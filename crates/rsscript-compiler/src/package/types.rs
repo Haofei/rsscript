@@ -51,6 +51,8 @@ pub struct PackageAnalysis {
     pub summary: PackageAnalysisSummary,
     pub exports: Vec<PackageAnalysisExport>,
     pub external_imports: Vec<PackageAnalysisExternalImport>,
+    pub call_edges: Vec<PackageAnalysisCallEdge>,
+    pub recursive_functions: Vec<String>,
     pub await_sites: Vec<PackageAnalysisAwaitSite>,
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -108,6 +110,14 @@ pub struct PackageAnalysisExternalImport {
     pub call_chain: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub span: Option<Span>,
+}
+
+/// One resolved call edge in the package-owned call graph. This is neutral
+/// semantic evidence, not a review classification or deployment decision.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct PackageAnalysisCallEdge {
+    pub caller: String,
+    pub callee: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

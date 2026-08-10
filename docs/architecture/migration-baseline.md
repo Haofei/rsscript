@@ -603,8 +603,11 @@ mechanical acceptance condition holds.
     escape qualifiers, for every public function.
   - [ ] **A07.2 — Diff resources and concurrency.** Report acquire/transfer/close,
     task fan-out, await/select, cancellation, and cleanup-path changes.
-  - [ ] **A07.3 — Diff graph and diagnostic facts.** Report call graph/recursion,
-    Provider requirements, and diagnostic additions/removals.
+  - [x] **A07.3 — Diff graph and diagnostic facts.** Report call graph/recursion,
+    Provider requirements, and diagnostic additions/removals. Neutral analysis
+    now records resolved call edges and recursion participants; semantic diff
+    compares them alongside versioned Provider import requirements and
+    coordinate-free diagnostic fact sets.
   - [ ] **A07.4 — Version and fixture the neutral schema.** Add JSON/Markdown
     goldens and prove no policy verdict or risk score enters the output.
     - [x] **A07.4a — Version diagnostic evidence explicitly.**

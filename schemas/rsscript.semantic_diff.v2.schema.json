@@ -4,7 +4,7 @@
   "title": "RSScript semantic diff v2",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "old", "new", "imports", "external_contracts", "exports", "external_calls", "await_sites", "diagnostics", "summary"],
+  "required": ["schema", "old", "new", "imports", "external_contracts", "exports", "external_calls", "call_edges", "recursive_functions", "await_sites", "diagnostics", "summary"],
   "properties": {
     "schema": { "const": "rsscript.semantic_diff.v2" },
     "old": { "$ref": "#/$defs/identity" },
@@ -13,6 +13,8 @@
     "external_contracts": { "$ref": "#/$defs/external_contract_diff" },
     "exports": { "$ref": "#/$defs/export_diff" },
     "external_calls": { "$ref": "#/$defs/external_call_diff" },
+    "call_edges": { "$ref": "#/$defs/call_edge_diff" },
+    "recursive_functions": { "$ref": "#/$defs/string_diff" },
     "await_sites": { "$ref": "#/$defs/await_diff" },
     "diagnostics": { "$ref": "#/$defs/diagnostic_diff" },
     "summary": { "type": "object", "additionalProperties": { "$ref": "#/$defs/count_change" } }
@@ -27,6 +29,7 @@
     "export": { "type": "object", "additionalProperties": false, "required": ["name", "kind", "function_kind", "parameters", "return_type", "retained_params", "semantic_facts"], "properties": { "name": { "type": "string" }, "kind": { "type": "string" }, "function_kind": { "type": ["string", "null"] }, "parameters": { "type": "array", "items": { "$ref": "#/$defs/function_parameter" } }, "return_type": { "type": ["string", "null"] }, "retained_params": { "type": "array", "items": { "type": "string" } }, "semantic_facts": { "type": "array", "items": { "type": "string" } } } },
     "function_parameter": { "type": "object", "additionalProperties": false, "required": ["name", "effect", "ty", "retained"], "properties": { "name": { "type": "string" }, "effect": { "enum": ["read", "mut", "take"] }, "ty": { "type": "string" }, "retained": { "type": "boolean" } } },
     "external_call": { "type": "object", "additionalProperties": false, "required": ["function", "symbol", "call_chain"], "properties": { "function": { "type": "string" }, "symbol": { "type": "string" }, "call_chain": { "type": "array", "items": { "type": "string" } } } },
+    "call_edge": { "type": "object", "additionalProperties": false, "required": ["caller", "callee"], "properties": { "caller": { "type": "string" }, "callee": { "type": "string" } } },
     "await": { "type": "object", "additionalProperties": false, "required": ["function", "callee", "live_across_await"], "properties": { "function": { "type": "string" }, "callee": { "type": ["string", "null"] }, "live_across_await": { "type": "array", "items": { "type": "string" } } } },
     "diagnostic": { "type": "object", "additionalProperties": false, "required": ["code", "severity", "summary", "label"], "properties": { "code": { "type": "string" }, "severity": { "type": "string" }, "summary": { "type": "string" }, "label": { "type": "string" } } },
     "changed_import": { "$ref": "#/$defs/changed_import_base" },
@@ -38,6 +41,8 @@
     "external_contract_diff": { "type": "object", "additionalProperties": false, "required": ["added", "removed", "changed"], "properties": { "added": { "type": "array", "items": { "$ref": "#/$defs/external_contract" } }, "removed": { "type": "array", "items": { "$ref": "#/$defs/external_contract" } }, "changed": { "type": "array", "items": { "$ref": "#/$defs/changed_external_contract" } } } },
     "export_diff": { "type": "object", "additionalProperties": false, "required": ["added", "removed", "changed"], "properties": { "added": { "type": "array", "items": { "$ref": "#/$defs/export" } }, "removed": { "type": "array", "items": { "$ref": "#/$defs/export" } }, "changed": { "type": "array", "items": { "$ref": "#/$defs/changed_export" } } } },
     "external_call_diff": { "type": "object", "additionalProperties": false, "required": ["added", "removed", "changed"], "properties": { "added": { "type": "array", "items": { "$ref": "#/$defs/external_call" } }, "removed": { "type": "array", "items": { "$ref": "#/$defs/external_call" } }, "changed": { "type": "array", "maxItems": 0 } } },
+    "call_edge_diff": { "type": "object", "additionalProperties": false, "required": ["added", "removed", "changed"], "properties": { "added": { "type": "array", "items": { "$ref": "#/$defs/call_edge" } }, "removed": { "type": "array", "items": { "$ref": "#/$defs/call_edge" } }, "changed": { "type": "array", "maxItems": 0 } } },
+    "string_diff": { "type": "object", "additionalProperties": false, "required": ["added", "removed", "changed"], "properties": { "added": { "type": "array", "items": { "type": "string" } }, "removed": { "type": "array", "items": { "type": "string" } }, "changed": { "type": "array", "maxItems": 0 } } },
     "await_diff": { "type": "object", "additionalProperties": false, "required": ["added", "removed", "changed"], "properties": { "added": { "type": "array", "items": { "$ref": "#/$defs/await" } }, "removed": { "type": "array", "items": { "$ref": "#/$defs/await" } }, "changed": { "type": "array", "maxItems": 0 } } },
     "diagnostic_diff": { "type": "object", "additionalProperties": false, "required": ["added", "removed", "changed"], "properties": { "added": { "type": "array", "items": { "$ref": "#/$defs/diagnostic" } }, "removed": { "type": "array", "items": { "$ref": "#/$defs/diagnostic" } }, "changed": { "type": "array", "maxItems": 0 } } },
     "count_change": { "type": "object", "additionalProperties": false, "required": ["old", "new"], "properties": { "old": { "type": "integer", "minimum": 0 }, "new": { "type": "integer", "minimum": 0 } } }

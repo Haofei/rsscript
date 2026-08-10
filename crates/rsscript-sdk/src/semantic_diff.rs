@@ -62,6 +62,13 @@ pub struct ExternalCallFactV1 {
     pub call_chain: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CallEdgeFactV1 {
+    pub caller: String,
+    pub callee: String,
+}
+
 /// A complete Artifact import contract. Unlike the compact bundle manifest
 /// requirement, this keeps the canonical parameter effects, retention, types,
 /// result and async shape that explain a signature-hash change.
@@ -112,6 +119,8 @@ pub struct SemanticDiffV1 {
     pub external_contracts: FactSetDiffV1<ExternalContractFactV1>,
     pub exports: FactSetDiffV1<ExportFactV1>,
     pub external_calls: FactSetDiffV1<ExternalCallFactV1>,
+    pub call_edges: FactSetDiffV1<CallEdgeFactV1>,
+    pub recursive_functions: FactSetDiffV1<String>,
     pub await_sites: FactSetDiffV1<AwaitFactV1>,
     pub diagnostics: FactSetDiffV1<DiagnosticFactV1>,
     pub summary: BTreeMap<String, CountChangeV1>,
@@ -142,6 +151,14 @@ impl SemanticDiffV1 {
                 &analysis_external_calls(old.analysis()),
                 &analysis_external_calls(new.analysis()),
             ),
+            call_edges: set_diff(
+                &analysis_call_edges(old.analysis()),
+                &analysis_call_edges(new.analysis()),
+            ),
+            recursive_functions: set_diff(
+                &strings(&old.analysis()["recursive_functions"]),
+                &strings(&new.analysis()["recursive_functions"]),
+            ),
             await_sites: set_diff(
                 &analysis_await_sites(old.analysis()),
                 &analysis_await_sites(new.analysis()),
@@ -167,6 +184,12 @@ impl SemanticDiffV1 {
             && self.external_calls.added.is_empty()
             && self.external_calls.removed.is_empty()
             && self.external_calls.changed.is_empty()
+            && self.call_edges.added.is_empty()
+            && self.call_edges.removed.is_empty()
+            && self.call_edges.changed.is_empty()
+            && self.recursive_functions.added.is_empty()
+            && self.recursive_functions.removed.is_empty()
+            && self.recursive_functions.changed.is_empty()
             && self.await_sites.added.is_empty()
             && self.await_sites.removed.is_empty()
             && self.await_sites.changed.is_empty()
@@ -184,6 +207,12 @@ impl SemanticDiffV1 {
         append_counts(&mut output, "External contracts", &self.external_contracts);
         append_counts(&mut output, "Exports", &self.exports);
         append_counts(&mut output, "External calls", &self.external_calls);
+        append_counts(&mut output, "Call graph", &self.call_edges);
+        append_counts(
+            &mut output,
+            "Recursive functions",
+            &self.recursive_functions,
+        );
         append_counts(&mut output, "Await sites", &self.await_sites);
         append_counts(&mut output, "Diagnostics", &self.diagnostics);
         if !self.summary.is_empty() {
@@ -295,6 +324,20 @@ fn analysis_external_calls(analysis: &serde_json::Value) -> Vec<ExternalCallFact
                 function: item["function"].as_str()?.to_string(),
                 symbol: item["symbol"].as_str()?.to_string(),
                 call_chain: strings(&item["call_chain"]),
+            })
+        })
+        .collect()
+}
+
+fn analysis_call_edges(analysis: &serde_json::Value) -> Vec<CallEdgeFactV1> {
+    analysis["call_edges"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            Some(CallEdgeFactV1 {
+                caller: item["caller"].as_str()?.to_string(),
+                callee: item["callee"].as_str()?.to_string(),
             })
         })
         .collect()
@@ -519,5 +562,18 @@ mod tests {
         assert_eq!(facts[0].parameters[0].effect, "take");
         assert!(facts[0].parameters[0].retained);
         assert_eq!(facts[0].return_type.as_deref(), Some("noescape Unit"));
+    }
+
+    #[test]
+    fn call_graph_facts_report_edges_and_recursion_without_review_metadata() {
+        let facts = analysis_call_edges(&serde_json::json!({
+            "call_edges": [
+                { "caller": "main", "callee": "walk" },
+                { "caller": "walk", "callee": "walk" }
+            ]
+        }));
+        assert_eq!(facts.len(), 2);
+        let recursion = set_diff(&["walk".to_string()], &Vec::new());
+        assert_eq!(recursion.removed, ["walk"]);
     }
 }

@@ -8,7 +8,7 @@ use crate::analyzer::{
 use crate::diagnostic::{Diagnostic, Span, code};
 use crate::hir::CallResolution;
 use crate::lint::lint_source;
-use crate::syntax::ast::TypeKind;
+use crate::syntax::ast::{Callee, TypeKind};
 
 use super::analysis_await::collect_package_await_sites;
 use super::contract::{
@@ -25,10 +25,10 @@ use super::dependency::{
 };
 use super::source_set::{PackageSource, load_package};
 use super::{
-    PACKAGE_ANALYSIS_SCHEMA, PackageAnalysis, PackageAnalysisAwaitSite, PackageAnalysisExport,
-    PackageAnalysisExternalImport, PackageAnalysisFile, PackageAnalysisParameter,
-    PackageAnalysisProducer, PackageAnalysisSummary, PackageReviewFileKind, dedup_diagnostics,
-    package_identity,
+    PACKAGE_ANALYSIS_SCHEMA, PackageAnalysis, PackageAnalysisAwaitSite, PackageAnalysisCallEdge,
+    PackageAnalysisExport, PackageAnalysisExternalImport, PackageAnalysisFile,
+    PackageAnalysisParameter, PackageAnalysisProducer, PackageAnalysisSummary,
+    PackageReviewFileKind, dedup_diagnostics, package_identity,
 };
 
 /// Analyze one already-captured package graph without consulting review policy,
@@ -170,6 +170,8 @@ pub(super) fn analyze_package_dir_captured(package_dir: &Path) -> Result<Package
         summary,
         exports,
         external_imports: package_external_imports(sources, database),
+        call_edges: package_call_edges(database),
+        recursive_functions: package_recursive_functions(database),
         await_sites,
         diagnostics,
     })
@@ -186,6 +188,73 @@ fn source_refs(sources: &[PackageSource], kind: PackageReviewFileKind) -> Vec<(&
         .filter(|source| source.kind == kind)
         .map(|source| (source.path.as_str(), source.contents.as_str()))
         .collect()
+}
+
+fn package_call_edges(
+    database: &crate::semantic::SemanticDatabase,
+) -> Vec<PackageAnalysisCallEdge> {
+    let mut edges = database
+        .hir()
+        .call_sites()
+        .iter()
+        .map(|site| PackageAnalysisCallEdge {
+            caller: site.function_name.clone(),
+            callee: package_call_site_label(site),
+        })
+        .collect::<Vec<_>>();
+    edges.sort();
+    edges.dedup();
+    edges
+}
+
+fn package_recursive_functions(database: &crate::semantic::SemanticDatabase) -> Vec<String> {
+    let edges = package_call_edges(database);
+    let functions = database
+        .hir()
+        .function_bodies()
+        .map(|(name, _)| name.to_string())
+        .collect::<BTreeSet<_>>();
+    let forward =
+        edges
+            .into_iter()
+            .fold(BTreeMap::<String, Vec<String>>::new(), |mut graph, edge| {
+                if functions.contains(&edge.callee) {
+                    graph.entry(edge.caller).or_default().push(edge.callee);
+                }
+                graph
+            });
+    functions
+        .into_iter()
+        .filter(|function| {
+            let mut pending = forward.get(function).cloned().unwrap_or_default();
+            let mut visited = BTreeSet::new();
+            while let Some(next) = pending.pop() {
+                if next == *function {
+                    return true;
+                }
+                if visited.insert(next.clone()) {
+                    pending.extend(forward.get(&next).into_iter().flatten().cloned());
+                }
+            }
+            false
+        })
+        .collect()
+}
+
+fn package_call_site_label(call_site: &crate::hir::HirCallSite) -> String {
+    match &call_site.resolution {
+        CallResolution::Resolved { signature, .. } => match &signature.namespace {
+            Some(namespace) => format!("{namespace}.{}", signature.name),
+            None => signature.name.clone(),
+        },
+        CallResolution::EnumVariant
+        | CallResolution::Ambiguous { .. }
+        | CallResolution::Unknown => match &call_site.callee {
+            Callee::Name(name) => name.clone(),
+            Callee::Qualified { namespace, name } => format!("{namespace}.{name}"),
+            Callee::ReceiverCall { method, .. } => method.clone(),
+        },
+    }
 }
 
 fn package_lint_diagnostics(sources: &[PackageSource]) -> Vec<Diagnostic> {

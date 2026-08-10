@@ -4,7 +4,7 @@
   "title": "RSScript package analysis v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["$schema", "producer", "language_version", "interface_catalog_digest", "snapshot_digest", "package", "files", "summary", "exports", "external_imports", "await_sites", "diagnostics"],
+  "required": ["$schema", "producer", "language_version", "interface_catalog_digest", "snapshot_digest", "package", "files", "summary", "exports", "external_imports", "call_edges", "recursive_functions", "await_sites", "diagnostics"],
   "properties": {
     "$schema": { "const": "rsscript.package_analysis.v1" },
     "producer": { "$ref": "#/$defs/producer" },
@@ -17,6 +17,8 @@
     "summary": { "type": "object" },
     "exports": { "type": "array", "items": { "type": "object" } },
     "external_imports": { "type": "array", "items": { "$ref": "#/$defs/import" } },
+    "call_edges": { "type": "array", "items": { "$ref": "#/$defs/call_edge" } },
+    "recursive_functions": { "type": "array", "items": { "type": "string" } },
     "await_sites": { "type": "array", "items": { "type": "object" } },
     "diagnostics": { "type": "array", "items": { "type": "object" } }
   },
@@ -50,6 +52,15 @@
         "symbol": { "type": "string" },
         "call_chain": { "type": "array", "items": { "type": "string" } },
         "span": { "type": "object" }
+      }
+    },
+    "call_edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caller", "callee"],
+      "properties": {
+        "caller": { "type": "string" },
+        "callee": { "type": "string" }
       }
     }
   }
