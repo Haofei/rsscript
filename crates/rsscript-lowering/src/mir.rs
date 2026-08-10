@@ -528,7 +528,20 @@ impl<'source, 'types> FunctionLowerer<'source, 'types> {
                 });
                 Ok(destination)
             }
-            ExecutableExpr::ObjectLiteral { .. } => self.unsupported("object literal"),
+            ExecutableExpr::ObjectLiteral { fields, .. } => {
+                let fields = fields
+                    .iter()
+                    .map(|field| -> Result<(String, ValueId), MirLoweringError> {
+                        Ok((field.name.clone(), self.lower_expression(&field.value)?))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let destination = self.value();
+                self.emit(MirInstruction::MakeObject {
+                    destination,
+                    fields,
+                });
+                Ok(destination)
+            }
             ExecutableExpr::MapLiteral { entries, .. } => {
                 let entries = entries
                     .iter()
@@ -828,8 +841,8 @@ fn binary_op(op: BinaryOp) -> MirBinaryOp {
 #[cfg(test)]
 mod tests {
     use rsscript_exec_ir::{
-        ExecutableBlock, ExecutableFunction, ExecutableMapLiteralEntry, ExecutableProgram,
-        ExecutableSignature,
+        ExecutableBlock, ExecutableFunction, ExecutableMapLiteralEntry,
+        ExecutableObjectLiteralField, ExecutableProgram, ExecutableSignature,
     };
 
     use super::*;
@@ -1010,6 +1023,36 @@ mod tests {
             ] if entries.len() == 1
         ));
         mir.verify().expect("verify map construction");
+    }
+
+    #[test]
+    fn lowers_json_object_literals_to_owned_mir_object_construction() {
+        let executable = module(ExecutableFunction {
+            name: "main".into(),
+            is_async: false,
+            signature: signature(),
+            body: ExecutableBlock {
+                statements: vec![ExecutableStmt::Return {
+                    value: Some(ExecutableExpr::ObjectLiteral {
+                        fields: vec![ExecutableObjectLiteralField {
+                            name: "count".into(),
+                            value: ExecutableExpr::Number { value: "3".into() },
+                        }],
+                        type_name: Some("JsonValue".into()),
+                    }),
+                }],
+            },
+        });
+
+        let mir = lower_executable_ir_to_mir(&executable).expect("lower object literal");
+        assert!(matches!(
+            mir.functions()[0].blocks()[0].instructions(),
+            [
+                MirInstruction::LoadLiteral { .. },
+                MirInstruction::MakeObject { fields, .. },
+            ] if fields == &[("count".into(), ValueId::new(0))]
+        ));
+        mir.verify().expect("verify object construction");
     }
 
     #[test]

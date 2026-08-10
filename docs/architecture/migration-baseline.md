@@ -263,12 +263,17 @@ mechanical acceptance condition holds.
       lower to `MakeList { destination, items }`; its owned `ValueId` inputs
       participate in dominance validation and codegen emits the existing
       verifier-checked `MakeList` bytecode instruction. Records, variants,
-      maps, field/index operations, and match dispatch remain fail-closed.
+      field/index operations, and match dispatch remain fail-closed.
     - [x] **M02.3b — Lower owned map construction.** Source map literals lower
       to `MakeMap { destination, entries }`, preserving resolved key/value
       `ValueId` pairs for dominance validation. Codegen emits verifier-checked
       v1 map entries and the dual-path corpus compares map results; records,
       variants, field/index operations, and match dispatch remain fail-closed.
+    - [x] **M02.3c — Lower JSON object construction.** JSON object literals
+      lower to `MakeObject { destination, fields }`; field names are serialized
+      JSON data while values remain resolved `ValueId`s. The dual-path corpus
+      compares canonical JSON output; language records, variants, field/index
+      operations, and match dispatch remain fail-closed.
   - [ ] **M02.4 — Add MIR structural validation.** Reject dangling blocks,
     invalid IDs, unterminated blocks, undefined values, and malformed CFG edges.
     - [x] **M02.4a — Verify the initial structural subset.** The verifier
@@ -425,6 +430,10 @@ mechanical acceptance condition holds.
       Lowering and dual-path migration fixtures prove map literals reach and
       execute through verified bytecode; non-map aggregate and pattern
       instructions remain fail-closed.
+    - [x] **V02.3f — Emit JSON object construction.** `MakeObject` maps JSON
+      data field names and resolved value IDs to verifier-checked v1 object
+      fields. The migration corpus compares source JSON-object output across
+      old and MIR bytecode paths; language record layouts remain fail-closed.
   - [x] **V02.4 — Switch SDK build to codegen-vm.** Reviewed SDK source,
     interface, and package builds now emit their supported MIR capability
     directly through `codegen-vm` into a provider-neutral Artifact, without

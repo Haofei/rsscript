@@ -45,6 +45,7 @@ pub enum MirValue {
     Char(char),
     List(Vec<MirValue>),
     Map(Vec<(MirValue, MirValue)>),
+    JsonObject(Vec<(String, MirValue)>),
 }
 
 impl MirValue {
@@ -72,6 +73,14 @@ impl MirValue {
                     .collect::<Vec<_>>();
                 rendered.sort();
                 format!("{{{}}}", rendered.join(", "))
+            }
+            Self::JsonObject(fields) => {
+                let mut rendered = fields
+                    .iter()
+                    .map(|(name, value)| format!("\"{name}\":{}", value.render()))
+                    .collect::<Vec<_>>();
+                rendered.sort();
+                format!("{{{}}}", rendered.join(","))
             }
         }
     }
@@ -204,6 +213,17 @@ impl<'a> Interpreter<'a> {
                                 .map(|(key, value)| {
                                     Ok((value_at(&values, *key)?, value_at(&values, *value)?))
                                 })
+                                .collect::<Result<Vec<_>, MirExecutionError>>()?,
+                        ));
+                    }
+                    MirInstruction::MakeObject {
+                        destination,
+                        fields,
+                    } => {
+                        values[destination.index()] = Some(MirValue::JsonObject(
+                            fields
+                                .iter()
+                                .map(|(name, value)| Ok((name.clone(), value_at(&values, *value)?)))
                                 .collect::<Result<Vec<_>, MirExecutionError>>()?,
                         ));
                     }

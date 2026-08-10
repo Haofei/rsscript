@@ -97,6 +97,13 @@ pub enum MirInstruction {
         destination: ValueId,
         entries: Vec<(ValueId, ValueId)>,
     },
+    /// Construct a JSON object from data field names and already-defined
+    /// values. Field names here are serialized JSON data, not unresolved
+    /// language record identities.
+    MakeObject {
+        destination: ValueId,
+        fields: Vec<(String, ValueId)>,
+    },
     ReadPlace {
         destination: ValueId,
         place: PlaceId,
@@ -794,6 +801,7 @@ fn instruction_definition(instruction: &MirInstruction) -> Option<ValueId> {
         MirInstruction::LoadLiteral { destination, .. }
         | MirInstruction::MakeList { destination, .. }
         | MirInstruction::MakeMap { destination, .. }
+        | MirInstruction::MakeObject { destination, .. }
         | MirInstruction::ReadPlace { destination, .. }
         | MirInstruction::BorrowRead { destination, .. }
         | MirInstruction::TakePlace { destination, .. }
@@ -822,6 +830,9 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
             .iter()
             .flat_map(|(key, value)| [*key, *value])
             .collect(),
+        MirInstruction::MakeObject { fields, .. } => {
+            fields.iter().map(|(_, value)| *value).collect()
+        }
         MirInstruction::AcquireResource { source, .. } => vec![*source],
         MirInstruction::Binary { left, right, .. } => vec![*left, *right],
         MirInstruction::Call { arguments, .. } => arguments
@@ -990,6 +1001,7 @@ fn transfer_move_state(
         MirInstruction::LoadLiteral { .. }
         | MirInstruction::MakeList { .. }
         | MirInstruction::MakeMap { .. }
+        | MirInstruction::MakeObject { .. }
         | MirInstruction::Binary { .. }
         | MirInstruction::Await { .. }
         | MirInstruction::Cancel { .. }
@@ -1042,6 +1054,7 @@ fn verify_instruction(
         MirInstruction::LoadLiteral { destination, .. }
         | MirInstruction::MakeList { destination, .. }
         | MirInstruction::MakeMap { destination, .. } => define(*destination, defined),
+        MirInstruction::MakeObject { destination, .. } => define(*destination, defined),
         MirInstruction::ReadPlace { destination, place } => {
             check_live_place(*place, moved_places)?;
             define(*destination, defined)

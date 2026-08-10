@@ -262,6 +262,27 @@ fn lower_instruction(
                 ),
             ],
         )),
+        MirInstruction::MakeObject {
+            destination,
+            fields,
+        } => code.push(instr(
+            "MakeObject",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                (
+                    "fields",
+                    json!(
+                        fields
+                            .iter()
+                            .map(|(name, value)| [
+                                serde_json::Value::String(name.clone()),
+                                json!(value_reg(function, *value)),
+                            ])
+                            .collect::<Vec<_>>()
+                    ),
+                ),
+            ],
+        )),
         MirInstruction::ReadPlace { destination, place }
         | MirInstruction::BorrowRead { destination, place }
         | MirInstruction::TakePlace { destination, place } => code.push(instr(

@@ -144,6 +144,16 @@ fn main() -> Map<Int, Int> {
 }
 "#,
     },
+    MigrationCase {
+        name: "json_object_literal",
+        capability: "JSON object literals",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn main() -> JsonValue {
+    return {"count": 3}
+}
+"#,
+    },
 ];
 
 #[test]
