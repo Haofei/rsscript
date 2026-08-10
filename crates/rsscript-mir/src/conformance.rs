@@ -196,6 +196,16 @@ impl<'a> Interpreter<'a> {
                             .take()
                             .ok_or(MirExecutionError::UninitializedPlace(place.index()))?;
                     }
+                    MirInstruction::AcquireResource { place, .. } => {
+                        // This migration oracle has no host resource implementation;
+                        // a live placeholder still lets lifecycle control-flow execute.
+                        places[place.index()] = Some(MirValue::Unit);
+                    }
+                    MirInstruction::ReleaseResource { place } => {
+                        let _ = places[place.index()]
+                            .take()
+                            .ok_or(MirExecutionError::UninitializedPlace(place.index()))?;
+                    }
                     MirInstruction::WritePlace { place, value } => {
                         places[place.index()] = Some(value_at(&values, *value)?);
                     }

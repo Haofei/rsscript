@@ -178,6 +178,12 @@ fn lower_instruction(
         )),
         MirInstruction::Retain { .. } => return Err(CodegenError::Unsupported("retain")),
         MirInstruction::Drop { .. } => return Err(CodegenError::Unsupported("drop")),
+        MirInstruction::AcquireResource { .. } => {
+            return Err(CodegenError::Unsupported("resource acquire"));
+        }
+        MirInstruction::ReleaseResource { .. } => {
+            return Err(CodegenError::Unsupported("resource release"));
+        }
         MirInstruction::WritePlace { place, value } => code.push(instr(
             "Move",
             [

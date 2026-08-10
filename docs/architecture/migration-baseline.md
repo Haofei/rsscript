@@ -291,6 +291,11 @@ mechanical acceptance condition holds.
   - [ ] **M03.2 — Add resource lifetime instructions and cleanup edges.** Model
     acquire/manage/release and verify cleanup for normal return, branch exit,
     error, and cancellation.
+    - [x] **M03.2a — Establish acquire/release verifier primitives.** Typed MIR
+      models canonical resource acquire/release, rejects invalid resource IDs
+      and unbalanced normal-return lifetimes, and makes unsupported VM codegen
+      fail closed. Source lowering, manage/transfer, and non-normal cleanup
+      edges remain follow-up work.
   - [ ] **M03.3 — Add structured-concurrency instructions.** Model spawn, await,
     join, cancel, and select with lexical task-group ownership.
   - [ ] **M03.4 — Add resolved builtin and external-call instructions.** Include

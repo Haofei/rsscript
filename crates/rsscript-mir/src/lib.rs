@@ -108,6 +108,17 @@ pub enum MirInstruction {
     Drop {
         place: PlaceId,
     },
+    /// Begin a runtime-owned resource lifetime in `place`. The resource type
+    /// names a canonical `WireType::Resource` entry rather than a string.
+    AcquireResource {
+        place: PlaceId,
+        resource_type: ResourceTypeId,
+    },
+    /// End a resource lifetime explicitly. Every reachable return edge must
+    /// have released all acquired resources.
+    ReleaseResource {
+        place: PlaceId,
+    },
     WritePlace {
         place: PlaceId,
         value: ValueId,
@@ -431,6 +442,8 @@ impl MirModule {
                 &self.functions,
                 &self.external_imports,
             )?;
+            verify_resource_types(function, &self.types)?;
+            verify_resource_lifetimes(function)?;
         }
         for (index, import) in self.external_imports.iter().enumerate() {
             if import.id.index() != index {
@@ -442,6 +455,79 @@ impl MirModule {
         }
         Ok(())
     }
+}
+
+fn verify_resource_types(
+    function: &MirFunction,
+    types: &[WireType],
+) -> Result<(), MirValidationError> {
+    for block in function.blocks() {
+        for instruction in block.instructions() {
+            if let MirInstruction::AcquireResource { resource_type, .. } = instruction {
+                match types.get(resource_type.index()) {
+                    Some(WireType::Resource { .. }) => {}
+                    _ => {
+                        return Err(MirValidationError::InvalidResourceType {
+                            function: function.id,
+                            resource_type: *resource_type,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Track resources independently from ordinary move state: an acquired
+/// resource must be released on every reachable return path. Joining paths is
+/// conservative (a resource live on any predecessor is live at the join).
+fn verify_resource_lifetimes(function: &MirFunction) -> Result<(), MirValidationError> {
+    let mut entries = vec![BTreeSet::new(); function.blocks.len()];
+    let mut queued = vec![false; function.blocks.len()];
+    let mut visited = vec![false; function.blocks.len()];
+    let mut worklist = VecDeque::from([BlockId::new(0)]);
+    queued[0] = true;
+    while let Some(block_id) = worklist.pop_front() {
+        queued[block_id.index()] = false;
+        visited[block_id.index()] = true;
+        let block = &function.blocks[block_id.index()];
+        let mut live = entries[block_id.index()].clone();
+        for instruction in block.instructions() {
+            match instruction {
+                MirInstruction::AcquireResource { place, .. } if !live.insert(*place) => {
+                    return Err(MirValidationError::ResourceAlreadyLive {
+                        function: function.id,
+                        place: *place,
+                    });
+                }
+                MirInstruction::ReleaseResource { place } if !live.remove(place) => {
+                    return Err(MirValidationError::ResourceNotLive {
+                        function: function.id,
+                        place: *place,
+                    });
+                }
+                _ => {}
+            }
+        }
+        if matches!(block.terminator(), MirTerminator::Return(_)) && !live.is_empty() {
+            return Err(MirValidationError::ResourceLeak {
+                function: function.id,
+                place: *live.iter().next().expect("non-empty resource set"),
+            });
+        }
+        for successor in successors(block.terminator()) {
+            let entry = &mut entries[successor.index()];
+            let before = entry.len();
+            entry.extend(live.iter().copied());
+            if (!visited[successor.index()] || entry.len() != before) && !queued[successor.index()]
+            {
+                worklist.push_back(successor);
+                queued[successor.index()] = true;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn verify_function(
@@ -590,6 +676,8 @@ fn instruction_definition(instruction: &MirInstruction) -> Option<ValueId> {
         MirInstruction::WritePlace { .. }
         | MirInstruction::Retain { .. }
         | MirInstruction::Drop { .. }
+        | MirInstruction::AcquireResource { .. }
+        | MirInstruction::ReleaseResource { .. }
         | MirInstruction::Discard { .. } => None,
     }
 }
@@ -614,7 +702,9 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         | MirInstruction::BorrowRead { .. }
         | MirInstruction::TakePlace { .. }
         | MirInstruction::Retain { .. }
-        | MirInstruction::Drop { .. } => Vec::new(),
+        | MirInstruction::Drop { .. }
+        | MirInstruction::AcquireResource { .. }
+        | MirInstruction::ReleaseResource { .. } => Vec::new(),
     }
 }
 
@@ -707,6 +797,15 @@ fn transfer_move_state(
             moved_places.insert(*place);
             Ok(())
         }
+        MirInstruction::AcquireResource { place, .. } => {
+            moved_places.remove(place);
+            Ok(())
+        }
+        MirInstruction::ReleaseResource { place } => {
+            check_live(*place, moved_places)?;
+            moved_places.insert(*place);
+            Ok(())
+        }
         MirInstruction::WritePlace { place, .. } => {
             moved_places.remove(place);
             Ok(())
@@ -789,6 +888,16 @@ fn verify_instruction(
         }
         MirInstruction::Retain { place } => check_live_place(*place, moved_places),
         MirInstruction::Drop { place } => {
+            check_live_place(*place, moved_places)?;
+            moved_places.insert(*place);
+            Ok(())
+        }
+        MirInstruction::AcquireResource { place, .. } => {
+            check_place(*place)?;
+            moved_places.remove(place);
+            Ok(())
+        }
+        MirInstruction::ReleaseResource { place } => {
             check_live_place(*place, moved_places)?;
             moved_places.insert(*place);
             Ok(())
@@ -972,6 +1081,22 @@ pub enum MirValidationError {
         function: FunctionId,
         ty: TypeId,
     },
+    InvalidResourceType {
+        function: FunctionId,
+        resource_type: ResourceTypeId,
+    },
+    ResourceAlreadyLive {
+        function: FunctionId,
+        place: PlaceId,
+    },
+    ResourceNotLive {
+        function: FunctionId,
+        place: PlaceId,
+    },
+    ResourceLeak {
+        function: FunctionId,
+        place: PlaceId,
+    },
     InvalidFunctionTarget {
         function: FunctionId,
         target: FunctionId,
@@ -1037,6 +1162,62 @@ mod tests {
             TypeId::new(0),
             false,
         )
+    }
+
+    #[test]
+    fn resource_lifetimes_require_canonical_type_and_release_before_return() {
+        let resource = WireType::Resource {
+            name: "host.fs.File".into(),
+        };
+        let valid = MirModule::new(
+            vec![WireType::Unit, resource.clone()],
+            vec![MirFunction::new(
+                FunctionId::new(0),
+                MirFunctionSignature::new(vec![], TypeId::new(0), false),
+                1,
+                0,
+                vec![BasicBlock::new(
+                    BlockId::new(0),
+                    vec![
+                        MirInstruction::AcquireResource {
+                            place: PlaceId::new(0),
+                            resource_type: ResourceTypeId::new(1),
+                        },
+                        MirInstruction::ReleaseResource {
+                            place: PlaceId::new(0),
+                        },
+                    ],
+                    MirTerminator::Return(None),
+                )],
+            )],
+            vec![MirFunctionDebug::new("main", vec!["file".into()])],
+            vec![],
+        );
+        assert!(valid.is_ok());
+
+        let leaked = MirModule::new(
+            vec![WireType::Unit, resource],
+            vec![MirFunction::new(
+                FunctionId::new(0),
+                MirFunctionSignature::new(vec![], TypeId::new(0), false),
+                1,
+                0,
+                vec![BasicBlock::new(
+                    BlockId::new(0),
+                    vec![MirInstruction::AcquireResource {
+                        place: PlaceId::new(0),
+                        resource_type: ResourceTypeId::new(1),
+                    }],
+                    MirTerminator::Return(None),
+                )],
+            )],
+            vec![MirFunctionDebug::new("main", vec!["file".into()])],
+            vec![],
+        );
+        assert!(matches!(
+            leaked,
+            Err(MirValidationError::ResourceLeak { .. })
+        ));
     }
 
     #[test]
