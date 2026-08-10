@@ -1,12 +1,12 @@
 use std::collections::HashSet;
 
 use crate::analyzer::{
-    Analyzer, function_belongs_to_protocol, function_body_belongs_to_protocol, generic_bounds,
+    Analyzer, function_belongs_to_protocol, function_body_belongs_to_protocol,
     protocol_method_names, protocol_signature_mismatch, split_qualified_name, type_ref_is_copy,
     type_ref_is_noescape,
 };
 use crate::diagnostic::{Diagnostic, code};
-use crate::syntax::ast::{FunctionDecl, GenericBound, GenericParam, Item, Param, TypeKind};
+use crate::syntax::ast::{FunctionDecl, GenericBound, GenericParam, Item, Param};
 use rsscript_semantics::is_builtin_type_name;
 
 impl Analyzer<'_> {
@@ -226,45 +226,6 @@ impl Analyzer<'_> {
                 "manual",
             ),
         );
-    }
-
-    pub(crate) fn check_generic_constraints(&mut self) {
-        let items = self.syntax_program.items.clone();
-        for item in &items {
-            match item {
-                Item::Type(decl) => {
-                    let bounds = generic_bounds(&decl.type_params);
-                    if decl.kind == TypeKind::Resource {
-                        for param in &decl.type_params {
-                            if param.bound.is_none() {
-                                self.generic_resource_argument_diagnostic(
-                                    &param.name,
-                                    &param.name,
-                                    &param.span,
-                                    "resource type parameters must declare an explicit bound.",
-                                );
-                            }
-                        }
-                        for field in &decl.fields {
-                            self.check_resource_type_param_field(&field.ty, &bounds);
-                        }
-                    }
-                }
-                Item::Function(function) => {
-                    let bounds = generic_bounds(&function.type_params);
-                    if let Some(return_ty) = &function.return_ty
-                        && function.returns_fresh
-                    {
-                        self.check_fresh_generic_return_bound(&function.name, return_ty, &bounds);
-                    }
-                }
-                Item::Module(_)
-                | Item::Use(_)
-                | Item::SumType(_)
-                | Item::TypeAlias(_)
-                | Item::Const(_) => {}
-            }
-        }
     }
 
     pub(crate) fn check_protocol_contracts(&mut self) {

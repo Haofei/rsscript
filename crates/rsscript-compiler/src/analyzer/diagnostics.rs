@@ -72,29 +72,4 @@ impl Analyzer<'_> {
             ),
         );
     }
-
-    pub(crate) fn generic_resource_argument_diagnostic(
-        &mut self,
-        generic_name: &str,
-        resource_name: &str,
-        span: &crate::diagnostic::Span,
-        cause: &str,
-    ) {
-        self.diagnostics.push(
-            Diagnostic::error(
-                code::RESOURCE_GENERIC_ARGUMENT,
-                format!(
-                    "generic type `{generic_name}` cannot be used with resource `{resource_name}`."
-                ),
-                span.clone(),
-                "resource generic misuse",
-            )
-            .with_cause(cause)
-            .with_fix(
-                "add_or_change_resource_bound",
-                "Do not store `T: Resource` in a generic value.",
-                "manual",
-            ),
-        );
-    }
 }

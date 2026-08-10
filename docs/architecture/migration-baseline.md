@@ -161,6 +161,10 @@ mechanical acceptance condition holds.
       generic type positions and explicit generic call namespaces, including the
       direct `Result<Resource, E>` return exception, are now traversed by
       `rsscript-semantics`; compiler only appends the canonical result.
+    - [x] **S02.2e — Move generic resource and fresh-return constraints.**
+      Resource generic bounds/fields and `fresh` generic return requirements are
+      derived by `rsscript-semantics`; compiler no longer owns bound maps or
+      their diagnostics.
   - [ ] **S02.2 — Move type and generic-constraint checks.** Relocate type
     inference, substitutions, generic constraints, and call result facts behind
     the semantic crate API.

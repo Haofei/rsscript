@@ -1170,6 +1170,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "derive_syntax_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
+        "generic_constraint_diagnostics",
         "fd_surface_diagnostics",
         "unknown_binding_diagnostics",
         "unknown_field_diagnostics",
@@ -1240,6 +1241,21 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     assert!(!compiler_derives.contains("fn supported_compiler_derive"));
     assert!(!compiler_derives.contains("fn check_supported_derives"));
     assert!(!compiler_derives.contains("fn check_resource_derives"));
+
+    let semantic_generic_constraints =
+        read(&root.join("crates/rsscript-semantics/src/generic_constraints.rs"));
+    assert!(semantic_generic_constraints.contains("pub fn generic_constraint_diagnostics"));
+    let compiler_declaration_checks =
+        read(&root.join("crates/rsscript-compiler/src/checks/declarations.rs"));
+    assert!(
+        compiler_declaration_checks.contains("rsscript_semantics::generic_constraint_diagnostics")
+    );
+    let compiler_signatures =
+        read(&root.join("crates/rsscript-compiler/src/checks/declarations/signatures.rs"));
+    assert!(!compiler_signatures.contains("fn check_generic_constraints"));
+    let compiler_unknowns = read(&root.join("crates/rsscript-compiler/src/analyzer/unknowns.rs"));
+    assert!(!compiler_unknowns.contains("fn check_fresh_generic_return_bound"));
+    assert!(!compiler_unknowns.contains("fn check_resource_type_param_field"));
 
     let semantic_resources = read(&root.join("crates/rsscript-semantics/src/resource_types.rs"));
     for query in [

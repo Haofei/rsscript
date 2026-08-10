@@ -1,4 +1,5 @@
 use super::*;
+use crate::syntax::ast::GenericParam;
 
 impl Analyzer<'_> {
     /// A compiler-owned derive expands to generated Rust, so every field must

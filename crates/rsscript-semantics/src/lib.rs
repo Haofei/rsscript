@@ -15,6 +15,7 @@ mod database;
 mod declarations;
 mod derives;
 mod external_types;
+mod generic_constraints;
 pub mod hir;
 mod identities;
 mod interface_descriptor;
@@ -34,6 +35,7 @@ pub use declarations::{
 };
 pub use derives::derive_syntax_diagnostics;
 pub use external_types::{external_binding_type_diagnostics, unknown_type_diagnostics};
+pub use generic_constraints::generic_constraint_diagnostics;
 
 /// Builtin source type roots recognized before backend lowering.
 pub const BUILTIN_TYPE_NAMES: &[&str] = &[

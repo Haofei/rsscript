@@ -19,8 +19,8 @@ use crate::semantic::{
     AnalysisResult, ResolvedType, SemanticDatabase, SourceSnapshot, ValidatedProgram,
 };
 use crate::syntax::ast::{
-    AssignStmt, Block, Callee, DataEffect, Expr, FieldDecl, FunctionDecl, GenericBound,
-    GenericParam, Item, MatchPattern, Stmt, TypeKind, TypeRef,
+    AssignStmt, Block, Callee, DataEffect, Expr, FieldDecl, FunctionDecl, Item, MatchPattern, Stmt,
+    TypeKind, TypeRef,
 };
 use crate::syntax::ast::{Program, merge_programs};
 
@@ -1469,13 +1469,6 @@ fn fn_type_param_type_name(type_name: &str, index: usize) -> Option<String> {
     Some(bare.trim().to_string())
 }
 
-pub(crate) fn generic_bounds(params: &[GenericParam]) -> HashMap<String, Option<GenericBound>> {
-    params
-        .iter()
-        .map(|param| (param.name.clone(), param.bound.clone()))
-        .collect()
-}
-
 fn async_not_lowerable_diagnostic(
     span: crate::diagnostic::Span,
     label: &str,
@@ -1887,15 +1880,6 @@ pub(crate) fn split_qualified_name(name: &str) -> (Option<String>, &str) {
     } else {
         (None, name)
     }
-}
-
-fn fresh_return_target_type(return_ty: &TypeRef) -> &TypeRef {
-    if matches!(return_ty.name.as_str(), "Result" | "Option")
-        && let Some(first_arg) = return_ty.args.first()
-    {
-        return first_arg;
-    }
-    return_ty
 }
 
 fn builtin_match_is_exhaustive(variants: &HashSet<String>) -> bool {

@@ -24,5 +24,9 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
 /// Generic bounds and resource-generic contracts belong to declaration checking
 /// even though they run after type-name resolution for diagnostic stability.
 pub(crate) fn check_generic_constraints(analyzer: &mut Analyzer<'_>) {
-    analyzer.check_generic_constraints();
+    analyzer
+        .diagnostics
+        .extend(rsscript_semantics::generic_constraint_diagnostics(
+            &analyzer.syntax_program,
+        ));
 }
