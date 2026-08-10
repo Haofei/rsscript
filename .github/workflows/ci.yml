@@ -38,6 +38,11 @@ jobs:
           toolchain: 1.96.1
           components: clippy, rustfmt
 
+      - name: Require ADRs for contract changes
+        env:
+          ADR_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: bash scripts/check-contract-adr.sh "$ADR_BASE"
+
       - name: Check
         run: |
           ! rg '^\s*(features|profile)\s*:|\beffects\s*\(|\bnative\s+(fn|module)\b|\bCapability\s*<' --glob '*.rss' --glob '*.rssi'

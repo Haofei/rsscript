@@ -682,10 +682,12 @@ mechanical acceptance condition holds.
     ABI mismatch, replacement Providers, and deterministic bundles.
   - [ ] **E03.3 — Add execution state-machine corpus.** Cover budgets,
     cancellation, cleanup, Provider errors, and interpreter/experiment parity.
-- [ ] **E04 — Require ADR/RFC records for contract changes.** Language semantics,
-  MIR, bytecode ISA, Provider ABI, Artifact format, and stable SDK changes must
-  state problem, non-goals, compatibility, migration, verifier/security impact,
-  and Provider/backend impact.
+- [x] **E04 — Require ADR/RFC records for contract changes.** Core CI compares
+  each change with its base revision and rejects ABI-model, MIR, bytecode,
+  Provider ABI, or reviewed SDK changes unless the same change updates a
+  numbered ADR. The checked-in template requires problem, non-goals,
+  compatibility, migration, verifier/security impact, and Provider/backend
+  impact; ADR 0001 records the initial typed Provider wire-value decision.
 - [ ] **E05 — Add opt-in deterministic Provider record/replay.** This remains P2
   until Core boundaries are stable and must define replayability, normalization,
   redaction, external-state dependence, and persistence rules without claiming
