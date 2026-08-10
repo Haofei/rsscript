@@ -9,7 +9,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt;
 
-use rsscript_abi_model::WireType;
+use rsscript_abi_model::{
+    DataEffect, ExternalSymbol, FunctionSignature, ParameterSignature, WireType,
+};
 use rsscript_exec_ir::{
     BinaryOp, Callee, ExecutableExpr, ExecutableFunction, ExecutableIr, ExecutableStmt, ParamEffect,
 };
@@ -137,11 +139,24 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<MirModule, MirLowe
         .iter()
         .map(|(_, _, signature)| types.checked_function_signature(signature))
         .collect::<Vec<_>>();
-    let targets = functions
-        .iter()
-        .enumerate()
-        .map(|(index, (name, _, _))| (name.to_string(), FunctionId::new(index as u32)))
-        .collect::<BTreeMap<_, _>>();
+    let external_imports = checked_external_imports(hir)?;
+    let targets = CallTargets {
+        functions: functions
+            .iter()
+            .enumerate()
+            .map(|(index, (name, _, _))| (name.to_string(), FunctionId::new(index as u32)))
+            .collect(),
+        external_imports: external_imports
+            .iter()
+            .enumerate()
+            .map(|(index, (symbol, _))| {
+                (
+                    symbol.as_str().to_owned(),
+                    rsscript_mir::ExternalSymbolId::new(index as u32),
+                )
+            })
+            .collect(),
+    };
     let mut lowered = Vec::with_capacity(functions.len());
     let mut debug = Vec::with_capacity(functions.len());
     for ((index, (name, block, signature)), mir_signature) in
@@ -159,7 +174,79 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<MirModule, MirLowe
         lowered.push(output.function);
         debug.push(output.debug);
     }
-    Ok(MirModule::new(types.into_types(), lowered, debug, vec![])?)
+    let imports = external_imports
+        .into_iter()
+        .enumerate()
+        .map(|(index, (symbol, signature))| {
+            MirExternalImport::new(
+                rsscript_mir::ExternalSymbolId::new(index as u32),
+                symbol,
+                signature,
+            )
+        })
+        .collect();
+    Ok(MirModule::new(types.into_types(), lowered, debug, imports)?)
+}
+
+fn checked_external_imports(
+    hir: &checked::Hir,
+) -> Result<Vec<(ExternalSymbol, FunctionSignature)>, MirLoweringError> {
+    let mut imports = BTreeMap::new();
+    for call in hir.call_sites() {
+        let checked::CallResolution::Resolved { signature, .. } = &call.resolution else {
+            continue;
+        };
+        if !signature.is_external {
+            continue;
+        }
+        let symbol = checked_external_symbol(signature)?;
+        imports
+            .entry(symbol.as_str().to_owned())
+            .or_insert((symbol, checked_external_signature(signature)));
+    }
+    Ok(imports.into_values().collect())
+}
+
+fn checked_external_symbol(
+    signature: &checked::FunctionSig,
+) -> Result<ExternalSymbol, MirLoweringError> {
+    let Some(namespace) = signature.namespace.as_deref() else {
+        return Err(MirLoweringError::Unsupported {
+            function: signature.name.clone(),
+            construct: "external checked HIR call without namespace",
+        });
+    };
+    ExternalSymbol::new(format!("{namespace}.{}", signature.name)).map_err(|_| {
+        MirLoweringError::Unsupported {
+            function: signature.name.clone(),
+            construct: "invalid external checked HIR symbol",
+        }
+    })
+}
+
+fn checked_external_signature(signature: &checked::FunctionSig) -> FunctionSignature {
+    FunctionSignature {
+        parameters: signature
+            .params
+            .iter()
+            .map(|parameter| ParameterSignature {
+                name: parameter.name.clone(),
+                effect: match parameter.effect.unwrap_or(checked::ParamEffect::Read) {
+                    checked::ParamEffect::Read => DataEffect::Read,
+                    checked::ParamEffect::Mut => DataEffect::Mut,
+                    checked::ParamEffect::Take => DataEffect::Take,
+                },
+                ty: WireType::parse(&parameter.ty.to_string()),
+                retained: signature.retained_params.contains(&parameter.name),
+            })
+            .collect(),
+        result: signature
+            .return_ty
+            .as_ref()
+            .map(|ty| WireType::parse(&ty.to_string()))
+            .unwrap_or(WireType::Unit),
+        asynchronous: signature.is_async,
+    }
 }
 
 #[derive(Clone)]
@@ -268,7 +355,7 @@ struct CheckedHirLowerer<'source> {
     body: &'source checked::HirBlock,
     signature: &'source checked::FunctionSig,
     mir_signature: MirFunctionSignature,
-    targets: BTreeMap<String, FunctionId>,
+    targets: CallTargets,
     blocks: Vec<BlockDraft>,
     current: BlockId,
     places: HashMap<String, PlaceId>,
@@ -284,7 +371,7 @@ impl<'source> CheckedHirLowerer<'source> {
         body: &'source checked::HirBlock,
         signature: &'source checked::FunctionSig,
         mir_signature: MirFunctionSignature,
-        targets: BTreeMap<String, FunctionId>,
+        targets: CallTargets,
     ) -> Self {
         let mut lowerer = Self {
             id,
@@ -557,22 +644,40 @@ impl<'source> CheckedHirLowerer<'source> {
         let checked::CallResolution::Resolved { signature, .. } = resolution else {
             return self.unsupported("unresolved checked HIR call");
         };
-        if signature.is_external || signature.is_builtin {
-            return self.unsupported("external or builtin checked HIR call");
+        if signature.is_builtin {
+            return self.unsupported("builtin checked HIR call");
         }
-        let qualified = signature
-            .namespace
-            .as_ref()
-            .map(|namespace| format!("{namespace}.{}", signature.name));
-        let target = self
-            .targets
-            .get(&signature.name)
-            .or_else(|| qualified.as_ref().and_then(|name| self.targets.get(name)))
-            .copied()
-            .ok_or_else(|| MirLoweringError::Unsupported {
-                function: self.function_name.to_owned(),
-                construct: "direct checked HIR call target",
-            })?;
+        let target = if signature.is_external {
+            let symbol = checked_external_symbol(signature)?;
+            self.targets
+                .external_imports
+                .get(symbol.as_str())
+                .copied()
+                .map(MirCallTarget::External)
+                .ok_or_else(|| MirLoweringError::Unsupported {
+                    function: self.function_name.to_owned(),
+                    construct: "direct checked HIR external call target",
+                })?
+        } else {
+            let qualified = signature
+                .namespace
+                .as_ref()
+                .map(|namespace| format!("{namespace}.{}", signature.name));
+            self.targets
+                .functions
+                .get(&signature.name)
+                .or_else(|| {
+                    qualified
+                        .as_ref()
+                        .and_then(|name| self.targets.functions.get(name))
+                })
+                .copied()
+                .map(MirCallTarget::Function)
+                .ok_or_else(|| MirLoweringError::Unsupported {
+                    function: self.function_name.to_owned(),
+                    construct: "direct checked HIR call target",
+                })?
+        };
         let mut ordered = args.iter().collect::<Vec<_>>();
         ordered.sort_by_key(|argument| argument.evaluation_index);
         let arguments = ordered
@@ -582,7 +687,7 @@ impl<'source> CheckedHirLowerer<'source> {
         let destination = self.value();
         self.emit(MirInstruction::Call {
             destination,
-            target: MirCallTarget::Function(target),
+            target,
             arguments,
         });
         Ok(destination)

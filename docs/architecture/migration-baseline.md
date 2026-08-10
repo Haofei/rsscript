@@ -372,8 +372,8 @@ mechanical acceptance condition holds.
       `break`/`continue`, return, and resolved internal read/`mut`/`take`
       calls) now lower from semantic HIR without constructing `ExecutableIr`;
       compiler output prefers that route and uses the explicit compatibility
-      bridge only when a capability is not yet direct-lowerable. External calls,
-      resources, and async remain follow-up direct-lowering work.
+      bridge only when a capability is not yet direct-lowerable. Resources and
+      async remain follow-up direct-lowering work.
   - [ ] **M04.2 — Verify MIR ownership, resources, and task scopes.** Add a
     verifier pass with targeted invalid-MIR fixtures.
   - [ ] **M04.3 — Enforce backend input boundaries.** Architecture tests reject

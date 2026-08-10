@@ -477,9 +477,25 @@ fn main() -> Int {
     .expect("external call source should validate");
     let compiled = compile_validated_to_ir(&validated);
     let mir = compiled
-        .mir()
-        .expect("resolved external call should lower to MIR");
+        .checked_hir_mir()
+        .expect("resolved external call should lower directly from checked HIR");
     assert_eq!(mir.external_imports().len(), 1);
+    assert_eq!(
+        mir.external_imports()[0].symbol().as_str(),
+        "Host.increment"
+    );
+    assert!(mir.functions().iter().any(|function| {
+        function.blocks().iter().flat_map(|block| block.instructions()).any(|instruction| {
+            matches!(
+                instruction,
+                MirInstruction::Call {
+                    target: rsscript_mir::MirCallTarget::External(_),
+                    arguments,
+                    ..
+                } if matches!(arguments.as_slice(), [rsscript_mir::MirCallArgument::BorrowRead(_)])
+            )
+        })
+    }));
 
     let host = ExternalFunction::new(|arguments| match arguments.as_slice() {
         [NativeValue::Int(value)] => Ok(NativeValue::Int(value + 1)),

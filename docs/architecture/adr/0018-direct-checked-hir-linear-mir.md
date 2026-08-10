@@ -20,8 +20,8 @@ expressions, lists, maps, JSON objects, resolved list indexing, structured
 and resolved internal calls with
 ordinary/read, `mut`, and `take` arguments. Call targets are looked up from checked
 `CallResolution` in a deterministic `FunctionId` table. `CompiledIr::mir()`
-prefers this path. Unsupported external calls, resource scopes, async, fields,
-records, variants, and match explicitly return a
+prefers this path. Unsupported resource scopes, async, fields, records,
+variants, and match explicitly return a
 lowering error; only the existing compatibility caller may then choose the old
 `ExecutableIr` bridge.
 
@@ -52,7 +52,8 @@ reading source syntax or `ExecutableIr` nodes.
 
 Compiler coverage asserts direct scalar, branch, and loop programs (including
 `break`/`continue`) produce valid owned MIR with explicit CFG terminators, and
-that resolved internal calls preserve `FunctionId`, `read`, `mut`, and `take`
-identity. SDK migration tests compile all direct HIR MIR shapes to
+that resolved internal and external calls preserve their typed target and
+`read`/`mut`/`take` identity. SDK migration tests compile all direct HIR MIR
+shapes to
 verifier-approved Artifacts and execute them in the VM with their expected
 results.
