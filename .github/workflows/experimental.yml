@@ -16,7 +16,7 @@ on:
       - "crates/rsscript-sdk/tests/backend_differential.rs"
       - "crates/rsscript-sdk/tests/jit_acceptance.rs"
       - "crates/rsscript-sdk/tests/jit_perf_gate.rs"
-      - "crates/rsscript-sdk/tests/generative.rs"
+      - "experiments/rss-testgen/tests/generative.rs"
       - "crates/rsscript-sdk/tests/runtime.rs"
       - "experiments/**"
   push:
@@ -31,7 +31,7 @@ on:
       - "crates/rsscript-sdk/tests/backend_differential.rs"
       - "crates/rsscript-sdk/tests/jit_acceptance.rs"
       - "crates/rsscript-sdk/tests/jit_perf_gate.rs"
-      - "crates/rsscript-sdk/tests/generative.rs"
+      - "experiments/rss-testgen/tests/generative.rs"
       - "crates/rsscript-sdk/tests/runtime.rs"
       - "experiments/**"
 
