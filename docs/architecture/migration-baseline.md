@@ -590,8 +590,10 @@ mechanical acceptance condition holds.
     suspension before a successful Provider result can escape.
   - [ ] **P08.2 — Add resource cleanup state-machine fixtures.** Cover success,
     script error, Provider error, cancellation, deadline, and drop failure.
-  - [ ] **P08.3 — Add lane, reentrancy, and panic boundary fixtures.** Validate
-    blocking policy and host failure containment.
+  - [x] **P08.3 — Add lane, reentrancy, and panic boundary fixtures.** Blocking
+    lane admission, non-reentrant call exclusion (including suspended async
+    futures), and unwind-style host failure containment are enforced by the
+    dispatcher and covered by focused fixtures.
     - [x] **P08.3a — Contain unwind-style Provider failures.** Both synchronous
       callables and asynchronous future polls are caught by the VM dispatcher and
       converted to structured internal Provider errors. Abort panics and native

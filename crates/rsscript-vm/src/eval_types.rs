@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Instant;
@@ -90,6 +91,19 @@ fn check_payload_budget(
     Ok(())
 }
 
+/// A shared permit held for the full lifetime of a non-reentrant Provider
+/// invocation. Dropping a suspended async future releases its permit, so a
+/// cancelled task cannot permanently lock out a Provider function.
+struct NonReentrantCallPermit {
+    active: Arc<AtomicBool>,
+}
+
+impl Drop for NonReentrantCallPermit {
+    fn drop(&mut self) {
+        self.active.store(false, Ordering::Release);
+    }
+}
+
 /// A linked provider callable. Registry resolution attaches the complete
 /// provider contract so invocation cannot silently discard descriptor metadata.
 #[derive(Clone)]
@@ -97,6 +111,7 @@ pub struct ExternalFunction {
     callable: ProviderCallable,
     contract: Option<ProviderInvocationContract>,
     host_context: Arc<HostCallContext>,
+    active_non_reentrant_call: Arc<AtomicBool>,
 }
 
 impl ExternalFunction {
@@ -149,11 +164,33 @@ impl ExternalFunction {
         self.callable.call_mode()
     }
 
+    fn acquire_non_reentrant_permit(
+        &self,
+    ) -> Result<Option<NonReentrantCallPermit>, ProviderError> {
+        if self
+            .contract()
+            .is_none_or(|contract| contract.descriptor.reentrant)
+        {
+            return Ok(None);
+        }
+        self.active_non_reentrant_call
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| {
+                ProviderError::unavailable(
+                    "non-reentrant provider function already has an active call",
+                )
+            })?;
+        Ok(Some(NonReentrantCallPermit {
+            active: Arc::clone(&self.active_non_reentrant_call),
+        }))
+    }
+
     pub fn call_with_context(
         &self,
         context: &mut ProviderCallContext<'_>,
         args: Vec<NativeValue>,
     ) -> Result<NativeValue, ProviderError> {
+        let _non_reentrant_permit = self.acquire_non_reentrant_permit()?;
         if let Some(contract) = self.contract() {
             context.provider_id.clone_from(&contract.provider_id);
             context
@@ -257,6 +294,10 @@ impl ExternalFunction {
         mut context: AsyncProviderCallContext,
         args: Vec<NativeValue>,
     ) -> ProviderFuture {
+        let non_reentrant_permit = match self.acquire_non_reentrant_permit() {
+            Ok(permit) => permit,
+            Err(error) => return Box::pin(async move { Err(error) }),
+        };
         let Some(contract) = self.contract.clone() else {
             return Box::pin(async {
                 Err(ProviderError::unavailable(
@@ -287,6 +328,7 @@ impl ExternalFunction {
             .map(|usage| usage.created);
         let started = Instant::now();
         Box::pin(async move {
+            let _non_reentrant_permit = non_reentrant_permit;
             let result = async {
                 context.check_cancelled()?;
                 check_payload_budget(request_bytes, context.remaining_byte_budget, "request")?;
@@ -376,6 +418,7 @@ impl ExternalFunction {
                 descriptor: function.descriptor,
             }),
             host_context,
+            active_non_reentrant_call: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -392,6 +435,7 @@ impl From<NativeInterpreterFn> for ExternalFunction {
             callable: callable.into(),
             contract: None,
             host_context: Arc::new(HostCallContext::default()),
+            active_non_reentrant_call: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -402,6 +446,7 @@ impl From<AsyncInterpreterFn> for ExternalFunction {
             callable: callable.into(),
             contract: None,
             host_context: Arc::new(HostCallContext::default()),
+            active_non_reentrant_call: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -684,6 +729,13 @@ mod provider_contract_tests {
     }
 
     fn registered_async_function(callable: AsyncInterpreterFn) -> ExternalFunction {
+        registered_async_function_with_reentrancy(callable, true)
+    }
+
+    fn registered_async_function_with_reentrancy(
+        callable: AsyncInterpreterFn,
+        reentrant: bool,
+    ) -> ExternalFunction {
         let symbol = ExternalSymbol::new("host.test.async_run").unwrap();
         let signature = FunctionSignature {
             parameters: vec![],
@@ -702,7 +754,7 @@ mod provider_contract_tests {
                 blocking: BlockingBehavior::NonBlocking,
                 cancellation: CancellationBehavior::Cooperative,
                 thread_safe: true,
-                reentrant: true,
+                reentrant,
                 resource_cleanup: ResourceCleanupContract::None,
                 error_mapping: ProviderErrorMapping::StructuredV1,
             }],
@@ -929,6 +981,29 @@ mod provider_contract_tests {
             result => panic!("expected payload limit failure, got {result:?}"),
         };
         assert_eq!(error.code, ProviderErrorCode::ResourceExhausted);
+    }
+
+    #[test]
+    fn async_dispatcher_enforces_non_reentrant_provider_contracts() {
+        let function = registered_async_function_with_reentrancy(
+            AsyncInterpreterFn::new(|_, _| async move {
+                std::future::pending::<Result<NativeValue, ProviderError>>().await
+            }),
+            false,
+        );
+        let mut first = function.start_async(async_context(None, None), vec![]);
+        assert!(matches!(poll_once(&mut first), Poll::Pending));
+
+        let mut second = function.start_async(async_context(None, None), vec![]);
+        let error = match poll_once(&mut second) {
+            Poll::Ready(Err(error)) => error,
+            result => panic!("expected non-reentrant Provider rejection, got {result:?}"),
+        };
+        assert_eq!(error.code, ProviderErrorCode::Unavailable);
+        drop(first);
+
+        let mut after_drop = function.start_async(async_context(None, None), vec![]);
+        assert!(matches!(poll_once(&mut after_drop), Poll::Pending));
     }
 
     #[test]
