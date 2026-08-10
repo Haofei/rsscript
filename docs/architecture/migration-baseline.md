@@ -383,8 +383,11 @@ mechanical acceptance condition holds.
       direct-lowerable. Internal task-group `async let`/`await` also lower to
       explicit MIR `Spawn`/`Await`; async external calls and cancellation remain
       follow-up direct-lowering work.
-  - [ ] **M04.2 — Verify MIR ownership, resources, and task scopes.** Add a
-    verifier pass with targeted invalid-MIR fixtures.
+  - [x] **M04.2 — Verify MIR ownership, resources, and task scopes.** The
+    construction verifier runs ownership-mode, move/drop, resource-lifetime,
+    resource-cleanup-over-CFG, and structured-task-close passes. Targeted
+    invalid-MIR fixtures reject incompatible call effects, use-after-move,
+    missing release on a reachable return, and an undrained task group.
   - [ ] **M04.3 — Enforce backend input boundaries.** Architecture tests reject
     syntax/HIR imports in VM, codegen, AOT, and JIT backend code.
 - [ ] **M05 — Run old/new lowering differentially.** The same corpus must
