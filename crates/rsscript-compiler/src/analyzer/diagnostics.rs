@@ -25,29 +25,6 @@ impl Analyzer<'_> {
         );
     }
 
-    pub(crate) fn unknown_protocol_diagnostic(
-        &mut self,
-        name: &str,
-        span: &crate::diagnostic::Span,
-    ) {
-        self.diagnostics.push(
-            Diagnostic::error(
-                code::UNKNOWN_PROTOCOL,
-                format!("unknown protocol `{name}`."),
-                span.clone(),
-                "unknown protocol",
-            )
-            .with_cause(
-                "Protocol bounds and implementations must name an explicit `protocol` declaration.",
-            )
-            .with_fix(
-                "declare_protocol",
-                format!("Declare `protocol {name} {{ ... }}` or use a declared protocol name."),
-                "manual",
-            ),
-        );
-    }
-
     pub(crate) fn protocol_impl_mismatch_diagnostic(
         &mut self,
         protocol: &str,

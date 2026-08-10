@@ -35,7 +35,9 @@ pub fn protocol_bound_diagnostics(
         .collect()
 }
 
-fn unknown_protocol_diagnostic(name: &str, span: &rsscript_syntax::Span) -> Diagnostic {
+/// Construct the canonical diagnostic for an unresolved protocol reference.
+/// Protocol implementation mapping checks use this same semantic fact.
+pub fn unknown_protocol_diagnostic(name: &str, span: &rsscript_syntax::Span) -> Diagnostic {
     Diagnostic::error(
         code::UNKNOWN_PROTOCOL,
         format!("unknown protocol `{name}`."),

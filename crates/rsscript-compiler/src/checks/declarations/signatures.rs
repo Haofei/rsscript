@@ -48,7 +48,11 @@ impl Analyzer<'_> {
         let protocol_impls = self.syntax_program.protocol_impls.clone();
         for protocol_impl in &protocol_impls {
             if !protocol_names.contains(&protocol_impl.protocol) {
-                self.unknown_protocol_diagnostic(&protocol_impl.protocol, &protocol_impl.span);
+                self.diagnostics
+                    .push(rsscript_semantics::unknown_protocol_diagnostic(
+                        &protocol_impl.protocol,
+                        &protocol_impl.span,
+                    ));
                 continue;
             }
             if self.hir.type_info(&protocol_impl.type_name).is_none()
