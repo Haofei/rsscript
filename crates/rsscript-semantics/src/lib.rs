@@ -29,7 +29,7 @@ mod symbols;
 mod type_aliases;
 mod types;
 pub use call_binding::{BoundArgument, BoundArgumentSource, CallBinding, CallBindingIssue};
-pub use control_flow::function_fallthrough_diagnostics;
+pub use control_flow::{function_fallthrough_diagnostics, missing_return_value_diagnostics};
 pub use database::{
     AnalysisResult, CompilationSession, CompilationSessionStats, FrontendCompletion,
     FrontendStopReason, SemanticDatabase, SessionSourceStore, SourceFileSnapshot, SourceSnapshot,

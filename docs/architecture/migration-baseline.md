@@ -216,6 +216,10 @@ mechanical acceptance condition holds.
       now owned by `rsscript-semantics`; compiler call checking only appends its
       canonical diagnostic. Task, cancellation, select, assignment,
       exhaustiveness, and reachability remain follow-up work.
+    - [x] **S02.5b — Move bare-return result diagnostics.** Explicit empty
+      returns within nested checked HIR blocks are now derived by semantics for
+      concrete non-`Unit` functions; compiler retains only expression-return
+      compatibility while alias and aggregate facts migrate.
   - [ ] **S02.6 — Delete compiler semantic-rule modules.** Add architecture
     tests that permit compiler orchestration only and reject semantic-rule
     implementations outside `rsscript-semantics`.

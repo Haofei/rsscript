@@ -44,6 +44,12 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
             &analyzer.syntax_program,
             &analyzer.hir,
         ));
+    analyzer
+        .diagnostics
+        .extend(rsscript_semantics::missing_return_value_diagnostics(
+            &analyzer.syntax_program,
+            &analyzer.hir,
+        ));
     let items = analyzer.syntax_program.items.clone();
     for item in &items {
         if let Item::Function(function) = item {
@@ -225,11 +231,7 @@ fn check_block(
                 );
                 check_expr(analyzer, function, value, context);
             }
-            HirStmt::Return {
-                value: None, span, ..
-            } => {
-                check_return_type(analyzer, function, None, span);
-            }
+            HirStmt::Return { value: None, .. } => {}
             HirStmt::Expr(value) | HirStmt::Assign { value, .. } => {
                 check_noescape_escape(
                     analyzer,
