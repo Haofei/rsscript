@@ -437,12 +437,17 @@ mechanical acceptance condition holds.
       return the same value and record the same Provider-call usage.
       The stable Provider-trace fields (identity, symbol, byte counts, and
       result code) also agree; elapsed time remains observational telemetry.
-      Call ordering and deadline comparison remain follow-up work.
+      Call ordering remains follow-up work.
     - [x] **M05.3b — Compare Provider cancellation during suspension.** Both
       paths run a cooperative async Provider that cancels the shared execution
       token after its first pending poll. Both retain an execution report with
       the same structured `ProviderErrorCode::Cancelled` failure, usage, and
-      stable Provider trace fields. Deadline comparison remains follow-up work.
+      stable Provider trace fields.
+    - [x] **M05.3c — Compare Provider deadlines during execution.** Both paths
+      run an async Provider whose work crosses a shared monotonic deadline.
+      They retain the same `ProviderErrorCode::DeadlineExceeded` failure, usage,
+      and stable Provider trace fields. Call-order comparison remains follow-up
+      work.
   - [ ] **M05.4 — Gate replacement on corpus parity.** New lowering cannot become
     default until all supported Core fixtures agree.
 - [ ] **M06 — Delete the source-shaped executable IR.** Remove nested

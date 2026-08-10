@@ -1073,6 +1073,103 @@ fn direct_checked_hir_awaited_provider_cancellation_matches_legacy_vm() {
     assert_matching_provider_trace(&legacy.provider_call_traces, &direct.provider_call_traces);
 }
 
+#[test]
+fn direct_checked_hir_awaited_provider_deadline_matches_legacy_vm() {
+    let source = "async fn main() -> Int { return await Host.wait() }";
+    let interface = "pub async fn Host.wait() -> Int\n";
+    let validated = analyze_source_with_interfaces_result(
+        "direct-hir-async-deadline.rss",
+        source,
+        &[("host-async.rssi", interface)],
+    )
+    .into_validated()
+    .expect("async deadline fixture should validate");
+    let compiled = compile_validated_to_ir(&validated);
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("awaited external deadline fixture lowers directly to MIR");
+
+    fn bindings() -> Vec<(String, ExternalFunction)> {
+        let symbol = ExternalSymbol::new("Host.wait").expect("valid test symbol");
+        let signature = FunctionSignature {
+            parameters: Vec::new(),
+            result: "Int".into(),
+            asynchronous: true,
+        };
+        let descriptor = ProviderDescriptor {
+            provider_id: "test.direct-async-deadline".into(),
+            provider_version: "1.0.0".into(),
+            supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+            functions: vec![ProviderFunctionDescriptor {
+                symbol: symbol.clone(),
+                signature: signature.clone(),
+                entry: "wait".into(),
+                call_mode: ProviderCallMode::Async,
+                blocking: BlockingBehavior::NonBlocking,
+                cancellation: CancellationBehavior::Cooperative,
+                thread_safe: true,
+                reentrant: true,
+                resource_cleanup: ResourceCleanupContract::None,
+                error_mapping: ProviderErrorMapping::StructuredV1,
+            }],
+        };
+        let callable = AsyncInterpreterFn::new(|_, _| async move {
+            std::thread::sleep(Duration::from_millis(5));
+            Ok(NativeValue::Int(42))
+        });
+        let mut registry = ExternalFunctionRegistry::new();
+        registry
+            .register_provider(
+                &descriptor,
+                BTreeMap::from([(
+                    symbol,
+                    ProviderFunction {
+                        signature,
+                        callable,
+                    },
+                )]),
+            )
+            .expect("async Provider registration should succeed");
+        registry.into_bindings().collect()
+    }
+
+    let expired = || VmLimits {
+        deadline: Some(MonotonicDeadline::after(Duration::from_millis(1))),
+        ..VmLimits::default()
+    };
+    let legacy = reg_vm_compile_validated(&validated)
+        .expect("legacy async deadline fixture compiles")
+        .execute_main_with_args_and_external_bindings_and_limits(
+            std::iter::empty::<String>(),
+            bindings(),
+            expired(),
+        )
+        .expect("legacy deadline retains its execution report");
+    let direct = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("direct async deadline MIR emits verified bytecode")
+    .execute_main_with_args_and_external_bindings_and_limits(
+        std::iter::empty::<String>(),
+        bindings(),
+        expired(),
+    )
+    .expect("direct deadline retains its execution report");
+
+    assert!(matches!(
+        legacy.failure,
+        Some(EvalError::Provider(ProviderError {
+            code: ProviderErrorCode::DeadlineExceeded,
+            ..
+        }))
+    ));
+    assert_eq!(legacy.failure, direct.failure);
+    assert_eq!(legacy.usage, direct.usage);
+    assert_matching_provider_trace(&legacy.provider_call_traces, &direct.provider_call_traces);
+}
+
 fn assert_matching_provider_trace(
     legacy: &[rsscript_sdk::ProviderCallTrace],
     direct: &[rsscript_sdk::ProviderCallTrace],
