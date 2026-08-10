@@ -321,6 +321,66 @@ fn main() -> Int {
 }
 
 #[test]
+fn direct_checked_hir_loop_reaches_verified_bytecode() {
+    let source = r#"
+fn main() -> Int {
+    let mut value = 0
+    while value < 5 {
+        value = value + 1
+    }
+    return value
+}
+"#;
+    let compiled =
+        compile_source_to_ir("direct-hir-loop.rss", source).expect("direct-HIR loop compiles");
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("checked HIR loop uses direct lowering");
+    let output = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("direct HIR loop emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("direct HIR loop bytecode executes");
+    assert_eq!(output.value, "5");
+}
+
+#[test]
+fn direct_checked_hir_loop_control_reaches_verified_bytecode() {
+    let source = r#"
+fn main() -> Int {
+    let mut value = 0
+    while value < 10 {
+        value = value + 1
+        if value == 3 {
+            continue
+        }
+        if value == 5 {
+            break
+        }
+    }
+    return value
+}
+"#;
+    let compiled = compile_source_to_ir("direct-hir-loop-control.rss", source)
+        .expect("direct-HIR loop control compiles");
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("checked HIR loop control uses direct lowering");
+    let output = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("direct HIR loop control emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("direct HIR loop control bytecode executes");
+    assert_eq!(output.value, "5");
+}
+
+#[test]
 fn direct_checked_hir_internal_calls_reach_verified_bytecode() {
     let source = r#"
 fn helper() -> Int {

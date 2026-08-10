@@ -274,6 +274,7 @@ struct CheckedHirLowerer<'source> {
     places: HashMap<String, PlaceId>,
     place_names: Vec<String>,
     next_value: u32,
+    loops: Vec<LoopTargets>,
 }
 
 impl<'source> CheckedHirLowerer<'source> {
@@ -297,6 +298,7 @@ impl<'source> CheckedHirLowerer<'source> {
             places: HashMap::new(),
             place_names: Vec::new(),
             next_value: 0,
+            loops: Vec::new(),
         };
         for parameter in &lowerer.signature.params {
             lowerer.place(&parameter.name);
@@ -387,13 +389,29 @@ impl<'source> CheckedHirLowerer<'source> {
                 else_body,
                 ..
             } => self.lower_if(condition, then_body, else_body.as_ref()),
-            checked::HirStmt::Loop { .. } => self.unsupported("checked HIR loop"),
+            checked::HirStmt::Loop {
+                condition, body, ..
+            } => self.lower_loop(condition.as_ref(), body),
             checked::HirStmt::With { .. } => self.unsupported("checked HIR resource scope"),
             checked::HirStmt::For { .. } => self.unsupported("checked HIR for loop"),
             checked::HirStmt::Match { .. } => self.unsupported("checked HIR match"),
             checked::HirStmt::Select { .. } => self.unsupported("checked HIR select"),
-            checked::HirStmt::Break(_) => self.unsupported("checked HIR break"),
-            checked::HirStmt::Continue(_) => self.unsupported("checked HIR continue"),
+            checked::HirStmt::Break(_) => {
+                let Some(targets) = self.loops.last() else {
+                    return self.unsupported("checked HIR break outside loop");
+                };
+                self.terminate(MirTerminator::Jump(targets.break_target));
+                self.start_detached_block();
+                Ok(())
+            }
+            checked::HirStmt::Continue(_) => {
+                let Some(targets) = self.loops.last() else {
+                    return self.unsupported("checked HIR continue outside loop");
+                };
+                self.terminate(MirTerminator::Jump(targets.continue_target));
+                self.start_detached_block();
+                Ok(())
+            }
             checked::HirStmt::Unknown(_) => self.unsupported("unknown checked HIR statement"),
         }
     }
@@ -607,6 +625,43 @@ impl<'source> CheckedHirLowerer<'source> {
         Ok(())
     }
 
+    fn lower_loop(
+        &mut self,
+        condition: Option<&checked::HirExpr>,
+        body: &checked::HirBlock,
+    ) -> Result<(), MirLoweringError> {
+        let header = self.new_block();
+        let body_block = self.new_block();
+        let exit = self.new_block();
+        self.terminate(MirTerminator::Jump(header));
+
+        self.current = header;
+        if let Some(condition) = condition {
+            let condition = self.lower_expression(condition)?;
+            self.terminate(MirTerminator::Branch {
+                condition,
+                then_target: body_block,
+                else_target: exit,
+            });
+        } else {
+            self.terminate(MirTerminator::Jump(body_block));
+        }
+
+        self.current = body_block;
+        self.loops.push(LoopTargets {
+            continue_target: header,
+            break_target: exit,
+            cleanup_depth: 0,
+        });
+        self.lower_checked_block(body)?;
+        self.loops.pop();
+        if self.current_block().terminator.is_none() {
+            self.terminate(MirTerminator::Jump(header));
+        }
+        self.current = exit;
+        Ok(())
+    }
+
     fn lower_checked_block(&mut self, block: &checked::HirBlock) -> Result<(), MirLoweringError> {
         for statement in &block.statements {
             if self.current_block().terminator.is_some() {
@@ -638,6 +693,10 @@ impl<'source> CheckedHirLowerer<'source> {
     fn terminate(&mut self, terminator: MirTerminator) {
         debug_assert!(self.current_block().terminator.is_none());
         self.current_block_mut().terminator = Some(terminator);
+    }
+
+    fn start_detached_block(&mut self) {
+        self.current = self.new_block();
     }
 
     fn place(&mut self, name: &str) -> PlaceId {

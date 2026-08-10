@@ -196,6 +196,62 @@ fn main() -> Int {
     }
 
     #[test]
+    fn direct_checked_hir_path_lowers_loops_to_cfg() {
+        let compiled = compile_source_to_ir(
+            "direct-hir-loop.rss",
+            r#"
+fn main() -> Int {
+    let mut value = 0
+    while value < 5 {
+        value = value + 1
+    }
+    return value
+}
+"#,
+        )
+        .expect("source should compile");
+        let mir = compiled
+            .checked_hir_mir()
+            .expect("checked HIR loop lowers without executable IR");
+        assert!(mir.functions()[0].blocks().iter().any(|block| {
+            matches!(
+                block.terminator(),
+                rsscript_mir::MirTerminator::Branch { .. }
+            )
+        }));
+        assert!(mir.functions()[0].blocks().len() >= 4);
+        mir.verify().expect("direct HIR loop MIR verifies");
+    }
+
+    #[test]
+    fn direct_checked_hir_path_lowers_loop_break_and_continue() {
+        let compiled = compile_source_to_ir(
+            "direct-hir-loop-control.rss",
+            r#"
+fn main() -> Int {
+    let mut value = 0
+    while value < 10 {
+        value = value + 1
+        if value == 3 {
+            continue
+        }
+        if value == 5 {
+            break
+        }
+    }
+    return value
+}
+"#,
+        )
+        .expect("source should compile");
+        let mir = compiled
+            .checked_hir_mir()
+            .expect("checked HIR loop control lowers without executable IR");
+        assert!(mir.functions()[0].blocks().len() >= 7);
+        mir.verify().expect("direct HIR loop control MIR verifies");
+    }
+
+    #[test]
     fn direct_checked_hir_path_resolves_internal_call_targets_to_function_ids() {
         let compiled = compile_source_to_ir(
             "direct-hir-call.rss",
