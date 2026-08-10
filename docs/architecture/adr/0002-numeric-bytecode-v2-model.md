@@ -31,6 +31,10 @@ and generated opcode reference all derive from one `INSTRUCTION_SCHEMA_V2`
 table. New v2 instructions must be added there rather than duplicating maps in
 the codec, verifier, or documentation.
 
+The v2 decoder has a bounded arbitrary-byte property corpus so malformed
+payloads cannot panic the verifier while explicit long-lived seed fixtures are
+added with future Artifact v2 sections.
+
 ## Compatibility and migration
 
 v1 remains the only deployed writer and reader. A future v2 container/ISA

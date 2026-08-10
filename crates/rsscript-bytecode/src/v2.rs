@@ -532,6 +532,7 @@ fn invalid(message: String) -> BytecodeError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     fn program(instructions: Vec<WireInstructionV2>) -> WireProgramV2 {
         WireProgramV2::new(
@@ -615,5 +616,15 @@ mod tests {
         let reference = instruction_schema_markdown();
         assert!(reference.contains("`call_external` | 5 | register, import, constant"));
         assert!(reference.contains("`resource_drop` | 9 | register"));
+    }
+
+    proptest! {
+        #[test]
+        fn arbitrary_bounded_v2_payload_never_panics(bytes in prop::collection::vec(any::<u8>(), 0..4096)) {
+            let result = std::panic::catch_unwind(|| {
+                BytecodeV2Verifier::default().verify_payload(&bytes)
+            });
+            prop_assert!(result.is_ok());
+        }
     }
 }
