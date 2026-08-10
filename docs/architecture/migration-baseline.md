@@ -385,8 +385,9 @@ mechanical acceptance condition holds.
     - [x] **V02.3b — Emit direct spawn/await task bytecode.** MIR task IDs map
       to dedicated registers and direct async functions emit `SpawnTask` and
       `AwaitJoin`; the ordinary verifier validates task-handle definitions and
-      call shapes. Cancellation, group join, select, and external async calls
-      remain fail-closed follow-up work.
+      call shapes, and the migration suite executes the resulting Artifact in
+      the VM. Cancellation, group join, select, and external async calls remain
+      fail-closed follow-up work.
   - [ ] **V02.4 — Switch SDK build to codegen-vm.** Remove VM compile helpers
     from the supported compilation path and add dependency tests.
 - [ ] **V03 — Make the verifier construct the only executable program type.**

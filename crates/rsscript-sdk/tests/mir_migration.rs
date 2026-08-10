@@ -5,8 +5,13 @@
 //! the legacy VM, the feature-gated MIR reference interpreter, and the
 //! verified-bytecode VM emitted directly from MIR.
 
+use rsscript_abi_model::WireType;
 use rsscript_compiler::{compile_source_to_ir, compile_validated_to_ir};
 use rsscript_mir::conformance::{MigrationCase, MigrationStage, execute_named};
+use rsscript_mir::{
+    BasicBlock, BlockId, FunctionId, MirFunction, MirFunctionDebug, MirFunctionSignature,
+    MirInstruction, MirLiteral, MirModule, MirTerminator, TaskGroupId, TaskId, TypeId, ValueId,
+};
 use rsscript_sdk::{
     CancellationToken, Compiler, ExternalFunction, MonotonicDeadline, NativeValue, ProviderError,
     ProviderResource, VmLimits, analyze_source_with_interfaces_result, reg_vm_compile_mir,
@@ -245,6 +250,7 @@ fn main() -> Int {
     let value = 41
     return Host.increment(value: read value)
 }
+
 "#;
     let validated = analyze_source_with_interfaces_result(
         "mir-external.rss",
@@ -281,6 +287,69 @@ fn main() -> Int {
 
     assert_eq!(legacy.value, "42");
     assert_eq!(mir_vm.value, legacy.value);
+}
+
+#[test]
+fn spawned_mir_task_executes_through_verified_bytecode_vm() {
+    let mir = MirModule::new(
+        vec![WireType::Int {
+            bits: 64,
+            signed: true,
+        }],
+        vec![
+            MirFunction::new(
+                FunctionId::new(0),
+                MirFunctionSignature::new(vec![], TypeId::new(0), false),
+                0,
+                1,
+                vec![BasicBlock::new(
+                    BlockId::new(0),
+                    vec![
+                        MirInstruction::Spawn {
+                            task: TaskId::new(0),
+                            group: TaskGroupId::new(0),
+                            target: FunctionId::new(1),
+                            arguments: vec![],
+                        },
+                        MirInstruction::Await {
+                            destination: ValueId::new(0),
+                            task: TaskId::new(0),
+                        },
+                    ],
+                    MirTerminator::Return(Some(ValueId::new(0))),
+                )],
+            ),
+            MirFunction::new(
+                FunctionId::new(1),
+                MirFunctionSignature::new(vec![], TypeId::new(0), true),
+                0,
+                1,
+                vec![BasicBlock::new(
+                    BlockId::new(0),
+                    vec![MirInstruction::LoadLiteral {
+                        destination: ValueId::new(0),
+                        value: MirLiteral::Int(7),
+                    }],
+                    MirTerminator::Return(Some(ValueId::new(0))),
+                )],
+            ),
+        ],
+        vec![
+            MirFunctionDebug::new("main", vec![]),
+            MirFunctionDebug::new("worker", vec![]),
+        ],
+        vec![],
+    )
+    .expect("task MIR verifies");
+    let output = reg_vm_compile_mir(
+        &mir,
+        &format!("sha256:{}", "a".repeat(64)),
+        &format!("sha256:{}", "b".repeat(64)),
+    )
+    .expect("task MIR emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("task bytecode executes in the VM");
+    assert_eq!(output.value, "7");
 }
 
 #[test]
