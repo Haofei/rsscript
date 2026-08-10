@@ -392,7 +392,7 @@ impl Analyzer<'_> {
         }
     }
 
-    pub(super) fn visible_protocol_names(&self) -> HashSet<String> {
+    pub(crate) fn visible_protocol_names(&self) -> HashSet<String> {
         self.interface_programs
             .iter()
             .flat_map(|program| program.protocols.iter())

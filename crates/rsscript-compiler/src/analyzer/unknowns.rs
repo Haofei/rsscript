@@ -70,27 +70,12 @@ impl Analyzer<'_> {
         ty: &TypeRef,
         generic_params: &HashSet<&str>,
     ) {
-        if ty.args.len() != 1 {
-            self.unknown_type_name_diagnostic(&type_ref_name(ty), &ty.span);
-            return;
-        }
-        let protocol = &ty.args[0];
-        if !protocol.args.is_empty()
-            || !protocol.fn_params.is_empty()
-            || protocol.fn_return.is_some()
-            || protocol.is_fresh
-            || protocol.is_noescape
-            || protocol.is_owned
-        {
-            self.unknown_type_name_diagnostic(&type_ref_name(ty), &ty.span);
-            return;
-        }
-        if generic_params.contains(protocol.name.as_str()) {
-            return;
-        }
-        if !self.protocol_name_is_visible(&protocol.name) {
-            self.unknown_protocol_diagnostic(&protocol.name, &protocol.span);
-        }
+        self.diagnostics
+            .extend(rsscript_semantics::external_binding_type_diagnostics(
+                ty,
+                generic_params,
+                &self.visible_protocol_names(),
+            ));
     }
 
     pub(crate) fn check_unknown_fields(&mut self) {

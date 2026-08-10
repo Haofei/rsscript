@@ -157,6 +157,9 @@ mechanical acceptance condition holds.
     - [x] **S02.2b — Move resolved unknown-field diagnostics.** The semantic HIR
       now owns field-existence diagnostics; compiler only appends them. Unknown
       type names, bindings, and generic constraints remain follow-up work.
+    - [x] **S02.2c — Move `Dyn<Protocol>` validation.** External binding type
+      shape and protocol-visibility diagnostics are semantic queries; compiler
+      supplies only the already-composed visible protocol set.
   - [ ] **S02.3 — Move call binding and effect checks.** Relocate positional and
     named argument binding, `read`/`mut`/`take`, external signature matching,
     and retention facts.
