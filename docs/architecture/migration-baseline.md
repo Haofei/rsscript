@@ -130,7 +130,9 @@ mechanical acceptance condition holds.
   orchestrates semantic queries and contains no semantic rule implementation.
   - [ ] **S02.1 — Move declaration/name-resolution facts.** Relocate symbol,
     namespace, import, and declaration validation with identical diagnostic
-    fixtures and spans.
+    fixtures and spans. The complete file-local editor symbol index (declarations,
+    lexical scopes, references, pattern bindings, and document outlines) now
+    belongs to `rsscript-semantics`; workspace namespace/import validation remains.
   - [ ] **S02.2 — Move type and generic-constraint checks.** Relocate type
     inference, substitutions, generic constraints, and call result facts behind
     the semantic crate API.

@@ -1851,6 +1851,7 @@ version = "0.1.0"
 dependencies = [
  "rsscript-compiler",
  "rsscript-operation",
+ "rsscript-semantics",
 ]
 
 [[package]]
