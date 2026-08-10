@@ -169,6 +169,10 @@ mechanical acceptance condition holds.
       Explicit return/parameter types, method/protocol `self` shape, and
       `retains` declaration validity are semantic queries; compiler only
       orchestrates their canonical diagnostics.
+    - [x] **S02.2f — Move protocol-bound visibility diagnostics.** Generic
+      protocol-bound resolution across interface and source snapshots is owned
+      by `rsscript-semantics`; compiler retains protocol implementation mapping
+      checks only.
   - [ ] **S02.2 — Move type and generic-constraint checks.** Relocate type
     inference, substitutions, generic constraints, and call result facts behind
     the semantic crate API.

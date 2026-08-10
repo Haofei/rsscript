@@ -4,20 +4,21 @@ use crate::analyzer::{
     Analyzer, function_belongs_to_protocol, function_body_belongs_to_protocol,
     protocol_method_names, protocol_signature_mismatch, split_qualified_name,
 };
-use crate::syntax::ast::{GenericBound, GenericParam, Item};
+use crate::syntax::ast::Item;
 use rsscript_semantics::is_builtin_type_name;
 
 impl Analyzer<'_> {
     pub(crate) fn check_protocol_contracts(&mut self) {
         let protocol_names = self.visible_protocol_names();
         let items = self.visible_protocol_items();
+        self.diagnostics
+            .extend(rsscript_semantics::protocol_bound_diagnostics(
+                &self.interface_programs,
+                &self.syntax_program,
+            ));
         for item in &items {
             match item {
-                Item::Type(decl) => {
-                    for param in &decl.type_params {
-                        self.check_protocol_bound(param, &protocol_names);
-                    }
-                }
+                Item::Type(_) => {}
                 Item::Function(function) => {
                     if function_body_belongs_to_protocol(function, &protocol_names) {
                         self.unsupported_syntax(
@@ -34,9 +35,6 @@ impl Analyzer<'_> {
                             "unsupported default implementation marker",
                             "`= _` is reserved for protocol method contracts so defaulted protocol behavior is review-visible.",
                         );
-                    }
-                    for param in &function.type_params {
-                        self.check_protocol_bound(param, &protocol_names);
                     }
                 }
                 Item::Module(_)
@@ -157,18 +155,5 @@ impl Analyzer<'_> {
             .flat_map(|program| program.items.iter().cloned())
             .chain(self.syntax_program.items.iter().cloned())
             .collect()
-    }
-
-    pub(super) fn check_protocol_bound(
-        &mut self,
-        param: &GenericParam,
-        protocol_names: &HashSet<String>,
-    ) {
-        let Some(GenericBound::Protocol(protocol)) = &param.bound else {
-            return;
-        };
-        if !protocol_names.contains(protocol) {
-            self.unknown_protocol_diagnostic(protocol, &param.span);
-        }
     }
 }

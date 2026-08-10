@@ -1176,6 +1176,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "unknown_field_diagnostics",
         "resource_field_diagnostics",
         "resource_generic_diagnostics",
+        "protocol_bound_diagnostics",
         "signature_diagnostics",
         "weak_field_diagnostics",
     ] {
@@ -1272,6 +1273,12 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
             "compiler must not re-own `{forbidden}`"
         );
     }
+
+    let semantic_protocol_bounds =
+        read(&root.join("crates/rsscript-semantics/src/protocol_bounds.rs"));
+    assert!(semantic_protocol_bounds.contains("pub fn protocol_bound_diagnostics"));
+    assert!(compiler_signatures.contains("rsscript_semantics::protocol_bound_diagnostics"));
+    assert!(!compiler_signatures.contains("fn check_protocol_bound"));
 
     let semantic_resources = read(&root.join("crates/rsscript-semantics/src/resource_types.rs"));
     for query in [

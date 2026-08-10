@@ -19,6 +19,7 @@ mod generic_constraints;
 pub mod hir;
 mod identities;
 mod interface_descriptor;
+mod protocol_bounds;
 mod resource_types;
 mod signatures;
 mod source_rules;
@@ -97,6 +98,7 @@ pub use interface_descriptor::{
     INTERFACE_DESCRIPTOR_SCHEMA, InterfaceDescriptorError, InterfaceDescriptorFunctionV1,
     InterfaceDescriptorResourceV1, InterfaceDescriptorV1,
 };
+pub use protocol_bounds::protocol_bound_diagnostics;
 pub use resource_types::{
     fd_surface_diagnostics, resource_field_diagnostics, resource_generic_diagnostics,
     weak_field_diagnostics,
