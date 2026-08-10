@@ -184,6 +184,12 @@ fn lower_instruction(
         MirInstruction::ReleaseResource { .. } => {
             return Err(CodegenError::Unsupported("resource release"));
         }
+        MirInstruction::Spawn { .. }
+        | MirInstruction::Await { .. }
+        | MirInstruction::Cancel { .. }
+        | MirInstruction::Join { .. } => {
+            return Err(CodegenError::Unsupported("structured concurrency"));
+        }
         MirInstruction::WritePlace { place, value } => code.push(instr(
             "Move",
             [

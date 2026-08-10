@@ -6,7 +6,7 @@
 //! Providers, or a runtime. Human-readable names are retained only in debug
 //! tables; instructions use typed local identities.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
 use std::fmt;
 
@@ -40,6 +40,8 @@ mir_id!(PlaceId);
 mir_id!(BuiltinId);
 mir_id!(ExternalSymbolId);
 mir_id!(ResourceTypeId);
+mir_id!(TaskId);
+mir_id!(TaskGroupId);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MirBinaryOp {
@@ -118,6 +120,28 @@ pub enum MirInstruction {
     /// have released all acquired resources.
     ReleaseResource {
         place: PlaceId,
+    },
+    /// Start an async internal function under its lexical task group. The
+    /// task must be awaited, cancelled, or joined before every return path.
+    Spawn {
+        task: TaskId,
+        group: TaskGroupId,
+        target: FunctionId,
+        arguments: Vec<MirCallArgument>,
+    },
+    /// Await one child task and make its result available to subsequent MIR.
+    Await {
+        destination: ValueId,
+        task: TaskId,
+    },
+    /// Cancel one child task. Cancellation is a lifecycle transition, not a
+    /// best-effort backend hint.
+    Cancel {
+        task: TaskId,
+    },
+    /// Close all still-live tasks in a lexical task group.
+    Join {
+        group: TaskGroupId,
     },
     WritePlace {
         place: PlaceId,
@@ -444,6 +468,7 @@ impl MirModule {
             )?;
             verify_resource_types(function, &self.types)?;
             verify_resource_lifetimes(function)?;
+            verify_task_lifetimes(function)?;
         }
         for (index, import) in self.external_imports.iter().enumerate() {
             if import.id.index() != index {
@@ -522,6 +547,90 @@ fn verify_resource_lifetimes(function: &MirFunction) -> Result<(), MirValidation
             entry.extend(live.iter().copied());
             if (!visited[successor.index()] || entry.len() != before) && !queued[successor.index()]
             {
+                worklist.push_back(successor);
+                queued[successor.index()] = true;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Child tasks are lexically owned. A task cannot silently escape a return
+/// edge: it must have been awaited, cancelled, or joined with its task group.
+fn verify_task_lifetimes(function: &MirFunction) -> Result<(), MirValidationError> {
+    let mut spawn_sites = BTreeSet::new();
+    for block in function.blocks() {
+        for instruction in block.instructions() {
+            if let MirInstruction::Spawn { task, .. } = instruction
+                && !spawn_sites.insert(*task)
+            {
+                return Err(MirValidationError::DuplicateTaskId {
+                    function: function.id,
+                    task: *task,
+                });
+            }
+        }
+    }
+
+    let mut entries = vec![BTreeMap::<TaskId, TaskGroupId>::new(); function.blocks.len()];
+    let mut queued = vec![false; function.blocks.len()];
+    let mut visited = vec![false; function.blocks.len()];
+    let mut worklist = VecDeque::from([BlockId::new(0)]);
+    queued[0] = true;
+    while let Some(block_id) = worklist.pop_front() {
+        queued[block_id.index()] = false;
+        visited[block_id.index()] = true;
+        let block = &function.blocks[block_id.index()];
+        let mut live = entries[block_id.index()].clone();
+        for instruction in block.instructions() {
+            match instruction {
+                MirInstruction::Spawn { task, group, .. }
+                    if live.insert(*task, *group).is_some() =>
+                {
+                    return Err(MirValidationError::TaskAlreadyLive {
+                        function: function.id,
+                        task: *task,
+                    });
+                }
+                MirInstruction::Await { task, .. } | MirInstruction::Cancel { task }
+                    if live.remove(task).is_none() =>
+                {
+                    return Err(MirValidationError::TaskNotLive {
+                        function: function.id,
+                        task: *task,
+                    });
+                }
+                MirInstruction::Join { group } => live.retain(|_, owner| owner != group),
+                _ => {}
+            }
+        }
+        if matches!(block.terminator(), MirTerminator::Return(_))
+            && let Some((task, _)) = live.iter().next()
+        {
+            return Err(MirValidationError::TaskLeak {
+                function: function.id,
+                task: *task,
+            });
+        }
+        for successor in successors(block.terminator()) {
+            let entry = &mut entries[successor.index()];
+            let mut changed = false;
+            for (task, group) in &live {
+                match entry.get(task) {
+                    Some(existing) if existing != group => {
+                        return Err(MirValidationError::TaskGroupMismatch {
+                            function: function.id,
+                            task: *task,
+                        });
+                    }
+                    Some(_) => {}
+                    None => {
+                        entry.insert(*task, *group);
+                        changed = true;
+                    }
+                }
+            }
+            if (!visited[successor.index()] || changed) && !queued[successor.index()] {
                 worklist.push_back(successor);
                 queued[successor.index()] = true;
             }
@@ -672,12 +781,16 @@ fn instruction_definition(instruction: &MirInstruction) -> Option<ValueId> {
         | MirInstruction::BorrowRead { destination, .. }
         | MirInstruction::TakePlace { destination, .. }
         | MirInstruction::Binary { destination, .. }
-        | MirInstruction::Call { destination, .. } => Some(*destination),
+        | MirInstruction::Call { destination, .. }
+        | MirInstruction::Await { destination, .. } => Some(*destination),
         MirInstruction::WritePlace { .. }
         | MirInstruction::Retain { .. }
         | MirInstruction::Drop { .. }
         | MirInstruction::AcquireResource { .. }
         | MirInstruction::ReleaseResource { .. }
+        | MirInstruction::Spawn { .. }
+        | MirInstruction::Cancel { .. }
+        | MirInstruction::Join { .. }
         | MirInstruction::Discard { .. } => None,
     }
 }
@@ -697,6 +810,15 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
                 | MirCallArgument::Take(_) => None,
             })
             .collect(),
+        MirInstruction::Spawn { arguments, .. } => arguments
+            .iter()
+            .filter_map(|argument| match argument {
+                MirCallArgument::Value(value) => Some(*value),
+                MirCallArgument::BorrowRead(_)
+                | MirCallArgument::BorrowMut(_)
+                | MirCallArgument::Take(_) => None,
+            })
+            .collect(),
         MirInstruction::LoadLiteral { .. }
         | MirInstruction::ReadPlace { .. }
         | MirInstruction::BorrowRead { .. }
@@ -704,7 +826,10 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         | MirInstruction::Retain { .. }
         | MirInstruction::Drop { .. }
         | MirInstruction::AcquireResource { .. }
-        | MirInstruction::ReleaseResource { .. } => Vec::new(),
+        | MirInstruction::ReleaseResource { .. }
+        | MirInstruction::Await { .. }
+        | MirInstruction::Cancel { .. }
+        | MirInstruction::Join { .. } => Vec::new(),
     }
 }
 
@@ -825,8 +950,26 @@ fn transfer_move_state(
             }
             Ok(())
         }
+        MirInstruction::Spawn { arguments, .. } => {
+            for argument in arguments {
+                match argument {
+                    MirCallArgument::Value(_) => {}
+                    MirCallArgument::BorrowRead(place) | MirCallArgument::BorrowMut(place) => {
+                        check_live(*place, moved_places)?;
+                    }
+                    MirCallArgument::Take(place) => {
+                        check_live(*place, moved_places)?;
+                        moved_places.insert(*place);
+                    }
+                }
+            }
+            Ok(())
+        }
         MirInstruction::LoadLiteral { .. }
         | MirInstruction::Binary { .. }
+        | MirInstruction::Await { .. }
+        | MirInstruction::Cancel { .. }
+        | MirInstruction::Join { .. }
         | MirInstruction::Discard { .. } => Ok(()),
     }
 }
@@ -988,6 +1131,57 @@ fn verify_instruction(
             }
             Ok(())
         }
+        MirInstruction::Spawn {
+            target, arguments, ..
+        } => {
+            let Some(callee) = functions.get(target.index()) else {
+                return Err(MirValidationError::InvalidFunctionTarget {
+                    function: function.id,
+                    target: *target,
+                });
+            };
+            if !callee.signature.is_async() {
+                return Err(MirValidationError::SpawnTargetNotAsync {
+                    function: function.id,
+                    target: *target,
+                });
+            }
+            if arguments.len() != callee.signature.parameter_modes().len() {
+                return Err(MirValidationError::CallArityMismatch {
+                    function: function.id,
+                    expected: callee.signature.parameter_modes().len(),
+                    actual: arguments.len(),
+                });
+            }
+            for (parameter, (argument, expected)) in arguments
+                .iter()
+                .zip(callee.signature.parameter_modes())
+                .enumerate()
+            {
+                let actual = argument.mode();
+                if !call_argument_compatible(actual, *expected) {
+                    return Err(MirValidationError::CallArgumentModeMismatch {
+                        function: function.id,
+                        parameter,
+                        expected: *expected,
+                        actual,
+                    });
+                }
+                match argument {
+                    MirCallArgument::Value(value) => used.push(*value),
+                    MirCallArgument::BorrowRead(place) | MirCallArgument::BorrowMut(place) => {
+                        check_live_place(*place, moved_places)?;
+                    }
+                    MirCallArgument::Take(place) => {
+                        check_live_place(*place, moved_places)?;
+                        moved_places.insert(*place);
+                    }
+                }
+            }
+            Ok(())
+        }
+        MirInstruction::Await { destination, .. } => define(*destination, defined),
+        MirInstruction::Cancel { .. } | MirInstruction::Join { .. } => Ok(()),
         MirInstruction::Discard { value } => {
             used.push(*value);
             Ok(())
@@ -1096,6 +1290,30 @@ pub enum MirValidationError {
     ResourceLeak {
         function: FunctionId,
         place: PlaceId,
+    },
+    DuplicateTaskId {
+        function: FunctionId,
+        task: TaskId,
+    },
+    TaskAlreadyLive {
+        function: FunctionId,
+        task: TaskId,
+    },
+    TaskNotLive {
+        function: FunctionId,
+        task: TaskId,
+    },
+    TaskLeak {
+        function: FunctionId,
+        task: TaskId,
+    },
+    TaskGroupMismatch {
+        function: FunctionId,
+        task: TaskId,
+    },
+    SpawnTargetNotAsync {
+        function: FunctionId,
+        target: FunctionId,
     },
     InvalidFunctionTarget {
         function: FunctionId,
@@ -1218,6 +1436,84 @@ mod tests {
             leaked,
             Err(MirValidationError::ResourceLeak { .. })
         ));
+    }
+
+    #[test]
+    fn structured_tasks_must_be_closed_before_return() {
+        let worker = MirFunction::new(
+            FunctionId::new(1),
+            MirFunctionSignature::new(vec![], TypeId::new(0), true),
+            0,
+            0,
+            vec![BasicBlock::new(
+                BlockId::new(0),
+                vec![],
+                MirTerminator::Return(None),
+            )],
+        );
+        let valid = MirModule::new(
+            vec![WireType::Unit],
+            vec![
+                MirFunction::new(
+                    FunctionId::new(0),
+                    signature(),
+                    0,
+                    1,
+                    vec![BasicBlock::new(
+                        BlockId::new(0),
+                        vec![
+                            MirInstruction::Spawn {
+                                task: TaskId::new(0),
+                                group: TaskGroupId::new(0),
+                                target: FunctionId::new(1),
+                                arguments: vec![],
+                            },
+                            MirInstruction::Await {
+                                destination: ValueId::new(0),
+                                task: TaskId::new(0),
+                            },
+                        ],
+                        MirTerminator::Return(Some(ValueId::new(0))),
+                    )],
+                ),
+                worker.clone(),
+            ],
+            vec![
+                MirFunctionDebug::new("main", vec![]),
+                MirFunctionDebug::new("worker", vec![]),
+            ],
+            vec![],
+        );
+        assert!(valid.is_ok());
+
+        let leaked = MirModule::new(
+            vec![WireType::Unit],
+            vec![
+                MirFunction::new(
+                    FunctionId::new(0),
+                    signature(),
+                    0,
+                    0,
+                    vec![BasicBlock::new(
+                        BlockId::new(0),
+                        vec![MirInstruction::Spawn {
+                            task: TaskId::new(0),
+                            group: TaskGroupId::new(0),
+                            target: FunctionId::new(1),
+                            arguments: vec![],
+                        }],
+                        MirTerminator::Return(None),
+                    )],
+                ),
+                worker,
+            ],
+            vec![
+                MirFunctionDebug::new("main", vec![]),
+                MirFunctionDebug::new("worker", vec![]),
+            ],
+            vec![],
+        );
+        assert!(matches!(leaked, Err(MirValidationError::TaskLeak { .. })));
     }
 
     #[test]

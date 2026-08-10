@@ -73,6 +73,7 @@ pub enum MirExecutionError {
     InvalidOperation(&'static str),
     DivisionByZero,
     UnsupportedExternalCall,
+    UnsupportedStructuredConcurrency,
     RecursionLimit,
     StepLimit,
 }
@@ -205,6 +206,12 @@ impl<'a> Interpreter<'a> {
                         let _ = places[place.index()]
                             .take()
                             .ok_or(MirExecutionError::UninitializedPlace(place.index()))?;
+                    }
+                    MirInstruction::Spawn { .. }
+                    | MirInstruction::Await { .. }
+                    | MirInstruction::Cancel { .. }
+                    | MirInstruction::Join { .. } => {
+                        return Err(MirExecutionError::UnsupportedStructuredConcurrency);
                     }
                     MirInstruction::WritePlace { place, value } => {
                         places[place.index()] = Some(value_at(&values, *value)?);

@@ -298,6 +298,11 @@ mechanical acceptance condition holds.
       edges remain follow-up work.
   - [ ] **M03.3 — Add structured-concurrency instructions.** Model spawn, await,
     join, cancel, and select with lexical task-group ownership.
+    - [x] **M03.3a — Establish typed task lifecycle primitives.** MIR now owns
+      task and task-group IDs, verifies internal async spawn signatures and
+      lexical close on normal returns, and rejects unsupported backend execution
+      until scheduling and source lowering are ready. Select and non-normal
+      cleanup remain follow-up work.
   - [ ] **M03.4 — Add resolved builtin and external-call instructions.** Include
     signature/effect/retention identity and no unresolved callee text.
     - [x] **M03.4a — Execute resolved external calls through MIR bytecode.** A
