@@ -227,6 +227,68 @@ pub struct WireFunctionV2 {
     instructions: Vec<WireInstructionV2>,
 }
 
+/// Numeric link into the Artifact-level import table. The external symbol and
+/// signature remain in that separately verified table; executable code only
+/// carries this stable index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WireImportV2 {
+    artifact_import: u32,
+}
+
+impl WireImportV2 {
+    pub const fn new(artifact_import: u32) -> Self {
+        Self { artifact_import }
+    }
+
+    pub const fn artifact_import(self) -> u32 {
+        self.artifact_import
+    }
+}
+
+/// Named exports deliberately use a numeric function identity in executable
+/// code. A future Artifact section supplies the stable export-name string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WireExportV2 {
+    function: WireFunctionId,
+}
+
+impl WireExportV2 {
+    pub const fn new(function: WireFunctionId) -> Self {
+        Self { function }
+    }
+
+    pub const fn function(self) -> WireFunctionId {
+        self.function
+    }
+}
+
+/// Optional source/debug side-table record. It cannot participate in
+/// executable control flow, but its numeric location is verified against the
+/// code table so a malformed debug section cannot reference arbitrary code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WireDebugLocationV2 {
+    function: WireFunctionId,
+    instruction: WireInstructionOffset,
+    source_start: u32,
+    source_end: u32,
+}
+
+impl WireDebugLocationV2 {
+    pub const fn new(
+        function: WireFunctionId,
+        instruction: WireInstructionOffset,
+        source_start: u32,
+        source_end: u32,
+    ) -> Self {
+        Self {
+            function,
+            instruction,
+            source_start,
+            source_end,
+        }
+    }
+}
+
 impl WireFunctionV2 {
     pub fn new(
         parameter_count: u32,
@@ -260,8 +322,10 @@ impl WireFunctionV2 {
 pub struct WireProgramV2 {
     types: Vec<WireType>,
     constants: Vec<Vec<u8>>,
-    import_count: u32,
+    imports: Vec<WireImportV2>,
+    exports: Vec<WireExportV2>,
     functions: Vec<WireFunctionV2>,
+    debug: Vec<WireDebugLocationV2>,
 }
 
 impl WireProgramV2 {
@@ -271,11 +335,25 @@ impl WireProgramV2 {
         import_count: u32,
         functions: Vec<WireFunctionV2>,
     ) -> Self {
+        let imports = (0..import_count).map(WireImportV2::new).collect();
+        Self::with_tables(types, constants, imports, Vec::new(), functions, Vec::new())
+    }
+
+    pub fn with_tables(
+        types: Vec<WireType>,
+        constants: Vec<Vec<u8>>,
+        imports: Vec<WireImportV2>,
+        exports: Vec<WireExportV2>,
+        functions: Vec<WireFunctionV2>,
+        debug: Vec<WireDebugLocationV2>,
+    ) -> Self {
         Self {
             types,
             constants,
-            import_count,
+            imports,
+            exports,
             functions,
+            debug,
         }
     }
 
@@ -288,11 +366,23 @@ impl WireProgramV2 {
     }
 
     pub const fn import_count(&self) -> u32 {
-        self.import_count
+        self.imports.len() as u32
+    }
+
+    pub fn imports(&self) -> &[WireImportV2] {
+        &self.imports
+    }
+
+    pub fn exports(&self) -> &[WireExportV2] {
+        &self.exports
     }
 
     pub fn functions(&self) -> &[WireFunctionV2] {
         &self.functions
+    }
+
+    pub fn debug_locations(&self) -> &[WireDebugLocationV2] {
+        &self.debug
     }
 
     /// Structural v2 verification that is independent of the compiler and VM.
@@ -323,9 +413,36 @@ impl WireProgramV2 {
                     register_count,
                     self.constants.len(),
                     self.functions.len(),
-                    self.import_count as usize,
+                    self.imports.len(),
                     function.instructions.len(),
                 )?;
+            }
+        }
+        for (index, export) in self.exports.iter().enumerate() {
+            if export.function.index() >= self.functions.len() {
+                return Err(invalid(format!(
+                    "v2 export {index} references invalid function {}",
+                    export.function.index()
+                )));
+            }
+        }
+        for (index, location) in self.debug.iter().enumerate() {
+            let Some(function) = self.functions.get(location.function.index()) else {
+                return Err(invalid(format!(
+                    "v2 debug location {index} references invalid function {}",
+                    location.function.index()
+                )));
+            };
+            if location.instruction.index() >= function.instructions.len() {
+                return Err(invalid(format!(
+                    "v2 debug location {index} references invalid instruction {}",
+                    location.instruction.index()
+                )));
+            }
+            if location.source_start > location.source_end {
+                return Err(invalid(format!(
+                    "v2 debug location {index} has inverted source range"
+                )));
             }
         }
         Ok(())
@@ -406,8 +523,10 @@ impl Default for BytecodeV2Verifier {
 struct RawProgramV2 {
     types: Vec<WireType>,
     constants: Vec<Vec<u8>>,
-    import_count: u32,
+    imports: Vec<u32>,
+    exports: Vec<u32>,
     functions: Vec<RawFunctionV2>,
+    debug: Vec<RawDebugLocationV2>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -421,12 +540,24 @@ struct RawFunctionV2 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct RawInstructionV2(u8, Vec<u32>);
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct RawDebugLocationV2(u32, u32, u32, u32);
+
 impl From<&WireProgramV2> for RawProgramV2 {
     fn from(program: &WireProgramV2) -> Self {
         Self {
             types: program.types.clone(),
             constants: program.constants.clone(),
-            import_count: program.import_count,
+            imports: program
+                .imports
+                .iter()
+                .map(|import| import.artifact_import)
+                .collect(),
+            exports: program
+                .exports
+                .iter()
+                .map(|export| export.function.0)
+                .collect(),
             functions: program
                 .functions
                 .iter()
@@ -440,6 +571,18 @@ impl From<&WireProgramV2> for RawProgramV2 {
                             RawInstructionV2(instruction.opcode as u8, instruction.operands.clone())
                         })
                         .collect(),
+                })
+                .collect(),
+            debug: program
+                .debug
+                .iter()
+                .map(|location| {
+                    RawDebugLocationV2(
+                        location.function.0,
+                        location.instruction.0,
+                        location.source_start,
+                        location.source_end,
+                    )
                 })
                 .collect(),
         }
@@ -472,8 +615,25 @@ impl TryFrom<RawProgramV2> for WireProgramV2 {
         Ok(Self {
             types: raw.types,
             constants: raw.constants,
-            import_count: raw.import_count,
+            imports: raw.imports.into_iter().map(WireImportV2::new).collect(),
+            exports: raw
+                .exports
+                .into_iter()
+                .map(|function| WireExportV2::new(WireFunctionId::new(function)))
+                .collect(),
             functions,
+            debug: raw
+                .debug
+                .into_iter()
+                .map(|RawDebugLocationV2(function, instruction, start, end)| {
+                    WireDebugLocationV2::new(
+                        WireFunctionId::new(function),
+                        WireInstructionOffset::new(instruction),
+                        start,
+                        end,
+                    )
+                })
+                .collect(),
         })
     }
 }
@@ -590,12 +750,14 @@ mod tests {
         let raw = RawProgramV2 {
             types: vec![WireType::Unit],
             constants: vec![vec![0]],
-            import_count: 0,
+            imports: vec![],
+            exports: vec![],
             functions: vec![RawFunctionV2 {
                 parameter_count: 0,
                 register_count: 1,
                 instructions: vec![RawInstructionV2(255, vec![])],
             }],
+            debug: vec![],
         };
         let unknown = crate::encode_executable_payload(&raw).expect("malformed test payload");
         assert!(matches!(
@@ -616,6 +778,50 @@ mod tests {
         let reference = instruction_schema_markdown();
         assert!(reference.contains("`call_external` | 5 | register, import, constant"));
         assert!(reference.contains("`resource_drop` | 9 | register"));
+    }
+
+    #[test]
+    fn v2_verifies_export_and_optional_debug_tables() {
+        let valid = WireProgramV2::with_tables(
+            vec![WireType::Unit],
+            vec![vec![0]],
+            vec![WireImportV2::new(4)],
+            vec![WireExportV2::new(WireFunctionId::new(0))],
+            vec![WireFunctionV2::new(
+                0,
+                1,
+                vec![WireInstructionV2::new(WireOpcodeV2::Return, vec![0])],
+            )],
+            vec![WireDebugLocationV2::new(
+                WireFunctionId::new(0),
+                WireInstructionOffset::new(0),
+                3,
+                7,
+            )],
+        );
+        let bytes = encode_program(&valid).expect("v2 tables encode");
+        let decoded = BytecodeV2Verifier::default()
+            .verify_payload(&bytes)
+            .expect("v2 tables verify");
+        assert_eq!(decoded.program(), &valid);
+
+        let invalid_debug = WireProgramV2::with_tables(
+            vec![WireType::Unit],
+            vec![],
+            vec![],
+            vec![WireExportV2::new(WireFunctionId::new(1))],
+            vec![WireFunctionV2::new(0, 1, vec![])],
+            vec![WireDebugLocationV2::new(
+                WireFunctionId::new(0),
+                WireInstructionOffset::new(1),
+                5,
+                4,
+            )],
+        );
+        assert!(matches!(
+            invalid_debug.verify(BytecodeLimits::default()),
+            Err(BytecodeError::InvalidPayload(_))
+        ));
     }
 
     proptest! {

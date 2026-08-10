@@ -405,7 +405,7 @@ mechanical acceptance condition holds.
 - [x] **B01 — Establish a bounded sectioned Artifact envelope.** Required and
   optional sections, canonical ordering, length/count limits, hashes, checksum,
   unknown-section handling, malformed corpora, and fuzz coverage are present.
-- [ ] **B02 — Define the typed bytecode v2 wire model.** Use bounded decoding,
+- [x] **B02 — Define the typed bytecode v2 wire model.** Use bounded decoding,
   numeric opcodes, numeric IDs, fixed operand layouts, and separate type,
   constant, function, import, export, code, and optional debug tables.
   - [x] **B02.1 — Introduce a numeric v2 executable model.**
@@ -419,6 +419,11 @@ mechanical acceptance condition holds.
     CBOR, rejects unknown numeric opcodes, and invokes the typed structural
     verifier before returning a program. Artifact section integration and the
     remaining tables remain follow-up work.
+  - [x] **B02.3 — Model import, export, and optional debug tables.** V2 now
+    carries numeric Artifact-import links, numeric function exports, and
+    function/instruction source locations as separate tables. The verifier
+    rejects invalid export/debug references and inverted source ranges; section
+    layout in a deployed v2 Artifact remains follow-up work.
 - [ ] **B03 — Generate codec and verification rules from one instruction
   schema.** The schema generates Rust instruction types, encoder, bounded
   decoder, operand validation, documentation, and fuzz seeds; string field maps

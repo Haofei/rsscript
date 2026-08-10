@@ -31,6 +31,10 @@ and generated opcode reference all derive from one `INSTRUCTION_SCHEMA_V2`
 table. New v2 instructions must be added there rather than duplicating maps in
 the codec, verifier, or documentation.
 
+V2 also separates numeric Artifact-import links, exports, and optional debug
+locations from the function/code table. The verifier checks every export and
+debug function/instruction reference before returning a verified program.
+
 The v2 decoder has a bounded arbitrary-byte property corpus so malformed
 payloads cannot panic the verifier while explicit long-lived seed fixtures are
 added with future Artifact v2 sections.
