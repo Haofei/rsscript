@@ -582,6 +582,10 @@ mechanical acceptance condition holds.
       faults remain isolated-runner concerns; reentrancy fixtures remain open.
   - [ ] **P08.4 — Add redaction and payload-limit fixtures.** Reports and traces
     remain bounded and do not expose sensitive Provider payloads by default.
+    - [x] **P08.4a — Redact Provider-controlled failure content by default.** The
+      portable execution report keeps only the stable Provider error code plus
+      aggregate telemetry; Provider message/details and per-call traces do not
+      serialize unless a host keeps separately redacted diagnostics.
 
 ### 6. Stable SDK and product workflows
 

@@ -822,7 +822,7 @@ impl LinkedArtifact<'_> {
                 };
                 return ExecutionReport::failed(
                     self.artifact.module_digest(),
-                    RuntimeError::from(error),
+                    RuntimeError::from_execution(error),
                     diagnostics,
                     started.elapsed(),
                     limits.cancel.as_ref(),
@@ -833,7 +833,7 @@ impl LinkedArtifact<'_> {
             Some(EvalError::Diagnostics(diagnostics)) => diagnostics.clone(),
             _ => Vec::new(),
         };
-        let failure = output.failure.map(RuntimeError::from);
+        let failure = output.failure.map(RuntimeError::from_execution);
         let termination_reason = failure
             .as_ref()
             .map_or(TerminationReason::Completed, |error| error.reason);
@@ -1265,6 +1265,20 @@ pub struct RuntimeError {
 #[cfg(feature = "execution")]
 impl From<EvalError> for RuntimeError {
     fn from(error: EvalError) -> Self {
+        Self::from_execution(error)
+    }
+}
+
+#[cfg(feature = "execution")]
+impl RuntimeError {
+    /// Convert execution failures into report-safe evidence.
+    ///
+    /// Provider messages and structured details are host-owned data and can
+    /// contain request paths, endpoints, credentials, or response fragments.
+    /// The default report keeps a stable machine-readable error code but does
+    /// not serialize that Provider-controlled content. Hosts that need richer
+    /// diagnostics must keep it in their own redacted trace sink.
+    fn from_execution(error: EvalError) -> Self {
         match error {
             EvalError::Diagnostics(diagnostics) => Self {
                 reason: TerminationReason::VerificationFailure,
@@ -1313,7 +1327,7 @@ impl From<EvalError> for RuntimeError {
                     }
                     _ => TerminationReason::ProviderError,
                 },
-                message: error.to_string(),
+                message: format!("provider call failed ({})", error.code.as_str()),
             },
         }
     }
@@ -1734,8 +1748,80 @@ fn main() -> Result<Unit, String> {
             report
                 .failure
                 .as_ref()
-                .is_some_and(|error| error.message.contains("InvalidArgument"))
+                .is_some_and(|error| error.message == "provider call failed (invalid_argument)")
         );
+    }
+
+    #[test]
+    fn default_reports_redact_provider_controlled_failure_text_and_payloads() {
+        let compiler = Compiler;
+        let package = compiler
+            .compile_with_interfaces(
+                &[(
+                    "main.rss",
+                    "module app\nuse host.test.*\nfn main() -> Unit { fail(); return Unit }",
+                )],
+                &[("test.rssi", "module host.test\npub fn fail() -> Unit\n")],
+            )
+            .expect("compile package");
+        let package = verified(package);
+        let signature = FunctionSignature {
+            parameters: vec![],
+            result: "Unit".into(),
+            asynchronous: false,
+        };
+        let symbol = ExternalSymbol::new("host.test.fail").expect("symbol");
+        let descriptor = ProviderDescriptor {
+            provider_id: "test.failure".into(),
+            provider_version: "1".into(),
+            supported_abi: vec![RUNTIME_ABI_VERSION],
+            functions: vec![ProviderFunctionDescriptor {
+                symbol: symbol.clone(),
+                signature: signature.clone(),
+                entry: "fail".into(),
+                call_mode: ProviderCallMode::Sync,
+                blocking: BlockingBehavior::NonBlocking,
+                cancellation: CancellationBehavior::NotApplicable,
+                thread_safe: true,
+                reentrant: true,
+                resource_cleanup: provider::ResourceCleanupContract::None,
+                error_mapping: provider::ProviderErrorMapping::StructuredV1,
+            }],
+        };
+        let mut providers = ProviderRegistry::default();
+        providers
+            .register(
+                &descriptor,
+                BTreeMap::from([(
+                    symbol,
+                    ProviderFunction {
+                        signature,
+                        callable: NativeInterpreterFn::new(|_| {
+                            let mut error = provider::ProviderError::invalid_argument(
+                                "secret-token=do-not-report",
+                            );
+                            error.details = Some(serde_json::json!({
+                                "credential": "do-not-report"
+                            }));
+                            Err(error)
+                        }),
+                    },
+                )]),
+            )
+            .expect("register provider");
+
+        let report = Runtime::new(providers)
+            .link(&package)
+            .expect("link provider")
+            .execute(ExecutionRequest::default());
+        assert_eq!(report.termination_reason, TerminationReason::ProviderError);
+        assert!(report.provider_call_traces.is_empty());
+        assert_eq!(report.telemetry.provider_functions.len(), 1);
+        let failure = report.failure.as_ref().expect("provider failure evidence");
+        assert_eq!(failure.message, "provider call failed (invalid_argument)");
+        let serialized = serde_json::to_string(&report).expect("serialize report");
+        assert!(!serialized.contains("secret-token"));
+        assert!(!serialized.contains("credential"));
     }
 
     #[test]
