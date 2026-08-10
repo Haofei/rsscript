@@ -165,6 +165,10 @@ mechanical acceptance condition holds.
       Resource generic bounds/fields and `fresh` generic return requirements are
       derived by `rsscript-semantics`; compiler no longer owns bound maps or
       their diagnostics.
+    - [x] **S02.3.2a — Move declaration signature and retention diagnostics.**
+      Explicit return/parameter types, method/protocol `self` shape, and
+      `retains` declaration validity are semantic queries; compiler only
+      orchestrates their canonical diagnostics.
   - [ ] **S02.2 — Move type and generic-constraint checks.** Relocate type
     inference, substitutions, generic constraints, and call result facts behind
     the semantic crate API.

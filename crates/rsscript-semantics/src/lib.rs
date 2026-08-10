@@ -20,6 +20,7 @@ pub mod hir;
 mod identities;
 mod interface_descriptor;
 mod resource_types;
+mod signatures;
 mod source_rules;
 mod symbols;
 mod type_aliases;
@@ -101,6 +102,7 @@ pub use resource_types::{
     weak_field_diagnostics,
 };
 pub use rsscript_source_model::{FileId, InterfaceId, ModuleId, SourceRevision};
+pub use signatures::signature_diagnostics;
 pub use source_rules::forbidden_surface_syntax_diagnostics;
 pub use symbols::{
     Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,

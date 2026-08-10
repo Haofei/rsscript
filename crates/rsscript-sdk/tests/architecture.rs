@@ -1176,6 +1176,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "unknown_field_diagnostics",
         "resource_field_diagnostics",
         "resource_generic_diagnostics",
+        "signature_diagnostics",
         "weak_field_diagnostics",
     ] {
         assert!(
@@ -1256,6 +1257,21 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     let compiler_unknowns = read(&root.join("crates/rsscript-compiler/src/analyzer/unknowns.rs"));
     assert!(!compiler_unknowns.contains("fn check_fresh_generic_return_bound"));
     assert!(!compiler_unknowns.contains("fn check_resource_type_param_field"));
+
+    let semantic_signatures = read(&root.join("crates/rsscript-semantics/src/signatures.rs"));
+    assert!(semantic_signatures.contains("pub fn signature_diagnostics"));
+    assert!(compiler_declaration_checks.contains("rsscript_semantics::signature_diagnostics"));
+    for forbidden in [
+        "fn check_signature_explicitness",
+        "fn check_return_type_explicit",
+        "fn check_retains_parameters",
+        "fn invalid_self_parameter_diagnostic",
+    ] {
+        assert!(
+            !compiler_signatures.contains(forbidden),
+            "compiler must not re-own `{forbidden}`"
+        );
+    }
 
     let semantic_resources = read(&root.join("crates/rsscript-semantics/src/resource_types.rs"));
     for query in [

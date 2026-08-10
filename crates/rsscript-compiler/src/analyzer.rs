@@ -2045,35 +2045,3 @@ pub(crate) fn is_valid_rust_identifier(name: &str) -> bool {
         && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
         && !crate::text_util::is_rust_keyword(name)
 }
-
-pub(crate) fn type_ref_is_noescape(ty: &TypeRef) -> bool {
-    ty.is_noescape || ty.args.iter().any(type_ref_is_noescape)
-}
-
-pub(crate) fn type_ref_is_copy(ty: &TypeRef) -> bool {
-    !ty.is_fresh
-        && !ty.is_noescape
-        && ty.args.is_empty()
-        && ty.fn_params.is_empty()
-        && ty.fn_return.is_none()
-        && matches!(
-            ty.name.as_str(),
-            "Bool"
-                | "Byte"
-                | "Char"
-                | "Float"
-                | "Float32"
-                | "Float64"
-                | "Int"
-                | "Int8"
-                | "Int16"
-                | "Int32"
-                | "Int64"
-                | "UInt"
-                | "UInt8"
-                | "UInt16"
-                | "UInt32"
-                | "UInt64"
-                | "Unit"
-        )
-}

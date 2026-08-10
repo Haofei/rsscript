@@ -18,7 +18,11 @@ mod signatures;
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
     duplicate_decls::check(analyzer);
     analyzer.check_protocol_contracts();
-    analyzer.check_signature_explicitness();
+    analyzer
+        .diagnostics
+        .extend(rsscript_semantics::signature_diagnostics(
+            &analyzer.syntax_program,
+        ));
 }
 
 /// Generic bounds and resource-generic contracts belong to declaration checking
