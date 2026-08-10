@@ -15,11 +15,13 @@ shapes instead of consuming checked semantic facts.
 
 `rsscript-lowering` now provides a projection-free direct lowerer for the
 linear checked-HIR subset: local bindings and assignment, literals, scalar
-binary expressions, lists, maps, JSON objects, resolved list indexing, and
-return. `CompiledIr::mir()` prefers this path. Unsupported control flow, calls,
-resource scopes, async, fields, records, variants, and match explicitly return
-a lowering error; only the existing compatibility caller may then choose the
-old `ExecutableIr` bridge.
+binary expressions, lists, maps, JSON objects, resolved list indexing, return,
+and resolved internal calls with ordinary/read arguments. Call targets are
+looked up from checked `CallResolution` in a deterministic `FunctionId` table.
+`CompiledIr::mir()` prefers this path. Unsupported control flow, mut/take or
+external calls, resource scopes, async, fields, records, variants, and match
+explicitly return a lowering error; only the existing compatibility caller may
+then choose the old `ExecutableIr` bridge.
 
 This is not the final HIR-to-MIR lowerer and does not change language syntax or
 make `ExecutableIr` a new stable API.
@@ -47,5 +49,6 @@ reading source syntax or `ExecutableIr` nodes.
 ## Evidence
 
 Compiler coverage asserts a linear scalar program produces direct HIR MIR with
-the expected owned instructions. The SDK migration test compiles that direct
-MIR to a verifier-approved Artifact and executes it in the VM with result 42.
+the expected owned instructions and that a resolved internal call becomes a
+`FunctionId` call. SDK migration tests compile both direct HIR MIR shapes to
+verifier-approved Artifacts and execute them in the VM with result 42.

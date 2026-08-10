@@ -165,4 +165,39 @@ fn main() -> Int {
         ));
         mir.verify().expect("direct HIR MIR verifies");
     }
+
+    #[test]
+    fn direct_checked_hir_path_resolves_internal_call_targets_to_function_ids() {
+        let compiled = compile_source_to_ir(
+            "direct-hir-call.rss",
+            r#"
+fn helper() -> Int {
+    return 42
+}
+
+fn main() -> Int {
+    return helper()
+}
+"#,
+        )
+        .expect("source should compile");
+        let mir = compiled
+            .checked_hir_mir()
+            .expect("internal call lowers from checked HIR");
+        assert!(mir.functions().iter().any(|function| {
+            function.blocks()[0]
+                .instructions()
+                .iter()
+                .any(|instruction| {
+                    matches!(
+                        instruction,
+                        rsscript_mir::MirInstruction::Call {
+                            target: rsscript_mir::MirCallTarget::Function(_),
+                            ..
+                        }
+                    )
+                })
+        }));
+        mir.verify().expect("direct HIR call MIR verifies");
+    }
 }

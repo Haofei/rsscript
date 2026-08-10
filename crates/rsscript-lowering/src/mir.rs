@@ -137,6 +137,11 @@ pub fn lower_checked_hir_linear_to_mir(hir: &checked::Hir) -> Result<MirModule, 
         .iter()
         .map(|(_, _, signature)| types.checked_function_signature(signature))
         .collect::<Vec<_>>();
+    let targets = functions
+        .iter()
+        .enumerate()
+        .map(|(index, (name, _, _))| (name.to_string(), FunctionId::new(index as u32)))
+        .collect::<BTreeMap<_, _>>();
     let mut lowered = Vec::with_capacity(functions.len());
     let mut debug = Vec::with_capacity(functions.len());
     for ((index, (name, block, signature)), mir_signature) in
@@ -148,6 +153,7 @@ pub fn lower_checked_hir_linear_to_mir(hir: &checked::Hir) -> Result<MirModule, 
             block,
             signature,
             mir_signature,
+            targets.clone(),
         )
         .lower()?;
         lowered.push(output.function);
@@ -262,6 +268,7 @@ struct CheckedHirLinearLowerer<'source> {
     body: &'source checked::HirBlock,
     signature: &'source checked::FunctionSig,
     mir_signature: MirFunctionSignature,
+    targets: BTreeMap<String, FunctionId>,
     instructions: Vec<MirInstruction>,
     places: HashMap<String, PlaceId>,
     place_names: Vec<String>,
@@ -276,6 +283,7 @@ impl<'source> CheckedHirLinearLowerer<'source> {
         body: &'source checked::HirBlock,
         signature: &'source checked::FunctionSig,
         mir_signature: MirFunctionSignature,
+        targets: BTreeMap<String, FunctionId>,
     ) -> Self {
         let mut lowerer = Self {
             id,
@@ -283,6 +291,7 @@ impl<'source> CheckedHirLinearLowerer<'source> {
             body,
             signature,
             mir_signature,
+            targets,
             instructions: Vec::new(),
             places: HashMap::new(),
             place_names: Vec::new(),
@@ -495,8 +504,18 @@ impl<'source> CheckedHirLinearLowerer<'source> {
                 Ok(destination)
             }
             checked::HirExpr::Index { .. } => self.unsupported("non-list checked HIR index"),
-            checked::HirExpr::Call { .. } => self.unsupported("checked HIR call"),
-            checked::HirExpr::Effect { .. } => self.unsupported("checked HIR effect"),
+            checked::HirExpr::Call {
+                receiver,
+                args,
+                resolution,
+                ..
+            } => self.lower_direct_call(receiver.as_ref(), args, resolution),
+            checked::HirExpr::Effect { effect, value, .. }
+                if matches!(effect, checked::ParamEffect::Read) =>
+            {
+                self.lower_expression(value)
+            }
+            checked::HirExpr::Effect { .. } => self.unsupported("non-read checked HIR effect"),
             checked::HirExpr::Manage { .. } => self.unsupported("checked HIR managed value"),
             checked::HirExpr::Spawn { .. } => self.unsupported("checked HIR spawn"),
             checked::HirExpr::Await { .. } => self.unsupported("checked HIR await"),
@@ -512,6 +531,52 @@ impl<'source> CheckedHirLinearLowerer<'source> {
         let destination = self.value();
         self.instructions
             .push(MirInstruction::LoadLiteral { destination, value });
+        Ok(destination)
+    }
+
+    fn lower_direct_call(
+        &mut self,
+        receiver: Option<&checked::HirCallReceiver>,
+        args: &[checked::HirCallArg],
+        resolution: &checked::CallResolution,
+    ) -> Result<ValueId, MirLoweringError> {
+        if receiver.is_some() {
+            return self.unsupported("checked HIR receiver call");
+        }
+        let checked::CallResolution::Resolved { signature, .. } = resolution else {
+            return self.unsupported("unresolved checked HIR call");
+        };
+        if signature.is_external || signature.is_builtin {
+            return self.unsupported("external or builtin checked HIR call");
+        }
+        let qualified = signature
+            .namespace
+            .as_ref()
+            .map(|namespace| format!("{namespace}.{}", signature.name));
+        let target = self
+            .targets
+            .get(&signature.name)
+            .or_else(|| qualified.as_ref().and_then(|name| self.targets.get(name)))
+            .copied()
+            .ok_or_else(|| MirLoweringError::Unsupported {
+                function: self.function_name.to_owned(),
+                construct: "direct checked HIR call target",
+            })?;
+        let mut ordered = args.iter().collect::<Vec<_>>();
+        ordered.sort_by_key(|argument| argument.evaluation_index);
+        let arguments = ordered
+            .into_iter()
+            .map(|argument| {
+                self.lower_expression(&argument.value)
+                    .map(MirCallArgument::Value)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let destination = self.value();
+        self.instructions.push(MirInstruction::Call {
+            destination,
+            target: MirCallTarget::Function(target),
+            arguments,
+        });
         Ok(destination)
     }
 

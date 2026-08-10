@@ -293,6 +293,33 @@ fn main() -> Int {
 }
 
 #[test]
+fn direct_checked_hir_internal_calls_reach_verified_bytecode() {
+    let source = r#"
+fn helper() -> Int {
+    return 42
+}
+
+fn main() -> Int {
+    return helper()
+}
+"#;
+    let compiled = compile_source_to_ir("direct-hir-call.rss", source)
+        .expect("direct-HIR call fixture compiles");
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("resolved internal call uses direct checked-HIR lowering");
+    let output = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("direct HIR call emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("direct HIR call bytecode executes");
+    assert_eq!(output.value, "42");
+}
+
+#[test]
 fn capability_stages_stay_explicit() {
     for case in CASES {
         assert!(
