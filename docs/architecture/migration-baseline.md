@@ -513,8 +513,10 @@ mechanical acceptance condition holds.
   type/field identity, and generic `Native { type_name, id }` escape hatches
   with typed records, variants, lists, resources, and generation-safe handles;
   JSON becomes an explicitly declared extension codec.
-  - [ ] **P06.1 — Define typed wire records, variants, and resources.** Use type,
-    field, variant, slot, and generation identity instead of free strings.
+  - [x] **P06.1 — Define typed wire records, variants, and resources.**
+    `rsscript-abi-model` owns positional `WireValue` records/variants plus
+    numeric type/field/variant/resource identities and generation-safe resource
+    handles; canonical values contain no free-form type or field-name identity.
   - [ ] **P06.2 — Implement the compatibility adapter.** Convert legacy
     `NativeValue` at generated boundaries while Core contracts use wire values.
   - [ ] **P06.3 — Migrate official Providers and mocks.** Each migration keeps

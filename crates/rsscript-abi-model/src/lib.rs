@@ -17,6 +17,117 @@ pub const CORE_LIBRARY_ABI_VERSION: u32 = 1;
 /// This deliberately does not track any crate/package release version.
 pub const LANGUAGE_SEMANTICS_VERSION: &str = "0.1.0";
 
+macro_rules! wire_id {
+    ($name:ident) => {
+        /// Opaque, module-local identity used by a typed ABI value table.
+        /// Human-readable names remain in the surrounding descriptor/type
+        /// table; dynamic values never carry them as executable identity.
+        #[derive(
+            Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+        )]
+        #[serde(transparent)]
+        pub struct $name(u32);
+
+        impl $name {
+            pub const fn new(value: u32) -> Self {
+                Self(value)
+            }
+
+            pub const fn get(self) -> u32 {
+                self.0
+            }
+        }
+    };
+}
+
+wire_id!(WireTypeId);
+wire_id!(WireFieldId);
+wire_id!(WireVariantId);
+wire_id!(WireResourceTypeId);
+
+/// A generation-safe resource reference in the canonical Provider wire model.
+///
+/// The table slot and generation are deliberately numeric: a resource value
+/// cannot be forged by spelling a type name or by reusing a stale slot after
+/// cleanup. The runtime/provider adapter owns the table that interprets this
+/// identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct WireResourceHandle {
+    pub resource_type: WireResourceTypeId,
+    pub slot: u32,
+    pub generation: u32,
+}
+
+/// Canonical dynamically transported value for Provider boundaries.
+///
+/// Unlike the legacy `NativeValue` compatibility representation, records and
+/// variants are positional and reference typed table identities; they contain
+/// no free-form type or field-name strings. JSON remains a named extension
+/// codec at an adapter boundary rather than an implicit escape hatch here.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WireValue {
+    Unit,
+    Bool {
+        value: bool,
+    },
+    Int {
+        value: i64,
+    },
+    Float {
+        value: f64,
+    },
+    String {
+        value: String,
+    },
+    Bytes {
+        value: Vec<u8>,
+    },
+    List {
+        element_type: WireTypeId,
+        values: Vec<WireValue>,
+    },
+    Tuple {
+        values: Vec<WireValue>,
+    },
+    Record {
+        type_id: WireTypeId,
+        fields: Vec<WireValue>,
+    },
+    Variant {
+        type_id: WireTypeId,
+        variant_id: WireVariantId,
+        payload: Option<Box<WireValue>>,
+    },
+    Resource {
+        handle: WireResourceHandle,
+    },
+}
+
+impl WireValue {
+    /// Deterministic lower-bound accounting for call/request budgets. This is
+    /// intentionally independent from a serialization codec so hosts can
+    /// enforce limits before choosing an adapter transport.
+    pub fn estimated_payload_bytes(&self) -> usize {
+        match self {
+            Self::Unit => 0,
+            Self::Bool { .. } => 1,
+            Self::Int { .. } | Self::Float { .. } => 8,
+            Self::String { value } => value.len(),
+            Self::Bytes { value } => value.len(),
+            Self::List { values, .. }
+            | Self::Tuple { values }
+            | Self::Record { fields: values, .. } => values.iter().fold(0usize, |total, value| {
+                total.saturating_add(value.estimated_payload_bytes())
+            }),
+            Self::Variant { payload, .. } => {
+                payload.as_deref().map_or(0, Self::estimated_payload_bytes)
+            }
+            Self::Resource { .. } => std::mem::size_of::<WireResourceHandle>(),
+        }
+    }
+}
+
 /// Canonical, serializable type representation used by artifacts and Providers.
 /// Semantic arenas may use local IDs internally; those IDs never cross the ABI.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -371,5 +482,32 @@ mod tests {
         let mut renamed = signature(DataEffect::Read);
         renamed.parameters[0].name = "text".into();
         assert_ne!(signature(DataEffect::Read).hash(), renamed.hash());
+    }
+
+    #[test]
+    fn wire_values_use_numeric_type_field_variant_and_resource_identity() {
+        let value = WireValue::Record {
+            type_id: WireTypeId::new(7),
+            fields: vec![WireValue::Variant {
+                type_id: WireTypeId::new(8),
+                variant_id: WireVariantId::new(2),
+                payload: Some(Box::new(WireValue::Resource {
+                    handle: WireResourceHandle {
+                        resource_type: WireResourceTypeId::new(3),
+                        slot: 4,
+                        generation: 5,
+                    },
+                })),
+            }],
+        };
+        let json = serde_json::to_value(&value).expect("wire value serializes");
+        let object = json.as_object().expect("record serialization");
+        assert_eq!(object["type_id"], 7);
+        assert!(object.get("type_name").is_none());
+        assert!(object.get("fields").is_some());
+        assert_eq!(
+            value.estimated_payload_bytes(),
+            std::mem::size_of::<WireResourceHandle>()
+        );
     }
 }
