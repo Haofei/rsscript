@@ -355,8 +355,10 @@ mechanical acceptance condition holds.
 - [ ] **V03 — Make the verifier construct the only executable program type.**
   Untrusted bytes decode and verify to a private-field `VerifiedModule`; public
   APIs cannot construct or mutate it and VM constructors accept nothing else.
-  - [ ] **V03.1 — Define private-field `VerifiedModule`.** Only bytecode verifier
-    code can create it from bounded decoded bytes.
+  - [x] **V03.1 — Define private-field verifier-owned program phases.** The v1
+    `VerifiedBytecode` envelope and v2 `VerifiedProgramV2` both have private
+    fields and are constructed only by their bounded verifier paths; loaders
+    accept verifier output rather than caller-built bytes or instruction data.
   - [x] **V03.1a — Require the verifier token at the SDK/VM boundary.** SDK
       Artifact verification now constructs `VerifiedBytecode` first and VM
     decoding accepts that opaque verifier output. VM-internal typed program
