@@ -540,7 +540,9 @@ mechanical acceptance condition holds.
     the same semantic descriptor; regression coverage also proves take and
     retention contract facts remain present in generated registration metadata.
   - [x] **P05.3 — Generate resource wrappers and adapter glue.** Resource values
-    use typed generation-safe handles; adapters isolate `NativeValue` conversion.
+    use typed generation-safe handles; generated wrappers expose canonical
+    `WireValue::Resource` conversion with a descriptor-supplied numeric resource
+    type, while adapters isolate legacy `NativeValue` conversion.
     Descriptor-declared resource names now map function parameters/results to
     generated wrappers, including nested aggregate positions, while only each
     wrapper's explicit `from_native`/`into_native` adapter touches the legacy
@@ -566,6 +568,10 @@ mechanical acceptance condition holds.
       runtime handles now convert to/from the canonical numeric wire handle
       with a descriptor-supplied resource type; no legacy type-name string is
       used at that boundary. Aggregate `NativeValue` adapters remain open.
+    - [x] **P06.2b — Generate canonical resource-wire adapters.** Generated
+      Provider resource wrappers now encode/decode `WireValue::Resource` using
+      explicit numeric resource identities; legacy `NativeValue` methods are
+      visibly compatibility-only adapters.
   - [ ] **P06.3 — Migrate official Providers and mocks.** Each migration keeps
     signature, error, resource, and payload-budget conformance fixtures green.
   - [ ] **P06.4 — Remove legacy escape variants from canonical APIs.** JSON stays

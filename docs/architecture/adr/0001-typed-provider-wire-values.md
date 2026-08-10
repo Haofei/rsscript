@@ -26,9 +26,11 @@ location for legacy-value conversion during migration.
 ## Compatibility and migration
 
 The existing Provider ABI remains version 2 while generated adapters and
-official Providers migrate incrementally. Resource wrappers pass their
-descriptor-supplied `WireResourceTypeId` when converting a runtime handle; they
-must not infer it from a legacy type-name. A future Provider ABI bump will make
+official Providers migrate incrementally. Generated resource wrappers expose
+`from_wire`/`into_wire` methods which take a descriptor-supplied
+`WireResourceTypeId` when converting a runtime handle; they must not infer it
+from a legacy type-name. Their `NativeValue` methods remain explicitly named
+compatibility adapters. A future Provider ABI bump will make
 the typed model the mandatory call payload and retain a read-only compatibility
 adapter for older Providers.
 
@@ -42,7 +44,7 @@ host applies request or response limits.
 ## Provider and backend impact
 
 Provider bindgen and the runtime resource table can now exchange typed resource
-handles. VM, AOT, JIT, and review integrations are unaffected until the
+handles at generated boundaries. VM, AOT, JIT, and review integrations are unaffected until the
 compatibility adapter migrates aggregate values.
 
 ## Evidence
