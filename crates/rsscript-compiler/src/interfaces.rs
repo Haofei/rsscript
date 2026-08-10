@@ -27,7 +27,7 @@ pub(crate) use rsscript_interface_catalog::default_interfaces;
 #[cfg(all(not(test), feature = "execution"))]
 pub(crate) use rsscript_interface_catalog::standard_package_interfaces;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "execution"))]
 pub(crate) fn default_interfaces() -> impl Iterator<Item = (&'static str, &'static str)> {
     rsscript_interface_catalog::CORE_INTERFACES
         .iter()
@@ -36,10 +36,17 @@ pub(crate) fn default_interfaces() -> impl Iterator<Item = (&'static str, &'stat
         .copied()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "execution"))]
 pub(crate) fn standard_package_interfaces() -> impl Iterator<Item = (&'static str, &'static str)> {
     rsscript_interface_catalog::STANDARD_PACKAGE_INTERFACES
         .iter()
         .chain(crate::test_interfaces::TEST_INTERFACES.iter())
         .copied()
 }
+
+// The compiler's frontend-only test build deliberately excludes execution
+// fixtures. Keep its catalog identical to the production neutral catalog so a
+// plain `cargo test` remains a valid Core gate instead of referencing a module
+// compiled only under the optional execution feature.
+#[cfg(all(test, not(feature = "execution")))]
+pub(crate) use rsscript_interface_catalog::default_interfaces;
