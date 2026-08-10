@@ -109,22 +109,24 @@ impl WireValue {
     /// intentionally independent from a serialization codec so hosts can
     /// enforce limits before choosing an adapter transport.
     pub fn estimated_payload_bytes(&self) -> usize {
-        match self {
-            Self::Unit => 0,
-            Self::Bool { .. } => 1,
-            Self::Int { .. } | Self::Float { .. } => 8,
-            Self::String { value } => value.len(),
-            Self::Bytes { value } => value.len(),
-            Self::List { values, .. }
-            | Self::Tuple { values }
-            | Self::Record { fields: values, .. } => values.iter().fold(0usize, |total, value| {
-                total.saturating_add(value.estimated_payload_bytes())
-            }),
-            Self::Variant { payload, .. } => {
-                payload.as_deref().map_or(0, Self::estimated_payload_bytes)
+        let mut total = 0usize;
+        let mut pending = vec![self];
+        while let Some(value) = pending.pop() {
+            match value {
+                Self::Unit => {}
+                Self::Bool { .. } => total = total.saturating_add(1),
+                Self::Int { .. } | Self::Float { .. } => total = total.saturating_add(8),
+                Self::String { value } => total = total.saturating_add(value.len()),
+                Self::Bytes { value } => total = total.saturating_add(value.len()),
+                Self::List { values, .. } | Self::Tuple { values } => pending.extend(values),
+                Self::Record { fields, .. } => pending.extend(fields),
+                Self::Variant { payload, .. } => pending.extend(payload.as_deref()),
+                Self::Resource { .. } => {
+                    total = total.saturating_add(std::mem::size_of::<WireResourceHandle>());
+                }
             }
-            Self::Resource { .. } => std::mem::size_of::<WireResourceHandle>(),
         }
+        total
     }
 }
 
@@ -509,5 +511,19 @@ mod tests {
             value.estimated_payload_bytes(),
             std::mem::size_of::<WireResourceHandle>()
         );
+    }
+
+    #[test]
+    fn wire_payload_accounting_handles_deeply_nested_values_iteratively() {
+        let mut value = WireValue::Bytes {
+            value: vec![1, 2, 3],
+        };
+        for _ in 0..1_024 {
+            value = WireValue::List {
+                element_type: WireTypeId::new(1),
+                values: vec![value],
+            };
+        }
+        assert_eq!(value.estimated_payload_bytes(), 3);
     }
 }
