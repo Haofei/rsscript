@@ -1581,6 +1581,95 @@ mod tests {
     }
 
     #[test]
+    fn task_groups_must_close_on_every_reachable_return_edge() {
+        let entry = BasicBlock::new(
+            BlockId::new(0),
+            vec![
+                MirInstruction::LoadLiteral {
+                    destination: ValueId::new(0),
+                    value: MirLiteral::Bool(true),
+                },
+                MirInstruction::Spawn {
+                    task: TaskId::new(0),
+                    group: TaskGroupId::new(0),
+                    target: FunctionId::new(1),
+                    arguments: vec![],
+                },
+            ],
+            MirTerminator::Branch {
+                condition: ValueId::new(0),
+                then_target: BlockId::new(1),
+                else_target: BlockId::new(2),
+            },
+        );
+        let joined = BasicBlock::new(
+            BlockId::new(1),
+            vec![MirInstruction::Join {
+                group: TaskGroupId::new(0),
+            }],
+            MirTerminator::Return(None),
+        );
+        let also_joined = BasicBlock::new(
+            BlockId::new(2),
+            vec![MirInstruction::Join {
+                group: TaskGroupId::new(0),
+            }],
+            MirTerminator::Return(None),
+        );
+        let worker = MirFunction::new(
+            FunctionId::new(1),
+            MirFunctionSignature::new(vec![], TypeId::new(0), true),
+            0,
+            0,
+            vec![BasicBlock::new(
+                BlockId::new(0),
+                vec![],
+                MirTerminator::Return(None),
+            )],
+        );
+        let valid = MirModule::new(
+            vec![WireType::Unit, WireType::Bool],
+            vec![
+                MirFunction::new(
+                    FunctionId::new(0),
+                    signature(),
+                    0,
+                    1,
+                    vec![entry.clone(), joined.clone(), also_joined],
+                ),
+                worker.clone(),
+            ],
+            vec![
+                MirFunctionDebug::new("main", vec![]),
+                MirFunctionDebug::new("worker", vec![]),
+            ],
+            vec![],
+        );
+        assert!(valid.is_ok(), "every branch drains the task group");
+
+        let missing_join = BasicBlock::new(BlockId::new(2), vec![], MirTerminator::Return(None));
+        let leaked = MirModule::new(
+            vec![WireType::Unit, WireType::Bool],
+            vec![
+                MirFunction::new(
+                    FunctionId::new(0),
+                    signature(),
+                    0,
+                    1,
+                    vec![entry, joined, missing_join],
+                ),
+                worker,
+            ],
+            vec![
+                MirFunctionDebug::new("main", vec![]),
+                MirFunctionDebug::new("worker", vec![]),
+            ],
+            vec![],
+        );
+        assert!(matches!(leaked, Err(MirValidationError::TaskLeak { .. })));
+    }
+
+    #[test]
     fn structured_tasks_must_be_closed_before_return() {
         let worker = MirFunction::new(
             FunctionId::new(1),

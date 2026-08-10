@@ -44,5 +44,7 @@ involved in this initial internal-task-only contract.
 
 ## Evidence
 
-MIR unit tests cover an awaited child and a leaked child. MIR conformance,
-codegen, and lowering tests demonstrate the explicit fail-closed boundary.
+MIR unit tests cover an awaited child, a leaked child, and a branch where every
+reachable return must drain the lexical group; omitting a drain on one sibling
+return is rejected. MIR conformance, codegen, and lowering tests demonstrate
+the explicit fail-closed boundary.

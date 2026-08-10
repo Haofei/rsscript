@@ -288,6 +288,10 @@ mechanical acceptance condition holds.
     propagates conservatively over reachable CFG edges and rejects a return
     branch that omits a release even when sibling branches clean up. Cancellation
     and Provider-error cleanup edges remain runtime-owned follow-up work.
+    - [x] **M02.4c — Verify task-group closure over CFG exits.** Task liveness
+    propagates over reachable CFG edges and rejects a return branch that omits
+    its lexical group drain even when sibling branches join. Cancellation and
+    select cleanup edges remain follow-up work.
 - [ ] **M03 — Make semantic operations explicit.** MIR represents move,
   read/mut borrow, retain, drop, resource acquire/release, spawn, await, join,
   cancellation, selection, external calls, and every cleanup/unwind edge.
