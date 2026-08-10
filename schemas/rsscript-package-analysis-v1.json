@@ -4,7 +4,7 @@
   "title": "RSScript package analysis v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["$schema", "producer", "language_version", "interface_catalog_digest", "snapshot_digest", "package", "files", "summary", "exports", "external_imports", "call_edges", "recursive_functions", "await_sites", "diagnostics"],
+  "required": ["$schema", "producer", "language_version", "interface_catalog_digest", "snapshot_digest", "package", "files", "summary", "exports", "external_imports", "call_edges", "recursive_functions", "resource_lifetimes", "task_groups", "await_sites", "diagnostics"],
   "properties": {
     "$schema": { "const": "rsscript.package_analysis.v1" },
     "producer": { "$ref": "#/$defs/producer" },
@@ -19,6 +19,8 @@
     "external_imports": { "type": "array", "items": { "$ref": "#/$defs/import" } },
     "call_edges": { "type": "array", "items": { "$ref": "#/$defs/call_edge" } },
     "recursive_functions": { "type": "array", "items": { "type": "string" } },
+    "resource_lifetimes": { "type": "array", "items": { "$ref": "#/$defs/resource_lifetime" } },
+    "task_groups": { "type": "array", "items": { "$ref": "#/$defs/task_group" } },
     "await_sites": { "type": "array", "items": { "type": "object" } },
     "diagnostics": { "type": "array", "items": { "type": "object" } }
   },
@@ -61,6 +63,24 @@
       "properties": {
         "caller": { "type": "string" },
         "callee": { "type": "string" }
+      }
+    },
+    "resource_lifetime": {
+      "type": "object", "additionalProperties": false,
+      "required": ["function", "binding", "acquisition", "cleanup", "cleanup_on_cancellation"],
+      "properties": {
+        "function": { "type": "string" }, "binding": { "type": "string" },
+        "acquisition": { "type": "string" }, "cleanup": { "type": "string" },
+        "cleanup_on_cancellation": { "type": "boolean" }
+      }
+    },
+    "task_group": {
+      "type": "object", "additionalProperties": false,
+      "required": ["function", "spawned_tasks", "select_arms", "drains_on_exit", "cleanup_on_cancellation"],
+      "properties": {
+        "function": { "type": "string" }, "spawned_tasks": { "type": "integer", "minimum": 0 },
+        "select_arms": { "type": "integer", "minimum": 0 }, "drains_on_exit": { "type": "boolean" },
+        "cleanup_on_cancellation": { "type": "boolean" }
       }
     }
   }

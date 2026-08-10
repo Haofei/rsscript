@@ -4,7 +4,7 @@
   "title": "RSScript semantic diff v2",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "old", "new", "imports", "external_contracts", "exports", "external_calls", "call_edges", "recursive_functions", "await_sites", "diagnostics", "summary"],
+  "required": ["schema", "old", "new", "imports", "external_contracts", "exports", "external_calls", "call_edges", "recursive_functions", "resource_lifetimes", "task_groups", "await_sites", "diagnostics", "summary"],
   "properties": {
     "schema": { "const": "rsscript.semantic_diff.v2" },
     "old": { "$ref": "#/$defs/identity" },
@@ -15,6 +15,8 @@
     "external_calls": { "$ref": "#/$defs/external_call_diff" },
     "call_edges": { "$ref": "#/$defs/call_edge_diff" },
     "recursive_functions": { "$ref": "#/$defs/string_diff" },
+    "resource_lifetimes": { "$ref": "#/$defs/resource_lifetime_diff" },
+    "task_groups": { "$ref": "#/$defs/task_group_diff" },
     "await_sites": { "$ref": "#/$defs/await_diff" },
     "diagnostics": { "$ref": "#/$defs/diagnostic_diff" },
     "summary": { "type": "object", "additionalProperties": { "$ref": "#/$defs/count_change" } }
@@ -30,6 +32,8 @@
     "function_parameter": { "type": "object", "additionalProperties": false, "required": ["name", "effect", "ty", "retained"], "properties": { "name": { "type": "string" }, "effect": { "enum": ["read", "mut", "take"] }, "ty": { "type": "string" }, "retained": { "type": "boolean" } } },
     "external_call": { "type": "object", "additionalProperties": false, "required": ["function", "symbol", "call_chain"], "properties": { "function": { "type": "string" }, "symbol": { "type": "string" }, "call_chain": { "type": "array", "items": { "type": "string" } } } },
     "call_edge": { "type": "object", "additionalProperties": false, "required": ["caller", "callee"], "properties": { "caller": { "type": "string" }, "callee": { "type": "string" } } },
+    "resource_lifetime": { "type": "object", "additionalProperties": false, "required": ["function", "binding", "acquisition", "cleanup", "cleanup_on_cancellation"], "properties": { "function": { "type": "string" }, "binding": { "type": "string" }, "acquisition": { "type": "string" }, "cleanup": { "type": "string" }, "cleanup_on_cancellation": { "type": "boolean" } } },
+    "task_group": { "type": "object", "additionalProperties": false, "required": ["function", "spawned_tasks", "select_arms", "drains_on_exit", "cleanup_on_cancellation"], "properties": { "function": { "type": "string" }, "spawned_tasks": { "type": "integer", "minimum": 0 }, "select_arms": { "type": "integer", "minimum": 0 }, "drains_on_exit": { "type": "boolean" }, "cleanup_on_cancellation": { "type": "boolean" } } },
     "await": { "type": "object", "additionalProperties": false, "required": ["function", "callee", "live_across_await"], "properties": { "function": { "type": "string" }, "callee": { "type": ["string", "null"] }, "live_across_await": { "type": "array", "items": { "type": "string" } } } },
     "diagnostic": { "type": "object", "additionalProperties": false, "required": ["code", "severity", "summary", "label"], "properties": { "code": { "type": "string" }, "severity": { "type": "string" }, "summary": { "type": "string" }, "label": { "type": "string" } } },
     "changed_import": { "$ref": "#/$defs/changed_import_base" },
@@ -43,6 +47,8 @@
     "external_call_diff": { "type": "object", "additionalProperties": false, "required": ["added", "removed", "changed"], "properties": { "added": { "type": "array", "items": { "$ref": "#/$defs/external_call" } }, "removed": { "type": "array", "items": { "$ref": "#/$defs/external_call" } }, "changed": { "type": "array", "maxItems": 0 } } },
     "call_edge_diff": { "type": "object", "additionalProperties": false, "required": ["added", "removed", "changed"], "properties": { "added": { "type": "array", "items": { "$ref": "#/$defs/call_edge" } }, "removed": { "type": "array", "items": { "$ref": "#/$defs/call_edge" } }, "changed": { "type": "array", "maxItems": 0 } } },
     "string_diff": { "type": "object", "additionalProperties": false, "required": ["added", "removed", "changed"], "properties": { "added": { "type": "array", "items": { "type": "string" } }, "removed": { "type": "array", "items": { "type": "string" } }, "changed": { "type": "array", "maxItems": 0 } } },
+    "resource_lifetime_diff": { "type": "object", "additionalProperties": false, "required": ["added", "removed", "changed"], "properties": { "added": { "type": "array", "items": { "$ref": "#/$defs/resource_lifetime" } }, "removed": { "type": "array", "items": { "$ref": "#/$defs/resource_lifetime" } }, "changed": { "type": "array", "maxItems": 0 } } },
+    "task_group_diff": { "type": "object", "additionalProperties": false, "required": ["added", "removed", "changed"], "properties": { "added": { "type": "array", "items": { "$ref": "#/$defs/task_group" } }, "removed": { "type": "array", "items": { "$ref": "#/$defs/task_group" } }, "changed": { "type": "array", "maxItems": 0 } } },
     "await_diff": { "type": "object", "additionalProperties": false, "required": ["added", "removed", "changed"], "properties": { "added": { "type": "array", "items": { "$ref": "#/$defs/await" } }, "removed": { "type": "array", "items": { "$ref": "#/$defs/await" } }, "changed": { "type": "array", "maxItems": 0 } } },
     "diagnostic_diff": { "type": "object", "additionalProperties": false, "required": ["added", "removed", "changed"], "properties": { "added": { "type": "array", "items": { "$ref": "#/$defs/diagnostic" } }, "removed": { "type": "array", "items": { "$ref": "#/$defs/diagnostic" } }, "changed": { "type": "array", "maxItems": 0 } } },
     "count_change": { "type": "object", "additionalProperties": false, "required": ["old", "new"], "properties": { "old": { "type": "integer", "minimum": 0 }, "new": { "type": "integer", "minimum": 0 } } }

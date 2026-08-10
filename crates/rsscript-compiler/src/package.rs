@@ -34,6 +34,7 @@ use crate::diagnostic::Diagnostic;
 mod analysis;
 #[path = "package/review/review_await.rs"]
 mod analysis_await;
+mod analysis_execution;
 mod artifact_store;
 mod authorization;
 mod check;

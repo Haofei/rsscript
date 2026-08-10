@@ -602,7 +602,10 @@ mechanical acceptance condition holds.
     parameter effects/types/retention plus return contracts, including source
     escape qualifiers, for every public function.
   - [ ] **A07.2 — Diff resources and concurrency.** Report acquire/transfer/close,
-    task fan-out, await/select, cancellation, and cleanup-path changes.
+    task fan-out, await/select, cancellation, and cleanup-path changes. Neutral
+    analysis now records lexical `with` acquisition/scope-exit cleanup and
+    cancellation cleanup, plus task-group fan-out/select/drain facts; resource
+    transfer facts remain to be normalized before this planning unit closes.
   - [x] **A07.3 — Diff graph and diagnostic facts.** Report call graph/recursion,
     Provider requirements, and diagnostic additions/removals. Neutral analysis
     now records resolved call edges and recursion participants; semantic diff

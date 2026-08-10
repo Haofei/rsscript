@@ -53,6 +53,8 @@ pub struct PackageAnalysis {
     pub external_imports: Vec<PackageAnalysisExternalImport>,
     pub call_edges: Vec<PackageAnalysisCallEdge>,
     pub recursive_functions: Vec<String>,
+    pub resource_lifetimes: Vec<PackageAnalysisResourceLifetime>,
+    pub task_groups: Vec<PackageAnalysisTaskGroup>,
     pub await_sites: Vec<PackageAnalysisAwaitSite>,
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -118,6 +120,28 @@ pub struct PackageAnalysisExternalImport {
 pub struct PackageAnalysisCallEdge {
     pub caller: String,
     pub callee: String,
+}
+
+/// A lexical `with` resource lifetime. Scope exit cleanup is language
+/// semantics, so normal completion, error unwinding and cancellation share the
+/// same cleanup fact without exposing a deployment policy.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct PackageAnalysisResourceLifetime {
+    pub function: String,
+    pub binding: String,
+    pub acquisition: String,
+    pub cleanup: String,
+    pub cleanup_on_cancellation: bool,
+}
+
+/// Structured concurrency owned by one lexical task group.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct PackageAnalysisTaskGroup {
+    pub function: String,
+    pub spawned_tasks: u32,
+    pub select_arms: u32,
+    pub drains_on_exit: bool,
+    pub cleanup_on_cancellation: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

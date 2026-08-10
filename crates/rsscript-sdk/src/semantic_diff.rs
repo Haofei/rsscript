@@ -69,6 +69,26 @@ pub struct CallEdgeFactV1 {
     pub callee: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceLifetimeFactV1 {
+    pub function: String,
+    pub binding: String,
+    pub acquisition: String,
+    pub cleanup: String,
+    pub cleanup_on_cancellation: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskGroupFactV1 {
+    pub function: String,
+    pub spawned_tasks: u32,
+    pub select_arms: u32,
+    pub drains_on_exit: bool,
+    pub cleanup_on_cancellation: bool,
+}
+
 /// A complete Artifact import contract. Unlike the compact bundle manifest
 /// requirement, this keeps the canonical parameter effects, retention, types,
 /// result and async shape that explain a signature-hash change.
@@ -121,6 +141,8 @@ pub struct SemanticDiffV1 {
     pub external_calls: FactSetDiffV1<ExternalCallFactV1>,
     pub call_edges: FactSetDiffV1<CallEdgeFactV1>,
     pub recursive_functions: FactSetDiffV1<String>,
+    pub resource_lifetimes: FactSetDiffV1<ResourceLifetimeFactV1>,
+    pub task_groups: FactSetDiffV1<TaskGroupFactV1>,
     pub await_sites: FactSetDiffV1<AwaitFactV1>,
     pub diagnostics: FactSetDiffV1<DiagnosticFactV1>,
     pub summary: BTreeMap<String, CountChangeV1>,
@@ -159,6 +181,14 @@ impl SemanticDiffV1 {
                 &strings(&old.analysis()["recursive_functions"]),
                 &strings(&new.analysis()["recursive_functions"]),
             ),
+            resource_lifetimes: set_diff(
+                &analysis_resource_lifetimes(old.analysis()),
+                &analysis_resource_lifetimes(new.analysis()),
+            ),
+            task_groups: set_diff(
+                &analysis_task_groups(old.analysis()),
+                &analysis_task_groups(new.analysis()),
+            ),
             await_sites: set_diff(
                 &analysis_await_sites(old.analysis()),
                 &analysis_await_sites(new.analysis()),
@@ -190,6 +220,12 @@ impl SemanticDiffV1 {
             && self.recursive_functions.added.is_empty()
             && self.recursive_functions.removed.is_empty()
             && self.recursive_functions.changed.is_empty()
+            && self.resource_lifetimes.added.is_empty()
+            && self.resource_lifetimes.removed.is_empty()
+            && self.resource_lifetimes.changed.is_empty()
+            && self.task_groups.added.is_empty()
+            && self.task_groups.removed.is_empty()
+            && self.task_groups.changed.is_empty()
             && self.await_sites.added.is_empty()
             && self.await_sites.removed.is_empty()
             && self.await_sites.changed.is_empty()
@@ -213,6 +249,8 @@ impl SemanticDiffV1 {
             "Recursive functions",
             &self.recursive_functions,
         );
+        append_counts(&mut output, "Resource lifetimes", &self.resource_lifetimes);
+        append_counts(&mut output, "Task groups", &self.task_groups);
         append_counts(&mut output, "Await sites", &self.await_sites);
         append_counts(&mut output, "Diagnostics", &self.diagnostics);
         if !self.summary.is_empty() {
@@ -338,6 +376,40 @@ fn analysis_call_edges(analysis: &serde_json::Value) -> Vec<CallEdgeFactV1> {
             Some(CallEdgeFactV1 {
                 caller: item["caller"].as_str()?.to_string(),
                 callee: item["callee"].as_str()?.to_string(),
+            })
+        })
+        .collect()
+}
+
+fn analysis_resource_lifetimes(analysis: &serde_json::Value) -> Vec<ResourceLifetimeFactV1> {
+    analysis["resource_lifetimes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            Some(ResourceLifetimeFactV1 {
+                function: item["function"].as_str()?.to_string(),
+                binding: item["binding"].as_str()?.to_string(),
+                acquisition: item["acquisition"].as_str()?.to_string(),
+                cleanup: item["cleanup"].as_str()?.to_string(),
+                cleanup_on_cancellation: item["cleanup_on_cancellation"].as_bool()?,
+            })
+        })
+        .collect()
+}
+
+fn analysis_task_groups(analysis: &serde_json::Value) -> Vec<TaskGroupFactV1> {
+    analysis["task_groups"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            Some(TaskGroupFactV1 {
+                function: item["function"].as_str()?.to_string(),
+                spawned_tasks: u32::try_from(item["spawned_tasks"].as_u64()?).ok()?,
+                select_arms: u32::try_from(item["select_arms"].as_u64()?).ok()?,
+                drains_on_exit: item["drains_on_exit"].as_bool()?,
+                cleanup_on_cancellation: item["cleanup_on_cancellation"].as_bool()?,
             })
         })
         .collect()
@@ -575,5 +647,23 @@ mod tests {
         assert_eq!(facts.len(), 2);
         let recursion = set_diff(&["walk".to_string()], &Vec::new());
         assert_eq!(recursion.removed, ["walk"]);
+    }
+
+    #[test]
+    fn execution_facts_keep_cleanup_and_structured_task_boundaries() {
+        let analysis = serde_json::json!({
+            "resource_lifetimes": [{
+                "function": "main", "binding": "file", "acquisition": "with",
+                "cleanup": "scope_exit", "cleanup_on_cancellation": true
+            }],
+            "task_groups": [{
+                "function": "main", "spawned_tasks": 2, "select_arms": 3,
+                "drains_on_exit": true, "cleanup_on_cancellation": true
+            }]
+        });
+        assert_eq!(analysis_resource_lifetimes(&analysis)[0].binding, "file");
+        assert!(analysis_resource_lifetimes(&analysis)[0].cleanup_on_cancellation);
+        assert_eq!(analysis_task_groups(&analysis)[0].spawned_tasks, 2);
+        assert!(analysis_task_groups(&analysis)[0].drains_on_exit);
     }
 }

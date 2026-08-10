@@ -11,6 +11,7 @@ use crate::lint::lint_source;
 use crate::syntax::ast::{Callee, TypeKind};
 
 use super::analysis_await::collect_package_await_sites;
+use super::analysis_execution::collect_execution_facts;
 use super::contract::{
     collect_package_const_contracts, collect_package_function_contracts,
     collect_package_protocol_contracts, collect_package_protocol_impl_contracts,
@@ -122,6 +123,7 @@ pub(super) fn analyze_package_dir_captured(package_dir: &Path) -> Result<Package
 
     let database = semantic_analysis.database();
     let review_await_sites = collect_package_await_sites(sources, database);
+    let (resource_lifetimes, task_groups) = collect_execution_facts(sources, database);
     let await_sites = review_await_sites
         .iter()
         .map(|site| PackageAnalysisAwaitSite {
@@ -172,6 +174,8 @@ pub(super) fn analyze_package_dir_captured(package_dir: &Path) -> Result<Package
         external_imports: package_external_imports(sources, database),
         call_edges: package_call_edges(database),
         recursive_functions: package_recursive_functions(database),
+        resource_lifetimes,
+        task_groups,
         await_sites,
         diagnostics,
     })
