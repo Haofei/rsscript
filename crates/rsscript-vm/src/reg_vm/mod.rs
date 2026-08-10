@@ -60,6 +60,7 @@ use crate::vm_value::{
     TypeLayout, TypedVec, ValueMap, VmClosure, VmMapKey, VmNative, VmStruct, VmValue, intern_layout,
 };
 use rsscript_abi_model::BinaryOp;
+#[cfg(feature = "legacy-exec-ir")]
 use rsscript_exec_ir::{
     Callee, ExecutableBlock as HirBlock, ExecutableCallArg as HirCallArg,
     ExecutableCallReceiver as HirCallReceiver, ExecutableExpr as HirExpr,
@@ -83,6 +84,7 @@ mod calls;
 mod exec;
 mod execution_plan;
 mod intrinsics;
+#[cfg(feature = "legacy-exec-ir")]
 mod lower;
 mod model;
 #[cfg(feature = "native-jit")]
@@ -98,6 +100,7 @@ mod value_access;
 mod value_convert;
 mod value_ops;
 use execution_plan::*;
+#[cfg(feature = "legacy-exec-ir")]
 pub(crate) use lower::*;
 pub(crate) use model::*;
 #[cfg(feature = "native-jit")]
@@ -138,6 +141,8 @@ const URL_COMPONENT_SET: &percent_encoding::AsciiSet = &NON_ALPHANUMERIC
 /// Lower owned, validated executable IR into a verified VM artifact. This is
 /// the only compiler-facing VM construction boundary: it consumes no AST, HIR,
 /// source loader, package model, or semantic database.
+#[cfg(feature = "legacy-exec-ir")]
+#[doc(hidden)]
 pub fn compile_executable_ir(
     executable: &rsscript_exec_ir::ExecutableIr,
     source_hash: &str,
@@ -537,6 +542,7 @@ enum CombinatorKind {
 /// type-checked against the stored `Fn`'s declared `mut` parameter — the same
 /// information `CallKnown`/`CallExternal` recover from the callee signature, but
 /// for a first-class closure value the effect lives on the call-site argument.
+#[cfg(feature = "legacy-exec-ir")]
 fn call_arg_mut_positions(args: &[HirCallArg]) -> Vec<usize> {
     args.iter()
         .enumerate()
@@ -1355,6 +1361,7 @@ impl RegVmExecutable {
 /// analyzer's `hir_expr_type_name`; kept local so the gate has no cross-module
 /// dependency. A `Closure` literal operand has no `type_name`, so it returns
 /// `None` and is (correctly) treated as observable.
+#[cfg(feature = "legacy-exec-ir")]
 fn reg_expr_type_name(expr: &HirExpr) -> Option<&str> {
     match expr {
         HirExpr::Ident { type_name, .. }
@@ -1396,6 +1403,7 @@ fn reg_expr_type_name(expr: &HirExpr) -> Option<&str> {
 ///     `"Fn("`; an uninstantiated type parameter (`"T"`) is unresolved and so
 ///     falls through to the conservative `true`.
 ///   * Anything unresolved/unknown → `true`.
+#[cfg(feature = "legacy-exec-ir")]
 fn type_name_may_contain_fn(type_name: &str, hir: &Hir) -> bool {
     fn go(name: &str, hir: &Hir, visited: &mut Vec<String>) -> bool {
         let name = name.trim();
@@ -6664,6 +6672,7 @@ fn intrinsic_arg<'a>(
         .ok_or_else(|| EvalError::Runtime(format!("reg VM missing argument {index}.")))
 }
 
+#[cfg(feature = "legacy-exec-ir")]
 fn int_compare_op(op: BinaryOp) -> Option<RegIntCompare> {
     match op {
         BinaryOp::Less => Some(RegIntCompare::Less),
@@ -6780,6 +6789,7 @@ fn as_task_handle(value: &VmValue) -> Option<TaskId> {
 /// Strip the `await`/`?`/effect wrappers off a `select` arm operation down to the
 /// underlying call to spawn, reporting whether a `?` was present (so the arm body
 /// can re-apply it to the winning result).
+#[cfg(feature = "legacy-exec-ir")]
 fn peel_select_operation(operation: &HirExpr) -> (&HirExpr, bool) {
     let mut current = operation;
     let mut has_try = false;

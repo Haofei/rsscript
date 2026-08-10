@@ -10,7 +10,7 @@ publish = false
 rsscript-abi-model = { path = "../rsscript-abi-model" }
 rsscript-bytecode = { path = "../rsscript-bytecode" }
 rsscript-diagnostics = { path = "../rsscript-diagnostics" }
-rsscript-exec-ir = { path = "../rsscript-exec-ir" }
+rsscript-exec-ir = { path = "../rsscript-exec-ir", optional = true }
 rsscript-operation = { path = "../rsscript-operation" }
 rsscript-provider-api = { path = "../rsscript-provider-api" }
 rsscript-text = { path = "../rsscript-text" }
@@ -30,6 +30,10 @@ vm-jit = { path = "../../experiments/vm-jit", optional = true }
 
 [features]
 default = []
+## Transitional source-shaped executable-IR lowering. Production callers pass
+## verifier-owned bytecode into the VM; this exists only for compatibility
+## fixtures that still require the legacy lowerer.
+legacy-exec-ir = ["dep:rsscript-exec-ir"]
 native-jit = ["dep:vm-jit"]
 
 [build-dependencies]

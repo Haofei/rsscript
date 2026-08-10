@@ -525,6 +525,13 @@ mechanical acceptance condition holds.
   payload verification from `rsscript-vm`.
   - [ ] **V04.1 — Delete VM source/HIR/executable-IR compile entry points.**
     Preserve only load/link/execute APIs over `VerifiedModule`.
+    - [x] **V04.1a — Isolate legacy executable-IR lowering.** The default VM
+      dependency closure no longer links `rsscript-exec-ir`; its source-shaped
+      lowerer and compiler-facing entry point require the explicit
+      `legacy-exec-ir` compatibility feature. The SDK migration adapter opts in
+      deliberately while direct MIR builds continue through codegen, verifier,
+      and the VM token boundary. Removing this compatibility feature entirely
+      remains follow-up work.
   - [ ] **V04.2 — Delete VM bytecode encoder and Artifact assembly.** Move all
     production encode logic to codegen/Artifact crates.
   - [ ] **V04.3 — Delete duplicate VM payload verifier.** Keep runtime defensive

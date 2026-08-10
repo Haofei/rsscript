@@ -19,6 +19,10 @@ legacy lowering callers retain their source compatibility. Syntax and checked
 MIR continue to map their own parser/IR operations at their respective
 lowering boundaries.
 
+The VM's remaining source-shaped executable-IR lowerer is an explicit
+`legacy-exec-ir` feature. It is not part of the default VM dependency closure;
+the transitional SDK compatibility adapter must opt into it deliberately.
+
 This decision does not define the bytecode-v2 opcode encoding, replace
 `MirBinaryOp`, or remove the remaining legacy executable-IR lowering path.
 Those steps require separate backend and verifier changes.
@@ -34,5 +38,6 @@ can become execution-only.
 ## Evidence
 
 The ABI, executable-IR, compiler lowering, and VM test suites compile against
-the shared operation type. Architecture tests continue to require frontend-free
-MIR and verifier-owned bytecode loading.
+the shared operation type. The VM is checked both with and without the legacy
+feature, while the SDK migration suite exercises the retained compatibility
+path. Architecture tests require the feature to remain explicit.

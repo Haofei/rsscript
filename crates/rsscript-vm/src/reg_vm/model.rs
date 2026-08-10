@@ -850,6 +850,7 @@ pub(crate) enum MatchFailurePatch {
 }
 
 impl RegUnit {
+    #[cfg(feature = "legacy-exec-ir")]
     pub(crate) fn lower(executable: &rsscript_exec_ir::ExecutableIr) -> Result<Self, EvalError> {
         let hir = executable.program();
         let names = executable

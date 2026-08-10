@@ -1517,6 +1517,51 @@ fn mir_codegen_is_a_vm_independent_verified_bytecode_boundary() {
 }
 
 #[test]
+fn legacy_executable_ir_lowering_is_an_explicit_vm_compatibility_feature() {
+    let root = workspace_root();
+    let manifest: toml::Value = toml::from_str(&read(&root.join("crates/rsscript-vm/Cargo.toml")))
+        .expect("VM manifest should parse");
+    let exec_ir = manifest["dependencies"]["rsscript-exec-ir"]
+        .as_table()
+        .expect("legacy executable IR dependency should be declared as a table");
+    assert_eq!(
+        exec_ir.get("optional").and_then(toml::Value::as_bool),
+        Some(true),
+        "the default VM closure must not link source-shaped executable IR"
+    );
+    let legacy_feature = manifest["features"]["legacy-exec-ir"]
+        .as_array()
+        .expect("legacy executable IR feature should be declared");
+    assert!(
+        legacy_feature
+            .iter()
+            .any(|entry| entry.as_str() == Some("dep:rsscript-exec-ir")),
+        "only the explicit compatibility feature may activate executable-IR lowering"
+    );
+
+    let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));
+    assert!(
+        vm.contains(
+            "#[cfg(feature = \"legacy-exec-ir\")]\n#[doc(hidden)]\npub fn compile_executable_ir"
+        ) && vm.contains("#[cfg(feature = \"legacy-exec-ir\")]\nmod lower;"),
+        "VM source-shaped lowering must remain behind its explicit compatibility feature"
+    );
+
+    let sdk_manifest: toml::Value =
+        toml::from_str(&read(&root.join("crates/rsscript-sdk/Cargo.toml")))
+            .expect("SDK manifest should parse");
+    let execution = sdk_manifest["features"]["execution"]
+        .as_array()
+        .expect("SDK execution feature should be declared");
+    assert!(
+        execution
+            .iter()
+            .any(|entry| entry.as_str() == Some("rsscript-vm/legacy-exec-ir")),
+        "the transitional SDK compatibility adapter must opt into legacy lowering explicitly"
+    );
+}
+
+#[test]
 fn vm_public_loader_requires_a_verifier_token() {
     let root = workspace_root();
     let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));

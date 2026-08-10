@@ -120,6 +120,7 @@ impl WireUnit {
     }
 }
 
+#[cfg(feature = "legacy-exec-ir")]
 pub(super) fn encode_and_verify(
     unit: &RegUnit,
     source_content_hash: &str,
@@ -186,6 +187,7 @@ pub(super) fn decode_verified_bytecode(
     })
 }
 
+#[cfg(feature = "legacy-exec-ir")]
 fn external_imports(
     unit: &RegUnit,
     executable: &rsscript_exec_ir::ExecutableIr,

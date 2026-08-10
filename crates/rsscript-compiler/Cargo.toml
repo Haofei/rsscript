@@ -67,4 +67,4 @@ reir = { path = "../../experiments/reir" }
 rsscript-review-reir = { path = "../../experiments/rsscript-review-reir" }
 sha1 = "0.10"
 proptest = "1"
-rsscript-vm = { path = "../rsscript-vm", default-features = false }
+rsscript-vm = { path = "../rsscript-vm", default-features = false, features = ["legacy-exec-ir"] }
