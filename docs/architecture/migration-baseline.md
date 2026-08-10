@@ -639,6 +639,9 @@ mechanical acceptance condition holds.
     and fail-closed profile requirements.
   - [ ] **A09.3 — Complete parent-side containment.** Cover process-tree kill,
     deadline, stdout/stderr/report limits, abnormal exits, and child disconnects.
+    The parent now treats either bounded pipe overflow as an immediate reason to
+    terminate the guarded process tree, reap the root, and join both readers;
+    disconnect-path coverage remains open.
   - [ ] **A09.4 — Fuzz protocol and runner failure paths.** Exercise framing,
     malformed messages, oversized inputs, incomplete I/O, and termination
     separation without calling it a universal sandbox.

@@ -2,6 +2,8 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::Path;
 use std::process::{Command, ExitCode, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -147,8 +149,13 @@ fn invoke_runner(
         .stderr
         .take()
         .ok_or_else(|| "runner stderr is unavailable".to_string())?;
-    let stdout_reader = thread::spawn(move || read_bounded(stdout, MAX_RESPONSE_BYTES + 16));
-    let stderr_reader = thread::spawn(move || read_bounded(stderr, RUNNER_STDERR_LIMIT));
+    let output_exceeded = Arc::new(AtomicBool::new(false));
+    let stdout_exceeded = Arc::clone(&output_exceeded);
+    let stderr_exceeded = Arc::clone(&output_exceeded);
+    let stdout_reader =
+        thread::spawn(move || read_bounded(stdout, MAX_RESPONSE_BYTES + 16, &stdout_exceeded));
+    let stderr_reader =
+        thread::spawn(move || read_bounded(stderr, RUNNER_STDERR_LIMIT, &stderr_exceeded));
     let deadline =
         Instant::now() + Duration::from_millis(request.limits.wall_time_ms.saturating_add(1000));
     loop {
@@ -174,6 +181,17 @@ fn invoke_runner(
             let stdout = join_runner_output(stdout_reader, "stdout")?;
             let stderr = join_runner_output(stderr_reader, "stderr")?;
             return Err(format_runner_deadline_error(status, &stdout, &stderr));
+        }
+        if output_exceeded.load(Ordering::Acquire) {
+            child
+                .terminate()
+                .map_err(|error| format!("cannot terminate oversized runner output: {error}"))?;
+            let status = child
+                .wait()
+                .map_err(|error| format!("cannot reap oversized runner output: {error}"))?;
+            let _ = join_runner_output(stdout_reader, "stdout");
+            let _ = join_runner_output(stderr_reader, "stderr");
+            return Err(format_runner_output_limit_error(status));
         }
         thread::sleep(Duration::from_millis(10));
     }
@@ -217,6 +235,12 @@ fn format_runner_deadline_error(
     }
 }
 
+fn format_runner_output_limit_error(status: std::process::ExitStatus) -> String {
+    format!(
+        "runner output exceeded its byte limit; terminated process tree and reaped root with {status}"
+    )
+}
+
 fn spawn_runner(command: &mut Command, limits: ProcessLimits) -> io::Result<GuardedChild> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
@@ -228,13 +252,18 @@ fn spawn_runner(command: &mut Command, limits: ProcessLimits) -> io::Result<Guar
     }
 }
 
-fn read_bounded(mut input: impl Read, maximum: usize) -> io::Result<Vec<u8>> {
+fn read_bounded(
+    mut input: impl Read,
+    maximum: usize,
+    exceeded: &AtomicBool,
+) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     input
         .by_ref()
         .take((maximum as u64) + 1)
         .read_to_end(&mut bytes)?;
     if bytes.len() > maximum {
+        exceeded.store(true, Ordering::Release);
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "runner output exceeds its byte limit",
@@ -375,9 +404,12 @@ mod tests {
 
     #[test]
     fn bounded_reader_rejects_runner_output_over_the_configured_limit() {
-        let error = read_bounded(Cursor::new(vec![0_u8; 5]), 4).expect_err("must reject");
+        let exceeded = AtomicBool::new(false);
+        let error =
+            read_bounded(Cursor::new(vec![0_u8; 5]), 4, &exceeded).expect_err("must reject");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(error.to_string().contains("byte limit"));
+        assert!(exceeded.load(Ordering::Acquire));
     }
 
     #[test]
@@ -397,6 +429,25 @@ mod tests {
         assert!(error.contains("terminated and reaped"));
         assert!(error.contains("child diagnostics"));
         assert!(!error.contains("not a report"));
+    }
+
+    #[test]
+    fn output_limit_error_records_process_tree_reap_without_a_script_report() {
+        let status = if cfg!(windows) {
+            Command::new("cmd")
+                .args(["/C", "exit", "1"])
+                .status()
+                .expect("status")
+        } else {
+            Command::new("sh")
+                .args(["-c", "exit 1"])
+                .status()
+                .expect("status")
+        };
+        let error = format_runner_output_limit_error(status);
+        assert!(error.contains("terminated process tree"));
+        assert!(error.contains("reaped root"));
+        assert!(!error.contains("ExecutionReport"));
     }
 
     #[test]
