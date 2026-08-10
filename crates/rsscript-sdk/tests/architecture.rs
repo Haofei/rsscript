@@ -1165,6 +1165,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "TypeId",
         "TypeQualifiers",
         "ValidatedProgram",
+        "duplicate_declaration_diagnostics",
     ] {
         assert!(
             semantics.contains(exported),
@@ -1199,6 +1200,19 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         );
     }
     assert!(compiler_projection.contains("pub use rsscript_semantics"));
+
+    let semantic_declarations = read(&root.join("crates/rsscript-semantics/src/declarations.rs"));
+    assert!(semantic_declarations.contains("pub fn duplicate_declaration_diagnostics"));
+    assert!(semantic_declarations.contains("DuplicateSymbolKind"));
+    let compiler_declarations =
+        read(&root.join("crates/rsscript-compiler/src/checks/declarations/duplicate_decls.rs"));
+    assert!(
+        compiler_declarations.contains("rsscript_semantics::duplicate_declaration_diagnostics")
+    );
+    assert!(
+        !compiler_declarations.contains("duplicate_symbols()"),
+        "compiler declaration checks must consume semantic duplicate diagnostics instead of reinterpreting HIR identity facts"
+    );
 
     assert!(
         !root

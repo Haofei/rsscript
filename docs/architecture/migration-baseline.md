@@ -136,6 +136,12 @@ mechanical acceptance condition holds.
     fixtures and spans. The complete file-local editor symbol index (declarations,
     lexical scopes, references, pattern bindings, and document outlines) now
     belongs to `rsscript-semantics`; workspace namespace/import validation remains.
+    - [x] **S02.1a — Move duplicate-declaration diagnostics.** The resolved HIR
+      duplicate inventory and its diagnostic construction now belong to
+      `rsscript-semantics`; compiler declaration checks only append the canonical
+      semantic diagnostics. An architecture test rejects local re-interpretation
+      of duplicate HIR facts, while backend-only lowered-name validation remains
+      in the compiler.
   - [ ] **S02.2 — Move type and generic-constraint checks.** Relocate type
     inference, substitutions, generic constraints, and call result facts behind
     the semantic crate API.

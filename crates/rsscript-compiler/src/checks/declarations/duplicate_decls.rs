@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::analyzer::{Analyzer, duplicate_symbol_label, is_valid_rust_identifier};
+use crate::analyzer::{Analyzer, is_valid_rust_identifier};
 use crate::diagnostic::{Diagnostic, code};
 use crate::syntax::ast::Item;
 
@@ -77,27 +77,9 @@ fn check_lowered_name_conflicts(analyzer: &mut Analyzer<'_>) {
 }
 
 fn check_duplicate_declarations(analyzer: &mut Analyzer<'_>) {
-    for duplicate in analyzer.hir.duplicate_symbols() {
-        analyzer.diagnostics.push(
-            Diagnostic::error(
-                code::DUPLICATE_DECLARATION,
-                format!(
-                    "{} `{}` is declared more than once.",
-                    duplicate_symbol_label(duplicate.kind),
-                    duplicate.name
-                ),
-                duplicate.duplicate_span.clone(),
-                "duplicate declaration",
-            )
-            .with_cause(format!(
-                "The first declaration is at {}:{}.",
-                duplicate.first_span.line, duplicate.first_span.column
-            ))
-            .with_fix(
-                "rename_declaration",
-                "Rename or remove one declaration so the symbol table is unambiguous.",
-                "manual",
-            ),
-        );
-    }
+    analyzer
+        .diagnostics
+        .extend(rsscript_semantics::duplicate_declaration_diagnostics(
+            &analyzer.hir,
+        ));
 }

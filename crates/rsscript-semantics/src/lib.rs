@@ -12,6 +12,7 @@ pub use rsscript_abi_model::{
 
 mod call_binding;
 mod database;
+mod declarations;
 pub mod hir;
 mod identities;
 mod interface_descriptor;
@@ -23,6 +24,7 @@ pub use database::{
     FrontendStopReason, SemanticDatabase, SessionSourceStore, SourceFileSnapshot, SourceSnapshot,
     SourceStoreError, SourceUpdate, ValidatedProgram,
 };
+pub use declarations::duplicate_declaration_diagnostics;
 pub use identities::DefinitionId;
 pub use interface_descriptor::{
     INTERFACE_DESCRIPTOR_SCHEMA, InterfaceDescriptorError, InterfaceDescriptorFunctionV1,

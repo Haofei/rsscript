@@ -10,8 +10,8 @@ use crate::checks::budget::{
 };
 use crate::diagnostic::{Diagnostic, Span, code};
 use crate::hir::{
-    CallResolution, DuplicateSymbolKind, FieldInfo, FunctionSig, Hir, HirBlock, HirExpr,
-    HirMatchArm, HirStmt, HirTypeKind, ParamSig,
+    CallResolution, FieldInfo, FunctionSig, Hir, HirBlock, HirExpr, HirMatchArm, HirStmt,
+    HirTypeKind, ParamSig,
 };
 use crate::interfaces::CORE_INTERFACES;
 use crate::lexer::{Token, lex_with_budget};
@@ -2007,15 +2007,6 @@ fn constrained_field_patterns(pattern: &MatchPattern) -> Vec<(String, &MatchPatt
         | MatchPattern::Literal { .. }
         | MatchPattern::List { .. }
         | MatchPattern::Wildcard(_) => Vec::new(),
-    }
-}
-
-pub(crate) fn duplicate_symbol_label(kind: DuplicateSymbolKind) -> &'static str {
-    match kind {
-        DuplicateSymbolKind::Function => "function",
-        DuplicateSymbolKind::Type => "type",
-        DuplicateSymbolKind::Constructor => "callable",
-        DuplicateSymbolKind::Field => "field",
     }
 }
 
