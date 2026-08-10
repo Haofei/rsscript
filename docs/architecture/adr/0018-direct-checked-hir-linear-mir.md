@@ -20,9 +20,11 @@ expressions, lists, maps, JSON objects, resolved list indexing, structured
 resource scopes, return, and resolved internal calls with ordinary/read, `mut`,
 and `take` arguments. Call targets are looked up from checked `CallResolution`
 in a deterministic `FunctionId` table. `CompiledIr::mir()` prefers this path.
-Unsupported async, fields, records, variants, and match explicitly return a
-lowering error; only the existing compatibility caller may then choose the old
-`ExecutableIr` bridge.
+Internal `task_group` async-let bindings and direct awaits lower to explicit
+`Spawn`/`Await` operations. Unsupported async external calls, cancellation,
+fields, records, variants, and match explicitly return a lowering error; only
+the existing compatibility caller may then choose the old `ExecutableIr`
+bridge.
 
 This is not the final HIR-to-MIR lowerer and does not change language syntax or
 make `ExecutableIr` a new stable API.
@@ -53,6 +55,8 @@ Compiler coverage asserts direct scalar, branch, and loop programs (including
 `break`/`continue`) plus lexical resource scopes produce valid owned MIR with
 explicit CFG terminators and cleanup operations, and that resolved internal and
 external calls preserve their typed target and `read`/`mut`/`take` identity. SDK
-migration tests compile all direct HIR MIR shapes to
+Migration tests also prove a checked-HIR task group emits verifier-approved
+`Spawn`/`Await` bytecode and returns 42. SDK migration tests compile all direct
+HIR MIR shapes to
 verifier-approved Artifacts and execute them in the VM with their expected
 results.

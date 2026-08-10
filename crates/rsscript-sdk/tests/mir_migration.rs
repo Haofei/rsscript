@@ -566,6 +566,54 @@ fn main() -> Int {
 }
 
 #[test]
+fn direct_checked_hir_async_task_group_emits_spawn_and_await() {
+    let source = r#"
+async fn worker() -> Int {
+    return 42
+}
+
+fn main() -> Int {
+    task_group {
+        async let task = worker()
+        let value = await task
+        return value
+    }
+}
+"#;
+    let compiled = compile_source_to_ir("direct-hir-async.rss", source)
+        .expect("structured async source should compile");
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("structured async lowers directly from checked HIR");
+    let instructions = mir
+        .functions()
+        .iter()
+        .flat_map(|function| function.blocks())
+        .flat_map(|block| block.instructions())
+        .collect::<Vec<_>>();
+    assert!(
+        instructions
+            .iter()
+            .any(|instruction| matches!(instruction, MirInstruction::Spawn { .. }))
+    );
+    assert!(
+        instructions
+            .iter()
+            .any(|instruction| matches!(instruction, MirInstruction::Await { .. }))
+    );
+    mir.verify().expect("structured async MIR verifies");
+    let output = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("structured async MIR emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("structured async bytecode executes");
+    assert_eq!(output.value, "42");
+}
+
+#[test]
 fn spawned_mir_task_executes_through_verified_bytecode_vm() {
     let mir = MirModule::new(
         vec![WireType::Int {

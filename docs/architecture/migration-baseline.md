@@ -373,7 +373,9 @@ mechanical acceptance condition holds.
       calls plus lexical resource scopes) now lower from semantic HIR without
       constructing `ExecutableIr`; compiler output prefers that route and uses
       the explicit compatibility bridge only when a capability is not yet
-      direct-lowerable. Async remains follow-up direct-lowering work.
+      direct-lowerable. Internal task-group `async let`/`await` also lower to
+      explicit MIR `Spawn`/`Await`; async external calls and cancellation remain
+      follow-up direct-lowering work.
   - [ ] **M04.2 — Verify MIR ownership, resources, and task scopes.** Add a
     verifier pass with targeted invalid-MIR fixtures.
   - [ ] **M04.3 — Enforce backend input boundaries.** Architecture tests reject

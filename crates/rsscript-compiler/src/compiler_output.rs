@@ -21,8 +21,8 @@ impl CompiledIr {
     /// typed CFG MIR migration boundary.
     ///
     /// The migration subset covers resolved calls, structured control flow,
-    /// and lexical resource scopes, while async and other unsupported semantic
-    /// forms still fail closed.
+    /// lexical resource scopes, and internal task-group spawn/await. Other
+    /// unsupported semantic forms still fail closed.
     pub fn mir(&self) -> Result<rsscript_mir::MirModule, rsscript_lowering::MirLoweringError> {
         self.checked_hir_mir()
             .or_else(|_| rsscript_lowering::lower_executable_ir_to_mir(&self.executable))

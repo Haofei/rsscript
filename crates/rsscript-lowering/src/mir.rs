@@ -363,6 +363,8 @@ struct CheckedHirLowerer<'source, 'types> {
     places: HashMap<String, PlaceId>,
     place_names: Vec<String>,
     next_value: u32,
+    tasks: HashMap<String, TaskId>,
+    next_task: u32,
     loops: Vec<LoopTargets>,
     resource_scopes: Vec<PlaceId>,
 }
@@ -390,6 +392,8 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             places: HashMap::new(),
             place_names: Vec::new(),
             next_value: 0,
+            tasks: HashMap::new(),
+            next_task: 0,
             loops: Vec::new(),
             resource_scopes: Vec::new(),
         };
@@ -400,9 +404,6 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
     }
 
     fn lower(mut self) -> Result<LoweredFunction, MirLoweringError> {
-        if self.signature.is_async {
-            return self.unsupported("async checked HIR function");
-        }
         for statement in &self.body.statements {
             if self.current_block().terminator.is_some() {
                 return self.unsupported("statement after return");
@@ -474,9 +475,12 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                 self.emit(MirInstruction::Discard { value });
                 Ok(())
             }
-            checked::HirStmt::Let { is_async: true, .. } => {
-                self.unsupported("async checked HIR binding")
-            }
+            checked::HirStmt::Let {
+                name,
+                value,
+                is_async: true,
+                ..
+            } => self.lower_async_binding(name, value.as_ref()),
             checked::HirStmt::If {
                 condition,
                 then_body,
@@ -633,7 +637,7 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             checked::HirExpr::Effect { .. } => self.unsupported("non-read checked HIR effect"),
             checked::HirExpr::Manage { .. } => self.unsupported("checked HIR managed value"),
             checked::HirExpr::Spawn { .. } => self.unsupported("checked HIR spawn"),
-            checked::HirExpr::Await { .. } => self.unsupported("checked HIR await"),
+            checked::HirExpr::Await { value, .. } => self.lower_await(value),
             checked::HirExpr::Try { .. } => self.unsupported("checked HIR try"),
             checked::HirExpr::Closure { .. } => self.unsupported("checked HIR closure"),
             checked::HirExpr::Field { .. } => self.unsupported("checked HIR field access"),
@@ -725,6 +729,78 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             checked::ParamEffect::Mut => MirCallArgument::BorrowMut(place),
             checked::ParamEffect::Take => MirCallArgument::Take(place),
         })
+    }
+
+    fn lower_async_binding(
+        &mut self,
+        name: &str,
+        value: Option<&checked::HirExpr>,
+    ) -> Result<(), MirLoweringError> {
+        let Some(checked::HirExpr::Call {
+            receiver,
+            args,
+            resolution,
+            ..
+        }) = value
+        else {
+            return self.unsupported("async checked HIR binding without direct call");
+        };
+        if receiver.is_some() {
+            return self.unsupported("async checked HIR receiver call");
+        }
+        let checked::CallResolution::Resolved { signature, .. } = resolution else {
+            return self.unsupported("unresolved async checked HIR call");
+        };
+        if signature.is_external || signature.is_builtin {
+            return self.unsupported("async external or builtin checked HIR call");
+        }
+        let qualified = signature
+            .namespace
+            .as_ref()
+            .map(|namespace| format!("{namespace}.{}", signature.name));
+        let target = self
+            .targets
+            .functions
+            .get(&signature.name)
+            .or_else(|| {
+                qualified
+                    .as_ref()
+                    .and_then(|name| self.targets.functions.get(name))
+            })
+            .copied()
+            .ok_or_else(|| MirLoweringError::Unsupported {
+                function: self.function_name.to_owned(),
+                construct: "direct async checked HIR call target",
+            })?;
+        let mut ordered = args.iter().collect::<Vec<_>>();
+        ordered.sort_by_key(|argument| argument.evaluation_index);
+        let arguments = ordered
+            .into_iter()
+            .map(|argument| self.lower_direct_call_argument(&argument.value))
+            .collect::<Result<Vec<_>, _>>()?;
+        let task = self.task();
+        if self.tasks.insert(name.to_owned(), task).is_some() {
+            return self.unsupported("duplicate async checked HIR binding");
+        }
+        self.emit(MirInstruction::Spawn {
+            task,
+            group: TaskGroupId::new(0),
+            target,
+            arguments,
+        });
+        Ok(())
+    }
+
+    fn lower_await(&mut self, value: &checked::HirExpr) -> Result<ValueId, MirLoweringError> {
+        let checked::HirExpr::Ident { name, .. } = value else {
+            return self.unsupported("await of non-task checked HIR local");
+        };
+        let Some(task) = self.tasks.get(name).copied() else {
+            return self.unsupported("await of unknown checked HIR task");
+        };
+        let destination = self.value();
+        self.emit(MirInstruction::Await { destination, task });
+        Ok(destination)
     }
 
     fn lower_if(
@@ -918,6 +994,12 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         let value = ValueId::new(self.next_value);
         self.next_value += 1;
         value
+    }
+
+    fn task(&mut self) -> TaskId {
+        let task = TaskId::new(self.next_task);
+        self.next_task += 1;
+        task
     }
 
     fn unsupported<T>(&self, construct: &'static str) -> Result<T, MirLoweringError> {
