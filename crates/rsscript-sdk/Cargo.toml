@@ -52,7 +52,6 @@ reir = { path = "../../experiments/reir" }
 rsscript-abi-model = { path = "../rsscript-abi-model" }
 rsscript-review-reir = { path = "../../experiments/rsscript-review-reir" }
 rsscript-mir = { path = "../rsscript-mir", features = ["conformance"] }
-rss-testgen = { path = "../../experiments/rss-testgen" }
 sha1 = "0.10"
 proptest = "1"
 tempfile = "3"

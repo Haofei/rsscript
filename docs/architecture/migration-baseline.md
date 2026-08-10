@@ -111,6 +111,9 @@ mechanical acceptance condition holds.
   excludes them, and CI invokes their maintenance gate explicitly. Self-host and
   native package source remain migration/test fixtures, so the milestone stays
   open until those assets have an explicit external maintenance boundary.
+  The generated-program differential has also moved from the SDK test target to
+  the `rss-testgen` experiment, so default Core tests no longer compile its
+  experiment dependency.
 - [ ] **G07 — Establish public API compatibility gates.** Check in a reviewed
   SDK API inventory, run semver/API-diff checks in CI, and reject experimental
   symbols from default SDK features. The reviewed inventory and default-feature

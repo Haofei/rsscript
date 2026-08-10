@@ -1,7 +1,8 @@
-//! Backend differential and generative integration tests.
+//! Curated Core backend differential integration tests.
 //!
 //! This is the single target for backend agreement: curated differentials,
-//! fixture corpus, generated programs, examples, and metamorphic checks.
+//! fixture corpus, examples, and metamorphic checks. Generated-program testing
+//! lives with the experimental `rss-testgen` workspace.
 #![allow(clippy::duplicate_mod)]
 
 #[path = "backend_differential.rs"]
@@ -10,7 +11,5 @@ mod backend_differential;
 mod differential_corpus;
 #[path = "examples_exec.rs"]
 mod examples_exec;
-#[path = "generative.rs"]
-mod generative;
 #[path = "metamorphic.rs"]
 mod metamorphic;

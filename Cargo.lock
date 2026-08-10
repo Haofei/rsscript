@@ -1714,13 +1714,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rss-testgen"
-version = "0.1.0"
-dependencies = [
- "rsscript-sdk",
-]
-
-[[package]]
 name = "rsscript-abi-model"
 version = "0.1.0"
 dependencies = [
@@ -1796,7 +1789,6 @@ dependencies = [
  "rand 0.8.7",
  "regex",
  "reir",
- "rss-testgen",
  "rsscript-abi-model",
  "rsscript-build-support",
  "rsscript-diagnostics",
@@ -2023,7 +2015,6 @@ dependencies = [
  "jsonschema",
  "proptest",
  "reir",
- "rss-testgen",
  "rsscript-abi-model",
  "rsscript-build-support",
  "rsscript-bytecode",

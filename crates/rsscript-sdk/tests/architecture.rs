@@ -182,9 +182,12 @@ fn cargo_metadata_enforces_composition_dependency_direction() {
         language_service,
         BTreeSet::from([
             "rsscript-compiler".to_string(),
+            "rsscript-diagnostics".to_string(),
             "rsscript-operation".to_string(),
+            "rsscript-semantics".to_string(),
+            "rsscript-syntax".to_string(),
         ]),
-        "language service must depend only on frontend and shared operation contracts"
+        "language service must depend only on frontend, diagnostics, and shared operation contracts"
     );
 
     for package in metadata["packages"].as_array().expect("metadata packages") {
@@ -293,6 +296,17 @@ fn root_workspace_excludes_experimental_packages() {
                     == Some(experimental)
             }),
             "Core workspace must not own experimental package `{experimental}`"
+        );
+    }
+}
+
+#[test]
+fn core_manifests_do_not_pull_test_generation_into_default_tests() {
+    let metadata = cargo_metadata(&workspace_root());
+    for package in ["rsscript-sdk", "rsscript-compiler"] {
+        assert!(
+            !metadata_direct_dependencies(&metadata, package).contains("rss-testgen"),
+            "Core package `{package}` must not depend on the experimental test generator"
         );
     }
 }
