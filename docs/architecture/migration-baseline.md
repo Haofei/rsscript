@@ -683,8 +683,8 @@ mechanical acceptance condition holds.
   - [ ] **E03.3 — Add execution state-machine corpus.** Cover budgets,
     cancellation, cleanup, Provider errors, and interpreter/experiment parity.
 - [x] **E04 — Require ADR/RFC records for contract changes.** Core CI compares
-  each change with its base revision and rejects ABI-model, MIR, bytecode,
-  Provider ABI, or reviewed SDK changes unless the same change updates a
+  each change with its base revision and rejects syntax/semantics, ABI-model,
+  MIR, bytecode, Provider ABI, or reviewed SDK changes unless the same change updates a
   numbered ADR. The checked-in template requires problem, non-goals,
   compatibility, migration, verifier/security impact, and Provider/backend
   impact; ADR 0001 records the initial typed Provider wire-value decision.

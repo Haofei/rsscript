@@ -15,7 +15,7 @@ adr_changed=false
 while IFS= read -r path; do
   [[ -z "${path}" ]] && continue
   case "${path}" in
-    crates/rsscript-abi-model/*|crates/rsscript-mir/*|crates/rsscript-bytecode/*|crates/rsscript-provider-api/*|crates/rsscript-sdk/*)
+    crates/rsscript-syntax/*|crates/rsscript-semantics/*|crates/rsscript-abi-model/*|crates/rsscript-mir/*|crates/rsscript-bytecode/*|crates/rsscript-provider-api/*|crates/rsscript-sdk/*)
       contract_changed=true
       ;;
   esac
