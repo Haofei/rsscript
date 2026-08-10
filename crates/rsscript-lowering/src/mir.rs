@@ -16,7 +16,8 @@ use rsscript_exec_ir::{
 use rsscript_mir::{
     BasicBlock, BlockId, FunctionId, MirBinaryOp, MirCallArgument, MirCallTarget,
     MirExternalImport, MirFunction, MirFunctionDebug, MirFunctionSignature, MirInstruction,
-    MirLiteral, MirModule, MirParameterMode, MirTerminator, PlaceId, TypeId, ValueId,
+    MirLiteral, MirModule, MirParameterMode, MirTerminator, PlaceId, ResourceTypeId, TypeId,
+    ValueId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,6 +91,7 @@ pub fn lower_executable_ir_to_mir(
             function,
             signature,
             targets.clone(),
+            &mut types,
         )
         .lower()?;
         lowered.push(output.function);
@@ -194,11 +196,12 @@ struct LoopTargets {
     break_target: BlockId,
 }
 
-struct FunctionLowerer<'a> {
+struct FunctionLowerer<'source, 'types> {
     id: FunctionId,
-    source: &'a ExecutableFunction,
+    source: &'source ExecutableFunction,
     signature: MirFunctionSignature,
     targets: CallTargets,
+    types: &'types mut TypeTable,
     blocks: Vec<BlockDraft>,
     current: BlockId,
     places: HashMap<String, PlaceId>,
@@ -207,18 +210,20 @@ struct FunctionLowerer<'a> {
     loops: Vec<LoopTargets>,
 }
 
-impl<'a> FunctionLowerer<'a> {
+impl<'source, 'types> FunctionLowerer<'source, 'types> {
     fn new(
         id: FunctionId,
-        source: &'a ExecutableFunction,
+        source: &'source ExecutableFunction,
         signature: MirFunctionSignature,
         targets: CallTargets,
+        types: &'types mut TypeTable,
     ) -> Self {
         let mut lowerer = Self {
             id,
             source,
             signature,
             targets,
+            types,
             blocks: vec![BlockDraft::new()],
             current: BlockId::new(0),
             places: HashMap::new(),
@@ -326,7 +331,11 @@ impl<'a> FunctionLowerer<'a> {
                 let value = self.lower_expression(expression)?;
                 self.emit(MirInstruction::Discard { value });
             }
-            ExecutableStmt::With { .. } => return self.unsupported("resource scope"),
+            ExecutableStmt::With {
+                resource,
+                binding,
+                body,
+            } => self.lower_with(resource, binding, body)?,
             ExecutableStmt::For { .. } => return self.unsupported("for loop"),
             ExecutableStmt::Match { .. } => return self.unsupported("match"),
             ExecutableStmt::Select { .. } => return self.unsupported("select"),
@@ -367,6 +376,53 @@ impl<'a> FunctionLowerer<'a> {
 
         self.current = join_block;
         Ok(())
+    }
+
+    fn lower_with(
+        &mut self,
+        resource: &ExecutableExpr,
+        binding: &str,
+        body: &rsscript_exec_ir::ExecutableBlock,
+    ) -> Result<(), MirLoweringError> {
+        let ExecutableExpr::Manage {
+            value, type_name, ..
+        } = resource
+        else {
+            return self.unsupported("unmanaged resource scope");
+        };
+        let Some(type_name) = type_name.as_deref() else {
+            return self.unsupported("resource scope without canonical type");
+        };
+        // Evaluate the managed source before entering the lifetime. The current
+        // MIR acquire primitive represents ownership of the resulting host
+        // resource; bytecode execution remains intentionally unsupported.
+        let _source = self.lower_expression(value)?;
+        let place = self.place(binding);
+        let resource_type = self.intern_resource_type(type_name);
+        self.emit(MirInstruction::AcquireResource {
+            place,
+            resource_type,
+        });
+        self.lower_statements(&body.statements)?;
+        if self.current_block().terminator.is_none() {
+            self.emit(MirInstruction::ReleaseResource { place });
+        }
+        Ok(())
+    }
+
+    fn intern_resource_type(&mut self, type_name: &str) -> ResourceTypeId {
+        let wire = match WireType::parse(type_name) {
+            WireType::Resource { name } => WireType::Resource { name },
+            WireType::Qualified { value, .. }
+                if matches!(value.as_ref(), WireType::Resource { .. }) =>
+            {
+                *value
+            }
+            _ => WireType::Resource {
+                name: type_name.to_owned(),
+            },
+        };
+        ResourceTypeId::new(self.types.intern(wire).index() as u32)
     }
 
     fn lower_loop(
@@ -780,7 +836,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_resource_and_async_nodes_until_their_mir_ops_exist() {
+    fn rejects_unmanaged_resource_and_async_nodes_until_their_mir_ops_exist() {
         let executable = module(ExecutableFunction {
             name: "main".into(),
             is_async: false,
@@ -797,10 +853,74 @@ mod tests {
         assert!(matches!(
             lower_executable_ir_to_mir(&executable),
             Err(MirLoweringError::Unsupported {
-                construct: "resource scope",
+                construct: "unmanaged resource scope",
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn lowers_a_managed_linear_resource_scope_to_explicit_lifetime_ops() {
+        let executable = module(ExecutableFunction {
+            name: "main".into(),
+            is_async: false,
+            signature: signature(),
+            body: ExecutableBlock {
+                statements: vec![ExecutableStmt::With {
+                    resource: ExecutableExpr::Manage {
+                        value: Box::new(ExecutableExpr::Call {
+                            callee: Callee::Name("open".into()),
+                            receiver: None,
+                            args: Vec::new(),
+                            type_name: Some("File".into()),
+                        }),
+                        type_name: Some("host.fs.File".into()),
+                    },
+                    binding: "file".into(),
+                    body: ExecutableBlock { statements: vec![] },
+                }],
+            },
+        });
+        let mut program = ExecutableProgram::default();
+        program.insert_function(
+            "open".into(),
+            ExecutableFunction {
+                name: "open".into(),
+                is_async: false,
+                signature: ExecutableSignature {
+                    namespace: None,
+                    name: "open".into(),
+                    is_async: false,
+                    params: Vec::new(),
+                    return_type: Some("host.fs.File".into()),
+                    is_external: false,
+                },
+                body: ExecutableBlock { statements: vec![] },
+            },
+        );
+        program.insert_function(
+            "main".into(),
+            executable.functions().next().unwrap().clone(),
+        );
+        let mir = lower_executable_ir_to_mir(&ExecutableIr::new(program, Box::new([])))
+            .expect("lower managed resource scope");
+        let main = mir
+            .functions()
+            .iter()
+            .find(|function| {
+                mir.function_debug(function.id())
+                    .is_some_and(|debug| debug.name() == "main")
+            })
+            .expect("main function");
+        assert!(matches!(
+            main.blocks()[0].instructions(),
+            [
+                MirInstruction::Call { .. },
+                MirInstruction::AcquireResource { .. },
+                MirInstruction::ReleaseResource { .. }
+            ]
+        ));
+        mir.verify().expect("verify resource lifetime");
     }
 
     #[test]

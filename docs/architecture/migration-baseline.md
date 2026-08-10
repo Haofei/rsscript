@@ -296,6 +296,11 @@ mechanical acceptance condition holds.
       and unbalanced normal-return lifetimes, and makes unsupported VM codegen
       fail closed. Source lowering, manage/transfer, and non-normal cleanup
       edges remain follow-up work.
+    - [x] **M03.2b — Lower managed linear resource scopes.** The transitional
+      lowerer turns an explicitly managed, normally-falling-through `with`
+      scope into `AcquireResource`/`ReleaseResource` around its binding and
+      interns a canonical resource type. Unmanaged scopes and non-normal exits
+      remain fail-closed until cleanup-edge lowering is implemented.
   - [ ] **M03.3 — Add structured-concurrency instructions.** Model spawn, await,
     join, cancel, and select with lexical task-group ownership.
     - [x] **M03.3a — Establish typed task lifecycle primitives.** MIR now owns
