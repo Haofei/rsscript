@@ -1,0 +1,48 @@
+# ADR 0002: Numeric bytecode v2 executable model
+
+## Status
+
+Accepted
+
+## Problem
+
+The v1 executable payload is a canonical CBOR encoding of a JSON-shaped object
+tree. Although its verifier is bounded, opcode names and field maps remain
+string-driven and can drift from the VM decoder.
+
+## Decision and non-goals
+
+`rsscript-bytecode::v2` owns an independent typed model with numeric table IDs,
+numeric opcode tags, exact operand arities, and structural index validation.
+Functions, constants, imports, registers, and instruction targets are all
+numeric identities. The model contains resource and structured-async opcode
+slots so those contracts do not require a future source-language string opcode.
+
+This decision does not enable a v2 Artifact writer, replace the v1 verifier, or
+freeze every future opcode. Export/debug table codec design and data-flow/type
+verification remain separate follow-up decisions.
+
+## Compatibility and migration
+
+v1 remains the only deployed writer and reader. A future v2 container/ISA
+version will serialize the typed model through a bounded codec while retaining a
+read-only v1 compatibility path. No current Provider, SDK, or source-language
+contract changes.
+
+## Verifier and security impact
+
+The new model validates finite operand layouts and every table index before a
+VM is involved. It is compiler/VM independent, so malformed future v2 input can
+be rejected at the Artifact boundary rather than by an execution decoder.
+
+## Provider and backend impact
+
+Provider imports are represented by `WireImportId`; VM, AOT, and JIT backends
+will consume a verified typed program rather than reinterpreting textual call
+keys. No backend changes land in this initial model.
+
+## Evidence
+
+Focused bytecode tests cover a valid numeric external call and wrong-arity or
+out-of-range operand rejection. The existing bounded v1 verifier suite remains
+green.

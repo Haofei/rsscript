@@ -404,6 +404,12 @@ mechanical acceptance condition holds.
 - [ ] **B02 — Define the typed bytecode v2 wire model.** Use bounded decoding,
   numeric opcodes, numeric IDs, fixed operand layouts, and separate type,
   constant, function, import, export, code, and optional debug tables.
+  - [x] **B02.1 — Introduce a numeric v2 executable model.**
+    `rsscript-bytecode::v2` now owns typed function/type/constant/import/register
+    identities, numeric opcodes with exact operand arity, and independent
+    structural checks for register, function, import, constant, and jump IDs.
+    A v2 codec, exports/debug tables, and production writer remain follow-up
+    work; v1 stays the deployed artifact path.
 - [ ] **B03 — Generate codec and verification rules from one instruction
   schema.** The schema generates Rust instruction types, encoder, bounded
   decoder, operand validation, documentation, and fuzz seeds; string field maps

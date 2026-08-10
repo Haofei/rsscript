@@ -12,6 +12,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+pub mod v2;
+
 pub const BYTECODE_SCHEMA: &str = "rsscript.bytecode.v1";
 /// Version of the binary Artifact container envelope, independent of language
 /// semantics and instruction-set compatibility.
