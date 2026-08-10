@@ -53,3 +53,44 @@ pub fn symbol_inventory(file: &str, source: &str) -> Vec<SymbolInventoryEntry> {
     crate::rust_lower::set_lower_name_overrides(previous);
     entries
 }
+
+#[cfg(all(test, feature = "execution"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inventory_preserves_module_identity_and_lowered_names() {
+        let source = concat!(
+            "const MAX_RETRIES: Int = 3\n",
+            "struct Device { id: Int }\n",
+            "fn Device.open(id: Int) -> fresh Device {\n",
+            "    return Device(id: id)\n",
+            "}\n",
+        );
+        let inventory = symbol_inventory("helpers.rss", source);
+        assert!(inventory.iter().all(|entry| entry.module == "helpers"));
+        let open = inventory
+            .iter()
+            .find(|entry| entry.qualname == "Device.open")
+            .expect("member function inventory entry");
+        assert_eq!(open.kind, SymbolKind::Function);
+        assert_eq!(open.lowered_name, "Device_open");
+    }
+
+    #[test]
+    fn inventory_applies_lower_name_pins() {
+        let source = concat!(
+            "#lower_name(\"helpers__count\")\n",
+            "fn count(value: read Int) -> Int { return value }\n",
+        );
+        let inventory = symbol_inventory("helpers.rss", source);
+        assert_eq!(
+            inventory
+                .iter()
+                .find(|entry| entry.qualname == "count")
+                .expect("count inventory entry")
+                .lowered_name,
+            "helpers__count"
+        );
+    }
+}
