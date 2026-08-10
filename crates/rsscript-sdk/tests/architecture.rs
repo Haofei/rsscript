@@ -1169,6 +1169,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "duplicate_declaration_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
+        "unknown_binding_diagnostics",
         "unknown_field_diagnostics",
     ] {
         assert!(
@@ -1220,7 +1221,10 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     );
     let compiler_unknowns = read(&root.join("crates/rsscript-compiler/src/analyzer/unknowns.rs"));
     assert!(compiler_unknowns.contains("rsscript_semantics::unknown_field_diagnostics"));
+    assert!(compiler_unknowns.contains("rsscript_semantics::unknown_binding_diagnostics"));
     assert!(compiler_unknowns.contains("rsscript_semantics::unknown_type_diagnostics"));
+    assert!(!compiler_unknowns.contains("check_unknown_bindings_in_block"));
+    assert!(!compiler_unknowns.contains("unknown_binding_diagnostic("));
     assert!(!compiler_unknowns.contains("unknown_field_diagnostic(&access.name"));
 
     let semantic_aliases = read(&root.join("crates/rsscript-semantics/src/type_aliases.rs"));

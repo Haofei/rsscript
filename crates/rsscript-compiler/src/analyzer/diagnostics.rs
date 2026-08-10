@@ -93,27 +93,6 @@ impl Analyzer<'_> {
         );
     }
 
-    pub(super) fn unknown_binding_diagnostic(
-        &mut self,
-        name: &str,
-        span: &crate::diagnostic::Span,
-    ) {
-        self.diagnostics.push(
-            Diagnostic::error(
-                code::UNKNOWN_BINDING,
-                format!("unknown value binding `{name}`."),
-                span.clone(),
-                "unknown binding",
-            )
-            .with_cause("RSScript values must resolve before Rust lowering.")
-            .with_fix(
-                "declare_binding",
-                format!("Declare `{name}` before using it or pass it as a parameter."),
-                "manual",
-            ),
-        );
-    }
-
     pub(super) fn resource_generic_argument_diagnostic(
         &mut self,
         generic_name: &str,

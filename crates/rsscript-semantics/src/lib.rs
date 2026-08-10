@@ -27,7 +27,9 @@ pub use database::{
     FrontendStopReason, SemanticDatabase, SessionSourceStore, SourceFileSnapshot, SourceSnapshot,
     SourceStoreError, SourceUpdate, ValidatedProgram,
 };
-pub use declarations::{duplicate_declaration_diagnostics, unknown_field_diagnostics};
+pub use declarations::{
+    duplicate_declaration_diagnostics, unknown_binding_diagnostics, unknown_field_diagnostics,
+};
 pub use external_types::{external_binding_type_diagnostics, unknown_type_diagnostics};
 
 /// Builtin source type roots recognized before backend lowering.

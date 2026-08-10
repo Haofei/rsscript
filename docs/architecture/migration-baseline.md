@@ -146,6 +146,10 @@ mechanical acceptance condition holds.
       of legacy `own struct`, surface-reference, and cast-style syntax is now
       derived by `rsscript-semantics` from syntax tokens. Compiler retains only
       HIR/type-dependent operator validation.
+    - [x] **S02.1c — Move lexical unknown-binding diagnostics.** Global source
+      values and lexical visibility across HIR blocks, patterns, closures,
+      resource scopes, and task/select bodies are now interpreted once by
+      `rsscript-semantics`; compiler only appends the canonical diagnostics.
   - [ ] **S02.2 — Move type and generic-constraint checks.** Relocate type
     inference, substitutions, generic constraints, and call result facts behind
     the semantic crate API.
