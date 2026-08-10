@@ -43,6 +43,7 @@ pub enum MirValue {
     Bool(bool),
     String(String),
     Char(char),
+    List(Vec<MirValue>),
 }
 
 impl MirValue {
@@ -55,6 +56,14 @@ impl MirValue {
             Self::Bool(value) => value.to_string(),
             Self::String(value) => value.clone(),
             Self::Char(value) => value.to_string(),
+            Self::List(items) => format!(
+                "[{}]",
+                items
+                    .iter()
+                    .map(Self::render)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
         }
     }
 }
@@ -167,6 +176,14 @@ impl<'a> Interpreter<'a> {
                 match instruction {
                     MirInstruction::LoadLiteral { destination, value } => {
                         values[destination.index()] = Some(literal(value));
+                    }
+                    MirInstruction::MakeList { destination, items } => {
+                        values[destination.index()] = Some(MirValue::List(
+                            items
+                                .iter()
+                                .map(|item| value_at(&values, *item))
+                                .collect::<Result<Vec<_>, _>>()?,
+                        ));
                     }
                     MirInstruction::ReadPlace { destination, place } => {
                         values[destination.index()] = Some(

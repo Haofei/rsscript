@@ -259,6 +259,11 @@ mechanical acceptance condition holds.
   - [ ] **M02.3 — Lower aggregate and pattern operations.** Cover records,
     variants, collections, field/index operations, and match dispatch without
     source AST nodes in MIR.
+    - [x] **M02.3a — Lower owned list construction.** Source array literals
+      lower to `MakeList { destination, items }`; its owned `ValueId` inputs
+      participate in dominance validation and codegen emits the existing
+      verifier-checked `MakeList` bytecode instruction. Records, variants,
+      maps, field/index operations, and match dispatch remain fail-closed.
   - [ ] **M02.4 — Add MIR structural validation.** Reject dangling blocks,
     invalid IDs, unterminated blocks, undefined values, and malformed CFG edges.
     - [x] **M02.4a — Verify the initial structural subset.** The verifier
@@ -406,6 +411,10 @@ mechanical acceptance condition holds.
       drop clears its proven-dead register before frame teardown. Codegen tests
       assert the emitted cleanup sequence and verify the ordinary Artifact;
       source-level retain/drop lowering remains follow-up work.
+    - [x] **V02.3d — Emit owned list construction.** `MakeList` maps typed MIR
+      value IDs to verifier-checked v1 item registers. Lowering and SDK
+      migration fixtures prove source list literals reach a verified Artifact;
+      non-list aggregate and pattern instructions remain fail-closed.
   - [x] **V02.4 — Switch SDK build to codegen-vm.** Reviewed SDK source,
     interface, and package builds now emit their supported MIR capability
     directly through `codegen-vm` into a provider-neutral Artifact, without

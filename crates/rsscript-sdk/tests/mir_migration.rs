@@ -124,6 +124,16 @@ fn main() -> Int {
 }
 "#,
     },
+    MigrationCase {
+        name: "list_literal",
+        capability: "owned list literals",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn main() -> List<Int> {
+    return [1, 2, 3]
+}
+"#,
+    },
 ];
 
 #[test]

@@ -226,6 +226,21 @@ fn lower_instruction(
         MirInstruction::LoadLiteral { destination, value } => {
             code.push(literal(value, value_reg(function, *destination)))
         }
+        MirInstruction::MakeList { destination, items } => code.push(instr(
+            "MakeList",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                (
+                    "items",
+                    json!(
+                        items
+                            .iter()
+                            .map(|value| value_reg(function, *value))
+                            .collect::<Vec<_>>()
+                    ),
+                ),
+            ],
+        )),
         MirInstruction::ReadPlace { destination, place }
         | MirInstruction::BorrowRead { destination, place }
         | MirInstruction::TakePlace { destination, place } => code.push(instr(
@@ -593,6 +608,57 @@ mod tests {
         BytecodeVerifier::default()
             .verify(&artifact.to_bytes().unwrap())
             .unwrap();
+    }
+
+    #[test]
+    fn owned_list_construction_emits_a_verifiable_make_list_instruction() {
+        let module = MirModule::new(
+            vec![WireType::Unit],
+            vec![MirFunction::new(
+                FunctionId::new(0),
+                MirFunctionSignature::new(vec![], TypeId::new(0), false),
+                0,
+                3,
+                vec![BasicBlock::new(
+                    BlockId::new(0),
+                    vec![
+                        MirInstruction::LoadLiteral {
+                            destination: ValueId::new(0),
+                            value: MirLiteral::Int(1),
+                        },
+                        MirInstruction::LoadLiteral {
+                            destination: ValueId::new(1),
+                            value: MirLiteral::Int(2),
+                        },
+                        MirInstruction::MakeList {
+                            destination: ValueId::new(2),
+                            items: vec![ValueId::new(0), ValueId::new(1)],
+                        },
+                    ],
+                    MirTerminator::Return(Some(ValueId::new(2))),
+                )],
+            )],
+            vec![MirFunctionDebug::new("main", vec![])],
+            vec![],
+        )
+        .expect("list MIR verifies");
+        let artifact = emit_artifact(
+            &module,
+            &format!("sha256:{}", "a".repeat(64)),
+            &format!("sha256:{}", "b".repeat(64)),
+            "0.1.0",
+        )
+        .expect("emit list bytecode");
+        let payload: serde_json::Value =
+            rsscript_bytecode::decode_executable_payload(&artifact.payload)
+                .expect("decode list payload");
+        assert_eq!(
+            payload["functions"][0]["code"][2]["MakeList"]["items"],
+            serde_json::json!([0, 1])
+        );
+        BytecodeVerifier::default()
+            .verify(&artifact.to_bytes().expect("encode list bytecode"))
+            .expect("verify list bytecode");
     }
 
     #[test]

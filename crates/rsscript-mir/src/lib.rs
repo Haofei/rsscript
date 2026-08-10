@@ -83,6 +83,13 @@ pub enum MirInstruction {
         destination: ValueId,
         value: MirLiteral,
     },
+    /// Construct an owned list from already-defined values. Element identity is
+    /// carried by the surrounding typed MIR table; the instruction itself has
+    /// no source spelling or unresolved constructor name.
+    MakeList {
+        destination: ValueId,
+        items: Vec<ValueId>,
+    },
     ReadPlace {
         destination: ValueId,
         place: PlaceId,
@@ -778,6 +785,7 @@ fn verify_value_dominance(function: &MirFunction) -> Result<(), MirValidationErr
 fn instruction_definition(instruction: &MirInstruction) -> Option<ValueId> {
     match instruction {
         MirInstruction::LoadLiteral { destination, .. }
+        | MirInstruction::MakeList { destination, .. }
         | MirInstruction::ReadPlace { destination, .. }
         | MirInstruction::BorrowRead { destination, .. }
         | MirInstruction::TakePlace { destination, .. }
@@ -801,6 +809,7 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         MirInstruction::WritePlace { value, .. } | MirInstruction::Discard { value } => {
             vec![*value]
         }
+        MirInstruction::MakeList { items, .. } => items.clone(),
         MirInstruction::AcquireResource { source, .. } => vec![*source],
         MirInstruction::Binary { left, right, .. } => vec![*left, *right],
         MirInstruction::Call { arguments, .. } => arguments
@@ -967,6 +976,7 @@ fn transfer_move_state(
             Ok(())
         }
         MirInstruction::LoadLiteral { .. }
+        | MirInstruction::MakeList { .. }
         | MirInstruction::Binary { .. }
         | MirInstruction::Await { .. }
         | MirInstruction::Cancel { .. }
@@ -1016,7 +1026,8 @@ fn verify_instruction(
         }
     };
     match instruction {
-        MirInstruction::LoadLiteral { destination, .. } => define(*destination, defined),
+        MirInstruction::LoadLiteral { destination, .. }
+        | MirInstruction::MakeList { destination, .. } => define(*destination, defined),
         MirInstruction::ReadPlace { destination, place } => {
             check_live_place(*place, moved_places)?;
             define(*destination, defined)

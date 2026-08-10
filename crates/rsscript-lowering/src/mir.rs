@@ -530,7 +530,15 @@ impl<'source, 'types> FunctionLowerer<'source, 'types> {
             }
             ExecutableExpr::ObjectLiteral { .. } => self.unsupported("object literal"),
             ExecutableExpr::MapLiteral { .. } => self.unsupported("map literal"),
-            ExecutableExpr::ArrayLiteral { .. } => self.unsupported("array literal"),
+            ExecutableExpr::ArrayLiteral { items, .. } => {
+                let items = items
+                    .iter()
+                    .map(|item| self.lower_expression(item))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let destination = self.value();
+                self.emit(MirInstruction::MakeList { destination, items });
+                Ok(destination)
+            }
             ExecutableExpr::Field { .. } => self.unsupported("field access"),
             ExecutableExpr::Index { .. } => self.unsupported("index access"),
             ExecutableExpr::Call {
@@ -923,6 +931,37 @@ mod tests {
             ]
         ));
         mir.verify().expect("verify explicit move");
+    }
+
+    #[test]
+    fn lowers_array_literals_to_owned_mir_list_construction() {
+        let executable = module(ExecutableFunction {
+            name: "main".into(),
+            is_async: false,
+            signature: signature(),
+            body: ExecutableBlock {
+                statements: vec![ExecutableStmt::Return {
+                    value: Some(ExecutableExpr::ArrayLiteral {
+                        items: vec![
+                            ExecutableExpr::Number { value: "1".into() },
+                            ExecutableExpr::Number { value: "2".into() },
+                        ],
+                        type_name: Some("List<Int>".into()),
+                    }),
+                }],
+            },
+        });
+
+        let mir = lower_executable_ir_to_mir(&executable).expect("lower array literal");
+        assert!(matches!(
+            mir.functions()[0].blocks()[0].instructions(),
+            [
+                MirInstruction::LoadLiteral { .. },
+                MirInstruction::LoadLiteral { .. },
+                MirInstruction::MakeList { items, .. },
+            ] if items.len() == 2
+        ));
+        mir.verify().expect("verify list construction");
     }
 
     #[test]
