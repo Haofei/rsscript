@@ -283,6 +283,18 @@ fn lower_instruction(
                 ),
             ],
         )),
+        MirInstruction::ListGet {
+            destination,
+            list,
+            index,
+        } => code.push(instr(
+            "ListGet",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("list", json!(value_reg(function, *list))),
+                ("index", json!(value_reg(function, *index))),
+            ],
+        )),
         MirInstruction::ReadPlace { destination, place }
         | MirInstruction::BorrowRead { destination, place }
         | MirInstruction::TakePlace { destination, place } => code.push(instr(

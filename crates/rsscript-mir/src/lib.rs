@@ -104,6 +104,13 @@ pub enum MirInstruction {
         destination: ValueId,
         fields: Vec<(String, ValueId)>,
     },
+    /// Read an element from a resolved list value. The lowerer emits this only
+    /// when checked type facts identify the base as `List<...>`.
+    ListGet {
+        destination: ValueId,
+        list: ValueId,
+        index: ValueId,
+    },
     ReadPlace {
         destination: ValueId,
         place: PlaceId,
@@ -802,6 +809,7 @@ fn instruction_definition(instruction: &MirInstruction) -> Option<ValueId> {
         | MirInstruction::MakeList { destination, .. }
         | MirInstruction::MakeMap { destination, .. }
         | MirInstruction::MakeObject { destination, .. }
+        | MirInstruction::ListGet { destination, .. }
         | MirInstruction::ReadPlace { destination, .. }
         | MirInstruction::BorrowRead { destination, .. }
         | MirInstruction::TakePlace { destination, .. }
@@ -833,6 +841,7 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         MirInstruction::MakeObject { fields, .. } => {
             fields.iter().map(|(_, value)| *value).collect()
         }
+        MirInstruction::ListGet { list, index, .. } => vec![*list, *index],
         MirInstruction::AcquireResource { source, .. } => vec![*source],
         MirInstruction::Binary { left, right, .. } => vec![*left, *right],
         MirInstruction::Call { arguments, .. } => arguments
@@ -1002,6 +1011,7 @@ fn transfer_move_state(
         | MirInstruction::MakeList { .. }
         | MirInstruction::MakeMap { .. }
         | MirInstruction::MakeObject { .. }
+        | MirInstruction::ListGet { .. }
         | MirInstruction::Binary { .. }
         | MirInstruction::Await { .. }
         | MirInstruction::Cancel { .. }
@@ -1053,8 +1063,9 @@ fn verify_instruction(
     match instruction {
         MirInstruction::LoadLiteral { destination, .. }
         | MirInstruction::MakeList { destination, .. }
-        | MirInstruction::MakeMap { destination, .. } => define(*destination, defined),
-        MirInstruction::MakeObject { destination, .. } => define(*destination, defined),
+        | MirInstruction::MakeMap { destination, .. }
+        | MirInstruction::MakeObject { destination, .. }
+        | MirInstruction::ListGet { destination, .. } => define(*destination, defined),
         MirInstruction::ReadPlace { destination, place } => {
             check_live_place(*place, moved_places)?;
             define(*destination, defined)

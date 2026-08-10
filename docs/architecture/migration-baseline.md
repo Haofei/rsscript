@@ -272,8 +272,12 @@ mechanical acceptance condition holds.
     - [x] **M02.3c — Lower JSON object construction.** JSON object literals
       lower to `MakeObject { destination, fields }`; field names are serialized
       JSON data while values remain resolved `ValueId`s. The dual-path corpus
-      compares canonical JSON output; language records, variants, field/index
-      operations, and match dispatch remain fail-closed.
+      compares canonical JSON output; language records, variants, field access,
+      non-list indexing, and match dispatch remain fail-closed.
+    - [x] **M02.3d — Lower resolved list indexing.** The lowerer accepts an
+      index only when checked projection facts identify its base as `List<…>`;
+      it emits `ListGet` over resolved value IDs. Map/JSON/record indexing,
+      field access, variants, and match dispatch remain fail-closed.
   - [ ] **M02.4 — Add MIR structural validation.** Reject dangling blocks,
     invalid IDs, unterminated blocks, undefined values, and malformed CFG edges.
     - [x] **M02.4a — Verify the initial structural subset.** The verifier
@@ -434,6 +438,10 @@ mechanical acceptance condition holds.
       data field names and resolved value IDs to verifier-checked v1 object
       fields. The migration corpus compares source JSON-object output across
       old and MIR bytecode paths; language record layouts remain fail-closed.
+    - [x] **V02.3g — Emit resolved list indexing.** `ListGet` maps its resolved
+      list and index value IDs to a verifier-checked v1 list read. The
+      dual-path corpus proves typed list-local indexing executes identically;
+      other indexing shapes remain fail-closed.
   - [x] **V02.4 — Switch SDK build to codegen-vm.** Reviewed SDK source,
     interface, and package builds now emit their supported MIR capability
     directly through `codegen-vm` into a provider-neutral Artifact, without

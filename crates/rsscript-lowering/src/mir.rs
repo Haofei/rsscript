@@ -569,7 +569,20 @@ impl<'source, 'types> FunctionLowerer<'source, 'types> {
                 Ok(destination)
             }
             ExecutableExpr::Field { .. } => self.unsupported("field access"),
-            ExecutableExpr::Index { .. } => self.unsupported("index access"),
+            ExecutableExpr::Index { base, index } => {
+                if !expression_type_name(base).is_some_and(is_list_type) {
+                    return self.unsupported("non-list index access");
+                }
+                let list = self.lower_expression(base)?;
+                let index = self.lower_expression(index)?;
+                let destination = self.value();
+                self.emit(MirInstruction::ListGet {
+                    destination,
+                    list,
+                    index,
+                });
+                Ok(destination)
+            }
             ExecutableExpr::Call {
                 callee,
                 receiver,
@@ -815,6 +828,34 @@ impl<'source, 'types> FunctionLowerer<'source, 'types> {
     }
 }
 
+fn expression_type_name(expression: &ExecutableExpr) -> Option<&str> {
+    match expression {
+        ExecutableExpr::Ident { type_name, .. }
+        | ExecutableExpr::ObjectLiteral { type_name, .. }
+        | ExecutableExpr::MapLiteral { type_name, .. }
+        | ExecutableExpr::ArrayLiteral { type_name, .. }
+        | ExecutableExpr::Call { type_name, .. }
+        | ExecutableExpr::Effect { type_name, .. }
+        | ExecutableExpr::Manage { type_name, .. }
+        | ExecutableExpr::Spawn { type_name, .. }
+        | ExecutableExpr::Await { type_name, .. }
+        | ExecutableExpr::Try { type_name, .. }
+        | ExecutableExpr::Match { type_name, .. } => type_name.as_deref(),
+        ExecutableExpr::Number { .. }
+        | ExecutableExpr::String { .. }
+        | ExecutableExpr::Char { .. }
+        | ExecutableExpr::Binary { .. }
+        | ExecutableExpr::Field { .. }
+        | ExecutableExpr::Index { .. }
+        | ExecutableExpr::Closure { .. }
+        | ExecutableExpr::Unknown => None,
+    }
+}
+
+fn is_list_type(type_name: &str) -> bool {
+    type_name == "List" || type_name.starts_with("List<")
+}
+
 fn binary_op(op: BinaryOp) -> MirBinaryOp {
     match op {
         BinaryOp::Add => MirBinaryOp::Add,
@@ -1053,6 +1094,42 @@ mod tests {
             ] if fields == &[("count".into(), ValueId::new(0))]
         ));
         mir.verify().expect("verify object construction");
+    }
+
+    #[test]
+    fn lowers_checked_list_index_to_explicit_mir_list_get() {
+        let executable = module(ExecutableFunction {
+            name: "main".into(),
+            is_async: false,
+            signature: signature(),
+            body: ExecutableBlock {
+                statements: vec![ExecutableStmt::Return {
+                    value: Some(ExecutableExpr::Index {
+                        base: Box::new(ExecutableExpr::ArrayLiteral {
+                            items: vec![
+                                ExecutableExpr::Number { value: "40".into() },
+                                ExecutableExpr::Number { value: "2".into() },
+                            ],
+                            type_name: Some("List<Int>".into()),
+                        }),
+                        index: Box::new(ExecutableExpr::Number { value: "1".into() }),
+                    }),
+                }],
+            },
+        });
+
+        let mir = lower_executable_ir_to_mir(&executable).expect("lower list index");
+        assert!(matches!(
+            mir.functions()[0].blocks()[0].instructions(),
+            [
+                MirInstruction::LoadLiteral { .. },
+                MirInstruction::LoadLiteral { .. },
+                MirInstruction::MakeList { .. },
+                MirInstruction::LoadLiteral { .. },
+                MirInstruction::ListGet { .. },
+            ]
+        ));
+        mir.verify().expect("verify list get");
     }
 
     #[test]

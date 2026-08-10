@@ -227,6 +227,23 @@ impl<'a> Interpreter<'a> {
                                 .collect::<Result<Vec<_>, MirExecutionError>>()?,
                         ));
                     }
+                    MirInstruction::ListGet {
+                        destination,
+                        list,
+                        index,
+                    } => {
+                        let index = match value_at(&values, *index)? {
+                            MirValue::Int(value) if value >= 0 => value as usize,
+                            _ => return Err(MirExecutionError::InvalidOperation("list index")),
+                        };
+                        let value = match value_at(&values, *list)? {
+                            MirValue::List(items) => items.get(index).cloned().ok_or(
+                                MirExecutionError::InvalidOperation("list index out of bounds"),
+                            )?,
+                            _ => return Err(MirExecutionError::InvalidOperation("list base")),
+                        };
+                        values[destination.index()] = Some(value);
+                    }
                     MirInstruction::ReadPlace { destination, place } => {
                         values[destination.index()] = Some(
                             places[place.index()]

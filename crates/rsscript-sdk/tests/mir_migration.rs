@@ -154,6 +154,17 @@ fn main() -> JsonValue {
 }
 "#,
     },
+    MigrationCase {
+        name: "list_index",
+        capability: "resolved list indexing",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn main() -> Int {
+    let values = [40, 2]
+    return values[1]
+}
+"#,
+    },
 ];
 
 #[test]
