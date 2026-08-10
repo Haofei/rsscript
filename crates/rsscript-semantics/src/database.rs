@@ -855,5 +855,17 @@ mod tests {
             session.hir_file_with_operation("main.rss", &cancelled),
             Err(OperationAbort::Cancelled)
         ));
+
+        let expired = OperationContext {
+            deadline: Some(MonotonicDeadline::at(
+                Instant::now() - Duration::from_millis(1),
+            )),
+            ..OperationContext::default()
+        };
+        assert!(matches!(
+            session.hir_file_with_operation("main.rss", &expired),
+            Err(OperationAbort::DeadlineExceeded)
+        ));
+        assert_eq!(session.stats().hir_cache_misses, 3);
     }
 }
