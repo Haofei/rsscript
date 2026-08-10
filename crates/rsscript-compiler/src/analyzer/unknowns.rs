@@ -94,26 +94,8 @@ impl Analyzer<'_> {
     }
 
     pub(crate) fn check_unknown_fields(&mut self) {
-        let items = self.syntax_program.items.clone();
-        for item in &items {
-            let Item::Function(function) = item else {
-                continue;
-            };
-            let Some(body) = self.hir.function_body(&function.name).cloned() else {
-                continue;
-            };
-            for access in &body.field_accesses {
-                let Some(base_type) = &access.base_type else {
-                    continue;
-                };
-                let Some(type_info) = self.hir.type_info(base_type) else {
-                    continue;
-                };
-                if !type_info.fields.contains_key(&access.name) {
-                    self.unknown_field_diagnostic(&access.name, base_type, &access.span);
-                }
-            }
-        }
+        self.diagnostics
+            .extend(rsscript_semantics::unknown_field_diagnostics(&self.hir));
     }
 
     pub(crate) fn check_unknown_bindings(&mut self) {

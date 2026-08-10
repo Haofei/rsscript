@@ -37,6 +37,33 @@ pub fn duplicate_declaration_diagnostics(hir: &Hir) -> Vec<Diagnostic> {
         .collect()
 }
 
+/// Derive unresolved field-access diagnostics from resolved HIR type facts.
+pub fn unknown_field_diagnostics(hir: &Hir) -> Vec<Diagnostic> {
+    hir.function_bodies()
+        .flat_map(|(_, body)| body.field_accesses.iter())
+        .filter_map(|access| {
+            let base_type = access.base_type.as_deref()?;
+            let type_info = hir.type_info(base_type)?;
+            (!type_info.fields.contains_key(&access.name)).then(|| {
+                Diagnostic::error(
+                    code::UNKNOWN_FIELD,
+                    format!("unknown field `{}` on type `{base_type}`.", access.name),
+                    access.span.clone(),
+                    "unknown field",
+                )
+                .with_cause("RSScript field accesses must resolve before Rust lowering.")
+                .with_fix(
+                    "use_declared_field",
+                    format!(
+                        "Use a field declared on `{base_type}` or update the type declaration."
+                    ),
+                    "manual",
+                )
+            })
+        })
+        .collect()
+}
+
 fn duplicate_symbol_label(kind: DuplicateSymbolKind) -> &'static str {
     match kind {
         DuplicateSymbolKind::Function => "function",

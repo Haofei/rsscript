@@ -154,6 +154,9 @@ mechanical acceptance condition holds.
       `rsscript-semantics` from immutable interface/source programs. Compiler
       type checks only append the canonical result; unknown-type, field, and
       generic-constraint checks remain follow-up work.
+    - [x] **S02.2b — Move resolved unknown-field diagnostics.** The semantic HIR
+      now owns field-existence diagnostics; compiler only appends them. Unknown
+      type names, bindings, and generic constraints remain follow-up work.
   - [ ] **S02.3 — Move call binding and effect checks.** Relocate positional and
     named argument binding, `read`/`mut`/`take`, external signature matching,
     and retention facts.

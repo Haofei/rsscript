@@ -1168,6 +1168,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "cyclic_type_alias_diagnostics",
         "duplicate_declaration_diagnostics",
         "forbidden_surface_syntax_diagnostics",
+        "unknown_field_diagnostics",
     ] {
         assert!(
             semantics.contains(exported),
@@ -1206,6 +1207,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     let semantic_declarations = read(&root.join("crates/rsscript-semantics/src/declarations.rs"));
     assert!(semantic_declarations.contains("pub fn duplicate_declaration_diagnostics"));
     assert!(semantic_declarations.contains("DuplicateSymbolKind"));
+    assert!(semantic_declarations.contains("pub fn unknown_field_diagnostics"));
     let compiler_declarations =
         read(&root.join("crates/rsscript-compiler/src/checks/declarations/duplicate_decls.rs"));
     assert!(
@@ -1215,6 +1217,9 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         !compiler_declarations.contains("duplicate_symbols()"),
         "compiler declaration checks must consume semantic duplicate diagnostics instead of reinterpreting HIR identity facts"
     );
+    let compiler_unknowns = read(&root.join("crates/rsscript-compiler/src/analyzer/unknowns.rs"));
+    assert!(compiler_unknowns.contains("rsscript_semantics::unknown_field_diagnostics"));
+    assert!(!compiler_unknowns.contains("unknown_field_diagnostic(&access.name"));
 
     let semantic_aliases = read(&root.join("crates/rsscript-semantics/src/type_aliases.rs"));
     assert!(semantic_aliases.contains("pub fn cyclic_type_alias_diagnostics"));

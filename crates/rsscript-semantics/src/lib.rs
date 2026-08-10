@@ -26,7 +26,7 @@ pub use database::{
     FrontendStopReason, SemanticDatabase, SessionSourceStore, SourceFileSnapshot, SourceSnapshot,
     SourceStoreError, SourceUpdate, ValidatedProgram,
 };
-pub use declarations::duplicate_declaration_diagnostics;
+pub use declarations::{duplicate_declaration_diagnostics, unknown_field_diagnostics};
 pub use identities::DefinitionId;
 pub use interface_descriptor::{
     INTERFACE_DESCRIPTOR_SCHEMA, InterfaceDescriptorError, InterfaceDescriptorFunctionV1,

@@ -97,28 +97,6 @@ impl Analyzer<'_> {
         );
     }
 
-    pub(super) fn unknown_field_diagnostic(
-        &mut self,
-        field_name: &str,
-        base_type: &str,
-        span: &crate::diagnostic::Span,
-    ) {
-        self.diagnostics.push(
-            Diagnostic::error(
-                code::UNKNOWN_FIELD,
-                format!("unknown field `{field_name}` on type `{base_type}`."),
-                span.clone(),
-                "unknown field",
-            )
-            .with_cause("RSScript field accesses must resolve before Rust lowering.")
-            .with_fix(
-                "use_declared_field",
-                format!("Use a field declared on `{base_type}` or update the type declaration."),
-                "manual",
-            ),
-        );
-    }
-
     pub(super) fn unknown_binding_diagnostic(
         &mut self,
         name: &str,
