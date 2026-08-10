@@ -25,6 +25,8 @@ Raw-bytes (front-end robustness):
   strict `rsscript.bindings.v1` schema without panicking.
 - **`execution_report`** — arbitrary JSON is checked against the strict
   `rsscript.execution_report.v1` consumer contract without panicking.
+- **`runner_protocol`** — hostile request/response bytes exercise bounded
+  isolated-runner framing and canonical round-trips without panicking.
 
 Generative (driven by `rss-testgen`):
 - **`differential`** — seed -> well-typed program -> every in-process backend
@@ -47,6 +49,7 @@ cargo +nightly fuzz run fail_closed
 cargo +nightly fuzz run bytecode_artifact
 cargo +nightly fuzz run binding_descriptor
 cargo +nightly fuzz run execution_report
+cargo +nightly fuzz run runner_protocol
 ```
 
 Native-JIT/deopt/OSR differential smoke:

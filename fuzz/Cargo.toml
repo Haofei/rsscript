@@ -40,6 +40,9 @@ path = "../crates/rsscript-bytecode"
 [dependencies.rsscript-sdk]
 path = "../crates/rsscript-sdk"
 
+[dependencies.rsscript-runner-protocol]
+path = "../crates/rsscript-runner-protocol"
+
 [dependencies.rss-testgen]
 path = "../experiments/rss-testgen"
 
@@ -115,6 +118,16 @@ bench = false
 [[bin]]
 name = "execution_report"
 path = "fuzz_targets/execution_report.rs"
+test = false
+doc = false
+bench = false
+
+# Runner requests and responses cross the isolated-process boundary. Raw input
+# must either be rejected by bounded framing/JSON validation or survive a
+# canonical round-trip; it must never panic the protocol parser.
+[[bin]]
+name = "runner_protocol"
+path = "fuzz_targets/runner_protocol.rs"
 test = false
 doc = false
 bench = false

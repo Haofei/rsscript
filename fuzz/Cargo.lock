@@ -1200,7 +1200,7 @@ dependencies = [
 name = "rss-testgen"
 version = "0.1.0"
 dependencies = [
- "rsscript-compiler",
+ "rsscript-sdk",
 ]
 
 [[package]]
@@ -1210,6 +1210,16 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "rsscript-build-support"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "toml",
 ]
 
 [[package]]
@@ -1223,6 +1233,16 @@ dependencies = [
  "serde_cbor",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "rsscript-codegen-vm"
+version = "0.1.0"
+dependencies = [
+ "rsscript-abi-model",
+ "rsscript-bytecode",
+ "rsscript-mir",
+ "serde_json",
 ]
 
 [[package]]
@@ -1240,13 +1260,16 @@ dependencies = [
  "rand",
  "regex",
  "rsscript-abi-model",
- "rsscript-bytecode",
+ "rsscript-build-support",
+ "rsscript-diagnostics",
  "rsscript-interface-catalog",
  "rsscript-lowering",
+ "rsscript-mir",
  "rsscript-operation",
  "rsscript-provider-api",
  "rsscript-semantics",
  "rsscript-syntax",
+ "rsscript-text",
  "rsscript-work-budget",
  "rustix",
  "semver",
@@ -1259,7 +1282,22 @@ dependencies = [
  "toml",
  "toml_edit",
  "uuid",
- "vm-jit",
+]
+
+[[package]]
+name = "rsscript-diagnostics"
+version = "0.1.0"
+dependencies = [
+ "rsscript-source-model",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "rsscript-exec-ir"
+version = "0.1.0"
+dependencies = [
+ "rsscript-abi-model",
 ]
 
 [[package]]
@@ -1270,7 +1308,8 @@ dependencies = [
  "libfuzzer-sys",
  "rss-testgen",
  "rsscript-bytecode",
- "rsscript-compiler",
+ "rsscript-runner-protocol",
+ "rsscript-sdk",
  "serde_json",
  "toml",
 ]
@@ -1284,8 +1323,17 @@ name = "rsscript-lowering"
 version = "0.1.0"
 dependencies = [
  "rsscript-abi-model",
+ "rsscript-exec-ir",
+ "rsscript-mir",
  "rsscript-semantics",
  "rsscript-syntax",
+]
+
+[[package]]
+name = "rsscript-mir"
+version = "0.1.0"
+dependencies = [
+ "rsscript-abi-model",
 ]
 
 [[package]]
@@ -1306,12 +1354,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsscript-runner-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "rsscript-sdk"
+version = "0.1.0"
+dependencies = [
+ "rsscript-abi-model",
+ "rsscript-build-support",
+ "rsscript-bytecode",
+ "rsscript-codegen-vm",
+ "rsscript-compiler",
+ "rsscript-interface-catalog",
+ "rsscript-lowering",
+ "rsscript-mir",
+ "rsscript-operation",
+ "rsscript-provider-api",
+ "rsscript-vm",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "rsscript-semantics"
 version = "0.1.0"
 dependencies = [
  "rsscript-abi-model",
+ "rsscript-diagnostics",
  "rsscript-interface-catalog",
+ "rsscript-operation",
+ "rsscript-source-model",
  "rsscript-syntax",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1325,8 +1406,41 @@ dependencies = [
 name = "rsscript-syntax"
 version = "0.1.0"
 dependencies = [
+ "rsscript-diagnostics",
  "rsscript-source-model",
  "rsscript-work-budget",
+]
+
+[[package]]
+name = "rsscript-text"
+version = "0.1.0"
+
+[[package]]
+name = "rsscript-vm"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "chrono",
+ "flate2",
+ "hex",
+ "hmac",
+ "percent-encoding",
+ "regex",
+ "rsscript-abi-model",
+ "rsscript-build-support",
+ "rsscript-bytecode",
+ "rsscript-diagnostics",
+ "rsscript-exec-ir",
+ "rsscript-operation",
+ "rsscript-provider-api",
+ "rsscript-text",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha2",
+ "sha3",
+ "toml",
+ "vm-jit",
 ]
 
 [[package]]
