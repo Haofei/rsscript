@@ -388,9 +388,10 @@ mechanical acceptance condition holds.
   - [ ] **M05.1 — Add pure-control-flow differential fixtures.** Compare return
     values, errors, and usage reports.
     - [x] **M05.1a — Establish the dual-path harness.** Declarative capability
-      stages and pure-control-flow fixtures compile, verify, execute through the
-      test-only MIR reference interpreter, and compare return values with the
-      legacy VM.
+      stages and pure-control-flow fixtures lower directly from checked HIR,
+      verify, execute through the test-only MIR reference interpreter, and
+      compare return values with the legacy VM. A DualPath fixture cannot hide
+      a fallback through `ExecutableIr`.
     - [x] **M05.1b — Close the initial MIR/VM bytecode loop.** The same scalar,
       CFG, direct-call, `read`, `mut`, and `take` fixtures now compile MIR
       directly to a bytecode artifact, pass the ordinary bytecode verifier, and

@@ -1,9 +1,9 @@
 //! Reusable migration gate for the typed MIR rollout.
 //!
 //! Add a capability by declaring its stage and a small source case. A
-//! `DualPath` case must compile to verified MIR and produce the same result in
-//! the legacy VM, the feature-gated MIR reference interpreter, and the
-//! verified-bytecode VM emitted directly from MIR.
+//! `DualPath` case must lower directly from checked HIR to verified MIR and
+//! produce the same result in the legacy VM, the feature-gated MIR reference
+//! interpreter, and the verified-bytecode VM emitted directly from MIR.
 
 use rsscript_abi_model::WireType;
 use rsscript_compiler::{compile_source_to_ir, compile_validated_to_ir};
@@ -186,9 +186,9 @@ fn dual_path_cases_match_the_legacy_vm() {
                     case.name, case.capability
                 )
             });
-        let mir = compiled.mir().unwrap_or_else(|error| {
+        let mir = compiled.checked_hir_mir().unwrap_or_else(|error| {
             panic!(
-                "{} must lower to MIR during dual-path migration: {error}",
+                "{} must lower directly from checked HIR during dual-path migration: {error}",
                 case.name
             )
         });
