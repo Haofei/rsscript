@@ -22,4 +22,8 @@ The real-filesystem Provider is explicitly rooted at a temporary directory and
 rejects absolute, parent, and symlink escape paths. Rooting narrows filesystem
 authority but is not a process-isolation boundary. The example cleans the
 directory up after the run.
-The printed SHA-256 identifies the provider-neutral bytecode artifact.
+The output includes stable hashes for the provider-neutral Artifact and the
+semantic `.rssi` descriptors. It also verifies that a bundle compared with
+itself produces an empty `rsscript.semantic_diff.v2`, demonstrating that
+interface contract evidence and Artifact identity are reviewable inputs rather
+than provider-specific runtime state.

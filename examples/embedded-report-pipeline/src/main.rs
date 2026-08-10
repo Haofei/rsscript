@@ -9,11 +9,13 @@ use rsscript_compiler::provider_api::{
     ProviderFunction,
 };
 use rsscript_compiler::{
+    analysis::SemanticDiffV1,
     artifact::ArtifactVerifier,
     compile::Compiler,
     provider_api::ProviderRegistry,
     runtime::{ExecutionRequest, RunLimits, Runtime, TracePolicy},
 };
+use rsscript_semantics::InterfaceDescriptorV1;
 use sha2::{Digest, Sha256};
 
 const SOURCE: &str = include_str!("../script/main.rss");
@@ -94,6 +96,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let bundle_before_providers = package.bundle_bytes()?;
     let artifact_hash = format!("{:x}", Sha256::digest(&bundle_before_providers));
+    let fs_descriptor = InterfaceDescriptorV1::from_interface_source("fs.rssi", FS_INTERFACE)
+        .map_err(|error| std::io::Error::other(format!("invalid fs interface: {error:?}")))?;
+    let log_descriptor = InterfaceDescriptorV1::from_interface_source("log.rssi", LOG_INTERFACE)
+        .map_err(|error| std::io::Error::other(format!("invalid log interface: {error:?}")))?;
+    let descriptor_hash = format!(
+        "{:x}",
+        Sha256::digest(
+            [
+                fs_descriptor.to_json_bytes()?,
+                log_descriptor.to_json_bytes()?
+            ]
+            .concat()
+        )
+    );
+    let unchanged = SemanticDiffV1::between(package.bundle(), package.bundle());
+    assert!(
+        unchanged.summary.is_empty()
+            && unchanged.imports.added.is_empty()
+            && unchanged.imports.removed.is_empty()
+            && unchanged.imports.changed.is_empty()
+            && unchanged.external_contracts.added.is_empty()
+            && unchanged.external_contracts.removed.is_empty()
+            && unchanged.external_contracts.changed.is_empty(),
+        "an Artifact compared with itself must have no semantic evidence changes"
+    );
     let verified = ArtifactVerifier.verify(package)?;
 
     let memory_files = Arc::new(Mutex::new(BTreeMap::from([(
@@ -148,6 +175,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     assert_eq!(verified.bundle().to_bytes()?, bundle_before_providers);
     println!("artifact sha256: {artifact_hash}");
+    println!("interface descriptor sha256: {descriptor_hash}");
+    println!(
+        "semantic diff schema: {} (self diff: empty)",
+        unchanged.schema
+    );
     println!("imports: {}", verified.external_imports().len());
     println!("memory provider report:\n{memory_report}");
     println!("filesystem provider report:\n{disk_report}");

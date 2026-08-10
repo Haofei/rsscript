@@ -720,8 +720,10 @@ mechanical acceptance condition holds.
   contain source, interfaces, generated Provider contract, memory and
   production-like Providers, Artifact identity, semantic-diff fixture, and
   success/failure reports for trusted and isolated execution.
-  - [ ] **E02.1 — Upgrade the embedded report pipeline fixtures.** Add generated
-    interface descriptor, semantic diff, and trusted/isolated report snapshots.
+  - [ ] **E02.1 — Upgrade the embedded report pipeline fixtures.** The example
+    now derives deterministic semantic interface-descriptor bytes, reports their
+    digest alongside the provider-neutral Artifact digest, and asserts an empty
+    neutral self-diff. Trusted/isolated report snapshots remain follow-up work.
   - [ ] **E02.2 — Add an async/resource workflow example.** Demonstrate task
     groups, cancellation, cleanup, mock/production-like Providers, and failures.
 - [ ] **E03 — Establish compatibility and conformance corpora.** Add source to

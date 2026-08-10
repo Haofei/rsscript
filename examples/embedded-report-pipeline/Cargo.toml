@@ -8,4 +8,5 @@ publish = false
 rsscript_compiler = { package = "rsscript-sdk", path = "../../crates/rsscript-sdk", features = ["execution"] }
 rsscript-provider-fs = { path = "../../providers/fs" }
 rsscript-provider-log = { path = "../../providers/log" }
+rsscript-semantics = { path = "../../crates/rsscript-semantics" }
 sha2 = "0.10"

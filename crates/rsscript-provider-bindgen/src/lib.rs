@@ -276,7 +276,7 @@ fn render_signature(signature: &FunctionSignature) -> String {
                 "rsscript_abi_model::ParameterSignature {{ name: {:?}.into(), effect: rsscript_abi_model::DataEffect::{:?}, ty: {:?}.into(), retained: {} }}",
                 parameter.name,
                 parameter.effect,
-                render_wire_type(&parameter.ty),
+                wire_type_source(&parameter.ty),
                 parameter.retained
             )
         })
@@ -284,11 +284,73 @@ fn render_signature(signature: &FunctionSignature) -> String {
         .join(", ");
     format!(
         "rsscript_abi_model::FunctionSignature {{ parameters: vec![{parameters}], result: {:?}.into(), asynchronous: {} }}",
-        render_wire_type(&signature.result),
+        wire_type_source(&signature.result),
         signature.asynchronous
     )
 }
 
+/// Render the canonical RSScript type spelling carried by the legacy
+/// `FunctionSignature` compatibility envelope. This must not use
+/// `render_wire_type`: that helper emits Rust source expressions for generated
+/// descriptor code, not the language ABI text that Artifact imports compare.
+fn wire_type_source(ty: &WireType) -> String {
+    match ty {
+        WireType::Unit => "Unit".into(),
+        WireType::Bool => "Bool".into(),
+        WireType::Int { .. } => "Int".into(),
+        WireType::Float { .. } => "Float".into(),
+        WireType::String => "String".into(),
+        WireType::Bytes => "Bytes".into(),
+        WireType::List { element } => format!("List<{}>", wire_type_source(element)),
+        WireType::Option { value } => format!("Option<{}>", wire_type_source(value)),
+        WireType::Result { ok, error } => format!(
+            "Result<{}, {}>",
+            wire_type_source(ok),
+            wire_type_source(error)
+        ),
+        WireType::Tuple { elements } => format!(
+            "({})",
+            elements
+                .iter()
+                .map(wire_type_source)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        WireType::Named {
+            package,
+            name,
+            arguments,
+        } => {
+            let root = package
+                .as_ref()
+                .map_or_else(|| name.clone(), |package| format!("{package}.{name}"));
+            if arguments.is_empty() {
+                root
+            } else {
+                format!(
+                    "{root}<{}>",
+                    arguments
+                        .iter()
+                        .map(wire_type_source)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
+        }
+        WireType::Resource { name } | WireType::Handle { name } => name.clone(),
+        WireType::Qualified { qualifier, value } => format!(
+            "{} {}",
+            match qualifier {
+                WireQualifier::Fresh => "fresh",
+                WireQualifier::Owned => "owned",
+                WireQualifier::NoEscape => "noescape",
+            },
+            wire_type_source(value)
+        ),
+    }
+}
+
+#[allow(dead_code)]
 fn render_wire_type(ty: &WireType) -> String {
     match ty {
         WireType::Unit => "rsscript_abi_model::WireType::Unit".into(),
@@ -394,8 +456,8 @@ mod tests {
         assert!(rust.contains("pub trait GeneratedProviderContract"));
         assert!(rust.contains("fn get(&self, name: String) -> Result<Option<String>"));
         assert!(rust.contains("host.env.get"));
-        assert!(rust.contains("WireType::Option"));
-        assert!(rust.contains("WireType::String"));
+        assert!(rust.contains("ty: \"String\".into()"));
+        assert!(rust.contains("result: \"Option<String>\".into()"));
         assert!(rust.contains("pub fn register<T>("));
         assert!(rust.contains("registry.register_provider(&descriptor(), implementations)"));
         assert!(rust.contains("pub struct MockProvider"));
@@ -426,6 +488,28 @@ mod tests {
         assert!(rust.contains("ResourceHandle::from_native_id"));
         assert!(rust.contains("pub const TYPE_NAME: &'static str = \"host.fs.File\""));
         assert!(rust.contains("fn open(&self, path: String) -> Result<hostfsFileHandle"));
+    }
+
+    #[test]
+    fn generated_descriptor_uses_language_type_spelling_not_rust_expressions() {
+        let descriptor = InterfaceDescriptorV1::from_interface_source(
+            "test.rssi",
+            "module host.test\npub fn run(value: read String) -> Option<Int>\n",
+        )
+        .unwrap();
+        let generated = ProviderInterface::from_descriptor(descriptor)
+            .unwrap()
+            .render_rust(&RustProviderOptions {
+                provider_id: "rsscript.test",
+                blocking: GeneratedBlocking::NonBlocking,
+                cancellation: GeneratedCancellation::NotApplicable,
+                thread_safe: true,
+                reentrant: true,
+                cleanup: GeneratedCleanup::None,
+            });
+        assert!(generated.contains("ty: \"String\".into()"));
+        assert!(generated.contains("result: \"Option<Int>\".into()"));
+        assert!(!generated.contains("ty: \"rsscript_abi_model::WireType"));
     }
 
     #[test]

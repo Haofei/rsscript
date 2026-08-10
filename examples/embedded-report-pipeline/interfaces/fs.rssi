@@ -1,5 +1,4 @@
 module host.fs
 
-pub fn read_text(path: read String) -> fresh String
+pub fn read_text(path: read String) -> String
 pub fn write_text(path: read String, text: read String) -> Unit
-
