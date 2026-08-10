@@ -423,6 +423,11 @@ mechanical acceptance condition holds.
   schema.** The schema generates Rust instruction types, encoder, bounded
   decoder, operand validation, documentation, and fuzz seeds; string field maps
   and `serde_json::Value` verification are removed.
+  - [x] **B03.1 — Make v2 opcode schema the single source of truth.** One
+    `INSTRUCTION_SCHEMA_V2` table now owns numeric tags, names, operand classes,
+    and arity; it drives raw decode lookup, structural operand validation, and
+    generated Markdown reference output. v2 fuzz seeds and Artifact integration
+    remain follow-up work.
 - [ ] **B04 — Separate all compatibility versions.** Container format, language
   semantics, bytecode ISA, Core library ABI, Provider ABI, analysis schema, and
   compiler provenance have explicit independent values. Language compatibility

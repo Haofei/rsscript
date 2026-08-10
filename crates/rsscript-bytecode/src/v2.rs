@@ -34,9 +34,9 @@ wire_id!(WireImportId);
 wire_id!(WireRegister);
 wire_id!(WireInstructionOffset);
 
-/// Numeric instruction opcode. Each variant has one fixed operand layout
-/// declared by [`WireOpcodeV2::operand_count`]; future codecs encode the tag as
-/// this `u8` rather than a source-language opcode name.
+/// Numeric instruction opcode. Its layout is owned by the one
+/// [`INSTRUCTION_SCHEMA_V2`] table; future codecs encode the tag as this `u8`
+/// rather than a source-language opcode name.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WireOpcodeV2 {
@@ -54,40 +54,149 @@ pub enum WireOpcodeV2 {
     Cancel = 12,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperandKindV2 {
+    Register,
+    Constant,
+    Function,
+    Import,
+    InstructionTarget,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InstructionSchemaV2 {
+    pub opcode: WireOpcodeV2,
+    pub name: &'static str,
+    pub operands: &'static [OperandKindV2],
+}
+
+const REGISTER_CONSTANT: &[OperandKindV2] = &[OperandKindV2::Register, OperandKindV2::Constant];
+const REGISTER_REGISTER: &[OperandKindV2] = &[OperandKindV2::Register, OperandKindV2::Register];
+const THREE_REGISTERS: &[OperandKindV2] = &[
+    OperandKindV2::Register,
+    OperandKindV2::Register,
+    OperandKindV2::Register,
+];
+const REGISTER_FUNCTION_CONSTANT: &[OperandKindV2] = &[
+    OperandKindV2::Register,
+    OperandKindV2::Function,
+    OperandKindV2::Constant,
+];
+const REGISTER_IMPORT_CONSTANT: &[OperandKindV2] = &[
+    OperandKindV2::Register,
+    OperandKindV2::Import,
+    OperandKindV2::Constant,
+];
+const REGISTER_TARGET: &[OperandKindV2] =
+    &[OperandKindV2::Register, OperandKindV2::InstructionTarget];
+const TARGET: &[OperandKindV2] = &[OperandKindV2::InstructionTarget];
+const REGISTER: &[OperandKindV2] = &[OperandKindV2::Register];
+
+/// Single source of truth for v2 opcode tags, operand arity, operand identity
+/// classes, and generated reference documentation.
+pub const INSTRUCTION_SCHEMA_V2: &[InstructionSchemaV2] = &[
+    InstructionSchemaV2 {
+        opcode: WireOpcodeV2::LoadConstant,
+        name: "load_constant",
+        operands: REGISTER_CONSTANT,
+    },
+    InstructionSchemaV2 {
+        opcode: WireOpcodeV2::Move,
+        name: "move",
+        operands: REGISTER_REGISTER,
+    },
+    InstructionSchemaV2 {
+        opcode: WireOpcodeV2::AddInt,
+        name: "add_int",
+        operands: THREE_REGISTERS,
+    },
+    InstructionSchemaV2 {
+        opcode: WireOpcodeV2::Call,
+        name: "call",
+        operands: REGISTER_FUNCTION_CONSTANT,
+    },
+    InstructionSchemaV2 {
+        opcode: WireOpcodeV2::CallExternal,
+        name: "call_external",
+        operands: REGISTER_IMPORT_CONSTANT,
+    },
+    InstructionSchemaV2 {
+        opcode: WireOpcodeV2::Jump,
+        name: "jump",
+        operands: TARGET,
+    },
+    InstructionSchemaV2 {
+        opcode: WireOpcodeV2::JumpIfTrue,
+        name: "jump_if_true",
+        operands: REGISTER_TARGET,
+    },
+    InstructionSchemaV2 {
+        opcode: WireOpcodeV2::Return,
+        name: "return",
+        operands: REGISTER,
+    },
+    InstructionSchemaV2 {
+        opcode: WireOpcodeV2::ResourceDrop,
+        name: "resource_drop",
+        operands: REGISTER,
+    },
+    InstructionSchemaV2 {
+        opcode: WireOpcodeV2::Spawn,
+        name: "spawn",
+        operands: REGISTER_FUNCTION_CONSTANT,
+    },
+    InstructionSchemaV2 {
+        opcode: WireOpcodeV2::Await,
+        name: "await",
+        operands: REGISTER_REGISTER,
+    },
+    InstructionSchemaV2 {
+        opcode: WireOpcodeV2::Cancel,
+        name: "cancel",
+        operands: REGISTER,
+    },
+];
+
+/// Render the checked-in opcode schema for Artifact/ISA documentation. Keeping
+/// this derived from the same table used by codec and validation prevents prose
+/// from becoming an independent opcode contract.
+pub fn instruction_schema_markdown() -> String {
+    let mut output = String::from("| Opcode | Tag | Operands |\n| --- | ---: | --- |\n");
+    for schema in INSTRUCTION_SCHEMA_V2 {
+        let operands = schema
+            .operands
+            .iter()
+            .map(|kind| match kind {
+                OperandKindV2::Register => "register",
+                OperandKindV2::Constant => "constant",
+                OperandKindV2::Function => "function",
+                OperandKindV2::Import => "import",
+                OperandKindV2::InstructionTarget => "instruction_target",
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        output.push_str(&format!(
+            "| `{}` | {} | {} |\n",
+            schema.name, schema.opcode as u8, operands
+        ));
+    }
+    output
+}
+
 impl WireOpcodeV2 {
     pub const fn operand_count(self) -> usize {
-        match self {
-            Self::LoadConstant => 2, // dst, constant
-            Self::Move => 2,         // dst, source
-            Self::AddInt => 3,       // dst, left, right
-            Self::Call => 3,         // dst, function, argument-list constant
-            Self::CallExternal => 3, // dst, import, argument-list constant
-            Self::Jump => 1,         // instruction target
-            Self::JumpIfTrue => 2,   // condition, instruction target
-            Self::Return => 1,       // source
-            Self::ResourceDrop => 1, // resource register
-            Self::Spawn => 3,        // dst, function, argument-list constant
-            Self::Await => 2,        // dst, task register
-            Self::Cancel => 1,       // task register
-        }
+        self.schema().operands.len()
+    }
+
+    pub const fn schema(self) -> &'static InstructionSchemaV2 {
+        &INSTRUCTION_SCHEMA_V2[(self as u8 - 1) as usize]
     }
 
     fn from_raw(value: u8) -> Option<Self> {
-        Some(match value {
-            1 => Self::LoadConstant,
-            2 => Self::Move,
-            3 => Self::AddInt,
-            4 => Self::Call,
-            5 => Self::CallExternal,
-            6 => Self::Jump,
-            7 => Self::JumpIfTrue,
-            8 => Self::Return,
-            9 => Self::ResourceDrop,
-            10 => Self::Spawn,
-            11 => Self::Await,
-            12 => Self::Cancel,
-            _ => return None,
-        })
+        INSTRUCTION_SCHEMA_V2
+            .iter()
+            .find(|schema| schema.opcode as u8 == value)
+            .map(|schema| schema.opcode)
     }
 }
 
@@ -388,82 +497,17 @@ fn verify_instruction(
             instruction.opcode.operand_count()
         )));
     }
-    let register = |operand: usize| {
-        check_index(
-            instruction.operands[operand],
-            registers,
-            "register",
-            function,
-            offset,
-        )
-    };
-    match instruction.opcode {
-        WireOpcodeV2::LoadConstant => {
-            register(0)?;
-            check_index(
-                instruction.operands[1],
-                constants,
-                "constant",
-                function,
-                offset,
-            )
-        }
-        WireOpcodeV2::Move | WireOpcodeV2::Await => {
-            register(0)?;
-            register(1)
-        }
-        WireOpcodeV2::AddInt => {
-            register(0)?;
-            register(1)?;
-            register(2)
-        }
-        WireOpcodeV2::Call | WireOpcodeV2::Spawn => {
-            register(0)?;
-            check_index(
-                instruction.operands[1],
-                functions,
-                "function",
-                function,
-                offset,
-            )?;
-            check_index(
-                instruction.operands[2],
-                constants,
-                "argument list",
-                function,
-                offset,
-            )
-        }
-        WireOpcodeV2::CallExternal => {
-            register(0)?;
-            check_index(instruction.operands[1], imports, "import", function, offset)?;
-            check_index(
-                instruction.operands[2],
-                constants,
-                "argument list",
-                function,
-                offset,
-            )
-        }
-        WireOpcodeV2::Jump => check_index(
-            instruction.operands[0],
-            instructions,
-            "instruction target",
-            function,
-            offset,
-        ),
-        WireOpcodeV2::JumpIfTrue => {
-            register(0)?;
-            check_index(
-                instruction.operands[1],
-                instructions,
-                "instruction target",
-                function,
-                offset,
-            )
-        }
-        WireOpcodeV2::Return | WireOpcodeV2::ResourceDrop | WireOpcodeV2::Cancel => register(0),
+    for (operand, kind) in instruction.opcode.schema().operands.iter().enumerate() {
+        let (limit, name) = match kind {
+            OperandKindV2::Register => (registers, "register"),
+            OperandKindV2::Constant => (constants, "constant"),
+            OperandKindV2::Function => (functions, "function"),
+            OperandKindV2::Import => (imports, "import"),
+            OperandKindV2::InstructionTarget => (instructions, "instruction target"),
+        };
+        check_index(instruction.operands[operand], limit, name, function, offset)?;
     }
+    Ok(())
 }
 
 fn check_index(
@@ -557,5 +601,19 @@ mod tests {
             decode_program(&unknown, BytecodeLimits::default()),
             Err(BytecodeError::InvalidPayload(message)) if message.contains("unknown opcode")
         ));
+    }
+
+    #[test]
+    fn instruction_schema_is_unique_and_drives_generated_reference() {
+        let mut tags = INSTRUCTION_SCHEMA_V2
+            .iter()
+            .map(|schema| schema.opcode as u8)
+            .collect::<Vec<_>>();
+        tags.sort_unstable();
+        tags.dedup();
+        assert_eq!(tags.len(), INSTRUCTION_SCHEMA_V2.len());
+        let reference = instruction_schema_markdown();
+        assert!(reference.contains("`call_external` | 5 | register, import, constant"));
+        assert!(reference.contains("`resource_drop` | 9 | register"));
     }
 }

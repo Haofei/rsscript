@@ -26,6 +26,11 @@ a v2 Artifact writer, replace the v1 verifier, or freeze every future opcode.
 Export/debug table design and data-flow/type verification remain separate
 follow-up decisions.
 
+The numeric tag, operand identity classes, validation arity, decoder lookup,
+and generated opcode reference all derive from one `INSTRUCTION_SCHEMA_V2`
+table. New v2 instructions must be added there rather than duplicating maps in
+the codec, verifier, or documentation.
+
 ## Compatibility and migration
 
 v1 remains the only deployed writer and reader. A future v2 container/ISA
