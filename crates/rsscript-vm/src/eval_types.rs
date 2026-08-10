@@ -73,6 +73,23 @@ fn provider_panic_error() -> ProviderError {
     ProviderError::internal("provider callable panicked")
 }
 
+/// Enforce the per-call payload ceiling at the runtime boundary, not merely in
+/// individual Provider implementations. Providers may use the remaining
+/// budgets to tune their work, but they cannot bypass the host's bound by
+/// forgetting to check it themselves.
+fn check_payload_budget(
+    bytes: usize,
+    limit: Option<usize>,
+    direction: &str,
+) -> Result<(), ProviderError> {
+    if limit.is_some_and(|limit| bytes > limit) {
+        return Err(ProviderError::resource_exhausted(format!(
+            "provider {direction} payload exceeds remaining budget"
+        )));
+    }
+    Ok(())
+}
+
 /// A linked provider callable. Registry resolution attaches the complete
 /// provider contract so invocation cannot silently discard descriptor metadata.
 #[derive(Clone)]
@@ -148,6 +165,7 @@ impl ExternalFunction {
         let started = Instant::now();
         let result = (|| {
             context.check_cancelled()?;
+            check_payload_budget(request_bytes, context.remaining_byte_budget, "request")?;
             if let Some(contract) = self.contract() {
                 if contract.descriptor.blocking == BlockingBehavior::MayBlock
                     && !context.blocking_allowed
@@ -200,7 +218,15 @@ impl ExternalFunction {
                     "runtime-registered provider call returned without registering a resource",
                 ));
             }
-            result
+            let value = result?;
+            let response_bytes = value.estimated_payload_bytes();
+            check_payload_budget(response_bytes, context.remaining_byte_budget, "response")?;
+            check_payload_budget(
+                response_bytes,
+                context.remaining_output_budget,
+                "response output",
+            )?;
+            Ok(value)
         })();
         let response_bytes = match &result {
             Ok(value) => value.estimated_payload_bytes(),
@@ -263,6 +289,7 @@ impl ExternalFunction {
         Box::pin(async move {
             let result = async {
                 context.check_cancelled()?;
+                check_payload_budget(request_bytes, context.remaining_byte_budget, "request")?;
                 if contract.descriptor.call_mode != ProviderCallMode::Async {
                     return Err(ProviderError::unavailable(
                         "async callable has a synchronous Provider descriptor",
@@ -297,7 +324,19 @@ impl ExternalFunction {
                         "runtime-registered provider call returned without registering a resource",
                     ));
                 }
-                result
+                let value = result?;
+                let response_bytes = value.estimated_payload_bytes();
+                check_payload_budget(
+                    response_bytes,
+                    trace_context.remaining_byte_budget,
+                    "response",
+                )?;
+                check_payload_budget(
+                    response_bytes,
+                    trace_context.remaining_output_budget,
+                    "response output",
+                )?;
+                Ok(value)
             }
             .await;
             let response_bytes = match &result {
@@ -730,6 +769,43 @@ mod provider_contract_tests {
     }
 
     #[test]
+    fn dispatchers_enforce_request_and_response_payload_limits() {
+        let called = Arc::new(AtomicBool::new(false));
+        let called_by_provider = Arc::clone(&called);
+        let function = registered_sync_function(
+            BlockingBehavior::NonBlocking,
+            ResourceCleanupContract::None,
+            NativeInterpreterFn::new(move |_| {
+                called_by_provider.store(true, Ordering::SeqCst);
+                Ok(NativeValue::String("response".into()))
+            }),
+        );
+        let mut request_context = ProviderCallContext {
+            remaining_byte_budget: Some(3),
+            ..ProviderCallContext::default()
+        };
+        let request_error = function
+            .call_with_context(
+                &mut request_context,
+                vec![NativeValue::String("request".into())],
+            )
+            .expect_err("oversized request must fail before Provider code runs");
+        assert_eq!(request_error.code, ProviderErrorCode::ResourceExhausted);
+        assert!(!called.load(Ordering::SeqCst));
+
+        let mut response_context = ProviderCallContext {
+            remaining_byte_budget: Some(64),
+            remaining_output_budget: Some(3),
+            ..ProviderCallContext::default()
+        };
+        let response_error = function
+            .call_with_context(&mut response_context, vec![])
+            .expect_err("oversized response must fail at the dispatcher boundary");
+        assert_eq!(response_error.code, ProviderErrorCode::ResourceExhausted);
+        assert!(called.load(Ordering::SeqCst));
+    }
+
+    #[test]
     fn runtime_registered_cleanup_contract_is_enforced() {
         let function = registered_function(
             BlockingBehavior::NonBlocking,
@@ -836,6 +912,23 @@ mod provider_contract_tests {
             result => panic!("expected cancellation after pending provider future, got {result:?}"),
         };
         assert_eq!(error.code, ProviderErrorCode::Cancelled);
+    }
+
+    #[test]
+    fn async_dispatcher_enforces_response_payload_limits() {
+        let function = registered_async_function(AsyncInterpreterFn::new(|_, _| async move {
+            Ok(NativeValue::String("response".into()))
+        }));
+        let mut context = async_context(None, None);
+        context.remaining_byte_budget = Some(64);
+        context.remaining_output_budget = Some(3);
+        let mut future = function.start_async(context, vec![]);
+
+        let error = match poll_once(&mut future) {
+            Poll::Ready(Err(error)) => error,
+            result => panic!("expected payload limit failure, got {result:?}"),
+        };
+        assert_eq!(error.code, ProviderErrorCode::ResourceExhausted);
     }
 
     #[test]

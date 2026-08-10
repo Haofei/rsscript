@@ -602,6 +602,10 @@ mechanical acceptance condition holds.
       portable execution report keeps only the stable Provider error code plus
       aggregate telemetry; Provider message/details and per-call traces do not
       serialize unless a host keeps separately redacted diagnostics.
+    - [x] **P08.4b — Enforce Provider request/response payload limits.** The
+      synchronous and asynchronous VM dispatchers reject oversized requests
+      before Provider code runs and oversized responses before they escape the
+      boundary, even when an individual Provider omits its own checks.
 
 ### 6. Stable SDK and product workflows
 
