@@ -176,7 +176,7 @@ fn lower_instruction(
         MirInstruction::Retain { .. } => return Err(CodegenError::Unsupported("retain")),
         MirInstruction::Drop { .. } => return Err(CodegenError::Unsupported("drop")),
         MirInstruction::AcquireResource { place, source, .. } => code.push(instr(
-            "Manage",
+            "Move",
             [
                 ("dst", json!(place_reg(*place))),
                 ("src", json!(value_reg(function, *source))),
@@ -499,7 +499,7 @@ mod tests {
     }
 
     #[test]
-    fn resource_lifetime_ops_emit_manage_and_drop_bytecode() {
+    fn resource_lifetime_ops_preserve_resource_value_until_drop() {
         let module = MirModule::new(
             vec![
                 WireType::Unit,
@@ -542,6 +542,23 @@ mod tests {
             "0.1.0",
         )
         .expect("emit resource bytecode");
+        let payload: serde_json::Value =
+            rsscript_bytecode::decode_executable_payload(&artifact.payload)
+                .expect("decode resource payload");
+        let opcodes = payload["functions"][0]["code"]
+            .as_array()
+            .expect("resource code")
+            .iter()
+            .map(|instruction| {
+                instruction
+                    .as_object()
+                    .and_then(|instruction| instruction.keys().next())
+                    .expect("single opcode")
+                    .as_str()
+            })
+            .collect::<Vec<_>>();
+        assert!(opcodes.contains(&"Move"));
+        assert!(opcodes.contains(&"ResourceDrop"));
         BytecodeVerifier::default()
             .verify(&artifact.to_bytes().expect("encode resource bytecode"))
             .expect("verify resource bytecode");

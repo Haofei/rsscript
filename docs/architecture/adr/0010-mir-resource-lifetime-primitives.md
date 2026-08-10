@@ -21,7 +21,7 @@ and requires every reachable return path to release all live resources.
 
 This establishes the normal-exit primitive only. Explicitly managed linear
 `with` scopes lower to it, and VM bytecode codegen maps it to existing
-`Manage`/`ResourceDrop` instructions. Transfer semantics and cleanup edges for
+`Move`/`ResourceDrop` instructions. Transfer semantics and cleanup edges for
 errors and cancellation remain separate milestones.
 
 ## Compatibility and migration
@@ -41,7 +41,7 @@ on provider errors or cancellation.
 
 The conformance interpreter preserves the acquired source value for
 control-flow tests. The VM code generator maps the linear resource subset to
-`Manage` and `ResourceDrop`; scheduler/error/cancellation cleanup and providers
+`Move` and `ResourceDrop`; scheduler/error/cancellation cleanup and providers
 remain follow-up work.
 
 ## Evidence

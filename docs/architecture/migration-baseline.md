@@ -383,7 +383,7 @@ mechanical acceptance condition holds.
   - [ ] **V02.3 — Lower resources, async, builtins, and external calls.** Add
     codegen fixtures for every Core MIR instruction.
     - [x] **V02.3a — Emit the linear resource lifetime subset.** Resource
-      acquisition carries its defined source value and emits `Manage`; release
+      acquisition carries its defined source value and emits `Move`; release
       emits `ResourceDrop`, with the ordinary bytecode verifier covering the
       resulting Artifact. Async scheduling, builtins, and non-normal cleanup
       remain follow-up work.
