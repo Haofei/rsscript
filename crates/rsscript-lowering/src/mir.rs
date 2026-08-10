@@ -700,16 +700,30 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         };
         let mut ordered = args.iter().collect::<Vec<_>>();
         ordered.sort_by_key(|argument| argument.evaluation_index);
-        let arguments = ordered
-            .into_iter()
-            .map(|argument| self.lower_direct_call_argument(&argument.value))
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut arguments = Vec::with_capacity(ordered.len());
+        let mut retained_places = Vec::new();
+        for argument in ordered {
+            let lowered = self.lower_direct_call_argument(&argument.value)?;
+            if argument
+                .parameter_index
+                .and_then(|index| signature.params.get(index))
+                .is_some_and(|parameter| signature.retained_params.contains(&parameter.name))
+                && let MirCallArgument::BorrowRead(place) | MirCallArgument::BorrowMut(place) =
+                    lowered
+            {
+                retained_places.push(place);
+            }
+            arguments.push(lowered);
+        }
         let destination = self.value();
         self.emit(MirInstruction::Call {
             destination,
             target,
             arguments,
         });
+        for place in retained_places {
+            self.emit(MirInstruction::Retain { place });
+        }
         Ok(destination)
     }
 
@@ -717,10 +731,21 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         &mut self,
         argument: &checked::HirExpr,
     ) -> Result<MirCallArgument, MirLoweringError> {
+        if let checked::HirExpr::Manage { value, .. } = argument {
+            let checked::HirExpr::Ident { name, .. } = value.as_ref() else {
+                return self.unsupported("manage checked HIR call argument on non-local value");
+            };
+            return self.lookup_place(name).map(MirCallArgument::BorrowRead);
+        }
         let checked::HirExpr::Effect { effect, value, .. } = argument else {
             return self.lower_expression(argument).map(MirCallArgument::Value);
         };
-        let checked::HirExpr::Ident { name, .. } = value.as_ref() else {
+        let value = match value.as_ref() {
+            checked::HirExpr::Ident { .. } => value.as_ref(),
+            checked::HirExpr::Manage { value, .. } => value.as_ref(),
+            _ => return self.unsupported("checked HIR data effect on non-local value"),
+        };
+        let checked::HirExpr::Ident { name, .. } = value else {
             return self.unsupported("checked HIR data effect on non-local value");
         };
         let place = self.lookup_place(name)?;

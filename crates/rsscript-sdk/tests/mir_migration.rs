@@ -522,6 +522,38 @@ fn main() -> Int {
 }
 
 #[test]
+fn direct_checked_hir_retaining_call_emits_retain_fact() {
+    let interface = "pub fn Store.put(value: read String) -> Unit retains(value)\n";
+    let source = r#"
+fn main() -> Unit {
+    local value = "rss"
+    Store.put(value: manage value)
+    return
+}
+"#;
+    let validated = analyze_source_with_interfaces_result(
+        "mir-retain.rss",
+        source,
+        &[("store.rssi", interface)],
+    )
+    .into_validated()
+    .expect("retaining call source should validate");
+    let compiled = compile_validated_to_ir(&validated);
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("retaining call lowers directly from checked HIR");
+    assert!(
+        mir.functions()
+            .iter()
+            .flat_map(|function| function.blocks())
+            .flat_map(|block| block.instructions())
+            .any(|instruction| matches!(instruction, MirInstruction::Retain { .. }))
+    );
+    mir.verify()
+        .expect("retention fact remains verifier-visible");
+}
+
+#[test]
 fn direct_checked_hir_resource_scope_emits_cleanup_before_return() {
     let interface = r#"
 module Host

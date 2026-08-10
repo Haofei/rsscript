@@ -23,9 +23,12 @@ standalone checked `take local` expression. It defines the moved value while
 transitioning the source place to unavailable, so source lowering cannot erase
 that move before a backend observes it.
 
-This decision does not yet lower source retention/resource syntax or add v1
-bytecode opcodes. The code generator rejects these operations until their
-runtime cleanup and conformance contracts are complete.
+The direct checked-HIR lowerer emits `Retain` after a resolved call whose
+semantic signature declares `retains(param)` and whose argument is a managed
+local read view. The v1 bytecode encoder preserves this as verifier-visible MIR
+ownership evidence without a separate runtime opcode: retention does not copy
+or destroy the VM value. Source-level explicit `drop`, resource transfer, and
+new bytecode ownership opcodes remain follow-up work.
 
 ## Compatibility and security impact
 
@@ -37,4 +40,5 @@ unchanged.
 ## Evidence
 
 MIR tests prove that a retained place remains readable and that reading a
-dropped place fails validation.
+dropped place fails validation. The migration suite proves a checked `.rssi`
+`retains(value)` contract becomes a direct-HIR `Retain` instruction.

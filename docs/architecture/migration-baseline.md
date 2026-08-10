@@ -313,8 +313,10 @@ mechanical acceptance condition holds.
     - [x] **M03.1d — Add explicit retain/drop ownership instructions.** MIR now
       preserves retention as a verifier-visible operation and models `drop` as a
       place-state transition; linear/CFG validation rejects reads after an
-      explicit drop until a write reinitializes the place. Source lowering and
-      bytecode support remain follow-up work.
+      explicit drop until a write reinitializes the place. Direct checked-HIR
+      calls emit `Retain` for a resolved `retains(param)` managed-local argument;
+      explicit source `drop` and a dedicated runtime opcode remain follow-up
+      work.
     - [x] **M03.1e — Lower standalone local moves.** A checked `take local`
       expression becomes explicit `TakePlace`, which consumes the source place
       in MIR and remains visible to the scalar codegen/conformance paths.
