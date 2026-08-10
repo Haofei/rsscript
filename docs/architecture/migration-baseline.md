@@ -438,7 +438,7 @@ mechanical acceptance condition holds.
     verifier computes per-instruction predecessor intersections, rejects reads
     not defined on every reachable path, and rejects fallthrough past a function
     end. Type/resource/task-state data-flow remains follow-up work.
-- [ ] **B04 — Separate all compatibility versions.** Container format, language
+- [x] **B04 — Separate all compatibility versions.** Container format, language
   semantics, bytecode ISA, Core library ABI, Provider ABI, analysis schema, and
   compiler provenance have explicit independent values. Language compatibility
   must not be inferred from `CARGO_PKG_VERSION`.
@@ -460,8 +460,9 @@ mechanical acceptance condition holds.
     schema allowlist; the bytecode verifier validates language, ISA, and Core
     library ABI before payload loading; Provider ABI continues to validate at
     link. Focused malformed/unknown-version tests exercise fail-closed paths.
-  - [ ] **B04.3 — Add supported-range fixtures.** Cover accepted N/N-1 inputs and
-    unknown major versions that must fail closed.
+  - [x] **B04.3 — Add supported-range fixtures.** The bytecode suite covers an
+    accepted declared N-1 language input and rejects unknown container, language,
+    runtime-ABI, ISA, and Core-library ABI versions before execution.
     - [x] **B04.3a — Exercise declared language ranges and container rejection.**
       The bytecode suite verifies an explicit N-1 compatibility range and
       rejects an unknown container major before decoding sections.
@@ -487,7 +488,7 @@ mechanical acceptance condition holds.
 - [x] **P03 — Use generation-safe resource handles.** Runtime resource tables
   reject stale handles and report created, cleaned, live, peak, and cleanup
   failures.
-- [ ] **P04 — Make semantic interface descriptors the bindgen input.** `.rssi`
+- [x] **P04 — Make semantic interface descriptors the bindgen input.** `.rssi`
   is parsed and canonicalized once by the semantic compiler into a versioned
   `InterfaceDescriptor`; bindgen must not duplicate syntax/type normalization.
   - [x] **P04.1 — Define `InterfaceDescriptorV1`.** Include canonical symbols,
@@ -498,14 +499,16 @@ mechanical acceptance condition holds.
       canonical signature hashes, public resource declarations, and a schema
       id. Serialized snapshots follow in P04.2. Descriptor bytes are now
       produced deterministically for binding and snapshot consumers.
-  - [ ] **P04.2 — Emit descriptors from semantic checking.** Snapshot descriptor
-    bytes and ensure source aliases cannot alter canonical ABI facts.
+  - [x] **P04.2 — Emit descriptors from semantic checking.** Immutable semantic
+    snapshots derive deterministic descriptor bytes, and focused coverage proves
+    aliases cannot alter canonical namespace-qualified ABI facts.
     - [x] **P04.2a — Derive descriptors from immutable semantic snapshots.**
       `SemanticDatabase::interface_descriptors()` derives contracts from the
       checked interface programs; tests prove it agrees with direct interface
       derivation, including canonical namespace-qualified resource identity.
-  - [ ] **P04.3 — Replace bindgen source parsing.** Bindgen accepts only the
-    descriptor and rejects unsupported descriptor versions.
+  - [x] **P04.3 — Replace bindgen source parsing.** Bindgen accepts only the
+    versioned descriptor, rejects unsupported versions, and no longer owns a
+    syntax dependency or source-parsing entry point.
     - [x] **P04.3a — Remove bindgen syntax ownership.** All official Provider
       build scripts derive an `InterfaceDescriptorV1` in semantics and pass it
       to `ProviderInterface::from_descriptor`; bindgen no longer depends on
