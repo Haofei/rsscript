@@ -34,4 +34,6 @@ deadline behavior remain governed by the linked Provider contract.
 
 The MIR migration suite compares legacy and direct-MIR execution of a
 cooperative asynchronous Provider that yields once before returning. Both paths
-complete with the same value and Provider-call usage.
+complete with the same value and Provider-call usage. A second fixture cancels
+the shared execution token while the Provider future is pending; both paths
+preserve the same structured Provider cancellation failure and usage report.

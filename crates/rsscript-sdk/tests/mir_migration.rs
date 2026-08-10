@@ -954,6 +954,124 @@ fn direct_checked_hir_awaited_external_provider_matches_legacy_vm() {
 }
 
 #[test]
+fn direct_checked_hir_awaited_provider_cancellation_matches_legacy_vm() {
+    let source = "async fn main() -> Int { return await Host.wait() }";
+    let interface = "pub async fn Host.wait() -> Int\n";
+    let validated = analyze_source_with_interfaces_result(
+        "direct-hir-async-cancel.rss",
+        source,
+        &[("host-async.rssi", interface)],
+    )
+    .into_validated()
+    .expect("async cancellation fixture should validate");
+    let compiled = compile_validated_to_ir(&validated);
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("awaited external cancellation fixture lowers directly to MIR");
+
+    fn bindings(cancellation: CancellationToken) -> Vec<(String, ExternalFunction)> {
+        let symbol = ExternalSymbol::new("Host.wait").expect("valid test symbol");
+        let signature = FunctionSignature {
+            parameters: Vec::new(),
+            result: "Int".into(),
+            asynchronous: true,
+        };
+        let descriptor = ProviderDescriptor {
+            provider_id: "test.direct-async-cancel".into(),
+            provider_version: "1.0.0".into(),
+            supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+            functions: vec![ProviderFunctionDescriptor {
+                symbol: symbol.clone(),
+                signature: signature.clone(),
+                entry: "wait".into(),
+                call_mode: ProviderCallMode::Async,
+                blocking: BlockingBehavior::NonBlocking,
+                cancellation: CancellationBehavior::Cooperative,
+                thread_safe: true,
+                reentrant: true,
+                resource_cleanup: ResourceCleanupContract::None,
+                error_mapping: ProviderErrorMapping::StructuredV1,
+            }],
+        };
+        let callable = AsyncInterpreterFn::new(move |_, _| {
+            let cancellation = cancellation.clone();
+            async move {
+                let mut first_poll = true;
+                std::future::poll_fn(move |context| {
+                    if first_poll {
+                        first_poll = false;
+                        cancellation.cancel();
+                        context.waker().wake_by_ref();
+                        std::task::Poll::Pending
+                    } else {
+                        std::task::Poll::Ready(Ok(NativeValue::Int(42)))
+                    }
+                })
+                .await
+            }
+        });
+        let mut registry = ExternalFunctionRegistry::new();
+        registry
+            .register_provider(
+                &descriptor,
+                BTreeMap::from([(
+                    symbol,
+                    ProviderFunction {
+                        signature,
+                        callable,
+                    },
+                )]),
+            )
+            .expect("async Provider registration should succeed");
+        registry.into_bindings().collect()
+    }
+
+    let legacy_cancel = CancellationToken::new();
+    let legacy = reg_vm_compile_validated(&validated)
+        .expect("legacy async cancellation fixture compiles")
+        .execute_main_with_args_and_external_bindings_and_limits(
+            std::iter::empty::<String>(),
+            bindings(legacy_cancel.clone()),
+            VmLimits {
+                cancel: Some(legacy_cancel),
+                ..VmLimits::default()
+            },
+        )
+        .expect("legacy cancellation retains its execution report");
+    let direct_cancel = CancellationToken::new();
+    let direct = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("direct async cancellation MIR emits verified bytecode")
+    .execute_main_with_args_and_external_bindings_and_limits(
+        std::iter::empty::<String>(),
+        bindings(direct_cancel.clone()),
+        VmLimits {
+            cancel: Some(direct_cancel),
+            ..VmLimits::default()
+        },
+    )
+    .expect("direct cancellation retains its execution report");
+
+    for report in [&legacy, &direct] {
+        assert!(
+            matches!(
+                report.failure,
+                Some(EvalError::Provider(ProviderError {
+                    code: ProviderErrorCode::Cancelled,
+                    ..
+                }))
+            ),
+            "unexpected cancellation result: {:?}",
+            report.failure
+        );
+    }
+    assert_eq!(legacy.usage, direct.usage);
+}
+
+#[test]
 fn direct_checked_hir_async_task_group_emits_spawn_and_await() {
     let source = r#"
 async fn worker() -> Int {
