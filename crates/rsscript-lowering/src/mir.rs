@@ -577,10 +577,7 @@ impl<'source> CheckedHirLowerer<'source> {
         ordered.sort_by_key(|argument| argument.evaluation_index);
         let arguments = ordered
             .into_iter()
-            .map(|argument| {
-                self.lower_expression(&argument.value)
-                    .map(MirCallArgument::Value)
-            })
+            .map(|argument| self.lower_direct_call_argument(&argument.value))
             .collect::<Result<Vec<_>, _>>()?;
         let destination = self.value();
         self.emit(MirInstruction::Call {
@@ -589,6 +586,24 @@ impl<'source> CheckedHirLowerer<'source> {
             arguments,
         });
         Ok(destination)
+    }
+
+    fn lower_direct_call_argument(
+        &mut self,
+        argument: &checked::HirExpr,
+    ) -> Result<MirCallArgument, MirLoweringError> {
+        let checked::HirExpr::Effect { effect, value, .. } = argument else {
+            return self.lower_expression(argument).map(MirCallArgument::Value);
+        };
+        let checked::HirExpr::Ident { name, .. } = value.as_ref() else {
+            return self.unsupported("checked HIR data effect on non-local value");
+        };
+        let place = self.lookup_place(name)?;
+        Ok(match effect {
+            checked::ParamEffect::Read => MirCallArgument::BorrowRead(place),
+            checked::ParamEffect::Mut => MirCallArgument::BorrowMut(place),
+            checked::ParamEffect::Take => MirCallArgument::Take(place),
+        })
     }
 
     fn lower_if(

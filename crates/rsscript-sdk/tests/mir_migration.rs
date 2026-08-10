@@ -408,6 +408,41 @@ fn main() -> Int {
 }
 
 #[test]
+fn direct_checked_hir_effect_calls_reach_verified_bytecode() {
+    let source = r#"
+fn increment_in_place(value: mut Int) -> Int {
+    value = value + 1
+    return value
+}
+
+fn consume(value: take Int) -> Int {
+    return value
+}
+
+fn main() -> Int {
+    let mut value = 40
+    increment_in_place(value: mut value)
+    local taken = 41
+    return consume(value: take taken)
+}
+"#;
+    let compiled =
+        compile_source_to_ir("direct-hir-effects.rss", source).expect("direct-HIR effects compile");
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("checked HIR effect calls use direct lowering");
+    let output = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("direct HIR effect calls emit verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("direct HIR effect call bytecode executes");
+    assert_eq!(output.value, "41");
+}
+
+#[test]
 fn capability_stages_stay_explicit() {
     for case in CASES {
         assert!(

@@ -369,10 +369,10 @@ mechanical acceptance condition holds.
     - [x] **M04.1a — Introduce direct checked-HIR lowering.** Supported
       functions (checked local bindings, scalar/aggregate expressions, list
       indexing, assignments, structured `if`/`else`, conditional loops with
-      `break`/`continue`, return, and resolved internal read calls) now lower
-      from semantic HIR without constructing `ExecutableIr`; compiler output
-      prefers that route and uses the explicit compatibility bridge only when a
-      capability is not yet direct-lowerable. Mut/take or external calls,
+      `break`/`continue`, return, and resolved internal read/`mut`/`take`
+      calls) now lower from semantic HIR without constructing `ExecutableIr`;
+      compiler output prefers that route and uses the explicit compatibility
+      bridge only when a capability is not yet direct-lowerable. External calls,
       resources, and async remain follow-up direct-lowering work.
   - [ ] **M04.2 — Verify MIR ownership, resources, and task scopes.** Add a
     verifier pass with targeted invalid-MIR fixtures.

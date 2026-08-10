@@ -20,9 +20,9 @@ impl CompiledIr {
     /// Lowers the checked executable representation into the frontend-free
     /// typed CFG MIR migration boundary.
     ///
-    /// The initial bridge intentionally supports only pure control flow. It
-    /// rejects resource, async, and call operations until those operations
-    /// have explicit MIR representations.
+    /// The migration subset covers resolved internal calls and structured
+    /// control flow, while resources, async, external calls, and other
+    /// unsupported semantic forms still fail closed.
     pub fn mir(&self) -> Result<rsscript_mir::MirModule, rsscript_lowering::MirLoweringError> {
         self.checked_hir_mir()
             .or_else(|_| rsscript_lowering::lower_executable_ir_to_mir(&self.executable))
@@ -284,5 +284,48 @@ fn main() -> Int {
                 })
         }));
         mir.verify().expect("direct HIR call MIR verifies");
+    }
+
+    #[test]
+    fn direct_checked_hir_path_preserves_mut_and_take_call_arguments() {
+        let compiled = compile_source_to_ir(
+            "direct-hir-effects.rss",
+            r#"
+fn increment_in_place(value: mut Int) -> Int {
+    value = value + 1
+    return value
+}
+
+fn consume(value: take Int) -> Int {
+    return value
+}
+
+fn main() -> Int {
+    let mut value = 40
+    increment_in_place(value: mut value)
+    local taken = 41
+    return consume(value: take taken)
+}
+"#,
+        )
+        .expect("source should compile");
+        let mir = compiled
+            .checked_hir_mir()
+            .expect("checked HIR effects lower without executable IR");
+        assert!(mir.functions().iter().any(|function| {
+            function.blocks().iter().flat_map(|block| block.instructions()).any(|instruction| {
+                matches!(
+                    instruction,
+                    rsscript_mir::MirInstruction::Call {
+                        arguments,
+                        ..
+                    } if arguments.iter().any(|argument| matches!(
+                        argument,
+                        rsscript_mir::MirCallArgument::BorrowMut(_) | rsscript_mir::MirCallArgument::Take(_)
+                    ))
+                )
+            })
+        }));
+        mir.verify().expect("direct HIR effect MIR verifies");
     }
 }
