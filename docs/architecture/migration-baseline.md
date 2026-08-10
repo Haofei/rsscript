@@ -161,6 +161,11 @@ mechanical acceptance condition holds.
       generic type positions and explicit generic call namespaces, including the
       direct `Result<Resource, E>` return exception, are now traversed by
       `rsscript-semantics`; compiler only appends the canonical result.
+    - [x] **S02.1g — Move derive-field compatibility diagnostics.** Field-level
+      `Eq`/`Ord`/`Hash`/JSON derive compatibility, including nested container,
+      local generic, handle, and weak-field reasoning, is now a semantic query.
+      The compiler only appends the canonical diagnostics and architecture tests
+      reject reimplementation of the derive-support algorithm.
     - [x] **S02.2e — Move generic resource and fresh-return constraints.**
       Resource generic bounds/fields and `fresh` generic return requirements are
       derived by `rsscript-semantics`; compiler no longer owns bound maps or

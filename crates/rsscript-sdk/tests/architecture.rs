@@ -1168,6 +1168,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "cyclic_type_alias_diagnostics",
         "duplicate_declaration_diagnostics",
         "derive_syntax_diagnostics",
+        "derive_field_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
         "generic_constraint_diagnostics",
@@ -1243,6 +1244,21 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     assert!(!compiler_derives.contains("fn supported_compiler_derive"));
     assert!(!compiler_derives.contains("fn check_supported_derives"));
     assert!(!compiler_derives.contains("fn check_resource_derives"));
+    let semantic_derive_fields = read(&root.join("crates/rsscript-semantics/src/derive_fields.rs"));
+    assert!(semantic_derive_fields.contains("pub fn derive_field_diagnostics"));
+    assert!(compiler_derives.contains("rsscript-semantics"));
+    for forbidden in [
+        "fn check_derive_field_requirements",
+        "fn collect_local_value_types",
+        "fn field_supports_derive",
+    ] {
+        assert!(
+            !compiler_derives.contains(forbidden),
+            "compiler must not re-own derive field rule `{forbidden}`"
+        );
+    }
+    let compiler_analyzer = read(&root.join("crates/rsscript-compiler/src/analyzer.rs"));
+    assert!(compiler_analyzer.contains("rsscript_semantics::derive_field_diagnostics"));
 
     let semantic_generic_constraints =
         read(&root.join("crates/rsscript-semantics/src/generic_constraints.rs"));

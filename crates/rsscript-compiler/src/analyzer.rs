@@ -19,8 +19,8 @@ use crate::semantic::{
     AnalysisResult, ResolvedType, SemanticDatabase, SourceSnapshot, ValidatedProgram,
 };
 use crate::syntax::ast::{
-    AssignStmt, Block, Callee, DataEffect, Expr, FieldDecl, FunctionDecl, Item, MatchPattern, Stmt,
-    TypeKind, TypeRef,
+    AssignStmt, Block, Callee, DataEffect, Expr, FunctionDecl, Item, MatchPattern, Stmt, TypeKind,
+    TypeRef,
 };
 use crate::syntax::ast::{Program, merge_programs};
 
@@ -1314,7 +1314,12 @@ impl Analyzer<'_> {
         }
 
         run_pass!(self.check_unsupported_syntax());
-        run_pass!(self.check_derive_field_requirements());
+        run_pass!(
+            self.diagnostics
+                .extend(rsscript_semantics::derive_field_diagnostics(
+                    &self.syntax_program
+                ))
+        );
         run_pass!(self.check_assignments());
         run_pass!(self.check_async_fn_lowerable());
         run_pass!(self.check_match_exhaustiveness());
