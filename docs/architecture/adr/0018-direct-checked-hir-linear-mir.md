@@ -21,7 +21,8 @@ expressions, lists, maps, JSON objects, resolved list indexing, structured
 resource scopes, return, and resolved internal calls with ordinary/read, `mut`,
 and `take` arguments, plus standalone `take local`. Call targets are looked up from checked `CallResolution`
 in a deterministic `FunctionId` table. `CompiledIr::mir()` prefers this path.
-Internal `task_group` async-let bindings and direct awaits lower to explicit
+Scalar literal/binding/wildcard statement `match` arms, internal `task_group`
+async-let bindings, and direct awaits lower to explicit
 `Spawn`/`Await` operations. Unsupported async external calls, cancellation,
 fields, records, variants, and match explicitly return a lowering error; only
 the existing compatibility caller may then choose the old `ExecutableIr`

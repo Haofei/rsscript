@@ -613,6 +613,40 @@ fn main() -> Int {
 }
 
 #[test]
+fn direct_checked_hir_literal_match_reaches_verified_bytecode() {
+    let source = r#"
+fn main() -> Int {
+    let value = 1
+    match value {
+        0 => { return 0 }
+        1 => { return 42 }
+        _ => { return 2 }
+    }
+}
+"#;
+    let compiled = compile_source_to_ir("direct-hir-match.rss", source)
+        .expect("literal match source compiles");
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("literal match lowers directly from checked HIR");
+    assert!(
+        mir.functions()[0]
+            .blocks()
+            .iter()
+            .any(|block| { matches!(block.terminator(), MirTerminator::Branch { .. }) })
+    );
+    let output = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("literal match emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("literal match bytecode executes");
+    assert_eq!(output.value, "42");
+}
+
+#[test]
 fn direct_checked_hir_resource_scope_emits_cleanup_before_return() {
     let interface = r#"
 module Host

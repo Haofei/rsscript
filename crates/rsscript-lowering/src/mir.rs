@@ -497,7 +497,7 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                 ..
             } => self.lower_with(resource, binding, body),
             checked::HirStmt::For { .. } => self.unsupported("checked HIR for loop"),
-            checked::HirStmt::Match { .. } => self.unsupported("checked HIR match"),
+            checked::HirStmt::Match { value, arms, .. } => self.lower_match(value, arms),
             checked::HirStmt::Select { .. } => self.unsupported("checked HIR select"),
             checked::HirStmt::Break(_) => {
                 let Some(targets) = self.loops.last() else {
@@ -883,6 +883,61 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         }
 
         self.current = join_block;
+        Ok(())
+    }
+
+    fn lower_match(
+        &mut self,
+        value: &checked::HirExpr,
+        arms: &[checked::HirMatchArm],
+    ) -> Result<(), MirLoweringError> {
+        let value = self.lower_expression(value)?;
+        let join = self.new_block();
+        for arm in arms {
+            if arm.guard.is_some() {
+                return self.unsupported("checked HIR match guard");
+            }
+            let arm_block = self.new_block();
+            let next = self.new_block();
+            match &arm.pattern {
+                rsscript_syntax::ast::MatchPattern::Wildcard(_) => {
+                    self.terminate(MirTerminator::Jump(arm_block));
+                }
+                rsscript_syntax::ast::MatchPattern::Binding { .. } => {
+                    self.terminate(MirTerminator::Jump(arm_block));
+                }
+                rsscript_syntax::ast::MatchPattern::Literal { value: literal, .. } => {
+                    let literal = match_literal(literal, self.function_name)?;
+                    let expected = self.literal(literal)?;
+                    let condition = self.value();
+                    self.emit(MirInstruction::Binary {
+                        destination: condition,
+                        op: MirBinaryOp::Equal,
+                        left: value,
+                        right: expected,
+                    });
+                    self.terminate(MirTerminator::Branch {
+                        condition,
+                        then_target: arm_block,
+                        else_target: next,
+                    });
+                }
+                _ => return self.unsupported("non-literal checked HIR match pattern"),
+            }
+
+            self.current = arm_block;
+            if let rsscript_syntax::ast::MatchPattern::Binding { name, .. } = &arm.pattern {
+                let place = self.place(name);
+                self.emit(MirInstruction::WritePlace { place, value });
+            }
+            self.lower_checked_block(&arm.body)?;
+            if self.current_block().terminator.is_none() {
+                self.terminate(MirTerminator::Jump(join));
+            }
+            self.current = next;
+        }
+        self.terminate(MirTerminator::Unreachable);
+        self.current = join;
         Ok(())
     }
 
@@ -1782,6 +1837,34 @@ fn checked_binary_op(op: rsscript_syntax::ast::BinaryOp) -> MirBinaryOp {
         rsscript_syntax::ast::BinaryOp::GreaterEqual => MirBinaryOp::GreaterEqual,
         rsscript_syntax::ast::BinaryOp::LogicalAnd => MirBinaryOp::LogicalAnd,
         rsscript_syntax::ast::BinaryOp::LogicalOr => MirBinaryOp::LogicalOr,
+    }
+}
+
+fn match_literal(
+    literal: &rsscript_syntax::ast::MatchLiteral,
+    function_name: &str,
+) -> Result<MirLiteral, MirLoweringError> {
+    match literal {
+        rsscript_syntax::ast::MatchLiteral::Int(value) => value
+            .parse::<i64>()
+            .map(MirLiteral::Int)
+            .or_else(|_| value.parse::<f64>().map(MirLiteral::Float))
+            .map_err(|_| MirLoweringError::Unsupported {
+                function: function_name.to_owned(),
+                construct: "non-numeric checked HIR match literal",
+            }),
+        rsscript_syntax::ast::MatchLiteral::String(value) => Ok(MirLiteral::String(value.clone())),
+        rsscript_syntax::ast::MatchLiteral::Char(value) => {
+            let mut chars = value.chars();
+            match (chars.next(), chars.next()) {
+                (Some(value), None) => Ok(MirLiteral::Char(value)),
+                _ => Err(MirLoweringError::Unsupported {
+                    function: function_name.to_owned(),
+                    construct: "invalid checked HIR match char literal",
+                }),
+            }
+        }
+        rsscript_syntax::ast::MatchLiteral::Bool(value) => Ok(MirLiteral::Bool(*value)),
     }
 }
 
