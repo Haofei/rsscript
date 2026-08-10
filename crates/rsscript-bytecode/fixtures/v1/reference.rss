@@ -1,0 +1,5 @@
+// Immutable source companion for the v1 compatibility bundle. The bundle is
+// checked in separately so compatibility tests never regenerate it.
+fn main() -> Int {
+    return 42
+}

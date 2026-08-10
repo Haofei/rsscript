@@ -1,3 +1,4 @@
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rsscript_sdk::{
     ArtifactVerifier, CancellationToken, Compiler, ExecutionRequest, RunLimits, Runtime,
     TerminationReason, format_diagnostics_json,
@@ -47,7 +48,7 @@ fn canonical_compilation_and_diagnostics_are_migration_baselines() {
     );
     assert_eq!(
         sha256(&first_bytes),
-        "1e0627bd4ea3d26df0212fb7a4fdeb9a4cec14346948e03e5db84046c8488a02",
+        "93a00989c3fa3441511b97cc65d92eae4a96befb8aab0e154d8e59f3a1a2b1a0",
         "an intentional Artifact encoding or lowering change must update this digest"
     );
 
@@ -109,4 +110,38 @@ fn verified_execution_outcomes_are_migration_baselines() {
         TerminationReason::Cancelled
     );
     assert!(cancelled_report.failure.is_some());
+}
+
+#[test]
+fn checked_in_v1_bundle_remains_read_only_verifiable_and_executable() {
+    // This fixture is intentionally decoded from checked-in text rather than
+    // regenerated from its companion source. It protects the deployed v1
+    // reader as the v2 writer evolves.
+    let bundle = STANDARD
+        .decode(
+            include_str!("../../rsscript-bytecode/fixtures/v1/reference.rssbundle.base64").trim(),
+        )
+        .expect("checked-in v1 compatibility bundle uses valid base64");
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../rsscript-bytecode/fixtures/v1/reference.report.json"
+    ))
+    .expect("checked-in v1 expected report is JSON");
+    let verified = ArtifactVerifier
+        .verify_bytes(&bundle)
+        .expect("checked-in v1 bundle remains verifiable");
+    let report = Runtime::default()
+        .link(&verified)
+        .expect("checked-in v1 bundle links without Providers")
+        .execute(ExecutionRequest::default());
+
+    assert_eq!(
+        report.termination_reason,
+        TerminationReason::Completed,
+        "v1 compatibility bundle must retain its terminal result"
+    );
+    assert_eq!(report.value, expected["value"].as_str().unwrap());
+    assert_eq!(
+        format!("{:?}", report.termination_reason).to_lowercase(),
+        expected["termination_reason"].as_str().unwrap()
+    );
 }
