@@ -11,6 +11,7 @@ pub use rsscript_abi_model::{
 };
 
 mod call_binding;
+mod control_flow;
 mod database;
 mod declarations;
 mod derive_fields;
@@ -28,6 +29,7 @@ mod symbols;
 mod type_aliases;
 mod types;
 pub use call_binding::{BoundArgument, BoundArgumentSource, CallBinding, CallBindingIssue};
+pub use control_flow::function_fallthrough_diagnostics;
 pub use database::{
     AnalysisResult, CompilationSession, CompilationSessionStats, FrontendCompletion,
     FrontendStopReason, SemanticDatabase, SessionSourceStore, SourceFileSnapshot, SourceSnapshot,

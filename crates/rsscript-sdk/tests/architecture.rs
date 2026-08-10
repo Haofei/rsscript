@@ -1169,6 +1169,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "duplicate_declaration_diagnostics",
         "derive_syntax_diagnostics",
         "derive_field_diagnostics",
+        "function_fallthrough_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
         "generic_constraint_diagnostics",
@@ -1259,6 +1260,21 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     }
     let compiler_analyzer = read(&root.join("crates/rsscript-compiler/src/analyzer.rs"));
     assert!(compiler_analyzer.contains("rsscript_semantics::derive_field_diagnostics"));
+
+    let semantic_control_flow = read(&root.join("crates/rsscript-semantics/src/control_flow.rs"));
+    assert!(semantic_control_flow.contains("pub fn function_fallthrough_diagnostics"));
+    let compiler_calls = read(&root.join("crates/rsscript-compiler/src/checks/calls.rs"));
+    assert!(compiler_calls.contains("rsscript_semantics::function_fallthrough_diagnostics"));
+    for forbidden in [
+        "fn check_function_fallthrough",
+        "fn block_may_fall_through",
+        "fn statement_may_fall_through",
+    ] {
+        assert!(
+            !compiler_calls.contains(forbidden),
+            "compiler must not re-own control-flow rule `{forbidden}`"
+        );
+    }
 
     let semantic_generic_constraints =
         read(&root.join("crates/rsscript-semantics/src/generic_constraints.rs"));

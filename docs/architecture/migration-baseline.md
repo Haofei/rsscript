@@ -211,6 +211,11 @@ mechanical acceptance condition holds.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.
+    - [x] **S02.5a — Move function fallthrough diagnostics.** The resolved-HIR
+      control-flow rule for non-`Unit` functions which can reach their end is
+      now owned by `rsscript-semantics`; compiler call checking only appends its
+      canonical diagnostic. Task, cancellation, select, assignment,
+      exhaustiveness, and reachability remain follow-up work.
   - [ ] **S02.6 — Delete compiler semantic-rule modules.** Add architecture
     tests that permit compiler orchestration only and reject semantic-rule
     implementations outside `rsscript-semantics`.
