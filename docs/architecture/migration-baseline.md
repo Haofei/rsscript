@@ -568,6 +568,11 @@ mechanical acceptance condition holds.
       encoder entirely remains follow-up work.
   - [ ] **V04.3 — Delete duplicate VM payload verifier.** Keep runtime defensive
     assertions only; malformed-byte handling belongs to bytecode verifier.
+    - [x] **V04.3a — Isolate compatibility raw-byte verification.** The default
+      VM no longer compiles a byte-slice verification entry point; it only decodes
+      the opaque `VerifiedBytecode` token. The retained raw verifier is coupled
+      to the legacy encoder's self-check behind `legacy-exec-ir`. Deleting that
+      compatibility self-check with the legacy encoder remains follow-up work.
 - [ ] **V05 — Remove experimental state from Core VM program objects.** JIT,
   OSR, deopt, branch/call profiles, and native tier state live in experiment-owned
   side tables keyed by stable function IDs.

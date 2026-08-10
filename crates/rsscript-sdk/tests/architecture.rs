@@ -1551,8 +1551,10 @@ fn legacy_executable_ir_lowering_is_an_explicit_vm_compatibility_feature() {
         bytecode.contains("#[cfg(feature = \"legacy-exec-ir\")]\npub(super) fn encode_and_verify")
             && bytecode.contains(
                 "#[cfg(feature = \"legacy-exec-ir\")]\npub(super) fn encode_and_verify_with_imports"
-            ),
-        "legacy register-unit Artifact encoding must not enter the default VM closure"
+            )
+            && bytecode
+                .contains("#[cfg(feature = \"legacy-exec-ir\")]\npub(super) fn verify_bytes"),
+        "legacy register-unit Artifact encoding and raw-byte verification must not enter the default VM closure"
     );
 
     let sdk_manifest: toml::Value =

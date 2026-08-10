@@ -2,7 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use rsscript_abi_model::{ExternalImport, RUNTIME_ABI_VERSION};
-use rsscript_bytecode::{BytecodeArtifact, BytecodeError, BytecodeVerifier, VerifiedBytecode};
+#[cfg(feature = "legacy-exec-ir")]
+use rsscript_bytecode::BytecodeVerifier;
+use rsscript_bytecode::{BytecodeArtifact, BytecodeError, VerifiedBytecode};
 use serde::{Deserialize, Serialize};
 
 use super::*;
@@ -158,10 +160,12 @@ pub(super) fn encode_and_verify_with_imports(
     verify_bytes(&artifact.to_bytes().map_err(bytecode_error)?)
 }
 
+#[cfg(feature = "legacy-exec-ir")]
 pub(super) fn verify_bytes(bytes: &[u8]) -> Result<VerifiedRegBytecode, EvalError> {
     verify_bytes_with_context(bytes, rsscript_bytecode::VerificationContext::default())
 }
 
+#[cfg(feature = "legacy-exec-ir")]
 pub(super) fn verify_bytes_with_context(
     bytes: &[u8],
     context: rsscript_bytecode::VerificationContext<'_>,

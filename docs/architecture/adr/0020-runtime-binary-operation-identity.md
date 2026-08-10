@@ -24,6 +24,8 @@ The VM's remaining source-shaped executable-IR lowerer is an explicit
 the transitional SDK compatibility adapter must opt into it deliberately.
 The legacy register-unit Artifact encoder and assembly helper use the same
 feature; direct MIR builds use `rsscript-codegen-vm` instead.
+Its raw-byte verification self-check is also feature-gated, so the default VM
+accepts only the opaque verifier-owned token before decoding for execution.
 
 This decision does not define the bytecode-v2 opcode encoding, replace
 `MirBinaryOp`, or remove the remaining legacy executable-IR lowering path.
