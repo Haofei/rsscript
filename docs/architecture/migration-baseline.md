@@ -172,14 +172,15 @@ mechanical acceptance condition holds.
     capture. Query migration remains follow-up work.
   - [ ] **S03.3 — Cache parse, resolve, type, HIR, and diagnostic queries.**
     Record dependencies so unrelated file changes do not invalidate a workspace.
-    `CompilationSession` now owns parse-tree caching keyed by immutable file
-    revision, including replacement/deletion invalidation and deterministic
-    source iteration. Resolve/type/HIR/diagnostic query migration remains open.
+    `CompilationSession` now owns parse-tree and local HIR caching keyed by
+    immutable role/file/revision, including replacement/deletion invalidation
+    and deterministic source iteration. Resolve/type, interface-aware workspace
+    HIR, and diagnostic query migration remains open.
   - [ ] **S03.4 — Thread cancellation and deadlines through every query.** Add
     cancellation, deadline, and diagnostic-budget tests for cold and cached
-    paths. Session parse queries now check the shared operation context before
-    and after cache access for source and interface inputs; resolve/type/HIR and
-    diagnostic queries remain to be migrated.
+    paths. Session parse and local HIR queries now check the shared operation
+    context before and after cache access for source and interface inputs;
+    resolve/type, workspace-HIR, and diagnostic queries remain to be migrated.
   - [ ] **S03.5 — Migrate CLI/package/test callers.** All frontend consumers use
     the session API; direct analyzer construction becomes private.
 - [ ] **S04 — Make language service consume semantic queries directly.** It

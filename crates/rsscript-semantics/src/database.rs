@@ -256,14 +256,19 @@ pub struct CompilationSession {
     sources: SessionSourceStore,
     interfaces: SessionSourceStore,
     parse_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<Program>>,
+    hir_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<Hir>>,
     parse_cache_hits: u64,
     parse_cache_misses: u64,
+    hir_cache_hits: u64,
+    hir_cache_misses: u64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CompilationSessionStats {
     pub parse_cache_hits: u64,
     pub parse_cache_misses: u64,
+    pub hir_cache_hits: u64,
+    pub hir_cache_misses: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -281,6 +286,7 @@ impl CompilationSession {
         let update = self.sources.set_file(path, text)?;
         if update.changed {
             self.invalidate_parse_cache(SessionFileRole::Source, update.file_id);
+            self.invalidate_hir_cache(SessionFileRole::Source, update.file_id);
         }
         Ok(update)
     }
@@ -289,6 +295,7 @@ impl CompilationSession {
         let update = self.sources.remove_file(path);
         if let Some(update) = update {
             self.invalidate_parse_cache(SessionFileRole::Source, update.file_id);
+            self.invalidate_hir_cache(SessionFileRole::Source, update.file_id);
         }
         update
     }
@@ -301,6 +308,7 @@ impl CompilationSession {
         let update = self.interfaces.set_file(path, text)?;
         if update.changed {
             self.invalidate_parse_cache(SessionFileRole::Interface, update.file_id);
+            self.invalidate_hir_cache(SessionFileRole::Interface, update.file_id);
         }
         Ok(update)
     }
@@ -309,6 +317,7 @@ impl CompilationSession {
         let update = self.interfaces.remove_file(path);
         if let Some(update) = update {
             self.invalidate_parse_cache(SessionFileRole::Interface, update.file_id);
+            self.invalidate_hir_cache(SessionFileRole::Interface, update.file_id);
         }
         update
     }
@@ -396,10 +405,52 @@ impl CompilationSession {
         Ok(programs)
     }
 
+    /// Build the source-shaped HIR for one immutable source revision exactly
+    /// once. Interface-aware workspace HIR remains a higher-level query, but
+    /// this per-file cache gives editor and incremental callers a stable local
+    /// semantic fact boundary without re-parsing unchanged text.
+    pub fn hir_file(&mut self, path: &str) -> Option<Arc<Hir>> {
+        let snapshot = self.source_snapshot();
+        let file = snapshot.files().iter().find(|file| file.path() == path)?;
+        self.hir_snapshot_file(SessionFileRole::Source, file)
+    }
+
+    /// Interface HIR uses a role-separated key because source and interface
+    /// stores allocate file IDs independently.
+    pub fn hir_interface(&mut self, path: &str) -> Option<Arc<Hir>> {
+        let snapshot = self.interface_snapshot();
+        let file = snapshot.files().iter().find(|file| file.path() == path)?;
+        self.hir_snapshot_file(SessionFileRole::Interface, file)
+    }
+
+    pub fn hir_file_with_operation(
+        &mut self,
+        path: &str,
+        operation: &OperationContext,
+    ) -> Result<Option<Arc<Hir>>, OperationAbort> {
+        operation.check()?;
+        let hir = self.hir_file(path);
+        operation.check()?;
+        Ok(hir)
+    }
+
+    pub fn hir_interface_with_operation(
+        &mut self,
+        path: &str,
+        operation: &OperationContext,
+    ) -> Result<Option<Arc<Hir>>, OperationAbort> {
+        operation.check()?;
+        let hir = self.hir_interface(path);
+        operation.check()?;
+        Ok(hir)
+    }
+
     pub fn stats(&self) -> CompilationSessionStats {
         CompilationSessionStats {
             parse_cache_hits: self.parse_cache_hits,
             parse_cache_misses: self.parse_cache_misses,
+            hir_cache_hits: self.hir_cache_hits,
+            hir_cache_misses: self.hir_cache_misses,
         }
     }
 
@@ -423,6 +474,28 @@ impl CompilationSession {
 
     fn invalidate_parse_cache(&mut self, role: SessionFileRole, file_id: FileId) {
         self.parse_cache
+            .retain(|(cached_role, cached_id, _), _| *cached_role != role || *cached_id != file_id);
+    }
+
+    fn hir_snapshot_file(
+        &mut self,
+        role: SessionFileRole,
+        file: &SourceFileSnapshot,
+    ) -> Option<Arc<Hir>> {
+        let key = (role, file.file_id(), file.revision());
+        if let Some(hir) = self.hir_cache.get(&key) {
+            self.hir_cache_hits = self.hir_cache_hits.saturating_add(1);
+            return Some(Arc::clone(hir));
+        }
+        let program = self.parse_snapshot_file(role, file)?;
+        let hir = Arc::new(Hir::from_syntax(&program));
+        self.hir_cache.insert(key, Arc::clone(&hir));
+        self.hir_cache_misses = self.hir_cache_misses.saturating_add(1);
+        Some(hir)
+    }
+
+    fn invalidate_hir_cache(&mut self, role: SessionFileRole, file_id: FileId) {
+        self.hir_cache
             .retain(|(cached_role, cached_id, _), _| *cached_role != role || *cached_id != file_id);
     }
 }
@@ -669,6 +742,8 @@ mod tests {
             CompilationSessionStats {
                 parse_cache_hits: 1,
                 parse_cache_misses: 1,
+                hir_cache_hits: 0,
+                hir_cache_misses: 0,
             }
         );
 
@@ -743,5 +818,42 @@ mod tests {
             .unwrap();
         assert!(Arc::ptr_eq(&cached, &reused));
         assert_eq!(session.stats().parse_cache_hits, 1);
+    }
+
+    #[test]
+    fn compilation_session_caches_hir_by_role_and_immutable_revision() {
+        let mut session = CompilationSession::default();
+        session
+            .set_file("main.rss", "fn main() -> Unit { return Unit }")
+            .unwrap();
+        session
+            .set_interface("host.rssi", "module host\npub fn emit() -> Unit\n")
+            .unwrap();
+
+        let first = session.hir_file("main.rss").expect("source HIR");
+        let second = session.hir_file("main.rss").expect("cached source HIR");
+        let interface = session.hir_interface("host.rssi").expect("interface HIR");
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(!Arc::ptr_eq(&first, &interface));
+        assert_eq!(session.stats().hir_cache_hits, 1);
+        assert_eq!(session.stats().hir_cache_misses, 2);
+
+        session
+            .set_file("main.rss", "fn main() -> Int { return 1 }")
+            .unwrap();
+        let replacement = session.hir_file("main.rss").expect("replacement HIR");
+        assert!(!Arc::ptr_eq(&first, &replacement));
+        assert_eq!(session.stats().hir_cache_misses, 3);
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let cancelled = OperationContext {
+            cancellation: Some(cancellation),
+            ..OperationContext::default()
+        };
+        assert!(matches!(
+            session.hir_file_with_operation("main.rss", &cancelled),
+            Err(OperationAbort::Cancelled)
+        ));
     }
 }
