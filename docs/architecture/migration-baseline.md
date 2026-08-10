@@ -434,6 +434,10 @@ mechanical acceptance condition holds.
     generated Markdown reference output. A bounded arbitrary-byte property
     corpus proves the v2 decoder cannot panic; explicit seed files and Artifact
     integration remain follow-up work.
+  - [x] **B03.2 — Verify v2 instruction-CFG register data flow.** The typed
+    verifier computes per-instruction predecessor intersections, rejects reads
+    not defined on every reachable path, and rejects fallthrough past a function
+    end. Type/resource/task-state data-flow remains follow-up work.
 - [ ] **B04 — Separate all compatibility versions.** Container format, language
   semantics, bytecode ISA, Core library ABI, Provider ABI, analysis schema, and
   compiler provenance have explicit independent values. Language compatibility

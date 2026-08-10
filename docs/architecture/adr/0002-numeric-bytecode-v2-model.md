@@ -35,6 +35,11 @@ V2 also separates numeric Artifact-import links, exports, and optional debug
 locations from the function/code table. The verifier checks every export and
 debug function/instruction reference before returning a verified program.
 
+The verifier also owns instruction-CFG register availability: entry parameters
+are initialized, branch joins intersect predecessor facts, and a register read
+must be defined on every reachable path. Functions may not fall through their
+last instruction.
+
 The v2 decoder has a bounded arbitrary-byte property corpus so malformed
 payloads cannot panic the verifier while explicit long-lived seed fixtures are
 added with future Artifact v2 sections.

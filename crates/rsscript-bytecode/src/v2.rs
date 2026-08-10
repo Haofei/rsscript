@@ -5,6 +5,8 @@
 //! fixed operand layouts before a v2 writer is enabled. The v1 reader remains
 //! the only deployed artifact reader/writer during this migration.
 
+use std::collections::BTreeSet;
+
 use rsscript_abi_model::WireType;
 use serde::{Deserialize, Serialize};
 
@@ -417,6 +419,7 @@ impl WireProgramV2 {
                     function.instructions.len(),
                 )?;
             }
+            verify_register_dataflow(function, function_index)?;
         }
         for (index, export) in self.exports.iter().enumerate() {
             if export.function.index() >= self.functions.len() {
@@ -446,6 +449,120 @@ impl WireProgramV2 {
             }
         }
         Ok(())
+    }
+}
+
+/// Verify instruction-CFG register availability. A register used after a
+/// branch join must be initialized on every reachable predecessor; v2 has no
+/// implicit phi/undefined value. This is deliberately independent from the VM
+/// register decoder and complements table-index validation above.
+fn verify_register_dataflow(
+    function: &WireFunctionV2,
+    function_index: usize,
+) -> Result<(), BytecodeError> {
+    if function.instructions.is_empty() {
+        return Err(invalid(format!(
+            "v2 function {function_index} has no terminating instruction"
+        )));
+    }
+    let mut entries = vec![None::<BTreeSet<u32>>; function.instructions.len()];
+    entries[0] = Some((0..function.parameter_count).collect());
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (offset, instruction) in function.instructions.iter().enumerate() {
+            let Some(entry) = entries[offset].clone() else {
+                continue;
+            };
+            let mut exit = entry;
+            if let Some(destination) = register_definition(instruction) {
+                exit.insert(destination);
+            }
+            for successor in instruction_successors(function, offset)? {
+                let slot = &mut entries[successor];
+                let merged = match slot {
+                    Some(existing) => existing.intersection(&exit).copied().collect(),
+                    None => exit.clone(),
+                };
+                if slot.as_ref() != Some(&merged) {
+                    *slot = Some(merged);
+                    changed = true;
+                }
+            }
+        }
+    }
+    for (offset, instruction) in function.instructions.iter().enumerate() {
+        let Some(mut available) = entries[offset].clone() else {
+            continue;
+        };
+        for register in register_uses(instruction) {
+            if !available.contains(&register) {
+                return Err(invalid(format!(
+                    "v2 function {function_index} instruction {offset} reads undefined register {register}"
+                )));
+            }
+        }
+        if let Some(destination) = register_definition(instruction) {
+            available.insert(destination);
+        }
+    }
+    Ok(())
+}
+
+fn instruction_successors(
+    function: &WireFunctionV2,
+    offset: usize,
+) -> Result<Vec<usize>, BytecodeError> {
+    let instruction = &function.instructions[offset];
+    let next = || {
+        offset
+            .checked_add(1)
+            .filter(|next| *next < function.instructions.len())
+            .ok_or_else(|| {
+                invalid(format!(
+                    "v2 instruction {offset} falls through past function end"
+                ))
+            })
+    };
+    match instruction.opcode {
+        WireOpcodeV2::Return => Ok(Vec::new()),
+        WireOpcodeV2::Jump => Ok(vec![instruction.operands[0] as usize]),
+        WireOpcodeV2::JumpIfTrue => Ok(vec![instruction.operands[1] as usize, next()?]),
+        _ => Ok(vec![next()?]),
+    }
+}
+
+fn register_definition(instruction: &WireInstructionV2) -> Option<u32> {
+    match instruction.opcode {
+        WireOpcodeV2::LoadConstant
+        | WireOpcodeV2::Move
+        | WireOpcodeV2::AddInt
+        | WireOpcodeV2::Call
+        | WireOpcodeV2::CallExternal
+        | WireOpcodeV2::Spawn
+        | WireOpcodeV2::Await => Some(instruction.operands[0]),
+        WireOpcodeV2::Jump
+        | WireOpcodeV2::JumpIfTrue
+        | WireOpcodeV2::Return
+        | WireOpcodeV2::ResourceDrop
+        | WireOpcodeV2::Cancel => None,
+    }
+}
+
+fn register_uses(instruction: &WireInstructionV2) -> Vec<u32> {
+    match instruction.opcode {
+        WireOpcodeV2::Move => vec![instruction.operands[1]],
+        WireOpcodeV2::AddInt => vec![instruction.operands[1], instruction.operands[2]],
+        WireOpcodeV2::JumpIfTrue
+        | WireOpcodeV2::Return
+        | WireOpcodeV2::ResourceDrop
+        | WireOpcodeV2::Cancel => vec![instruction.operands[0]],
+        WireOpcodeV2::Await => vec![instruction.operands[1]],
+        WireOpcodeV2::LoadConstant
+        | WireOpcodeV2::Call
+        | WireOpcodeV2::CallExternal
+        | WireOpcodeV2::Jump
+        | WireOpcodeV2::Spawn => Vec::new(),
     }
 }
 
@@ -790,11 +907,14 @@ mod tests {
             vec![WireFunctionV2::new(
                 0,
                 1,
-                vec![WireInstructionV2::new(WireOpcodeV2::Return, vec![0])],
+                vec![
+                    WireInstructionV2::new(WireOpcodeV2::LoadConstant, vec![0, 0]),
+                    WireInstructionV2::new(WireOpcodeV2::Return, vec![0]),
+                ],
             )],
             vec![WireDebugLocationV2::new(
                 WireFunctionId::new(0),
-                WireInstructionOffset::new(0),
+                WireInstructionOffset::new(1),
                 3,
                 7,
             )],
@@ -821,6 +941,20 @@ mod tests {
         assert!(matches!(
             invalid_debug.verify(BytecodeLimits::default()),
             Err(BytecodeError::InvalidPayload(_))
+        ));
+    }
+
+    #[test]
+    fn v2_rejects_register_reads_not_defined_on_every_cfg_path() {
+        let malformed = program(vec![
+            WireInstructionV2::new(WireOpcodeV2::LoadConstant, vec![0, 0]),
+            WireInstructionV2::new(WireOpcodeV2::JumpIfTrue, vec![0, 3]),
+            WireInstructionV2::new(WireOpcodeV2::LoadConstant, vec![1, 0]),
+            WireInstructionV2::new(WireOpcodeV2::Return, vec![1]),
+        ]);
+        assert!(matches!(
+            malformed.verify(BytecodeLimits::default()),
+            Err(BytecodeError::InvalidPayload(message)) if message.contains("undefined register 1")
         ));
     }
 
