@@ -278,7 +278,7 @@ mechanical acceptance condition holds.
       index only when checked projection facts identify its base as `List<…>`;
       it emits `ListGet` over resolved value IDs. Map/JSON/record indexing,
       field access, variants, and match dispatch remain fail-closed.
-  - [ ] **M02.4 — Add MIR structural validation.** Reject dangling blocks,
+- [x] **M02.4 — Add MIR structural validation.** Reject dangling blocks,
     invalid IDs, unterminated blocks, undefined values, and malformed CFG edges.
     - [x] **M02.4a — Verify the initial structural subset.** The verifier
     rejects empty functions, invalid block/place/value references, duplicate
