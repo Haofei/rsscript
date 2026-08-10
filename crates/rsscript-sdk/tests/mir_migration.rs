@@ -585,6 +585,34 @@ fn main() -> String {
 }
 
 #[test]
+fn direct_checked_hir_builtin_literals_reach_verified_bytecode() {
+    let source = r#"
+fn main() -> Int {
+    let mut value = 0
+    while true {
+        value = value + 1
+        break
+    }
+    return value
+}
+"#;
+    let compiled = compile_source_to_ir("direct-hir-builtin-literals.rss", source)
+        .expect("builtin literal source compiles");
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("builtin literals lower directly from checked HIR");
+    let output = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("builtin literals emit verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("builtin literal bytecode executes");
+    assert_eq!(output.value, "1");
+}
+
+#[test]
 fn direct_checked_hir_resource_scope_emits_cleanup_before_return() {
     let interface = r#"
 module Host

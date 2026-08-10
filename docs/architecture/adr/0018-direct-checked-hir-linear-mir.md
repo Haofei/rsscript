@@ -14,7 +14,8 @@ shapes instead of consuming checked semantic facts.
 ## Decision and non-goals
 
 `rsscript-lowering` now provides a projection-free direct lowerer for the
-checked-HIR subset: local bindings and assignment, literals, scalar binary
+checked-HIR subset: local bindings and assignment, literals (including semantic
+`Unit`/boolean identifiers), scalar binary
 expressions, lists, maps, JSON objects, resolved list indexing, structured
 `if`/`else` CFG branches, conditional loops with `break`/`continue`, lexical
 resource scopes, return, and resolved internal calls with ordinary/read, `mut`,

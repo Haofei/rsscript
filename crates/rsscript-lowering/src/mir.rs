@@ -528,6 +528,15 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         expression: &checked::HirExpr,
     ) -> Result<ValueId, MirLoweringError> {
         match expression {
+            checked::HirExpr::Ident { name, .. } if name == "Unit" => {
+                self.literal(MirLiteral::Unit)
+            }
+            checked::HirExpr::Ident { name, .. } if name == "true" => {
+                self.literal(MirLiteral::Bool(true))
+            }
+            checked::HirExpr::Ident { name, .. } if name == "false" => {
+                self.literal(MirLiteral::Bool(false))
+            }
             checked::HirExpr::Ident { name, .. } => {
                 let destination = self.value();
                 let place = self.lookup_place(name)?;
