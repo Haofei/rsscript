@@ -903,9 +903,6 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                 rsscript_syntax::ast::MatchPattern::Wildcard(_) => {
                     self.terminate(MirTerminator::Jump(arm_block));
                 }
-                rsscript_syntax::ast::MatchPattern::Binding { .. } => {
-                    self.terminate(MirTerminator::Jump(arm_block));
-                }
                 rsscript_syntax::ast::MatchPattern::Literal { value: literal, .. } => {
                     let literal = match_literal(literal, self.function_name)?;
                     let expected = self.literal(literal)?;
@@ -926,10 +923,6 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             }
 
             self.current = arm_block;
-            if let rsscript_syntax::ast::MatchPattern::Binding { name, .. } = &arm.pattern {
-                let place = self.place(name);
-                self.emit(MirInstruction::WritePlace { place, value });
-            }
             self.lower_checked_block(&arm.body)?;
             if self.current_block().terminator.is_none() {
                 self.terminate(MirTerminator::Jump(join));
@@ -956,8 +949,7 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             let arm_block = self.new_block();
             let next = self.new_block();
             match &arm.pattern {
-                rsscript_syntax::ast::MatchPattern::Wildcard(_)
-                | rsscript_syntax::ast::MatchPattern::Binding { .. } => {
+                rsscript_syntax::ast::MatchPattern::Wildcard(_) => {
                     self.terminate(MirTerminator::Jump(arm_block));
                 }
                 rsscript_syntax::ast::MatchPattern::Literal { value: literal, .. } => {
@@ -979,10 +971,6 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             }
 
             self.current = arm_block;
-            if let rsscript_syntax::ast::MatchPattern::Binding { name, .. } = &arm.pattern {
-                let place = self.place(name);
-                self.emit(MirInstruction::WritePlace { place, value });
-            }
             self.lower_match_expression_arm(&arm.body, result_place)?;
             if self.current_block().terminator.is_none() {
                 self.terminate(MirTerminator::Jump(join));

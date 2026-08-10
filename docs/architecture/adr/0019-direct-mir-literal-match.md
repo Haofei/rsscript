@@ -12,12 +12,11 @@ dispatch that MIR can represent with existing equality and CFG primitives.
 
 ## Decision and non-goals
 
-Direct lowering now accepts statement `match` arms using scalar literals,
-binding patterns, or `_`, provided no arm has a guard. Literal tests become a
-fresh `MirLiteral`, `Binary(Equal)`, and `Branch`; each arm has an explicit
-block and falls through to a join block only when it does not terminate.
-Binding patterns write the resolved scrutinee value to an owned MIR place.
-Failure to match every arm reaches an explicit `Unreachable` terminator.
+Direct lowering now accepts statement `match` arms using scalar literals or
+`_`, provided no arm has a guard. Literal tests become a fresh `MirLiteral`,
+`Binary(Equal)`, and `Branch`; each arm has an explicit block and falls through
+to a join block only when it does not terminate. Failure to match every arm
+reaches an explicit `Unreachable` terminator.
 
 Expression-form scalar matches use the same dispatch CFG. Each non-terminating
 arm writes its final expression to a synthetic MIR place, then the join reads
