@@ -1,3 +1,4 @@
+use std::fmt;
 use std::fs;
 use std::io::{self, Read};
 use std::path::Path;
@@ -200,13 +201,26 @@ fn invoke_runner(
         .map_err(|error| format!("runner wait failed: {error}"))?;
     let stdout = join_runner_output(stdout_reader, "stdout")?;
     let stderr = join_runner_output(stderr_reader, "stderr")?;
+    decode_runner_response(status, &stdout, &stderr)
+}
+
+/// Decode the child response only after the child and both pipe readers have
+/// been reaped. A successful process exit without a complete frame is not a
+/// script report: it is a runner/protocol failure (for example a child
+/// disconnect). Keeping that distinction prevents callers from treating an
+/// empty or truncated pipe as an `ExecutionReport`.
+fn decode_runner_response(
+    status: std::process::ExitStatus,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> Result<RunnerResponseV1, String> {
     if !status.success() {
         return Err(format!(
             "runner exited with {status}: {}",
-            String::from_utf8_lossy(&stderr).trim()
+            String::from_utf8_lossy(stderr).trim()
         ));
     }
-    read_response(stdout.as_slice()).map_err(|error| error.to_string())
+    read_response(stdout).map_err(|error| format_runner_disconnect_error(status, stderr, error))
 }
 
 fn join_runner_output(
@@ -239,6 +253,23 @@ fn format_runner_output_limit_error(status: std::process::ExitStatus) -> String 
     format!(
         "runner output exceeded its byte limit; terminated process tree and reaped root with {status}"
     )
+}
+
+fn format_runner_disconnect_error(
+    status: std::process::ExitStatus,
+    stderr: &[u8],
+    error: impl fmt::Display,
+) -> String {
+    let stderr = String::from_utf8_lossy(stderr).trim().to_string();
+    if stderr.is_empty() {
+        format!(
+            "runner protocol response was incomplete or malformed after the child was reaped with {status}: {error}"
+        )
+    } else {
+        format!(
+            "runner protocol response was incomplete or malformed after the child was reaped with {status}: {error}; child diagnostics: {stderr}"
+        )
+    }
 }
 
 fn spawn_runner(command: &mut Command, limits: ProcessLimits) -> io::Result<GuardedChild> {
@@ -447,6 +478,27 @@ mod tests {
         let error = format_runner_output_limit_error(status);
         assert!(error.contains("terminated process tree"));
         assert!(error.contains("reaped root"));
+        assert!(!error.contains("ExecutionReport"));
+    }
+
+    #[test]
+    fn incomplete_successful_child_response_is_a_reaped_runner_failure() {
+        let status = if cfg!(windows) {
+            Command::new("cmd")
+                .args(["/C", "exit", "0"])
+                .status()
+                .expect("status")
+        } else {
+            Command::new("sh")
+                .args(["-c", "exit 0"])
+                .status()
+                .expect("status")
+        };
+        let error = decode_runner_response(status, b"", b"child stopped\n")
+            .expect_err("an empty pipe must not become a script report");
+        assert!(error.contains("incomplete or malformed"));
+        assert!(error.contains("reaped"));
+        assert!(error.contains("child diagnostics"));
         assert!(!error.contains("ExecutionReport"));
     }
 

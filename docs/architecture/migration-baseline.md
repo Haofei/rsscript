@@ -642,7 +642,9 @@ mechanical acceptance condition holds.
     deadline, stdout/stderr/report limits, abnormal exits, and child disconnects.
     The parent now treats either bounded pipe overflow as an immediate reason to
     terminate the guarded process tree, reap the root, and join both readers;
-    disconnect-path coverage remains open.
+    a successful child exit with an incomplete response frame is now reported as
+    a reaped runner/protocol failure rather than a script report, with focused
+    disconnect-path coverage. Process-tree fault injection remains open.
   - [ ] **A09.4 — Fuzz protocol and runner failure paths.** Exercise framing,
     malformed messages, oversized inputs, incomplete I/O, and termination
     separation without calling it a universal sandbox. The bounded protocol now
