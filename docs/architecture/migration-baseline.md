@@ -196,9 +196,10 @@ mechanical acceptance condition holds.
     transition path. Cargo metadata
     tests must eventually reject a language-service edge to
     compiler, VM, SDK, package persistence, or concrete Providers.
-  - [ ] **S04.2 — Add document revision and invalidation tests.** Verify edits,
-    deletes, interface changes, cancellation, and deadlines through the LSP
-    adapter.
+  - [x] **S04.2 — Add document revision and invalidation tests.** The language
+    service suite verifies revision replacement and deletion, direct and
+    transitive interface invalidation, unrelated-interface cache retention,
+    cancellation, deadlines, and response-budget cache semantics.
 - [ ] **S05 — Finish compiler purity.** Compiler input is an explicit immutable
   `SourceSet`/`WorkspaceSnapshot`; package traversal, filesystem locking,
   temporary files, compression, Artifact persistence, review/risk, and Rust AOT
