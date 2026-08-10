@@ -2010,19 +2010,6 @@ fn constrained_field_patterns(pattern: &MatchPattern) -> Vec<(String, &MatchPatt
     }
 }
 
-fn type_ref_contains_name(ty: &TypeRef, name: &str) -> bool {
-    ty.name == name
-        || ty.args.iter().any(|arg| type_ref_contains_name(arg, name))
-        || ty
-            .fn_params
-            .iter()
-            .any(|param| type_ref_contains_name(param, name))
-        || ty
-            .fn_return
-            .as_deref()
-            .is_some_and(|return_ty| type_ref_contains_name(return_ty, name))
-}
-
 fn type_ref_name(ty: &TypeRef) -> String {
     let base = if ty.name == "Fn" {
         let params = ty

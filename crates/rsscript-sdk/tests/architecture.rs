@@ -1170,8 +1170,11 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "derive_syntax_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
+        "fd_surface_diagnostics",
         "unknown_binding_diagnostics",
         "unknown_field_diagnostics",
+        "resource_field_diagnostics",
+        "weak_field_diagnostics",
     ] {
         assert!(
             semantics.contains(exported),
@@ -1236,6 +1239,27 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     assert!(!compiler_derives.contains("fn supported_compiler_derive"));
     assert!(!compiler_derives.contains("fn check_supported_derives"));
     assert!(!compiler_derives.contains("fn check_resource_derives"));
+
+    let semantic_resources = read(&root.join("crates/rsscript-semantics/src/resource_types.rs"));
+    for query in [
+        "pub fn fd_surface_diagnostics",
+        "pub fn resource_field_diagnostics",
+        "pub fn weak_field_diagnostics",
+    ] {
+        assert!(semantic_resources.contains(query));
+    }
+    let compiler_resource_types =
+        read(&root.join("crates/rsscript-compiler/src/analyzer/resource_types.rs"));
+    for forbidden in [
+        "fn check_resource_fields",
+        "fn check_fd_surface",
+        "fn check_weak_fields",
+    ] {
+        assert!(
+            !compiler_resource_types.contains(forbidden),
+            "compiler must not re-own `{forbidden}`"
+        );
+    }
     assert!(!compiler_unknowns.contains("unknown_field_diagnostic(&access.name"));
 
     let semantic_aliases = read(&root.join("crates/rsscript-semantics/src/type_aliases.rs"));

@@ -15,11 +15,25 @@ pub(crate) fn check_names(analyzer: &mut Analyzer<'_>) {
     analyzer.check_unknown_types();
     analyzer.check_unknown_fields();
     analyzer.check_unknown_bindings();
-    analyzer.check_fd_surface();
+    analyzer
+        .diagnostics
+        .extend(rsscript_semantics::fd_surface_diagnostics(
+            &analyzer.syntax_program,
+        ));
 }
 
 pub(crate) fn check_resource_shapes(analyzer: &mut Analyzer<'_>) {
-    analyzer.check_resource_fields();
-    analyzer.check_weak_fields();
+    analyzer
+        .diagnostics
+        .extend(rsscript_semantics::resource_field_diagnostics(
+            &analyzer.hir,
+            &analyzer.syntax_program,
+        ));
+    analyzer
+        .diagnostics
+        .extend(rsscript_semantics::weak_field_diagnostics(
+            &analyzer.hir,
+            &analyzer.syntax_program,
+        ));
     analyzer.check_resource_generic_arguments();
 }

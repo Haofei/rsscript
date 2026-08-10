@@ -1,26 +1,6 @@
 use super::*;
 
 impl Analyzer<'_> {
-    pub(super) fn fd_surface_diagnostic(
-        &mut self,
-        span: crate::diagnostic::Span,
-        summary: impl Into<String>,
-        fix: impl Into<String>,
-    ) {
-        self.diagnostics.push(
-            Diagnostic::error(
-                code::FD_OUTSIDE_INTERNAL_BOUNDARY,
-                summary,
-                span,
-                "Fd outside native/resource internals",
-            )
-            .with_cause(
-                "`Fd` is a trusted native/resource-internal descriptor handle, not an ordinary RSScript value type.",
-            )
-            .with_fix("use_resource_wrapper", fix, "manual"),
-        );
-    }
-
     pub(crate) fn unknown_type_name_diagnostic(
         &mut self,
         name: &str,

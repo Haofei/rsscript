@@ -153,6 +153,10 @@ mechanical acceptance condition holds.
     - [x] **S02.1d — Move derive-surface diagnostics.** The language derive
       catalog and resource move-only derive restrictions are semantic queries;
       compiler source traversal only appends their diagnostics.
+    - [x] **S02.1e — Move resource declaration-boundary diagnostics.** Raw `Fd`
+      surface checks, non-resource resource fields, and weak-class field
+      restrictions are semantic queries over source and HIR facts; compiler
+      retains only generic-resource call traversal pending the larger migration.
   - [ ] **S02.2 — Move type and generic-constraint checks.** Relocate type
     inference, substitutions, generic constraints, and call result facts behind
     the semantic crate API.

@@ -18,6 +18,7 @@ mod external_types;
 pub mod hir;
 mod identities;
 mod interface_descriptor;
+mod resource_types;
 mod source_rules;
 mod symbols;
 mod type_aliases;
@@ -92,6 +93,9 @@ pub use identities::DefinitionId;
 pub use interface_descriptor::{
     INTERFACE_DESCRIPTOR_SCHEMA, InterfaceDescriptorError, InterfaceDescriptorFunctionV1,
     InterfaceDescriptorResourceV1, InterfaceDescriptorV1,
+};
+pub use resource_types::{
+    fd_surface_diagnostics, resource_field_diagnostics, weak_field_diagnostics,
 };
 pub use rsscript_source_model::{FileId, InterfaceId, ModuleId, SourceRevision};
 pub use source_rules::forbidden_surface_syntax_diagnostics;
