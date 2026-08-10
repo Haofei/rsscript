@@ -16,8 +16,8 @@ use rsscript_exec_ir::{
 use rsscript_mir::{
     BasicBlock, BlockId, FunctionId, MirBinaryOp, MirCallArgument, MirCallTarget,
     MirExternalImport, MirFunction, MirFunctionDebug, MirFunctionSignature, MirInstruction,
-    MirLiteral, MirModule, MirParameterMode, MirTerminator, PlaceId, ResourceTypeId, TypeId,
-    ValueId,
+    MirLiteral, MirModule, MirParameterMode, MirTerminator, PlaceId, ResourceTypeId, TaskGroupId,
+    TaskId, TypeId, ValueId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,6 +207,8 @@ struct FunctionLowerer<'source, 'types> {
     places: HashMap<String, PlaceId>,
     place_names: Vec<String>,
     next_value: u32,
+    tasks: HashMap<String, TaskId>,
+    next_task: u32,
     loops: Vec<LoopTargets>,
 }
 
@@ -229,6 +231,8 @@ impl<'source, 'types> FunctionLowerer<'source, 'types> {
             places: HashMap::new(),
             place_names: Vec::new(),
             next_value: 0,
+            tasks: HashMap::new(),
+            next_task: 0,
             loops: Vec::new(),
         };
         for parameter in &source.signature.params {
@@ -281,7 +285,7 @@ impl<'source, 'types> FunctionLowerer<'source, 'types> {
                 is_async,
             } => {
                 if *is_async {
-                    return self.unsupported("async binding");
+                    return self.lower_async_binding(name, value.as_ref());
                 }
                 let place = self.place(name);
                 if let Some(value) = value {
@@ -528,8 +532,8 @@ impl<'source, 'types> FunctionLowerer<'source, 'types> {
                 ParamEffect::Take => self.lower_take(value),
             },
             ExecutableExpr::Manage { .. } => self.unsupported("managed resource"),
-            ExecutableExpr::Spawn { .. } => self.unsupported("spawn"),
-            ExecutableExpr::Await { .. } => self.unsupported("await"),
+            ExecutableExpr::Spawn { .. } => self.unsupported("standalone spawn"),
+            ExecutableExpr::Await { value, .. } => self.lower_await(value),
             ExecutableExpr::Try { .. } => self.unsupported("try"),
             ExecutableExpr::Closure { .. } => self.unsupported("closure"),
             ExecutableExpr::Match { .. } => self.unsupported("match expression"),
@@ -586,6 +590,62 @@ impl<'source, 'types> FunctionLowerer<'source, 'types> {
             target,
             arguments,
         });
+        Ok(destination)
+    }
+
+    fn lower_async_binding(
+        &mut self,
+        name: &str,
+        value: Option<&ExecutableExpr>,
+    ) -> Result<(), MirLoweringError> {
+        let Some(ExecutableExpr::Call {
+            callee,
+            receiver,
+            args,
+            ..
+        }) = value
+        else {
+            return self.unsupported("async binding without direct call");
+        };
+        if receiver.is_some() {
+            return self.unsupported("async receiver call");
+        }
+        let name_key = match callee {
+            Callee::Name(name) => name.clone(),
+            Callee::Qualified { namespace, name } => format!("{namespace}.{name}"),
+            Callee::ReceiverCall { .. } => return self.unsupported("async receiver call"),
+        };
+        let Some(target) = self.targets.functions.get(&name_key).copied() else {
+            return self.unsupported("async external or unresolved call");
+        };
+        let mut ordered = args.iter().collect::<Vec<_>>();
+        ordered.sort_by_key(|argument| argument.evaluation_index);
+        let arguments = ordered
+            .into_iter()
+            .map(|argument| self.lower_call_argument(&argument.value))
+            .collect::<Result<Vec<_>, _>>()?;
+        let task = self.task();
+        if self.tasks.insert(name.to_owned(), task).is_some() {
+            return self.unsupported("duplicate async binding");
+        }
+        self.emit(MirInstruction::Spawn {
+            task,
+            group: TaskGroupId::new(0),
+            target,
+            arguments,
+        });
+        Ok(())
+    }
+
+    fn lower_await(&mut self, value: &ExecutableExpr) -> Result<ValueId, MirLoweringError> {
+        let ExecutableExpr::Ident { name, .. } = value else {
+            return self.unsupported("await of non-task local");
+        };
+        let Some(task) = self.tasks.get(name).copied() else {
+            return self.unsupported("await of unknown task");
+        };
+        let destination = self.value();
+        self.emit(MirInstruction::Await { destination, task });
         Ok(destination)
     }
 
@@ -651,6 +711,12 @@ impl<'source, 'types> FunctionLowerer<'source, 'types> {
         let value = ValueId::new(self.next_value);
         self.next_value += 1;
         value
+    }
+
+    fn task(&mut self) -> TaskId {
+        let task = TaskId::new(self.next_task);
+        self.next_task += 1;
+        task
     }
 
     fn emit(&mut self, instruction: MirInstruction) {
@@ -921,6 +987,70 @@ mod tests {
             ]
         ));
         mir.verify().expect("verify resource lifetime");
+    }
+
+    #[test]
+    fn lowers_async_binding_and_await_to_structured_task_ops() {
+        let worker = ExecutableFunction {
+            name: "worker".into(),
+            is_async: true,
+            signature: ExecutableSignature {
+                namespace: None,
+                name: "worker".into(),
+                is_async: true,
+                params: Vec::new(),
+                return_type: Some("Int".into()),
+                is_external: false,
+            },
+            body: ExecutableBlock {
+                statements: vec![ExecutableStmt::Return {
+                    value: Some(ExecutableExpr::Number { value: "7".into() }),
+                }],
+            },
+        };
+        let main = ExecutableFunction {
+            name: "main".into(),
+            is_async: false,
+            signature: signature(),
+            body: ExecutableBlock {
+                statements: vec![
+                    ExecutableStmt::Let {
+                        name: "job".into(),
+                        value: Some(ExecutableExpr::Call {
+                            callee: Callee::Name("worker".into()),
+                            receiver: None,
+                            args: Vec::new(),
+                            type_name: Some("Int".into()),
+                        }),
+                        is_async: true,
+                    },
+                    ExecutableStmt::Return {
+                        value: Some(ExecutableExpr::Await {
+                            value: Box::new(ExecutableExpr::Ident {
+                                name: "job".into(),
+                                type_name: Some("Task<Int>".into()),
+                            }),
+                            type_name: Some("Int".into()),
+                        }),
+                    },
+                ],
+            },
+        };
+        let mir = lower_executable_ir_to_mir(&module_with_functions(vec![main, worker]))
+            .expect("lower async binding");
+        let main = mir
+            .functions()
+            .iter()
+            .find(|function| {
+                mir.function_debug(function.id())
+                    .is_some_and(|debug| debug.name() == "main")
+            })
+            .expect("main function");
+        assert!(matches!(
+            main.blocks()[0].instructions(),
+            [MirInstruction::Spawn { .. }, MirInstruction::Await { .. }]
+        ));
+        mir.verify().expect("verify structured task lifetime");
     }
 
     #[test]

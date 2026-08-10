@@ -308,6 +308,11 @@ mechanical acceptance condition holds.
       lexical close on normal returns, and rejects unsupported backend execution
       until scheduling and source lowering are ready. Select and non-normal
       cleanup remain follow-up work.
+    - [x] **M03.3b — Lower direct async bindings and awaits.** A checked direct
+      internal async binding lowers to `Spawn`, and awaiting its local task
+      lowers to `Await`; the lifecycle verifier rejects any unclosed child.
+      External async calls, join/cancel syntax, select, and scheduler bytecode
+      remain fail-closed follow-up work.
   - [ ] **M03.4 — Add resolved builtin and external-call instructions.** Include
     signature/effect/retention identity and no unresolved callee text.
     - [x] **M03.4a — Execute resolved external calls through MIR bytecode.** A
