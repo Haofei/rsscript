@@ -66,7 +66,7 @@ pub(crate) fn format_selfhost_interface_metadata_rss(metadata: &InterfaceMetadat
         "module selfhost.interfaces\n\n\
          fn is_builtin_type(name: read String) -> Bool {\n",
     );
-    for name in crate::analyzer::BUILTIN_TYPE_NAMES {
+    for name in rsscript_semantics::BUILTIN_TYPE_NAMES {
         out.push_str(&format!(
             "    if name == {} {{ return true }}\n",
             rss_string(name)
@@ -302,8 +302,8 @@ mod tests {
         let metadata = metadata();
         assert!(!metadata.types.iter().any(|name| name == "ProcessRequest"));
         assert!(metadata.types.iter().any(|name| name == "JsonValue"));
-        assert!(crate::analyzer::BUILTIN_TYPE_NAMES.contains(&"Int"));
-        assert!(crate::analyzer::BUILTIN_TYPE_NAMES.contains(&"Result"));
+        assert!(rsscript_semantics::BUILTIN_TYPE_NAMES.contains(&"Int"));
+        assert!(rsscript_semantics::BUILTIN_TYPE_NAMES.contains(&"Result"));
     }
 
     #[test]

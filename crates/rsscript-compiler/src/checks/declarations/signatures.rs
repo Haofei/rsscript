@@ -2,11 +2,12 @@ use std::collections::HashSet;
 
 use crate::analyzer::{
     Analyzer, function_belongs_to_protocol, function_body_belongs_to_protocol, generic_bounds,
-    is_builtin_type_name, protocol_method_names, protocol_signature_mismatch, split_qualified_name,
-    type_ref_is_copy, type_ref_is_noescape,
+    protocol_method_names, protocol_signature_mismatch, split_qualified_name, type_ref_is_copy,
+    type_ref_is_noescape,
 };
 use crate::diagnostic::{Diagnostic, code};
 use crate::syntax::ast::{FunctionDecl, GenericBound, GenericParam, Item, Param, TypeKind};
+use rsscript_semantics::is_builtin_type_name;
 
 impl Analyzer<'_> {
     pub(crate) fn check_signature_explicitness(&mut self) {

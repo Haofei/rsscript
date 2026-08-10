@@ -3,7 +3,6 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 
 use rsscript_operation::OperationContext;
-pub(crate) use rsscript_semantics::{BUILTIN_TYPE_NAMES, is_builtin_type_name};
 
 use crate::checks;
 use crate::checks::budget::{
