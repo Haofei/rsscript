@@ -145,6 +145,11 @@ mechanical acceptance condition holds.
   - [ ] **S02.2 — Move type and generic-constraint checks.** Relocate type
     inference, substitutions, generic constraints, and call result facts behind
     the semantic crate API.
+    - [x] **S02.2a — Move cyclic type-alias diagnostics.** Alias dependency
+      graphs and their diagnostic construction are now derived by
+      `rsscript-semantics` from immutable interface/source programs. Compiler
+      type checks only append the canonical result; unknown-type, field, and
+      generic-constraint checks remain follow-up work.
   - [ ] **S02.3 — Move call binding and effect checks.** Relocate positional and
     named argument binding, `read`/`mut`/`take`, external signature matching,
     and retention facts.

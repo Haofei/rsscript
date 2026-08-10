@@ -17,6 +17,7 @@ pub mod hir;
 mod identities;
 mod interface_descriptor;
 mod symbols;
+mod type_aliases;
 mod types;
 pub use call_binding::{BoundArgument, BoundArgumentSource, CallBinding, CallBindingIssue};
 pub use database::{
@@ -35,6 +36,7 @@ pub use symbols::{
     Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
     document_symbols, symbol_index,
 };
+pub use type_aliases::cyclic_type_alias_diagnostics;
 pub use types::{
     ResolvedParamEffect, ResolvedType, ResolvedTypeKind, SemanticTypeFacts, TypeArena, TypeId,
     TypeQualifiers,

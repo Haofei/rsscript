@@ -1165,6 +1165,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "TypeId",
         "TypeQualifiers",
         "ValidatedProgram",
+        "cyclic_type_alias_diagnostics",
         "duplicate_declaration_diagnostics",
     ] {
         assert!(
@@ -1213,6 +1214,22 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         !compiler_declarations.contains("duplicate_symbols()"),
         "compiler declaration checks must consume semantic duplicate diagnostics instead of reinterpreting HIR identity facts"
     );
+
+    let semantic_aliases = read(&root.join("crates/rsscript-semantics/src/type_aliases.rs"));
+    assert!(semantic_aliases.contains("pub fn cyclic_type_alias_diagnostics"));
+    assert!(semantic_aliases.contains("AliasCycleDefinition"));
+    let compiler_types = read(&root.join("crates/rsscript-compiler/src/checks/types.rs"));
+    assert!(compiler_types.contains("rsscript_semantics::cyclic_type_alias_diagnostics"));
+    for forbidden in [
+        "fn check_alias_cycles",
+        "fn alias_cycle(",
+        "AliasCycleDefinition",
+    ] {
+        assert!(
+            !compiler_types.contains(forbidden),
+            "compiler type checks must not re-own semantic alias-cycle rule `{forbidden}`"
+        );
+    }
 
     assert!(
         !root
