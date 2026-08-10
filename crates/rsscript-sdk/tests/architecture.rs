@@ -1174,6 +1174,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "unknown_binding_diagnostics",
         "unknown_field_diagnostics",
         "resource_field_diagnostics",
+        "resource_generic_diagnostics",
         "weak_field_diagnostics",
     ] {
         assert!(
@@ -1244,6 +1245,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     for query in [
         "pub fn fd_surface_diagnostics",
         "pub fn resource_field_diagnostics",
+        "pub fn resource_generic_diagnostics",
         "pub fn weak_field_diagnostics",
     ] {
         assert!(semantic_resources.contains(query));
@@ -1254,6 +1256,9 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "fn check_resource_fields",
         "fn check_fd_surface",
         "fn check_weak_fields",
+        "fn check_resource_generic_type_ref",
+        "fn check_resource_generic_calls_in_block",
+        "fn check_resource_generic_calls_in_expr",
     ] {
         assert!(
             !compiler_resource_types.contains(forbidden),

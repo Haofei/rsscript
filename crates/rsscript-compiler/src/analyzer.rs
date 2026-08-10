@@ -39,12 +39,6 @@ use task_group::{
     direct_task_group_awaited_handles_in_stmt, find_nested_task_group_await_span,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ResourceGenericContext {
-    Ordinary,
-    Return,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PatternWitness {
     Any,
@@ -53,14 +47,6 @@ enum PatternWitness {
         name: String,
         fields: Vec<(String, PatternWitness)>,
     },
-}
-
-fn resource_result_return_arg_allowed(
-    ty: &TypeRef,
-    index: usize,
-    context: ResourceGenericContext,
-) -> bool {
-    context == ResourceGenericContext::Return && ty.name == "Result" && index == 0
 }
 
 /// The source shape is explicit because a single source preserves its historic
@@ -1416,12 +1402,6 @@ impl Analyzer<'_> {
         };
         self.diagnostics.extend(diagnostics);
     }
-}
-
-fn generic_namespace_args(namespace: &str) -> Option<(&str, Vec<&str>)> {
-    let (root, rest) = namespace.split_once('<')?;
-    let args = rest.strip_suffix('>')?;
-    Some((root, split_top_level_type_args(args)))
 }
 
 /// The top-level parameter slices of a `Fn(...)` type string, e.g.

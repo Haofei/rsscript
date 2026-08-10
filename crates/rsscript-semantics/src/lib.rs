@@ -95,7 +95,8 @@ pub use interface_descriptor::{
     InterfaceDescriptorResourceV1, InterfaceDescriptorV1,
 };
 pub use resource_types::{
-    fd_surface_diagnostics, resource_field_diagnostics, weak_field_diagnostics,
+    fd_surface_diagnostics, resource_field_diagnostics, resource_generic_diagnostics,
+    weak_field_diagnostics,
 };
 pub use rsscript_source_model::{FileId, InterfaceId, ModuleId, SourceRevision};
 pub use source_rules::forbidden_surface_syntax_diagnostics;

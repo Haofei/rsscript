@@ -73,30 +73,6 @@ impl Analyzer<'_> {
         );
     }
 
-    pub(super) fn resource_generic_argument_diagnostic(
-        &mut self,
-        generic_name: &str,
-        resource_name: &str,
-        span: &crate::diagnostic::Span,
-    ) {
-        self.diagnostics.push(
-            Diagnostic::error(
-                code::RESOURCE_GENERIC_ARGUMENT,
-                format!(
-                    "generic type `{generic_name}` cannot be instantiated with resource `{resource_name}`."
-                ),
-                span.clone(),
-                "resource generic argument",
-            )
-            .with_cause("Generic containers cannot hold resource values.")
-            .with_fix(
-                "use_resource_api",
-                "Use the resource through `with`, or use a non-resource value type.",
-                "manual",
-            ),
-        );
-    }
-
     pub(crate) fn generic_resource_argument_diagnostic(
         &mut self,
         generic_name: &str,

@@ -157,6 +157,10 @@ mechanical acceptance condition holds.
       surface checks, non-resource resource fields, and weak-class field
       restrictions are semantic queries over source and HIR facts; compiler
       retains only generic-resource call traversal pending the larger migration.
+    - [x] **S02.1f — Move resource generic-containment diagnostics.** Resource
+      generic type positions and explicit generic call namespaces, including the
+      direct `Result<Resource, E>` return exception, are now traversed by
+      `rsscript-semantics`; compiler only appends the canonical result.
   - [ ] **S02.2 — Move type and generic-constraint checks.** Relocate type
     inference, substitutions, generic constraints, and call result facts behind
     the semantic crate API.
