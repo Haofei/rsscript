@@ -624,6 +624,10 @@ mechanical acceptance condition holds.
       expected report. Additional v1 package and failure fixtures remain open.
   - [ ] **B05.2 — Add malformed and compatibility fixture suites.** Cover every
     section, table, opcode, version, and size boundary.
+    - [x] **B05.2a — Preserve a static malformed v1 boundary case.** A
+      checked-in trailing-byte mutation is applied to the read-only reference
+      bundle and must be rejected at the bundle boundary before verification or
+      execution. Per-section/table/opcode/version/size fixtures remain open.
   - [ ] **B05.3 — Test deterministic bytes across supported platforms.** Compare
     bundle and analysis bytes from identical snapshots.
 

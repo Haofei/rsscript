@@ -145,3 +145,25 @@ fn checked_in_v1_bundle_remains_read_only_verifiable_and_executable() {
         expected["termination_reason"].as_str().unwrap()
     );
 }
+
+#[test]
+fn checked_in_v1_trailing_byte_fixture_remains_fail_closed() {
+    let mut bundle = STANDARD
+        .decode(
+            include_str!("../../rsscript-bytecode/fixtures/v1/reference.rssbundle.base64").trim(),
+        )
+        .expect("checked-in v1 compatibility bundle uses valid base64");
+    let trailing = u8::from_str_radix(
+        include_str!("../../rsscript-bytecode/fixtures/v1/reference.trailing-byte.hex").trim(),
+        16,
+    )
+    .expect("checked-in malformed fixture byte is hexadecimal");
+    bundle.push(trailing);
+    let error = ArtifactVerifier
+        .verify_bytes(&bundle)
+        .expect_err("a v1 bundle with a checked-in trailing byte must fail closed");
+    assert!(
+        error.to_string().contains("trailing"),
+        "malformed fixture must fail at the bundle boundary: {error}"
+    );
+}
