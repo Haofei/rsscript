@@ -181,6 +181,14 @@ impl<'a> Interpreter<'a> {
                                 .ok_or(MirExecutionError::UninitializedPlace(place.index()))?,
                         );
                     }
+                    MirInstruction::Retain { place } => {
+                        let _ = place_value(&places, place.index())?;
+                    }
+                    MirInstruction::Drop { place } => {
+                        let _ = places[place.index()]
+                            .take()
+                            .ok_or(MirExecutionError::UninitializedPlace(place.index()))?;
+                    }
                     MirInstruction::WritePlace { place, value } => {
                         places[place.index()] = Some(value_at(&values, *value)?);
                     }

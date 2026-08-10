@@ -92,6 +92,16 @@ pub enum MirInstruction {
         destination: ValueId,
         place: PlaceId,
     },
+    /// A checked escape/retention boundary. The place stays live, but a
+    /// backend can no longer erase the fact that its value may outlive a call.
+    Retain {
+        place: PlaceId,
+    },
+    /// Explicitly end a local value's ownership. Later reads must fail until a
+    /// write reinitializes the place, including across CFG joins.
+    Drop {
+        place: PlaceId,
+    },
     WritePlace {
         place: PlaceId,
         value: ValueId,
@@ -570,7 +580,10 @@ fn instruction_definition(instruction: &MirInstruction) -> Option<ValueId> {
         | MirInstruction::BorrowRead { destination, .. }
         | MirInstruction::Binary { destination, .. }
         | MirInstruction::Call { destination, .. } => Some(*destination),
-        MirInstruction::WritePlace { .. } | MirInstruction::Discard { .. } => None,
+        MirInstruction::WritePlace { .. }
+        | MirInstruction::Retain { .. }
+        | MirInstruction::Drop { .. }
+        | MirInstruction::Discard { .. } => None,
     }
 }
 
@@ -591,7 +604,9 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
             .collect(),
         MirInstruction::LoadLiteral { .. }
         | MirInstruction::ReadPlace { .. }
-        | MirInstruction::BorrowRead { .. } => Vec::new(),
+        | MirInstruction::BorrowRead { .. }
+        | MirInstruction::Retain { .. }
+        | MirInstruction::Drop { .. } => Vec::new(),
     }
 }
 
@@ -673,6 +688,12 @@ fn transfer_move_state(
         MirInstruction::ReadPlace { place, .. } | MirInstruction::BorrowRead { place, .. } => {
             check_live(*place, moved_places)
         }
+        MirInstruction::Retain { place } => check_live(*place, moved_places),
+        MirInstruction::Drop { place } => {
+            check_live(*place, moved_places)?;
+            moved_places.insert(*place);
+            Ok(())
+        }
         MirInstruction::WritePlace { place, .. } => {
             moved_places.remove(place);
             Ok(())
@@ -747,6 +768,12 @@ fn verify_instruction(
         MirInstruction::BorrowRead { destination, place } => {
             check_live_place(*place, moved_places)?;
             define(*destination, defined)
+        }
+        MirInstruction::Retain { place } => check_live_place(*place, moved_places),
+        MirInstruction::Drop { place } => {
+            check_live_place(*place, moved_places)?;
+            moved_places.insert(*place);
+            Ok(())
         }
         MirInstruction::WritePlace { place, value } => {
             check_place(*place)?;
@@ -1310,6 +1337,54 @@ mod tests {
                 debug,
                 Vec::new()
             ),
+            Err(MirValidationError::UseAfterMove { .. })
+        ));
+    }
+
+    #[test]
+    fn explicit_retain_keeps_a_place_live_but_drop_invalidates_it() {
+        let retained = MirFunction::new(
+            FunctionId::new(0),
+            signature(),
+            1,
+            1,
+            vec![BasicBlock::new(
+                BlockId::new(0),
+                vec![
+                    MirInstruction::Retain {
+                        place: PlaceId::new(0),
+                    },
+                    MirInstruction::ReadPlace {
+                        destination: ValueId::new(0),
+                        place: PlaceId::new(0),
+                    },
+                ],
+                MirTerminator::Return(Some(ValueId::new(0))),
+            )],
+        );
+        assert!(MirModule::new(vec![WireType::Unit], vec![retained], debug(), Vec::new()).is_ok());
+
+        let dropped = MirFunction::new(
+            FunctionId::new(0),
+            signature(),
+            1,
+            1,
+            vec![BasicBlock::new(
+                BlockId::new(0),
+                vec![
+                    MirInstruction::Drop {
+                        place: PlaceId::new(0),
+                    },
+                    MirInstruction::ReadPlace {
+                        destination: ValueId::new(0),
+                        place: PlaceId::new(0),
+                    },
+                ],
+                MirTerminator::Return(Some(ValueId::new(0))),
+            )],
+        );
+        assert!(matches!(
+            MirModule::new(vec![WireType::Unit], vec![dropped], debug(), Vec::new()),
             Err(MirValidationError::UseAfterMove { .. })
         ));
     }

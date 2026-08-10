@@ -273,6 +273,11 @@ mechanical acceptance condition holds.
     - [x] **M03.1c — Verify call ownership contracts.** Function signatures own
       `read`/`mut`/`take` parameter modes and verifier checks each direct or
       external call argument against that contract before execution.
+    - [x] **M03.1d — Add explicit retain/drop ownership instructions.** MIR now
+      preserves retention as a verifier-visible operation and models `drop` as a
+      place-state transition; linear/CFG validation rejects reads after an
+      explicit drop until a write reinitializes the place. Source lowering and
+      bytecode support remain follow-up work.
   - [ ] **M03.2 — Add resource lifetime instructions and cleanup edges.** Model
     acquire/manage/release and verify cleanup for normal return, branch exit,
     error, and cancellation.

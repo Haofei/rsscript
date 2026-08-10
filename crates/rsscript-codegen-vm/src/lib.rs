@@ -175,6 +175,8 @@ fn lower_instruction(
                 ("src", json!(place_reg(*place))),
             ],
         )),
+        MirInstruction::Retain { .. } => return Err(CodegenError::Unsupported("retain")),
+        MirInstruction::Drop { .. } => return Err(CodegenError::Unsupported("drop")),
         MirInstruction::WritePlace { place, value } => code.push(instr(
             "Move",
             [
