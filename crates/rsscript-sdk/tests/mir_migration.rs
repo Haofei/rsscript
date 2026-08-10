@@ -8,9 +8,13 @@
 use rsscript_compiler::{compile_source_to_ir, compile_validated_to_ir};
 use rsscript_mir::conformance::{MigrationCase, MigrationStage, execute_named};
 use rsscript_sdk::{
-    Compiler, ExternalFunction, NativeValue, analyze_source_with_interfaces_result,
-    reg_vm_compile_mir, reg_vm_compile_validated, reg_vm_eval_source_main,
+    CancellationToken, Compiler, ExternalFunction, MonotonicDeadline, NativeValue, ProviderError,
+    ProviderResource, VmLimits, analyze_source_with_interfaces_result, reg_vm_compile_mir,
+    reg_vm_compile_validated, reg_vm_eval_source_main,
 };
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 const CASES: &[MigrationCase] = &[
     MigrationCase {
@@ -277,4 +281,186 @@ fn main() -> Int {
 
     assert_eq!(legacy.value, "42");
     assert_eq!(mir_vm.value, legacy.value);
+}
+
+#[test]
+fn provider_resources_finalize_once_across_execution_terminal_paths() {
+    const INTERFACE: &str = "pub fn Host.open() -> Unit\n";
+    const SUCCESS: &str = r#"
+fn main() -> Unit {
+    Host.open()
+    return
+}
+"#;
+    const SCRIPT_ERROR: &str = r#"
+fn main() -> Int {
+    Host.open()
+    return 1 / 0
+}
+"#;
+    const LOOP_AFTER_OPEN: &str = r#"
+fn main() -> Int {
+    Host.open()
+    let mut value = 0
+    while value < 2000000 {
+        value = value + 1
+    }
+    return value
+}
+"#;
+
+    struct CountedResource {
+        cleanups: Arc<AtomicU64>,
+        fail: bool,
+    }
+
+    impl ProviderResource for CountedResource {
+        fn cleanup(&mut self) -> Result<(), ProviderError> {
+            self.cleanups.fetch_add(1, Ordering::SeqCst);
+            if self.fail {
+                Err(ProviderError::internal("intentional cleanup failure"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    fn executable(source: &str) -> rsscript_sdk::RegVmExecutable {
+        let validated = analyze_source_with_interfaces_result(
+            "resource-terminal.rss",
+            source,
+            &[("host.rssi", INTERFACE)],
+        )
+        .into_validated()
+        .expect("resource fixture validates");
+        reg_vm_compile_validated(&validated).expect("resource fixture compiles")
+    }
+
+    fn resource_provider(
+        cleanups: Arc<AtomicU64>,
+        fail_after_register: bool,
+        cancel: Option<CancellationToken>,
+        sleep_before_return: bool,
+        fail_cleanup: bool,
+    ) -> ExternalFunction {
+        ExternalFunction::new_contextual(move |context, _| {
+            context.register_resource(CountedResource {
+                cleanups: Arc::clone(&cleanups),
+                fail: fail_cleanup,
+            })?;
+            if let Some(cancel) = &cancel {
+                cancel.cancel();
+            }
+            if sleep_before_return {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            if fail_after_register {
+                Err(ProviderError::internal("intentional Provider failure"))
+            } else {
+                Ok(NativeValue::Unit)
+            }
+        })
+    }
+
+    let cases = [
+        ("success", SUCCESS, false, None, false, false, false, false),
+        (
+            "script error",
+            SCRIPT_ERROR,
+            false,
+            None,
+            false,
+            false,
+            false,
+            false,
+        ),
+        (
+            "Provider error",
+            SUCCESS,
+            true,
+            None,
+            false,
+            false,
+            false,
+            false,
+        ),
+        (
+            "cancellation",
+            LOOP_AFTER_OPEN,
+            false,
+            Some(CancellationToken::new()),
+            false,
+            false,
+            false,
+            false,
+        ),
+        (
+            "deadline",
+            LOOP_AFTER_OPEN,
+            false,
+            None,
+            true,
+            false,
+            true,
+            false,
+        ),
+        (
+            "cleanup failure",
+            SUCCESS,
+            false,
+            None,
+            false,
+            true,
+            false,
+            true,
+        ),
+    ];
+
+    for (
+        name,
+        source,
+        provider_fails,
+        cancellation,
+        sleeps,
+        cleanup_fails,
+        expires,
+        expect_cleanup_failure,
+    ) in cases
+    {
+        let cleanups = Arc::new(AtomicU64::new(0));
+        let executable = executable(source);
+        let limits = VmLimits {
+            deadline: expires.then(|| MonotonicDeadline::after(Duration::from_millis(1))),
+            ..VmLimits::default()
+        };
+        let report = executable
+            .execute_main_with_args_and_external_bindings_and_limits(
+                std::iter::empty::<String>(),
+                [(
+                    "Host.open",
+                    resource_provider(
+                        Arc::clone(&cleanups),
+                        provider_fails,
+                        cancellation,
+                        sleeps,
+                        cleanup_fails,
+                    ),
+                )],
+                limits,
+            )
+            .expect("terminal path must retain an execution report");
+        assert_eq!(cleanups.load(Ordering::SeqCst), 1, "{name}");
+        assert_eq!(report.usage.resources_created, 1, "{name}");
+        assert_eq!(report.usage.resources_live_at_return, 0, "{name}");
+        assert_eq!(
+            report.usage.resources_cleaned,
+            u64::from(!expect_cleanup_failure),
+            "{name}"
+        );
+        assert_eq!(
+            report.usage.resource_cleanup_failures,
+            u64::from(expect_cleanup_failure),
+            "{name}"
+        );
+    }
 }

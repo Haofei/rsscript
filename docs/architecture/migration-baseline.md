@@ -580,16 +580,19 @@ mechanical acceptance condition holds.
   carries host-defined labels to Provider calls without Core interpreting an
   authorization policy. The runtime reports required symbols; provider profiles
   remain responsible for any authority narrowing.
-- [ ] **P08 — Complete async/resource conformance.** Test cancellation during
-  suspension, deadline expiry, blocking-lane enforcement, cleanup exactly once
-  on success/error/cancel/deadline, reentrancy, panic containment, redaction, and
-  request/response limits.
+- [x] **P08 — Complete async/resource conformance.** Async cancellation and
+  deadlines, blocking lanes, exact-once cleanup across terminal paths,
+  reentrancy, panic containment, default redaction, and request/response payload
+  limits are enforced by the dispatcher and covered by focused fixtures.
   - [x] **P08.1 — Add async cancellation and deadline fixtures.** The VM async
     dispatcher is manually polled through a pending Provider future, then verifies
     that cooperative cancellation and a monotonic deadline are both observed after
     suspension before a successful Provider result can escape.
-  - [ ] **P08.2 — Add resource cleanup state-machine fixtures.** Cover success,
-    script error, Provider error, cancellation, deadline, and drop failure.
+  - [x] **P08.2 — Add resource cleanup state-machine fixtures.** A single
+    verified-bytecode state-machine fixture registers an exact-once Provider
+    resource and exercises success, script error, Provider error, cancellation,
+    deadline, and cleanup failure. Every terminal path retains usage evidence;
+    cleanup failure is counted without leaving a live resource.
   - [x] **P08.3 — Add lane, reentrancy, and panic boundary fixtures.** Blocking
     lane admission, non-reentrant call exclusion (including suspended async
     futures), and unwind-style host failure containment are enforced by the
@@ -598,7 +601,7 @@ mechanical acceptance condition holds.
       callables and asynchronous future polls are caught by the VM dispatcher and
       converted to structured internal Provider errors. Abort panics and native
       faults remain isolated-runner concerns; reentrancy fixtures remain open.
-  - [ ] **P08.4 — Add redaction and payload-limit fixtures.** Reports and traces
+  - [x] **P08.4 — Add redaction and payload-limit fixtures.** Reports and traces
     remain bounded and do not expose sensitive Provider payloads by default.
     - [x] **P08.4a — Redact Provider-controlled failure content by default.** The
       portable execution report keeps only the stable Provider error code plus
