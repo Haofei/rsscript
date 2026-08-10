@@ -111,6 +111,12 @@ pub enum MirInstruction {
         list: ValueId,
         index: ValueId,
     },
+    /// Read the length of a resolved list value. This keeps lowered list
+    /// iteration free of source-level iterator identity.
+    ListLen {
+        destination: ValueId,
+        list: ValueId,
+    },
     ReadPlace {
         destination: ValueId,
         place: PlaceId,
@@ -810,6 +816,7 @@ fn instruction_definition(instruction: &MirInstruction) -> Option<ValueId> {
         | MirInstruction::MakeMap { destination, .. }
         | MirInstruction::MakeObject { destination, .. }
         | MirInstruction::ListGet { destination, .. }
+        | MirInstruction::ListLen { destination, .. }
         | MirInstruction::ReadPlace { destination, .. }
         | MirInstruction::BorrowRead { destination, .. }
         | MirInstruction::TakePlace { destination, .. }
@@ -842,6 +849,7 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
             fields.iter().map(|(_, value)| *value).collect()
         }
         MirInstruction::ListGet { list, index, .. } => vec![*list, *index],
+        MirInstruction::ListLen { list, .. } => vec![*list],
         MirInstruction::AcquireResource { source, .. } => vec![*source],
         MirInstruction::Binary { left, right, .. } => vec![*left, *right],
         MirInstruction::Call { arguments, .. } => arguments
@@ -1012,6 +1020,7 @@ fn transfer_move_state(
         | MirInstruction::MakeMap { .. }
         | MirInstruction::MakeObject { .. }
         | MirInstruction::ListGet { .. }
+        | MirInstruction::ListLen { .. }
         | MirInstruction::Binary { .. }
         | MirInstruction::Await { .. }
         | MirInstruction::Cancel { .. }
@@ -1065,7 +1074,8 @@ fn verify_instruction(
         | MirInstruction::MakeList { destination, .. }
         | MirInstruction::MakeMap { destination, .. }
         | MirInstruction::MakeObject { destination, .. }
-        | MirInstruction::ListGet { destination, .. } => define(*destination, defined),
+        | MirInstruction::ListGet { destination, .. }
+        | MirInstruction::ListLen { destination, .. } => define(*destination, defined),
         MirInstruction::ReadPlace { destination, place } => {
             check_live_place(*place, moved_places)?;
             define(*destination, defined)

@@ -283,6 +283,11 @@ mechanical acceptance condition holds.
       with an explicit unmatched terminator; expression arms join through an
       owned result place. Guards and variant/record/list patterns remain
       fail-closed pending typed projection operations.
+    - [x] **M02.3f — Lower checked list iteration.** Synchronous `for item in
+      List<T>` lowers to explicit `ListLen`/`ListGet`, index-place, and CFG
+      operations; a direct-HIR dual-path fixture compares the legacy VM, MIR
+      reference interpreter, and verified MIR bytecode VM. Async and non-list
+      iteration remain fail-closed pending stable protocol semantics.
 - [x] **M02.4 — Add MIR structural validation.** Reject dangling blocks,
     invalid IDs, unterminated blocks, undefined values, and malformed CFG edges.
     - [x] **M02.4a — Verify the initial structural subset.** The verifier

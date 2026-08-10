@@ -496,7 +496,20 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                 body,
                 ..
             } => self.lower_with(resource, binding, body),
-            checked::HirStmt::For { .. } => self.unsupported("checked HIR for loop"),
+            checked::HirStmt::For {
+                binding,
+                iterable,
+                iterable_type_name,
+                is_async,
+                body,
+                ..
+            } => self.lower_for(
+                binding,
+                iterable,
+                iterable_type_name.as_deref(),
+                *is_async,
+                body,
+            ),
             checked::HirStmt::Match { value, arms, .. } => self.lower_match(value, arms),
             checked::HirStmt::Select { .. } => self.unsupported("checked HIR select"),
             checked::HirStmt::Break(_) => {
@@ -1048,6 +1061,111 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         if self.current_block().terminator.is_none() {
             self.terminate(MirTerminator::Jump(header));
         }
+        self.current = exit;
+        Ok(())
+    }
+
+    /// Lower synchronous `for item in List<T>` into explicit index-based CFG.
+    /// Non-list and async iterator protocols remain fail-closed until MIR owns
+    /// their runtime and cancellation semantics.
+    fn lower_for(
+        &mut self,
+        binding: &str,
+        iterable: &checked::HirExpr,
+        iterable_type_name: Option<&str>,
+        is_async: bool,
+        body: &checked::HirBlock,
+    ) -> Result<(), MirLoweringError> {
+        if is_async {
+            return self.unsupported("async checked HIR for loop");
+        }
+        let Some(iterable_type_name) = iterable_type_name else {
+            return self.unsupported("checked HIR for loop without resolved iterable type");
+        };
+        if !iterable_type_name.trim_start().starts_with("List<") {
+            return self.unsupported("non-list checked HIR for loop");
+        }
+
+        let list = self.lower_expression(iterable)?;
+        let index_place = self.place(&format!("$for_index_{}", self.place_names.len()));
+        let zero = self.literal(MirLiteral::Int(0))?;
+        self.emit(MirInstruction::WritePlace {
+            place: index_place,
+            value: zero,
+        });
+        let one = self.literal(MirLiteral::Int(1))?;
+        let length = self.value();
+        self.emit(MirInstruction::ListLen {
+            destination: length,
+            list,
+        });
+
+        let header = self.new_block();
+        let body_block = self.new_block();
+        let increment = self.new_block();
+        let exit = self.new_block();
+        self.terminate(MirTerminator::Jump(header));
+
+        self.current = header;
+        let index = self.value();
+        self.emit(MirInstruction::ReadPlace {
+            destination: index,
+            place: index_place,
+        });
+        let in_bounds = self.value();
+        self.emit(MirInstruction::Binary {
+            destination: in_bounds,
+            op: MirBinaryOp::Less,
+            left: index,
+            right: length,
+        });
+        self.terminate(MirTerminator::Branch {
+            condition: in_bounds,
+            then_target: body_block,
+            else_target: exit,
+        });
+
+        self.current = body_block;
+        let item = self.value();
+        self.emit(MirInstruction::ListGet {
+            destination: item,
+            list,
+            index,
+        });
+        let binding = self.place(binding);
+        self.emit(MirInstruction::WritePlace {
+            place: binding,
+            value: item,
+        });
+        self.loops.push(LoopTargets {
+            continue_target: increment,
+            break_target: exit,
+            cleanup_depth: self.resource_scopes.len(),
+        });
+        self.lower_checked_block(body)?;
+        self.loops.pop();
+        if self.current_block().terminator.is_none() {
+            self.terminate(MirTerminator::Jump(increment));
+        }
+
+        self.current = increment;
+        let current = self.value();
+        self.emit(MirInstruction::ReadPlace {
+            destination: current,
+            place: index_place,
+        });
+        let next = self.value();
+        self.emit(MirInstruction::Binary {
+            destination: next,
+            op: MirBinaryOp::Add,
+            left: current,
+            right: one,
+        });
+        self.emit(MirInstruction::WritePlace {
+            place: index_place,
+            value: next,
+        });
+        self.terminate(MirTerminator::Jump(header));
         self.current = exit;
         Ok(())
     }

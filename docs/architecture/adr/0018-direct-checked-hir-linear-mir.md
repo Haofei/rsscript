@@ -28,6 +28,11 @@ fields, records, variants, and match explicitly return a lowering error; only
 the existing compatibility caller may then choose the old `ExecutableIr`
 bridge.
 
+Synchronous `for item in List<T>` also lowers after semantic type resolution
+into explicit `ListLen`, `ListGet`, index-place, branch, and increment CFG
+operations. Async iteration and non-list iterator protocols remain unsupported
+until their task and protocol contracts have stable MIR forms.
+
 This is not the final HIR-to-MIR lowerer and does not change language syntax or
 make `ExecutableIr` a new stable API.
 

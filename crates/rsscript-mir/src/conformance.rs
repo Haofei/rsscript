@@ -244,6 +244,13 @@ impl<'a> Interpreter<'a> {
                         };
                         values[destination.index()] = Some(value);
                     }
+                    MirInstruction::ListLen { destination, list } => {
+                        let length = match value_at(&values, *list)? {
+                            MirValue::List(items) => items.len() as i64,
+                            _ => return Err(MirExecutionError::InvalidOperation("list base")),
+                        };
+                        values[destination.index()] = Some(MirValue::Int(length));
+                    }
                     MirInstruction::ReadPlace { destination, place } => {
                         values[destination.index()] = Some(
                             places[place.index()]

@@ -165,6 +165,21 @@ fn main() -> Int {
 }
 "#,
     },
+    MigrationCase {
+        name: "list_for_loop",
+        capability: "checked List for loops",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn main() -> Int {
+    let values = [10, 20, 12]
+    let mut total = 0
+    for value in values {
+        total = total + value
+    }
+    return total
+}
+"#,
+    },
 ];
 
 #[test]
