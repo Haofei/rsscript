@@ -19,9 +19,15 @@ block and falls through to a join block only when it does not terminate.
 Binding patterns write the resolved scrutinee value to an owned MIR place.
 Failure to match every arm reaches an explicit `Unreachable` terminator.
 
-Variant, struct, list, and nested patterns; guards; field extraction; and
-expression-form `match` remain fail-closed. They require dedicated typed MIR
-projection operations and may not be reconstructed from syntax by a backend.
+Expression-form scalar matches use the same dispatch CFG. Each non-terminating
+arm writes its final expression to a synthetic MIR place, then the join reads
+that place into the expression result `ValueId`; arms that explicitly return
+remain terminal. This is a CFG normal form, not a hidden source-shaped match
+node.
+
+Variant, struct, list, and nested patterns; guards; and field extraction remain
+fail-closed. They require dedicated typed MIR projection operations and may not
+be reconstructed from syntax by a backend.
 
 ## Compatibility and security impact
 
@@ -32,6 +38,6 @@ than silently selecting an arm.
 
 ## Evidence
 
-The migration suite compiles a checked-HIR integer literal match directly to
-MIR, verifies its branch CFG, emits verified bytecode, and executes the selected
-arm with result `42`.
+The migration suite compiles checked-HIR statement and expression integer
+literal matches directly to MIR, verifies their branch CFG, emits verified
+bytecode, and executes selected arms with results `42` and `one`.

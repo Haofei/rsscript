@@ -647,6 +647,34 @@ fn main() -> Int {
 }
 
 #[test]
+fn direct_checked_hir_literal_match_expression_reaches_verified_bytecode() {
+    let source = r#"
+fn main() -> String {
+    let value = 1
+    return match value {
+        0 => { "zero" }
+        1 => { "one" }
+        _ => { "many" }
+    }
+}
+"#;
+    let compiled = compile_source_to_ir("direct-hir-match-expression.rss", source)
+        .expect("literal match expression source compiles");
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("literal match expression lowers directly from checked HIR");
+    let output = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("literal match expression emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("literal match expression bytecode executes");
+    assert_eq!(output.value, "one");
+}
+
+#[test]
 fn direct_checked_hir_resource_scope_emits_cleanup_before_return() {
     let interface = r#"
 module Host

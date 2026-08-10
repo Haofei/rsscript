@@ -278,11 +278,11 @@ mechanical acceptance condition holds.
       index only when checked projection facts identify its base as `List<…>`;
       it emits `ListGet` over resolved value IDs. Map/JSON/record indexing,
       field access, variants, and non-scalar match dispatch remain fail-closed.
-    - [x] **M02.3e — Lower scalar match statements.** Checked literal,
-      binding, and wildcard statement arms lower to owned `Equal`/`Branch` CFG
-      blocks with an explicit unmatched terminator. Guards, expression matches,
-      and variant/record/list patterns remain fail-closed pending typed
-      projection operations.
+    - [x] **M02.3e — Lower scalar match forms.** Checked literal, binding, and
+      wildcard statement and expression arms lower to owned `Equal`/`Branch`
+      CFG blocks with an explicit unmatched terminator; expression arms join
+      through an owned result place. Guards and variant/record/list patterns
+      remain fail-closed pending typed projection operations.
 - [x] **M02.4 — Add MIR structural validation.** Reject dangling blocks,
     invalid IDs, unterminated blocks, undefined values, and malformed CFG edges.
     - [x] **M02.4a — Verify the initial structural subset.** The verifier

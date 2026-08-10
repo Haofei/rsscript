@@ -655,7 +655,7 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             checked::HirExpr::Try { .. } => self.unsupported("checked HIR try"),
             checked::HirExpr::Closure { .. } => self.unsupported("checked HIR closure"),
             checked::HirExpr::Field { .. } => self.unsupported("checked HIR field access"),
-            checked::HirExpr::Match { .. } => self.unsupported("checked HIR match expression"),
+            checked::HirExpr::Match { value, arms, .. } => self.lower_match_expression(value, arms),
             checked::HirExpr::Unknown(_) => self.unsupported("unknown checked HIR expression"),
         }
     }
@@ -939,6 +939,92 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         self.terminate(MirTerminator::Unreachable);
         self.current = join;
         Ok(())
+    }
+
+    fn lower_match_expression(
+        &mut self,
+        value: &checked::HirExpr,
+        arms: &[checked::HirMatchArm],
+    ) -> Result<ValueId, MirLoweringError> {
+        let value = self.lower_expression(value)?;
+        let result_place = self.place(&format!("__rss_mir_match_result_{}", self.next_value));
+        let join = self.new_block();
+        for arm in arms {
+            if arm.guard.is_some() {
+                return self.unsupported("checked HIR match expression guard");
+            }
+            let arm_block = self.new_block();
+            let next = self.new_block();
+            match &arm.pattern {
+                rsscript_syntax::ast::MatchPattern::Wildcard(_)
+                | rsscript_syntax::ast::MatchPattern::Binding { .. } => {
+                    self.terminate(MirTerminator::Jump(arm_block));
+                }
+                rsscript_syntax::ast::MatchPattern::Literal { value: literal, .. } => {
+                    let expected = self.literal(match_literal(literal, self.function_name)?)?;
+                    let condition = self.value();
+                    self.emit(MirInstruction::Binary {
+                        destination: condition,
+                        op: MirBinaryOp::Equal,
+                        left: value,
+                        right: expected,
+                    });
+                    self.terminate(MirTerminator::Branch {
+                        condition,
+                        then_target: arm_block,
+                        else_target: next,
+                    });
+                }
+                _ => return self.unsupported("non-literal checked HIR match expression pattern"),
+            }
+
+            self.current = arm_block;
+            if let rsscript_syntax::ast::MatchPattern::Binding { name, .. } = &arm.pattern {
+                let place = self.place(name);
+                self.emit(MirInstruction::WritePlace { place, value });
+            }
+            self.lower_match_expression_arm(&arm.body, result_place)?;
+            if self.current_block().terminator.is_none() {
+                self.terminate(MirTerminator::Jump(join));
+            }
+            self.current = next;
+        }
+        self.terminate(MirTerminator::Unreachable);
+        self.current = join;
+        let destination = self.value();
+        self.emit(MirInstruction::ReadPlace {
+            destination,
+            place: result_place,
+        });
+        Ok(destination)
+    }
+
+    fn lower_match_expression_arm(
+        &mut self,
+        body: &checked::HirBlock,
+        result_place: PlaceId,
+    ) -> Result<(), MirLoweringError> {
+        let Some((last, initial)) = body.statements.split_last() else {
+            return self.unsupported("empty checked HIR match expression arm");
+        };
+        for statement in initial {
+            self.lower_statement(statement)?;
+            if self.current_block().terminator.is_some() {
+                return self.unsupported("terminating statement before match expression value");
+            }
+        }
+        match last {
+            checked::HirStmt::Expr(expression) => {
+                let value = self.lower_expression(expression)?;
+                self.emit(MirInstruction::WritePlace {
+                    place: result_place,
+                    value,
+                });
+                Ok(())
+            }
+            checked::HirStmt::Return { .. } => self.lower_statement(last),
+            _ => self.unsupported("checked HIR match expression arm without value"),
+        }
     }
 
     fn lower_loop(
