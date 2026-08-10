@@ -267,9 +267,10 @@ impl Compiler {
     #[cfg(feature = "execution")]
     pub fn compile(&self, file: &str, source: &str) -> Result<BuiltArtifact, CompileError> {
         let snapshot_digest = in_memory_snapshot_digest(&[(file, source)], &[]);
-        let mut executable = reg_vm_compile_source(file, source).map_err(CompileError::from)?;
-        executable.bind_snapshot_digest(&snapshot_digest)?;
-        BuiltArtifact::from_executable(executable, source_analysis(file, &snapshot_digest))
+        let compiled = compile_source_to_ir(file, source).map_err(CompileError::Diagnostics)?;
+        let artifact = vm_adapter::emit_compiled_artifact(&compiled, &snapshot_digest)
+            .map_err(CompileError::from)?;
+        BuiltArtifact::from_bytecode(artifact, source_analysis(file, &snapshot_digest))
     }
 
     #[cfg(feature = "execution")]
@@ -288,11 +289,12 @@ impl Compiler {
             })?;
         operation.check().map_err(CompileError::from)?;
         let snapshot_digest = in_memory_snapshot_digest(&[(file, source)], &[]);
-        let mut executable = reg_vm_compile_validated(&validated).map_err(CompileError::from)?;
-        executable.bind_snapshot_digest(&snapshot_digest)?;
+        let compiled = compile_validated_to_ir(&validated);
+        let artifact = vm_adapter::emit_compiled_artifact(&compiled, &snapshot_digest)
+            .map_err(CompileError::from)?;
         operation.check().map_err(CompileError::from)?;
         let built =
-            BuiltArtifact::from_executable(executable, source_analysis(file, &snapshot_digest))?;
+            BuiltArtifact::from_bytecode(artifact, source_analysis(file, &snapshot_digest))?;
         operation.check().map_err(CompileError::from)?;
         Ok(built)
     }
@@ -309,9 +311,10 @@ impl Compiler {
         let validated = validate_sources_with_interfaces(sources, interfaces)
             .map_err(CompileError::Diagnostics)?;
         let snapshot_digest = in_memory_snapshot_digest(sources, interfaces);
-        let mut executable = reg_vm_compile_validated(&validated).map_err(CompileError::from)?;
-        executable.bind_snapshot_digest(&snapshot_digest)?;
-        BuiltArtifact::from_executable(executable, source_set_analysis(sources, &snapshot_digest))
+        let compiled = compile_validated_to_ir(&validated);
+        let artifact = vm_adapter::emit_compiled_artifact(&compiled, &snapshot_digest)
+            .map_err(CompileError::from)?;
+        BuiltArtifact::from_bytecode(artifact, source_set_analysis(sources, &snapshot_digest))
     }
 
     #[cfg(feature = "execution")]
@@ -329,13 +332,12 @@ impl Compiler {
                 })?;
         operation.check().map_err(CompileError::from)?;
         let snapshot_digest = in_memory_snapshot_digest(sources, interfaces);
-        let mut executable = reg_vm_compile_validated(&validated).map_err(CompileError::from)?;
-        executable.bind_snapshot_digest(&snapshot_digest)?;
+        let compiled = compile_validated_to_ir(&validated);
+        let artifact = vm_adapter::emit_compiled_artifact(&compiled, &snapshot_digest)
+            .map_err(CompileError::from)?;
         operation.check().map_err(CompileError::from)?;
-        let built = BuiltArtifact::from_executable(
-            executable,
-            source_set_analysis(sources, &snapshot_digest),
-        )?;
+        let built =
+            BuiltArtifact::from_bytecode(artifact, source_set_analysis(sources, &snapshot_digest))?;
         operation.check().map_err(CompileError::from)?;
         Ok(built)
     }
@@ -390,21 +392,16 @@ impl Compiler {
         if analysis.summary.errors != 0 {
             return Err(CompileError::Diagnostics(analysis.diagnostics.clone()));
         }
-        let mut executable =
-            reg_vm_compile_package_input(snapshot.lowering_input()).map_err(CompileError::from)?;
-        executable.bind_snapshot_digest(snapshot.digest())?;
-        analysis.module_digest = Some(
-            executable
-                .bytecode_artifact()
-                .header
-                .executable_hash
-                .clone(),
-        );
+        let compiled = compile_package_input_to_ir(snapshot.lowering_input())
+            .map_err(CompileError::Diagnostics)?;
+        let artifact = vm_adapter::emit_compiled_artifact(&compiled, snapshot.digest())
+            .map_err(CompileError::from)?;
+        analysis.module_digest = Some(artifact.header.executable_hash.clone());
         let analysis = serde_json::to_value(&analysis).map_err(|error| CompileError::Package {
             code: CompileErrorCode::PackageAnalysis,
             message: error.to_string(),
         })?;
-        BuiltArtifact::from_executable(executable, analysis)
+        BuiltArtifact::from_bytecode(artifact, analysis)
     }
 
     #[cfg(feature = "execution")]
@@ -428,12 +425,14 @@ pub struct BuiltArtifact {
 
 #[cfg(feature = "execution")]
 impl BuiltArtifact {
-    fn from_executable(
-        executable: RegVmExecutable,
+    fn from_bytecode(
+        artifact: BytecodeArtifact,
         analysis: serde_json::Value,
     ) -> Result<Self, CompileError> {
-        let artifact = executable.to_bytecode().map_err(CompileError::from)?;
-        let bundle = ArtifactBundle::new(artifact, analysis).map_err(CompileError::from)?;
+        let bytes = artifact
+            .to_bytes()
+            .map_err(|error| CompileError::from(EvalError::Runtime(error.to_string())))?;
+        let bundle = ArtifactBundle::new(bytes, analysis).map_err(CompileError::from)?;
         Ok(Self { bundle })
     }
 

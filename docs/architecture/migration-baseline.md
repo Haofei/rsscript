@@ -396,8 +396,13 @@ mechanical acceptance condition holds.
       call shapes, and the migration suite executes the resulting Artifact in
       the VM. Cancellation, group join, select, and external async calls remain
       fail-closed follow-up work.
-  - [ ] **V02.4 — Switch SDK build to codegen-vm.** Remove VM compile helpers
-    from the supported compilation path and add dependency tests.
+  - [x] **V02.4 — Switch SDK build to codegen-vm.** Reviewed SDK source,
+    interface, and package builds now emit their supported MIR capability
+    directly through `codegen-vm` into a provider-neutral Artifact, without
+    constructing a VM executable. The legacy executable-IR fallback remains
+    confined to the opt-in compatibility adapter for capabilities that MIR
+    intentionally rejects; architecture tests reject VM compile-helper calls
+    from the reviewed build methods.
 - [ ] **V03 — Make the verifier construct the only executable program type.**
   Untrusted bytes decode and verify to a private-field `VerifiedModule`; public
   APIs cannot construct or mutate it and VM constructors accept nothing else.

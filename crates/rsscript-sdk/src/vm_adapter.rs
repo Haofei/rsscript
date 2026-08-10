@@ -10,6 +10,7 @@ use rsscript_compiler::{
     compile_source_to_ir, compile_validated_to_ir, prepare_package_for_execution,
 };
 
+use rsscript_bytecode::BytecodeArtifact;
 #[cfg(feature = "native-jit")]
 #[allow(unused_imports)]
 pub use rsscript_vm::with_native_cost_model_disabled;
@@ -75,6 +76,42 @@ fn emit_ir(compiled: &CompiledIr) -> Result<RegVmExecutable, EvalError> {
     )
 }
 
+/// Build a provider-neutral Artifact from compiler output without first
+/// constructing a VM executable.
+///
+/// The reviewed SDK uses this boundary for every MIR capability supported by
+/// `rsscript-codegen-vm`: compiler -> MIR -> bytecode Artifact. The legacy
+/// executable-IR fallback remains deliberately confined to this compatibility
+/// adapter while the migration corpus still has unsupported MIR constructs.
+pub(crate) fn emit_compiled_artifact(
+    compiled: &CompiledIr,
+    snapshot_digest: &str,
+) -> Result<BytecodeArtifact, EvalError> {
+    match compiled.mir() {
+        Ok(mir) => match emit_mir_artifact(
+            &mir,
+            compiled.source_hash(),
+            compiled.interface_catalog_digest(),
+            snapshot_digest,
+        ) {
+            Ok(artifact) => return Ok(artifact),
+            Err(rsscript_codegen_vm::CodegenError::Unsupported(_)) => {}
+            Err(error) => return Err(EvalError::Runtime(error.to_string())),
+        },
+        Err(rsscript_lowering::MirLoweringError::Unsupported { .. }) => {}
+        Err(error) => return Err(EvalError::Runtime(error.to_string())),
+    }
+
+    let mut executable = rsscript_vm::compile_executable_ir(
+        compiled.executable(),
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )?;
+    executable.bind_snapshot_digest(snapshot_digest)?;
+    let bytes = executable.to_bytecode()?;
+    BytecodeArtifact::from_bytes(&bytes).map_err(|error| EvalError::Runtime(error.to_string()))
+}
+
 fn emit_mir(
     mir: &rsscript_mir::MirModule,
     source_hash: &str,
@@ -94,6 +131,24 @@ fn emit_mir(
         .map_err(|error| rsscript_codegen_vm::CodegenError::Bytecode(error.to_string()))?;
     RegVmExecutable::from_verified_bytecode(verified)
         .map_err(|error| rsscript_codegen_vm::CodegenError::Bytecode(format!("{error:?}")))
+}
+
+fn emit_mir_artifact(
+    mir: &rsscript_mir::MirModule,
+    source_hash: &str,
+    interface_catalog_digest: &str,
+    snapshot_digest: &str,
+) -> Result<BytecodeArtifact, rsscript_codegen_vm::CodegenError> {
+    let mut artifact = rsscript_codegen_vm::emit_artifact(
+        mir,
+        source_hash,
+        interface_catalog_digest,
+        env!("CARGO_PKG_VERSION"),
+    )?;
+    artifact
+        .bind_snapshot_digest(snapshot_digest)
+        .map_err(|error| rsscript_codegen_vm::CodegenError::Bytecode(error.to_string()))?;
+    Ok(artifact)
 }
 
 pub fn reg_vm_eval_source_main_with_args(

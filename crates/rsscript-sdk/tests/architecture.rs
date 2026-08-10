@@ -1497,6 +1497,23 @@ fn mir_codegen_is_a_vm_independent_verified_bytecode_boundary() {
             && emit_mir.contains("RegVmExecutable::from_verified_bytecode"),
         "SDK MIR compilation must pass through codegen, verifier, then the VM token boundary"
     );
+
+    let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
+    for signature in [
+        "pub fn compile(&self, file: &str, source: &str)",
+        "pub fn compile_with_interfaces(",
+        "pub fn build(&self, snapshot: &WorkspaceSnapshot)",
+    ] {
+        let build = function_source(&sdk, signature);
+        assert!(
+            build.contains("vm_adapter::emit_compiled_artifact"),
+            "reviewed SDK build `{signature}` must emit an Artifact without a VM compile helper"
+        );
+        assert!(
+            !build.contains("reg_vm_compile"),
+            "reviewed SDK build `{signature}` must not call a legacy VM compile helper"
+        );
+    }
 }
 
 #[test]

@@ -94,8 +94,8 @@ fn wire_unit(mir: &MirModule) -> Result<Value, CodegenError> {
         native_signatures.insert(
             name.clone(),
             json!({
-                "params": function.signature().parameter_types().iter().map(|id| format!("{:?}", mir.ty(*id).expect("validated type"))).collect::<Vec<_>>(),
-                "return_type": format!("{:?}", mir.ty(function.signature().result()).expect("validated result type")),
+                "params": function.signature().parameter_types().iter().map(|id| legacy_signature_type(mir.ty(*id).expect("validated type"))).collect::<Vec<_>>(),
+                "return_type": legacy_signature_type(mir.ty(function.signature().result()).expect("validated result type")),
             }),
         );
         functions.push(wire_function(mir, function)?);
@@ -108,6 +108,68 @@ fn wire_unit(mir: &MirModule) -> Result<Value, CodegenError> {
         "native_signatures": native_signatures,
         "closure_identity_observable": false,
     }))
+}
+
+/// Render the legacy register-VM signature spelling from canonical MIR types.
+///
+/// The transitional v1 payload still carries entry-point signatures as text,
+/// but that spelling must be derived from the type table rather than Rust's
+/// debug representation. In particular, `List<String>` is part of the VM's
+/// explicit `main` ABI and cannot be emitted as `List { .. }`.
+fn legacy_signature_type(ty: &rsscript_abi_model::WireType) -> String {
+    use rsscript_abi_model::{WireQualifier, WireType};
+
+    match ty {
+        WireType::Unit => "Unit".to_owned(),
+        WireType::Bool => "Bool".to_owned(),
+        WireType::Int { .. } => "Int".to_owned(),
+        WireType::Float { .. } => "Float".to_owned(),
+        WireType::String => "String".to_owned(),
+        WireType::Bytes => "Bytes".to_owned(),
+        WireType::List { element } => format!("List<{}>", legacy_signature_type(element)),
+        WireType::Option { value } => format!("Option<{}>", legacy_signature_type(value)),
+        WireType::Result { ok, error } => format!(
+            "Result<{}, {}>",
+            legacy_signature_type(ok),
+            legacy_signature_type(error)
+        ),
+        WireType::Tuple { elements } => {
+            let elements = elements
+                .iter()
+                .map(legacy_signature_type)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({elements})")
+        }
+        WireType::Named {
+            package,
+            name,
+            arguments,
+        } => {
+            let qualified = package
+                .as_ref()
+                .map_or_else(|| name.clone(), |package| format!("{package}.{name}"));
+            if arguments.is_empty() {
+                qualified
+            } else {
+                let arguments = arguments
+                    .iter()
+                    .map(legacy_signature_type)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{qualified}<{arguments}>")
+            }
+        }
+        WireType::Resource { name } | WireType::Handle { name } => name.clone(),
+        WireType::Qualified { qualifier, value } => {
+            let qualifier = match qualifier {
+                WireQualifier::Fresh => "fresh",
+                WireQualifier::Owned => "owned",
+                WireQualifier::NoEscape => "noescape",
+            };
+            format!("{qualifier} {}", legacy_signature_type(value))
+        }
+    }
 }
 
 fn wire_function(mir: &MirModule, function: &MirFunction) -> Result<Value, CodegenError> {
