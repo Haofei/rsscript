@@ -560,6 +560,12 @@ mechanical acceptance condition holds.
       remains follow-up work.
   - [ ] **V04.2 — Delete VM bytecode encoder and Artifact assembly.** Move all
     production encode logic to codegen/Artifact crates.
+    - [x] **V04.2a — Isolate legacy register-unit encoding.** The default VM
+      closure no longer compiles the legacy register-unit Artifact encoder or
+      assembly helper. Both require `legacy-exec-ir`, alongside the only caller
+      that still lowers source-shaped executable IR. `rsscript-codegen-vm`
+      remains the production MIR-to-Artifact writer; deleting the compatibility
+      encoder entirely remains follow-up work.
   - [ ] **V04.3 — Delete duplicate VM payload verifier.** Keep runtime defensive
     assertions only; malformed-byte handling belongs to bytecode verifier.
 - [ ] **V05 — Remove experimental state from Core VM program objects.** JIT,

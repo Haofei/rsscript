@@ -1546,6 +1546,14 @@ fn legacy_executable_ir_lowering_is_an_explicit_vm_compatibility_feature() {
         ) && vm.contains("#[cfg(feature = \"legacy-exec-ir\")]\nmod lower;"),
         "VM source-shaped lowering must remain behind its explicit compatibility feature"
     );
+    let bytecode = read(&root.join("crates/rsscript-vm/src/reg_vm/bytecode.rs"));
+    assert!(
+        bytecode.contains("#[cfg(feature = \"legacy-exec-ir\")]\npub(super) fn encode_and_verify")
+            && bytecode.contains(
+                "#[cfg(feature = \"legacy-exec-ir\")]\npub(super) fn encode_and_verify_with_imports"
+            ),
+        "legacy register-unit Artifact encoding must not enter the default VM closure"
+    );
 
     let sdk_manifest: toml::Value =
         toml::from_str(&read(&root.join("crates/rsscript-sdk/Cargo.toml")))

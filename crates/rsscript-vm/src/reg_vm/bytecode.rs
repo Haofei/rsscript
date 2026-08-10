@@ -38,6 +38,7 @@ impl VerifiedRegBytecode {
     }
 }
 
+#[cfg(feature = "legacy-exec-ir")]
 impl From<&RegUnit> for WireUnit {
     fn from(unit: &RegUnit) -> Self {
         Self {
@@ -135,6 +136,7 @@ pub(super) fn encode_and_verify(
     )
 }
 
+#[cfg(feature = "legacy-exec-ir")]
 pub(super) fn encode_and_verify_with_imports(
     unit: &RegUnit,
     source_content_hash: &str,

@@ -22,6 +22,8 @@ lowering boundaries.
 The VM's remaining source-shaped executable-IR lowerer is an explicit
 `legacy-exec-ir` feature. It is not part of the default VM dependency closure;
 the transitional SDK compatibility adapter must opt into it deliberately.
+The legacy register-unit Artifact encoder and assembly helper use the same
+feature; direct MIR builds use `rsscript-codegen-vm` instead.
 
 This decision does not define the bytecode-v2 opcode encoding, replace
 `MirBinaryOp`, or remove the remaining legacy executable-IR lowering path.
@@ -40,4 +42,5 @@ can become execution-only.
 The ABI, executable-IR, compiler lowering, and VM test suites compile against
 the shared operation type. The VM is checked both with and without the legacy
 feature, while the SDK migration suite exercises the retained compatibility
-path. Architecture tests require the feature to remain explicit.
+path. Architecture tests require the feature to remain explicit, including its
+legacy encoder boundary.
