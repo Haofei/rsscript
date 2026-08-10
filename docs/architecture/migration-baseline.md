@@ -258,9 +258,9 @@ mechanical acceptance condition holds.
 - [ ] **M03 — Make semantic operations explicit.** MIR represents move,
   read/mut borrow, retain, drop, resource acquire/release, spawn, await, join,
   cancellation, selection, external calls, and every cleanup/unwind edge.
-  - [ ] **M03.1 — Add explicit ownership instructions.** Model move, read borrow,
-    mutable borrow, retain, and drop, then test use-after-move rejection on CFG
-    joins.
+  - [x] **M03.1 — Add explicit ownership instructions.** MIR models standalone
+    and call-boundary move, read/mutable borrow, retain, and drop; construction
+    validation rejects use-after-move on linear paths and CFG joins.
     - [x] **M03.1a — Lower direct-call read borrows.** A checked `read` of a
       local argument becomes verifier-visible `BorrowRead`; mutable borrow,
       move, retain, and drop remain follow-up work.
