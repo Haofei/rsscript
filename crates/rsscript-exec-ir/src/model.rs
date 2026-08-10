@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+pub use rsscript_abi_model::BinaryOp;
 use rsscript_abi_model::{ExternalSymbol, FunctionSignature};
 
 fn type_root_name(name: &str) -> &str {
@@ -246,28 +247,6 @@ pub enum ExecutableExpr {
         type_name: Option<String>,
     },
     Unknown,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BinaryOp {
-    Add,
-    Subtract,
-    Multiply,
-    Divide,
-    Modulo,
-    BitAnd,
-    BitOr,
-    BitXor,
-    ShiftLeft,
-    ShiftRight,
-    Equal,
-    NotEqual,
-    Less,
-    LessEqual,
-    Greater,
-    GreaterEqual,
-    LogicalAnd,
-    LogicalOr,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

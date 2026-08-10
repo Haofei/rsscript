@@ -59,8 +59,9 @@ use crate::vm_value::clone_value_map_preserving_capacity;
 use crate::vm_value::{
     TypeLayout, TypedVec, ValueMap, VmClosure, VmMapKey, VmNative, VmStruct, VmValue, intern_layout,
 };
+use rsscript_abi_model::BinaryOp;
 use rsscript_exec_ir::{
-    BinaryOp, Callee, ExecutableBlock as HirBlock, ExecutableCallArg as HirCallArg,
+    Callee, ExecutableBlock as HirBlock, ExecutableCallArg as HirCallArg,
     ExecutableCallReceiver as HirCallReceiver, ExecutableExpr as HirExpr,
     ExecutableMatchArm as HirMatchArm, ExecutableProgram as Hir, ExecutableStmt as HirStmt,
     ExecutableTypeKind as HirTypeKind, MatchFieldPattern, MatchLiteral, MatchPattern, ParamEffect,

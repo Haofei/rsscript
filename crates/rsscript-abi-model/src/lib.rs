@@ -17,6 +17,33 @@ pub const CORE_LIBRARY_ABI_VERSION: u32 = 1;
 /// This deliberately does not track any crate/package release version.
 pub const LANGUAGE_SEMANTICS_VERSION: &str = "0.1.0";
 
+/// Canonical binary operation identity shared by executable contracts and
+/// runtime evaluation. This is semantic identity, not source spelling: syntax
+/// parsers and legacy IR projections map their local representations here.
+/// Keeping it in the ABI model prevents a VM execution primitive from being
+/// owned by the source-shaped compatibility IR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BinaryOp {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Modulo,
+    BitAnd,
+    BitOr,
+    BitXor,
+    ShiftLeft,
+    ShiftRight,
+    Equal,
+    NotEqual,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+    LogicalAnd,
+    LogicalOr,
+}
+
 macro_rules! wire_id {
     ($name:ident) => {
         /// Opaque, module-local identity used by a typed ABI value table.
