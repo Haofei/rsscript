@@ -150,6 +150,9 @@ mechanical acceptance condition holds.
       values and lexical visibility across HIR blocks, patterns, closures,
       resource scopes, and task/select bodies are now interpreted once by
       `rsscript-semantics`; compiler only appends the canonical diagnostics.
+    - [x] **S02.1d — Move derive-surface diagnostics.** The language derive
+      catalog and resource move-only derive restrictions are semantic queries;
+      compiler source traversal only appends their diagnostics.
   - [ ] **S02.2 — Move type and generic-constraint checks.** Relocate type
     inference, substitutions, generic constraints, and call result facts behind
     the semantic crate API.

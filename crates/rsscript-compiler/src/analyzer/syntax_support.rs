@@ -220,10 +220,12 @@ impl Analyzer<'_> {
                 self.check_unsupported_syntax_block(&function.body);
             }
             Item::Type(type_decl) => {
-                self.check_supported_derives(&type_decl.derives, &type_decl.span);
-                if type_decl.kind == TypeKind::Resource {
-                    self.check_resource_derives(&type_decl.derives, &type_decl.span);
-                }
+                self.diagnostics
+                    .extend(rsscript_semantics::derive_syntax_diagnostics(
+                        &type_decl.derives,
+                        &type_decl.span,
+                        type_decl.kind == TypeKind::Resource,
+                    ));
                 for span in &type_decl.malformed_generic_param_spans {
                     self.unsupported_syntax(
                         span.clone(),
@@ -269,7 +271,12 @@ impl Analyzer<'_> {
                 }
             }
             Item::SumType(sum) => {
-                self.check_supported_derives(&sum.derives, &sum.span);
+                self.diagnostics
+                    .extend(rsscript_semantics::derive_syntax_diagnostics(
+                        &sum.derives,
+                        &sum.span,
+                        false,
+                    ));
                 for field in sum.variants.iter().flat_map(|variant| &variant.fields) {
                     let canonical = self.canonical_type_ref(&field.ty);
                     self.check_unsupported_syntax_type_ref(&canonical, false, true);

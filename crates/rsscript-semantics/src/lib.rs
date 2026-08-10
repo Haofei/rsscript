@@ -13,6 +13,7 @@ pub use rsscript_abi_model::{
 mod call_binding;
 mod database;
 mod declarations;
+mod derives;
 mod external_types;
 pub mod hir;
 mod identities;
@@ -30,6 +31,7 @@ pub use database::{
 pub use declarations::{
     duplicate_declaration_diagnostics, unknown_binding_diagnostics, unknown_field_diagnostics,
 };
+pub use derives::derive_syntax_diagnostics;
 pub use external_types::{external_binding_type_diagnostics, unknown_type_diagnostics};
 
 /// Builtin source type roots recognized before backend lowering.

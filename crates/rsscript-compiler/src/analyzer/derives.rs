@@ -1,59 +1,6 @@
 use super::*;
 
 impl Analyzer<'_> {
-    pub(super) fn check_supported_derives(
-        &mut self,
-        derives: &[String],
-        span: &crate::diagnostic::Span,
-    ) {
-        for derive in derives {
-            if supported_compiler_derive(derive) {
-                continue;
-            }
-            self.unsupported_syntax(
-                span.clone(),
-                "unsupported derive",
-                "This name is not a compiler-owned RSScript derive. Supported derives are Debug, Clone, Eq, Ord, Hash, JsonEncode, JsonDecode, Schema, and ReviewSchema.",
-            );
-        }
-    }
-
-    /// Resources are move-only RAII values that default to `Debug` only. Value
-    /// derives (`Clone`, `Eq`, `Ord`, `Hash`, `JsonEncode`, `JsonDecode`) would
-    /// expand into generated Rust that copies or compares the resource — which
-    /// contradicts the move-only model and can leak a backend trait-bound error
-    /// — so only the implicit `Debug` and the review-only markers are allowed.
-    pub(super) fn check_resource_derives(
-        &mut self,
-        derives: &[String],
-        span: &crate::diagnostic::Span,
-    ) {
-        for derive in derives {
-            // Unknown names are already reported by `check_supported_derives`.
-            if !supported_compiler_derive(derive)
-                || matches!(derive.as_str(), "Debug" | "Schema" | "ReviewSchema")
-            {
-                continue;
-            }
-            self.diagnostics.push(
-                Diagnostic::error(
-                    code::RESOURCE_DERIVE_UNSUPPORTED,
-                    format!("`{derive}` derive is not allowed on a resource."),
-                    span.clone(),
-                    "resources support only `Debug`, `Schema`, and `ReviewSchema`",
-                )
-                .with_cause(
-                    "Resources are move-only RAII values. Value derives such as `Clone`, `Eq`, `Ord`, `Hash`, `JsonEncode`, and `JsonDecode` would copy or compare the resource, which contradicts its move-only model.",
-                )
-                .with_fix(
-                    "remove_resource_derive",
-                    format!("Remove `{derive}` from the resource, or model the data as a `struct`."),
-                    "manual",
-                ),
-            );
-        }
-    }
-
     /// A compiler-owned derive expands to generated Rust, so every field must
     /// support it. This reports an RSScript diagnostic before lowering instead
     /// of letting a `Float: Eq` style trait-bound error leak from rustc.
@@ -439,21 +386,4 @@ fn user_type_support(
         }
         _ => DeriveSupport::Unknown,
     }
-}
-
-fn supported_compiler_derive(name: &str) -> bool {
-    // `Eq`/`Ord` are the canonical spellings; `PartialEq`/`PartialOrd` are not a
-    // separate review-visible surface (Rust expands them inside `Eq`/`Ord`).
-    matches!(
-        name,
-        "Debug"
-            | "Clone"
-            | "Eq"
-            | "Ord"
-            | "Hash"
-            | "JsonEncode"
-            | "JsonDecode"
-            | "Schema"
-            | "ReviewSchema"
-    )
 }

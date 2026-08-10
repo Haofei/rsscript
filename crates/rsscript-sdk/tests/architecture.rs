@@ -1167,6 +1167,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "ValidatedProgram",
         "cyclic_type_alias_diagnostics",
         "duplicate_declaration_diagnostics",
+        "derive_syntax_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
         "unknown_binding_diagnostics",
@@ -1225,6 +1226,16 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     assert!(compiler_unknowns.contains("rsscript_semantics::unknown_type_diagnostics"));
     assert!(!compiler_unknowns.contains("check_unknown_bindings_in_block"));
     assert!(!compiler_unknowns.contains("unknown_binding_diagnostic("));
+
+    let semantic_derives = read(&root.join("crates/rsscript-semantics/src/derives.rs"));
+    assert!(semantic_derives.contains("pub fn derive_syntax_diagnostics"));
+    let compiler_syntax_support =
+        read(&root.join("crates/rsscript-compiler/src/analyzer/syntax_support.rs"));
+    assert!(compiler_syntax_support.contains("rsscript_semantics::derive_syntax_diagnostics"));
+    let compiler_derives = read(&root.join("crates/rsscript-compiler/src/analyzer/derives.rs"));
+    assert!(!compiler_derives.contains("fn supported_compiler_derive"));
+    assert!(!compiler_derives.contains("fn check_supported_derives"));
+    assert!(!compiler_derives.contains("fn check_resource_derives"));
     assert!(!compiler_unknowns.contains("unknown_field_diagnostic(&access.name"));
 
     let semantic_aliases = read(&root.join("crates/rsscript-semantics/src/type_aliases.rs"));
