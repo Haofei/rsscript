@@ -353,6 +353,75 @@ fn spawned_mir_task_executes_through_verified_bytecode_vm() {
 }
 
 #[test]
+fn task_group_join_drains_mir_children_before_returning() {
+    let mir = MirModule::new(
+        vec![WireType::Int {
+            bits: 64,
+            signed: true,
+        }],
+        vec![
+            MirFunction::new(
+                FunctionId::new(0),
+                MirFunctionSignature::new(vec![], TypeId::new(0), false),
+                0,
+                1,
+                vec![BasicBlock::new(
+                    BlockId::new(0),
+                    vec![
+                        MirInstruction::Spawn {
+                            task: TaskId::new(0),
+                            group: TaskGroupId::new(0),
+                            target: FunctionId::new(1),
+                            arguments: vec![],
+                        },
+                        MirInstruction::Join {
+                            group: TaskGroupId::new(0),
+                        },
+                        MirInstruction::LoadLiteral {
+                            destination: ValueId::new(0),
+                            value: MirLiteral::Int(1),
+                        },
+                    ],
+                    MirTerminator::Return(Some(ValueId::new(0))),
+                )],
+            ),
+            MirFunction::new(
+                FunctionId::new(1),
+                MirFunctionSignature::new(vec![], TypeId::new(0), true),
+                0,
+                1,
+                vec![BasicBlock::new(
+                    BlockId::new(0),
+                    vec![MirInstruction::LoadLiteral {
+                        destination: ValueId::new(0),
+                        value: MirLiteral::Int(7),
+                    }],
+                    MirTerminator::Return(Some(ValueId::new(0))),
+                )],
+            ),
+        ],
+        vec![
+            MirFunctionDebug::new("main", vec![]),
+            MirFunctionDebug::new("worker", vec![]),
+        ],
+        vec![],
+    )
+    .expect("task-group MIR verifies");
+    let output = reg_vm_compile_mir(
+        &mir,
+        &format!("sha256:{}", "a".repeat(64)),
+        &format!("sha256:{}", "b".repeat(64)),
+    )
+    .expect("task-group MIR emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("joined task bytecode executes in the VM");
+    assert_eq!(output.value, "1");
+    assert_eq!(output.usage.tasks_created, 2);
+    assert_eq!(output.usage.tasks_completed, 2);
+    assert_eq!(output.usage.tasks_live_at_return, 0);
+}
+
+#[test]
 fn provider_resources_finalize_once_across_execution_terminal_paths() {
     const INTERFACE: &str = "pub fn Host.open() -> Unit\n";
     const SUCCESS: &str = r#"

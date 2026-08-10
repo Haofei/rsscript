@@ -291,9 +291,21 @@ fn lower_instruction(
                 ("src", json!(task_reg(function, *task))),
             ],
         )),
-        MirInstruction::Cancel { .. } | MirInstruction::Join { .. } => {
-            return Err(CodegenError::Unsupported("task cancellation or group join"));
+        MirInstruction::Cancel { .. } => {
+            return Err(CodegenError::Unsupported("task cancellation"));
         }
+        MirInstruction::Join { group } => code.push(instr(
+            "JoinTasks",
+            [(
+                "handles",
+                json!(
+                    tasks_for_group(function, *group)
+                        .into_iter()
+                        .map(|task| task_reg(function, task))
+                        .collect::<Vec<_>>()
+                ),
+            )],
+        )),
         MirInstruction::WritePlace { place, value } => code.push(instr(
             "Move",
             [
@@ -503,6 +515,20 @@ fn task_count(function: &MirFunction) -> usize {
         })
         .max()
         .unwrap_or(0)
+}
+
+fn tasks_for_group(function: &MirFunction, group: rsscript_mir::TaskGroupId) -> Vec<TaskId> {
+    function
+        .blocks()
+        .iter()
+        .flat_map(|block| block.instructions())
+        .filter_map(|instruction| match instruction {
+            MirInstruction::Spawn {
+                task, group: owner, ..
+            } if *owner == group => Some(*task),
+            _ => None,
+        })
+        .collect()
 }
 
 #[cfg(test)]

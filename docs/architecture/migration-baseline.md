@@ -319,8 +319,13 @@ mechanical acceptance condition holds.
     - [x] **M03.3b — Lower direct async bindings and awaits.** A checked direct
       internal async binding lowers to `Spawn`, and awaiting its local task
       lowers to `Await`; the lifecycle verifier rejects any unclosed child.
-      External async calls, join/cancel syntax, select, and scheduler bytecode
-      remain fail-closed follow-up work.
+      External async calls, join/cancel syntax, and select remain fail-closed
+      follow-up work.
+    - [x] **M03.3c — Execute lexical task-group drain.** `Join` lowers to the
+      v1 `JoinTasks` instruction over its resolved child handles. The scheduler
+      resumes the parent only after every still-live child completes and reaps
+      each child exactly once; awaited children are safe to omit from the drain.
+      Cancellation delivery and select remain follow-up work.
   - [ ] **M03.4 — Add resolved builtin and external-call instructions.** Include
     signature/effect/retention identity and no unresolved callee text.
     - [x] **M03.4a — Execute resolved external calls through MIR bytecode.** A
@@ -392,10 +397,10 @@ mechanical acceptance condition holds.
       remain follow-up work.
     - [x] **V02.3b — Emit direct spawn/await task bytecode.** MIR task IDs map
       to dedicated registers and direct async functions emit `SpawnTask` and
-      `AwaitJoin`; the ordinary verifier validates task-handle definitions and
-      call shapes, and the migration suite executes the resulting Artifact in
-      the VM. Cancellation, group join, select, and external async calls remain
-      fail-closed follow-up work.
+      `AwaitJoin`; lexical group join emits `JoinTasks`. The ordinary verifier
+      validates task-handle definitions and call shapes, and the migration suite
+      executes spawned, awaited, and drained children in the VM. Cancellation,
+      select, and external async calls remain fail-closed follow-up work.
     - [x] **V02.3c — Emit explicit retain/drop ownership boundaries.** Retain
       remains a verifier-visible semantic fact with no implicit VM copy, while
       drop clears its proven-dead register before frame teardown. Codegen tests

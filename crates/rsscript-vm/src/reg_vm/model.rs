@@ -515,6 +515,12 @@ pub(crate) enum RegInstr {
         dst: Reg,
         src: Reg,
     },
+    /// Wait for every still-live child task named by `handles`. Unlike
+    /// repeated `AwaitJoin`, group join discards child values and resumes the
+    /// parent only after the entire lexical set has completed.
+    JoinTasks {
+        handles: Vec<Reg>,
+    },
     /// `select { ... }`: each `handles` reg holds a spawned arm task. Park until
     /// the first arm finishes, then write its index to `winner` and its value to
     /// `value`; a branch ladder afterwards dispatches to the winning arm's body.

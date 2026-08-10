@@ -195,6 +195,9 @@ impl RegVm {
                     Some(Wait::Join { task }) => {
                         self.tasks.get(task).is_some_and(|s| s.done.is_some())
                     }
+                    Some(Wait::JoinAll { tasks }) => tasks
+                        .iter()
+                        .all(|task| self.tasks.get(task).is_none_or(|slot| slot.done.is_some())),
                     Some(Wait::Select { handles, .. }) => handles
                         .iter()
                         .any(|h| self.tasks.get(h).is_some_and(|s| s.done.is_some())),
@@ -282,6 +285,12 @@ impl RegVm {
                 // `AwaitJoin` immediate-path note).
                 self.tasks.remove(&task);
                 self.complete_wait(tid, result);
+            }
+            Wait::JoinAll { tasks } => {
+                for task in tasks {
+                    self.tasks.remove(&task);
+                }
+                self.complete_wait(tid, VmValue::Unit);
             }
             Wait::Select {
                 handles,

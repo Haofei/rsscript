@@ -1758,6 +1758,28 @@ impl RegVm {
                                 None => self.set_reg(base + *dst, value),
                             }
                         }
+                        RegInstr::JoinTasks { handles } => {
+                            let mut tasks = handles
+                                .iter()
+                                .filter_map(|reg| as_task_handle(self.reg(base + *reg)))
+                                .collect::<Vec<_>>();
+                            tasks.sort_unstable();
+                            tasks.dedup();
+                            if tasks.iter().all(|task| {
+                                self.tasks.get(task).is_none_or(|slot| slot.done.is_some())
+                            }) {
+                                for task in tasks {
+                                    self.tasks.remove(&task);
+                                }
+                            } else {
+                                self.suspension = Some(Suspension {
+                                    wait: Wait::JoinAll { tasks },
+                                    // Group join has no result, but scheduler
+                                    // completion still requires a valid slot.
+                                    resume_dst: base,
+                                });
+                            }
+                        }
                         RegInstr::SelectWait {
                             handles,
                             winner,

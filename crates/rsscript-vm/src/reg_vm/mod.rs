@@ -1484,6 +1484,9 @@ enum Wait {
     Send { sender: VmSender, value: VmValue },
     /// `await`-ing a spawned task / `async let`: ready when that task finishes.
     Join { task: TaskId },
+    /// Structured task-group drain: ready only after every still-live child
+    /// finishes. Completed children are reaped when the parent resumes.
+    JoinAll { tasks: Vec<TaskId> },
     /// `select { ... }`: ready as soon as any arm task in `handles` finishes. The
     /// winning arm index and its value are written to `winner_dst`/`value_dst`.
     Select {

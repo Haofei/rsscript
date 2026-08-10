@@ -192,6 +192,7 @@ fn deepcopy_collect_regs(instr: &RegInstr, out: &mut Vec<Reg>) {
             out.push(*winner);
             out.push(*value);
         }
+        RegInstr::JoinTasks { handles } => out.extend(handles.iter().copied()),
         RegInstr::ListFilter {
             dst,
             list,
