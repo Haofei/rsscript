@@ -644,7 +644,9 @@ mechanical acceptance condition holds.
     disconnect-path coverage remains open.
   - [ ] **A09.4 — Fuzz protocol and runner failure paths.** Exercise framing,
     malformed messages, oversized inputs, incomplete I/O, and termination
-    separation without calling it a universal sandbox.
+    separation without calling it a universal sandbox. The bounded protocol now
+    has exhaustive truncated-frame and oversized-length regression coverage;
+    mutation fuzzing and runner-process fault injection remain open.
 
 ### 7. Adoption, evidence, and maintenance
 

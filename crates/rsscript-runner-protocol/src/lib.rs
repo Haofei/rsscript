@@ -299,7 +299,9 @@ impl std::fmt::Display for ProtocolError {
             Self::Schema(schema) => write!(formatter, "unsupported runner schema `{schema}`"),
             Self::Limit(name) => write!(formatter, "{name} exceeds the protocol limit"),
             Self::Invalid(message) => formatter.write_str(message),
-            Self::TrailingBytes => formatter.write_str("runner request contains trailing bytes"),
+            Self::TrailingBytes => {
+                formatter.write_str("runner protocol frame contains trailing bytes")
+            }
         }
     }
 }
@@ -386,6 +388,55 @@ mod tests {
         assert!(matches!(
             read_request(bytes.as_slice()),
             Err(ProtocolError::TrailingBytes)
+        ));
+    }
+
+    #[test]
+    fn every_incomplete_request_and_response_frame_is_rejected_without_a_report() {
+        let request = RunnerRequestV1::new(vec!["hello".to_string()]).expect("request");
+        let mut request_bytes = Vec::new();
+        write_request(&mut request_bytes, &request, b"bundle").expect("request frame");
+        for length in 0..request_bytes.len() {
+            assert!(
+                matches!(
+                    read_request(&request_bytes[..length]),
+                    Err(ProtocolError::Io(_))
+                ),
+                "request prefix {length} must fail as incomplete I/O"
+            );
+        }
+
+        let response = RunnerResponseV1::report(serde_json::json!({"ok": true}));
+        let mut response_bytes = Vec::new();
+        write_response(&mut response_bytes, &response).expect("response frame");
+        for length in 0..response_bytes.len() {
+            assert!(
+                matches!(
+                    read_response(&response_bytes[..length]),
+                    Err(ProtocolError::Io(_))
+                ),
+                "response prefix {length} must fail as incomplete I/O"
+            );
+        }
+    }
+
+    #[test]
+    fn declared_oversized_lengths_fail_before_payload_allocation() {
+        let mut request = Vec::new();
+        request.extend_from_slice(REQUEST_MAGIC);
+        request.extend_from_slice(&((MAX_HEADER_BYTES as u64) + 1).to_be_bytes());
+        request.extend_from_slice(&0_u64.to_be_bytes());
+        assert!(matches!(
+            read_request(request.as_slice()),
+            Err(ProtocolError::Limit("runner request"))
+        ));
+
+        let mut response = Vec::new();
+        response.extend_from_slice(RESPONSE_MAGIC);
+        response.extend_from_slice(&((MAX_RESPONSE_BYTES as u64) + 1).to_be_bytes());
+        assert!(matches!(
+            read_response(response.as_slice()),
+            Err(ProtocolError::Limit("runner response"))
         ));
     }
 }
