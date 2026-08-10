@@ -565,8 +565,10 @@ mechanical acceptance condition holds.
   suspension, deadline expiry, blocking-lane enforcement, cleanup exactly once
   on success/error/cancel/deadline, reentrancy, panic containment, redaction, and
   request/response limits.
-  - [ ] **P08.1 — Add async cancellation and deadline fixtures.** Assert Provider
-    observation and VM/runner termination semantics while futures are pending.
+  - [x] **P08.1 — Add async cancellation and deadline fixtures.** The VM async
+    dispatcher is manually polled through a pending Provider future, then verifies
+    that cooperative cancellation and a monotonic deadline are both observed after
+    suspension before a successful Provider result can escape.
   - [ ] **P08.2 — Add resource cleanup state-machine fixtures.** Cover success,
     script error, Provider error, cancellation, deadline, and drop failure.
   - [ ] **P08.3 — Add lane, reentrancy, and panic boundary fixtures.** Validate

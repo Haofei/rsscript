@@ -544,6 +544,10 @@ impl CoverageBucket {
 #[cfg(test)]
 mod provider_contract_tests {
     use super::*;
+    use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationId};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::task::{Context, Poll, Waker};
+    use std::time::Duration;
 
     fn registered_function(
         blocking: BlockingBehavior,
@@ -586,6 +590,71 @@ mod provider_contract_tests {
             )
             .unwrap();
         registry.into_bindings().next().unwrap().1
+    }
+
+    fn registered_async_function(callable: AsyncInterpreterFn) -> ExternalFunction {
+        let symbol = ExternalSymbol::new("host.test.async_run").unwrap();
+        let signature = FunctionSignature {
+            parameters: vec![],
+            result: "Unit".into(),
+            asynchronous: true,
+        };
+        let descriptor = ProviderDescriptor {
+            provider_id: "test.provider".into(),
+            provider_version: "1.0.0".into(),
+            supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+            functions: vec![ProviderFunctionDescriptor {
+                symbol: symbol.clone(),
+                signature: signature.clone(),
+                entry: "async_run".into(),
+                call_mode: ProviderCallMode::Async,
+                blocking: BlockingBehavior::NonBlocking,
+                cancellation: CancellationBehavior::Cooperative,
+                thread_safe: true,
+                reentrant: true,
+                resource_cleanup: ResourceCleanupContract::None,
+                error_mapping: ProviderErrorMapping::StructuredV1,
+            }],
+        };
+        let mut registry = ExternalFunctionRegistry::new();
+        registry
+            .register_provider(
+                &descriptor,
+                BTreeMap::from([(
+                    symbol,
+                    ProviderFunction {
+                        signature,
+                        callable,
+                    },
+                )]),
+            )
+            .unwrap();
+        registry.into_bindings().next().unwrap().1
+    }
+
+    fn async_context(
+        cancellation: Option<CancellationToken>,
+        deadline: Option<MonotonicDeadline>,
+    ) -> AsyncProviderCallContext {
+        AsyncProviderCallContext {
+            cancellation,
+            deadline,
+            remaining_byte_budget: None,
+            remaining_output_budget: None,
+            call_id: OperationId(7),
+            provider_id: String::new(),
+            provider_version: String::new(),
+            symbol: "host.test.async_run".into(),
+            host_context: Arc::new(HostCallContext::default()),
+            trace: None,
+            resources: None,
+        }
+    }
+
+    fn poll_once(future: &mut ProviderFuture) -> Poll<Result<NativeValue, ProviderError>> {
+        let waker = Waker::noop();
+        let mut context = Context::from_waker(waker);
+        future.as_mut().poll(&mut context)
     }
 
     #[test]
@@ -664,5 +733,64 @@ mod provider_contract_tests {
             )
             .unwrap_err();
         assert_eq!(error, ProviderLoadError::CallModeMismatch(symbol));
+    }
+
+    #[test]
+    fn async_dispatcher_observes_cancellation_while_provider_is_suspended() {
+        let started = Arc::new(AtomicBool::new(false));
+        let started_by_provider = Arc::clone(&started);
+        let function = registered_async_function(AsyncInterpreterFn::new(move |_, _| {
+            let started = Arc::clone(&started_by_provider);
+            async move {
+                std::future::poll_fn(move |_| {
+                    if !started.swap(true, Ordering::SeqCst) {
+                        Poll::Pending
+                    } else {
+                        Poll::Ready(Ok(NativeValue::Unit))
+                    }
+                })
+                .await
+            }
+        }));
+        let cancellation = CancellationToken::new();
+        let mut future =
+            function.start_async(async_context(Some(cancellation.clone()), None), vec![]);
+
+        assert!(matches!(poll_once(&mut future), Poll::Pending));
+        assert!(started.load(Ordering::SeqCst));
+        cancellation.cancel();
+
+        let error = match poll_once(&mut future) {
+            Poll::Ready(Err(error)) => error,
+            result => panic!("expected cancellation after pending provider future, got {result:?}"),
+        };
+        assert_eq!(error.code, ProviderErrorCode::Cancelled);
+    }
+
+    #[test]
+    fn async_dispatcher_observes_deadline_expiry_while_provider_is_suspended() {
+        let function = registered_async_function(AsyncInterpreterFn::new(|_, _| async move {
+            let mut pending = true;
+            std::future::poll_fn(move |_| {
+                if pending {
+                    pending = false;
+                    Poll::Pending
+                } else {
+                    Poll::Ready(Ok(NativeValue::Unit))
+                }
+            })
+            .await
+        }));
+        let deadline = MonotonicDeadline::after(Duration::from_millis(1));
+        let mut future = function.start_async(async_context(None, Some(deadline)), vec![]);
+
+        assert!(matches!(poll_once(&mut future), Poll::Pending));
+        std::thread::sleep(Duration::from_millis(5));
+
+        let error = match poll_once(&mut future) {
+            Poll::Ready(Err(error)) => error,
+            result => panic!("expected deadline after pending provider future, got {result:?}"),
+        };
+        assert_eq!(error.code, ProviderErrorCode::DeadlineExceeded);
     }
 }
