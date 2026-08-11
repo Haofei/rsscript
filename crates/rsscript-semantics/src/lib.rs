@@ -10,6 +10,7 @@ pub use rsscript_abi_model::{
     ParameterSignature, SignatureHash,
 };
 
+mod await_placement;
 mod call_arguments;
 mod call_binding;
 mod control_flow;
@@ -29,6 +30,7 @@ mod source_rules;
 mod symbols;
 mod type_aliases;
 mod types;
+pub use await_placement::await_placement_diagnostics;
 pub use call_arguments::{
     CallArgumentFact, CallParameterFact, ReceiverCallEffectFact, call_argument_diagnostics,
     receiver_call_effect_diagnostics,

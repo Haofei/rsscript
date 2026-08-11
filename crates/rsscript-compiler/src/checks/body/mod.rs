@@ -72,7 +72,12 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
         check_fresh_returns(analyzer, &local_analysis, &function);
         if let Some(body) = &hir_body {
             if let Some(block) = body.block.as_ref() {
-                check_await_placement(analyzer, block, function.is_async);
+                analyzer
+                    .diagnostics
+                    .extend(rsscript_semantics::await_placement_diagnostics(
+                        block,
+                        function.is_async,
+                    ));
             }
             check_local_class_bindings(analyzer, body);
             check_uninferable_unused_bindings(analyzer, body);

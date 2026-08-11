@@ -1171,6 +1171,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "derive_field_diagnostics",
         "call_argument_diagnostics",
         "receiver_call_effect_diagnostics",
+        "await_placement_diagnostics",
         "function_fallthrough_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
@@ -1300,6 +1301,24 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         !compiler_generic_constraints.contains("fn check_receiver_call_self_effect"),
         "compiler must not re-own receiver-call effect diagnostics"
     );
+
+    let semantic_await_placement =
+        read(&root.join("crates/rsscript-semantics/src/await_placement.rs"));
+    assert!(semantic_await_placement.contains("pub fn await_placement_diagnostics"));
+    let compiler_body = read(&root.join("crates/rsscript-compiler/src/checks/body/mod.rs"));
+    let compiler_async_checks =
+        read(&root.join("crates/rsscript-compiler/src/checks/body/async_checks.rs"));
+    assert!(compiler_body.contains("rsscript_semantics::await_placement_diagnostics"));
+    for forbidden in [
+        "fn check_await_placement",
+        "fn check_await_placement_stmt",
+        "fn check_await_placement_expr",
+    ] {
+        assert!(
+            !compiler_async_checks.contains(forbidden),
+            "compiler must not re-own await placement rule `{forbidden}`"
+        );
+    }
 
     let semantic_generic_constraints =
         read(&root.join("crates/rsscript-semantics/src/generic_constraints.rs"));

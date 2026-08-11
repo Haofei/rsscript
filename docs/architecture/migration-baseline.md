@@ -229,6 +229,10 @@ mechanical acceptance condition holds.
       returns within nested checked HIR blocks are now derived by semantics for
       concrete non-`Unit` functions; compiler retains only expression-return
       compatibility while alias and aggregate facts migrate.
+    - [x] **S02.5c — Move await-placement diagnostics.** Async-context traversal
+      across checked HIR blocks, closures, assignment targets, and select
+      boundaries is now owned by `rsscript-semantics`; operand and live-value
+      checks remain separate follow-up work.
   - [ ] **S02.6 — Delete compiler semantic-rule modules.** Add architecture
     tests that permit compiler orchestration only and reject semantic-rule
     implementations outside `rsscript-semantics`.
