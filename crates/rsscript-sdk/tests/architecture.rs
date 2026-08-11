@@ -1169,6 +1169,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "duplicate_declaration_diagnostics",
         "derive_syntax_diagnostics",
         "derive_field_diagnostics",
+        "call_argument_diagnostics",
         "function_fallthrough_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
@@ -1273,6 +1274,21 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         assert!(
             !compiler_calls.contains(forbidden),
             "compiler must not re-own control-flow rule `{forbidden}`"
+        );
+    }
+
+    let semantic_call_arguments =
+        read(&root.join("crates/rsscript-semantics/src/call_arguments.rs"));
+    assert!(semantic_call_arguments.contains("pub fn call_argument_diagnostics"));
+    assert!(compiler_calls.contains("rsscript_semantics::call_argument_diagnostics"));
+    for forbidden in [
+        "fn check_argument_naming",
+        "fn check_argument_completeness",
+        "fn check_argument_effects",
+    ] {
+        assert!(
+            !compiler_calls.contains(forbidden),
+            "compiler must not re-own call argument rule `{forbidden}`"
         );
     }
 

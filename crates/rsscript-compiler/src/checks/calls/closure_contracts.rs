@@ -2025,11 +2025,3 @@ pub(super) fn local_closure_escape_diagnostic(
         "manual",
     )
 }
-
-pub(super) fn join_param_names(params: &[crate::hir::ParamSig]) -> String {
-    params
-        .iter()
-        .map(|param| param.name.as_str())
-        .collect::<Vec<_>>()
-        .join(", ")
-}

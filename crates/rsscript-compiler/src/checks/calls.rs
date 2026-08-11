@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use crate::analyzer::Analyzer;
 use crate::checks::diagnostic_helpers::error_cause_manual_fix;
 use crate::checks::shared::builtin_value_type_name;
-use crate::diagnostic::{Diagnostic, FixEdit, Span, code};
+use crate::diagnostic::{Diagnostic, Span, code};
 use crate::hir::{
     CallResolution, FunctionSig, HirBindingKind, HirBlock, HirCallArg, HirExpr, HirStmt, ParamSig,
     ResolvedCalleeKind,
@@ -1092,15 +1092,6 @@ fn check_call_args(
         signature.params.clone()
     };
     check_protocol_receiver_satisfaction(analyzer, function, callee, args, call_span);
-    let param_effects: HashMap<String, &'static str> = signature
-        .params
-        .iter()
-        .filter_map(|param| {
-            param
-                .effect
-                .map(|effect| (param.name.clone(), effect.as_str()))
-        })
-        .collect();
     let param_names: HashSet<String> = signature_params
         .iter()
         .map(|param| param.name.clone())
@@ -1139,31 +1130,45 @@ fn check_call_args(
         })
         .collect();
 
-    check_argument_naming(
-        analyzer,
-        args,
-        &call_name,
-        allow_positional_args,
-        allow_constructor_field_shorthand,
-        &param_names,
-        &signature_params,
-        &resolved_names,
-    );
-    check_argument_completeness(
-        analyzer,
-        &call_name,
-        call_span,
-        &signature_params,
-        &resolved_names,
-    );
-    check_argument_effects(
-        analyzer,
-        args,
-        &call_name,
-        allow_positional_args,
-        &param_effects,
-        &resolved_names,
-    );
+    let parameter_facts = signature
+        .params
+        .iter()
+        .enumerate()
+        .map(|(index, parameter)| rsscript_semantics::CallParameterFact {
+            accepts_argument: !is_receiver_call || index != 0,
+            required: !is_receiver_call || index != 0,
+            name: parameter.name.clone(),
+            effect: parameter.effect.map(|effect| effect.as_str()),
+        })
+        .collect::<Vec<_>>();
+    let argument_facts = args
+        .iter()
+        .zip(&resolved_names)
+        .map(
+            |(argument, resolved_name)| rsscript_semantics::CallArgumentFact {
+                explicit_name: argument.name.is_some(),
+                resolved_name: resolved_name.map(str::to_owned),
+                span: argument.span.clone(),
+                value_span: hir_expr_span(&argument.value).clone(),
+                constructor_shorthand: constructor_field_shorthand_name(
+                    allow_constructor_field_shorthand,
+                    argument,
+                    &param_names,
+                )
+                .is_some(),
+                effect: expr_data_effect(&argument.value),
+            },
+        )
+        .collect::<Vec<_>>();
+    analyzer
+        .diagnostics
+        .extend(rsscript_semantics::call_argument_diagnostics(
+            &call_name,
+            call_span,
+            allow_positional_args,
+            &parameter_facts,
+            &argument_facts,
+        ));
 
     let Some(type_param_substitutions) =
         call_type_param_substitutions(analyzer, Some(function), callee, args, signature)
@@ -1205,163 +1210,6 @@ fn check_call_args(
         local_closure_bindings,
         &resolved_names,
     );
-}
-
-/// Phase 1: enforce argument naming rules — unnamed arguments where they are not
-/// allowed, duplicate arguments, and unknown argument names.
-#[allow(clippy::too_many_arguments)]
-fn check_argument_naming(
-    analyzer: &mut Analyzer<'_>,
-    args: &[HirCallArg],
-    call_name: &str,
-    allow_positional_args: bool,
-    allow_constructor_field_shorthand: bool,
-    param_names: &HashSet<String>,
-    signature_params: &[ParamSig],
-    resolved_names: &[Option<&str>],
-) {
-    for arg in args {
-        if arg.name.is_none()
-            && !allow_positional_args
-            && constructor_field_shorthand_name(allow_constructor_field_shorthand, arg, param_names)
-                .is_none()
-        {
-            analyzer.diagnostics.push(
-                Diagnostic::error(
-                    code::UNNAMED_ARGUMENT,
-                    format!("call to `{call_name}` uses an unnamed argument."),
-                    arg.span.clone(),
-                    "argument must be named",
-                )
-                .with_cause("Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand.")
-                .with_fix(
-                    "add_argument_name",
-                    "Write the argument as `name: value`.",
-                    "manual",
-                ),
-            );
-        }
-    }
-
-    let mut seen_names = HashSet::new();
-    let mut seen_positional_params = HashSet::new();
-    for (arg, resolved) in args.iter().zip(resolved_names) {
-        let Some(name) = *resolved else {
-            continue;
-        };
-        if arg.name.is_none() && !seen_positional_params.insert(name) {
-            continue;
-        }
-        if !seen_names.insert(name) {
-            analyzer.diagnostics.push(
-                Diagnostic::error(
-                    code::DUPLICATE_ARGUMENT,
-                    format!("call to `{call_name}` repeats argument `{name}`."),
-                    arg.span.clone(),
-                    "duplicate argument",
-                )
-                .with_cause("Each named parameter can be provided at most once.")
-                .with_fix(
-                    "remove_duplicate_argument",
-                    format!("Remove the extra `{name}: ...` argument."),
-                    "manual",
-                ),
-            );
-        }
-        if !param_names.contains(name) {
-            analyzer.diagnostics.push(
-                Diagnostic::error(
-                    code::UNKNOWN_ARGUMENT,
-                    format!("call to `{call_name}` has no argument named `{name}`."),
-                    arg.span.clone(),
-                    "unknown argument",
-                )
-                .with_cause(format!(
-                    "`{call_name}` does not declare a parameter named `{name}`."
-                ))
-                .with_fix(
-                    "rename_argument",
-                    format!("Use one of: {}.", join_param_names(signature_params)),
-                    "manual",
-                ),
-            );
-        }
-    }
-}
-
-/// Phase 2: enforce argument completeness — every required parameter must be
-/// provided.
-fn check_argument_completeness(
-    analyzer: &mut Analyzer<'_>,
-    call_name: &str,
-    call_span: &Span,
-    signature_params: &[ParamSig],
-    resolved_names: &[Option<&str>],
-) {
-    let provided_names: HashSet<&str> = resolved_names.iter().filter_map(|name| *name).collect();
-    for param in signature_params {
-        if !provided_names.contains(param.name.as_str()) {
-            analyzer.diagnostics.push(
-                Diagnostic::error(
-                    code::MISSING_ARGUMENT,
-                    format!(
-                        "call to `{call_name}` is missing required argument `{}`.",
-                        param.name
-                    ),
-                    call_span.clone(),
-                    "missing argument",
-                )
-                .with_cause(format!(
-                    "`{call_name}` requires a named argument `{}`.",
-                    param.name
-                ))
-                .with_fix(
-                    "add_argument",
-                    format!("Add `{}: ...` to the call.", param.name),
-                    "manual",
-                ),
-            );
-        }
-    }
-}
-
-/// Phase 3: enforce call-site data effects (`read`/`mut`/`take`) for parameters
-/// that declare one.
-fn check_argument_effects(
-    analyzer: &mut Analyzer<'_>,
-    args: &[HirCallArg],
-    call_name: &str,
-    _allow_positional_args: bool,
-    param_effects: &HashMap<String, &'static str>,
-    resolved_names: &[Option<&str>],
-) {
-    for (arg, resolved) in args.iter().zip(resolved_names) {
-        let Some(name) = *resolved else {
-            continue;
-        };
-        let Some(expected) = param_effects.get(name) else {
-            continue;
-        };
-        if *expected == "read" && expr_data_effect(&arg.value).is_none() {
-            continue;
-        }
-        if expr_data_effect(&arg.value) != Some(*expected) {
-            analyzer.diagnostics.push(
-                Diagnostic::error(
-                    code::MISSING_DATA_EFFECT,
-                    format!("argument `{name}` for `{call_name}` must use `{expected}`."),
-                    hir_expr_span(&arg.value).clone(),
-                    "data effect mismatch",
-                )
-                .with_cause("A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter.")
-                .with_fix_edit(
-                    "add_data_effect",
-                    format!("Write `{name}: {expected} ...` at the call site."),
-                    FixEdit::insert_before(hir_expr_span(&arg.value), format!("{expected} ")),
-                ),
-            );
-        }
-    }
 }
 
 /// Phase 4: check each argument's type against the resolved signature parameter

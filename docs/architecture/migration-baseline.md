@@ -205,6 +205,11 @@ mechanical acceptance condition holds.
     - [ ] **S02.3.2 — Move effect and signature diagnostics.** Relocate call-site
       `read`/`mut`/`take`, external signature, retention, and argument-shape
       validation from compiler checks into semantic queries.
+      - [x] **S02.3.2b — Move call argument shape and data-effect diagnostics.**
+        Naming, duplicate/unknown/missing argument, and `read`/`mut`/`take`
+        diagnostics now consume resolved call facts in `rsscript-semantics`;
+        compiler call checking supplies resolution facts only. External
+        signature matching and retention remain follow-up work.
   - [ ] **S02.4 — Move ownership and resource checks.** Relocate moves, escapes,
     borrows, `fresh`/`owned`/`noescape`, resource declarations, and cleanup
     validation with property and hostile-corpus coverage.

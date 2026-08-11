@@ -10,6 +10,7 @@ pub use rsscript_abi_model::{
     ParameterSignature, SignatureHash,
 };
 
+mod call_arguments;
 mod call_binding;
 mod control_flow;
 mod database;
@@ -28,6 +29,7 @@ mod source_rules;
 mod symbols;
 mod type_aliases;
 mod types;
+pub use call_arguments::{CallArgumentFact, CallParameterFact, call_argument_diagnostics};
 pub use call_binding::{BoundArgument, BoundArgumentSource, CallBinding, CallBindingIssue};
 pub use control_flow::{function_fallthrough_diagnostics, missing_return_value_diagnostics};
 pub use database::{
