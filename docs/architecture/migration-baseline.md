@@ -210,6 +210,10 @@ mechanical acceptance condition holds.
         diagnostics now consume resolved call facts in `rsscript-semantics`;
         compiler call checking supplies resolution facts only. External
         signature matching and retention remain follow-up work.
+      - [x] **S02.3.2c — Move receiver-call effect diagnostics.** The implicit
+        receiver's declared and call-site `read`/`mut`/`take` contract is now a
+        semantic query over resolved receiver facts; compiler only resolves the
+        receiver expression and signature slot.
   - [ ] **S02.4 — Move ownership and resource checks.** Relocate moves, escapes,
     borrows, `fresh`/`owned`/`noescape`, resource declarations, and cleanup
     validation with property and hostile-corpus coverage.

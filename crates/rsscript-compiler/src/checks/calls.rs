@@ -1082,7 +1082,30 @@ fn check_call_args(
             ..
         }
     );
-    check_receiver_call_self_effect(analyzer, callee, signature, call_span);
+    if let Callee::ReceiverCall {
+        receiver,
+        method,
+        effect,
+    } = callee
+    {
+        let receiver_fact = rsscript_semantics::ReceiverCallEffectFact {
+            callee_display: callee_display(callee),
+            method: method.clone(),
+            receiver_label: call_expr_label(receiver),
+            supplied_effect: (*effect).unwrap_or(DataEffect::Read).as_str(),
+            receiver_parameter_declared: !signature.params.is_empty(),
+            expected_effect: signature
+                .params
+                .first()
+                .and_then(|parameter| parameter.effect.map(|effect| effect.as_str())),
+            span: call_span.clone(),
+        };
+        analyzer
+            .diagnostics
+            .extend(rsscript_semantics::receiver_call_effect_diagnostics(
+                &receiver_fact,
+            ));
+    }
     // For receiver-call shorthand, the receiver slot is provided implicitly.
     // Protocol methods conventionally name it `self`; core namespace functions
     // may keep their canonical parameter name, e.g. `List.push(list: mut List<T>, ...)`.

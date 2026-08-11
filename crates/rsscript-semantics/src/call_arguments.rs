@@ -28,6 +28,86 @@ pub struct CallParameterFact {
     pub effect: Option<&'static str>,
 }
 
+/// Resolved facts for receiver-call shorthand's implicit `self` argument.
+#[derive(Debug, Clone)]
+pub struct ReceiverCallEffectFact {
+    pub callee_display: String,
+    pub method: String,
+    pub receiver_label: String,
+    pub supplied_effect: &'static str,
+    pub receiver_parameter_declared: bool,
+    pub expected_effect: Option<&'static str>,
+    pub span: Span,
+}
+
+/// Diagnose the implicit receiver's data-effect contract.
+pub fn receiver_call_effect_diagnostics(fact: &ReceiverCallEffectFact) -> Vec<Diagnostic> {
+    if !fact.receiver_parameter_declared {
+        return vec![Diagnostic::error(
+            code::UNKNOWN_CALLEE,
+            format!(
+                "receiver-call `{}` does not resolve to a method with a receiver parameter.",
+                fact.callee_display
+            ),
+            fact.span.clone(),
+            "receiver method required",
+        )
+        .with_cause(
+            "Receiver-call shorthand expands to a qualified call and requires the resolved function to declare the receiver as its first parameter.",
+        )
+        .with_fix(
+            "use_qualified_call",
+            format!(
+                "Call `{}` in qualified form, or put the receiver parameter first in its signature.",
+                fact.method
+            ),
+            "manual",
+        )];
+    }
+    let Some(expected) = fact.expected_effect else {
+        return vec![Diagnostic::error(
+            code::MISSING_DATA_EFFECT,
+            format!(
+                "receiver `{}` for `{}` has no declared `self` effect to match.",
+                fact.receiver_label, fact.method
+            ),
+            fact.span.clone(),
+            "missing receiver effect",
+        )
+        .with_cause(
+            "Receiver-call shorthand requires the resolved method to declare `self: read|mut|take ...` so the call-site effect can be checked.",
+        )
+        .with_fix(
+            "add_self_effect",
+            "Declare the method receiver as `self: read ...`, `self: mut ...`, or `self: take ...`.",
+            "manual",
+        )];
+    };
+    if expected == fact.supplied_effect {
+        return Vec::new();
+    }
+    vec![Diagnostic::error(
+        code::MISSING_DATA_EFFECT,
+        format!(
+            "receiver `{}` for `{}` uses `{}` but the method requires `{}`.",
+            fact.receiver_label, fact.method, fact.supplied_effect, expected
+        ),
+        fact.span.clone(),
+        "receiver effect mismatch",
+    )
+    .with_cause(
+        "Receiver-call shorthand is only valid when the visible receiver effect exactly matches the resolved method's `self` effect.",
+    )
+    .with_fix(
+        "match_receiver_effect",
+        format!(
+            "Write `{} {}.{}(...)`.",
+            expected, fact.receiver_label, fact.method
+        ),
+        "machine-applicable",
+    )]
+}
+
 /// Diagnose call argument naming, completeness, and data-effect mismatches.
 ///
 /// Call resolution remains the compiler's responsibility. This function consumes
@@ -268,5 +348,30 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn receiver_effect_fact_preserves_receiver_contract_diagnostics() {
+        let mismatch = ReceiverCallEffectFact {
+            callee_display: "List.push".to_owned(),
+            method: "push".to_owned(),
+            receiver_label: "items".to_owned(),
+            supplied_effect: "read",
+            receiver_parameter_declared: true,
+            expected_effect: Some("mut"),
+            span: span(),
+        };
+        let diagnostics = receiver_call_effect_diagnostics(&mismatch);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, code::MISSING_DATA_EFFECT);
+        assert!(diagnostics[0].summary.contains("requires `mut`"));
+
+        let missing_parameter = ReceiverCallEffectFact {
+            receiver_parameter_declared: false,
+            ..mismatch
+        };
+        let diagnostics = receiver_call_effect_diagnostics(&missing_parameter);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, code::UNKNOWN_CALLEE);
     }
 }

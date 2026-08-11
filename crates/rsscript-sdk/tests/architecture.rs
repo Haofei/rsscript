@@ -1170,6 +1170,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "derive_syntax_diagnostics",
         "derive_field_diagnostics",
         "call_argument_diagnostics",
+        "receiver_call_effect_diagnostics",
         "function_fallthrough_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
@@ -1291,6 +1292,14 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
             "compiler must not re-own call argument rule `{forbidden}`"
         );
     }
+    assert!(semantic_call_arguments.contains("pub fn receiver_call_effect_diagnostics"));
+    assert!(compiler_calls.contains("rsscript_semantics::receiver_call_effect_diagnostics"));
+    let compiler_generic_constraints =
+        read(&root.join("crates/rsscript-compiler/src/checks/calls/generic_constraints.rs"));
+    assert!(
+        !compiler_generic_constraints.contains("fn check_receiver_call_self_effect"),
+        "compiler must not re-own receiver-call effect diagnostics"
+    );
 
     let semantic_generic_constraints =
         read(&root.join("crates/rsscript-semantics/src/generic_constraints.rs"));

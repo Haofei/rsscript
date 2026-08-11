@@ -29,7 +29,10 @@ mod source_rules;
 mod symbols;
 mod type_aliases;
 mod types;
-pub use call_arguments::{CallArgumentFact, CallParameterFact, call_argument_diagnostics};
+pub use call_arguments::{
+    CallArgumentFact, CallParameterFact, ReceiverCallEffectFact, call_argument_diagnostics,
+    receiver_call_effect_diagnostics,
+};
 pub use call_binding::{BoundArgument, BoundArgumentSource, CallBinding, CallBindingIssue};
 pub use control_flow::{function_fallthrough_diagnostics, missing_return_value_diagnostics};
 pub use database::{
