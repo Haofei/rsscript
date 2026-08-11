@@ -1172,6 +1172,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "call_argument_diagnostics",
         "receiver_call_effect_diagnostics",
         "await_placement_diagnostics",
+        "await_operand_diagnostic",
         "function_fallthrough_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
@@ -1317,6 +1318,20 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         assert!(
             !compiler_async_checks.contains(forbidden),
             "compiler must not re-own await placement rule `{forbidden}`"
+        );
+    }
+    assert!(semantic_await_placement.contains("pub fn await_operand_diagnostic"));
+    let compiler_body_semantics =
+        read(&root.join("crates/rsscript-compiler/src/checks/body/semantics.rs"));
+    assert!(compiler_body_semantics.contains("rsscript_semantics::await_operand_diagnostic"));
+    for forbidden in [
+        "fn check_await_operand",
+        "fn await_targets_async_let_binding",
+        "fn await_expr_targets_async_call",
+    ] {
+        assert!(
+            !compiler_async_checks.contains(forbidden),
+            "compiler must not re-own await operand rule `{forbidden}`"
         );
     }
 

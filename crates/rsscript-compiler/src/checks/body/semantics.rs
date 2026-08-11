@@ -1202,7 +1202,13 @@ pub(super) fn check_expr_semantics_with_context(
             );
         }
         HirExpr::Await { value, .. } => {
-            check_await_operand(analyzer, value, expr);
+            if let Some(diagnostic) = rsscript_semantics::await_operand_diagnostic(
+                value,
+                expr,
+                &mut analyzer.async_let_names,
+            ) {
+                analyzer.diagnostics.push(diagnostic);
+            }
             let mut await_live_after = live_after.clone();
             collect_await_operand_live_uses(value, &mut await_live_after);
             check_await_live_values(analyzer, state, expr, &await_live_after);

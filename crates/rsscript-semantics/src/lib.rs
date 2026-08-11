@@ -30,7 +30,7 @@ mod source_rules;
 mod symbols;
 mod type_aliases;
 mod types;
-pub use await_placement::await_placement_diagnostics;
+pub use await_placement::{await_operand_diagnostic, await_placement_diagnostics};
 pub use call_arguments::{
     CallArgumentFact, CallParameterFact, ReceiverCallEffectFact, call_argument_diagnostics,
     receiver_call_effect_diagnostics,

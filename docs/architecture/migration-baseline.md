@@ -233,6 +233,10 @@ mechanical acceptance condition holds.
       across checked HIR blocks, closures, assignment targets, and select
       boundaries is now owned by `rsscript-semantics`; operand and live-value
       checks remain separate follow-up work.
+    - [x] **S02.5d — Move await-operand diagnostics.** The direct async-call or
+      task-group async-let requirement is now checked by semantics, including
+      consumption of a pending async-let binding; live-value checks remain a
+      separate ownership follow-up.
   - [ ] **S02.6 — Delete compiler semantic-rule modules.** Add architecture
     tests that permit compiler orchestration only and reject semantic-rule
     implementations outside `rsscript-semantics`.

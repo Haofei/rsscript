@@ -1,6 +1,6 @@
 //! Semantic validation of where source `await` expressions may occur.
 
-use crate::hir::{HirBlock, HirExpr, HirStmt, assign_target_reads};
+use crate::hir::{CallResolution, HirBlock, HirExpr, HirStmt, assign_target_reads};
 use rsscript_diagnostics::{Diagnostic, code};
 
 /// Diagnose `await` expressions outside an async function or structured task
@@ -9,6 +9,84 @@ pub fn await_placement_diagnostics(block: &HirBlock, function_is_async: bool) ->
     let mut diagnostics = Vec::new();
     collect_block(block, function_is_async, &mut diagnostics);
     diagnostics
+}
+
+/// Diagnose an await operand and consume a matching structured async-let name.
+/// Returns `None` when the operand is a resolved async call or an outstanding
+/// async-let binding from the current task group.
+pub fn await_operand_diagnostic(
+    value: &HirExpr,
+    await_expr: &HirExpr,
+    async_let_names: &mut Vec<String>,
+) -> Option<Diagnostic> {
+    if await_expr_targets_async_call(value) {
+        return None;
+    }
+    if let Some(async_let_name) =
+        await_targets_async_let_binding(value, async_let_names).map(str::to_owned)
+    {
+        async_let_names.retain(|name| name != &async_let_name);
+        return None;
+    }
+    Some(
+        Diagnostic::error(
+            code::AWAIT_NON_ASYNC,
+            "`await` must consume an async call.",
+            expr_span(await_expr).clone(),
+            "await non-async expression",
+        )
+        .with_cause("RSScript does not expose Future or Task values in source; the executable async MVP only awaits direct async calls.")
+        .with_fix("await_async_call", "Await an `async fn` call directly.", "manual"),
+    )
+}
+
+fn await_targets_async_let_binding<'a>(
+    expr: &'a HirExpr,
+    async_let_names: &'a [String],
+) -> Option<&'a str> {
+    match expr {
+        HirExpr::Ident { name, .. } if async_let_names.contains(name) => Some(name.as_str()),
+        HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => {
+            await_targets_async_let_binding(value, async_let_names)
+        }
+        _ => None,
+    }
+}
+
+fn await_expr_targets_async_call(expr: &HirExpr) -> bool {
+    match expr {
+        HirExpr::Call { resolution, .. } => {
+            matches!(resolution, CallResolution::Resolved { signature, .. } if signature.is_async)
+        }
+        HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => {
+            await_expr_targets_async_call(value)
+        }
+        _ => false,
+    }
+}
+
+fn expr_span(expr: &HirExpr) -> &rsscript_diagnostics::Span {
+    match expr {
+        HirExpr::Ident { span, .. }
+        | HirExpr::Number { span, .. }
+        | HirExpr::String { span, .. }
+        | HirExpr::Char { span, .. }
+        | HirExpr::ObjectLiteral { span, .. }
+        | HirExpr::MapLiteral { span, .. }
+        | HirExpr::ArrayLiteral { span, .. }
+        | HirExpr::Binary { span, .. }
+        | HirExpr::Field { span, .. }
+        | HirExpr::Index { span, .. }
+        | HirExpr::Call { span, .. }
+        | HirExpr::Effect { span, .. }
+        | HirExpr::Manage { span, .. }
+        | HirExpr::Spawn { span, .. }
+        | HirExpr::Await { span, .. }
+        | HirExpr::Try { span, .. }
+        | HirExpr::Closure { span, .. }
+        | HirExpr::Match { span, .. }
+        | HirExpr::Unknown(span) => span,
+    }
 }
 
 fn collect_block(block: &HirBlock, function_is_async: bool, diagnostics: &mut Vec<Diagnostic>) {
@@ -191,5 +269,26 @@ mod tests {
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].code, code::AWAIT_OUTSIDE_ASYNC);
         assert!(await_placement_diagnostics(&block, true).is_empty());
+    }
+
+    #[test]
+    fn await_operand_consumes_a_structured_async_let_once() {
+        let value = HirExpr::Ident {
+            name: "pending".to_owned(),
+            type_name: None,
+            span: span(),
+        };
+        let await_expr = HirExpr::Await {
+            value: Box::new(value.clone()),
+            type_name: None,
+            span: span(),
+        };
+        let mut async_let_names = vec!["pending".to_owned()];
+
+        assert!(await_operand_diagnostic(&value, &await_expr, &mut async_let_names).is_none());
+        assert!(async_let_names.is_empty());
+        let diagnostic = await_operand_diagnostic(&value, &await_expr, &mut async_let_names)
+            .expect("a consumed async let cannot be awaited twice");
+        assert_eq!(diagnostic.code, code::AWAIT_NON_ASYNC);
     }
 }
