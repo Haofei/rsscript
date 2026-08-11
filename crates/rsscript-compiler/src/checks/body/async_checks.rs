@@ -63,44 +63,6 @@ pub(super) fn expr_span(expr: &HirExpr) -> &Span {
     }
 }
 
-pub(super) fn check_async_call_consumed(
-    analyzer: &mut Analyzer<'_>,
-    callee: &Callee,
-    resolution: &CallResolution,
-    span: &Span,
-    async_call_consumed: bool,
-) {
-    let CallResolution::Resolved { signature, .. } = resolution else {
-        return;
-    };
-    if !signature.is_async || async_call_consumed {
-        return;
-    }
-
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::ASYNC_CALL_NOT_CONSUMED,
-            format!(
-                "async call `{}` must be awaited.",
-                body_callee_display(callee)
-            ),
-            span.clone(),
-            "async call must be awaited",
-        )
-        .with_cause(
-            "Async calls introduce suspension boundaries that must be visible in source; `spawn` is reserved but not executable in v0.7.",
-        )
-        .with_fix(
-            "await_async_call",
-            format!(
-                "Write `await {}(...)`.",
-                body_callee_display(callee)
-            ),
-            "manual",
-        ),
-    );
-}
-
 pub(super) fn is_weak_upgrade_callee(callee: &Callee) -> bool {
     matches!(
         callee,

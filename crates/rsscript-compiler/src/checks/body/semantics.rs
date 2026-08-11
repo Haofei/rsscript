@@ -1169,7 +1169,16 @@ pub(super) fn check_expr_semantics_with_context(
             span,
             ..
         } => {
-            check_async_call_consumed(analyzer, callee, resolution, span, async_call_consumed);
+            if let CallResolution::Resolved { signature, .. } = resolution
+                && let Some(diagnostic) = rsscript_semantics::async_call_consumption_diagnostic(
+                    &body_callee_display(callee),
+                    span,
+                    signature.is_async,
+                    async_call_consumed,
+                )
+            {
+                analyzer.diagnostics.push(diagnostic);
+            }
             check_constructor_field_initializers(analyzer, callee, args, expr, state);
             check_call_place_conflicts(analyzer, args, resolution, state);
             let weak_upgrade = is_weak_upgrade_callee(callee);

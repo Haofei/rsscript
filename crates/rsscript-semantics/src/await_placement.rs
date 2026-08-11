@@ -40,6 +40,34 @@ pub fn await_operand_diagnostic(
     )
 }
 
+/// Diagnose an async call that is evaluated without an `await` boundary.
+pub fn async_call_consumption_diagnostic(
+    callee_display: &str,
+    span: &rsscript_diagnostics::Span,
+    is_async: bool,
+    consumed: bool,
+) -> Option<Diagnostic> {
+    if !is_async || consumed {
+        return None;
+    }
+    Some(
+        Diagnostic::error(
+            code::ASYNC_CALL_NOT_CONSUMED,
+            format!("async call `{callee_display}` must be awaited."),
+            span.clone(),
+            "async call must be awaited",
+        )
+        .with_cause(
+            "Async calls introduce suspension boundaries that must be visible in source; `spawn` is reserved but not executable in v0.7.",
+        )
+        .with_fix(
+            "await_async_call",
+            format!("Write `await {callee_display}(...)`."),
+            "manual",
+        ),
+    )
+}
+
 fn await_targets_async_let_binding<'a>(
     expr: &'a HirExpr,
     async_let_names: &'a [String],
@@ -290,5 +318,14 @@ mod tests {
         let diagnostic = await_operand_diagnostic(&value, &await_expr, &mut async_let_names)
             .expect("a consumed async let cannot be awaited twice");
         assert_eq!(diagnostic.code, code::AWAIT_NON_ASYNC);
+    }
+
+    #[test]
+    fn async_call_consumption_requires_an_explicit_boundary() {
+        let diagnostic = async_call_consumption_diagnostic("fetch", &span(), true, false)
+            .expect("an unconsumed async call is invalid");
+        assert_eq!(diagnostic.code, code::ASYNC_CALL_NOT_CONSUMED);
+        assert!(async_call_consumption_diagnostic("fetch", &span(), true, true).is_none());
+        assert!(async_call_consumption_diagnostic("fetch", &span(), false, false).is_none());
     }
 }

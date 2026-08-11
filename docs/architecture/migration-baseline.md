@@ -237,6 +237,9 @@ mechanical acceptance condition holds.
       task-group async-let requirement is now checked by semantics, including
       consumption of a pending async-let binding; live-value checks remain a
       separate ownership follow-up.
+    - [x] **S02.5e — Move async-call consumption diagnostics.** Resolved async
+      calls evaluated without `await` or `spawn` are diagnosed by semantics;
+      compiler supplies only resolved call facts.
   - [ ] **S02.6 — Delete compiler semantic-rule modules.** Add architecture
     tests that permit compiler orchestration only and reject semantic-rule
     implementations outside `rsscript-semantics`.
