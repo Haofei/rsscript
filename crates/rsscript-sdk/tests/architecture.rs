@@ -1283,6 +1283,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "hir_stmt_effect_events",
         "hir_stmt_identifier_uses",
         "managed_closure_uses_by_statement",
+        "resource_escapes_by_with_statement",
         "fd_surface_diagnostics",
         "unknown_binding_diagnostics",
         "unknown_field_diagnostics",
@@ -1437,36 +1438,23 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
             "compiler must not own resource producer rule `{forbidden}`"
         );
     }
-    let compiler_local_resources =
-        read(&root.join("crates/rsscript-compiler/src/checks/local/resources.rs"));
     let compiler_local_flow = read(&root.join("crates/rsscript-compiler/src/checks/local/flow.rs"));
-    assert!(compiler_local_resources.contains("rsscript_semantics::hir_block_identifier_uses"));
     let compiler_local_analysis = read(&root.join("crates/rsscript-compiler/src/checks/local.rs"));
     assert!(
         compiler_local_analysis.contains("rsscript_semantics::managed_closure_uses_by_statement")
     );
+    assert!(
+        compiler_local_analysis.contains("rsscript_semantics::resource_escapes_by_with_statement")
+    );
     assert!(compiler_local_flow.contains("rsscript_semantics::hir_stmt_identifier_uses"));
     assert!(compiler_local_flow.contains("rsscript_semantics::hir_stmt_effect_events"));
     assert!(compiler_local_flow.contains("rsscript_semantics::hir_expr_path"));
-    for forbidden in [
-        "fn collect_hir_block_idents",
-        "fn collect_hir_stmt_idents",
-        "fn collect_hir_expr_idents",
-        "fn collect_hir_stmt_effect_events",
-        "fn collect_hir_expr_effect_events",
-        "fn collect_hir_block_inline_capture_uses",
-        "fn collect_hir_stmt_inline_capture_uses",
-        "fn collect_hir_expr_inline_capture_uses",
-        "fn index_managed_closure_uses_from_block",
-        "fn collect_block_managed_closure_uses",
-        "fn collect_stmt_managed_closure_uses",
-        "fn collect_expr_managed_closure_uses",
-    ] {
-        assert!(
-            !compiler_local_resources.contains(forbidden),
-            "compiler must not re-own generic HIR identifier traversal `{forbidden}`"
-        );
-    }
+    assert!(
+        !root
+            .join("crates/rsscript-compiler/src/checks/local/resources.rs")
+            .exists(),
+        "compiler must not retain migrated semantic resource traversal"
+    );
     let compiler_protocol_rules = read(&root.join("crates/rsscript-compiler/src/analyzer.rs"));
     assert!(
         !compiler_protocol_rules.contains("fn protocol_signature_mismatch"),

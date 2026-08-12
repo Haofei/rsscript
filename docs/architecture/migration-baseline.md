@@ -370,6 +370,10 @@ mechanical acceptance condition holds.
     - [x] **S02.4t — Move managed-closure fact indexing.** Semantics owns
       statement-keyed managed-closure capture indexing, including nested
       closure discovery; compiler flow only reads the neutral index.
+    - [x] **S02.4u — Move resource-escape fact indexing.** Semantics owns the
+      recursive `with` escape/capture index, including retain, `manage`,
+      wrapper, and intentional `TempDir.keep(take ...)` transfer semantics;
+      compiler only reads the span-keyed neutral facts.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.

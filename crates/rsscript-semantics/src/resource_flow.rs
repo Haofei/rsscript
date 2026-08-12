@@ -1,16 +1,18 @@
-//! Resource escape and managed closure capture indexing.
+//! Backend-neutral HIR facts for lexical resource escape and capture checks.
 
-use super::*;
+use crate::hir::{HirBlock, HirCallArg, HirEffectEventKind, HirExpr, HirStmt, ParamEffect};
+use crate::{ResourceEscape, ResourceEscapeKind, hir::HirBindingKind, hir_block_identifier_uses};
+use rsscript_syntax::{Span, ast::Callee};
+use std::collections::HashMap;
 
-pub(super) fn index_resource_escapes_from_block(
-    block: &HirBlock,
-) -> HashMap<Span, Vec<ResourceEscape>> {
+/// Index resource escape and capture facts by the enclosing `with` statement.
+pub fn resource_escapes_by_with_statement(block: &HirBlock) -> HashMap<Span, Vec<ResourceEscape>> {
     let mut escapes = HashMap::new();
     collect_block_resource_escapes(block, &mut escapes);
     escapes
 }
 
-pub(super) fn collect_block_resource_escapes(
+fn collect_block_resource_escapes(
     block: &HirBlock,
     escapes_by_with_span: &mut HashMap<Span, Vec<ResourceEscape>>,
 ) {
@@ -82,7 +84,7 @@ pub(super) fn collect_block_resource_escapes(
     }
 }
 
-pub(super) fn collect_expr_resource_escapes(
+fn collect_expr_resource_escapes(
     expr: &HirExpr,
     escapes_by_with_span: &mut HashMap<Span, Vec<ResourceEscape>>,
 ) {
@@ -96,9 +98,7 @@ pub(super) fn collect_expr_resource_escapes(
         | HirExpr::Manage { value, .. }
         | HirExpr::Spawn { value, .. }
         | HirExpr::Await { value, .. }
-        | HirExpr::Try { value, .. } => {
-            collect_expr_resource_escapes(value, escapes_by_with_span);
-        }
+        | HirExpr::Try { value, .. } => collect_expr_resource_escapes(value, escapes_by_with_span),
         HirExpr::Binary { left, right, .. } => {
             collect_expr_resource_escapes(left, escapes_by_with_span);
             collect_expr_resource_escapes(right, escapes_by_with_span);
@@ -142,7 +142,7 @@ pub(super) fn collect_expr_resource_escapes(
     }
 }
 
-pub(super) fn collect_resource_escapes_in_block(
+fn collect_resource_escapes_in_block(
     binding: &str,
     block: &HirBlock,
     escapes: &mut Vec<ResourceEscape>,
@@ -227,9 +227,13 @@ pub(super) fn collect_resource_escapes_in_block(
     }
 }
 
-pub(super) fn managed_binding_resource_capture_span(expr: &HirExpr, binding: &str) -> Option<Span> {
+fn managed_binding_resource_capture_span(expr: &HirExpr, binding: &str) -> Option<Span> {
     match expr {
-        HirExpr::Closure { body, span, .. } if hir_block_mentions_ident(body, binding) => {
+        HirExpr::Closure { body, span, .. }
+            if hir_block_identifier_uses(body)
+                .iter()
+                .any(|(name, _)| name == binding) =>
+        {
             Some(span.clone())
         }
         HirExpr::Effect {
@@ -244,7 +248,7 @@ pub(super) fn managed_binding_resource_capture_span(expr: &HirExpr, binding: &st
     }
 }
 
-pub(super) fn collect_resource_escapes_in_expr(
+fn collect_resource_escapes_in_expr(
     binding: &str,
     expr: &HirExpr,
     escapes: &mut Vec<ResourceEscape>,
@@ -288,9 +292,7 @@ pub(super) fn collect_resource_escapes_in_expr(
         HirExpr::Effect { value, .. }
         | HirExpr::Spawn { value, .. }
         | HirExpr::Await { value, .. }
-        | HirExpr::Try { value, .. } => {
-            collect_resource_escapes_in_expr(binding, value, escapes);
-        }
+        | HirExpr::Try { value, .. } => collect_resource_escapes_in_expr(binding, value, escapes),
         HirExpr::Binary { left, right, .. } => {
             collect_resource_escapes_in_expr(binding, left, escapes);
             collect_resource_escapes_in_expr(binding, right, escapes);
@@ -334,7 +336,7 @@ pub(super) fn collect_resource_escapes_in_expr(
     }
 }
 
-pub(super) fn resource_escape_operand_span(expr: &HirExpr, binding: &str) -> Option<Span> {
+fn resource_escape_operand_span(expr: &HirExpr, binding: &str) -> Option<Span> {
     match expr {
         HirExpr::Ident { name, span, .. } if name == binding => Some(span.clone()),
         HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => {
@@ -347,50 +349,31 @@ pub(super) fn resource_escape_operand_span(expr: &HirExpr, binding: &str) -> Opt
     }
 }
 
-pub(super) fn tempdir_keep_consumes_binding(
-    callee: &Callee,
-    args: &[HirCallArg],
-    binding: &str,
-) -> bool {
-    (matches!(
-        callee,
-        Callee::Qualified { namespace, name } if namespace == "TempDir" && name == "keep"
-    ) || matches!(
-        callee,
-        Callee::Name(name) if name == "TempDir.keep"
-    )) && args.iter().any(|arg| {
-        arg.name.as_deref().unwrap_or("dir") == "dir" && take_ident_effect_expr(&arg.value, binding)
-    })
+fn tempdir_keep_consumes_binding(callee: &Callee, args: &[HirCallArg], binding: &str) -> bool {
+    (matches!(callee, Callee::Qualified { namespace, name } if namespace == "TempDir" && name == "keep")
+        || matches!(callee, Callee::Name(name) if name == "TempDir.keep"))
+        && args.iter().any(|arg| {
+            arg.name.as_deref().unwrap_or("dir") == "dir"
+                && take_ident_effect_expr(&arg.value, binding)
+        })
 }
 
-pub(super) fn take_ident_effect_expr(expr: &HirExpr, binding: &str) -> bool {
+fn take_ident_effect_expr(expr: &HirExpr, binding: &str) -> bool {
     matches!(
         expr,
         HirExpr::Effect {
             effect: ParamEffect::Take,
             value,
             ..
-        } if matches!(
-            value.as_ref(),
-            HirExpr::Ident { name, .. } if name == binding
-        )
+        } if matches!(value.as_ref(), HirExpr::Ident { name, .. } if name == binding)
     )
 }
 
-pub(super) fn resource_escape_wrapper_callee(callee: &Callee) -> bool {
-    matches!(
-        callee,
-        Callee::Name(name) if matches!(name.as_str(), "Ok" | "Err" | "Some")
-    )
+fn resource_escape_wrapper_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Name(name) if matches!(name.as_str(), "Ok" | "Err" | "Some"))
 }
 
-pub(super) fn hir_block_mentions_ident(block: &HirBlock, binding: &str) -> bool {
-    rsscript_semantics::hir_block_identifier_uses(block)
-        .iter()
-        .any(|(name, _)| name == binding)
-}
-
-pub(super) fn push_resource_escape(
+fn push_resource_escape(
     escapes: &mut Vec<ResourceEscape>,
     binding: &str,
     kind: ResourceEscapeKind,
@@ -403,5 +386,42 @@ pub(super) fn push_resource_escape(
     };
     if !escapes.contains(&escape) {
         escapes.push(escape);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hir::Hir;
+    use rsscript_syntax::parse_source;
+
+    #[test]
+    fn indexes_returned_resource_escape_by_with_span() {
+        let program = parse_source(
+            "resource-flow.rss",
+            r#"
+resource File { fd: Int }
+fn File.open() -> File
+fn main() -> File {
+    with File.open() as file {
+        return file
+    }
+}
+"#,
+        );
+        let hir = Hir::from_syntax(&program);
+        let body = hir
+            .function_body("main")
+            .and_then(|body| body.block.as_ref())
+            .unwrap();
+        let HirStmt::With { span, .. } = &body.statements[0] else {
+            panic!("expected a with statement");
+        };
+
+        assert!(matches!(
+            resource_escapes_by_with_statement(body).get(span).unwrap().as_slice(),
+            [ResourceEscape { binding, kind: ResourceEscapeKind::Escape, .. }]
+                if binding == "file"
+        ));
     }
 }

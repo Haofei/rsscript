@@ -4,9 +4,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use crate::checks::shared::hir_expr_span;
 use crate::diagnostic::Span;
 use crate::hir::{
-    CallResolution, HirBinding, HirBindingKind, HirBlock, HirCallArg, HirEffectEvent,
-    HirEffectEventKind, HirExpr, HirFunctionBody, HirReturnProof, HirStmt, HirTypeKind,
-    ParamEffect, ResolvedCalleeKind,
+    CallResolution, HirBinding, HirBindingKind, HirBlock, HirEffectEvent, HirEffectEventKind,
+    HirExpr, HirFunctionBody, HirReturnProof, HirStmt, HirTypeKind, ParamEffect,
+    ResolvedCalleeKind,
 };
 use crate::syntax::ast::{Callee, Expr};
 
@@ -14,11 +14,9 @@ use super::body::Flow;
 
 mod flow;
 mod ownership;
-mod resources;
 
 pub(crate) use flow::*;
 use ownership::*;
-use resources::*;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct BodyState {
@@ -105,9 +103,10 @@ impl<'a> LocalAnalysis<'a> {
             HashMap::new,
             rsscript_semantics::managed_closure_uses_by_statement,
         );
-        let resource_escapes_by_with_span = body
-            .and_then(|body| body.block.as_ref())
-            .map_or_else(HashMap::new, index_resource_escapes_from_block);
+        let resource_escapes_by_with_span = body.and_then(|body| body.block.as_ref()).map_or_else(
+            HashMap::new,
+            rsscript_semantics::resource_escapes_by_with_statement,
+        );
         let take_handle_fields = body
             .and_then(|body| body.block.as_ref())
             .map_or_else(Vec::new, collect_take_handle_fields);
