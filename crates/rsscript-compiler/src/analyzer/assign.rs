@@ -411,12 +411,12 @@ impl<'a> AssignChecker<'a> {
                     ),
                 };
                 self.diagnostics
-                    .push(invalid_assignment_diagnostic(span, label, cause));
+                    .push(rsscript_semantics::invalid_assignment_diagnostic(span, label, cause));
             }
             Expr::Field { .. } | Expr::Index { .. } => {
                 self.validate_compound_assignment(stmt, &span);
             }
-            _ => self.diagnostics.push(invalid_assignment_diagnostic(
+            _ => self.diagnostics.push(rsscript_semantics::invalid_assignment_diagnostic(
                 span,
                 "the left side of `=` is not a place".to_string(),
                 "Assignment targets must be a place: a local, a field, or an index — not a call result or literal."
@@ -440,19 +440,11 @@ impl<'a> AssignChecker<'a> {
         }
         if !crate::checks::calls::argument_type_matches(&target_type, &value_type) {
             self.diagnostics.push(
-                Diagnostic::error(
-                    code::ASSIGNMENT_TYPE_MISMATCH,
-                    format!("cannot assign `{value_type}` to `{name}` of type `{target_type}`."),
+                rsscript_semantics::local_assignment_type_mismatch_diagnostic(
+                    name,
+                    &value_type,
+                    &target_type,
                     span.clone(),
-                    "assignment type mismatch",
-                )
-                .with_cause(
-                    "The assigned value's type must match the place's type before Rust lowering.",
-                )
-                .with_fix(
-                    "match_assignment_type",
-                    format!("Assign a `{target_type}` value to `{name}`."),
-                    "manual",
                 ),
             );
         }
@@ -460,7 +452,7 @@ impl<'a> AssignChecker<'a> {
 
     fn validate_compound_assignment(&mut self, stmt: &AssignStmt, span: &crate::diagnostic::Span) {
         let Some(root) = assign_place_root(&stmt.target) else {
-            self.diagnostics.push(invalid_assignment_diagnostic(
+            self.diagnostics.push(rsscript_semantics::invalid_assignment_diagnostic(
                 span.clone(),
                 "the left side of `=` is not rooted in a local place".to_string(),
                 "Field and index assignment must start from a local binding, such as `user.name` or `items[i]`."
@@ -474,7 +466,7 @@ impl<'a> AssignChecker<'a> {
             // mutation propagates to the caller, like `&mut`).
             Some(AssignBinding::MutParam) => {}
             Some(AssignBinding::ImmutableLocal) => {
-                self.diagnostics.push(invalid_assignment_diagnostic(
+                self.diagnostics.push(rsscript_semantics::invalid_assignment_diagnostic(
                     span.clone(),
                     format!("`{root}` is an immutable binding"),
                     format!("Declare `{root}` with `let mut` before assigning through one of its fields or indexes."),
@@ -482,7 +474,7 @@ impl<'a> AssignChecker<'a> {
                 return;
             }
             Some(AssignBinding::Param) => {
-                self.diagnostics.push(invalid_assignment_diagnostic(
+                self.diagnostics.push(rsscript_semantics::invalid_assignment_diagnostic(
                     span.clone(),
                     format!("`{root}` is a parameter, not a reassignable local"),
                     "Assign through a `mut` API parameter explicitly, or bind the value to a `let mut` local first."
@@ -491,11 +483,13 @@ impl<'a> AssignChecker<'a> {
                 return;
             }
             None => {
-                self.diagnostics.push(invalid_assignment_diagnostic(
-                    span.clone(),
-                    format!("`{root}` is not a binding in scope"),
-                    "The assignment target's root must be a `let mut` local in scope.".to_string(),
-                ));
+                self.diagnostics
+                    .push(rsscript_semantics::invalid_assignment_diagnostic(
+                        span.clone(),
+                        format!("`{root}` is not a binding in scope"),
+                        "The assignment target's root must be a `let mut` local in scope."
+                            .to_string(),
+                    ));
                 return;
             }
         }
@@ -508,22 +502,11 @@ impl<'a> AssignChecker<'a> {
                 return;
             };
             if type_root_name(&base_type) != "List" {
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        code::ASSIGNMENT_TARGET_DEFERRED,
-                        "index assignment is only supported for List values.",
+                self.diagnostics
+                    .push(rsscript_semantics::deferred_index_assignment_diagnostic(
+                        &base_type,
                         span.clone(),
-                        format!("cannot assign through `{base_type}` index"),
-                    )
-                    .with_cause(
-                        "`list[i] = value` has clear in-place list update semantics. Other indexed types still require explicit APIs such as `Map.insert`.",
-                    )
-                    .with_fix(
-                        "use_explicit_update_api",
-                        "Use the collection's explicit mutating API for this indexed assignment.",
-                        "manual",
-                    ),
-                );
+                    ));
                 return;
             }
         }
@@ -548,19 +531,10 @@ impl<'a> AssignChecker<'a> {
         }
         if !crate::checks::calls::argument_type_matches(&target_type, &value_type) {
             self.diagnostics.push(
-                Diagnostic::error(
-                    code::ASSIGNMENT_TYPE_MISMATCH,
-                    format!("cannot assign `{value_type}` to `{target_type}` place."),
+                rsscript_semantics::place_assignment_type_mismatch_diagnostic(
+                    &value_type,
+                    &target_type,
                     span.clone(),
-                    "assignment type mismatch",
-                )
-                .with_cause(
-                    "The assigned value's type must match the field or indexed element type before Rust lowering.",
-                )
-                .with_fix(
-                    "match_assignment_type",
-                    format!("Assign a `{target_type}` value to this place."),
-                    "manual",
                 ),
             );
         }
@@ -575,20 +549,6 @@ impl<'a> AssignChecker<'a> {
             },
         )
     }
-}
-
-fn invalid_assignment_diagnostic(
-    span: crate::diagnostic::Span,
-    label: String,
-    cause: String,
-) -> Diagnostic {
-    Diagnostic::error(code::INVALID_ASSIGNMENT, "invalid assignment.", span, label)
-        .with_cause(cause)
-        .with_fix(
-            "declare_let_mut",
-            "Declare the target as a `let mut` local, or remove the assignment.",
-            "manual",
-        )
 }
 
 /// The root place identifier of an assignment target, following field/index

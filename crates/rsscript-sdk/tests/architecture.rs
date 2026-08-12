@@ -1501,6 +1501,27 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         !compiler_assignment.contains("root.len() == 1"),
         "assignment checking must not re-own unresolved-generic inference"
     );
+    let semantic_assignment = read(&root.join("crates/rsscript-semantics/src/assignment.rs"));
+    for exported in [
+        "pub fn invalid_assignment_diagnostic",
+        "pub fn local_assignment_type_mismatch_diagnostic",
+        "pub fn place_assignment_type_mismatch_diagnostic",
+        "pub fn deferred_index_assignment_diagnostic",
+    ] {
+        assert!(semantic_assignment.contains(exported));
+    }
+    for delegated in [
+        "rsscript_semantics::invalid_assignment_diagnostic",
+        "rsscript_semantics::local_assignment_type_mismatch_diagnostic",
+        "rsscript_semantics::place_assignment_type_mismatch_diagnostic",
+        "rsscript_semantics::deferred_index_assignment_diagnostic",
+    ] {
+        assert!(compiler_assignment.contains(delegated));
+    }
+    assert!(
+        !compiler_assignment.contains("Diagnostic::"),
+        "compiler must not construct assignment language diagnostics"
+    );
     assert!(
         !compiler_calls.contains("The callee is not a user function"),
         "compiler must not re-own resolved call diagnostic text"

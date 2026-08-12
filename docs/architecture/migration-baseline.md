@@ -209,6 +209,9 @@ mechanical acceptance condition holds.
     - [x] **S02.2k — Move unresolved generic detection.** Semantics owns the
       rendered-type recursion and generic identity rule; compiler call and
       assignment paths provide only active/declaration type facts.
+    - [x] **S02.5p — Move assignment diagnostics.** Compiler retains lexical
+      scope/place fact extraction, while semantics owns invalid-target,
+      mutability, type-mismatch, and indexed-target diagnostic contracts.
     - [x] **S02.2j — Move bounded generic substitution.** Semantics owns the
       recursive substitution algorithm; compiler contributes only a narrow
       adapter to its shared cancellation and substitution budget.

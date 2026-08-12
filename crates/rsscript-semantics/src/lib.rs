@@ -10,6 +10,7 @@ pub use rsscript_abi_model::{
     ParameterSignature, SignatureHash,
 };
 
+mod assignment;
 mod await_placement;
 mod call_arguments;
 mod call_binding;
@@ -39,6 +40,10 @@ mod type_aliases;
 mod type_compatibility;
 mod types;
 mod weak_fields;
+pub use assignment::{
+    deferred_index_assignment_diagnostic, invalid_assignment_diagnostic,
+    local_assignment_type_mismatch_diagnostic, place_assignment_type_mismatch_diagnostic,
+};
 pub use await_placement::{
     AwaitLiveValueFact, async_call_consumption_diagnostic, await_live_value_diagnostics,
     await_operand_diagnostic, await_placement_diagnostics,
