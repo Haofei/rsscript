@@ -83,7 +83,9 @@ pub use declarations::{
 };
 pub use derive_fields::derive_field_diagnostics;
 pub use derives::derive_syntax_diagnostics;
-pub use external_types::{external_binding_type_diagnostics, unknown_type_diagnostics};
+pub use external_types::{
+    external_binding_type_diagnostics, unknown_type_diagnostics, unknown_type_name_diagnostic,
+};
 pub use generic_constraints::{
     ProtocolSatisfactionFacts, SubstitutionBudget, SubstitutionError,
     conventional_variant_form_diagnostic, duplicate_variant_field_diagnostic, dyn_from_diagnostic,
@@ -188,7 +190,9 @@ pub use interface_descriptor::{
     INTERFACE_DESCRIPTOR_SCHEMA, InterfaceDescriptorError, InterfaceDescriptorFunctionV1,
     InterfaceDescriptorResourceV1, InterfaceDescriptorV1,
 };
-pub use protocol_bounds::{protocol_bound_diagnostics, unknown_protocol_diagnostic};
+pub use protocol_bounds::{
+    protocol_bound_diagnostics, protocol_impl_mismatch_diagnostic, unknown_protocol_diagnostic,
+};
 pub use resource_types::{
     fd_surface_diagnostics, resource_field_diagnostics, resource_generic_diagnostics,
     weak_field_diagnostics,

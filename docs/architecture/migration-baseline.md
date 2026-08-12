@@ -150,6 +150,10 @@ mechanical acceptance condition holds.
       retains detection while adapting source forms, but
       `rsscript-semantics` owns the canonical unsupported-syntax diagnostic,
       including its code, message, cause, and fix.
+    - [x] **S02.1i — Move declaration type and protocol-implementation
+      diagnostics.** Semantics owns the canonical unresolved-type and protocol
+      implementation mapping diagnostic contracts; compiler only supplies
+      resolved declaration facts and spans.
     - [x] **S02.2g — Move resolved builtin operator diagnostics.** Compiler
       extracts HIR operand/type facts; semantics owns non-numeric arithmetic and
       fixed-operand compatibility diagnostic contracts.

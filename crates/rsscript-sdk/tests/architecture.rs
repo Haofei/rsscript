@@ -1251,7 +1251,10 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "spawn_local_capture_diagnostic",
         "function_fallthrough_diagnostics",
         "forbidden_surface_syntax_diagnostics",
+        "unsupported_syntax_diagnostic",
         "external_binding_type_diagnostics",
+        "unknown_type_name_diagnostic",
+        "protocol_impl_mismatch_diagnostic",
         "generic_constraint_diagnostics",
         "fd_surface_diagnostics",
         "unknown_binding_diagnostics",
@@ -1321,6 +1324,19 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     let compiler_syntax_support =
         read(&root.join("crates/rsscript-compiler/src/analyzer/syntax_support.rs"));
     assert!(compiler_syntax_support.contains("rsscript_semantics::derive_syntax_diagnostics"));
+    assert!(compiler_syntax_support.contains("rsscript_semantics::unsupported_syntax_diagnostic"));
+    assert!(!compiler_syntax_support.contains("Diagnostic::"));
+    let compiler_declaration_diagnostics =
+        read(&root.join("crates/rsscript-compiler/src/analyzer/diagnostics.rs"));
+    assert!(
+        compiler_declaration_diagnostics
+            .contains("rsscript_semantics::unknown_type_name_diagnostic")
+    );
+    assert!(
+        compiler_declaration_diagnostics
+            .contains("rsscript_semantics::protocol_impl_mismatch_diagnostic")
+    );
+    assert!(!compiler_declaration_diagnostics.contains("Diagnostic::"));
     let compiler_derives = read(&root.join("crates/rsscript-compiler/src/analyzer/derives.rs"));
     assert!(!compiler_derives.contains("fn supported_compiler_derive"));
     assert!(!compiler_derives.contains("fn check_supported_derives"));

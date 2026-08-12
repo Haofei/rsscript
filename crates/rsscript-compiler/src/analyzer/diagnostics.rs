@@ -6,23 +6,8 @@ impl Analyzer<'_> {
         name: &str,
         span: &crate::diagnostic::Span,
     ) {
-        self.diagnostics.push(
-            Diagnostic::error(
-                code::UNKNOWN_TYPE,
-                format!("unknown type `{name}`."),
-                span.clone(),
-                "unknown type",
-            )
-            .with_cause("RSScript type checking must resolve source-level types before Rust lowering.")
-            .with_fix(
-                "declare_or_import_type",
-                format!(
-                    "Declare `{}`, import an `.rssi` contract that declares it, or use a known core/runtime type.",
-                    name
-                ),
-                "manual",
-            ),
-        );
+        self.diagnostics
+            .push(rsscript_semantics::unknown_type_name_diagnostic(name, span));
     }
 
     pub(crate) fn protocol_impl_mismatch_diagnostic(
@@ -34,19 +19,9 @@ impl Analyzer<'_> {
         label: impl Into<String>,
         cause: impl Into<String>,
     ) {
-        self.diagnostics.push(
-            Diagnostic::error(
-                code::PACKAGE_INTERFACE_MISMATCH,
-                format!("`{type_name}` does not satisfy protocol `{protocol}` method `{method}`."),
-                span.clone(),
-                label,
-            )
-            .with_cause(cause)
-            .with_fix(
-                "fix_protocol_impl_mapping",
-                "Update the protocol impl mapping or concrete function signature to match the protocol contract exactly.",
-                "manual",
-            ),
-        );
+        self.diagnostics
+            .push(rsscript_semantics::protocol_impl_mismatch_diagnostic(
+                protocol, type_name, method, span, label, cause,
+            ));
     }
 }

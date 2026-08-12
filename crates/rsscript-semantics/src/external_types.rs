@@ -135,8 +135,16 @@ fn known_type_ref(hir: &Hir, ty: &TypeRef, generic_params: &HashSet<&str>) -> bo
 }
 
 fn unknown_type_name(ty: &TypeRef) -> Diagnostic {
-    let name = type_ref_name(ty);
-    Diagnostic::error(code::UNKNOWN_TYPE, format!("unknown type `{name}`."), ty.span.clone(), "unknown type")
+    unknown_type_name_diagnostic(&type_ref_name(ty), &ty.span)
+}
+
+/// Construct the canonical diagnostic for an unresolved source-level type.
+///
+/// This accepts a rendered type name so declaration and protocol-implementation
+/// checks can share the same language contract without rebuilding a syntax
+/// `TypeRef` solely to emit a diagnostic.
+pub fn unknown_type_name_diagnostic(name: &str, span: &rsscript_syntax::Span) -> Diagnostic {
+    Diagnostic::error(code::UNKNOWN_TYPE, format!("unknown type `{name}`."), span.clone(), "unknown type")
         .with_cause("RSScript type checking must resolve source-level types before Rust lowering.")
         .with_fix("declare_or_import_type", format!("Declare `{name}`, import an `.rssi` contract that declares it, or use a known core/runtime type."), "manual")
 }
@@ -209,5 +217,18 @@ mod tests {
         let mut visible = HashSet::new();
         visible.insert("Missing".to_string());
         assert!(external_binding_type_diagnostics(ty, &HashSet::new(), &visible).is_empty());
+    }
+
+    #[test]
+    fn unresolved_type_contract_is_shared_by_declaration_checks() {
+        let program = rsscript_syntax::parse_source("types.rss", "struct Item { value: Missing }");
+        let span = match &program.items[0] {
+            rsscript_syntax::ast::Item::Type(decl) => &decl.fields[0].ty.span,
+            _ => unreachable!(),
+        };
+        let diagnostic = unknown_type_name_diagnostic("Missing", span);
+        assert_eq!(diagnostic.code, code::UNKNOWN_TYPE);
+        assert_eq!(diagnostic.label, "unknown type");
+        assert_eq!(diagnostic.fixes[0].kind, "declare_or_import_type");
     }
 }
