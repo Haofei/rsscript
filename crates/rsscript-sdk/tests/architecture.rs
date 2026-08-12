@@ -1669,6 +1669,25 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         compiler_body_closures
             .contains("rsscript_semantics::explicit_closure_capture_contract_diagnostic")
     );
+    let semantic_places = read(&root.join("crates/rsscript-semantics/src/place.rs"));
+    for exported in [
+        "pub fn managed_field_split_conflict_diagnostic",
+        "pub fn field_partial_access_conflict_diagnostic",
+        "pub fn field_prefix_conflict_diagnostic",
+        "pub fn indexed_place_conflict_diagnostic",
+        "pub fn move_base_field_conflict_diagnostic",
+    ] {
+        assert!(semantic_places.contains(exported));
+    }
+    for delegated in [
+        "rsscript_semantics::managed_field_split_conflict_diagnostic",
+        "rsscript_semantics::field_partial_access_conflict_diagnostic",
+        "rsscript_semantics::field_prefix_conflict_diagnostic",
+        "rsscript_semantics::indexed_place_conflict_diagnostic",
+        "rsscript_semantics::move_base_field_conflict_diagnostic",
+    ] {
+        assert!(compiler_body_places.contains(delegated));
+    }
     for forbidden in [
         "fn resource_escape_diagnostic",
         "fn resource_capture_diagnostic",
@@ -1692,6 +1711,18 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         assert!(
             !compiler_body_effects.contains(forbidden),
             "compiler must not re-own closure or read-view diagnostic `{forbidden}`"
+        );
+    }
+    for forbidden in [
+        "fn managed_field_split_conflict_diagnostic",
+        "fn field_partial_access_conflict_diagnostic",
+        "fn field_prefix_conflict_diagnostic",
+        "fn indexed_place_conflict_diagnostic",
+        "fn move_base_field_conflict_diagnostic",
+    ] {
+        assert!(
+            !compiler_body_places.contains(forbidden),
+            "compiler must not re-own place conflict diagnostic `{forbidden}`"
         );
     }
     for forbidden in [

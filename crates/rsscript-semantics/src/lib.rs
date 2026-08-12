@@ -25,6 +25,7 @@ mod identities;
 mod interface_descriptor;
 mod literals;
 mod ownership;
+mod place;
 mod protocol_bounds;
 mod resource_types;
 mod signatures;
@@ -82,6 +83,11 @@ pub use ownership::{
     resource_producer_missing_try_diagnostic, retained_closure_capture_diagnostic,
     retained_local_diagnostic, spawn_local_capture_diagnostic, take_handle_field_diagnostic,
     weak_field_requires_weak_handle_diagnostic,
+};
+pub use place::{
+    field_partial_access_conflict_diagnostic, field_prefix_conflict_diagnostic,
+    indexed_place_conflict_diagnostic, managed_field_split_conflict_diagnostic,
+    move_base_field_conflict_diagnostic,
 };
 pub use try_checks::{try_error_type_diagnostics, try_operand_diagnostic};
 pub use weak_fields::{is_weak_upgrade_call, weak_field_upgrade_diagnostic};

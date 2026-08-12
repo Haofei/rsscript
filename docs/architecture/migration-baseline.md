@@ -257,6 +257,9 @@ mechanical acceptance condition holds.
       Compiler gathers local/capture/place facts; semantics owns read-view
       exclusivity, noescape capture consumption, and explicit capture contract
       diagnostics.
+    - [x] **S02.4m — Move call-place conflict diagnostics.** Compiler resolves
+      local place paths and disjointness facts; semantics owns managed split,
+      whole-base, prefix, indexed, and move-versus-field diagnostics.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.
