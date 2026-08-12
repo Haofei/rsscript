@@ -26,6 +26,7 @@ pub mod hir;
 mod identities;
 mod interface_descriptor;
 mod literals;
+mod operators;
 mod ownership;
 mod place;
 mod protocol_bounds;
@@ -89,6 +90,7 @@ pub use literals::{
     char_literal_scalar_diagnostic, integer_literal_range_diagnostic,
     match_char_literal_scalar_diagnostic,
 };
+pub use operators::{operator_overload_attempt_diagnostic, operator_type_mismatch_diagnostic};
 pub use ownership::{
     constructor_field_effect_diagnostic, explicit_closure_capture_contract_diagnostic,
     explicit_closure_missing_capture_diagnostic, explicit_closure_unused_capture_diagnostic,

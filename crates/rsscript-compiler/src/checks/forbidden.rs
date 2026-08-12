@@ -1,6 +1,5 @@
 use crate::analyzer::Analyzer;
 use crate::checks::shared::builtin_value_type_name;
-use crate::diagnostic::{Diagnostic, code};
 use crate::hir::{HirBlock, HirExpr, HirStmt};
 use crate::syntax::ast::{BinaryOp, FunctionDecl, Item};
 use crate::text_util::type_root_name;
@@ -115,18 +114,7 @@ fn check_operator_overload_attempts_in_expr(analyzer: &mut Analyzer<'_>, expr: &
                 && (non_numeric_operand(analyzer, left) || non_numeric_operand(analyzer, right))
             {
                 analyzer.diagnostics.push(
-                    Diagnostic::error(
-                        code::OPERATOR_OVERLOAD_ATTEMPT,
-                        "arithmetic operators are only built in for numeric values.",
-                        span.clone(),
-                        "operator on non-numeric value",
-                    )
-                    .with_cause("RSScript does not support user-defined operator overloads.")
-                    .with_fix(
-                        "use_named_function",
-                        "Use a named function such as `Type.add(left: read a, right: read b)`.",
-                        "manual",
-                    ),
+                    rsscript_semantics::operator_overload_attempt_diagnostic(span.clone()),
                 );
             }
             check_builtin_operator_operand_types(analyzer, *op, left, right, span);
@@ -306,22 +294,11 @@ fn operator_type_mismatch_diagnostic(
     right_type: &str,
     expected: &str,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::OPERATOR_TYPE_MISMATCH,
-            format!(
-                "operator `{operator}` has operands `{left_type}` and `{right_type}`, expected {expected}."
-            ),
-            span,
-            "operator type mismatch",
-        )
-        .with_cause("RSScript operators have fixed built-in operand types and do not use implicit conversion or overload resolution.")
-        .with_fix(
-            "use_typed_operator_operands",
-            "Compare values of the same supported type, or call an explicit named conversion/function first.",
-            "manual",
-        ),
-    );
+    analyzer
+        .diagnostics
+        .push(rsscript_semantics::operator_type_mismatch_diagnostic(
+            operator, left_type, right_type, expected, span,
+        ));
 }
 
 fn operator_label(op: BinaryOp) -> &'static str {

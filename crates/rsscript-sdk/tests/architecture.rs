@@ -1483,6 +1483,18 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         !compiler_generic_constraints.contains("external_binding protocol not satisfied"),
         "compiler must not re-own resolved protocol and variant diagnostic text"
     );
+    let semantic_operators = read(&root.join("crates/rsscript-semantics/src/operators.rs"));
+    assert!(semantic_operators.contains("pub fn operator_overload_attempt_diagnostic"));
+    assert!(semantic_operators.contains("pub fn operator_type_mismatch_diagnostic"));
+    let compiler_forbidden = read(&root.join("crates/rsscript-compiler/src/checks/forbidden.rs"));
+    assert!(
+        compiler_forbidden.contains("rsscript_semantics::operator_overload_attempt_diagnostic")
+    );
+    assert!(compiler_forbidden.contains("rsscript_semantics::operator_type_mismatch_diagnostic"));
+    assert!(
+        !compiler_forbidden.contains("RSScript does not support user-defined operator overloads"),
+        "compiler must not re-own builtin operator diagnostic text"
+    );
 
     let semantic_await_placement =
         read(&root.join("crates/rsscript-semantics/src/await_placement.rs"));
