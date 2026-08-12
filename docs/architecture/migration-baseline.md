@@ -264,6 +264,10 @@ mechanical acceptance condition holds.
     - [x] **S02.5i — Move `match` expression arm result diagnostics.** Checked-HIR
       validation that all value-producing match arms agree with the resolved
       expression result type now belongs to semantics.
+    - [x] **S02.5j — Move `match` scrutinee diagnostics.** Semantics owns the
+      supported scrutinee-type rule and canonical diagnostic; compiler supplies
+      alias-expanded type and declared pattern-kind facts from its current HIR
+      adapter.
   - [ ] **S02.6 — Delete compiler semantic-rule modules.** Add architecture
     tests that permit compiler orchestration only and reject semantic-rule
     implementations outside `rsscript-semantics`.

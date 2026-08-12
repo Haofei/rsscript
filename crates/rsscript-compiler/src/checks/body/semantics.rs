@@ -362,28 +362,17 @@ pub(super) fn check_match_scrutinee_type(analyzer: &mut Analyzer<'_>, expr: &Hir
         return;
     };
     let type_name = analyzer.expand_type_alias(type_name);
-    if matches!(type_root_name(&type_name), "Option" | "Result" | "List") {
-        return;
-    }
-    if matches!(type_name.as_str(), "Int" | "String" | "Char" | "Bool") {
-        return;
-    }
-    // Allow matching on user-defined sum/struct/class types.
-    if matches!(
+    let is_declared_pattern_type = matches!(
         analyzer.hir.type_kind(&type_name),
         Some(HirTypeKind::Sum | HirTypeKind::Struct | HirTypeKind::Class)
+    );
+    if let Some(diagnostic) = rsscript_semantics::match_scrutinee_diagnostic(
+        expr,
+        Some(&type_name),
+        is_declared_pattern_type,
     ) {
-        return;
+        analyzer.diagnostics.push(diagnostic);
     }
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::CONTROL_FLOW_TYPE_MISMATCH,
-        format!("match scrutinee has type `{type_name}`, expected `Option<T>`, `Result<T, E>`, `List<T>`, a declared sum/struct/class type, or an `Int`/`String`/`Char`/`Bool` literal match."),
-        hir_expr_span(expr).clone(),
-        "control-flow type mismatch",
-        "RSScript v0.7 `match` is limited to review-visible `Option`, `Result`, declared sum/struct/class patterns, and simple scalar literal dispatch.",
-        "match_option_or_result",
-        "Match an `Option<T>`, `Result<T, E>`, declared sum value, or scalar literal value; otherwise rewrite this branch as `if`.",
-    ));
 }
 
 pub(super) fn check_match_patterns_match_scrutinee(

@@ -150,6 +150,36 @@ pub fn match_expression_arm_type_diagnostics(
         .collect()
 }
 
+/// Diagnose a `match` scrutinee outside the set of values with a review-visible
+/// pattern model. Alias expansion and declared-type classification are supplied
+/// by the semantic database caller.
+pub fn match_scrutinee_diagnostic(
+    expr: &HirExpr,
+    type_name: Option<&str>,
+    is_declared_pattern_type: bool,
+) -> Option<Diagnostic> {
+    let type_name = type_name?;
+    let supported_root = matches!(type_root_name(type_name), "Option" | "Result" | "List");
+    let supported_scalar = matches!(type_name, "Int" | "String" | "Char" | "Bool");
+    if supported_root || supported_scalar || is_declared_pattern_type {
+        return None;
+    }
+    Some(
+        Diagnostic::error(
+            code::CONTROL_FLOW_TYPE_MISMATCH,
+            format!("match scrutinee has type `{type_name}`, expected `Option<T>`, `Result<T, E>`, `List<T>`, a declared sum/struct/class type, or an `Int`/`String`/`Char`/`Bool` literal match."),
+            expr_span(expr).clone(),
+            "control-flow type mismatch",
+        )
+        .with_cause("RSScript v0.7 `match` is limited to review-visible `Option`, `Result`, declared sum/struct/class patterns, and simple scalar literal dispatch.")
+        .with_fix(
+            "match_option_or_result",
+            "Match an `Option<T>`, `Result<T, E>`, declared sum value, or scalar literal value; otherwise rewrite this branch as `if`.",
+            "manual",
+        ),
+    )
+}
+
 fn collect_bare_returns(
     block: &HirBlock,
     function: &FunctionDecl,
@@ -340,6 +370,14 @@ fn generic_item_type<'a>(type_name: &'a str, root: &str) -> Option<&'a str> {
     (!inner.is_empty()).then_some(inner)
 }
 
+fn type_root_name(type_name: &str) -> &str {
+    let type_name = type_name.trim();
+    let type_name = type_name.strip_prefix("fresh ").unwrap_or(type_name);
+    type_name
+        .split_once('<')
+        .map_or(type_name, |(root, _)| root)
+}
+
 fn match_arm_value_type(block: &HirBlock) -> Option<&str> {
     match block.statements.iter().next_back()? {
         HirStmt::Return {
@@ -453,5 +491,25 @@ mod tests {
         let diagnostics = match_expression_arm_type_diagnostics(arms, type_name.as_deref());
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].code, code::CONTROL_FLOW_TYPE_MISMATCH);
+    }
+
+    #[test]
+    fn validates_match_scrutinee_types_from_resolved_facts() {
+        let span = rsscript_diagnostics::Span {
+            file: "match.rss".to_owned(),
+            line: 1,
+            column: 1,
+            length: 1,
+        };
+        let value = HirExpr::Ident {
+            name: "value".to_owned(),
+            type_name: Some("Map<String, Int>".to_owned()),
+            span,
+        };
+        let diagnostic = match_scrutinee_diagnostic(&value, Some("Map<String, Int>"), false)
+            .expect("must reject Map patterns");
+        assert_eq!(diagnostic.code, code::CONTROL_FLOW_TYPE_MISMATCH);
+        assert!(match_scrutinee_diagnostic(&value, Some("Result<Int, Error>"), false).is_none());
+        assert!(match_scrutinee_diagnostic(&value, Some("Token"), true).is_none());
     }
 }

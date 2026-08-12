@@ -1183,6 +1183,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "bool_condition_diagnostic",
         "for_iterable_diagnostic",
         "match_expression_arm_type_diagnostics",
+        "match_scrutinee_diagnostic",
         "function_fallthrough_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
@@ -1413,6 +1414,12 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
             "compiler must not re-own match arm result rule `{forbidden}`"
         );
     }
+    assert!(semantic_control_flow.contains("pub fn match_scrutinee_diagnostic"));
+    assert!(compiler_body_semantics.contains("rsscript_semantics::match_scrutinee_diagnostic"));
+    assert!(
+        !compiler_body_semantics.contains("match scrutinee has type"),
+        "compiler must not re-own match scrutinee diagnostic text"
+    );
 
     let semantic_generic_constraints =
         read(&root.join("crates/rsscript-semantics/src/generic_constraints.rs"));
