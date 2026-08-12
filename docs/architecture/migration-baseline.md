@@ -154,6 +154,9 @@ mechanical acceptance condition holds.
       diagnostics.** Semantics owns the canonical unresolved-type and protocol
       implementation mapping diagnostic contracts; compiler only supplies
       resolved declaration facts and spans.
+    - [x] **S02.1j — Move protocol implementation signature comparison.**
+      Semantics owns resolved parameter, `Self` substitution, return, freshness,
+      and retention compatibility; compiler only resolves mapping targets.
     - [x] **S02.2g — Move resolved builtin operator diagnostics.** Compiler
       extracts HIR operand/type facts; semantics owns non-numeric arithmetic and
       fixed-operand compatibility diagnostic contracts.

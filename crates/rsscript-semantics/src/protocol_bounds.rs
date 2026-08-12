@@ -1,7 +1,11 @@
 //! Protocol-bound visibility diagnostics.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
+use crate::{
+    ResolvedType,
+    hir::{FunctionSig, ParamSig},
+};
 use rsscript_diagnostics::{Diagnostic, code};
 use rsscript_syntax::ast::{GenericBound, Item, Program};
 
@@ -74,6 +78,97 @@ pub fn protocol_impl_mismatch_diagnostic(
         "Update the protocol impl mapping or concrete function signature to match the protocol contract exactly.",
         "manual",
     )
+}
+
+/// Compare a resolved protocol method signature with its mapped concrete
+/// implementation after substituting `Self` with the implementation type.
+/// Returns the stable human-readable mismatch reason used by the protocol
+/// implementation diagnostic.
+pub fn protocol_signature_mismatch(
+    protocol: &FunctionSig,
+    target: &FunctionSig,
+    concrete_type: &str,
+) -> Option<String> {
+    if protocol.is_async != target.is_async {
+        return Some("async/sync kind must match the protocol method exactly.".to_owned());
+    }
+    if protocol.params.len() != target.params.len() {
+        return Some(format!(
+            "parameter count mismatch: protocol has {}, implementation has {}.",
+            protocol.params.len(),
+            target.params.len()
+        ));
+    }
+    for (protocol_param, target_param) in protocol.params.iter().zip(&target.params) {
+        if let Some(reason) = protocol_param_mismatch(protocol_param, target_param, concrete_type) {
+            return Some(reason);
+        }
+    }
+    let substitutions =
+        BTreeMap::from([("Self".to_owned(), ResolvedType::from_display(concrete_type))]);
+    let protocol_return = protocol
+        .return_ty
+        .as_ref()
+        .map(|return_type| return_type.substitute(&substitutions));
+    if protocol_return != target.return_ty {
+        return Some(format!(
+            "return type mismatch: protocol expects `{}`, implementation returns `{}`.",
+            protocol_return
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "Unit".to_owned()),
+            target
+                .return_ty
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "Unit".to_owned())
+        ));
+    }
+    if protocol.returns_fresh != target.returns_fresh {
+        return Some("fresh return mode must match the protocol method exactly.".to_owned());
+    }
+    if protocol.retained_params != target.retained_params {
+        return Some("retains(...) effects must match the protocol method exactly.".to_owned());
+    }
+    None
+}
+
+fn protocol_param_mismatch(
+    protocol: &ParamSig,
+    target: &ParamSig,
+    concrete_type: &str,
+) -> Option<String> {
+    if protocol.name != target.name {
+        return Some(format!(
+            "parameter name mismatch: protocol expects `{}`, implementation has `{}`.",
+            protocol.name, target.name
+        ));
+    }
+    if protocol.effect != target.effect {
+        return Some(format!(
+            "parameter effect mismatch for `{}`: protocol expects `{}`, implementation has `{}`.",
+            protocol.name,
+            protocol
+                .effect
+                .map(|effect| effect.as_str())
+                .unwrap_or("none"),
+            target
+                .effect
+                .map(|effect| effect.as_str())
+                .unwrap_or("none")
+        ));
+    }
+    let expected = protocol.ty.substitute(&BTreeMap::from([(
+        "Self".to_owned(),
+        ResolvedType::from_display(concrete_type),
+    )]));
+    if expected != target.ty {
+        return Some(format!(
+            "parameter type mismatch for `{}`: protocol expects `{expected}`, implementation has `{}`.",
+            protocol.name, target.ty
+        ));
+    }
+    None
 }
 
 #[cfg(test)]

@@ -10,14 +10,11 @@ use crate::checks::budget::{
 };
 use crate::diagnostic::{Diagnostic, Span};
 use crate::hir::{
-    CallResolution, FieldInfo, FunctionSig, Hir, HirBlock, HirExpr, HirMatchArm, HirStmt,
-    HirTypeKind, ParamSig,
+    CallResolution, FieldInfo, Hir, HirBlock, HirExpr, HirMatchArm, HirStmt, HirTypeKind,
 };
 use crate::interfaces::CORE_INTERFACES;
 use crate::lexer::{Token, lex_with_budget};
-use crate::semantic::{
-    AnalysisResult, ResolvedType, SemanticDatabase, SourceSnapshot, ValidatedProgram,
-};
+use crate::semantic::{AnalysisResult, SemanticDatabase, SourceSnapshot, ValidatedProgram};
 use crate::syntax::ast::{
     AssignStmt, Block, Callee, DataEffect, Expr, FunctionDecl, Item, MatchPattern, Stmt, TypeKind,
     TypeRef,
@@ -1498,95 +1495,6 @@ pub(crate) fn function_belongs_to_protocol(
     split_qualified_name(&function.name)
         .0
         .is_some_and(|namespace| protocol_names.contains(&namespace))
-}
-
-pub(crate) fn protocol_signature_mismatch(
-    protocol: &FunctionSig,
-    target: &FunctionSig,
-    concrete_type: &str,
-) -> Option<String> {
-    if protocol.is_async != target.is_async {
-        return Some("async/sync kind must match the protocol method exactly.".to_string());
-    }
-    if protocol.params.len() != target.params.len() {
-        return Some(format!(
-            "parameter count mismatch: protocol has {}, implementation has {}.",
-            protocol.params.len(),
-            target.params.len()
-        ));
-    }
-    for (protocol_param, target_param) in protocol.params.iter().zip(&target.params) {
-        if let Some(reason) = protocol_param_mismatch(protocol_param, target_param, concrete_type) {
-            return Some(reason);
-        }
-    }
-    let substitutions = BTreeMap::from([(
-        "Self".to_string(),
-        ResolvedType::from_display(concrete_type),
-    )]);
-    let protocol_return = protocol
-        .return_ty
-        .as_ref()
-        .map(|return_type| return_type.substitute(&substitutions));
-    if protocol_return != target.return_ty {
-        return Some(format!(
-            "return type mismatch: protocol expects `{}`, implementation returns `{}`.",
-            protocol_return
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| "Unit".to_string()),
-            target
-                .return_ty
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| "Unit".to_string())
-        ));
-    }
-    if protocol.returns_fresh != target.returns_fresh {
-        return Some("fresh return mode must match the protocol method exactly.".to_string());
-    }
-    if protocol.retained_params != target.retained_params {
-        return Some("retains(...) effects must match the protocol method exactly.".to_string());
-    }
-    None
-}
-
-fn protocol_param_mismatch(
-    protocol: &ParamSig,
-    target: &ParamSig,
-    concrete_type: &str,
-) -> Option<String> {
-    if protocol.name != target.name {
-        return Some(format!(
-            "parameter name mismatch: protocol expects `{}`, implementation has `{}`.",
-            protocol.name, target.name
-        ));
-    }
-    if protocol.effect != target.effect {
-        return Some(format!(
-            "parameter effect mismatch for `{}`: protocol expects `{}`, implementation has `{}`.",
-            protocol.name,
-            protocol
-                .effect
-                .map(|effect| effect.as_str())
-                .unwrap_or("none"),
-            target
-                .effect
-                .map(|effect| effect.as_str())
-                .unwrap_or("none")
-        ));
-    }
-    let expected_type = protocol.ty.substitute(&BTreeMap::from([(
-        "Self".to_string(),
-        ResolvedType::from_display(concrete_type),
-    )]));
-    if expected_type != target.ty {
-        return Some(format!(
-            "parameter type mismatch for `{}`: protocol expects `{expected_type}`, implementation has `{}`.",
-            protocol.name, target.ty
-        ));
-    }
-    None
 }
 
 pub(crate) fn split_qualified_name(name: &str) -> (Option<String>, &str) {

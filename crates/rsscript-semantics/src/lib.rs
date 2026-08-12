@@ -194,7 +194,8 @@ pub use interface_descriptor::{
     InterfaceDescriptorResourceV1, InterfaceDescriptorV1,
 };
 pub use protocol_bounds::{
-    protocol_bound_diagnostics, protocol_impl_mismatch_diagnostic, unknown_protocol_diagnostic,
+    protocol_bound_diagnostics, protocol_impl_mismatch_diagnostic, protocol_signature_mismatch,
+    unknown_protocol_diagnostic,
 };
 pub use resource_types::{
     fd_surface_diagnostics, resource_field_diagnostics, resource_generic_diagnostics,

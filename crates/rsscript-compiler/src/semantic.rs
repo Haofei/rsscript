@@ -1,3 +1,6 @@
+// Used by optional Rust lowering and compiler-only test support; the default
+// frontend build intentionally does not select either consumer.
+#[allow(unused_imports)]
 pub(crate) use rsscript_semantics::ResolvedType;
 pub use rsscript_semantics::{
     AnalysisResult, FrontendCompletion, FrontendStopReason, SemanticDatabase, SourceFileSnapshot,

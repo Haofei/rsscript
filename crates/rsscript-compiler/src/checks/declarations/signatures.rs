@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use crate::analyzer::{
     Analyzer, function_belongs_to_protocol, function_body_belongs_to_protocol,
-    protocol_method_names, protocol_signature_mismatch, split_qualified_name,
+    protocol_method_names, split_qualified_name,
 };
 use crate::syntax::ast::Item;
 use rsscript_semantics::is_builtin_type_name;
@@ -118,7 +118,7 @@ impl Analyzer<'_> {
                     );
                     continue;
                 };
-                if let Some(reason) = protocol_signature_mismatch(
+                if let Some(reason) = rsscript_semantics::protocol_signature_mismatch(
                     protocol_signature,
                     target_signature,
                     &protocol_impl.type_name,

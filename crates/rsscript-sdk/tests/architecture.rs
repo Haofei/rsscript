@@ -1257,6 +1257,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "external_binding_type_diagnostics",
         "unknown_type_name_diagnostic",
         "protocol_impl_mismatch_diagnostic",
+        "protocol_signature_mismatch",
         "generic_constraint_diagnostics",
         "fd_surface_diagnostics",
         "unknown_binding_diagnostics",
@@ -1339,6 +1340,16 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
             .contains("rsscript_semantics::protocol_impl_mismatch_diagnostic")
     );
     assert!(!compiler_declaration_diagnostics.contains("Diagnostic::"));
+    let compiler_protocol_rules = read(&root.join("crates/rsscript-compiler/src/analyzer.rs"));
+    assert!(
+        !compiler_protocol_rules.contains("fn protocol_signature_mismatch"),
+        "compiler must not own protocol implementation signature comparison"
+    );
+    let compiler_protocol_signatures =
+        read(&root.join("crates/rsscript-compiler/src/checks/declarations/signatures.rs"));
+    assert!(
+        compiler_protocol_signatures.contains("rsscript_semantics::protocol_signature_mismatch")
+    );
     let compiler_derives = read(&root.join("crates/rsscript-compiler/src/analyzer/derives.rs"));
     assert!(!compiler_derives.contains("fn supported_compiler_derive"));
     assert!(!compiler_derives.contains("fn check_supported_derives"));
