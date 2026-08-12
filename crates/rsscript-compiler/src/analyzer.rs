@@ -30,14 +30,8 @@ mod diagnostics;
 mod exhaustiveness;
 mod resource_types;
 mod syntax_support;
-mod task_group;
 mod unknowns;
 use assign::AssignChecker;
-use task_group::{
-    collect_direct_task_group_awaited_handles, collect_nested_task_group_async_lets,
-    collect_task_group_async_lets, collect_task_group_awaited_handles,
-    direct_task_group_awaited_handles_in_stmt, find_nested_task_group_await_span,
-};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PatternWitness {

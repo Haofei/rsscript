@@ -35,6 +35,7 @@ mod resource_types;
 mod signatures;
 mod source_rules;
 mod symbols;
+mod task_groups;
 mod try_checks;
 mod type_aliases;
 mod type_compatibility;
@@ -205,6 +206,7 @@ pub use symbols::{
     Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
     document_symbols, symbol_index,
 };
+pub use task_groups::task_group_async_let_diagnostics;
 pub use type_aliases::cyclic_type_alias_diagnostics;
 pub use types::{
     ResolvedParamEffect, ResolvedType, ResolvedTypeKind, SemanticTypeFacts, TypeArena, TypeId,

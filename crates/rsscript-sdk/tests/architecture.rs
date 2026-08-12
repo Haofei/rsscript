@@ -1390,6 +1390,8 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     assert!(
         semantic_async_lowering.contains("pub fn cancellation_token_outside_task_group_diagnostic")
     );
+    let semantic_task_groups = read(&root.join("crates/rsscript-semantics/src/task_groups.rs"));
+    assert!(semantic_task_groups.contains("pub fn task_group_async_let_diagnostics"));
     assert!(compiler_analyzer.contains("rsscript_semantics::async_fn_lowering_diagnostic"));
     assert!(
         compiler_analyzer
@@ -1397,6 +1399,15 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     );
     assert!(!compiler_analyzer.contains("fn async_not_lowerable_diagnostic"));
     assert!(!compiler_analyzer.contains("fn cancellation_token_outside_task_group_diagnostic"));
+    assert!(
+        !root
+            .join("crates/rsscript-compiler/src/analyzer/task_group.rs")
+            .exists(),
+        "compiler must not retain task-group async-let rule traversal"
+    );
+    assert!(
+        compiler_syntax_support.contains("rsscript_semantics::task_group_async_let_diagnostics")
+    );
 
     let semantic_call_arguments =
         read(&root.join("crates/rsscript-semantics/src/call_arguments.rs"));
@@ -3386,7 +3397,7 @@ fn program_arguments_enter_through_the_explicit_main_abi() {
 fn high_risk_state_machines_keep_dedicated_module_owners() {
     let root = workspace_root();
     let required = [
-        "crates/rsscript-compiler/src/analyzer/task_group.rs",
+        "crates/rsscript-semantics/src/task_groups.rs",
         "crates/rsscript-compiler/src/package/native/bindings.rs",
         "crates/rsscript-vm/src/reg_vm/tier/admission.rs",
         "crates/rsscript-vm/src/reg_vm/tier/call_scratch.rs",

@@ -433,8 +433,9 @@ impl Analyzer<'_> {
                 self.check_unsupported_syntax_block(&stmt.body);
             }
             Stmt::TaskGroup(stmt) => {
-                self.check_task_group_async_let_shape(&stmt.body);
-                self.check_task_group_async_lets_consumed(&stmt.body);
+                self.diagnostics.extend(
+                    rsscript_semantics::task_group_async_let_diagnostics(&stmt.body),
+                );
                 let was_in_task_group = self.in_task_group;
                 self.in_task_group = true;
                 self.check_unsupported_syntax_block(&stmt.body);
@@ -578,96 +579,6 @@ impl Analyzer<'_> {
                     "unsupported expression",
                     "This expression is outside the current RSScript parser surface.",
                 );
-            }
-        }
-    }
-
-    pub(super) fn check_task_group_async_lets_consumed(&mut self, block: &Block) {
-        let mut async_lets = Vec::new();
-        let mut awaited = HashSet::new();
-        collect_task_group_async_lets(block, &mut async_lets);
-        collect_direct_task_group_awaited_handles(block, &mut awaited);
-        for (name, span) in async_lets {
-            if name == "_" {
-                continue;
-            }
-            if !awaited.contains(&name) {
-                self.unsupported_syntax(
-                    span,
-                    "unawaited async let",
-                    "`async let` handles are lexical task_group handles and must be consumed by `await` inside the same `task_group { ... }` block.",
-                );
-            }
-        }
-    }
-
-    pub(super) fn check_task_group_async_let_shape(&mut self, block: &Block) {
-        let mut top_level_async_lets = HashSet::new();
-        for statement in &block.statements {
-            if let Stmt::Let(stmt) = statement
-                && stmt.is_async
-                && stmt.name != "_"
-            {
-                top_level_async_lets.insert(stmt.name.clone());
-            }
-        }
-
-        let mut nested_async_lets = Vec::new();
-        collect_nested_task_group_async_lets(block, &mut nested_async_lets);
-        for span in nested_async_lets {
-            self.unsupported_syntax(
-                span,
-                "nested async let",
-                "`async let` is currently supported only as a direct child of `task_group { ... }` so checking and lowering share one structured-concurrency model.",
-            );
-        }
-
-        let mut all_awaited = HashSet::new();
-        let mut direct_awaited = HashSet::new();
-        collect_task_group_awaited_handles(block, &mut all_awaited);
-        collect_direct_task_group_awaited_handles(block, &mut direct_awaited);
-        for name in all_awaited {
-            if top_level_async_lets.contains(&name) && !direct_awaited.contains(&name) {
-                let span = find_nested_task_group_await_span(block, &name)
-                    .cloned()
-                    .unwrap_or_else(|| block.span.clone());
-                self.unsupported_syntax(
-                    span,
-                    "nested async let await",
-                    "`await` of a task_group async-let handle must be a direct task_group statement in the v0.7 executable MVP.",
-                );
-            }
-        }
-
-        let mut declared = HashSet::new();
-        let mut awaited = HashSet::new();
-        for statement in &block.statements {
-            if let Stmt::Let(stmt) = statement
-                && stmt.is_async
-            {
-                if stmt.name != "_" {
-                    declared.insert(stmt.name.clone());
-                }
-                continue;
-            }
-
-            for (name, span) in direct_task_group_awaited_handles_in_stmt(statement) {
-                if !top_level_async_lets.contains(&name) {
-                    continue;
-                }
-                if !declared.contains(&name) {
-                    self.unsupported_syntax(
-                        span,
-                        "async let await before declaration",
-                        "`await` of a task_group async-let handle must appear after the matching `async let` declaration.",
-                    );
-                } else if !awaited.insert(name) {
-                    self.unsupported_syntax(
-                        span,
-                        "async let awaited more than once",
-                        "`async let` handles are bounded task_group handles and can be consumed by `await` only once.",
-                    );
-                }
             }
         }
     }

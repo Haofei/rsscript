@@ -226,6 +226,10 @@ mechanical acceptance condition holds.
     - [x] **S02.5r — Move async-lowering boundary diagnostics.** Compiler
       finds invalid nested-await and cancellation-token source facts, while
       semantics owns their canonical structured-async diagnostic contracts.
+    - [x] **S02.5s — Move task-group async-let rules.** Semantics now owns
+      source-AST traversal and validation of async-let lexical scope, direct
+      await placement, declaration order, and exactly-once consumption;
+      compiler only appends the resulting semantic diagnostics.
     - [x] **S02.2j — Move bounded generic substitution.** Semantics owns the
       recursive substitution algorithm; compiler contributes only a narrow
       adapter to its shared cancellation and substitution budget.
