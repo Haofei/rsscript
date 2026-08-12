@@ -82,7 +82,7 @@ pub use ownership::{
     resource_capture_diagnostic, resource_escape_diagnostic, resource_producer_escape_diagnostic,
     resource_producer_missing_try_diagnostic, retained_closure_capture_diagnostic,
     retained_local_diagnostic, spawn_local_capture_diagnostic, take_handle_field_diagnostic,
-    weak_field_requires_weak_handle_diagnostic,
+    uninferable_binding_type_diagnostic, weak_field_requires_weak_handle_diagnostic,
 };
 pub use place::{
     field_partial_access_conflict_diagnostic, field_prefix_conflict_diagnostic,

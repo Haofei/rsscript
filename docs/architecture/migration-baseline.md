@@ -260,6 +260,9 @@ mechanical acceptance condition holds.
     - [x] **S02.4m — Move call-place conflict diagnostics.** Compiler resolves
       local place paths and disjointness facts; semantics owns managed split,
       whole-base, prefix, indexed, and move-versus-field diagnostics.
+    - [x] **S02.4n — Move uninferable binding diagnostics.** Compiler gathers
+      raw binding-use facts and recognizes open variant constructors; semantics
+      owns the canonical ambiguous-binding diagnostic and fix.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.

@@ -238,22 +238,12 @@ pub(super) fn check_uninferable_bindings_in_stmt(
             span,
             ..
         } if ty == value_ty && !uses.contains(name) && open_variant_constructor(value) => {
-            analyzer.diagnostics.push(
-                Diagnostic::error(
-                    code::UNINFERABLE_BINDING_TYPE,
-                    format!("the type of `{name}` cannot be inferred."),
+            analyzer
+                .diagnostics
+                .push(rsscript_semantics::uninferable_binding_type_diagnostic(
+                    name,
                     span.clone(),
-                    "uninferable binding type",
-                )
-                .with_cause(
-                    "A bare `Ok(...)`, `Err(...)`, or `None` leaves a type parameter open, and this binding is never used, so nothing can constrain it — the type is ambiguous and would not lower to valid Rust.",
-                )
-                .with_fix(
-                    "annotate_binding_type",
-                    "Add a type annotation (e.g. `let v: Result<Int, String> = ...`) or remove the unused binding.",
-                    "manual",
-                ),
-            );
+                ));
         }
         HirStmt::With { body, .. } | HirStmt::Loop { body, .. } | HirStmt::For { body, .. } => {
             check_uninferable_bindings_in_block(analyzer, body, uses);

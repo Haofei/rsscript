@@ -475,6 +475,24 @@ pub fn explicit_closure_capture_contract_diagnostic(
     ))
 }
 
+/// Diagnose an unused binding whose open variant parameter cannot be inferred.
+pub fn uninferable_binding_type_diagnostic(name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        code::UNINFERABLE_BINDING_TYPE,
+        format!("the type of `{name}` cannot be inferred."),
+        span,
+        "uninferable binding type",
+    )
+    .with_cause(
+        "A bare `Ok(...)`, `Err(...)`, or `None` leaves a type parameter open, and this binding is never used, so nothing can constrain it — the type is ambiguous and would not lower to valid Rust.",
+    )
+    .with_fix(
+        "annotate_binding_type",
+        "Add a type annotation (e.g. `let v: Result<Int, String> = ...`) or remove the unused binding.",
+        "manual",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -594,6 +612,10 @@ mod tests {
         assert_eq!(
             explicit_closure_capture_contract_diagnostic("item", "read", "take", span(1)).code,
             code::CLOSURE_CAPTURE_CONTRACT
+        );
+        assert_eq!(
+            uninferable_binding_type_diagnostic("value", span(1)).code,
+            code::UNINFERABLE_BINDING_TYPE
         );
     }
 }

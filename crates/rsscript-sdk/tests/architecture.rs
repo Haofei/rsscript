@@ -1582,6 +1582,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "pub fn explicit_closure_missing_capture_diagnostic",
         "pub fn explicit_closure_unused_capture_diagnostic",
         "pub fn explicit_closure_capture_contract_diagnostic",
+        "pub fn uninferable_binding_type_diagnostic",
     ] {
         assert!(semantic_ownership.contains(exported));
     }
@@ -1614,6 +1615,15 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
             "compiler must not re-own local-flow ownership diagnostic `{forbidden}`"
         );
     }
+    let compiler_body_binding =
+        read(&root.join("crates/rsscript-compiler/src/checks/body/binding.rs"));
+    assert!(
+        compiler_body_binding.contains("rsscript_semantics::uninferable_binding_type_diagnostic")
+    );
+    assert!(
+        !compiler_body_binding.contains("the type of `{name}` cannot be inferred"),
+        "compiler must not re-own uninferable binding diagnostic text"
+    );
 
     let compiler_body_resources =
         read(&root.join("crates/rsscript-compiler/src/checks/body/resources.rs"));
