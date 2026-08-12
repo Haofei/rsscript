@@ -988,7 +988,6 @@ fn analyze_program(prepared: PreparedAnalysis) -> AnalysisResult {
         diagnostics: AnalysisDiagnostics::new(budget.clone()),
         budget,
         type_aliases,
-        in_task_group: false,
         async_let_names: Vec::new(),
     };
     analyzer.run();
@@ -1058,7 +1057,6 @@ fn analyze_syntax_program(prepared: PreparedAnalysis) -> AnalysisResult {
         diagnostics: AnalysisDiagnostics::new(budget.clone()),
         budget,
         type_aliases,
-        in_task_group: false,
         async_let_names: Vec::new(),
     };
     analyzer.run_syntax_only();
@@ -1091,7 +1089,6 @@ pub(crate) struct Analyzer<'a> {
     pub(crate) diagnostics: AnalysisDiagnostics,
     pub(crate) budget: Rc<FrontendBudget>,
     pub(crate) type_aliases: std::collections::BTreeMap<String, AliasDefinition>,
-    in_task_group: bool,
     pub(crate) async_let_names: Vec<String>,
 }
 
@@ -1445,18 +1442,6 @@ fn fn_type_param_type_name(type_name: &str, index: usize) -> Option<String> {
         .or_else(|| param.strip_prefix("take "))
         .unwrap_or(param);
     Some(bare.trim().to_string())
-}
-
-/// The awaited inner expression of `await x` / `await x?`.
-fn async_await_inner_ast(expr: &Expr) -> Option<&Expr> {
-    match expr {
-        Expr::Try { value, .. } => match value.as_ref() {
-            Expr::Await { value, .. } => Some(value),
-            _ => None,
-        },
-        Expr::Await { value, .. } => Some(value),
-        _ => None,
-    }
 }
 
 pub(crate) fn split_qualified_name(name: &str) -> (Option<String>, &str) {

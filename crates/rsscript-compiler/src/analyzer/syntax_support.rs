@@ -18,19 +18,20 @@ impl Analyzer<'_> {
             .extend(rsscript_semantics::declaration_item_surface_diagnostics(
                 item,
             ));
+        self.diagnostics
+            .extend(rsscript_semantics::item_body_surface_diagnostics(item));
         match item {
             Item::Function(function) => {
                 for param in &function.params {
                     let canonical = self.canonical_type_ref(&param.ty);
-                    if param.effect == Some(DataEffect::Take)
-                        && canonical.name == "Fn"
-                        && !canonical.is_owned
+                    if let Some(diagnostic) =
+                        rsscript_semantics::by_value_callback_parameter_diagnostic(
+                            &canonical,
+                            param.effect,
+                            &param.span,
+                        )
                     {
-                        self.unsupported_syntax(
-                            param.span.clone(),
-                            "unsupported by-value callback parameter",
-                            "A callback passed with `take` must use `owned Fn(...)` so the Rust representation is sized. Use `read Fn(...)`, `mut Fn(...)`, or `take owned Fn(...)`.",
-                        );
+                        self.diagnostics.push(diagnostic);
                     }
                     self.diagnostics
                         .extend(rsscript_semantics::type_ref_surface_diagnostics(
@@ -46,7 +47,7 @@ impl Analyzer<'_> {
                             &canonical, false, true,
                         ));
                 }
-                self.check_unsupported_syntax_block(&function.body);
+                self.check_canonical_type_refs_block(&function.body);
             }
             Item::Type(type_decl) => {
                 self.diagnostics
@@ -85,240 +86,138 @@ impl Analyzer<'_> {
         }
     }
 
-    pub(super) fn check_unsupported_syntax_block(&mut self, block: &Block) {
+    /// Extract alias-canonical type-reference facts from bodies. All source
+    /// syntax legality for these bodies is owned by `rsscript-semantics`.
+    pub(super) fn check_canonical_type_refs_block(&mut self, block: &Block) {
         for statement in &block.statements {
-            self.check_unsupported_syntax_stmt(statement);
+            self.check_canonical_type_refs_stmt(statement);
         }
     }
 
-    pub(super) fn check_unsupported_syntax_stmt(&mut self, statement: &Stmt) {
+    fn check_canonical_type_refs_stmt(&mut self, statement: &Stmt) {
         match statement {
             Stmt::Let(stmt) => {
-                if stmt.malformed {
-                    self.unsupported_syntax(
-                        stmt.span.clone(),
-                        "malformed statement",
-                        "`let` and `local` bindings need a binding name, and an `=` must be followed by an expression.",
-                    );
+                if let Some(ty) = &stmt.type_annotation {
+                    let canonical = self.canonical_type_ref(ty);
+                    self.diagnostics
+                        .extend(rsscript_semantics::type_ref_surface_diagnostics(
+                            &canonical, false, true,
+                        ));
                 }
-               if stmt.is_async && !self.in_task_group {
-                   self.unsupported_syntax(
-                       stmt.span.clone(),
-                       "`async let` outside task_group",
-                       "`async let` can only be used inside a `task_group { ... }` block.",
-                   );
-               }
-               if let Some(ty) = &stmt.type_annotation {
-                   let canonical = self.canonical_type_ref(ty);
-                   self.diagnostics.extend(
-                       rsscript_semantics::type_ref_surface_diagnostics(&canonical, false, true),
-                   );
-               }
-               if let Some(value) = &stmt.value {
-                   self.check_unsupported_syntax_expr(value);
-               }
-           }
+                if let Some(value) = &stmt.value {
+                    self.check_canonical_type_refs_expr(value);
+                }
+            }
             Stmt::Return(stmt) => {
                 if let Some(value) = &stmt.value {
-                    self.check_unsupported_syntax_expr(value);
+                    self.check_canonical_type_refs_expr(value);
                 }
             }
             Stmt::With(stmt) => {
-                self.check_unsupported_syntax_expr(&stmt.resource);
-                self.check_unsupported_syntax_block(&stmt.body);
+                self.check_canonical_type_refs_expr(&stmt.resource);
+                self.check_canonical_type_refs_block(&stmt.body);
             }
-            Stmt::MalformedWith(span) => self.unsupported_syntax(
-                span.clone(),
-                "malformed with statement",
-                "`with` statements must use `with resource as name { ... }`.",
-            ),
             Stmt::If(stmt) => {
-                self.check_unsupported_syntax_expr(&stmt.condition);
-                self.check_unsupported_syntax_block(&stmt.then_body);
+                self.check_canonical_type_refs_expr(&stmt.condition);
+                self.check_canonical_type_refs_block(&stmt.then_body);
                 if let Some(else_body) = &stmt.else_body {
-                    self.check_unsupported_syntax_block(else_body);
+                    self.check_canonical_type_refs_block(else_body);
                 }
             }
-            Stmt::MalformedIf(span) => self.unsupported_syntax(
-                span.clone(),
-                "malformed if statement",
-                "`if` statements must use `if condition { ... }` with optional `else { ... }` or `else if ...`.",
-            ),
             Stmt::Loop(stmt) => {
                 if let Some(condition) = &stmt.condition {
-                    self.check_unsupported_syntax_expr(condition);
+                    self.check_canonical_type_refs_expr(condition);
                 }
-                self.check_unsupported_syntax_block(&stmt.body);
+                self.check_canonical_type_refs_block(&stmt.body);
             }
-            Stmt::MalformedLoop(span) => self.unsupported_syntax(
-                span.clone(),
-                "malformed loop statement",
-                "`loop` statements must use `loop { ... }`; `while` statements must use `while condition { ... }`.",
-            ),
             Stmt::For(stmt) => {
-                self.check_unsupported_syntax_expr(&stmt.iterable);
-                self.check_unsupported_syntax_block(&stmt.body);
+                self.check_canonical_type_refs_expr(&stmt.iterable);
+                self.check_canonical_type_refs_block(&stmt.body);
             }
-            Stmt::TaskGroup(stmt) => {
-                self.diagnostics.extend(
-                    rsscript_semantics::task_group_async_let_diagnostics(&stmt.body),
-                );
-                let was_in_task_group = self.in_task_group;
-                self.in_task_group = true;
-                self.check_unsupported_syntax_block(&stmt.body);
-                self.in_task_group = was_in_task_group;
-            }
+            Stmt::TaskGroup(stmt) => self.check_canonical_type_refs_block(&stmt.body),
             Stmt::Select(stmt) => {
                 for arm in &stmt.arms {
-                    if async_await_inner_ast(&arm.operation).is_none() {
-                        self.unsupported_syntax(
-                            arm.span.clone(),
-                            "malformed select arm",
-                            "Select arms must use `name = await operation => { ... }`.",
-                        );
-                    }
-                    self.check_unsupported_syntax_expr(&arm.operation);
-                    self.check_unsupported_syntax_block(&arm.body);
+                    self.check_canonical_type_refs_expr(&arm.operation);
+                    self.check_canonical_type_refs_block(&arm.body);
                 }
             }
-            Stmt::MalformedFor(span) => self.unsupported_syntax(
-                span.clone(),
-                "malformed for statement",
-                "`for` statements must use `for name in iterable { ... }`.",
-            ),
             Stmt::Match(stmt) => {
-                self.check_unsupported_syntax_expr(&stmt.value);
-                for span in &stmt.malformed_arm_spans {
-                    self.unsupported_syntax(
-                        span.clone(),
-                        "malformed match arm",
-                        "Match arms must use `pattern => statement` or `pattern => { ... }`.",
-                    );
-                }
+                self.check_canonical_type_refs_expr(&stmt.value);
                 for arm in &stmt.arms {
-                    self.check_unsupported_syntax_block(&arm.body);
+                    self.check_canonical_type_refs_block(&arm.body);
                 }
             }
             Stmt::LetElse(stmt) => {
-                self.check_unsupported_syntax_expr(&stmt.value);
-                self.check_unsupported_syntax_block(&stmt.else_body);
+                self.check_canonical_type_refs_expr(&stmt.value);
+                self.check_canonical_type_refs_block(&stmt.else_body);
             }
-            Stmt::MalformedMatch(span) => self.unsupported_syntax(
-                span.clone(),
-                "malformed match statement",
-                "`match` statements must use `match value { pattern => ... }`.",
-            ),
             Stmt::Assign(stmt) => {
-                self.check_unsupported_syntax_expr(&stmt.target);
-                self.check_unsupported_syntax_expr(&stmt.value);
+                self.check_canonical_type_refs_expr(&stmt.target);
+                self.check_canonical_type_refs_expr(&stmt.value);
             }
-            Stmt::Expr(expr) => self.check_unsupported_syntax_expr(expr),
-            Stmt::Break(_) | Stmt::Continue(_) => {}
-            Stmt::Unknown(span) => self.unsupported_syntax(
-                span.clone(),
-                "unsupported statement",
-                "This statement is outside the current RSScript parser surface.",
-            ),
+            Stmt::Expr(expr) => self.check_canonical_type_refs_expr(expr),
+            Stmt::MalformedWith(_)
+            | Stmt::MalformedIf(_)
+            | Stmt::MalformedLoop(_)
+            | Stmt::MalformedFor(_)
+            | Stmt::MalformedMatch(_)
+            | Stmt::Break(_)
+            | Stmt::Continue(_)
+            | Stmt::Unknown(_) => {}
         }
     }
 
-    pub(super) fn check_unsupported_syntax_expr(&mut self, expr: &Expr) {
+    fn check_canonical_type_refs_expr(&mut self, expr: &Expr) {
         match expr {
             Expr::Binary { left, right, .. } => {
-                self.check_unsupported_syntax_expr(left);
-                self.check_unsupported_syntax_expr(right);
+                self.check_canonical_type_refs_expr(left);
+                self.check_canonical_type_refs_expr(right);
             }
-            Expr::Field { base, .. } => self.check_unsupported_syntax_expr(base),
+            Expr::Field { base, .. } => self.check_canonical_type_refs_expr(base),
             Expr::Index { base, index, .. } => {
-                self.check_unsupported_syntax_expr(base);
-                self.check_unsupported_syntax_expr(index);
+                self.check_canonical_type_refs_expr(base);
+                self.check_canonical_type_refs_expr(index);
             }
             Expr::Call { args, .. } => {
                 for arg in args {
-                    if arg.malformed {
-                        self.unsupported_syntax(
-                            arg.span.clone(),
-                            "malformed call argument",
-                            "Call arguments cannot contain empty argument slots.",
-                        );
-                    } else {
-                        self.check_unsupported_syntax_expr(&arg.value);
-                    }
+                    self.check_canonical_type_refs_expr(&arg.value);
                 }
             }
             Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
-                self.check_unsupported_syntax_expr(value);
+                self.check_canonical_type_refs_expr(value);
             }
-            Expr::Spawn { value, span } => {
-                self.unsupported_syntax(
-                    span.clone(),
-                    "unsupported spawn expression",
-                    "`spawn` is not a v0.7 source-level task feature. Use `task_group { async let ... }` for structured isolate-local async work.",
-                );
-                self.check_unsupported_syntax_expr(value);
+            Expr::Spawn { value, .. } | Expr::Await { value, .. } => {
+                self.check_canonical_type_refs_expr(value);
             }
-            Expr::Await { value, .. } => {
-                self.check_unsupported_syntax_expr(value);
-            }
-            Expr::Closure { body, .. } => self.check_unsupported_syntax_block(body),
-            Expr::Match {
-                value,
-                arms,
-                malformed_arm_spans,
-                ..
-            } => {
-                self.check_unsupported_syntax_expr(value);
-                for span in malformed_arm_spans {
-                    self.unsupported_syntax(
-                        span.clone(),
-                        "malformed match arm",
-                        "Match arms must use `pattern => statement` or `pattern => { ... }`.",
-                    );
-                }
+            Expr::Closure { body, .. } => self.check_canonical_type_refs_block(body),
+            Expr::Match { value, arms, .. } => {
+                self.check_canonical_type_refs_expr(value);
                 for arm in arms {
-                    self.check_unsupported_syntax_block(&arm.body);
+                    self.check_canonical_type_refs_block(&arm.body);
                 }
             }
             Expr::ObjectLiteral { fields, .. } => {
                 for field in fields {
-                    self.check_unsupported_syntax_expr(&field.value);
+                    self.check_canonical_type_refs_expr(&field.value);
                 }
             }
             Expr::MapLiteral { entries, .. } => {
                 for entry in entries {
-                    self.check_unsupported_syntax_expr(&entry.key);
-                    self.check_unsupported_syntax_expr(&entry.value);
+                    self.check_canonical_type_refs_expr(&entry.key);
+                    self.check_canonical_type_refs_expr(&entry.value);
                 }
             }
             Expr::ArrayLiteral { items, .. } => {
                 for item in items {
-                    self.check_unsupported_syntax_expr(item);
+                    self.check_canonical_type_refs_expr(item);
                 }
             }
             Expr::Ident(_, _)
             | Expr::Number(_, _)
             | Expr::String(_, _)
             | Expr::CharLiteral(_, _)
-            | Expr::MultilineString(_, _) => {}
-            Expr::Unknown(span) => {
-                self.unsupported_syntax(
-                    span.clone(),
-                    "unsupported expression",
-                    "This expression is outside the current RSScript parser surface.",
-                );
-            }
+            | Expr::MultilineString(_, _)
+            | Expr::Unknown(_) => {}
         }
-    }
-
-    pub(crate) fn unsupported_syntax(
-        &mut self,
-        span: crate::diagnostic::Span,
-        label: &str,
-        cause: &str,
-    ) {
-        self.diagnostics
-            .push(rsscript_semantics::unsupported_syntax_diagnostic(
-                span, label, cause,
-            ));
     }
 }

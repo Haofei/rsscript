@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use rsscript_diagnostics::{Diagnostic, Span, code};
-use rsscript_syntax::ast::{Item, Program, TypeRef};
+use rsscript_syntax::ast::{DataEffect, Item, Program, TypeRef};
 use rsscript_syntax::lexer::{Token, TokenKind};
 
 /// Derive diagnostics for deliberately unsupported surface forms.
@@ -292,6 +292,23 @@ pub fn type_ref_surface_diagnostics(
     let mut diagnostics = Vec::new();
     type_ref_surface_diagnostics_inner(ty, allow_noescape, allow_owned, &mut diagnostics);
     diagnostics
+}
+
+/// Return the canonical diagnostic for a callback consumed by value without an
+/// owned representation. The caller supplies the alias-canonical parameter
+/// type and source effect fact.
+pub fn by_value_callback_parameter_diagnostic(
+    ty: &TypeRef,
+    effect: Option<DataEffect>,
+    span: &Span,
+) -> Option<Diagnostic> {
+    (effect == Some(DataEffect::Take) && ty.name == "Fn" && !ty.is_owned).then(|| {
+        unsupported_syntax_diagnostic(
+            span.clone(),
+            "unsupported by-value callback parameter",
+            "A callback passed with `take` must use `owned Fn(...)` so the Rust representation is sized. Use `read Fn(...)`, `mut Fn(...)`, or `take owned Fn(...)`.",
+        )
+    })
 }
 
 fn type_ref_surface_diagnostics_inner(
@@ -612,6 +629,28 @@ mod tests {
         assert_eq!(
             type_ref_surface_diagnostics(return_ty, false, true)[0].label,
             "unsupported noescape position"
+        );
+    }
+
+    #[test]
+    fn by_value_callback_rule_requires_owned_fn() {
+        let program = rsscript_syntax::parse_source(
+            "callback.rss",
+            "fn run(callback: take Fn() -> Unit) -> Unit {}\n",
+        );
+        let Item::Function(function) = &program.items[0] else {
+            panic!("expected function declaration");
+        };
+        let parameter = &function.params[0];
+        assert_eq!(
+            by_value_callback_parameter_diagnostic(
+                &parameter.ty,
+                parameter.effect,
+                &parameter.span,
+            )
+            .expect("by-value callback diagnostic")
+            .label,
+            "unsupported by-value callback parameter"
         );
     }
 }

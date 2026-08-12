@@ -174,6 +174,10 @@ mechanical acceptance condition holds.
     - [x] **S02.2l — Move callback qualifier placement diagnostics.** Compiler
       supplies alias-canonical `TypeRef` facts; semantics owns recursive
       `owned`/`noescape Fn` placement and malformed type-argument diagnostics.
+    - [x] **S02.5v — Move source body-surface traversal.** Semantics owns
+      malformed/unsupported statement and expression diagnostics, select-arm
+      shape, spawn rejection, and task-group context. Compiler only traverses
+      bodies to extract alias-canonical type-reference facts.
     - [x] **S02.2g — Move resolved builtin operator diagnostics.** Compiler
       extracts HIR operand/type facts; semantics owns non-numeric arithmetic and
       fixed-operand compatibility diagnostic contracts.

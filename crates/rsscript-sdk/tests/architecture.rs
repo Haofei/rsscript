@@ -1199,6 +1199,8 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "cyclic_type_alias_diagnostics",
         "declaration_item_surface_diagnostics",
         "declaration_surface_diagnostics",
+        "block_surface_diagnostics",
+        "by_value_callback_parameter_diagnostic",
         "duplicate_declaration_diagnostics",
         "derive_syntax_diagnostics",
         "derive_field_diagnostics",
@@ -1214,6 +1216,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "try_operand_diagnostic",
         "try_error_type_diagnostics",
         "integer_literal_range_diagnostic",
+        "item_body_surface_diagnostics",
         "char_literal_scalar_diagnostic",
         "match_char_literal_scalar_diagnostic",
         "bool_condition_diagnostic",
@@ -1333,7 +1336,6 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     let compiler_syntax_support =
         read(&root.join("crates/rsscript-compiler/src/analyzer/syntax_support.rs"));
     assert!(compiler_syntax_support.contains("rsscript_semantics::derive_syntax_diagnostics"));
-    assert!(compiler_syntax_support.contains("rsscript_semantics::unsupported_syntax_diagnostic"));
     assert!(!compiler_syntax_support.contains("fn check_module_use_layout"));
     assert!(
         compiler_syntax_support.contains("rsscript_semantics::declaration_surface_diagnostics")
@@ -1344,6 +1346,22 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     );
     assert!(compiler_syntax_support.contains("rsscript_semantics::type_ref_surface_diagnostics"));
     assert!(!compiler_syntax_support.contains("fn check_unsupported_syntax_type_ref"));
+    assert!(compiler_syntax_support.contains("rsscript_semantics::item_body_surface_diagnostics"));
+    assert!(
+        compiler_syntax_support
+            .contains("rsscript_semantics::by_value_callback_parameter_diagnostic")
+    );
+    for forbidden in [
+        "fn check_unsupported_syntax_block",
+        "fn check_unsupported_syntax_stmt",
+        "fn check_unsupported_syntax_expr",
+        "in_task_group",
+    ] {
+        assert!(
+            !compiler_syntax_support.contains(forbidden),
+            "compiler must not own source-body syntax rule `{forbidden}`"
+        );
+    }
     for forbidden in [
         "fn check_reserved_protocol_generics",
         "fn check_reserved_declaration_names",
@@ -1461,9 +1479,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
             .exists(),
         "compiler must not retain task-group async-let rule traversal"
     );
-    assert!(
-        compiler_syntax_support.contains("rsscript_semantics::task_group_async_let_diagnostics")
-    );
+    assert!(compiler_syntax_support.contains("rsscript_semantics::item_body_surface_diagnostics"));
 
     let semantic_call_arguments =
         read(&root.join("crates/rsscript-semantics/src/call_arguments.rs"));

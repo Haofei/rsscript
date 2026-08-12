@@ -33,6 +33,7 @@ mod place;
 mod protocol_bounds;
 mod resource_types;
 mod signatures;
+mod source_bodies;
 mod source_rules;
 mod symbols;
 mod task_groups;
@@ -204,10 +205,11 @@ pub use resource_types::{
 };
 pub use rsscript_source_model::{FileId, InterfaceId, ModuleId, SourceRevision};
 pub use signatures::signature_diagnostics;
+pub use source_bodies::{block_surface_diagnostics, item_body_surface_diagnostics};
 pub use source_rules::{
-    declaration_item_surface_diagnostics, declaration_surface_diagnostics,
-    forbidden_surface_syntax_diagnostics, module_use_layout_diagnostics,
-    type_ref_surface_diagnostics, unsupported_syntax_diagnostic,
+    by_value_callback_parameter_diagnostic, declaration_item_surface_diagnostics,
+    declaration_surface_diagnostics, forbidden_surface_syntax_diagnostics,
+    module_use_layout_diagnostics, type_ref_surface_diagnostics, unsupported_syntax_diagnostic,
 };
 pub use symbols::{
     Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
