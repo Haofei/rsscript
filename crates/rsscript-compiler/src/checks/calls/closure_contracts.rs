@@ -1089,21 +1089,12 @@ pub(super) fn callback_operator_type_mismatch_diagnostic(
     expected: &str,
 ) {
     analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::OPERATOR_TYPE_MISMATCH,
-            format!(
-                "operator `{operator}` has operands `{left_type}` and `{right_type}`, expected {expected}."
-            ),
+        rsscript_semantics::callback_operator_type_mismatch_diagnostic(
+            operator,
+            left_type,
+            right_type,
+            expected,
             span.clone(),
-            "operator type mismatch",
-        )
-        .with_cause(
-            "`noescape Fn(...)` callback parameter types apply inside callback expressions before Rust lowering.",
-        )
-        .with_fix(
-            "use_typed_operator_operands",
-            "Use operands with matching RSScript types.",
-            "manual",
         ),
     );
 }
@@ -1143,17 +1134,15 @@ pub(super) fn callback_return_type_mismatch_diagnostic(
     expected: &str,
     span: &Span,
 ) {
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::ARGUMENT_TYPE_MISMATCH,
-        format!(
-            "callback argument `{arg_name}` for `{call_name}` returns `{actual}`, expected `{expected}`."
+    analyzer.diagnostics.push(
+        rsscript_semantics::callback_return_type_mismatch_diagnostic(
+            call_name,
+            arg_name,
+            actual,
+            expected,
+            span.clone(),
         ),
-        span.clone(),
-        "argument type mismatch",
-        "`noescape Fn() -> T` callback return types are part of the call signature and must be checked before Rust lowering.",
-        "match_callback_return_type",
-        format!("Return a `{expected}` value from this callback."),
-    ));
+    );
 }
 
 pub(super) fn callback_fresh_return_not_clean_diagnostic(
@@ -1164,17 +1153,15 @@ pub(super) fn callback_fresh_return_not_clean_diagnostic(
     expected: &str,
     span: &Span,
 ) {
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::ARGUMENT_TYPE_MISMATCH,
-        format!(
-            "callback argument `{arg_name}` for `{call_name}` returns non-fresh value `{name}`, expected `{expected}`."
+    analyzer.diagnostics.push(
+        rsscript_semantics::callback_fresh_return_not_clean_diagnostic(
+            call_name,
+            arg_name,
+            name,
+            expected,
+            span.clone(),
         ),
-        span.clone(),
-        "argument type mismatch",
-        "`noescape Fn() -> fresh T` callback returns are fresh contracts and cannot return captured or managed values.",
-        "return_fresh_callback_value",
-        "Return a struct constructor, fresh call, or local value created inside the callback.",
-    ));
+    );
 }
 
 pub(super) fn callback_fresh_return_unknown_diagnostic(
@@ -1184,17 +1171,14 @@ pub(super) fn callback_fresh_return_unknown_diagnostic(
     expected: &str,
     span: &Span,
 ) {
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::ARGUMENT_TYPE_MISMATCH,
-        format!(
-            "callback argument `{arg_name}` for `{call_name}` returns value whose freshness cannot be proven, expected `{expected}`."
+    analyzer.diagnostics.push(
+        rsscript_semantics::callback_fresh_return_unknown_diagnostic(
+            call_name,
+            arg_name,
+            expected,
+            span.clone(),
         ),
-        span.clone(),
-        "argument type mismatch",
-        "`noescape Fn() -> fresh T` callback returns must be proven fresh before Rust lowering.",
-        "return_fresh_callback_value",
-        "Return a struct constructor, fresh call, or local value created inside the callback.",
-    ));
+    );
 }
 
 pub(super) fn callback_retained_local_diagnostic(
@@ -1204,15 +1188,11 @@ pub(super) fn callback_retained_local_diagnostic(
     local_name: &str,
     span: Span,
 ) {
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::LOCAL_VALUE_RETAINED,
-        format!("retaining API `{callee}` cannot retain local value `{local_name}`."),
-        span,
-        "local value retained",
-        format!("`{callee}` declares `retains({param})`."),
-        "manage_local",
-        format!("Pass `{param}` through `manage {local_name}` before retaining it."),
-    ));
+    analyzer
+        .diagnostics
+        .push(rsscript_semantics::retained_local_diagnostic(
+            local_name, callee, param, span,
+        ));
 }
 
 pub(super) fn callback_arity_mismatch_diagnostic(
@@ -1223,17 +1203,15 @@ pub(super) fn callback_arity_mismatch_diagnostic(
     expected: usize,
     span: &Span,
 ) {
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::ARGUMENT_TYPE_MISMATCH,
-        format!(
-            "callback argument `{arg_name}` for `{call_name}` has {actual} parameter(s), expected {expected}."
-        ),
-        span.clone(),
-        "argument type mismatch",
-        "`noescape Fn(...) -> T` callback parameter counts are part of the call signature and must be checked before Rust lowering.",
-        "match_callback_parameter_count",
-        format!("Use a callback with {expected} parameter(s)."),
-    ));
+    analyzer
+        .diagnostics
+        .push(rsscript_semantics::callback_arity_mismatch_diagnostic(
+            call_name,
+            arg_name,
+            actual,
+            expected,
+            span.clone(),
+        ));
 }
 
 pub(super) fn callback_call_arity_mismatch_diagnostic(
@@ -1243,17 +1221,14 @@ pub(super) fn callback_call_arity_mismatch_diagnostic(
     expected: usize,
     span: Span,
 ) {
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::ARGUMENT_TYPE_MISMATCH,
-        format!(
-            "callback `{callback_name}` called with {actual} argument(s), expected {expected}."
-        ),
-        span,
-        "argument type mismatch",
-        "`noescape Fn(...)` callback calls must match the callback parameter contract before Rust lowering.",
-        "match_callback_call_arity",
-        format!("Call `{callback_name}` with {expected} argument(s)."),
-    ));
+    analyzer
+        .diagnostics
+        .push(rsscript_semantics::callback_call_arity_mismatch_diagnostic(
+            callback_name,
+            actual,
+            expected,
+            span,
+        ));
 }
 
 pub(super) fn callback_call_argument_type_mismatch_diagnostic(
@@ -1264,18 +1239,15 @@ pub(super) fn callback_call_argument_type_mismatch_diagnostic(
     expected: &str,
     span: &Span,
 ) {
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::ARGUMENT_TYPE_MISMATCH,
-        format!(
-            "argument {} for callback `{callback_name}` has type `{actual}`, expected `{expected}`.",
-            index + 1
+    analyzer.diagnostics.push(
+        rsscript_semantics::callback_call_argument_type_mismatch_diagnostic(
+            callback_name,
+            index,
+            actual,
+            expected,
+            span.clone(),
         ),
-        span.clone(),
-        "argument type mismatch",
-        "`noescape Fn(...)` callback argument types are part of the callback contract and must be checked before Rust lowering.",
-        "match_callback_call_argument_type",
-        format!("Pass a `{expected}` value for argument {}.", index + 1),
-    ));
+    );
 }
 
 pub(super) fn callback_call_site_argument_type_mismatch_diagnostic(
@@ -1286,17 +1258,15 @@ pub(super) fn callback_call_site_argument_type_mismatch_diagnostic(
     expected: &str,
     span: &Span,
 ) {
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::ARGUMENT_TYPE_MISMATCH,
-        format!(
-            "argument `{arg_name}` for `{call_name}` has type `{actual}`, expected `{expected}`."
+    analyzer.diagnostics.push(
+        rsscript_semantics::callback_call_site_argument_type_mismatch_diagnostic(
+            call_name,
+            arg_name,
+            actual,
+            expected,
+            span.clone(),
         ),
-        span.clone(),
-        "argument type mismatch",
-        "`noescape Fn(...)` callback parameter types apply to ordinary calls inside callback expressions before Rust lowering.",
-        "match_callback_body_call_argument_type",
-        format!("Pass a `{expected}` value for `{arg_name}`."),
-    ));
+    );
 }
 
 pub(super) fn type_pattern_matches(

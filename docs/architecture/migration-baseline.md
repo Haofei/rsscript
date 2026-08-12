@@ -217,6 +217,9 @@ mechanical acceptance condition holds.
       - [x] **S02.3.2d — Move return type diagnostics.** Compiler resolves
         return and variant-payload type facts; semantics owns both canonical
         return mismatch diagnostics and fixes.
+      - [x] **S02.3.2e — Move callback contract diagnostics.** Compiler derives
+        resolved callback parameter, return, freshness, operator, and retention
+        facts; semantics owns their canonical mismatch diagnostics and fixes.
   - [ ] **S02.4 — Move ownership and resource checks.** Relocate moves, escapes,
     borrows, `fresh`/`owned`/`noescape`, resource declarations, and cleanup
     validation with property and hostile-corpus coverage.

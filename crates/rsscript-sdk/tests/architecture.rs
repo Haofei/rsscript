@@ -1359,6 +1359,39 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         !compiler_calls.contains("RSScript return types are part of the review contract"),
         "compiler must not re-own return type diagnostic text"
     );
+    let semantic_callbacks = read(&root.join("crates/rsscript-semantics/src/callbacks.rs"));
+    for exported in [
+        "pub fn callback_operator_type_mismatch_diagnostic",
+        "pub fn callback_return_type_mismatch_diagnostic",
+        "pub fn callback_fresh_return_not_clean_diagnostic",
+        "pub fn callback_fresh_return_unknown_diagnostic",
+        "pub fn callback_arity_mismatch_diagnostic",
+        "pub fn callback_call_arity_mismatch_diagnostic",
+        "pub fn callback_call_argument_type_mismatch_diagnostic",
+        "pub fn callback_call_site_argument_type_mismatch_diagnostic",
+    ] {
+        assert!(semantic_callbacks.contains(exported));
+    }
+    let compiler_closure_contracts =
+        read(&root.join("crates/rsscript-compiler/src/checks/calls/closure_contracts.rs"));
+    for delegated in [
+        "rsscript_semantics::callback_operator_type_mismatch_diagnostic",
+        "rsscript_semantics::callback_return_type_mismatch_diagnostic",
+        "rsscript_semantics::callback_fresh_return_not_clean_diagnostic",
+        "rsscript_semantics::callback_fresh_return_unknown_diagnostic",
+        "rsscript_semantics::callback_arity_mismatch_diagnostic",
+        "rsscript_semantics::callback_call_arity_mismatch_diagnostic",
+        "rsscript_semantics::callback_call_argument_type_mismatch_diagnostic",
+        "rsscript_semantics::callback_call_site_argument_type_mismatch_diagnostic",
+        "rsscript_semantics::retained_local_diagnostic",
+    ] {
+        assert!(compiler_closure_contracts.contains(delegated));
+    }
+    assert!(
+        !compiler_closure_contracts
+            .contains("callback parameter counts are part of the call signature"),
+        "compiler must not re-own callback contract diagnostic text"
+    );
 
     let semantic_await_placement =
         read(&root.join("crates/rsscript-semantics/src/await_placement.rs"));
