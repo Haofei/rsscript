@@ -14,6 +14,7 @@ mod await_placement;
 mod call_arguments;
 mod call_binding;
 mod callbacks;
+mod closure_escape;
 mod control_flow;
 mod database;
 mod declarations;
@@ -51,6 +52,9 @@ pub use callbacks::{
     callback_call_arity_mismatch_diagnostic, callback_call_site_argument_type_mismatch_diagnostic,
     callback_fresh_return_not_clean_diagnostic, callback_fresh_return_unknown_diagnostic,
     callback_operator_type_mismatch_diagnostic, callback_return_type_mismatch_diagnostic,
+};
+pub use closure_escape::{
+    ClosureEscapeContext, local_closure_escape_diagnostic, noescape_escape_diagnostic,
 };
 pub use control_flow::{
     bool_condition_diagnostic, conflicting_pattern_field_effect_diagnostic,

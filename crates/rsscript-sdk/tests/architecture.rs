@@ -1392,6 +1392,23 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
             .contains("callback parameter counts are part of the call signature"),
         "compiler must not re-own callback contract diagnostic text"
     );
+    let semantic_closure_escape =
+        read(&root.join("crates/rsscript-semantics/src/closure_escape.rs"));
+    assert!(semantic_closure_escape.contains("pub enum ClosureEscapeContext"));
+    assert!(semantic_closure_escape.contains("pub fn noescape_escape_diagnostic"));
+    assert!(semantic_closure_escape.contains("pub fn local_closure_escape_diagnostic"));
+    assert!(
+        compiler_closure_contracts
+            .contains("rsscript_semantics::ClosureEscapeContext as NoescapeEscapeContext")
+    );
+    assert!(compiler_closure_contracts.contains("rsscript_semantics::noescape_escape_diagnostic"));
+    assert!(
+        compiler_closure_contracts.contains("rsscript_semantics::local_closure_escape_diagnostic")
+    );
+    assert!(
+        !compiler_closure_contracts.contains("noescape callback `{name}` cannot be stored"),
+        "compiler must not re-own closure escape diagnostic text"
+    );
 
     let semantic_await_placement =
         read(&root.join("crates/rsscript-semantics/src/await_placement.rs"));

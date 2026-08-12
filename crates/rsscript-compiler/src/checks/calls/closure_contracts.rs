@@ -1321,21 +1321,8 @@ pub(super) fn is_noescape_callback_call(
         && matches!(callee, Callee::Name(name) if noescape_bindings.contains_key(name))
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(super) enum NoescapeEscapeContext<'a> {
-    Store,
-    Return,
-    UseAsValue,
-    Pass { callee: &'a str },
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(super) enum LocalClosureEscapeContext<'a> {
-    Store,
-    Return,
-    UseAsValue,
-    Pass { callee: &'a str },
-}
+pub(super) use rsscript_semantics::ClosureEscapeContext as LocalClosureEscapeContext;
+pub(super) use rsscript_semantics::ClosureEscapeContext as NoescapeEscapeContext;
 
 pub(super) fn check_local_closure_escape(
     analyzer: &mut Analyzer<'_>,
@@ -1347,12 +1334,14 @@ pub(super) fn check_local_closure_escape(
     let Some((name, use_span)) = local_closure_escape_use(expr, local_closure_bindings) else {
         return;
     };
-    analyzer.diagnostics.push(local_closure_escape_diagnostic(
-        name,
-        use_span,
-        context_span.clone(),
-        context,
-    ));
+    analyzer
+        .diagnostics
+        .push(rsscript_semantics::local_closure_escape_diagnostic(
+            name,
+            use_span,
+            context_span.clone(),
+            context,
+        ));
 }
 
 pub(super) fn local_closure_escape_use<'a>(
@@ -1454,12 +1443,14 @@ pub(super) fn check_noescape_escape(
     let Some((name, use_span)) = noescape_escape_use(expr, noescape_bindings) else {
         return;
     };
-    analyzer.diagnostics.push(noescape_escape_diagnostic(
-        name,
-        use_span,
-        context_span.clone(),
-        context,
-    ));
+    analyzer
+        .diagnostics
+        .push(rsscript_semantics::noescape_escape_diagnostic(
+            name,
+            use_span,
+            context_span.clone(),
+            context,
+        ));
 }
 
 pub(super) fn noescape_escape_use<'a>(
@@ -1910,88 +1901,4 @@ pub(super) fn fn_type_prefix(type_name: &str) -> &'static str {
     } else {
         ""
     }
-}
-
-pub(super) fn noescape_escape_diagnostic(
-    name: &str,
-    use_span: Span,
-    context_span: Span,
-    context: NoescapeEscapeContext<'_>,
-) -> Diagnostic {
-    let (summary, cause) = match context {
-        NoescapeEscapeContext::Store => (
-            format!("noescape callback `{name}` cannot be stored."),
-            "`noescape Fn()` parameters are temporary callback external_bindings and cannot be bound into stored values.".to_string(),
-        ),
-        NoescapeEscapeContext::Return => (
-            format!("noescape callback `{name}` cannot be returned."),
-            "`noescape Fn()` parameters cannot escape the current function through a return value.".to_string(),
-        ),
-        NoescapeEscapeContext::UseAsValue => (
-            format!("noescape callback `{name}` cannot be used as an ordinary value."),
-            "Call the noescape callback directly, or pass it to another resolved `noescape Fn()` parameter.".to_string(),
-        ),
-        NoescapeEscapeContext::Pass { callee } => (
-            format!("noescape callback `{name}` cannot be passed to `{callee}` as an ordinary value."),
-            "Forwarding a noescape callback is only allowed when the target parameter is also `noescape Fn()`.".to_string(),
-        ),
-    };
-    Diagnostic::error(
-        code::NOESCAPE_CALLBACK_ESCAPE,
-        summary,
-        use_span,
-        "noescape callback escapes",
-    )
-    .with_cause(cause)
-    .with_cause(format!(
-        "The escaping context starts at {}:{}.",
-        context_span.line, context_span.column
-    ))
-    .with_fix(
-        "keep_noescape_local",
-        "Call the callback directly, or change the API to an ordinary managed callback type.",
-        "manual",
-    )
-}
-
-pub(super) fn local_closure_escape_diagnostic(
-    name: &str,
-    use_span: Span,
-    context_span: Span,
-    context: LocalClosureEscapeContext<'_>,
-) -> Diagnostic {
-    let (summary, cause) = match context {
-        LocalClosureEscapeContext::Store => (
-            format!("local closure `{name}` cannot be stored in a managed binding."),
-            "A closure bound with `local` is an exclusive local external_binding and cannot become managed data.".to_string(),
-        ),
-        LocalClosureEscapeContext::Return => (
-            format!("local closure `{name}` cannot be returned."),
-            "A local closure cannot escape the function where its local captures are valid.".to_string(),
-        ),
-        LocalClosureEscapeContext::UseAsValue => (
-            format!("local closure `{name}` cannot be used as an ordinary value."),
-            "Call the local closure directly, or pass it to a resolved `noescape Fn()` parameter.".to_string(),
-        ),
-        LocalClosureEscapeContext::Pass { callee } => (
-            format!("local closure `{name}` cannot be passed to `{callee}` as an ordinary value."),
-            "Forwarding a local closure is only allowed when the target parameter is `noescape Fn()`.".to_string(),
-        ),
-    };
-    Diagnostic::error(
-        code::LOCAL_CLOSURE_ESCAPE,
-        summary,
-        use_span,
-        "local closure escapes",
-    )
-    .with_cause(cause)
-    .with_cause(format!(
-        "The escaping context starts at {}:{}.",
-        context_span.line, context_span.column
-    ))
-    .with_fix(
-        "keep_local_closure_noescape",
-        "Call the closure locally, or pass it to a noescape callback parameter.",
-        "manual",
-    )
 }

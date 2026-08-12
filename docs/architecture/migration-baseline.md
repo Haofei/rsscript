@@ -220,6 +220,9 @@ mechanical acceptance condition holds.
       - [x] **S02.3.2e — Move callback contract diagnostics.** Compiler derives
         resolved callback parameter, return, freshness, operator, and retention
         facts; semantics owns their canonical mismatch diagnostics and fixes.
+      - [x] **S02.3.2f — Move callback escape diagnostics.** Semantics owns the
+        noescape/local closure escape-context model and diagnostics; compiler
+        only finds escape uses and supplies resolved context/span facts.
   - [ ] **S02.4 — Move ownership and resource checks.** Relocate moves, escapes,
     borrows, `fresh`/`owned`/`noescape`, resource declarations, and cleanup
     validation with property and hostile-corpus coverage.
