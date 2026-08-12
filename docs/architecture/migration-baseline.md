@@ -164,6 +164,9 @@ mechanical acceptance condition holds.
     - [x] **S02.1l — Move module/use layout rules.** Semantics owns per-file
       module ordering, import ordering, and duplicate local import binding
       diagnostics; compiler only supplies the parsed item stream.
+    - [x] **S02.1m — Move declaration surface rules.** Semantics owns removed
+      markers, malformed top-level forms, generated-name reservation, generic
+      protocol reservation, and the `.rss` function-body requirement.
     - [x] **S02.2g — Move resolved builtin operator diagnostics.** Compiler
       extracts HIR operand/type facts; semantics owns non-numeric arithmetic and
       fixed-operand compatibility diagnostic contracts.

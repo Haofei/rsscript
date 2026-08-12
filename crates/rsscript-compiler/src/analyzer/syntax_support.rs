@@ -2,113 +2,14 @@ use super::*;
 
 impl Analyzer<'_> {
     pub(super) fn check_unsupported_syntax(&mut self) {
-        for index in 0..self.tokens.len().saturating_sub(1) {
-            if self.tokens[index].is_ident_text("effects") && self.tokens[index + 1].symbol("(") {
-                self.unsupported_syntax(
-                    self.tokens[index].span.clone(),
-                    "removed effect clause",
-                    "Generic declaration-effect clauses are not part of RSScript; use structured `retains(name)` only when a parameter escapes the call.",
-                );
-            }
-            if (self.tokens[index].is_ident_text("native")
-                || self.tokens[index].is_ident_text("unsafe"))
-                && (self.tokens[index + 1].is_ident_text("fn")
-                    || self.tokens[index + 1].is_ident_text("module"))
-            {
-                self.unsupported_syntax(
-                    self.tokens[index].span.clone(),
-                    "removed implementation marker",
-                    "Implementation origin and host risk belong to package binding metadata, not source declarations.",
-                );
-            }
-        }
-        for span in self.syntax_program.unknown_top_level_spans.clone() {
-            self.unsupported_syntax(
-                span,
-                "unsupported top-level item",
-                "This top-level construct is outside the current RSScript parser surface.",
-            );
-        }
-        for span in self.syntax_program.malformed_declaration_spans.clone() {
-            self.unsupported_syntax(
-                span,
-                "malformed declaration",
-                "This declaration starts like RSScript syntax but does not match the supported declaration grammar.",
-            );
-        }
         self.diagnostics
-            .extend(rsscript_semantics::module_use_layout_diagnostics(
-                &self.syntax_program.items,
+            .extend(rsscript_semantics::declaration_surface_diagnostics(
+                self.tokens,
+                &self.syntax_program,
             ));
-        self.check_reserved_declaration_names();
-        self.check_reserved_protocol_generics();
-        let protocol_names = self
-            .syntax_program
-            .protocols
-            .iter()
-            .map(|protocol| protocol.name.clone())
-            .collect::<HashSet<_>>();
         let items = self.syntax_program.items.clone();
         for item in &items {
-            if let Item::Function(function) = item
-                && !function.has_body
-                && !function.span.file.ends_with(".rssi")
-                && !function
-                    .name
-                    .split_once('.')
-                    .is_some_and(|(namespace, _)| protocol_names.contains(namespace))
-            {
-                self.unsupported_syntax(
-                    function.span.clone(),
-                    "bodyless source function",
-                    "Implementation functions in `.rss` files require a body; put external declarations in an `.rssi` package interface.",
-                );
-            }
             self.check_unsupported_syntax_item(item);
-        }
-    }
-
-    fn check_reserved_protocol_generics(&mut self) {
-        for index in 0..self.tokens.len().saturating_sub(2) {
-            if !(self.tokens[index].is_ident_text("protocol")
-                || self.tokens[index].is_ident_text("impl"))
-                || !self.tokens[index + 2].symbol("<")
-            {
-                continue;
-            }
-            self.unsupported_syntax(
-                self.tokens[index + 2].span.clone(),
-                "generic protocol declaration",
-                "Generic protocol and protocol-implementation declarations are reserved for a later language version; use function generics with a protocol bound instead.",
-            );
-        }
-    }
-
-    /// The `__rss_*` and `__rsscript_*` namespaces are reserved for
-    /// compiler-generated desugaring temporaries and runtime helpers. Reject user
-    /// declarations that claim one so generated helpers can never collide with
-    /// source symbols. Other `__`-prefixed names (Python-style dunders like
-    /// `__hash__`, and the synthetic `__TupleN` tuple structs) are left legal.
-    pub(super) fn check_reserved_declaration_names(&mut self) {
-        use crate::syntax::ast::Item;
-        for item in self.syntax_program.items.clone() {
-            let (name, span) = match &item {
-                Item::Function(decl) => (decl.name.as_str(), &decl.span),
-                Item::Type(decl) => (decl.name.as_str(), &decl.span),
-                Item::SumType(decl) => (decl.name.as_str(), &decl.span),
-                Item::TypeAlias(decl) => (decl.name.as_str(), &decl.span),
-                Item::Const(decl) => (decl.name.as_str(), &decl.span),
-                Item::Module(_) | Item::Use(_) => continue,
-            };
-            // `Type.method` reserves on the member, not the (user) type prefix.
-            let leaf = name.rsplit('.').next().unwrap_or(name);
-            if is_reserved_generated_name(leaf) {
-                self.unsupported_syntax(
-                    span.clone(),
-                    "reserved declaration name",
-                    "The `__rss_` and `__rsscript_` prefixes are reserved for compiler-generated symbols; rename this declaration.",
-                );
-            }
         }
     }
 

@@ -1013,15 +1013,6 @@ fn analyze_program(prepared: PreparedAnalysis) -> AnalysisResult {
     )
 }
 
-/// Namespaces that the compiler generates and a user declaration must not claim:
-/// desugaring temporaries (`__rss_*`) and runtime helpers (`__rsscript_*`). Other
-/// `__`-prefixed names (Python-style dunders like `__hash__`, `__eq__`, and the
-/// synthetic `__TupleN` structs the tuple desugar injects) are legal — they don't
-/// collide with any generated namespace.
-fn is_reserved_generated_name(leaf: &str) -> bool {
-    leaf.starts_with("__rss_") || leaf.starts_with("__rsscript_")
-}
-
 fn collect_type_alias_metadata<'a>(
     programs: impl IntoIterator<Item = &'a crate::syntax::ast::Program>,
 ) -> BTreeMap<String, AliasDefinition> {

@@ -1197,6 +1197,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "TypeQualifiers",
         "ValidatedProgram",
         "cyclic_type_alias_diagnostics",
+        "declaration_surface_diagnostics",
         "duplicate_declaration_diagnostics",
         "derive_syntax_diagnostics",
         "derive_field_diagnostics",
@@ -1331,8 +1332,19 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         read(&root.join("crates/rsscript-compiler/src/analyzer/syntax_support.rs"));
     assert!(compiler_syntax_support.contains("rsscript_semantics::derive_syntax_diagnostics"));
     assert!(compiler_syntax_support.contains("rsscript_semantics::unsupported_syntax_diagnostic"));
-    assert!(compiler_syntax_support.contains("rsscript_semantics::module_use_layout_diagnostics"));
     assert!(!compiler_syntax_support.contains("fn check_module_use_layout"));
+    assert!(
+        compiler_syntax_support.contains("rsscript_semantics::declaration_surface_diagnostics")
+    );
+    for forbidden in [
+        "fn check_reserved_protocol_generics",
+        "fn check_reserved_declaration_names",
+    ] {
+        assert!(
+            !compiler_syntax_support.contains(forbidden),
+            "compiler must not own declaration surface rule `{forbidden}`"
+        );
+    }
     assert!(!compiler_syntax_support.contains("Diagnostic::"));
     let compiler_declaration_diagnostics =
         read(&root.join("crates/rsscript-compiler/src/analyzer/diagnostics.rs"));

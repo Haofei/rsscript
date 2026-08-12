@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use rsscript_diagnostics::{Diagnostic, Span, code};
-use rsscript_syntax::ast::Item;
+use rsscript_syntax::ast::{Item, Program};
 use rsscript_syntax::lexer::{Token, TokenKind};
 
 /// Derive diagnostics for deliberately unsupported surface forms.
@@ -103,6 +103,112 @@ fn item_span_file(item: &Item) -> String {
         Item::Module(decl) => decl.span.file.clone(),
         Item::Use(decl) => decl.span.file.clone(),
     }
+}
+
+/// Derive declaration-level surface diagnostics from one parsed source or
+/// interface program and its token stream.
+///
+/// These are language rules, not compiler lowering restrictions: removed
+/// markers, malformed top-level declarations, generated-name reservation,
+/// protocol generic reservation, and the body requirement for `.rss`
+/// implementation functions.
+pub fn declaration_surface_diagnostics(tokens: &[Token], program: &Program) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for index in 0..tokens.len().saturating_sub(1) {
+        if tokens[index].is_ident_text("effects") && tokens[index + 1].symbol("(") {
+            diagnostics.push(unsupported_syntax_diagnostic(
+                tokens[index].span.clone(),
+                "removed effect clause",
+                "Generic declaration-effect clauses are not part of RSScript; use structured `retains(name)` only when a parameter escapes the call.",
+            ));
+        }
+        if (tokens[index].is_ident_text("native") || tokens[index].is_ident_text("unsafe"))
+            && (tokens[index + 1].is_ident_text("fn") || tokens[index + 1].is_ident_text("module"))
+        {
+            diagnostics.push(unsupported_syntax_diagnostic(
+                tokens[index].span.clone(),
+                "removed implementation marker",
+                "Implementation origin and host risk belong to package binding metadata, not source declarations.",
+            ));
+        }
+    }
+    for span in &program.unknown_top_level_spans {
+        diagnostics.push(unsupported_syntax_diagnostic(
+            span.clone(),
+            "unsupported top-level item",
+            "This top-level construct is outside the current RSScript parser surface.",
+        ));
+    }
+    for span in &program.malformed_declaration_spans {
+        diagnostics.push(unsupported_syntax_diagnostic(
+            span.clone(),
+            "malformed declaration",
+            "This declaration starts like RSScript syntax but does not match the supported declaration grammar.",
+        ));
+    }
+    diagnostics.extend(module_use_layout_diagnostics(&program.items));
+    let protocol_names = program
+        .protocols
+        .iter()
+        .map(|protocol| protocol.name.as_str())
+        .collect::<HashSet<_>>();
+    for item in &program.items {
+        if let Some((name, span)) = declaration_name_and_span(item) {
+            let leaf = name.rsplit('.').next().unwrap_or(name);
+            if is_reserved_generated_name(leaf) {
+                diagnostics.push(unsupported_syntax_diagnostic(
+                    span.clone(),
+                    "reserved declaration name",
+                    "The `__rss_` and `__rsscript_` prefixes are reserved for compiler-generated symbols; rename this declaration.",
+                ));
+            }
+        }
+    }
+    for index in 0..tokens.len().saturating_sub(2) {
+        if (tokens[index].is_ident_text("protocol") || tokens[index].is_ident_text("impl"))
+            && tokens[index + 2].symbol("<")
+        {
+            diagnostics.push(unsupported_syntax_diagnostic(
+                tokens[index + 2].span.clone(),
+                "generic protocol declaration",
+                "Generic protocol and protocol-implementation declarations are reserved for a later language version; use function generics with a protocol bound instead.",
+            ));
+        }
+    }
+    for item in &program.items {
+        let Item::Function(function) = item else {
+            continue;
+        };
+        if !function.has_body
+            && !function.span.file.ends_with(".rssi")
+            && !function
+                .name
+                .split_once('.')
+                .is_some_and(|(namespace, _)| protocol_names.contains(namespace))
+        {
+            diagnostics.push(unsupported_syntax_diagnostic(
+                function.span.clone(),
+                "bodyless source function",
+                "Implementation functions in `.rss` files require a body; put external declarations in an `.rssi` package interface.",
+            ));
+        }
+    }
+    diagnostics
+}
+
+fn declaration_name_and_span(item: &Item) -> Option<(&str, &Span)> {
+    match item {
+        Item::Function(decl) => Some((&decl.name, &decl.span)),
+        Item::Type(decl) => Some((&decl.name, &decl.span)),
+        Item::SumType(decl) => Some((&decl.name, &decl.span)),
+        Item::TypeAlias(decl) => Some((&decl.name, &decl.span)),
+        Item::Const(decl) => Some((&decl.name, &decl.span)),
+        Item::Module(_) | Item::Use(_) => None,
+    }
+}
+
+fn is_reserved_generated_name(leaf: &str) -> bool {
+    leaf.starts_with("__rss_") || leaf.starts_with("__rsscript_")
 }
 
 /// Build the canonical diagnostic for a parsed construct that RSScript does
@@ -337,5 +443,16 @@ mod tests {
         assert_eq!(diagnostics[0].label, "duplicate import name");
         assert_eq!(diagnostics[1].label, "misplaced module declaration");
         assert_eq!(diagnostics[2].label, "misplaced module declaration");
+    }
+
+    #[test]
+    fn declaration_surface_rules_cover_generated_names_and_source_bodies() {
+        let source = "fn __rss_hidden() -> Unit {}\nfn external() -> Unit\n";
+        let program = rsscript_syntax::parse_source("source.rss", source);
+        let tokens = rsscript_syntax::lexer::lex("source.rss", source);
+        let diagnostics = declaration_surface_diagnostics(&tokens, &program);
+        assert_eq!(diagnostics.len(), 2);
+        assert_eq!(diagnostics[0].label, "reserved declaration name");
+        assert_eq!(diagnostics[1].label, "bodyless source function");
     }
 }
