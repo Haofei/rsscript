@@ -1350,13 +1350,9 @@ impl Analyzer<'_> {
             if !function.is_async {
                 continue;
             }
-            if let Some(span) = async_block_nonlinear_await(&function.body) {
-                diagnostics.push(rsscript_semantics::async_fn_lowering_diagnostic(
-                    span,
-                    "this `await` is inside an expression that needs full async expression lowering",
-                    "Move the await to a statement boundary, or put it inside an `if`/`loop`/`match` body where RSScript can create an explicit async boundary.",
-                ));
-            }
+            diagnostics.extend(rsscript_semantics::async_function_lowering_diagnostics(
+                function,
+            ));
             diagnostics.extend(rsscript_semantics::async_function_cancellation_diagnostics(
                 function,
             ));
@@ -1463,19 +1459,6 @@ fn fn_type_param_type_name(type_name: &str, index: usize) -> Option<String> {
     Some(bare.trim().to_string())
 }
 
-/// AST analogue of [`crate::hir::assign_target_reads`]: the evaluated
-/// sub-expressions of an assignment target (a field/index base, an index
-/// expression), excluding the write root. So awaits/`?`/calls embedded in an
-/// assignment *target* (e.g. `xs[await f()] = v`) are visited like the RHS.
-fn assign_target_reads_ast(target: &Expr) -> Vec<&Expr> {
-    match target {
-        Expr::Ident(_, _) => Vec::new(),
-        Expr::Field { base, .. } => vec![base.as_ref()],
-        Expr::Index { base, index, .. } => vec![base.as_ref(), index.as_ref()],
-        other => vec![other],
-    }
-}
-
 /// The awaited inner expression of `await x` / `await x?`.
 fn async_await_inner_ast(expr: &Expr) -> Option<&Expr> {
     match expr {
@@ -1486,143 +1469,6 @@ fn async_await_inner_ast(expr: &Expr) -> Option<&Expr> {
         Expr::Await { value, .. } => Some(value),
         _ => None,
     }
-}
-
-fn expr_first_await(expr: &Expr) -> Option<crate::diagnostic::Span> {
-    match expr {
-        Expr::Await { span, .. } => Some(span.clone()),
-        Expr::Binary { left, right, .. } => {
-            expr_first_await(left).or_else(|| expr_first_await(right))
-        }
-        Expr::Field { base, .. } => expr_first_await(base),
-        Expr::Index { base, index, .. } => {
-            expr_first_await(base).or_else(|| expr_first_await(index))
-        }
-        Expr::Call { args, .. } => args.iter().find_map(|arg| expr_first_await(&arg.value)),
-        Expr::Effect { value, .. }
-        | Expr::Manage { value, .. }
-        | Expr::Spawn { value, .. }
-        | Expr::Try { value, .. } => expr_first_await(value),
-        Expr::Closure { body, .. } => block_first_await(body),
-        Expr::Match { value, arms, .. } => expr_first_await(value)
-            .or_else(|| {
-                arms.iter()
-                    .find_map(|arm| arm.guard.as_ref().and_then(expr_first_await))
-            })
-            .or_else(|| arms.iter().find_map(|arm| block_first_await(&arm.body))),
-        Expr::MapLiteral { entries, .. } => entries
-            .iter()
-            .find_map(|entry| expr_first_await(&entry.key))
-            .or_else(|| {
-                entries
-                    .iter()
-                    .find_map(|entry| expr_first_await(&entry.value))
-            }),
-        Expr::ObjectLiteral { fields, .. } => fields
-            .iter()
-            .find_map(|field| expr_first_await(&field.value)),
-        Expr::ArrayLiteral { items, .. } => items.iter().find_map(expr_first_await),
-        Expr::Ident(..)
-        | Expr::Number(..)
-        | Expr::String(..)
-        | Expr::CharLiteral(..)
-        | Expr::MultilineString(..)
-        | Expr::Unknown(_) => None,
-    }
-}
-
-fn block_first_await(block: &Block) -> Option<crate::diagnostic::Span> {
-    block.statements.iter().find_map(stmt_first_await_ast)
-}
-
-fn stmt_first_await_ast(statement: &Stmt) -> Option<crate::diagnostic::Span> {
-    match statement {
-        Stmt::Let(stmt) => stmt.value.as_ref().and_then(expr_first_await),
-        Stmt::Return(stmt) => stmt.value.as_ref().and_then(expr_first_await),
-        Stmt::Expr(expr) => expr_first_await(expr),
-        Stmt::With(stmt) => {
-            expr_first_await(&stmt.resource).or_else(|| block_first_await(&stmt.body))
-        }
-        Stmt::If(stmt) => expr_first_await(&stmt.condition)
-            .or_else(|| block_first_await(&stmt.then_body))
-            .or_else(|| stmt.else_body.as_ref().and_then(block_first_await)),
-        Stmt::Loop(stmt) => stmt
-            .condition
-            .as_ref()
-            .and_then(expr_first_await)
-            .or_else(|| block_first_await(&stmt.body)),
-        Stmt::For(stmt) => {
-            if stmt.is_async {
-                Some(stmt.span.clone())
-            } else {
-                expr_first_await(&stmt.iterable).or_else(|| block_first_await(&stmt.body))
-            }
-        }
-        Stmt::Match(stmt) => expr_first_await(&stmt.value).or_else(|| {
-            stmt.arms
-                .iter()
-                .find_map(|arm| block_first_await(&arm.body))
-        }),
-        Stmt::Select(stmt) => stmt.arms.iter().find_map(|arm| {
-            expr_first_await(&arm.operation).or_else(|| block_first_await(&arm.body))
-        }),
-        Stmt::TaskGroup(stmt) => block_first_await(&stmt.body),
-        Stmt::LetElse(stmt) => {
-            expr_first_await(&stmt.value).or_else(|| block_first_await(&stmt.else_body))
-        }
-        Stmt::Assign(stmt) => assign_target_reads_ast(&stmt.target)
-            .into_iter()
-            .find_map(expr_first_await)
-            .or_else(|| expr_first_await(&stmt.value)),
-        _ => None,
-    }
-}
-
-/// The span of the first `await` that is *not* a top-level statement of an async
-/// body (i.e. nested in control flow or a non-await expression position).
-fn async_block_nonlinear_await(block: &Block) -> Option<crate::diagnostic::Span> {
-    for statement in &block.statements {
-        let nested = match statement {
-            Stmt::Let(stmt) => match stmt.value.as_ref() {
-                Some(value) => match async_await_inner_ast(value) {
-                    Some(inner) => expr_first_await(inner),
-                    None => expr_first_await(value),
-                },
-                None => None,
-            },
-            Stmt::Expr(expr) => match async_await_inner_ast(expr) {
-                Some(inner) => expr_first_await(inner),
-                None => expr_first_await(expr),
-            },
-            // `return await op` is a top-level await; only nested awaits in the
-            // returned expression are non-linear.
-            Stmt::Return(stmt) => match stmt.value.as_ref() {
-                Some(value) => match async_await_inner_ast(value) {
-                    Some(inner) => expr_first_await(inner),
-                    None => expr_first_await(value),
-                },
-                None => None,
-            },
-            Stmt::Select(_) | Stmt::For(_) | Stmt::TaskGroup(_) => None,
-            Stmt::If(_) | Stmt::Loop(_) | Stmt::Match(_) | Stmt::With(_) => None,
-            // An assignment's RHS follows the same rule as a `let` initializer (a
-            // direct `await` is linear; nested awaits are not). The target is an
-            // evaluated place, so any await inside a field/index base or index
-            // expression is non-linear (e.g. `xs[await f()] = v`).
-            Stmt::Assign(stmt) => assign_target_reads_ast(&stmt.target)
-                .into_iter()
-                .find_map(expr_first_await)
-                .or_else(|| match async_await_inner_ast(&stmt.value) {
-                    Some(inner) => expr_first_await(inner),
-                    None => expr_first_await(&stmt.value),
-                }),
-            other => stmt_first_await_ast(other),
-        };
-        if nested.is_some() {
-            return nested;
-        }
-    }
-    None
 }
 
 pub(crate) fn protocol_method_names(items: &[Item], protocol: &str) -> HashSet<String> {

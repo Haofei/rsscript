@@ -128,6 +128,167 @@ pub fn async_function_cancellation_diagnostics(function: &FunctionDecl) -> Vec<D
         .collect()
 }
 
+/// Validate the source-level await shape accepted by the current structured
+/// async lowering model.
+pub fn async_function_lowering_diagnostics(function: &FunctionDecl) -> Vec<Diagnostic> {
+    if !function.is_async {
+        return Vec::new();
+    }
+    nonlinear_await_in_block(&function.body)
+        .map(|span| {
+            async_fn_lowering_diagnostic(
+                span,
+                "this `await` is inside an expression that needs full async expression lowering",
+                "Move the await to a statement boundary, or put it inside an `if`/`loop`/`match` body where RSScript can create an explicit async boundary.",
+            )
+        })
+        .into_iter()
+        .collect()
+}
+
+fn nonlinear_await_in_block(block: &AstBlock) -> Option<rsscript_diagnostics::Span> {
+    block
+        .statements
+        .iter()
+        .find_map(|statement| match statement {
+            AstStmt::Let(statement) => statement
+                .value
+                .as_ref()
+                .and_then(nested_await_beyond_direct),
+            AstStmt::Expr(expr) => nested_await_beyond_direct(expr),
+            AstStmt::Return(statement) => statement
+                .value
+                .as_ref()
+                .and_then(nested_await_beyond_direct),
+            AstStmt::Select(_) | AstStmt::For(_) | AstStmt::TaskGroup(_) => None,
+            AstStmt::If(_) | AstStmt::Loop(_) | AstStmt::Match(_) | AstStmt::With(_) => None,
+            AstStmt::Assign(statement) => assignment_target_reads(&statement.target)
+                .into_iter()
+                .find_map(first_await_in_expr)
+                .or_else(|| nested_await_beyond_direct(&statement.value)),
+            other => first_await_in_statement(other),
+        })
+}
+
+fn nested_await_beyond_direct(expr: &AstExpr) -> Option<rsscript_diagnostics::Span> {
+    match direct_await_operand(expr) {
+        Some(operand) => first_await_in_expr(operand),
+        None => first_await_in_expr(expr),
+    }
+}
+
+fn assignment_target_reads(target: &AstExpr) -> Vec<&AstExpr> {
+    match target {
+        AstExpr::Ident(_, _) => Vec::new(),
+        AstExpr::Field { base, .. } => vec![base],
+        AstExpr::Index { base, index, .. } => vec![base, index],
+        other => vec![other],
+    }
+}
+
+fn direct_await_operand(expr: &AstExpr) -> Option<&AstExpr> {
+    match expr {
+        AstExpr::Try { value, .. } => match value.as_ref() {
+            AstExpr::Await { value, .. } => Some(value),
+            _ => None,
+        },
+        AstExpr::Await { value, .. } => Some(value),
+        _ => None,
+    }
+}
+
+fn first_await_in_expr(expr: &AstExpr) -> Option<rsscript_diagnostics::Span> {
+    match expr {
+        AstExpr::Await { span, .. } => Some(span.clone()),
+        AstExpr::Binary { left, right, .. } => {
+            first_await_in_expr(left).or_else(|| first_await_in_expr(right))
+        }
+        AstExpr::Field { base, .. } => first_await_in_expr(base),
+        AstExpr::Index { base, index, .. } => {
+            first_await_in_expr(base).or_else(|| first_await_in_expr(index))
+        }
+        AstExpr::Call { args, .. } => args
+            .iter()
+            .find_map(|argument| first_await_in_expr(&argument.value)),
+        AstExpr::Effect { value, .. }
+        | AstExpr::Manage { value, .. }
+        | AstExpr::Spawn { value, .. }
+        | AstExpr::Try { value, .. } => first_await_in_expr(value),
+        AstExpr::Closure { body, .. } => first_await_in_block(body),
+        AstExpr::Match { value, arms, .. } => first_await_in_expr(value)
+            .or_else(|| {
+                arms.iter()
+                    .find_map(|arm| arm.guard.as_ref().and_then(first_await_in_expr))
+            })
+            .or_else(|| arms.iter().find_map(|arm| first_await_in_block(&arm.body))),
+        AstExpr::MapLiteral { entries, .. } => entries
+            .iter()
+            .find_map(|entry| first_await_in_expr(&entry.key))
+            .or_else(|| {
+                entries
+                    .iter()
+                    .find_map(|entry| first_await_in_expr(&entry.value))
+            }),
+        AstExpr::ObjectLiteral { fields, .. } => fields
+            .iter()
+            .find_map(|field| first_await_in_expr(&field.value)),
+        AstExpr::ArrayLiteral { items, .. } => items.iter().find_map(first_await_in_expr),
+        AstExpr::Ident(..)
+        | AstExpr::Number(..)
+        | AstExpr::String(..)
+        | AstExpr::CharLiteral(..)
+        | AstExpr::MultilineString(..)
+        | AstExpr::Unknown(_) => None,
+    }
+}
+
+fn first_await_in_block(block: &AstBlock) -> Option<rsscript_diagnostics::Span> {
+    block.statements.iter().find_map(first_await_in_statement)
+}
+
+fn first_await_in_statement(statement: &AstStmt) -> Option<rsscript_diagnostics::Span> {
+    match statement {
+        AstStmt::Let(statement) => statement.value.as_ref().and_then(first_await_in_expr),
+        AstStmt::Return(statement) => statement.value.as_ref().and_then(first_await_in_expr),
+        AstStmt::Expr(expr) => first_await_in_expr(expr),
+        AstStmt::With(statement) => first_await_in_expr(&statement.resource)
+            .or_else(|| first_await_in_block(&statement.body)),
+        AstStmt::If(statement) => first_await_in_expr(&statement.condition)
+            .or_else(|| first_await_in_block(&statement.then_body))
+            .or_else(|| statement.else_body.as_ref().and_then(first_await_in_block)),
+        AstStmt::Loop(statement) => statement
+            .condition
+            .as_ref()
+            .and_then(first_await_in_expr)
+            .or_else(|| first_await_in_block(&statement.body)),
+        AstStmt::For(statement) => {
+            if statement.is_async {
+                Some(statement.span.clone())
+            } else {
+                first_await_in_expr(&statement.iterable)
+                    .or_else(|| first_await_in_block(&statement.body))
+            }
+        }
+        AstStmt::Match(statement) => first_await_in_expr(&statement.value).or_else(|| {
+            statement
+                .arms
+                .iter()
+                .find_map(|arm| first_await_in_block(&arm.body))
+        }),
+        AstStmt::Select(statement) => statement.arms.iter().find_map(|arm| {
+            first_await_in_expr(&arm.operation).or_else(|| first_await_in_block(&arm.body))
+        }),
+        AstStmt::TaskGroup(statement) => first_await_in_block(&statement.body),
+        AstStmt::LetElse(statement) => first_await_in_expr(&statement.value)
+            .or_else(|| first_await_in_block(&statement.else_body)),
+        AstStmt::Assign(statement) => assignment_target_reads(&statement.target)
+            .into_iter()
+            .find_map(first_await_in_expr)
+            .or_else(|| first_await_in_expr(&statement.value)),
+        _ => None,
+    }
+}
+
 fn first_cancellation_token_in_block(block: &AstBlock) -> Option<rsscript_diagnostics::Span> {
     block
         .statements
@@ -553,6 +714,24 @@ mod tests {
             1
         );
         assert!(async_function_cancellation_diagnostics(functions[1]).is_empty());
+    }
+
+    #[test]
+    fn async_lowering_rule_accepts_direct_await_and_rejects_nested_await() {
+        let program = rsscript_syntax::parse_source(
+            "async.rss",
+            "async fn direct() { let value = await work() }\nasync fn nested() { let value = wrap(await work()) }",
+        );
+        let functions = program
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                rsscript_syntax::ast::Item::Function(function) => Some(function),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(async_function_lowering_diagnostics(functions[0]).is_empty());
+        assert_eq!(async_function_lowering_diagnostics(functions[1]).len(), 1);
     }
 
     #[test]

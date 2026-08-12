@@ -1388,19 +1388,22 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         read(&root.join("crates/rsscript-semantics/src/await_placement.rs"));
     assert!(semantic_async_lowering.contains("pub fn async_fn_lowering_diagnostic"));
     assert!(semantic_async_lowering.contains("pub fn async_function_cancellation_diagnostics"));
+    assert!(semantic_async_lowering.contains("pub fn async_function_lowering_diagnostics"));
     assert!(
         semantic_async_lowering.contains("pub fn cancellation_token_outside_task_group_diagnostic")
     );
     let semantic_task_groups = read(&root.join("crates/rsscript-semantics/src/task_groups.rs"));
     assert!(semantic_task_groups.contains("pub fn task_group_async_let_diagnostics"));
-    assert!(compiler_analyzer.contains("rsscript_semantics::async_fn_lowering_diagnostic"));
     assert!(
         compiler_analyzer.contains("rsscript_semantics::async_function_cancellation_diagnostics")
     );
+    assert!(compiler_analyzer.contains("rsscript_semantics::async_function_lowering_diagnostics"));
     assert!(!compiler_analyzer.contains("fn async_not_lowerable_diagnostic"));
     assert!(!compiler_analyzer.contains("fn cancellation_token_outside_task_group_diagnostic"));
     assert!(!compiler_analyzer.contains("fn block_first_cancellation_token"));
     assert!(!compiler_analyzer.contains("fn expr_first_cancellation_token"));
+    assert!(!compiler_analyzer.contains("fn async_block_nonlinear_await"));
+    assert!(!compiler_analyzer.contains("fn expr_first_await"));
     assert!(
         !root
             .join("crates/rsscript-compiler/src/analyzer/task_group.rs")
