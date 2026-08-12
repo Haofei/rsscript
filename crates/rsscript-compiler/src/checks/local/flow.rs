@@ -409,8 +409,7 @@ pub(super) fn drop_resource_on_exits(
 }
 
 pub(super) fn push_local_flow_step(steps: &mut Vec<LocalFlowStep>, statement: &HirStmt) -> usize {
-    let mut uses = Vec::new();
-    collect_hir_stmt_idents(statement, &mut uses);
+    let uses = rsscript_semantics::hir_stmt_identifier_uses(statement);
     let mut events = Vec::new();
     collect_hir_stmt_effect_events(statement, &mut events);
     let id = steps.len();

@@ -24,6 +24,7 @@ mod derives;
 mod external_types;
 mod generic_constraints;
 pub mod hir;
+mod hir_uses;
 mod identities;
 mod interface_descriptor;
 mod literals;
@@ -102,6 +103,7 @@ pub use generic_constraints::{
     unknown_variant_field_diagnostic, unnamed_variant_field_diagnostic,
     variant_field_type_mismatch_diagnostic,
 };
+pub use hir_uses::{hir_block_identifier_uses, hir_stmt_identifier_uses};
 pub use literals::{
     char_literal_scalar_diagnostic, integer_literal_range_diagnostic,
     match_char_literal_scalar_diagnostic,

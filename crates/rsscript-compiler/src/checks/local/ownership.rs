@@ -588,9 +588,7 @@ pub(super) fn collect_ordered_moved_uses_from_expr(
             }
         }
         HirExpr::Closure { body, .. } => {
-            let mut uses = Vec::new();
-            collect_hir_block_idents(body, &mut uses);
-            for (name, span) in uses {
+            for (name, span) in rsscript_semantics::hir_block_identifier_uses(body) {
                 if let Some(move_span) = state.move_span(&name) {
                     push_moved_use(moved_uses, name, span, move_span.clone());
                 }

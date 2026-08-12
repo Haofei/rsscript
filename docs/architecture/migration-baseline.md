@@ -356,6 +356,10 @@ mechanical acceptance condition holds.
       Semantics owns HIR resource/`Result<Resource, E>` classification,
       recursive boundary traversal, and the `with`/`?` diagnostics; compiler
       only selects the enclosing expression and aggregates diagnostics.
+    - [x] **S02.4q — Move generic HIR identifier-use traversal.** Semantics
+      owns the source-order HIR identifier-use queries consumed by compiler CFG,
+      closure-move, and resource checks; compiler only derives its local-flow
+      facts from the neutral query output.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.

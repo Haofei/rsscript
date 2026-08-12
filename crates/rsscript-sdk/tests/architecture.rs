@@ -1277,6 +1277,8 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "protocol_method_names",
         "protocol_signature_mismatch",
         "generic_constraint_diagnostics",
+        "hir_block_identifier_uses",
+        "hir_stmt_identifier_uses",
         "fd_surface_diagnostics",
         "unknown_binding_diagnostics",
         "unknown_field_diagnostics",
@@ -1429,6 +1431,21 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         assert!(
             !compiler_resource_rules.contains(forbidden),
             "compiler must not own resource producer rule `{forbidden}`"
+        );
+    }
+    let compiler_local_resources =
+        read(&root.join("crates/rsscript-compiler/src/checks/local/resources.rs"));
+    let compiler_local_flow = read(&root.join("crates/rsscript-compiler/src/checks/local/flow.rs"));
+    assert!(compiler_local_resources.contains("rsscript_semantics::hir_block_identifier_uses"));
+    assert!(compiler_local_flow.contains("rsscript_semantics::hir_stmt_identifier_uses"));
+    for forbidden in [
+        "fn collect_hir_block_idents",
+        "fn collect_hir_stmt_idents",
+        "fn collect_hir_expr_idents",
+    ] {
+        assert!(
+            !compiler_local_resources.contains(forbidden),
+            "compiler must not re-own generic HIR identifier traversal `{forbidden}`"
         );
     }
     let compiler_protocol_rules = read(&root.join("crates/rsscript-compiler/src/analyzer.rs"));
