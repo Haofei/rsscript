@@ -344,6 +344,37 @@ fn migration_boundary_rejects_disabled_cemetery_code_and_root_glob_exports() {
 }
 
 #[test]
+fn compiler_checks_only_construct_nonsemantic_boundary_diagnostics() {
+    let root = workspace_root();
+    let checks_root = root.join("crates/rsscript-compiler/src/checks");
+    let direct_diagnostic_owners = rust_files_below(&checks_root)
+        .into_iter()
+        .filter_map(|path| {
+            read(&path).contains("Diagnostic::").then(|| {
+                path.strip_prefix(&root)
+                    .unwrap_or(&path)
+                    .display()
+                    .to_string()
+            })
+        })
+        .collect::<BTreeSet<_>>();
+    let permitted = BTreeSet::from([
+        "crates/rsscript-compiler/src/checks/budget.rs".to_owned(),
+        "crates/rsscript-compiler/src/checks/declarations/duplicate_decls.rs".to_owned(),
+    ]);
+    assert_eq!(
+        direct_diagnostic_owners, permitted,
+        "language diagnostics must be constructed by rsscript-semantics; compiler checks may only own documented orchestration or backend-boundary diagnostics"
+    );
+
+    let budget = read(&root.join("crates/rsscript-compiler/src/checks/budget.rs"));
+    assert!(budget.contains("S02.6: this is an orchestration diagnostic"));
+    let declarations =
+        read(&root.join("crates/rsscript-compiler/src/checks/declarations/duplicate_decls.rs"));
+    assert!(declarations.contains("S02.6: `#lower_name` validates the Rust AOT backend namespace"));
+}
+
+#[test]
 fn rss_check_default_cargo_closure_is_frontend_only() {
     let root = workspace_root();
     let output = Command::new(env!("CARGO"))

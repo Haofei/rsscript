@@ -7,6 +7,8 @@ use crate::semantic::{FrontendCompletion, FrontendStopReason};
 pub(crate) use rsscript_work_budget::{BudgetExhaustion, FrontendBudget, FrontendBudgetLimits};
 
 pub(crate) fn incomplete_diagnostic(budget: &FrontendBudget) -> Option<Diagnostic> {
+    // S02.6: this is an orchestration diagnostic, not a language rule. The
+    // compiler owns frontend work-budget termination and its completion state.
     let exhausted = budget.exhaustion()?;
     Some(
         Diagnostic::error(

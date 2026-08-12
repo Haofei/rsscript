@@ -337,9 +337,12 @@ mechanical acceptance condition holds.
     - [x] **S02.5o — Move declared pattern field diagnostics.** Semantics owns
       diagnostics for unknown structured fields and omitted fields without `..`;
       compiler supplies the resolved declaration facts.
-  - [ ] **S02.6 — Delete compiler semantic-rule modules.** Add architecture
-    tests that permit compiler orchestration only and reject semantic-rule
-    implementations outside `rsscript-semantics`.
+  - [x] **S02.6 — Guard compiler semantic-rule ownership.** Architecture tests
+    now reject any direct language-diagnostic construction below compiler
+    checks. The only explicit exceptions are frontend-budget termination and
+    Rust `#lower_name` backend constraints, both documented at the source
+    boundary; all language diagnostic contracts are delegated to
+    `rsscript-semantics`.
 - [ ] **S03 — Add one `CompilationSession` query boundary.** Introduce stable
   source/module/interface/definition/type identities, dependency tracking,
   cancellation, deadlines, and cached HIR/MIR queries shared by CLI, package
