@@ -45,6 +45,7 @@ mod protocol_bounds;
 mod resource_flow;
 mod resource_producers;
 mod resource_types;
+mod retained_closure_flow;
 mod signatures;
 mod source_bodies;
 mod source_rules;
@@ -248,6 +249,7 @@ pub use resource_types::{
     fd_surface_diagnostics, resource_field_diagnostics, resource_generic_diagnostics,
     weak_field_diagnostics,
 };
+pub use retained_closure_flow::retained_closure_captures_from_flow;
 pub use rsscript_source_model::{FileId, InterfaceId, ModuleId, SourceRevision};
 pub use signatures::signature_diagnostics;
 pub use source_bodies::{block_surface_diagnostics, item_body_surface_diagnostics};

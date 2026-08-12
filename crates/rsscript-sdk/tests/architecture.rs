@@ -1581,6 +1581,23 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
             "compiler must not re-own fresh-return flow rule `{forbidden}`"
         );
     }
+    let semantic_retained_closure_flow =
+        read(&root.join("crates/rsscript-semantics/src/retained_closure_flow.rs"));
+    assert!(semantic_retained_closure_flow.contains("retained_closure_captures_from_flow"));
+    assert!(
+        compiler_local_analysis.contains("rsscript_semantics::retained_closure_captures_from_flow")
+    );
+    for forbidden in [
+        "fn collect_retained_closure_captures_from_block",
+        "fn collect_retained_closure_captures_from_stmt",
+        "fn collect_retained_closure_captures_from_expr",
+        "fn push_retained_closure_capture",
+    ] {
+        assert!(
+            !compiler_local_ownership.contains(forbidden),
+            "compiler must not re-own retained-closure flow rule `{forbidden}`"
+        );
+    }
     assert!(semantic_local_flow_builder.contains("fresh_match_binding"));
     for forbidden in [
         "fn fresh_payload_type_for_variant",
@@ -1610,7 +1627,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
             "compiler must not re-own semantic value property `{forbidden}`"
         );
     }
-    assert!(compiler_local_ownership.contains("rsscript_semantics::retained_closure_argument"));
+    assert!(semantic_retained_closure_flow.contains("retained_closure_argument"));
     assert!(semantic_local_flow_builder.contains("retained_closure_argument"));
     for forbidden in [
         "fn retained_closure_arg",

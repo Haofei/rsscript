@@ -5,10 +5,7 @@ use crate::diagnostic::Span;
 use crate::hir::HirEffectEvent;
 #[cfg(test)]
 use crate::hir::HirReturnProof;
-use crate::hir::{
-    CallResolution, HirBindingKind, HirBlock, HirEffectEventKind, HirExpr, HirFunctionBody, HirStmt,
-};
-use crate::syntax::ast::{Callee, Expr};
+use crate::hir::{HirBindingKind, HirBlock, HirEffectEventKind, HirExpr, HirFunctionBody, HirStmt};
 
 use super::body::Flow;
 
@@ -164,15 +161,15 @@ impl<'a> LocalAnalysis<'a> {
     }
 
     pub(crate) fn retained_closure_captures(&self) -> Vec<RetainedClosureCapture> {
-        let mut captures = Vec::new();
-        if let Some(block) = self.body.and_then(|body| body.block.as_ref()) {
-            collect_retained_closure_captures_from_block(
-                block,
-                &self.flow_entry_states_by_span,
-                &mut captures,
-            );
-        }
-        captures
+        self.body
+            .and_then(|body| body.block.as_ref())
+            .map(|block| {
+                rsscript_semantics::retained_closure_captures_from_flow(
+                    block,
+                    &self.flow_entry_states_by_span,
+                )
+            })
+            .unwrap_or_default()
     }
 
     pub(crate) fn fresh_return_issues(&self) -> Vec<FreshReturnIssue> {

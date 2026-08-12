@@ -422,6 +422,9 @@ mechanical acceptance condition holds.
     - [x] **S02.4ah — Move fresh-return flow facts.** Semantics derives failed
       `fresh` return proofs from checked HIR plus local-flow entry states;
       compiler consumes the resulting facts to emit diagnostics.
+    - [x] **S02.4ai — Move retained-closure flow facts.** Semantics derives
+      local captures passed to retaining calls from checked HIR plus local-flow
+      entry states; compiler consumes the resulting facts to emit diagnostics.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.
