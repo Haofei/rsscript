@@ -1283,6 +1283,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "resource_field_diagnostics",
         "resource_generic_diagnostics",
         "resource_producer_context_diagnostic",
+        "resource_producer_diagnostics",
         "resource_producer_kind",
         "result_resource_with_try_diagnostic",
         "protocol_bound_diagnostics",
@@ -1416,10 +1417,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     assert!(!compiler_declaration_diagnostics.contains("Diagnostic::"));
     let compiler_resource_rules =
         read(&root.join("crates/rsscript-compiler/src/checks/body/resources.rs"));
-    assert!(
-        compiler_resource_rules
-            .contains("rsscript_semantics::resource_producer_context_diagnostic")
-    );
+    assert!(compiler_resource_rules.contains("rsscript_semantics::resource_producer_diagnostics"));
     assert!(
         compiler_resource_rules.contains("rsscript_semantics::result_resource_with_try_diagnostic")
     );
@@ -1428,6 +1426,8 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "fn expr_type_is_resource",
         "fn result_resource_ok_type",
         "fn result_ok_type_name",
+        "fn check_resource_producer_children",
+        "fn check_resource_producer_stmt",
     ] {
         assert!(
             !compiler_resource_rules.contains(forbidden),
@@ -2059,7 +2059,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "rsscript_semantics::managed_closure_local_capture_diagnostic",
         "rsscript_semantics::resource_escape_diagnostic",
         "rsscript_semantics::resource_capture_diagnostic",
-        "rsscript_semantics::resource_producer_context_diagnostic",
+        "rsscript_semantics::resource_producer_diagnostics",
         "rsscript_semantics::result_resource_with_try_diagnostic",
     ] {
         assert!(compiler_body_resources.contains(delegated));

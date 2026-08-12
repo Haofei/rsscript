@@ -8,7 +8,8 @@ Accepted.
 
 `rsscript-semantics` owns the HIR query that classifies resource producers and
 `Result<Resource, E>` producers, plus their context and missing-`?` diagnostics.
-Compiler keeps only the transitional lexical HIR traversal.
+Semantics also owns recursive HIR traversal for the boundary; compiler selects
+the enclosing expression and appends the resulting diagnostics.
 
 ## Compatibility and impact
 

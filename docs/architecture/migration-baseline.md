@@ -352,10 +352,10 @@ mechanical acceptance condition holds.
       managed-to-local, fresh-return, handle-take, and resource-escape fact
       types are owned by `rsscript-semantics`; compiler flow only produces them
       while its CFG implementation is migrated.
-    - [x] **S02.4p — Move resource-producer classification.** Semantics owns
-      HIR resource/`Result<Resource, E>` classification and the `with`/`?`
-      boundary diagnostics; compiler only supplies lexical context while it
-      traverses HIR.
+    - [x] **S02.4p — Move resource-producer classification and traversal.**
+      Semantics owns HIR resource/`Result<Resource, E>` classification,
+      recursive boundary traversal, and the `with`/`?` diagnostics; compiler
+      only selects the enclosing expression and aggregates diagnostics.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.

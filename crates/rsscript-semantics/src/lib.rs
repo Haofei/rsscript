@@ -206,8 +206,8 @@ pub use protocol_bounds::{
     unknown_protocol_diagnostic,
 };
 pub use resource_producers::{
-    ResourceProducerKind, resource_producer_context_diagnostic, resource_producer_kind,
-    result_resource_with_try_diagnostic,
+    ResourceProducerKind, resource_producer_context_diagnostic, resource_producer_diagnostics,
+    resource_producer_kind, result_resource_with_try_diagnostic,
 };
 pub use resource_types::{
     fd_surface_diagnostics, resource_field_diagnostics, resource_generic_diagnostics,
