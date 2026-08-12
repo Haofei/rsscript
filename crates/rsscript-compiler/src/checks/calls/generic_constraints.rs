@@ -582,52 +582,29 @@ pub(super) fn collect_type_param_substitutions_bounded(
     true
 }
 
+struct CompilerSubstitutionBudget<'a>(&'a crate::checks::budget::AnalysisBudget);
+
+impl rsscript_semantics::SubstitutionBudget for CompilerSubstitutionBudget<'_> {
+    fn check_recursion(&self, depth: usize) -> bool {
+        self.0.check_recursion(depth)
+    }
+
+    fn consume_substitution(&self) -> bool {
+        self.0.consume_substitution()
+    }
+}
+
+/// Bridge the compiler's shared frontend budget into the semantics-owned
+/// generic substitution rule.
 pub(super) fn substitute_type_params(
     budget: &crate::checks::budget::AnalysisBudget,
     type_name: &str,
     substitutions: &HashMap<String, String>,
 ) -> Result<String, ()> {
-    substitute_type_params_bounded(budget, type_name, substitutions, 0)
-}
-
-pub(super) fn substitute_type_params_bounded(
-    budget: &crate::checks::budget::AnalysisBudget,
-    type_name: &str,
-    substitutions: &HashMap<String, String>,
-    depth: usize,
-) -> Result<String, ()> {
-    if !budget.check_recursion(depth) || !budget.consume_substitution() {
-        return Err(());
-    }
-    if let Some(replacement) = substitutions.get(type_name) {
-        return Ok(replacement.clone());
-    }
-    if let Some(target) = fresh_type_target(type_name) {
-        return Ok(format!(
-            "fresh {}",
-            substitute_type_params_bounded(budget, target, substitutions, depth + 1)?
-        ));
-    }
-    if let Some(return_ty) = fn_return_type(type_name) {
-        let prefix = fn_type_prefix(type_name);
-        let params = fn_param_types(type_name)
-            .into_iter()
-            .map(|param| substitute_type_params_bounded(budget, param, substitutions, depth + 1))
-            .collect::<Result<Vec<_>, _>>()?
-            .join(", ");
-        return Ok(format!(
-            "{prefix}Fn({params}) -> {}",
-            substitute_type_params_bounded(budget, return_ty, substitutions, depth + 1)?
-        ));
-    }
-    let Some(args) = type_arg_names(type_name) else {
-        return Ok(type_name.to_string());
-    };
-    let root = type_root_name(type_name);
-    let args = args
-        .into_iter()
-        .map(|arg| substitute_type_params_bounded(budget, arg, substitutions, depth + 1))
-        .collect::<Result<Vec<_>, _>>()?
-        .join(", ");
-    Ok(format!("{root}<{args}>"))
+    rsscript_semantics::substitute_type_params(
+        &CompilerSubstitutionBudget(budget),
+        type_name,
+        substitutions,
+    )
+    .map_err(|_| ())
 }

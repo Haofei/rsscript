@@ -1891,14 +1891,3 @@ pub(super) fn fn_param_bare_type(param: &str) -> &str {
     }
     param
 }
-
-pub(super) fn fn_type_prefix(type_name: &str) -> &'static str {
-    let type_name = type_name.trim();
-    if type_name.starts_with("noescape ") {
-        "noescape "
-    } else if type_name.starts_with("owned ") {
-        "owned "
-    } else {
-        ""
-    }
-}

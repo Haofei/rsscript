@@ -14,6 +14,135 @@ pub struct ProtocolSatisfactionFacts {
     pub declared_derives: HashMap<String, Vec<String>>,
 }
 
+/// Budget hook for bounded semantic generic substitution. The semantic crate
+/// defines the operation; each frontend supplies shared cancellation and
+/// resource accounting through this narrow adapter.
+pub trait SubstitutionBudget {
+    fn check_recursion(&self, depth: usize) -> bool;
+    fn consume_substitution(&self) -> bool;
+}
+
+/// A bounded substitution could not complete.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubstitutionError {
+    BudgetExhausted,
+}
+
+/// Substitute resolved generic parameters in a rendered legacy HIR type while
+/// preserving source qualifiers and function parameter effects.
+pub fn substitute_type_params(
+    budget: &dyn SubstitutionBudget,
+    type_name: &str,
+    substitutions: &HashMap<String, String>,
+) -> Result<String, SubstitutionError> {
+    substitute_type_params_bounded(budget, type_name, substitutions, 0)
+}
+
+fn substitute_type_params_bounded(
+    budget: &dyn SubstitutionBudget,
+    type_name: &str,
+    substitutions: &HashMap<String, String>,
+    depth: usize,
+) -> Result<String, SubstitutionError> {
+    if !budget.check_recursion(depth) || !budget.consume_substitution() {
+        return Err(SubstitutionError::BudgetExhausted);
+    }
+    if let Some(replacement) = substitutions.get(type_name) {
+        return Ok(replacement.clone());
+    }
+    if let Some(target) = type_name.trim().strip_prefix("fresh ").map(str::trim) {
+        return Ok(format!(
+            "fresh {}",
+            substitute_type_params_bounded(budget, target, substitutions, depth + 1)?
+        ));
+    }
+    if let Some(return_ty) = rendered_function_return_type(type_name) {
+        let prefix = rendered_function_prefix(type_name);
+        let params = rendered_function_parameter_types(type_name)
+            .into_iter()
+            .map(|parameter| {
+                substitute_type_params_bounded(budget, parameter, substitutions, depth + 1)
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .join(", ");
+        return Ok(format!(
+            "{prefix}Fn({params}) -> {}",
+            substitute_type_params_bounded(budget, return_ty, substitutions, depth + 1)?
+        ));
+    }
+    let Some(args) = crate::type_arg_names(type_name) else {
+        return Ok(type_name.to_owned());
+    };
+    let root = crate::type_root_name(type_name);
+    let args = args
+        .into_iter()
+        .map(|argument| substitute_type_params_bounded(budget, argument, substitutions, depth + 1))
+        .collect::<Result<Vec<_>, _>>()?
+        .join(", ");
+    Ok(format!("{root}<{args}>"))
+}
+
+fn rendered_function_body(type_name: &str) -> Option<&str> {
+    type_name
+        .trim()
+        .strip_prefix("noescape ")
+        .or_else(|| type_name.trim().strip_prefix("owned "))
+        .unwrap_or(type_name.trim())
+        .strip_prefix("Fn(")
+}
+
+fn rendered_function_return_type(type_name: &str) -> Option<&str> {
+    rendered_function_body(type_name)
+        .and_then(|body| body.split_once(')'))
+        .and_then(|(_, rest)| rest.trim_start().strip_prefix("->"))
+        .map(str::trim)
+}
+
+fn rendered_function_parameter_types(type_name: &str) -> Vec<&str> {
+    let Some(parameters) = rendered_function_body(type_name).and_then(|body| {
+        body.split_once(')')
+            .map(|(parameters, _)| parameters.trim())
+    }) else {
+        return Vec::new();
+    };
+    if parameters.is_empty() {
+        return Vec::new();
+    }
+    split_rendered_type_arguments(parameters)
+}
+
+fn split_rendered_type_arguments(value: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut depth = 0usize;
+    for (index, character) in value.char_indices() {
+        match character {
+            '<' | '(' => depth += 1,
+            '>' | ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(value[start..index].trim());
+                start = index + character.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    if start < value.len() {
+        parts.push(value[start..].trim());
+    }
+    parts
+}
+
+fn rendered_function_prefix(type_name: &str) -> &'static str {
+    let type_name = type_name.trim();
+    if type_name.starts_with("noescape ") {
+        "noescape "
+    } else if type_name.starts_with("owned ") {
+        "owned "
+    } else {
+        ""
+    }
+}
+
 /// Decide a resolved protocol-bound fact without compiler HIR or runtime
 /// dependencies. The compiler supplies the visible implementation inventory;
 /// semantics owns the language rule for builtin and structural containers.
@@ -497,6 +626,18 @@ fn generic_resource_argument_diagnostic(
 mod tests {
     use super::*;
 
+    struct UnlimitedBudget;
+
+    impl SubstitutionBudget for UnlimitedBudget {
+        fn check_recursion(&self, _depth: usize) -> bool {
+            true
+        }
+
+        fn consume_substitution(&self) -> bool {
+            true
+        }
+    }
+
     #[test]
     fn validates_resource_fields_and_fresh_generic_returns() {
         let program = rsscript_syntax::parse_source(
@@ -569,5 +710,21 @@ fn make<T: Managed>() -> fresh T
         ));
         assert!(type_satisfies_protocol_bound("Int", "Clone", &facts));
         assert!(!type_satisfies_protocol_bound("Float", "Eq", &facts));
+    }
+
+    #[test]
+    fn substitutes_rendered_generic_types_through_the_budget_contract() {
+        let substitutions = HashMap::from([
+            ("T".to_owned(), "Int".to_owned()),
+            ("E".to_owned(), "String".to_owned()),
+        ]);
+        assert_eq!(
+            substitute_type_params(&UnlimitedBudget, "Result<T, List<E>>", &substitutions),
+            Ok("Result<Int, List<String>>".to_owned())
+        );
+        assert_eq!(
+            substitute_type_params(&UnlimitedBudget, "fresh T", &substitutions),
+            Ok("fresh Int".to_owned())
+        );
     }
 }

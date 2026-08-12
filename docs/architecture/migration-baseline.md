@@ -206,6 +206,9 @@ mechanical acceptance condition holds.
       alias-expanded rendered type compatibility for qualifiers, function
       parameter effects, containers, and open `Option`/`Result` variants;
       compiler only supplies resolved types and invokes the semantic rule.
+    - [x] **S02.2j — Move bounded generic substitution.** Semantics owns the
+      recursive substitution algorithm; compiler contributes only a narrow
+      adapter to its shared cancellation and substitution budget.
   - [ ] **S02.3 — Move call binding and effect checks.** Relocate positional and
     named argument binding, `read`/`mut`/`take`, external signature matching,
     and retention facts.

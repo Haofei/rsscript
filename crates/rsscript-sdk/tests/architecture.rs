@@ -1520,6 +1520,8 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     }
     assert!(semantic_generic_constraints.contains("pub fn protocol_satisfaction_facts"));
     assert!(semantic_generic_constraints.contains("pub fn type_satisfies_protocol_bound"));
+    assert!(semantic_generic_constraints.contains("pub trait SubstitutionBudget"));
+    assert!(semantic_generic_constraints.contains("pub fn substitute_type_params"));
     assert!(
         compiler_generic_constraints.contains("rsscript_semantics::protocol_satisfaction_facts")
     );
@@ -1531,12 +1533,15 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "fn type_derives_protocol",
         "fn builtin_type_is_hashable",
         "fn builtin_type_is_clone",
+        "fn substitute_type_params_bounded",
     ] {
         assert!(
             !compiler_generic_constraints.contains(forbidden),
             "compiler must not re-own generic protocol satisfaction rule `{forbidden}`"
         );
     }
+    assert!(compiler_generic_constraints.contains("impl rsscript_semantics::SubstitutionBudget"));
+    assert!(compiler_generic_constraints.contains("rsscript_semantics::substitute_type_params"));
     assert!(
         !compiler_generic_constraints.contains("external_binding protocol not satisfied"),
         "compiler must not re-own resolved protocol and variant diagnostic text"
