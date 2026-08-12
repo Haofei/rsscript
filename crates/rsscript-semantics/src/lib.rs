@@ -32,6 +32,7 @@ mod operators;
 mod ownership;
 mod place;
 mod protocol_bounds;
+mod resource_producers;
 mod resource_types;
 mod signatures;
 mod source_bodies;
@@ -203,6 +204,10 @@ pub use protocol_bounds::{
     protocol_bound_diagnostics, protocol_declaration_diagnostics,
     protocol_impl_mismatch_diagnostic, protocol_method_names, protocol_signature_mismatch,
     unknown_protocol_diagnostic,
+};
+pub use resource_producers::{
+    ResourceProducerKind, resource_producer_context_diagnostic, resource_producer_kind,
+    result_resource_with_try_diagnostic,
 };
 pub use resource_types::{
     fd_surface_diagnostics, resource_field_diagnostics, resource_generic_diagnostics,

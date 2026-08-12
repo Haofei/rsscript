@@ -1,6 +1,4 @@
-use crate::text_util::{
-    split_top_level_type_args, substitute_type_args, type_arg_names, type_root_name,
-};
+use crate::text_util::{substitute_type_args, type_arg_names, type_root_name};
 use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::Analyzer;

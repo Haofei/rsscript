@@ -55,17 +55,16 @@ pub(super) fn check_resource_producer_expr(
     expr: &HirExpr,
     allowed_resource_context: bool,
 ) {
-    if expr_is_resource_producer(analyzer, expr) {
-        if allowed_resource_context {
-            check_resource_producer_children(analyzer, expr);
-        } else {
-            analyzer
-                .diagnostics
-                .push(rsscript_semantics::resource_producer_escape_diagnostic(
-                    hir_expr_type_name(expr).unwrap_or("resource"),
-                    hir_expr_span(expr).clone(),
-                ));
-        }
+    if let Some(diagnostic) = rsscript_semantics::resource_producer_context_diagnostic(
+        &analyzer.hir,
+        expr,
+        allowed_resource_context,
+    ) {
+        analyzer.diagnostics.push(diagnostic);
+        return;
+    }
+    if rsscript_semantics::resource_producer_kind(&analyzer.hir, expr).is_some() {
+        check_resource_producer_children(analyzer, expr);
         return;
     }
 
@@ -121,19 +120,11 @@ pub(super) fn check_resource_producer_expr(
 }
 
 pub(super) fn check_result_resource_with_has_try(analyzer: &mut Analyzer<'_>, resource: &HirExpr) {
-    if matches!(resource, HirExpr::Try { .. }) {
-        return;
+    if let Some(diagnostic) =
+        rsscript_semantics::result_resource_with_try_diagnostic(&analyzer.hir, resource)
+    {
+        analyzer.diagnostics.push(diagnostic);
     }
-    let Some(resource_type) = result_resource_ok_type(analyzer, resource) else {
-        return;
-    };
-
-    analyzer.diagnostics.push(
-        rsscript_semantics::resource_producer_missing_try_diagnostic(
-            &resource_type,
-            hir_expr_span(resource).clone(),
-        ),
-    );
 }
 
 pub(super) fn check_resource_producer_children(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
@@ -220,42 +211,6 @@ pub(super) fn check_resource_producer_stmt(analyzer: &mut Analyzer<'_>, statemen
         | HirStmt::Continue(_)
         | HirStmt::Unknown(_) => {}
     }
-}
-
-pub(super) fn expr_is_resource_producer(analyzer: &Analyzer<'_>, expr: &HirExpr) -> bool {
-    match expr {
-        HirExpr::Call { .. } => {
-            expr_type_is_resource(analyzer, expr)
-                || result_resource_ok_type(analyzer, expr).is_some()
-        }
-        HirExpr::Try { value, .. } | HirExpr::Effect { value, .. } => {
-            expr_type_is_resource(analyzer, expr) && expr_is_resource_producer(analyzer, value)
-        }
-        _ => false,
-    }
-}
-
-pub(super) fn expr_type_is_resource(analyzer: &Analyzer<'_>, expr: &HirExpr) -> bool {
-    hir_expr_type_name(expr).is_some_and(|type_name| {
-        analyzer.hir.type_kind(type_root_name(type_name)) == Some(HirTypeKind::Resource)
-    })
-}
-
-pub(super) fn result_resource_ok_type(analyzer: &Analyzer<'_>, expr: &HirExpr) -> Option<String> {
-    let type_name = hir_expr_type_name(expr)?;
-    let ok_type = result_ok_type_name(type_name)?;
-    if analyzer.hir.type_kind(type_root_name(ok_type)) == Some(HirTypeKind::Resource) {
-        Some(ok_type.to_string())
-    } else {
-        None
-    }
-}
-
-pub(super) fn result_ok_type_name(type_name: &str) -> Option<&str> {
-    let inner = type_name
-        .strip_prefix("Result<")
-        .and_then(|type_name| type_name.strip_suffix('>'))?;
-    split_top_level_type_args(inner).into_iter().next()
 }
 
 pub(super) fn resource_is_active_at(
