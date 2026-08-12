@@ -80,11 +80,13 @@ pub use derive_fields::derive_field_diagnostics;
 pub use derives::derive_syntax_diagnostics;
 pub use external_types::{external_binding_type_diagnostics, unknown_type_diagnostics};
 pub use generic_constraints::{
-    conventional_variant_form_diagnostic, duplicate_variant_field_diagnostic, dyn_from_diagnostic,
-    generic_constraint_diagnostics, missing_variant_field_diagnostic,
+    ProtocolSatisfactionFacts, conventional_variant_form_diagnostic,
+    duplicate_variant_field_diagnostic, dyn_from_diagnostic, dynamic_protocol_name,
+    generic_constraint_diagnostics, missing_variant_field_diagnostic, protocol_bound_guidance,
     protocol_bound_not_satisfied_diagnostic, protocol_receiver_not_satisfied_diagnostic,
-    too_many_variant_fields_diagnostic, unknown_variant_field_diagnostic,
-    unnamed_variant_field_diagnostic, variant_field_type_mismatch_diagnostic,
+    protocol_satisfaction_facts, too_many_variant_fields_diagnostic, type_satisfies_protocol_bound,
+    unknown_variant_field_diagnostic, unnamed_variant_field_diagnostic,
+    variant_field_type_mismatch_diagnostic,
 };
 pub use literals::{
     char_literal_scalar_diagnostic, integer_literal_range_diagnostic,

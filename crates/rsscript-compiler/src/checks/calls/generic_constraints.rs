@@ -11,6 +11,7 @@ pub(super) fn check_generic_call_bounds(
     substitutions: &HashMap<String, String>,
     call_span: &Span,
 ) {
+    let protocol_facts = protocol_satisfaction_facts(analyzer, function);
     for (param, bound) in signature
         .type_params
         .iter()
@@ -34,10 +35,10 @@ pub(super) fn check_generic_call_bounds(
         {
             continue;
         }
-        if type_satisfies_protocol_bound(analyzer, function, actual, protocol) {
+        if rsscript_semantics::type_satisfies_protocol_bound(actual, protocol, &protocol_facts) {
             continue;
         }
-        let (cause, fix) = protocol_bound_guidance(protocol, actual);
+        let (cause, fix) = rsscript_semantics::protocol_bound_guidance(protocol, actual);
         analyzer
             .diagnostics
             .push(rsscript_semantics::protocol_bound_not_satisfied_diagnostic(
@@ -51,65 +52,24 @@ pub(super) fn check_generic_call_bounds(
     }
 }
 
-pub(super) fn type_satisfies_protocol_bound(
+fn protocol_satisfaction_facts(
     analyzer: &Analyzer<'_>,
     function: &FunctionDecl,
-    actual: &str,
-    protocol: &str,
-) -> bool {
-    let actual_root = type_root_name(strip_fresh_type(actual));
-    if dyn_protocol(actual).is_some_and(|dyn_protocol| dyn_protocol == protocol) {
-        return true;
-    }
-    if protocol == "Ord" && builtin_type_is_ord(actual_root) {
-        return true;
-    }
-    if (protocol == "Hashable" || protocol == "Eq") && builtin_type_is_hashable(actual_root) {
-        return true;
-    }
-    if protocol == "Clone" && builtin_type_is_clone(actual_root) {
-        return true;
-    }
-    // `List<T>`/`Option<T>`/`Result<A, B>` are `Hashable`/`Eq` exactly when their
-    // element types are, so a key like `List<Coord>` is satisfiable structurally.
-    if (protocol == "Hashable" || protocol == "Eq")
-        && matches!(actual_root, "List" | "Option" | "Result")
-        && let Some(args) = type_arg_names(strip_fresh_type(actual))
-    {
-        return args
+) -> rsscript_semantics::ProtocolSatisfactionFacts {
+    rsscript_semantics::protocol_satisfaction_facts(
+        &function.type_params,
+        analyzer
+            .syntax_program
+            .protocol_impls
             .iter()
-            .all(|arg| type_satisfies_protocol_bound(analyzer, function, arg, protocol));
-    }
-    // `List<T>`/`Option<T>`/`Result<A, B>` are `Clone` exactly when their element
-    // types are, mirroring the structural derive support for value containers.
-    if protocol == "Clone"
-        && matches!(actual_root, "List" | "Option" | "Result")
-        && let Some(args) = type_arg_names(strip_fresh_type(actual))
-    {
-        return args
-            .iter()
-            .all(|arg| type_satisfies_protocol_bound(analyzer, function, arg, protocol));
-    }
-    if function.type_params.iter().any(|param| {
-        param.name == actual_root
-            && matches!(
-                param.bound.as_ref(),
-                Some(GenericBound::Protocol(bound)) if bound == protocol
-            )
-    }) {
-        return true;
-    }
-    if analyzer
-        .syntax_program
-        .protocol_impls
-        .iter()
-        .any(|protocol_impl| {
-            protocol_impl.protocol == protocol && protocol_impl.type_name == actual_root
-        })
-    {
-        return true;
-    }
-    type_derives_protocol(&analyzer.syntax_program.items, actual_root, protocol)
+            .map(|protocol_impl| {
+                (
+                    protocol_impl.protocol.clone(),
+                    protocol_impl.type_name.clone(),
+                )
+            }),
+        [&analyzer.syntax_program],
+    )
 }
 
 pub(super) fn check_dyn_from_call(
@@ -144,7 +104,7 @@ pub(super) fn check_dyn_from_call(
         return;
     };
     let value_type = strip_fresh_type(value_type);
-    if dyn_protocol(value_type).is_some() {
+    if rsscript_semantics::dynamic_protocol_name(value_type).is_some() {
         analyzer.diagnostics.push(rsscript_semantics::dyn_from_diagnostic(
             protocol,
             value_type,
@@ -153,7 +113,11 @@ pub(super) fn check_dyn_from_call(
         ));
         return;
     }
-    if !type_satisfies_protocol_bound(analyzer, function, value_type, protocol) {
+    if !rsscript_semantics::type_satisfies_protocol_bound(
+        value_type,
+        protocol,
+        &protocol_satisfaction_facts(analyzer, function),
+    ) {
         analyzer.diagnostics.push(rsscript_semantics::dyn_from_diagnostic(
             protocol,
             value_type,
@@ -161,117 +125,6 @@ pub(super) fn check_dyn_from_call(
             "The wrapped value must satisfy the external_binding protocol via an explicit impl.",
         ));
     }
-}
-
-/// Protocol-specific cause/fix text for an unsatisfied generic protocol bound.
-/// `Hashable`/`Eq` are compiler-derived structural contracts (used by
-/// `Map`/`Set` keys), so the suggestion points at the concrete `derives(...)`
-/// list rather than the comparator wording used for `Ord`.
-pub(super) fn protocol_bound_guidance(protocol: &str, actual: &str) -> (&'static str, String) {
-    match protocol {
-        "Hashable" => (
-            "A `Map` key / `Set` element must be `Hashable` (and therefore `Eq`). Hashability is a compiler-derived structural contract: a builtin scalar key, or a managed struct/sum that derives `Eq` and `Hash`.",
-            format!(
-                "Add `derives(Eq, Hash)` to `{actual}` so the compiler derives a structural hash and equality, or use a hashable key type."
-            ),
-        ),
-        "Eq" => (
-            "Equality is a compiler-derived structural contract: a builtin scalar, or a managed struct/sum that derives `Eq` (or `Ord`, which implies `Eq`).",
-            format!("Add `derives(Eq)` to `{actual}`, or use an equatable type."),
-        ),
-        _ => (
-            "Generic protocol bounds are nominal. Use a type with a matching derive, add a compatible generic bound, or pass an explicit comparator API.",
-            format!(
-                "Add `derives({protocol})` to `{actual}` if the compiler-owned ordering is intended, or call an API that accepts an explicit comparator."
-            ),
-        ),
-    }
-}
-
-pub(super) fn builtin_type_is_ord(type_name: &str) -> bool {
-    matches!(type_name, "Int" | "String" | "Bool")
-}
-
-/// Builtin scalar types that are `Hashable`/`Eq` directly (no derive needed).
-/// Mirrors the structural derive support in the analyzer (`Float` is excluded
-/// because it is neither `Eq` nor `Hash`).
-pub(super) fn builtin_type_is_hashable(type_name: &str) -> bool {
-    matches!(
-        type_name,
-        "Int"
-            | "Int8"
-            | "Int16"
-            | "Int32"
-            | "Int64"
-            | "UInt"
-            | "UInt8"
-            | "UInt16"
-            | "UInt32"
-            | "UInt64"
-            | "Bool"
-            | "Byte"
-            | "Char"
-            | "Unit"
-            | "String"
-    )
-}
-
-/// Builtin scalar types that are `Clone` directly (no derive needed). Every
-/// value scalar is copyable, including `Float` (which is not `Eq`/`Hash`).
-pub(super) fn builtin_type_is_clone(type_name: &str) -> bool {
-    matches!(
-        type_name,
-        "Int"
-            | "Int8"
-            | "Int16"
-            | "Int32"
-            | "Int64"
-            | "UInt"
-            | "UInt8"
-            | "UInt16"
-            | "UInt32"
-            | "UInt64"
-            | "Bool"
-            | "Byte"
-            | "Char"
-            | "Unit"
-            | "Float"
-            | "Float32"
-            | "Float64"
-            | "String"
-    )
-}
-
-/// Whether a user-declared `type_name` satisfies a compiler-derived `protocol`
-/// bound. `Ord` requires `derives(Ord)`; `Hashable` requires `derives(Hash)`;
-/// `Eq` requires `derives(Eq)` or `derives(Ord)` (which implies `Eq`).
-pub(super) fn type_derives_protocol(items: &[Item], type_name: &str, protocol: &str) -> bool {
-    let derive_satisfies = |derives: &[String]| -> bool {
-        let has = |name: &str| derives.iter().any(|derive| derive == name);
-        match protocol {
-            "Ord" => has("Ord"),
-            "Hashable" => has("Hash"),
-            "Eq" => has("Eq") || has("Ord"),
-            "Clone" => has("Clone"),
-            _ => false,
-        }
-    };
-    if !matches!(protocol, "Ord" | "Hashable" | "Eq" | "Clone") {
-        return false;
-    }
-    items.iter().any(|item| match item {
-        Item::Type(decl) => decl.name == type_name && derive_satisfies(&decl.derives),
-        Item::SumType(sum) => sum.name == type_name && derive_satisfies(&sum.derives),
-        _ => false,
-    })
-}
-
-pub(super) fn dyn_protocol(type_name: &str) -> Option<&str> {
-    let root = type_root_name(strip_fresh_type(type_name));
-    if root != "Dyn" {
-        return None;
-    }
-    type_arg_names(type_name).and_then(|args| args.first().copied())
 }
 
 pub(super) fn dyn_from_protocol(callee: &Callee) -> Option<&str> {
@@ -440,26 +293,11 @@ pub(super) fn check_protocol_receiver_satisfaction(
     };
     let receiver_type = strip_fresh_type(receiver_type);
     let receiver_root = type_root_name(receiver_type);
-    if type_satisfies_protocol_bound(analyzer, function, receiver_type, namespace) {
-        return;
-    }
-    if function.type_params.iter().any(|param| {
-        param.name == receiver_root
-            && matches!(
-                param.bound.as_ref(),
-                Some(GenericBound::Protocol(protocol)) if protocol == namespace
-            )
-    }) {
-        return;
-    }
-    if analyzer
-        .syntax_program
-        .protocol_impls
-        .iter()
-        .any(|protocol_impl| {
-            protocol_impl.protocol == *namespace && protocol_impl.type_name == receiver_root
-        })
-    {
+    if rsscript_semantics::type_satisfies_protocol_bound(
+        receiver_type,
+        namespace,
+        &protocol_satisfaction_facts(analyzer, function),
+    ) {
         return;
     }
     analyzer.diagnostics.push(

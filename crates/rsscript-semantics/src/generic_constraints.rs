@@ -5,6 +5,206 @@ use std::collections::HashMap;
 use rsscript_diagnostics::{Diagnostic, code};
 use rsscript_syntax::ast::{GenericBound, GenericParam, Item, Program, TypeKind, TypeRef};
 
+/// The source-independent facts needed to decide whether a concrete type
+/// satisfies a protocol bound at a resolved call site.
+#[derive(Debug, Clone, Default)]
+pub struct ProtocolSatisfactionFacts {
+    pub caller_type_param_bounds: HashMap<String, Option<GenericBound>>,
+    pub visible_protocol_impls: Vec<(String, String)>,
+    pub declared_derives: HashMap<String, Vec<String>>,
+}
+
+/// Decide a resolved protocol-bound fact without compiler HIR or runtime
+/// dependencies. The compiler supplies the visible implementation inventory;
+/// semantics owns the language rule for builtin and structural containers.
+pub fn type_satisfies_protocol_bound(
+    actual: &str,
+    protocol: &str,
+    facts: &ProtocolSatisfactionFacts,
+) -> bool {
+    let actual_root = crate::type_root_name(strip_fresh_type(actual));
+    if dyn_protocol(actual).is_some_and(|dyn_protocol| dyn_protocol == protocol) {
+        return true;
+    }
+    if protocol == "Ord" && builtin_type_is_ord(actual_root) {
+        return true;
+    }
+    if (protocol == "Hashable" || protocol == "Eq") && builtin_type_is_hashable(actual_root) {
+        return true;
+    }
+    if protocol == "Clone" && builtin_type_is_clone(actual_root) {
+        return true;
+    }
+    if (protocol == "Hashable" || protocol == "Eq" || protocol == "Clone")
+        && matches!(actual_root, "List" | "Option" | "Result")
+        && let Some(args) = crate::type_arg_names(strip_fresh_type(actual))
+    {
+        return args
+            .iter()
+            .all(|arg| type_satisfies_protocol_bound(arg, protocol, facts));
+    }
+    if facts
+        .caller_type_param_bounds
+        .get(actual_root)
+        .and_then(Option::as_ref)
+        .is_some_and(|bound| matches!(bound, GenericBound::Protocol(bound) if bound == protocol))
+    {
+        return true;
+    }
+    if facts
+        .visible_protocol_impls
+        .iter()
+        .any(|(implemented_protocol, type_name)| {
+            implemented_protocol == protocol && type_name == actual_root
+        })
+    {
+        return true;
+    }
+    facts
+        .declared_derives
+        .get(actual_root)
+        .is_some_and(|derives| type_derives_protocol(derives, protocol))
+}
+
+/// Extract a platform-neutral protocol-satisfaction inventory from syntax.
+pub fn protocol_satisfaction_facts<'a>(
+    function_type_params: &[GenericParam],
+    visible_protocol_impls: impl IntoIterator<Item = (String, String)>,
+    programs: impl IntoIterator<Item = &'a Program>,
+) -> ProtocolSatisfactionFacts {
+    let mut facts = ProtocolSatisfactionFacts {
+        caller_type_param_bounds: function_type_params
+            .iter()
+            .map(|parameter| (parameter.name.clone(), parameter.bound.clone()))
+            .collect(),
+        visible_protocol_impls: visible_protocol_impls.into_iter().collect(),
+        declared_derives: HashMap::new(),
+    };
+    for program in programs {
+        for item in &program.items {
+            match item {
+                Item::Type(decl) => {
+                    facts
+                        .declared_derives
+                        .insert(decl.name.clone(), decl.derives.clone());
+                }
+                Item::SumType(decl) => {
+                    facts
+                        .declared_derives
+                        .insert(decl.name.clone(), decl.derives.clone());
+                }
+                Item::Module(_)
+                | Item::Use(_)
+                | Item::TypeAlias(_)
+                | Item::Const(_)
+                | Item::Function(_) => {}
+            }
+        }
+    }
+    facts
+}
+
+/// Return the semantic guidance paired with a failed generic protocol bound.
+pub fn protocol_bound_guidance(protocol: &str, actual: &str) -> (&'static str, String) {
+    match protocol {
+        "Hashable" => (
+            "A `Map` key / `Set` element must be `Hashable` (and therefore `Eq`). Hashability is a compiler-derived structural contract: a builtin scalar key, or a managed struct/sum that derives `Eq` and `Hash`.",
+            format!(
+                "Add `derives(Eq, Hash)` to `{actual}` so the compiler derives a structural hash and equality, or use a hashable key type."
+            ),
+        ),
+        "Eq" => (
+            "Equality is a compiler-derived structural contract: a builtin scalar, or a managed struct/sum that derives `Eq` (or `Ord`, which implies `Eq`).",
+            format!("Add `derives(Eq)` to `{actual}`, or use an equatable type."),
+        ),
+        _ => (
+            "Generic protocol bounds are nominal. Use a type with a matching derive, add a compatible generic bound, or pass an explicit comparator API.",
+            format!(
+                "Add `derives({protocol})` to `{actual}` if the compiler-owned ordering is intended, or call an API that accepts an explicit comparator."
+            ),
+        ),
+    }
+}
+
+/// Whether a rendered resolved type is a dynamic protocol value.
+pub fn dynamic_protocol_name(type_name: &str) -> Option<&str> {
+    dyn_protocol(type_name)
+}
+
+fn strip_fresh_type(type_name: &str) -> &str {
+    type_name
+        .trim()
+        .strip_prefix("fresh ")
+        .unwrap_or(type_name.trim())
+}
+
+fn dyn_protocol(type_name: &str) -> Option<&str> {
+    (crate::type_root_name(strip_fresh_type(type_name)) == "Dyn")
+        .then(|| crate::type_arg_names(type_name))
+        .flatten()
+        .and_then(|args| args.first().copied())
+}
+
+fn builtin_type_is_ord(type_name: &str) -> bool {
+    matches!(type_name, "Int" | "String" | "Bool")
+}
+
+fn builtin_type_is_hashable(type_name: &str) -> bool {
+    matches!(
+        type_name,
+        "Int"
+            | "Int8"
+            | "Int16"
+            | "Int32"
+            | "Int64"
+            | "UInt"
+            | "UInt8"
+            | "UInt16"
+            | "UInt32"
+            | "UInt64"
+            | "Bool"
+            | "Byte"
+            | "Char"
+            | "Unit"
+            | "String"
+    )
+}
+
+fn builtin_type_is_clone(type_name: &str) -> bool {
+    matches!(
+        type_name,
+        "Int"
+            | "Int8"
+            | "Int16"
+            | "Int32"
+            | "Int64"
+            | "UInt"
+            | "UInt8"
+            | "UInt16"
+            | "UInt32"
+            | "UInt64"
+            | "Bool"
+            | "Byte"
+            | "Char"
+            | "Unit"
+            | "Float"
+            | "Float32"
+            | "Float64"
+            | "String"
+    )
+}
+
+fn type_derives_protocol(derives: &[String], protocol: &str) -> bool {
+    let has = |name: &str| derives.iter().any(|derive| derive == name);
+    match protocol {
+        "Ord" => has("Ord"),
+        "Hashable" => has("Hash"),
+        "Eq" => has("Eq") || has("Ord"),
+        "Clone" => has("Clone"),
+        _ => false,
+    }
+}
+
 /// Validate resource generic fields and fresh generic return requirements.
 pub fn generic_constraint_diagnostics(program: &Program) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
@@ -351,5 +551,23 @@ fn make<T: Managed>() -> fresh T
         assert_eq!(diagnostics[7].code, code::MISSING_ARGUMENT);
         assert_eq!(diagnostics[8].code, code::UNSUPPORTED_SYNTAX);
         assert_eq!(diagnostics[9].code, code::PROTOCOL_NOT_SATISFIED);
+    }
+
+    #[test]
+    fn evaluates_protocol_satisfaction_from_neutral_facts() {
+        let facts = ProtocolSatisfactionFacts {
+            declared_derives: HashMap::from([(
+                "Coordinate".to_owned(),
+                vec!["Eq".to_owned(), "Hash".to_owned()],
+            )]),
+            ..ProtocolSatisfactionFacts::default()
+        };
+        assert!(type_satisfies_protocol_bound(
+            "List<Coordinate>",
+            "Hashable",
+            &facts
+        ));
+        assert!(type_satisfies_protocol_bound("Int", "Clone", &facts));
+        assert!(!type_satisfies_protocol_bound("Float", "Eq", &facts));
     }
 }

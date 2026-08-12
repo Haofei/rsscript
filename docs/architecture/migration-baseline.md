@@ -198,6 +198,10 @@ mechanical acceptance condition holds.
     - [x] **S02.2d — Move unknown source type diagnostics.** Alias, builtin,
       generic, and declared-type identity now resolve through semantics HIR;
       compiler supplies source and visible protocol snapshots only.
+    - [x] **S02.2h — Move generic protocol satisfaction rules.** Semantics now
+      evaluates builtin, structural-container, generic-bound, implementation,
+      and derive protocol facts. Compiler supplies the resolved call type and
+      visible source inventory only.
   - [ ] **S02.3 — Move call binding and effect checks.** Relocate positional and
     named argument binding, `read`/`mut`/`take`, external signature matching,
     and retention facts.
