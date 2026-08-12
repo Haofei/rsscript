@@ -589,7 +589,8 @@ pub(super) fn collect_closure_local_moved_uses_from_expr(
     match expr {
         HirExpr::Closure { body, .. } => {
             let steps = collect_local_flow_steps(body);
-            let entry_states = collect_flow_entry_states(&steps, BodyState::default());
+            let entry_states =
+                rsscript_semantics::local_flow_entry_states(&steps, BodyState::default());
             collect_ordered_moved_uses_from_block(body, &entry_states, moved_uses);
             collect_closure_local_moved_uses_from_block(body, moved_uses);
         }

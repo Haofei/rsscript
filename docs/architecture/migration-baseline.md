@@ -411,6 +411,10 @@ mechanical acceptance condition holds.
       graph step, binding, resource-binding, and cleanup-edge data model;
       compiler graph construction and fixed-point solving remain the next
       migration stages.
+    - [x] **S02.4af — Move local-flow fixed-point solving.** Semantics owns
+      ownership-state transfer, cleanup-edge application, conservative joins,
+      and reachable graph-entry state computation; compiler only supplies the
+      checked-HIR-derived graph.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.

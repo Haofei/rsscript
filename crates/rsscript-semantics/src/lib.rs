@@ -34,6 +34,7 @@ mod literals;
 mod local_binding_facts;
 mod local_flow_facts;
 mod local_flow_graph;
+mod local_flow_solver;
 mod local_flow_state;
 mod operators;
 mod ownership;
@@ -133,6 +134,10 @@ pub use local_flow_facts::{
 };
 pub use local_flow_graph::{
     LocalFlowBinding, LocalFlowEdge, LocalFlowResourceBinding, LocalFlowStep, LocalFlowStepKind,
+};
+pub use local_flow_solver::{
+    local_flow_entry_states, merge_local_flow_entry_state, merge_local_flow_states,
+    transfer_local_flow_step,
 };
 pub use local_flow_state::{LocalFlowState, initial_local_flow_state, path_root};
 pub use operators::{operator_overload_attempt_diagnostic, operator_type_mismatch_diagnostic};

@@ -1,5 +1,5 @@
 use crate::text_util::strip_fresh_type;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
 use crate::checks::shared::hir_expr_span;
 use crate::diagnostic::Span;
@@ -54,7 +54,7 @@ impl<'a> LocalAnalysis<'a> {
         let flow_steps = body
             .and_then(|body| body.block.as_ref())
             .map_or_else(Vec::new, collect_local_flow_steps);
-        let flow_entry_states_by_span = collect_flow_entry_states(
+        let flow_entry_states_by_span = rsscript_semantics::local_flow_entry_states(
             &flow_steps,
             rsscript_semantics::initial_local_flow_state(body),
         );

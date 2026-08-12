@@ -1481,6 +1481,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         compiler_local_analysis.contains("use rsscript_semantics::LocalFlowState as BodyState")
     );
     assert!(compiler_local_analysis.contains("LocalFlowBinding, LocalFlowEdge"));
+    assert!(compiler_local_analysis.contains("rsscript_semantics::local_flow_entry_states"));
     assert!(
         !compiler_local_analysis.contains("pub(crate) struct BodyState"),
         "compiler must not re-own the local-flow state lattice"
@@ -1501,6 +1502,17 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         !compiler_local_flow.contains("impl BodyState"),
         "compiler must not re-own local-flow state transitions"
     );
+    for forbidden in [
+        "fn collect_flow_entry_states",
+        "fn transfer_flow_step",
+        "fn merge_flow_entry_state",
+        "fn merge_flow_states",
+    ] {
+        assert!(
+            !compiler_local_flow.contains(forbidden),
+            "compiler must not re-own local-flow solver `{forbidden}`"
+        );
+    }
     let compiler_local_ownership =
         read(&root.join("crates/rsscript-compiler/src/checks/local/ownership.rs"));
     assert!(compiler_local_analysis.contains("rsscript_semantics::initial_local_flow_state"));
