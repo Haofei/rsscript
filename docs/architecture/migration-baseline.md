@@ -157,6 +157,10 @@ mechanical acceptance condition holds.
     - [x] **S02.1j — Move protocol implementation signature comparison.**
       Semantics owns resolved parameter, `Self` substitution, return, freshness,
       and retention compatibility; compiler only resolves mapping targets.
+    - [x] **S02.1k — Move protocol declaration rules.** Semantics owns the
+      source-level protocol method index plus the bodyless-contract and default
+      implementation-marker diagnostics; compiler only supplies visible items
+      and protocol names.
     - [x] **S02.2g — Move resolved builtin operator diagnostics.** Compiler
       extracts HIR operand/type facts; semantics owns non-numeric arithmetic and
       fixed-operand compatibility diagnostic contracts.

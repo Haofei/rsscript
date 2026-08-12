@@ -1468,35 +1468,6 @@ fn async_await_inner_ast(expr: &Expr) -> Option<&Expr> {
     }
 }
 
-pub(crate) fn protocol_method_names(items: &[Item], protocol: &str) -> HashSet<String> {
-    items
-        .iter()
-        .filter_map(|item| {
-            let Item::Function(function) = item else {
-                return None;
-            };
-            let (namespace, method) = split_qualified_name(&function.name);
-            (namespace.as_deref() == Some(protocol)).then(|| method.to_string())
-        })
-        .collect()
-}
-
-pub(crate) fn function_body_belongs_to_protocol(
-    function: &FunctionDecl,
-    protocol_names: &HashSet<String>,
-) -> bool {
-    !function.body.statements.is_empty() && function_belongs_to_protocol(function, protocol_names)
-}
-
-pub(crate) fn function_belongs_to_protocol(
-    function: &FunctionDecl,
-    protocol_names: &HashSet<String>,
-) -> bool {
-    split_qualified_name(&function.name)
-        .0
-        .is_some_and(|namespace| protocol_names.contains(&namespace))
-}
-
 pub(crate) fn split_qualified_name(name: &str) -> (Option<String>, &str) {
     if let Some((namespace, name)) = name.rsplit_once('.') {
         (Some(namespace.to_string()), name)

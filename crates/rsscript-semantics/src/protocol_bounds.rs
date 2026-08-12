@@ -7,7 +7,76 @@ use crate::{
     hir::{FunctionSig, ParamSig},
 };
 use rsscript_diagnostics::{Diagnostic, code};
-use rsscript_syntax::ast::{GenericBound, Item, Program};
+use rsscript_syntax::ast::{FunctionDecl, GenericBound, Item, Program};
+
+/// Derive source-level protocol declaration diagnostics.
+///
+/// Protocol methods are explicit, bodyless contracts. The parser records them
+/// as qualified functions (`Protocol.method`), so this rule stays independent
+/// of HIR construction and is shared by every compiler front end.
+pub fn protocol_declaration_diagnostics(
+    items: &[Item],
+    visible_protocol_names: &HashSet<String>,
+) -> Vec<Diagnostic> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(function) => Some(function),
+            _ => None,
+        })
+        .flat_map(|function| {
+            let belongs_to_protocol = function_belongs_to_protocol(function, visible_protocol_names);
+            let mut diagnostics = Vec::new();
+            if !function.body.statements.is_empty() && belongs_to_protocol {
+                diagnostics.push(crate::unsupported_syntax_diagnostic(
+                    function.span.clone(),
+                    "unsupported protocol method body",
+                    "Protocols are effect-carrying external_binding contracts in v0.7. Protocol methods are bodyless signatures; default method bodies are not part of the RSScript protocol model.",
+                ));
+            }
+            if function.default_impl_marker && !belongs_to_protocol {
+                diagnostics.push(crate::unsupported_syntax_diagnostic(
+                    function.span.clone(),
+                    "unsupported default implementation marker",
+                    "`= _` is reserved for protocol method contracts so defaulted protocol behavior is review-visible.",
+                ));
+            }
+            diagnostics
+        })
+        .collect()
+}
+
+/// Return the method names declared by `protocol` in a source/interface item
+/// stream. The parser canonicalizes protocol methods as qualified functions.
+pub fn protocol_method_names(items: &[Item], protocol: &str) -> HashSet<String> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(function) => Some(function),
+            _ => None,
+        })
+        .filter_map(|function| {
+            let (namespace, method) = split_qualified_name(&function.name);
+            (namespace == Some(protocol)).then(|| method.to_owned())
+        })
+        .collect()
+}
+
+fn function_belongs_to_protocol(
+    function: &FunctionDecl,
+    visible_protocol_names: &HashSet<String>,
+) -> bool {
+    split_qualified_name(&function.name)
+        .0
+        .is_some_and(|namespace| visible_protocol_names.contains(namespace))
+}
+
+fn split_qualified_name(name: &str) -> (Option<&str>, &str) {
+    name.rsplit_once('.')
+        .map_or((None, name), |(namespace, method)| {
+            (Some(namespace), method)
+        })
+}
 
 /// Derive unknown protocol-bound diagnostics from the same interface/source
 /// snapshot used to build HIR.
@@ -197,5 +266,45 @@ mod tests {
         assert_eq!(diagnostic.code, code::PACKAGE_INTERFACE_MISMATCH);
         assert_eq!(diagnostic.label, "missing protocol method mapping");
         assert_eq!(diagnostic.fixes[0].kind, "fix_protocol_impl_mapping");
+    }
+
+    #[test]
+    fn protocol_declaration_rules_reject_bodies_and_free_default_markers() {
+        let source = rsscript_syntax::parse_source(
+            "protocol.rss",
+            r#"
+protocol Writer {
+    fn write(self: read Self) -> Unit { return }
+}
+fn helper() -> Unit = _
+"#,
+        );
+        let names = source
+            .protocols
+            .iter()
+            .map(|protocol| protocol.name.clone())
+            .collect();
+        let diagnostics = protocol_declaration_diagnostics(&source.items, &names);
+        assert_eq!(diagnostics.len(), 2);
+        assert_eq!(diagnostics[0].label, "unsupported protocol method body");
+        assert_eq!(
+            diagnostics[1].label,
+            "unsupported default implementation marker"
+        );
+    }
+
+    #[test]
+    fn protocol_method_names_only_include_the_requested_protocol() {
+        let source = rsscript_syntax::parse_source(
+            "protocols.rss",
+            r#"
+protocol Writer { fn write(self: read Self) -> Unit }
+protocol Reader { fn read(self: read Self) -> Unit }
+"#,
+        );
+        assert_eq!(
+            protocol_method_names(&source.items, "Writer"),
+            HashSet::from(["write".to_owned()])
+        );
     }
 }

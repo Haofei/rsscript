@@ -1,9 +1,6 @@
 use std::collections::HashSet;
 
-use crate::analyzer::{
-    Analyzer, function_belongs_to_protocol, function_body_belongs_to_protocol,
-    protocol_method_names, split_qualified_name,
-};
+use crate::analyzer::{Analyzer, split_qualified_name};
 use crate::syntax::ast::Item;
 use rsscript_semantics::is_builtin_type_name;
 
@@ -16,34 +13,11 @@ impl Analyzer<'_> {
                 &self.interface_programs,
                 &self.syntax_program,
             ));
-        for item in &items {
-            match item {
-                Item::Type(_) => {}
-                Item::Function(function) => {
-                    if function_body_belongs_to_protocol(function, &protocol_names) {
-                        self.unsupported_syntax(
-                            function.span.clone(),
-                            "unsupported protocol method body",
-                            "Protocols are effect-carrying external_binding contracts in v0.7. Protocol methods are bodyless signatures; default method bodies are not part of the RSScript protocol model.",
-                        );
-                    }
-                    if function.default_impl_marker
-                        && !function_belongs_to_protocol(function, &protocol_names)
-                    {
-                        self.unsupported_syntax(
-                            function.span.clone(),
-                            "unsupported default implementation marker",
-                            "`= _` is reserved for protocol method contracts so defaulted protocol behavior is review-visible.",
-                        );
-                    }
-                }
-                Item::Module(_)
-                | Item::Use(_)
-                | Item::SumType(_)
-                | Item::TypeAlias(_)
-                | Item::Const(_) => {}
-            }
-        }
+        self.diagnostics
+            .extend(rsscript_semantics::protocol_declaration_diagnostics(
+                &items,
+                &protocol_names,
+            ));
 
         let protocol_impls = self.syntax_program.protocol_impls.clone();
         for protocol_impl in &protocol_impls {
@@ -60,7 +34,8 @@ impl Analyzer<'_> {
             {
                 self.unknown_type_name_diagnostic(&protocol_impl.type_name, &protocol_impl.span);
             }
-            let protocol_methods = protocol_method_names(&items, &protocol_impl.protocol);
+            let protocol_methods =
+                rsscript_semantics::protocol_method_names(&items, &protocol_impl.protocol);
             let mapped_methods = protocol_impl
                 .mappings
                 .iter()
