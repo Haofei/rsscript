@@ -1189,6 +1189,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "match_pattern_type_diagnostic",
         "match_variant_family_diagnostic",
         "variant_pattern_arity_diagnostic",
+        "structured_match_effect_diagnostic",
         "function_fallthrough_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
@@ -1464,6 +1465,14 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
             "compiler must not re-own match pattern rule `{forbidden}`"
         );
     }
+    assert!(semantic_control_flow.contains("pub fn structured_match_effect_diagnostic"));
+    assert!(
+        compiler_body_semantics.contains("rsscript_semantics::structured_match_effect_diagnostic")
+    );
+    assert!(
+        !compiler_body_semantics.contains("structured match patterns require an explicit"),
+        "compiler must not re-own structured match effect diagnostics"
+    );
 
     let semantic_generic_constraints =
         read(&root.join("crates/rsscript-semantics/src/generic_constraints.rs"));

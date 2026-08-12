@@ -277,6 +277,9 @@ mechanical acceptance condition holds.
     - [x] **S02.5l — Move variant pattern diagnostics.** Semantics now owns
       canonical diagnostics for non-matching patterns, invalid variant families,
       and positional binding arity; compiler only resolves fields and recurses.
+    - [x] **S02.5m — Move structured `match` effect diagnostics.** Semantics
+      owns the explicit scrutinee-effect requirement for struct and list
+      patterns; compiler continues to supply only per-arm facts.
   - [ ] **S02.6 — Delete compiler semantic-rule modules.** Add architecture
     tests that permit compiler orchestration only and reject semantic-rule
     implementations outside `rsscript-semantics`.

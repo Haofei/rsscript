@@ -2,7 +2,9 @@
 
 use crate::hir::{Hir, HirBlock, HirExpr, HirMatchArm, HirStmt, number_literal_type_name};
 use rsscript_diagnostics::{Diagnostic, code};
-use rsscript_syntax::ast::{FunctionDecl, Item, MatchLiteral, Program, TypeRef};
+use rsscript_syntax::ast::{
+    DataEffect, FunctionDecl, Item, MatchLiteral, MatchPattern, Program, TypeRef,
+};
 use std::collections::HashSet;
 
 pub fn function_fallthrough_diagnostics(program: &Program, hir: &Hir) -> Vec<Diagnostic> {
@@ -265,6 +267,36 @@ pub fn variant_pattern_arity_diagnostic(
     .with_cause(
         "A positional variant pattern must bind exactly as many sub-patterns as the variant declares fields, in declared order.",
     )
+}
+
+/// Diagnose a structured match pattern that omits its explicit scrutinee data
+/// effect. Literal and variant patterns do not project a field place and are
+/// therefore outside this rule.
+pub fn structured_match_effect_diagnostic(
+    pattern: &MatchPattern,
+    scrutinee_effect: Option<DataEffect>,
+    arm_span: &rsscript_diagnostics::Span,
+) -> Option<Diagnostic> {
+    let is_structured = matches!(
+        pattern,
+        MatchPattern::Struct { .. } | MatchPattern::List { .. }
+    );
+    (is_structured && scrutinee_effect.is_none()).then(|| {
+        Diagnostic::error(
+            code::MISSING_DATA_EFFECT,
+            "structured match patterns require an explicit scrutinee effect.",
+            arm_span.clone(),
+            "missing match scrutinee effect",
+        )
+        .with_cause(
+            "A structured pattern projects fields from the scrutinee, so the source must spell `match read`, `match mut`, or `match take`.",
+        )
+        .with_fix(
+            "spell_match_effect",
+            "Add `read`, `mut`, or `take` after `match`.",
+            "manual",
+        )
+    })
 }
 
 fn collect_bare_returns(
@@ -634,5 +666,27 @@ mod tests {
         assert_eq!(arity.code, code::VARIANT_PATTERN_ARITY_MISMATCH);
         let pattern = match_pattern_type_diagnostic("[..]", "Int", &span);
         assert_eq!(pattern.code, code::CONTROL_FLOW_TYPE_MISMATCH);
+    }
+
+    #[test]
+    fn requires_explicit_effect_for_structured_match_patterns() {
+        let span = rsscript_diagnostics::Span {
+            file: "match.rss".to_owned(),
+            line: 1,
+            column: 1,
+            length: 1,
+        };
+        let pattern = MatchPattern::List {
+            prefix: Vec::new(),
+            rest: None,
+            suffix: Vec::new(),
+            span: span.clone(),
+        };
+        let diagnostic = structured_match_effect_diagnostic(&pattern, None, &span)
+            .expect("structured patterns need an effect");
+        assert_eq!(diagnostic.code, code::MISSING_DATA_EFFECT);
+        assert!(
+            structured_match_effect_diagnostic(&pattern, Some(DataEffect::Read), &span).is_none()
+        );
     }
 }

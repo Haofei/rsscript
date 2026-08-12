@@ -669,20 +669,12 @@ pub(super) fn check_match_pattern_effects(
         .map(type_root_name)
         .is_some_and(|root| analyzer.hir.type_kind(root) == Some(HirTypeKind::Class));
     for arm in arms {
-        if matches!(
-            arm.pattern,
-            MatchPattern::Struct { .. } | MatchPattern::List { .. }
-        ) && scrutinee_effect.is_none()
-        {
-            analyzer.diagnostics.push(error_cause_manual_fix(
-                code::MISSING_DATA_EFFECT,
-                "structured match patterns require an explicit scrutinee effect.",
-                arm.span.clone(),
-                "missing match scrutinee effect",
-                "A structured pattern projects fields from the scrutinee, so the source must spell `match read`, `match mut`, or `match take`.",
-                "spell_match_effect",
-                "Add `read`, `mut`, or `take` after `match`.",
-            ));
+        if let Some(diagnostic) = rsscript_semantics::structured_match_effect_diagnostic(
+            &arm.pattern,
+            scrutinee_effect,
+            &arm.span,
+        ) {
+            analyzer.diagnostics.push(diagnostic);
         }
         check_pattern_field_effects(
             analyzer,
