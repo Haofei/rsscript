@@ -391,7 +391,7 @@ impl<'a> AssignChecker<'a> {
                     Some(AssignBinding::MutParam)
                         if self
                             .resolve_type(name)
-                            .is_some_and(|ty| crate::checks::local::is_copy_type_name(&ty)) =>
+                            .is_some_and(|ty| rsscript_semantics::is_copy_type_name(&ty)) =>
                     {
                         self.check_assignment_type(name, &stmt.value, &span);
                         return;

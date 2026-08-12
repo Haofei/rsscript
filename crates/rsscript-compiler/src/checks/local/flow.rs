@@ -999,7 +999,7 @@ impl BodyState {
                 && binding
                     .ty
                     .as_ref()
-                    .is_none_or(|ty| !is_copy_type_name(&ty.to_string()))
+                    .is_none_or(|ty| !rsscript_semantics::is_copy_type_name(&ty.to_string()))
             {
                 self.bind_managed(binding.name.clone());
             }
@@ -1168,49 +1168,6 @@ impl BodyState {
             }
         }
     }
-}
-
-/// Whether a value of `type_name` may be sent as a cross-isolate **message**
-/// (spec §20.2-3): a self-contained value carrying no managed (`Rc`) handle, so it
-/// can cross an isolate boundary without sharing mutable state. v1 allows Copy
-/// scalars plus the immutable owned-data types `String` and `Bytes` (value
-/// semantics; safe to transfer/share). Mutable/managed containers (`List`, `Map`,
-/// `Buffer`), structs/sums, handles, closures, and generics are conservatively
-/// rejected for now — broadening to data-only structs/containers is a follow-up.
-pub(crate) fn is_cross_isolate_transferable(type_name: &str) -> bool {
-    let type_name = type_name.trim();
-    if is_copy_type_name(type_name) {
-        return true;
-    }
-    matches!(
-        type_name.strip_prefix("fresh ").unwrap_or(type_name),
-        "String" | "Bytes"
-    )
-}
-
-pub(crate) fn is_copy_type_name(type_name: &str) -> bool {
-    let type_name = type_name.trim();
-    !type_name.contains('<')
-        && matches!(
-            type_name.strip_prefix("fresh ").unwrap_or(type_name),
-            "Bool"
-                | "Byte"
-                | "Char"
-                | "Float"
-                | "Float32"
-                | "Float64"
-                | "Int"
-                | "Int8"
-                | "Int16"
-                | "Int32"
-                | "Int64"
-                | "UInt"
-                | "UInt8"
-                | "UInt16"
-                | "UInt32"
-                | "UInt64"
-                | "Unit"
-        )
 }
 
 pub(crate) fn merge_if_state(

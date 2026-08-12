@@ -45,6 +45,7 @@ mod try_checks;
 mod type_aliases;
 mod type_compatibility;
 mod types;
+mod value_properties;
 mod weak_fields;
 pub use assignment::{
     deferred_index_assignment_diagnostic, invalid_assignment_diagnostic,
@@ -242,6 +243,7 @@ pub use types::{
 pub(crate) use types::{
     builtin_generic_type_params, substitute_type_args, type_arg_names, type_root_name,
 };
+pub use value_properties::{is_copy_type_name, is_cross_isolate_transferable};
 
 /// Structured retention facts attached to a callable signature.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

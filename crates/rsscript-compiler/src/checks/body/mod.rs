@@ -13,9 +13,10 @@ use crate::syntax::ast::{
 };
 
 use super::local::{
-    BodyState, FreshReturnIssueKind, LocalAnalysis, ResourceEscapeKind, is_copy_type_name,
-    merge_if_state, merge_loop_state,
+    BodyState, FreshReturnIssueKind, LocalAnalysis, ResourceEscapeKind, merge_if_state,
+    merge_loop_state,
 };
+use rsscript_semantics::is_copy_type_name;
 
 mod binding;
 mod closure_captures;

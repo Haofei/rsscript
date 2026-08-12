@@ -1384,7 +1384,7 @@ fn check_message_channel_payload(
     {
         return;
     }
-    if crate::checks::local::is_cross_isolate_transferable(element) {
+    if rsscript_semantics::is_cross_isolate_transferable(element) {
         return;
     }
     analyzer.diagnostics.push(

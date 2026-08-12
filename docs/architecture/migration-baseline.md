@@ -377,6 +377,10 @@ mechanical acceptance condition holds.
     - [x] **S02.4v — Move retained-closure argument resolution.** Semantics
       owns extraction of closure payloads through `read` and option/result
       wrappers; CFG and retained-capture checks consume the same HIR query.
+    - [x] **S02.4w — Move value-property queries.** Semantics owns canonical
+      Copy and cross-isolate transfer eligibility; compiler assignment, call,
+      and CFG checks consume the shared query instead of reinterpreting type
+      names.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.
