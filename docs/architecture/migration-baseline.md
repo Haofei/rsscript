@@ -223,6 +223,9 @@ mechanical acceptance condition holds.
     - [x] **S02.4b — Move `?` operand validation.** Known operand type validation
       for `Result`/`Option` short-circuiting is now a semantic query; function
       error-type compatibility remains a separate follow-up.
+    - [x] **S02.4c — Move `?` function error compatibility.** Recursive checked
+      HIR validation of `Result` error-type equality now belongs to semantics;
+      compiler provides only the enclosing function's resolved error type.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.

@@ -95,7 +95,12 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
                 .return_ty
                 .as_ref()
                 .and_then(result_error_type_ref_name);
-            check_try_error_types(analyzer, block, return_error_type.as_deref());
+            analyzer
+                .diagnostics
+                .extend(rsscript_semantics::try_error_type_diagnostics(
+                    block,
+                    return_error_type.as_deref(),
+                ));
             check_block(
                 analyzer,
                 &local_analysis,

@@ -478,31 +478,6 @@ pub(super) fn explicit_closure_capture_contract_diagnostic(
     );
 }
 
-pub(super) fn try_error_type_mismatch_diagnostic(
-    analyzer: &mut Analyzer<'_>,
-    span: &Span,
-    operand_error_type: &str,
-    function_error_type: &str,
-) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::INVALID_TRY_OPERATOR,
-            "`?` error type must exactly match the function error type.",
-            span.clone(),
-            "mismatched try error type",
-        )
-        .with_cause(format!(
-            "The operand returns `Result<_, {operand_error_type}>`, but the function returns `Result<_, {function_error_type}>`."
-        ))
-        .with_cause("RSScript does not perform implicit error conversion for `?`.")
-        .with_fix(
-            "map_error_explicitly",
-            "Handle the error explicitly and return the function's error type.",
-            "manual",
-        ),
-    );
-}
-
 pub(super) fn moved_use_diagnostic(analyzer: &mut Analyzer<'_>, moved_use: MovedUse) {
     analyzer.diagnostics.push(error_cause_manual_fix(
         code::USE_AFTER_MANAGE,
