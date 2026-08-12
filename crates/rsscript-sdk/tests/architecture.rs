@@ -1178,6 +1178,8 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "weak_field_upgrade_diagnostic",
         "try_operand_diagnostic",
         "try_error_type_diagnostics",
+        "integer_literal_range_diagnostic",
+        "char_literal_scalar_diagnostic",
         "function_fallthrough_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
@@ -1361,6 +1363,23 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         assert!(
             !compiler_try_checks.contains(forbidden),
             "compiler must not re-own try error compatibility rule `{forbidden}`"
+        );
+    }
+
+    let semantic_literals = read(&root.join("crates/rsscript-semantics/src/literals.rs"));
+    assert!(semantic_literals.contains("pub fn integer_literal_range_diagnostic"));
+    assert!(semantic_literals.contains("pub fn char_literal_scalar_diagnostic"));
+    assert!(
+        compiler_body_semantics.contains("rsscript_semantics::integer_literal_range_diagnostic")
+    );
+    assert!(compiler_body_semantics.contains("rsscript_semantics::char_literal_scalar_diagnostic"));
+    for forbidden in [
+        "fn check_integer_literal_range",
+        "fn check_char_literal_scalar",
+    ] {
+        assert!(
+            !compiler_body_semantics.contains(forbidden),
+            "compiler must not re-own literal validity rule `{forbidden}`"
         );
     }
 

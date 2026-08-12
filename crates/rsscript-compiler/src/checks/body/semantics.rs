@@ -344,49 +344,6 @@ pub(super) fn check_expr_semantics(
     );
 }
 
-/// A decimal integer literal must fit RSScript's `Int` (i64). Reject out-of-range
-/// literals at the frontend so they never reach the VM (runtime error) or the
-/// compiled backend (rustc error). Non-decimal / float literals are left alone.
-pub(super) fn check_integer_literal_range(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
-    let HirExpr::Number { value, span, .. } = expr else {
-        return;
-    };
-    let is_decimal_integer = !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit());
-    if is_decimal_integer && value.parse::<i64>().is_err() {
-        analyzer.diagnostics.push(error_cause_manual_fix(
-            code::INTEGER_LITERAL_OUT_OF_RANGE,
-            format!("integer literal `{value}` does not fit in `Int` (i64)."),
-            span.clone(),
-            "integer literal out of range",
-            "RSScript `Int` is a 64-bit signed integer; literals must fit in i64.",
-            "use_in_range_literal",
-            "Use a value within i64 range.",
-        ));
-    }
-}
-
-/// A `Char` literal denotes exactly one Unicode scalar. Reject `''` (empty) and
-/// `'ab'` (multi-scalar) at the frontend so they never reach lowering (which
-/// would otherwise silently truncate to the first scalar) or the VM/compiled
-/// backend. Well-formed single-scalar literals are left alone.
-pub(super) fn check_char_literal_scalar(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
-    let HirExpr::Char { value, span } = expr else {
-        return;
-    };
-    let count = crate::text_util::char_literal_scalar_count(value);
-    if count != 1 {
-        analyzer.diagnostics.push(error_cause_manual_fix(
-            code::CHAR_LITERAL_NOT_SINGLE_SCALAR,
-            format!("character literal must contain exactly one character, found {count}."),
-            span.clone(),
-            "invalid character literal",
-            "A `Char` is a single Unicode scalar value; `''` is empty and `'ab'` holds more than one.",
-            "use_single_char_literal",
-            "Put exactly one character between the single quotes, or use a `String` literal (double quotes) for text.",
-        ));
-    }
-}
-
 pub(super) fn check_bool_condition(analyzer: &mut Analyzer<'_>, expr: &HirExpr, construct: &str) {
     let Some(type_name) = hir_expr_type_name(expr) else {
         return;
@@ -1159,8 +1116,12 @@ pub(super) fn check_expr_semantics_with_context(
     async_call_consumed: bool,
     live_after: &HashSet<String>,
 ) {
-    check_integer_literal_range(analyzer, expr);
-    check_char_literal_scalar(analyzer, expr);
+    if let Some(diagnostic) = rsscript_semantics::integer_literal_range_diagnostic(expr) {
+        analyzer.diagnostics.push(diagnostic);
+    }
+    if let Some(diagnostic) = rsscript_semantics::char_literal_scalar_diagnostic(expr) {
+        analyzer.diagnostics.push(diagnostic);
+    }
     match expr {
         HirExpr::Call {
             callee,
