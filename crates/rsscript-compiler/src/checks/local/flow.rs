@@ -1072,7 +1072,7 @@ pub(crate) fn merge_loop_state(
 mod tests;
 
 pub(super) fn merge_non_fallthrough(left: Flow, right: Flow) -> Flow {
-    if left == right { left } else { Flow::Return }
+    rsscript_semantics::merge_non_fallthrough(left, right)
 }
 
 pub(super) fn fallthrough_projection(base: &BodyState, branch: &BodyState) -> BodyState {

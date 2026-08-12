@@ -16,6 +16,7 @@ use super::local::{
     BodyState, FreshReturnIssueKind, LocalAnalysis, ResourceEscapeKind, merge_if_state,
     merge_loop_state,
 };
+pub(crate) use rsscript_semantics::Flow;
 use rsscript_semantics::is_copy_type_name;
 
 mod binding;
@@ -108,14 +109,6 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
             );
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Flow {
-    Fallthrough,
-    Return,
-    Break,
-    Continue,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

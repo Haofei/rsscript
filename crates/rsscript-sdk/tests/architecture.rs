@@ -1281,6 +1281,8 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "hir_block_inline_capture_uses",
         "hir_expr_path",
         "hir_expr_type_name",
+        "Flow",
+        "merge_non_fallthrough",
         "hir_stmt_effect_events",
         "hir_stmt_identifier_uses",
         "managed_closure_uses_by_statement",
@@ -1466,6 +1468,13 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         !compiler_local_flow.contains("fn hir_expr_type_name"),
         "compiler must not re-own the HIR type projection"
     );
+    let compiler_body = read(&root.join("crates/rsscript-compiler/src/checks/body/mod.rs"));
+    assert!(compiler_body.contains("pub(crate) use rsscript_semantics::Flow"));
+    assert!(
+        !compiler_body.contains("pub(crate) enum Flow"),
+        "compiler must not re-own the structured flow-state enum"
+    );
+    assert!(compiler_local_flow.contains("rsscript_semantics::merge_non_fallthrough"));
     let compiler_assign = read(&root.join("crates/rsscript-compiler/src/analyzer/assign.rs"));
     assert!(compiler_assign.contains("rsscript_semantics::is_copy_type_name"));
     let compiler_calls = read(&root.join("crates/rsscript-compiler/src/checks/calls.rs"));
