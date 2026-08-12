@@ -390,6 +390,9 @@ mechanical acceptance condition holds.
     - [x] **S02.4z — Move fresh match-binding facts.** Semantics owns the
       single-payload `Some`/`Ok` fresh binding contract and resolved-HIR
       projection; compiler CFG only turns that fact into a flow node.
+    - [x] **S02.4aa — Move local-binding HIR facts.** Semantics owns the
+      initializer's source, handle-field, and fresh-value projections; compiler
+      CFG consumes one fact object when constructing a binding node.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.

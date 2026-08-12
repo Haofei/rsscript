@@ -30,6 +30,7 @@ mod hir_uses;
 mod identities;
 mod interface_descriptor;
 mod literals;
+mod local_binding_facts;
 mod local_flow_facts;
 mod operators;
 mod ownership;
@@ -121,6 +122,7 @@ pub use literals::{
     char_literal_scalar_diagnostic, integer_literal_range_diagnostic,
     match_char_literal_scalar_diagnostic,
 };
+pub use local_binding_facts::{LocalBindingValueFacts, local_binding_value_facts};
 pub use local_flow_facts::{
     FreshReturnIssue, FreshReturnIssueKind, ManagedToLocalUse, MovedUse, ResourceEscape,
     ResourceEscapeKind, RetainedClosureCapture, RetainedLocalUse, TakeHandleField,

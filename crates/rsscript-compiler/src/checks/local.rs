@@ -5,8 +5,7 @@ use crate::checks::shared::hir_expr_span;
 use crate::diagnostic::Span;
 use crate::hir::{
     CallResolution, HirBinding, HirBindingKind, HirBlock, HirEffectEvent, HirEffectEventKind,
-    HirExpr, HirFunctionBody, HirReturnProof, HirStmt, HirTypeKind, ParamEffect,
-    ResolvedCalleeKind,
+    HirExpr, HirFunctionBody, HirReturnProof, HirStmt, ParamEffect,
 };
 use crate::syntax::ast::{Callee, Expr};
 

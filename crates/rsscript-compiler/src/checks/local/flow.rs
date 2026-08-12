@@ -726,16 +726,22 @@ pub(super) fn local_flow_step_binding(statement: &HirStmt) -> Option<LocalFlowBi
             value,
             ty,
             ..
-        } => Some(LocalFlowBinding {
-            name: name.clone(),
-            kind: *kind,
-            type_name: ty.as_ref().map(ToString::to_string),
-            value_ident: value.as_ref().and_then(local_binding_source_ident),
-            value_handle_field: value.as_ref().and_then(local_binding_handle_field_source),
-            fresh_from_local_source: None,
-            fresh_from_scrutinee: false,
-            fresh_from_fresh_value: value.as_ref().is_some_and(hir_expr_is_fresh_value),
-        }),
+        } => {
+            let value_facts = value
+                .as_ref()
+                .map(rsscript_semantics::local_binding_value_facts)
+                .unwrap_or_default();
+            Some(LocalFlowBinding {
+                name: name.clone(),
+                kind: *kind,
+                type_name: ty.as_ref().map(ToString::to_string),
+                value_ident: value_facts.source_ident,
+                value_handle_field: value_facts.handle_field_source,
+                fresh_from_local_source: None,
+                fresh_from_scrutinee: false,
+                fresh_from_fresh_value: value_facts.is_fresh_value,
+            })
+        }
         HirStmt::Return { .. }
         | HirStmt::With { .. }
         | HirStmt::If { .. }
@@ -749,116 +755,6 @@ pub(super) fn local_flow_step_binding(statement: &HirStmt) -> Option<LocalFlowBi
         | HirStmt::Assign { .. }
         | HirStmt::Unknown(_) => None,
     }
-}
-
-/// True if `value` is itself a fresh, unaliased value: a literal, a collection
-/// literal, a struct/variant constructor, or a fresh-returning call (seen through
-/// `?` and effect wrappers). A managed `let` bound to such a value can be returned
-/// directly as `fresh` until it is moved, retained, or captured — exactly the
-/// invalidations the flow analysis already applies to clean locals.
-pub(super) fn hir_expr_is_fresh_value(value: &HirExpr) -> bool {
-    match value {
-        HirExpr::Number { .. }
-        | HirExpr::String { .. }
-        | HirExpr::Char { .. }
-        | HirExpr::ObjectLiteral { .. }
-        | HirExpr::MapLiteral { .. }
-        | HirExpr::ArrayLiteral { .. } => true,
-        HirExpr::Call { resolution, .. } => match resolution {
-            CallResolution::EnumVariant => true,
-            CallResolution::Resolved {
-                kind:
-                    ResolvedCalleeKind::Constructor {
-                        type_kind: HirTypeKind::Struct,
-                    },
-                ..
-            } => true,
-            CallResolution::Resolved { signature, .. } => signature.returns_fresh,
-            _ => false,
-        },
-        HirExpr::Try { value, .. } | HirExpr::Effect { value, .. } => {
-            hir_expr_is_fresh_value(value)
-        }
-        _ => false,
-    }
-}
-
-pub(super) fn local_binding_source_ident(value: &HirExpr) -> Option<(String, Span)> {
-    match value {
-        HirExpr::Ident { name, span, .. } => Some((name.clone(), span.clone())),
-        HirExpr::Effect {
-            effect: ParamEffect::Read | ParamEffect::Mut,
-            value,
-            ..
-        } => local_binding_source_ident(value),
-        HirExpr::Call { callee, args, .. } if local_binding_wrapper_callee(callee) => args
-            .iter()
-            .find_map(|arg| local_binding_source_ident(&arg.value)),
-        HirExpr::Number { .. }
-        | HirExpr::String { .. }
-        | HirExpr::Char { .. }
-        | HirExpr::MapLiteral { .. }
-        | HirExpr::ObjectLiteral { .. }
-        | HirExpr::ArrayLiteral { .. }
-        | HirExpr::Binary { .. }
-        | HirExpr::Field { .. }
-        | HirExpr::Index { .. }
-        | HirExpr::Call { .. }
-        | HirExpr::Effect { .. }
-        | HirExpr::Manage { .. }
-        | HirExpr::Spawn { .. }
-        | HirExpr::Await { .. }
-        | HirExpr::Try { .. }
-        | HirExpr::Closure { .. }
-        | HirExpr::Match { .. }
-        | HirExpr::Unknown(_) => None,
-    }
-}
-
-pub(super) fn local_binding_handle_field_source(value: &HirExpr) -> Option<(String, Span)> {
-    match value {
-        HirExpr::Field { base, access, .. } if access.is_handle => {
-            rsscript_semantics::hir_expr_path(base).map(|(mut path, _)| {
-                path.push('.');
-                path.push_str(&access.name);
-                (path, access.span.clone())
-            })
-        }
-        HirExpr::Field { base, .. } => local_binding_handle_field_source(base),
-        HirExpr::Effect {
-            effect: ParamEffect::Read | ParamEffect::Mut,
-            value,
-            ..
-        } => local_binding_handle_field_source(value),
-        HirExpr::Call { callee, args, .. } if local_binding_wrapper_callee(callee) => args
-            .iter()
-            .find_map(|arg| local_binding_handle_field_source(&arg.value)),
-        HirExpr::Number { .. }
-        | HirExpr::String { .. }
-        | HirExpr::Char { .. }
-        | HirExpr::MapLiteral { .. }
-        | HirExpr::ObjectLiteral { .. }
-        | HirExpr::ArrayLiteral { .. }
-        | HirExpr::Binary { .. }
-        | HirExpr::Ident { .. }
-        | HirExpr::Index { .. }
-        | HirExpr::Call { .. }
-        | HirExpr::Effect { .. }
-        | HirExpr::Manage { .. }
-        | HirExpr::Spawn { .. }
-        | HirExpr::Await { .. }
-        | HirExpr::Try { .. }
-        | HirExpr::Closure { .. }
-        | HirExpr::Match { .. }
-        | HirExpr::Unknown(_) => None,
-    }
-}
-
-pub(super) fn local_binding_wrapper_callee(callee: &Callee) -> bool {
-    matches!(
-        callee,
-        Callee::Name(name) if matches!(name.as_str(), "Ok" | "Err" | "Some")
-    )
 }
 
 pub(super) fn local_flow_step_resource_binding(
