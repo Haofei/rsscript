@@ -38,18 +38,16 @@ pub(super) fn check_generic_call_bounds(
             continue;
         }
         let (cause, fix) = protocol_bound_guidance(protocol, actual);
-        analyzer.diagnostics.push(
-            Diagnostic::error(
-                code::PROTOCOL_NOT_SATISFIED,
-                format!(
-                    "type `{actual}` does not satisfy protocol `{protocol}` required by `{call_name}`."
-                ),
+        analyzer
+            .diagnostics
+            .push(rsscript_semantics::protocol_bound_not_satisfied_diagnostic(
+                actual,
+                protocol,
+                call_name,
                 call_span.clone(),
-                "protocol not satisfied",
-            )
-            .with_cause(cause)
-            .with_fix("satisfy_protocol_bound", fix, "manual"),
-        );
+                cause,
+                fix,
+            ));
     }
 }
 
@@ -135,17 +133,19 @@ pub(super) fn check_dyn_from_call(
         return;
     };
     let Some(value_type) = hir_expr_type_name(&value_arg.value) else {
-        analyzer.diagnostics.push(dyn_from_diagnostic(
-            protocol,
-            "<unknown>",
-            call_span.clone(),
-            "ExternalBinding construction requires a typed value binding.",
-        ));
+        analyzer
+            .diagnostics
+            .push(rsscript_semantics::dyn_from_diagnostic(
+                protocol,
+                "<unknown>",
+                call_span.clone(),
+                "ExternalBinding construction requires a typed value binding.",
+            ));
         return;
     };
     let value_type = strip_fresh_type(value_type);
     if dyn_protocol(value_type).is_some() {
-        analyzer.diagnostics.push(dyn_from_diagnostic(
+        analyzer.diagnostics.push(rsscript_semantics::dyn_from_diagnostic(
             protocol,
             value_type,
             call_span.clone(),
@@ -154,7 +154,7 @@ pub(super) fn check_dyn_from_call(
         return;
     }
     if !type_satisfies_protocol_bound(analyzer, function, value_type, protocol) {
-        analyzer.diagnostics.push(dyn_from_diagnostic(
+        analyzer.diagnostics.push(rsscript_semantics::dyn_from_diagnostic(
             protocol,
             value_type,
             call_span.clone(),
@@ -284,29 +284,6 @@ pub(super) fn dyn_from_protocol(callee: &Callee) -> Option<&str> {
     type_arg_names(namespace).and_then(|args| args.first().copied())
 }
 
-pub(super) fn dyn_from_diagnostic(
-    protocol: &str,
-    value_type: &str,
-    span: Span,
-    cause: &'static str,
-) -> Diagnostic {
-    Diagnostic::error(
-        code::PROTOCOL_NOT_SATISFIED,
-        format!("cannot construct `Dyn<{protocol}>` from `{value_type}`."),
-        span,
-        "external_binding protocol not satisfied",
-    )
-    .with_cause(cause)
-    .with_cause(
-        "Dyn values are explicit dynamic protocol boundaries; construction requires a concrete value with a visible protocol implementation.",
-    )
-    .with_fix(
-        "add_protocol_impl",
-        format!("Declare `impl {protocol} for {value_type} {{ ... }}` or wrap a value that already satisfies `{protocol}`."),
-        "manual",
-    )
-}
-
 pub(super) fn check_enum_variant_form(
     analyzer: &mut Analyzer<'_>,
     callee: &Callee,
@@ -327,14 +304,12 @@ pub(super) fn check_enum_variant_form(
         // Variants use the same named-field construction form as structs (per the v0.7 spec);
         // positional/unnamed payload args are not allowed.
         if let Some(unnamed) = args.iter().find(|arg| arg.name.is_none()) {
-            analyzer.diagnostics.push(Diagnostic::error(
-                code::UNNAMED_ARGUMENT,
-                format!(
-                    "variant `{variant}` must be constructed with named fields, e.g. `{variant}(field: value)`."
-                ),
-                unnamed.span.clone(),
-                "variant field must be named",
-            ));
+            analyzer
+                .diagnostics
+                .push(rsscript_semantics::unnamed_variant_field_diagnostic(
+                    &variant,
+                    unnamed.span.clone(),
+                ));
             return;
         }
         let mut seen = vec![false; fields.len()];
@@ -344,40 +319,37 @@ pub(super) fn check_enum_variant_form(
                 Some(name) => match fields.iter().position(|(fname, _)| fname == name) {
                     Some(i) => i,
                     None => {
-                        analyzer.diagnostics.push(Diagnostic::error(
-                            code::UNKNOWN_ARGUMENT,
-                            format!("variant `{variant}` has no field `{name}`."),
-                            arg.span.clone(),
-                            "unknown variant field",
-                        ));
+                        analyzer.diagnostics.push(
+                            rsscript_semantics::unknown_variant_field_diagnostic(
+                                &variant,
+                                name,
+                                arg.span.clone(),
+                            ),
+                        );
                         continue;
                     }
                 },
                 None if index < fields.len() => index,
                 None => {
-                    analyzer.diagnostics.push(Diagnostic::error(
-                        code::UNKNOWN_ARGUMENT,
-                        format!(
-                            "variant `{variant}` has {} field(s) but {} were given.",
+                    analyzer.diagnostics.push(
+                        rsscript_semantics::too_many_variant_fields_diagnostic(
+                            &variant,
                             fields.len(),
-                            args.len()
+                            args.len(),
+                            arg.span.clone(),
                         ),
-                        arg.span.clone(),
-                        "too many variant fields",
-                    ));
+                    );
                     continue;
                 }
             };
             if seen[field_idx] {
-                analyzer.diagnostics.push(Diagnostic::error(
-                    code::DUPLICATE_ARGUMENT,
-                    format!(
-                        "variant `{variant}` field `{}` is provided more than once.",
-                        fields[field_idx].0
-                    ),
-                    arg.span.clone(),
-                    "duplicate variant field",
-                ));
+                analyzer
+                    .diagnostics
+                    .push(rsscript_semantics::duplicate_variant_field_diagnostic(
+                        &variant,
+                        &fields[field_idx].0,
+                        arg.span.clone(),
+                    ));
                 continue;
             }
             seen[field_idx] = true;
@@ -394,25 +366,26 @@ pub(super) fn check_enum_variant_form(
                 && !unresolved_generic_type(analyzer, actual)
                 && !argument_type_matches(expected, actual)
             {
-                analyzer.diagnostics.push(Diagnostic::error(
-                    code::ARGUMENT_TYPE_MISMATCH,
-                    format!(
-                        "variant `{variant}` field `{}` has type `{actual}`, expected `{expected}`.",
-                        fields[field_idx].0
+                analyzer.diagnostics.push(
+                    rsscript_semantics::variant_field_type_mismatch_diagnostic(
+                        &variant,
+                        &fields[field_idx].0,
+                        actual,
+                        expected,
+                        hir_expr_span(&arg.value).clone(),
                     ),
-                    hir_expr_span(&arg.value).clone(),
-                    "variant field type mismatch",
-                ));
+                );
             }
         }
         for (i, provided) in seen.iter().enumerate() {
             if !provided {
-                analyzer.diagnostics.push(Diagnostic::error(
-                    code::MISSING_ARGUMENT,
-                    format!("variant `{variant}` is missing field `{}`.", fields[i].0),
-                    call_span.clone(),
-                    "missing variant field",
-                ));
+                analyzer
+                    .diagnostics
+                    .push(rsscript_semantics::missing_variant_field_diagnostic(
+                        &variant,
+                        &fields[i].0,
+                        call_span.clone(),
+                    ));
             }
         }
         return;
@@ -439,20 +412,11 @@ pub(super) fn check_enum_variant_form(
         .first()
         .map(|arg| arg.span.clone())
         .unwrap_or_else(|| call_span.clone());
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::UNSUPPORTED_SYNTAX,
-            format!("variant `{variant}` must use its conventional RSScript form."),
-            span,
-            "unsupported variant form",
-        )
-        .with_cause("Standard Result and Option variants are call-like for checker purposes, but they are not ordinary named-argument calls.")
-        .with_fix(
-            "use_conventional_variant_form",
-            format!("Write this variant as {form}."),
-            "manual",
-        ),
-    );
+    analyzer
+        .diagnostics
+        .push(rsscript_semantics::conventional_variant_form_diagnostic(
+            &variant, form, span,
+        ));
 }
 
 pub(super) fn check_protocol_receiver_satisfaction(
@@ -499,19 +463,12 @@ pub(super) fn check_protocol_receiver_satisfaction(
         return;
     }
     analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::PROTOCOL_NOT_SATISFIED,
-            format!(
-                "receiver type `{receiver_type}` does not satisfy protocol `{namespace}` for `{namespace}.{name}`."
-            ),
+        rsscript_semantics::protocol_receiver_not_satisfied_diagnostic(
+            receiver_type,
+            receiver_root,
+            namespace,
+            name,
             call_span.clone(),
-            "protocol not satisfied",
-        )
-        .with_cause("Protocols are nominal external_binding contracts. A protocol call must be backed by an explicit generic bound or an explicit protocol implementation.")
-        .with_fix(
-            "add_protocol_bound_or_impl",
-            format!("Add a `{receiver_root}: {namespace}` generic bound or declare `impl {namespace} for {receiver_root} {{ ... }}`."),
-            "manual",
         ),
     );
 }

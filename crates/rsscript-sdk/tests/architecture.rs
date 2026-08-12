@@ -1449,6 +1449,40 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         !compiler_calls.contains("The callee is not a user function"),
         "compiler must not re-own resolved call diagnostic text"
     );
+    let semantic_generic_constraints =
+        read(&root.join("crates/rsscript-semantics/src/generic_constraints.rs"));
+    for exported in [
+        "pub fn protocol_bound_not_satisfied_diagnostic",
+        "pub fn dyn_from_diagnostic",
+        "pub fn unnamed_variant_field_diagnostic",
+        "pub fn unknown_variant_field_diagnostic",
+        "pub fn too_many_variant_fields_diagnostic",
+        "pub fn duplicate_variant_field_diagnostic",
+        "pub fn variant_field_type_mismatch_diagnostic",
+        "pub fn missing_variant_field_diagnostic",
+        "pub fn conventional_variant_form_diagnostic",
+        "pub fn protocol_receiver_not_satisfied_diagnostic",
+    ] {
+        assert!(semantic_generic_constraints.contains(exported));
+    }
+    for delegated in [
+        "rsscript_semantics::protocol_bound_not_satisfied_diagnostic",
+        "rsscript_semantics::dyn_from_diagnostic",
+        "rsscript_semantics::unnamed_variant_field_diagnostic",
+        "rsscript_semantics::unknown_variant_field_diagnostic",
+        "rsscript_semantics::too_many_variant_fields_diagnostic",
+        "rsscript_semantics::duplicate_variant_field_diagnostic",
+        "rsscript_semantics::variant_field_type_mismatch_diagnostic",
+        "rsscript_semantics::missing_variant_field_diagnostic",
+        "rsscript_semantics::conventional_variant_form_diagnostic",
+        "rsscript_semantics::protocol_receiver_not_satisfied_diagnostic",
+    ] {
+        assert!(compiler_generic_constraints.contains(delegated));
+    }
+    assert!(
+        !compiler_generic_constraints.contains("external_binding protocol not satisfied"),
+        "compiler must not re-own resolved protocol and variant diagnostic text"
+    );
 
     let semantic_await_placement =
         read(&root.join("crates/rsscript-semantics/src/await_placement.rs"));

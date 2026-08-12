@@ -227,6 +227,10 @@ mechanical acceptance condition holds.
         alias expansion and type matching, while semantics owns binding,
         argument/payload, map/list literal, resolution, and message-transfer
         diagnostic contracts.
+      - [x] **S02.3.2h — Move resolved protocol and variant diagnostics.**
+        Compiler resolves protocol satisfaction, `Dyn` construction, and
+        variant-field facts; semantics owns the canonical generic-bound,
+        protocol-receiver, and variant-construction diagnostic contracts.
   - [ ] **S02.4 — Move ownership and resource checks.** Relocate moves, escapes,
     borrows, `fresh`/`owned`/`noescape`, resource declarations, and cleanup
     validation with property and hostile-corpus coverage.

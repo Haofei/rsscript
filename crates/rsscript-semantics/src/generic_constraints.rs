@@ -61,6 +61,184 @@ pub fn generic_constraint_diagnostics(program: &Program) -> Vec<Diagnostic> {
     diagnostics
 }
 
+/// Construct the canonical diagnostic for a resolved generic protocol-bound
+/// failure. Resolution and structural protocol satisfaction remain frontend
+/// facts; the language-facing contract belongs to semantics.
+pub fn protocol_bound_not_satisfied_diagnostic(
+    actual: &str,
+    protocol: &str,
+    call_name: &str,
+    span: rsscript_syntax::Span,
+    cause: &'static str,
+    fix: String,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::PROTOCOL_NOT_SATISFIED,
+        format!(
+            "type `{actual}` does not satisfy protocol `{protocol}` required by `{call_name}`."
+        ),
+        span,
+        "protocol not satisfied",
+    )
+    .with_cause(cause)
+    .with_fix("satisfy_protocol_bound", fix, "manual")
+}
+
+/// Construct the canonical diagnostic for an invalid `Dyn<Protocol>`
+/// construction after the compiler has resolved the wrapped value type.
+pub fn dyn_from_diagnostic(
+    protocol: &str,
+    value_type: &str,
+    span: rsscript_syntax::Span,
+    cause: &'static str,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::PROTOCOL_NOT_SATISFIED,
+        format!("cannot construct `Dyn<{protocol}>` from `{value_type}`."),
+        span,
+        "external_binding protocol not satisfied",
+    )
+    .with_cause(cause)
+    .with_cause(
+        "Dyn values are explicit dynamic protocol boundaries; construction requires a concrete value with a visible protocol implementation.",
+    )
+    .with_fix(
+        "add_protocol_impl",
+        format!("Declare `impl {protocol} for {value_type} {{ ... }}` or wrap a value that already satisfies `{protocol}`."),
+        "manual",
+    )
+}
+
+/// Construct the canonical diagnostic for a positional user-variant field.
+pub fn unnamed_variant_field_diagnostic(variant: &str, span: rsscript_syntax::Span) -> Diagnostic {
+    Diagnostic::error(
+        code::UNNAMED_ARGUMENT,
+        format!(
+            "variant `{variant}` must be constructed with named fields, e.g. `{variant}(field: value)`."
+        ),
+        span,
+        "variant field must be named",
+    )
+}
+
+/// Construct the canonical diagnostic for an unknown user-variant field.
+pub fn unknown_variant_field_diagnostic(
+    variant: &str,
+    field: &str,
+    span: rsscript_syntax::Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::UNKNOWN_ARGUMENT,
+        format!("variant `{variant}` has no field `{field}`."),
+        span,
+        "unknown variant field",
+    )
+}
+
+/// Construct the canonical diagnostic for excess user-variant fields.
+pub fn too_many_variant_fields_diagnostic(
+    variant: &str,
+    expected: usize,
+    actual: usize,
+    span: rsscript_syntax::Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::UNKNOWN_ARGUMENT,
+        format!("variant `{variant}` has {expected} field(s) but {actual} were given."),
+        span,
+        "too many variant fields",
+    )
+}
+
+/// Construct the canonical diagnostic for a repeated user-variant field.
+pub fn duplicate_variant_field_diagnostic(
+    variant: &str,
+    field: &str,
+    span: rsscript_syntax::Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::DUPLICATE_ARGUMENT,
+        format!("variant `{variant}` field `{field}` is provided more than once."),
+        span,
+        "duplicate variant field",
+    )
+}
+
+/// Construct the canonical diagnostic for a user-variant field type mismatch.
+pub fn variant_field_type_mismatch_diagnostic(
+    variant: &str,
+    field: &str,
+    actual: &str,
+    expected: &str,
+    span: rsscript_syntax::Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::ARGUMENT_TYPE_MISMATCH,
+        format!("variant `{variant}` field `{field}` has type `{actual}`, expected `{expected}`."),
+        span,
+        "variant field type mismatch",
+    )
+}
+
+/// Construct the canonical diagnostic for a missing user-variant field.
+pub fn missing_variant_field_diagnostic(
+    variant: &str,
+    field: &str,
+    span: rsscript_syntax::Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::MISSING_ARGUMENT,
+        format!("variant `{variant}` is missing field `{field}`."),
+        span,
+        "missing variant field",
+    )
+}
+
+/// Construct the canonical diagnostic for a malformed standard sum variant.
+pub fn conventional_variant_form_diagnostic(
+    variant: &str,
+    form: &str,
+    span: rsscript_syntax::Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::UNSUPPORTED_SYNTAX,
+        format!("variant `{variant}` must use its conventional RSScript form."),
+        span,
+        "unsupported variant form",
+    )
+    .with_cause("Standard Result and Option variants are call-like for checker purposes, but they are not ordinary named-argument calls.")
+    .with_fix(
+        "use_conventional_variant_form",
+        format!("Write this variant as {form}."),
+        "manual",
+    )
+}
+
+/// Construct the canonical diagnostic for a resolved protocol receiver that
+/// has no matching implementation or generic bound.
+pub fn protocol_receiver_not_satisfied_diagnostic(
+    receiver_type: &str,
+    receiver_root: &str,
+    protocol: &str,
+    method: &str,
+    span: rsscript_syntax::Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::PROTOCOL_NOT_SATISFIED,
+        format!(
+            "receiver type `{receiver_type}` does not satisfy protocol `{protocol}` for `{protocol}.{method}`."
+        ),
+        span,
+        "protocol not satisfied",
+    )
+    .with_cause("Protocols are nominal external_binding contracts. A protocol call must be backed by an explicit generic bound or an explicit protocol implementation.")
+    .with_fix(
+        "add_protocol_bound_or_impl",
+        format!("Add a `{receiver_root}: {protocol}` generic bound or declare `impl {protocol} for {receiver_root} {{ ... }}`."),
+        "manual",
+    )
+}
+
 fn generic_bounds(params: &[GenericParam]) -> HashMap<String, Option<GenericBound>> {
     params
         .iter()
@@ -133,5 +311,45 @@ fn make<T: Managed>() -> fresh T
         assert_eq!(diagnostics.len(), 2);
         assert_eq!(diagnostics[0].code, code::RESOURCE_GENERIC_ARGUMENT);
         assert_eq!(diagnostics[1].code, code::INVALID_FRESH_RETURN_TYPE);
+    }
+
+    #[test]
+    fn derives_resolved_protocol_and_variant_diagnostics() {
+        let span = rsscript_syntax::Span {
+            file: "generic.rss".to_owned(),
+            line: 1,
+            column: 1,
+            length: 1,
+        };
+        let diagnostics = [
+            protocol_bound_not_satisfied_diagnostic(
+                "Widget",
+                "Clone",
+                "copy",
+                span.clone(),
+                "a protocol bound failed",
+                "Use a cloneable value.".into(),
+            ),
+            dyn_from_diagnostic("Display", "Widget", span.clone(), "missing impl"),
+            unnamed_variant_field_diagnostic("Event", span.clone()),
+            unknown_variant_field_diagnostic("Event", "bogus", span.clone()),
+            too_many_variant_fields_diagnostic("Event", 1, 2, span.clone()),
+            duplicate_variant_field_diagnostic("Event", "name", span.clone()),
+            variant_field_type_mismatch_diagnostic("Event", "name", "Int", "String", span.clone()),
+            missing_variant_field_diagnostic("Event", "name", span.clone()),
+            conventional_variant_form_diagnostic("None", "`None`", span.clone()),
+            protocol_receiver_not_satisfied_diagnostic("Widget", "Widget", "Display", "show", span),
+        ];
+
+        assert_eq!(diagnostics[0].code, code::PROTOCOL_NOT_SATISFIED);
+        assert_eq!(diagnostics[1].code, code::PROTOCOL_NOT_SATISFIED);
+        assert_eq!(diagnostics[2].code, code::UNNAMED_ARGUMENT);
+        assert_eq!(diagnostics[3].code, code::UNKNOWN_ARGUMENT);
+        assert_eq!(diagnostics[4].code, code::UNKNOWN_ARGUMENT);
+        assert_eq!(diagnostics[5].code, code::DUPLICATE_ARGUMENT);
+        assert_eq!(diagnostics[6].code, code::ARGUMENT_TYPE_MISMATCH);
+        assert_eq!(diagnostics[7].code, code::MISSING_ARGUMENT);
+        assert_eq!(diagnostics[8].code, code::UNSUPPORTED_SYNTAX);
+        assert_eq!(diagnostics[9].code, code::PROTOCOL_NOT_SATISFIED);
     }
 }

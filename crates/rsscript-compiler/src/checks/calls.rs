@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::Analyzer;
 use crate::checks::shared::builtin_value_type_name;
-use crate::diagnostic::{Diagnostic, Span, code};
+use crate::diagnostic::Span;
 use crate::hir::{
     CallResolution, FunctionSig, HirBindingKind, HirBlock, HirCallArg, HirExpr, HirStmt, ParamSig,
     ResolvedCalleeKind,
