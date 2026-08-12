@@ -223,6 +223,9 @@ mechanical acceptance condition holds.
     - [x] **S02.5q — Move exhaustiveness diagnostics.** Compiler determines
       match coverage from resolved HIR/declarations; semantics owns the
       canonical statement/expression non-exhaustiveness diagnostic contract.
+    - [x] **S02.5r — Move async-lowering boundary diagnostics.** Compiler
+      finds invalid nested-await and cancellation-token source facts, while
+      semantics owns their canonical structured-async diagnostic contracts.
     - [x] **S02.2j — Move bounded generic substitution.** Semantics owns the
       recursive substitution algorithm; compiler contributes only a narrow
       adapter to its shared cancellation and substitution budget.

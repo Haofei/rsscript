@@ -8,7 +8,7 @@ use crate::checks;
 use crate::checks::budget::{
     AnalysisDiagnostics, FrontendBudget, FrontendBudgetLimits, budget_completion,
 };
-use crate::diagnostic::{Diagnostic, Span, code};
+use crate::diagnostic::{Diagnostic, Span};
 use crate::hir::{
     CallResolution, FieldInfo, FunctionSig, Hir, HirBlock, HirExpr, HirMatchArm, HirStmt,
     HirTypeKind, ParamSig,
@@ -1357,7 +1357,7 @@ impl Analyzer<'_> {
                 continue;
             }
             if let Some(span) = async_block_nonlinear_await(&function.body) {
-                diagnostics.push(async_not_lowerable_diagnostic(
+                diagnostics.push(rsscript_semantics::async_fn_lowering_diagnostic(
                     span,
                     "this `await` is inside an expression that needs full async expression lowering",
                     "Move the await to a statement boundary, or put it inside an `if`/`loop`/`match` body where RSScript can create an explicit async boundary.",
@@ -1369,7 +1369,9 @@ impl Analyzer<'_> {
             // would silently lower to a never-cancelled token. Reject it instead
             // of handing out fake structured cancellation.
             if let Some(span) = block_first_cancellation_token(&function.body) {
-                diagnostics.push(cancellation_token_outside_task_group_diagnostic(span));
+                diagnostics.push(
+                    rsscript_semantics::cancellation_token_outside_task_group_diagnostic(span),
+                );
             }
         }
         self.diagnostics.extend(diagnostics);
@@ -1472,42 +1474,6 @@ fn fn_type_param_type_name(type_name: &str, index: usize) -> Option<String> {
         .or_else(|| param.strip_prefix("take "))
         .unwrap_or(param);
     Some(bare.trim().to_string())
-}
-
-fn async_not_lowerable_diagnostic(
-    span: crate::diagnostic::Span,
-    label: &str,
-    cause: &str,
-) -> Diagnostic {
-    Diagnostic::error(
-        code::ASYNC_FN_NOT_LOWERABLE,
-        "async function is not lowerable in this version.",
-        span,
-        label,
-    )
-    .with_cause(cause)
-    .with_fix(
-        "restructure_async_fn",
-        "Make every `await` a top-level statement, or move a `task_group` into a synchronous function.",
-        "manual",
-    )
-}
-
-fn cancellation_token_outside_task_group_diagnostic(span: crate::diagnostic::Span) -> Diagnostic {
-    Diagnostic::error(
-        code::CANCELLATION_TOKEN_OUTSIDE_TASK_GROUP,
-        "`Task.cancellation_token()` is not allowed inside an `async fn`.",
-        span,
-        "this would observe a never-cancelled token, not the task_group's",
-    )
-    .with_cause(
-        "An `async fn` has no lexically enclosing `task_group`, so this call cannot inherit the group's cancellation token and would silently never cancel.",
-    )
-    .with_fix(
-        "pass_cancellation_token",
-        "Call `Task.cancellation_token()` inside the `task_group` block and pass the token into this function as a `read CancellationToken` parameter.",
-        "manual",
-    )
 }
 
 /// First `Task.cancellation_token()` call span anywhere in a function body.

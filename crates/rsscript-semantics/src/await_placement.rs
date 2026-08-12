@@ -68,6 +68,48 @@ pub fn async_call_consumption_diagnostic(
     )
 }
 
+/// Construct the canonical diagnostic for an `await` expression whose source
+/// shape cannot be lowered by RSScript's structured async model.
+pub fn async_fn_lowering_diagnostic(
+    span: rsscript_diagnostics::Span,
+    label: impl Into<String>,
+    cause: impl Into<String>,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::ASYNC_FN_NOT_LOWERABLE,
+        "async function is not lowerable in this version.",
+        span,
+        label,
+    )
+    .with_cause(cause)
+    .with_fix(
+        "restructure_async_fn",
+        "Make every `await` a top-level statement, or move a `task_group` into a synchronous function.",
+        "manual",
+    )
+}
+
+/// Construct the canonical diagnostic for a cancellation-token request that
+/// has no lexically owning task group.
+pub fn cancellation_token_outside_task_group_diagnostic(
+    span: rsscript_diagnostics::Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::CANCELLATION_TOKEN_OUTSIDE_TASK_GROUP,
+        "`Task.cancellation_token()` is not allowed inside an `async fn`.",
+        span,
+        "this would observe a never-cancelled token, not the task_group's",
+    )
+    .with_cause(
+        "An `async fn` has no lexically enclosing `task_group`, so this call cannot inherit the group's cancellation token and would silently never cancel.",
+    )
+    .with_fix(
+        "pass_cancellation_token",
+        "Call `Task.cancellation_token()` inside the `task_group` block and pass the token into this function as a `read CancellationToken` parameter.",
+        "manual",
+    )
+}
+
 /// A value whose current flow state would retain it across an `await`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AwaitLiveValueFact {
@@ -354,6 +396,24 @@ mod tests {
         assert_eq!(diagnostic.code, code::ASYNC_CALL_NOT_CONSUMED);
         assert!(async_call_consumption_diagnostic("fetch", &span(), true, true).is_none());
         assert!(async_call_consumption_diagnostic("fetch", &span(), false, false).is_none());
+    }
+
+    #[test]
+    fn async_lowering_and_cancellation_contracts_are_canonical() {
+        let lowering = async_fn_lowering_diagnostic(
+            span(),
+            "await is nested in an expression",
+            "the source shape needs an explicit suspension boundary.",
+        );
+        assert_eq!(lowering.code, code::ASYNC_FN_NOT_LOWERABLE);
+        assert_eq!(lowering.fixes[0].kind, "restructure_async_fn");
+
+        let cancellation = cancellation_token_outside_task_group_diagnostic(span());
+        assert_eq!(
+            cancellation.code,
+            code::CANCELLATION_TOKEN_OUTSIDE_TASK_GROUP
+        );
+        assert_eq!(cancellation.fixes[0].kind, "pass_cancellation_token");
     }
 
     #[test]

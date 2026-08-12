@@ -1205,7 +1205,9 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "await_placement_diagnostics",
         "await_operand_diagnostic",
         "async_call_consumption_diagnostic",
+        "async_fn_lowering_diagnostic",
         "await_live_value_diagnostics",
+        "cancellation_token_outside_task_group_diagnostic",
         "weak_field_upgrade_diagnostic",
         "try_operand_diagnostic",
         "try_error_type_diagnostics",
@@ -1381,6 +1383,20 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         !compiler_exhaustiveness.contains("Diagnostic::"),
         "compiler must not construct non-exhaustive match diagnostics"
     );
+
+    let semantic_async_lowering =
+        read(&root.join("crates/rsscript-semantics/src/await_placement.rs"));
+    assert!(semantic_async_lowering.contains("pub fn async_fn_lowering_diagnostic"));
+    assert!(
+        semantic_async_lowering.contains("pub fn cancellation_token_outside_task_group_diagnostic")
+    );
+    assert!(compiler_analyzer.contains("rsscript_semantics::async_fn_lowering_diagnostic"));
+    assert!(
+        compiler_analyzer
+            .contains("rsscript_semantics::cancellation_token_outside_task_group_diagnostic")
+    );
+    assert!(!compiler_analyzer.contains("fn async_not_lowerable_diagnostic"));
+    assert!(!compiler_analyzer.contains("fn cancellation_token_outside_task_group_diagnostic"));
 
     let semantic_call_arguments =
         read(&root.join("crates/rsscript-semantics/src/call_arguments.rs"));

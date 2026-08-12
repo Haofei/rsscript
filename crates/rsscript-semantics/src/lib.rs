@@ -45,8 +45,9 @@ pub use assignment::{
     local_assignment_type_mismatch_diagnostic, place_assignment_type_mismatch_diagnostic,
 };
 pub use await_placement::{
-    AwaitLiveValueFact, async_call_consumption_diagnostic, await_live_value_diagnostics,
-    await_operand_diagnostic, await_placement_diagnostics,
+    AwaitLiveValueFact, async_call_consumption_diagnostic, async_fn_lowering_diagnostic,
+    await_live_value_diagnostics, await_operand_diagnostic, await_placement_diagnostics,
+    cancellation_token_outside_task_group_diagnostic,
 };
 pub use call_arguments::{
     CallArgumentFact, CallParameterFact, ReceiverCallEffectFact, call_argument_diagnostics,
