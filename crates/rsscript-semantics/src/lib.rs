@@ -70,7 +70,11 @@ pub use literals::{
     match_char_literal_scalar_diagnostic,
 };
 pub use ownership::{
-    managed_to_local_diagnostic, moved_use_diagnostic, retained_closure_capture_diagnostic,
+    invalid_manage_operand_diagnostic, invalid_take_operand_diagnostic,
+    local_class_binding_diagnostic, managed_closure_local_capture_diagnostic,
+    managed_to_local_diagnostic, moved_use_diagnostic, resource_capture_diagnostic,
+    resource_escape_diagnostic, resource_producer_escape_diagnostic,
+    resource_producer_missing_try_diagnostic, retained_closure_capture_diagnostic,
     retained_local_diagnostic, take_handle_field_diagnostic,
 };
 pub use try_checks::{try_error_type_diagnostics, try_operand_diagnostic};

@@ -1202,6 +1202,14 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "retained_local_diagnostic",
         "retained_closure_capture_diagnostic",
         "take_handle_field_diagnostic",
+        "managed_closure_local_capture_diagnostic",
+        "resource_escape_diagnostic",
+        "resource_capture_diagnostic",
+        "resource_producer_escape_diagnostic",
+        "resource_producer_missing_try_diagnostic",
+        "local_class_binding_diagnostic",
+        "invalid_manage_operand_diagnostic",
+        "invalid_take_operand_diagnostic",
         "function_fallthrough_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
@@ -1585,6 +1593,43 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         assert!(
             !compiler_body_effects.contains(forbidden),
             "compiler must not re-own local-flow ownership diagnostic `{forbidden}`"
+        );
+    }
+
+    let compiler_body_resources =
+        read(&root.join("crates/rsscript-compiler/src/checks/body/resources.rs"));
+    let compiler_body_closures =
+        read(&root.join("crates/rsscript-compiler/src/checks/body/closure_captures.rs"));
+    let compiler_body_fresh = read(&root.join("crates/rsscript-compiler/src/checks/body/fresh.rs"));
+    for delegated in [
+        "rsscript_semantics::managed_closure_local_capture_diagnostic",
+        "rsscript_semantics::resource_escape_diagnostic",
+        "rsscript_semantics::resource_capture_diagnostic",
+        "rsscript_semantics::resource_producer_escape_diagnostic",
+        "rsscript_semantics::resource_producer_missing_try_diagnostic",
+    ] {
+        assert!(compiler_body_resources.contains(delegated));
+    }
+    for delegated in [
+        "rsscript_semantics::invalid_manage_operand_diagnostic",
+        "rsscript_semantics::invalid_take_operand_diagnostic",
+        "rsscript_semantics::resource_escape_diagnostic",
+    ] {
+        assert!(compiler_body_effects.contains(delegated));
+    }
+    assert!(compiler_body_closures.contains("rsscript_semantics::local_class_binding_diagnostic"));
+    assert!(compiler_body_fresh.contains("rsscript_semantics::resource_escape_diagnostic"));
+    for forbidden in [
+        "fn resource_escape_diagnostic",
+        "fn resource_capture_diagnostic",
+        "fn resource_producer_escape_diagnostic",
+        "fn local_class_binding_diagnostic",
+        "fn invalid_manage_operand_diagnostic",
+        "fn invalid_take_operand_diagnostic",
+    ] {
+        assert!(
+            !compiler_body_resources.contains(forbidden),
+            "compiler must not re-own resource-boundary diagnostic `{forbidden}`"
         );
     }
 

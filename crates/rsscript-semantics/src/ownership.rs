@@ -96,6 +96,130 @@ pub fn take_handle_field_diagnostic(name: &str, span: Span) -> Diagnostic {
     )
 }
 
+/// Diagnose a managed closure that captures a local binding.
+pub fn managed_closure_local_capture_diagnostic(name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        code::LOCAL_CAPTURED_BY_MANAGED_CLOSURE,
+        format!("managed closure captures local value `{name}`."),
+        span,
+        "local captured here",
+    )
+    .with_cause("Closures bound with `let` are managed closures.")
+    .with_fix(
+        "use_local_closure",
+        "Bind the closure with `local` or use a noescape callback.",
+        "manual",
+    )
+}
+
+/// Diagnose a resource which would outlive its `with` scope.
+pub fn resource_escape_diagnostic(binding: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        code::RESOURCE_ESCAPE,
+        format!("resource `{binding}` cannot escape its `with` block."),
+        span,
+        "resource escapes",
+    )
+    .with_cause("A `with` resource must be dropped when the block exits.")
+}
+
+/// Diagnose a managed closure capture of a scoped resource.
+pub fn resource_capture_diagnostic(binding: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        code::RESOURCE_ESCAPE,
+        format!("resource `{binding}` cannot be captured by a managed closure."),
+        span,
+        "resource captured",
+    )
+    .with_cause("Managed closures may outlive the `with` block that owns the resource.")
+}
+
+/// Diagnose a transient resource producer outside a `with` boundary.
+pub fn resource_producer_escape_diagnostic(type_name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        code::RESOURCE_ESCAPE,
+        format!("resource-producing expression of type `{type_name}` must be consumed by `with`."),
+        span,
+        "resource producer escapes",
+    )
+    .with_cause(
+        "Resource-producing calls create transient linear values that cannot be stored, returned, retained, managed, or passed as ordinary values.",
+    )
+    .with_fix(
+        "use_with",
+        "Use `with producer(...)? as resource { ... }`.",
+        "manual",
+    )
+}
+
+/// Diagnose a result-wrapped resource producer that lacks an explicit `?`.
+pub fn resource_producer_missing_try_diagnostic(resource_type: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        code::RESOURCE_PRODUCER_MISSING_TRY,
+        format!(
+            "`with` over `Result<{resource_type}, E>` must explicitly unwrap the resource producer with `?`."
+        ),
+        span,
+        "missing resource producer `?`",
+    )
+    .with_cause(
+        "Resource-producing `Result` values are transient; the successful resource must enter the `with` scope explicitly.",
+    )
+    .with_fix(
+        "add_try_to_resource_producer",
+        "Write `with producer(...)? as resource { ... }`.",
+        "machine-applicable",
+    )
+}
+
+/// Diagnose binding a managed class handle as a local value.
+pub fn local_class_binding_diagnostic(binding: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        code::LOCAL_CLASS_BINDING,
+        format!("class binding `{binding}` cannot be local."),
+        span,
+        "class bound as local",
+    )
+    .with_cause("Classes are managed identity objects; their constructors produce managed handles.")
+    .with_fix(
+        "use_managed_class_binding",
+        format!("Declare `{binding}` with `let` instead of `local`."),
+        "machine-applicable",
+    )
+}
+
+/// Diagnose `manage` applied to a value which is not a local binding or fresh shell.
+pub fn invalid_manage_operand_diagnostic(cause: impl Into<String>, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        code::INVALID_MANAGE_OPERAND,
+        "`manage` requires a local binding.",
+        span,
+        "not a local binding",
+    )
+    .with_cause(cause)
+    .with_fix(
+        "remove_manage_or_create_local",
+        "Remove `manage`, or create the value as `local` at its origin.",
+        "manual",
+    )
+}
+
+/// Diagnose `take` applied to a value which is not local.
+pub fn invalid_take_operand_diagnostic(cause: impl Into<String>, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        code::INVALID_TAKE_OPERAND,
+        "`take` requires a local value.",
+        span,
+        "not a local value",
+    )
+    .with_cause(cause)
+    .with_fix(
+        "use_local_or_read",
+        "Pass a local value with `take`, or use `read`/`mut` for managed values.",
+        "manual",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,6 +255,38 @@ mod tests {
         assert_eq!(
             take_handle_field_diagnostic("child", span(1)).code,
             code::TAKE_HANDLE_FIELD
+        );
+        assert_eq!(
+            managed_closure_local_capture_diagnostic("value", span(1)).code,
+            code::LOCAL_CAPTURED_BY_MANAGED_CLOSURE
+        );
+        assert_eq!(
+            resource_escape_diagnostic("resource", span(1)).code,
+            code::RESOURCE_ESCAPE
+        );
+        assert_eq!(
+            resource_capture_diagnostic("resource", span(1)).code,
+            code::RESOURCE_ESCAPE
+        );
+        assert_eq!(
+            resource_producer_escape_diagnostic("File", span(1)).code,
+            code::RESOURCE_ESCAPE
+        );
+        assert_eq!(
+            resource_producer_missing_try_diagnostic("File", span(1)).code,
+            code::RESOURCE_PRODUCER_MISSING_TRY
+        );
+        assert_eq!(
+            local_class_binding_diagnostic("object", span(1)).code,
+            code::LOCAL_CLASS_BINDING
+        );
+        assert_eq!(
+            invalid_manage_operand_diagnostic("not local", span(1)).code,
+            code::INVALID_MANAGE_OPERAND
+        );
+        assert_eq!(
+            invalid_take_operand_diagnostic("not local", span(1)).code,
+            code::INVALID_TAKE_OPERAND
         );
     }
 }

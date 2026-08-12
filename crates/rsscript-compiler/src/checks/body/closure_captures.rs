@@ -340,7 +340,12 @@ pub(super) fn check_local_class_bindings(
                 analyzer.hir.type_kind(&ty.to_string()) == Some(HirTypeKind::Class)
             })
         {
-            local_class_binding_diagnostic(analyzer, &binding.name, binding.span.clone());
+            analyzer
+                .diagnostics
+                .push(rsscript_semantics::local_class_binding_diagnostic(
+                    &binding.name,
+                    binding.span.clone(),
+                ));
         }
     }
 }

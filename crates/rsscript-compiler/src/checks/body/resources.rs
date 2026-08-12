@@ -1,5 +1,5 @@
 use super::*;
-use crate::checks::diagnostic_helpers::{error_cause_fix, error_cause_manual_fix};
+use crate::checks::diagnostic_helpers::error_cause_manual_fix;
 
 pub(super) fn check_managed_closure_captures(
     analyzer: &mut Analyzer<'_>,
@@ -12,15 +12,9 @@ pub(super) fn check_managed_closure_captures(
         .unwrap_or(&[]);
     for (name, span) in uses {
         if state.is_local(name) {
-            analyzer.diagnostics.push(error_cause_manual_fix(
-                code::LOCAL_CAPTURED_BY_MANAGED_CLOSURE,
-                format!("managed closure captures local value `{name}`."),
-                span.clone(),
-                "local captured here",
-                "Closures bound with `let` are managed closures.",
-                "use_local_closure",
-                "Bind the closure with `local` or use a noescape callback.",
-            ));
+            analyzer.diagnostics.push(
+                rsscript_semantics::managed_closure_local_capture_diagnostic(name, span.clone()),
+            );
         }
     }
 }
@@ -37,10 +31,20 @@ pub(super) fn check_resource_escape(
             }
             match escape.kind {
                 ResourceEscapeKind::Escape => {
-                    resource_escape_diagnostic(analyzer, &escape.binding, escape.span.clone());
+                    analyzer
+                        .diagnostics
+                        .push(rsscript_semantics::resource_escape_diagnostic(
+                            &escape.binding,
+                            escape.span.clone(),
+                        ));
                 }
                 ResourceEscapeKind::Capture => {
-                    resource_capture_diagnostic(analyzer, &escape.binding, escape.span.clone());
+                    analyzer
+                        .diagnostics
+                        .push(rsscript_semantics::resource_capture_diagnostic(
+                            &escape.binding,
+                            escape.span.clone(),
+                        ));
                 }
             }
         }
@@ -56,11 +60,12 @@ pub(super) fn check_resource_producer_expr(
         if allowed_resource_context {
             check_resource_producer_children(analyzer, expr);
         } else {
-            resource_producer_escape_diagnostic(
-                analyzer,
-                hir_expr_span(expr).clone(),
-                hir_expr_type_name(expr).unwrap_or("resource"),
-            );
+            analyzer
+                .diagnostics
+                .push(rsscript_semantics::resource_producer_escape_diagnostic(
+                    hir_expr_type_name(expr).unwrap_or("resource"),
+                    hir_expr_span(expr).clone(),
+                ));
         }
         return;
     }
@@ -124,18 +129,12 @@ pub(super) fn check_result_resource_with_has_try(analyzer: &mut Analyzer<'_>, re
         return;
     };
 
-    analyzer.diagnostics.push(error_cause_fix(
-        code::RESOURCE_PRODUCER_MISSING_TRY,
-        format!(
-            "`with` over `Result<{resource_type}, E>` must explicitly unwrap the resource producer with `?`."
+    analyzer.diagnostics.push(
+        rsscript_semantics::resource_producer_missing_try_diagnostic(
+            &resource_type,
+            hir_expr_span(resource).clone(),
         ),
-        hir_expr_span(resource).clone(),
-        "missing resource producer `?`",
-        "Resource-producing `Result` values are transient; the successful resource must enter the `with` scope explicitly.",
-        "add_try_to_resource_producer",
-        "Write `with producer(...)? as resource { ... }`.",
-        "machine-applicable",
-    ));
+    );
 }
 
 pub(super) fn check_resource_producer_children(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
@@ -268,103 +267,6 @@ pub(super) fn resource_is_active_at(
     local_analysis
         .flow_entry_state(span)
         .is_none_or(|state| state.is_resource(binding))
-}
-
-pub(super) fn resource_escape_diagnostic(
-    analyzer: &mut Analyzer<'_>,
-    binding: &str,
-    span: crate::diagnostic::Span,
-) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::RESOURCE_ESCAPE,
-            format!("resource `{binding}` cannot escape its `with` block."),
-            span,
-            "resource escapes",
-        )
-        .with_cause("A `with` resource must be dropped when the block exits."),
-    );
-}
-
-pub(super) fn resource_producer_escape_diagnostic(
-    analyzer: &mut Analyzer<'_>,
-    span: crate::diagnostic::Span,
-    type_name: &str,
-) {
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::RESOURCE_ESCAPE,
-        format!("resource-producing expression of type `{type_name}` must be consumed by `with`."),
-        span,
-        "resource producer escapes",
-        "Resource-producing calls create transient linear values that cannot be stored, returned, retained, managed, or passed as ordinary values.",
-        "use_with",
-        "Use `with producer(...)? as resource { ... }`.",
-    ));
-}
-
-pub(super) fn local_class_binding_diagnostic(
-    analyzer: &mut Analyzer<'_>,
-    binding: &str,
-    span: crate::diagnostic::Span,
-) {
-    analyzer.diagnostics.push(error_cause_fix(
-        code::LOCAL_CLASS_BINDING,
-        format!("class binding `{binding}` cannot be local."),
-        span,
-        "class bound as local",
-        "Classes are managed identity objects; their constructors produce managed handles.",
-        "use_managed_class_binding",
-        format!("Declare `{binding}` with `let` instead of `local`."),
-        "machine-applicable",
-    ));
-}
-
-pub(super) fn invalid_manage_operand_diagnostic(
-    analyzer: &mut Analyzer<'_>,
-    cause: impl Into<String>,
-    span: crate::diagnostic::Span,
-) {
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::INVALID_MANAGE_OPERAND,
-        "`manage` requires a local binding.",
-        span,
-        "not a local binding",
-        cause,
-        "remove_manage_or_create_local",
-        "Remove `manage`, or create the value as `local` at its origin.",
-    ));
-}
-
-pub(super) fn invalid_take_operand_diagnostic(
-    analyzer: &mut Analyzer<'_>,
-    cause: impl Into<String>,
-    span: crate::diagnostic::Span,
-) {
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::INVALID_TAKE_OPERAND,
-        "`take` requires a local value.",
-        span,
-        "not a local value",
-        cause,
-        "use_local_or_read",
-        "Pass a local value with `take`, or use `read`/`mut` for managed values.",
-    ));
-}
-
-pub(super) fn resource_capture_diagnostic(
-    analyzer: &mut Analyzer<'_>,
-    binding: &str,
-    span: crate::diagnostic::Span,
-) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::RESOURCE_ESCAPE,
-            format!("resource `{binding}` cannot be captured by a managed closure."),
-            span,
-            "resource captured",
-        )
-        .with_cause("Managed closures may outlive the `with` block that owns the resource."),
-    );
 }
 
 pub(super) fn fresh_return_diagnostic(

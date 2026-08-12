@@ -241,6 +241,11 @@ mechanical acceptance condition holds.
     - [x] **S02.4h — Move LocalAnalysis ownership diagnostics.** Compiler flow
       derives moved, managed-to-local, retained-local, retained-closure, and
       handle-field facts; semantics now owns each resulting diagnostic.
+    - [x] **S02.4i — Move resource-boundary diagnostics.** Compiler continues
+      to traverse checked HIR and derive flow facts, while semantics owns
+      managed-closure captures, resource escapes/captures/producers, `with`
+      result unwrapping, class-local bindings, and invalid `manage`/`take`
+      diagnostics.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.

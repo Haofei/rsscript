@@ -18,11 +18,12 @@ pub(super) fn check_manage_operand_is_local(
         if expr_is_fresh_shell(value) {
             return;
         }
-        invalid_manage_operand_diagnostic(
-            analyzer,
-            "`manage` can only move a named local binding or a freshly produced value.",
-            span.clone(),
-        );
+        analyzer
+            .diagnostics
+            .push(rsscript_semantics::invalid_manage_operand_diagnostic(
+                "`manage` can only move a named local binding or a freshly produced value.",
+                span.clone(),
+            ));
         return;
     };
     if !state.is_local(name) {
@@ -30,11 +31,12 @@ pub(super) fn check_manage_operand_is_local(
             read_view_mutation_diagnostic(analyzer, name, span.clone());
             return;
         }
-        invalid_manage_operand_diagnostic(
-            analyzer,
-            format!("`{name}` is not a local binding and cannot be moved with `manage`."),
-            span.clone(),
-        );
+        analyzer
+            .diagnostics
+            .push(rsscript_semantics::invalid_manage_operand_diagnostic(
+                format!("`{name}` is not a local binding and cannot be moved with `manage`."),
+                span.clone(),
+            ));
     }
 }
 
@@ -57,26 +59,33 @@ pub(super) fn check_take_operand_is_local(
     state: &BodyState,
 ) {
     let Some(path) = place_path(value) else {
-        invalid_take_operand_diagnostic(
-            analyzer,
-            "`take` can only consume a named local binding or a local field path.",
-            span.clone(),
-        );
+        analyzer
+            .diagnostics
+            .push(rsscript_semantics::invalid_take_operand_diagnostic(
+                "`take` can only consume a named local binding or a local field path.",
+                span.clone(),
+            ));
         return;
     };
     if !state.is_local(&path.base) {
         if state.is_resource(&path.base) {
-            resource_escape_diagnostic(analyzer, &path.base, span.clone());
+            analyzer
+                .diagnostics
+                .push(rsscript_semantics::resource_escape_diagnostic(
+                    &path.base,
+                    span.clone(),
+                ));
             return;
         }
-        invalid_take_operand_diagnostic(
-            analyzer,
-            format!(
-                "`{}` is not a local binding and cannot be consumed with `take`.",
-                path.base
-            ),
-            span.clone(),
-        );
+        analyzer
+            .diagnostics
+            .push(rsscript_semantics::invalid_take_operand_diagnostic(
+                format!(
+                    "`{}` is not a local binding and cannot be consumed with `take`.",
+                    path.base
+                ),
+                span.clone(),
+            ));
     }
 }
 

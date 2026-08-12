@@ -400,7 +400,9 @@ pub(super) fn check_spawn_captures(
                 format!("Convert `{name}` through `manage` before spawning the task."),
             ));
         } else if state.is_resource(&name) {
-            resource_escape_diagnostic(analyzer, &name, span);
+            analyzer
+                .diagnostics
+                .push(rsscript_semantics::resource_escape_diagnostic(&name, span));
         }
     }
 }
