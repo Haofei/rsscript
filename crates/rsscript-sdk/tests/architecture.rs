@@ -1463,10 +1463,12 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     assert!(
         compiler_local_analysis.contains("rsscript_semantics::resource_escapes_by_with_statement")
     );
-    assert!(compiler_local_flow.contains("rsscript_semantics::hir_stmt_identifier_uses"));
-    assert!(compiler_local_flow.contains("rsscript_semantics::hir_stmt_effect_events"));
+    let semantic_local_flow_builder =
+        read(&root.join("crates/rsscript-semantics/src/local_flow_builder.rs"));
+    assert!(semantic_local_flow_builder.contains("hir_stmt_identifier_uses"));
+    assert!(semantic_local_flow_builder.contains("hir_stmt_effect_events"));
     assert!(compiler_body.contains("rsscript_semantics::is_copy_type_name"));
-    assert!(compiler_local_flow.contains("rsscript_semantics::hir_expr_type_name"));
+    assert!(semantic_local_flow_builder.contains("hir_expr_type_name"));
     assert!(
         !compiler_local_flow.contains("fn hir_expr_type_name"),
         "compiler must not re-own the HIR type projection"
@@ -1476,12 +1478,14 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         !compiler_body.contains("pub(crate) enum Flow"),
         "compiler must not re-own the structured flow-state enum"
     );
-    assert!(compiler_local_flow.contains("rsscript_semantics::merge_non_fallthrough"));
+    let semantic_local_flow_solver =
+        read(&root.join("crates/rsscript-semantics/src/local_flow_solver.rs"));
+    assert!(semantic_local_flow_solver.contains("merge_non_fallthrough"));
     assert!(
         compiler_local_analysis.contains("use rsscript_semantics::LocalFlowState as BodyState")
     );
-    assert!(compiler_local_analysis.contains("LocalFlowBinding, LocalFlowEdge"));
     assert!(compiler_local_analysis.contains("rsscript_semantics::local_flow_entry_states"));
+    assert!(compiler_local_flow.contains("rsscript_semantics::local_flow_graph"));
     assert!(
         !compiler_local_analysis.contains("pub(crate) struct BodyState"),
         "compiler must not re-own the local-flow state lattice"
@@ -1503,6 +1507,11 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "compiler must not re-own local-flow state transitions"
     );
     for forbidden in [
+        "fn collect_block_local_flow",
+        "fn collect_stmt_local_flow",
+        "fn collect_match_local_flow",
+        "fn collect_select_local_flow",
+        "fn push_local_flow_step",
         "fn collect_flow_entry_states",
         "fn transfer_flow_step",
         "fn merge_flow_entry_state",
@@ -1516,7 +1525,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     let compiler_local_ownership =
         read(&root.join("crates/rsscript-compiler/src/checks/local/ownership.rs"));
     assert!(compiler_local_analysis.contains("rsscript_semantics::initial_local_flow_state"));
-    assert!(compiler_local_flow.contains("rsscript_semantics::path_root"));
+    assert!(semantic_local_flow_solver.contains("path_root"));
     assert!(compiler_local_ownership.contains("rsscript_semantics::path_root"));
     assert!(
         !compiler_local_ownership.contains("fn initial_state_from_body"),
@@ -1558,18 +1567,18 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         );
     }
     assert!(compiler_local_ownership.contains("rsscript_semantics::fresh_return_value_span"));
-    assert!(compiler_local_flow.contains("rsscript_semantics::fresh_match_binding"));
+    assert!(semantic_local_flow_builder.contains("fresh_match_binding"));
     for forbidden in [
         "fn fresh_payload_type_for_variant",
         "fn is_fresh_match_scrutinee",
         "fn hir_expr_ident_name",
     ] {
         assert!(
-            !compiler_local_flow.contains(forbidden),
+            !semantic_local_flow_builder.contains(forbidden),
             "compiler must not re-own fresh-match fact rule `{forbidden}`"
         );
     }
-    assert!(compiler_local_flow.contains("rsscript_semantics::local_binding_value_facts"));
+    assert!(semantic_local_flow_builder.contains("local_binding_value_facts"));
     for forbidden in [
         "fn hir_expr_is_fresh_value",
         "fn local_binding_source_ident",
@@ -1577,7 +1586,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "fn local_binding_wrapper_callee",
     ] {
         assert!(
-            !compiler_local_flow.contains(forbidden),
+            !semantic_local_flow_builder.contains(forbidden),
             "compiler must not re-own local-binding HIR fact `{forbidden}`"
         );
     }
@@ -1588,7 +1597,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         );
     }
     assert!(compiler_local_ownership.contains("rsscript_semantics::retained_closure_argument"));
-    assert!(compiler_local_flow.contains("rsscript_semantics::retained_closure_argument"));
+    assert!(semantic_local_flow_builder.contains("retained_closure_argument"));
     for forbidden in [
         "fn retained_closure_arg",
         "fn retained_closure_wrapper_callee",

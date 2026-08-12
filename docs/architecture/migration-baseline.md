@@ -415,6 +415,10 @@ mechanical acceptance condition holds.
       ownership-state transfer, cleanup-edge application, conservative joins,
       and reachable graph-entry state computation; compiler only supplies the
       checked-HIR-derived graph.
+    - [x] **S02.4ag — Move local-flow graph construction.** Semantics now
+      lowers checked HIR into the local ownership graph, including structured
+      branches, loops, resource-cleanup edges, and closure-capture facts;
+      compiler has only compatibility adapters for legacy callers.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.

@@ -32,6 +32,7 @@ mod identities;
 mod interface_descriptor;
 mod literals;
 mod local_binding_facts;
+mod local_flow_builder;
 mod local_flow_facts;
 mod local_flow_graph;
 mod local_flow_solver;
@@ -128,6 +129,7 @@ pub use literals::{
     match_char_literal_scalar_diagnostic,
 };
 pub use local_binding_facts::{LocalBindingValueFacts, local_binding_value_facts};
+pub use local_flow_builder::{local_flow_graph, local_flow_statement_span};
 pub use local_flow_facts::{
     FreshReturnIssue, FreshReturnIssueKind, ManagedToLocalUse, MovedUse, ResourceEscape,
     ResourceEscapeKind, RetainedClosureCapture, RetainedLocalUse, TakeHandleField,
@@ -137,7 +139,7 @@ pub use local_flow_graph::{
 };
 pub use local_flow_solver::{
     local_flow_entry_states, merge_local_flow_entry_state, merge_local_flow_states,
-    transfer_local_flow_step,
+    merge_local_if_state, merge_local_loop_state, transfer_local_flow_step,
 };
 pub use local_flow_state::{LocalFlowState, initial_local_flow_state, path_root};
 pub use operators::{operator_overload_attempt_diagnostic, operator_type_mismatch_diagnostic};

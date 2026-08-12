@@ -1,6 +1,6 @@
 //! Fixed-point ownership analysis for the neutral local-flow graph.
 
-use crate::{LocalFlowState, LocalFlowStep, path_root};
+use crate::{Flow, LocalFlowState, LocalFlowStep, merge_non_fallthrough, path_root};
 use rsscript_syntax::Span;
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -171,4 +171,180 @@ pub fn merge_local_flow_states(left: &LocalFlowState, right: &LocalFlowState) ->
 
 fn intersection(left: &HashSet<String>, right: &HashSet<String>) -> HashSet<String> {
     left.intersection(right).cloned().collect()
+}
+
+/// Merge the two branches of a source-shaped `if` check into its fallthrough
+/// ownership state. This remains available while the legacy body walker is
+/// replaced by the graph-only consumer.
+pub fn merge_local_if_state(
+    state: &mut LocalFlowState,
+    base: &LocalFlowState,
+    then_state: LocalFlowState,
+    then_flow: Flow,
+    else_branch: Option<(LocalFlowState, Flow)>,
+) -> Flow {
+    let (else_state, else_flow) = else_branch.unwrap_or_else(|| (base.clone(), Flow::Fallthrough));
+    let mut fallthrough_states = Vec::new();
+    if then_flow == Flow::Fallthrough {
+        fallthrough_states.push(then_state);
+    }
+    if else_flow == Flow::Fallthrough {
+        fallthrough_states.push(else_state);
+    }
+    match fallthrough_states.as_slice() {
+        [] => {
+            *state = base.clone();
+            merge_non_fallthrough(then_flow, else_flow)
+        }
+        [only] => {
+            *state = local_fallthrough_projection(base, only);
+            Flow::Fallthrough
+        }
+        [left, right] => {
+            *state = merge_local_fallthrough_states(base, left, right);
+            Flow::Fallthrough
+        }
+        _ => unreachable!("if has at most two branches"),
+    }
+}
+
+/// Merge a source-shaped loop body into its post-loop ownership state.
+pub fn merge_local_loop_state(
+    state: &mut LocalFlowState,
+    base: &LocalFlowState,
+    body_state: LocalFlowState,
+    body_flow: Flow,
+    may_skip: bool,
+) -> Flow {
+    if !may_skip && body_flow == Flow::Return {
+        *state = base.clone();
+        return Flow::Return;
+    }
+    if !may_skip && body_flow == Flow::Break {
+        *state = local_fallthrough_projection(base, &body_state);
+        return Flow::Fallthrough;
+    }
+    let mut moved = base.moved.clone();
+    let mut moved_paths = base.moved_paths.clone();
+    if body_flow != Flow::Return {
+        for (name, span) in &body_state.moved {
+            if base.locals.contains(name) || base.moved.contains_key(name) {
+                moved.entry(name.clone()).or_insert_with(|| span.clone());
+            }
+        }
+        merge_moved_paths_from_branch(&mut moved_paths, base, &body_state);
+    }
+    state.locals = base.locals.clone();
+    state.field_splittable_locals = base.field_splittable_locals.clone();
+    state.managed = base.managed.clone();
+    state.read_views = base.read_views.clone();
+    state.resources = base.resources.clone();
+    state.value_types = base.value_types.clone();
+    state.moved = moved;
+    state.moved_paths = moved_paths;
+    state.clean_locals = base
+        .clean_locals
+        .intersection(&body_state.clean_locals)
+        .filter(|name| base.locals.contains(*name) || base.managed.contains(*name))
+        .cloned()
+        .collect();
+    state.fresh_returnable_locals = base
+        .fresh_returnable_locals
+        .intersection(&body_state.fresh_returnable_locals)
+        .filter(|name| state.clean_locals.contains(*name))
+        .cloned()
+        .collect();
+    Flow::Fallthrough
+}
+
+fn local_fallthrough_projection(base: &LocalFlowState, branch: &LocalFlowState) -> LocalFlowState {
+    let mut moved = base.moved.clone();
+    let mut moved_paths = base.moved_paths.clone();
+    for (name, span) in &branch.moved {
+        if base.locals.contains(name) || base.moved.contains_key(name) {
+            moved.entry(name.clone()).or_insert_with(|| span.clone());
+        }
+    }
+    merge_moved_paths_from_branch(&mut moved_paths, base, branch);
+    let clean_locals = branch
+        .clean_locals
+        .intersection(&base.clean_locals)
+        .filter(|name| base.locals.contains(*name) || base.managed.contains(*name))
+        .cloned()
+        .collect::<HashSet<_>>();
+    let fresh_returnable_locals = branch
+        .fresh_returnable_locals
+        .intersection(&base.fresh_returnable_locals)
+        .filter(|name| clean_locals.contains(*name))
+        .cloned()
+        .collect::<HashSet<_>>();
+    LocalFlowState {
+        locals: base.locals.clone(),
+        field_splittable_locals: base.field_splittable_locals.clone(),
+        managed: base.managed.clone(),
+        read_views: base.read_views.clone(),
+        resources: base.resources.clone(),
+        value_types: base.value_types.clone(),
+        moved,
+        moved_paths,
+        clean_locals,
+        fresh_returnable_locals,
+    }
+}
+
+fn merge_local_fallthrough_states(
+    base: &LocalFlowState,
+    left: &LocalFlowState,
+    right: &LocalFlowState,
+) -> LocalFlowState {
+    let mut moved = base.moved.clone();
+    let mut moved_paths = base.moved_paths.clone();
+    for branch in [left, right] {
+        for (name, span) in &branch.moved {
+            if base.locals.contains(name) || base.moved.contains_key(name) {
+                moved.entry(name.clone()).or_insert_with(|| span.clone());
+            }
+        }
+        merge_moved_paths_from_branch(&mut moved_paths, base, branch);
+    }
+    let clean_locals = left
+        .clean_locals
+        .intersection(&right.clean_locals)
+        .filter(|name| base.locals.contains(*name) || base.managed.contains(*name))
+        .cloned()
+        .collect::<HashSet<_>>();
+    let fresh_returnable_locals = left
+        .fresh_returnable_locals
+        .intersection(&right.fresh_returnable_locals)
+        .filter(|name| clean_locals.contains(*name))
+        .cloned()
+        .collect::<HashSet<_>>();
+    LocalFlowState {
+        locals: base.locals.clone(),
+        field_splittable_locals: base.field_splittable_locals.clone(),
+        managed: base.managed.clone(),
+        read_views: base.read_views.clone(),
+        resources: base.resources.clone(),
+        value_types: base.value_types.clone(),
+        moved,
+        moved_paths,
+        clean_locals,
+        fresh_returnable_locals,
+    }
+}
+
+fn merge_moved_paths_from_branch(
+    moved_paths: &mut HashMap<String, Span>,
+    base: &LocalFlowState,
+    branch: &LocalFlowState,
+) {
+    for (path, span) in &branch.moved_paths {
+        if path_root(path).is_some_and(|root| base.locals.contains(root))
+            || base.moved_paths.contains_key(path)
+        {
+            moved_paths
+                .entry(path.clone())
+                .or_insert_with(|| span.clone());
+        }
+    }
 }

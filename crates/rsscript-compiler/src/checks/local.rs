@@ -1,7 +1,5 @@
-use crate::text_util::strip_fresh_type;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-use crate::checks::shared::hir_expr_span;
 use crate::diagnostic::Span;
 #[cfg(test)]
 use crate::hir::HirEffectEvent;
@@ -20,9 +18,9 @@ pub(crate) use flow::*;
 use ownership::*;
 
 pub(crate) use rsscript_semantics::LocalFlowState as BodyState;
-pub(crate) use rsscript_semantics::{
-    LocalFlowBinding, LocalFlowEdge, LocalFlowResourceBinding, LocalFlowStep, LocalFlowStepKind,
-};
+pub(crate) use rsscript_semantics::LocalFlowStep;
+#[cfg(test)]
+pub(crate) use rsscript_semantics::LocalFlowStepKind;
 
 pub(crate) use rsscript_semantics::{
     FreshReturnIssue, FreshReturnIssueKind, ManagedToLocalUse, MovedUse, ResourceEscape,
