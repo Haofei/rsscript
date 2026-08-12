@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use rsscript_diagnostics::{Diagnostic, Span, code};
-use rsscript_syntax::ast::{Item, Program};
+use rsscript_syntax::ast::{Item, Program, TypeRef};
 use rsscript_syntax::lexer::{Token, TokenKind};
 
 /// Derive diagnostics for deliberately unsupported surface forms.
@@ -279,6 +279,59 @@ pub fn declaration_item_surface_diagnostics(item: &Item) -> Vec<Diagnostic> {
     diagnostics
 }
 
+/// Derive callback qualifier and malformed type-argument diagnostics for a
+/// canonical type reference.
+///
+/// Callers may expand aliases before invoking this query, but the placement
+/// rules and recursive diagnostic traversal are semantic and backend-neutral.
+pub fn type_ref_surface_diagnostics(
+    ty: &TypeRef,
+    allow_noescape: bool,
+    allow_owned: bool,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    type_ref_surface_diagnostics_inner(ty, allow_noescape, allow_owned, &mut diagnostics);
+    diagnostics
+}
+
+fn type_ref_surface_diagnostics_inner(
+    ty: &TypeRef,
+    allow_noescape: bool,
+    allow_owned: bool,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if ty.is_noescape && (!allow_noescape || ty.name != "Fn") {
+        diagnostics.push(unsupported_syntax_diagnostic(
+            ty.span.clone(),
+            "unsupported noescape position",
+            "`noescape Fn(...)` is only supported as a direct function parameter type.",
+        ));
+    }
+    if ty.is_owned && (!allow_owned || ty.name != "Fn") {
+        diagnostics.push(unsupported_syntax_diagnostic(
+            ty.span.clone(),
+            "unsupported owned position",
+            "`owned Fn(...)` is supported as a function parameter and in storable positions (generic argument, struct field, binding, or return type).",
+        ));
+    }
+    for span in &ty.malformed_arg_spans {
+        diagnostics.push(unsupported_syntax_diagnostic(
+            span.clone(),
+            "malformed type argument",
+            "Type arguments must be valid type references; empty or unsupported type argument slots are not allowed.",
+        ));
+    }
+    for arg in &ty.args {
+        type_ref_surface_diagnostics_inner(arg, false, allow_owned, diagnostics);
+    }
+    for param in &ty.fn_params {
+        type_ref_surface_diagnostics_inner(param, false, allow_owned, diagnostics);
+    }
+    if let Some(ret) = &ty.fn_return {
+        type_ref_surface_diagnostics_inner(ret, false, allow_owned, diagnostics);
+    }
+}
+
 fn declaration_name_and_span(item: &Item) -> Option<(&str, &Span)> {
     match item {
         Item::Function(decl) => Some((&decl.name, &decl.span)),
@@ -545,6 +598,20 @@ mod tests {
         assert_eq!(
             declaration_item_surface_diagnostics(&program.items[0])[0].label,
             "unsupported const initializer"
+        );
+    }
+
+    #[test]
+    fn type_ref_rules_reject_noescape_outside_a_direct_parameter() {
+        let program =
+            rsscript_syntax::parse_source("type.rss", "fn make() -> noescape Fn() -> Unit {}\n");
+        let Item::Function(function) = &program.items[0] else {
+            panic!("expected function declaration");
+        };
+        let return_ty = function.return_ty.as_ref().expect("return type");
+        assert_eq!(
+            type_ref_surface_diagnostics(return_ty, false, true)[0].label,
+            "unsupported noescape position"
         );
     }
 }

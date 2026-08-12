@@ -207,7 +207,7 @@ pub use signatures::signature_diagnostics;
 pub use source_rules::{
     declaration_item_surface_diagnostics, declaration_surface_diagnostics,
     forbidden_surface_syntax_diagnostics, module_use_layout_diagnostics,
-    unsupported_syntax_diagnostic,
+    type_ref_surface_diagnostics, unsupported_syntax_diagnostic,
 };
 pub use symbols::{
     Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,

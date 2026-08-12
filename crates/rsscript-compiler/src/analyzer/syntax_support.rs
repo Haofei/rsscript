@@ -32,13 +32,19 @@ impl Analyzer<'_> {
                             "A callback passed with `take` must use `owned Fn(...)` so the Rust representation is sized. Use `read Fn(...)`, `mut Fn(...)`, or `take owned Fn(...)`.",
                         );
                     }
-                    self.check_unsupported_syntax_type_ref(&canonical, true, true);
+                    self.diagnostics
+                        .extend(rsscript_semantics::type_ref_surface_diagnostics(
+                            &canonical, true, true,
+                        ));
                 }
                 if let Some(return_ty) = &function.return_ty {
                     // Return type is a storable position: `owned Fn(...)` may be
                     // returned (first-class), but `noescape` may not escape.
                     let canonical = self.canonical_type_ref(return_ty);
-                    self.check_unsupported_syntax_type_ref(&canonical, false, true);
+                    self.diagnostics
+                        .extend(rsscript_semantics::type_ref_surface_diagnostics(
+                            &canonical, false, true,
+                        ));
                 }
                 self.check_unsupported_syntax_block(&function.body);
             }
@@ -53,7 +59,10 @@ impl Analyzer<'_> {
                     // Struct/class fields are storable positions: an `owned Fn`
                     // field is first-class; `noescape` fields are rejected.
                     let canonical = self.canonical_type_ref(&field.ty);
-                    self.check_unsupported_syntax_type_ref(&canonical, false, true);
+                    self.diagnostics
+                        .extend(rsscript_semantics::type_ref_surface_diagnostics(
+                            &canonical, false, true,
+                        ));
                 }
             }
             Item::SumType(sum) => {
@@ -65,68 +74,14 @@ impl Analyzer<'_> {
                     ));
                 for field in sum.variants.iter().flat_map(|variant| &variant.fields) {
                     let canonical = self.canonical_type_ref(&field.ty);
-                    self.check_unsupported_syntax_type_ref(&canonical, false, true);
+                    self.diagnostics
+                        .extend(rsscript_semantics::type_ref_surface_diagnostics(
+                            &canonical, false, true,
+                        ));
                 }
             }
             Item::Const(_) => {}
             Item::Module(_) | Item::Use(_) | Item::TypeAlias(_) => {}
-        }
-    }
-
-    /// Validate `owned`/`noescape` Fn placement.
-    ///
-    /// Soundness boundary (RSS principle):
-    /// - `owned Fn(...)` is a FIRST-CLASS value: allowed as a direct parameter
-    ///   AND in storable positions (generic argument, struct field, `let`/
-    ///   `local` binding type, function return type). A stored/escaping owned
-    ///   closure may only capture owned (move) or `Copy` values, so it cannot
-    ///   dangle — the capture-soundness checks elsewhere enforce that.
-    /// - `noescape Fn(...)` stays PARAMETER-ONLY. A noescape callback may
-    ///   borrow-capture, so letting it be stored/returned would let a borrow
-    ///   escape. It is rejected anywhere except a direct function parameter.
-    ///
-    /// `allow_noescape` is true only at a direct parameter position and never
-    /// propagates into nested type positions. `allow_owned` is true at a
-    /// parameter position and at every storable position, and propagates into
-    /// nested positions (a `List<owned Fn(...)>`, an `owned Fn` field, an
-    /// `owned Fn` return, or an `owned Fn` returning/taking another `owned Fn`).
-    pub(super) fn check_unsupported_syntax_type_ref(
-        &mut self,
-        ty: &TypeRef,
-        allow_noescape: bool,
-        allow_owned: bool,
-    ) {
-        if ty.is_noescape && (!allow_noescape || ty.name != "Fn") {
-            self.unsupported_syntax(
-                ty.span.clone(),
-                "unsupported noescape position",
-                "`noescape Fn(...)` is only supported as a direct function parameter type.",
-            );
-        }
-        if ty.is_owned && (!allow_owned || ty.name != "Fn") {
-            self.unsupported_syntax(
-                ty.span.clone(),
-                "unsupported owned position",
-                "`owned Fn(...)` is supported as a function parameter and in storable positions (generic argument, struct field, binding, or return type).",
-            );
-        }
-        for span in &ty.malformed_arg_spans {
-            self.unsupported_syntax(
-                span.clone(),
-                "malformed type argument",
-                "Type arguments must be valid type references; empty or unsupported type argument slots are not allowed.",
-            );
-        }
-        // `owned` Fn stays first-class through nested positions; `noescape`
-        // never does (it is strictly a direct-parameter external_binding).
-        for arg in &ty.args {
-            self.check_unsupported_syntax_type_ref(arg, false, allow_owned);
-        }
-        for param in &ty.fn_params {
-            self.check_unsupported_syntax_type_ref(param, false, allow_owned);
-        }
-        if let Some(ret) = &ty.fn_return {
-            self.check_unsupported_syntax_type_ref(ret, false, allow_owned);
         }
     }
 
@@ -155,7 +110,9 @@ impl Analyzer<'_> {
                }
                if let Some(ty) = &stmt.type_annotation {
                    let canonical = self.canonical_type_ref(ty);
-                   self.check_unsupported_syntax_type_ref(&canonical, false, true);
+                   self.diagnostics.extend(
+                       rsscript_semantics::type_ref_surface_diagnostics(&canonical, false, true),
+                   );
                }
                if let Some(value) = &stmt.value {
                    self.check_unsupported_syntax_expr(value);

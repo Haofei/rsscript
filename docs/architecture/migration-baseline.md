@@ -171,6 +171,9 @@ mechanical acceptance condition holds.
       malformed declaration fragments, opaque/drop restrictions, and literal
       const-initializer validation; compiler retains only alias-aware type
       placement and recursive syntax adaptation.
+    - [x] **S02.2l — Move callback qualifier placement diagnostics.** Compiler
+      supplies alias-canonical `TypeRef` facts; semantics owns recursive
+      `owned`/`noescape Fn` placement and malformed type-argument diagnostics.
     - [x] **S02.2g — Move resolved builtin operator diagnostics.** Compiler
       extracts HIR operand/type facts; semantics owns non-numeric arithmetic and
       fixed-operand compatibility diagnostic contracts.

@@ -1256,6 +1256,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "function_fallthrough_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "module_use_layout_diagnostics",
+        "type_ref_surface_diagnostics",
         "unsupported_syntax_diagnostic",
         "external_binding_type_diagnostics",
         "unknown_type_name_diagnostic",
@@ -1341,6 +1342,8 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         compiler_syntax_support
             .contains("rsscript_semantics::declaration_item_surface_diagnostics")
     );
+    assert!(compiler_syntax_support.contains("rsscript_semantics::type_ref_surface_diagnostics"));
+    assert!(!compiler_syntax_support.contains("fn check_unsupported_syntax_type_ref"));
     for forbidden in [
         "fn check_reserved_protocol_generics",
         "fn check_reserved_declaration_names",
