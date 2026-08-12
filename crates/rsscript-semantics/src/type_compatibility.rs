@@ -1,6 +1,56 @@
 //! Diagnostics for compiler-resolved type compatibility facts.
 
+use std::collections::HashSet;
+
 use rsscript_diagnostics::{Diagnostic, Span, code};
+
+/// Facts that determine whether a rendered legacy HIR type still contains an
+/// unresolved generic parameter.
+#[derive(Debug, Clone, Default)]
+pub struct UnresolvedGenericFacts {
+    pub declared_type_names: HashSet<String>,
+    pub active_generic_names: HashSet<String>,
+}
+
+/// Whether a rendered type references a generic parameter that has not been
+/// substituted. This is a semantic rule shared by calls, closures, literals,
+/// and assignment checking.
+pub fn contains_unresolved_generic_type(type_name: &str, facts: &UnresolvedGenericFacts) -> bool {
+    let root = crate::type_root_name(type_name);
+    if facts.active_generic_names.contains(root) {
+        return true;
+    }
+    if facts.declared_type_names.contains(root) {
+        return false;
+    }
+    (root.len() == 1 && root.chars().all(|character| character.is_ascii_uppercase()))
+        || type_name
+            .trim()
+            .strip_prefix("fresh ")
+            .is_some_and(|target| contains_unresolved_generic_type(target.trim(), facts))
+        || crate::type_arg_names(type_name).is_some_and(|arguments| {
+            arguments
+                .iter()
+                .any(|argument| contains_unresolved_generic_type(argument, facts))
+        })
+        || function_return_type(type_name)
+            .is_some_and(|return_type| contains_unresolved_generic_type(return_type, facts))
+        || function_parameter_types(type_name)
+            .iter()
+            .any(|parameter| contains_unresolved_generic_type(parameter, facts))
+}
+
+/// Whether a rendered type includes one of the supplied unresolved generic
+/// parameter names. Intended for unresolved callee signatures.
+pub fn type_contains_unresolved_generic(type_name: &str, generic_names: &[String]) -> bool {
+    contains_unresolved_generic_type(
+        type_name,
+        &UnresolvedGenericFacts {
+            active_generic_names: generic_names.iter().cloned().collect(),
+            ..UnresolvedGenericFacts::default()
+        },
+    )
+}
 
 /// Compare two rendered, alias-expanded source types using the language's
 /// structural compatibility rule. Callers resolve aliases and generic
@@ -396,6 +446,24 @@ mod tests {
         assert!(!type_compatible(
             "noescape Fn(Int) -> Int",
             "Fn(read Int) -> Int"
+        ));
+    }
+
+    #[test]
+    fn detects_unresolved_generics_from_neutral_type_facts() {
+        let facts = UnresolvedGenericFacts {
+            declared_type_names: HashSet::from(["Widget".to_owned()]),
+            active_generic_names: HashSet::from(["T".to_owned()]),
+        };
+        assert!(contains_unresolved_generic_type("List<T>", &facts));
+        assert!(contains_unresolved_generic_type(
+            "Fn(read T) -> Int",
+            &facts
+        ));
+        assert!(!contains_unresolved_generic_type("Widget", &facts));
+        assert!(contains_unresolved_generic_type(
+            "List<U>",
+            &UnresolvedGenericFacts::default()
         ));
     }
 }

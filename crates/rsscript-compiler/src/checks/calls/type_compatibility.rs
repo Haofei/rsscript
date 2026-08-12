@@ -3,6 +3,7 @@
 use super::*;
 
 pub(crate) use rsscript_semantics::type_compatible as argument_type_matches;
+pub(super) use rsscript_semantics::type_contains_unresolved_generic;
 
 pub(super) fn callee_name(callee: &Callee) -> String {
     match callee {
@@ -160,7 +161,7 @@ pub(super) fn check_map_literal_entry_expr(
     role: &str,
     context: &str,
 ) {
-    if unresolved_generic_type(analyzer, expected) {
+    if has_unresolved_generic_fact(analyzer, expected) {
         return;
     }
     if json_value_accepts_literal(expected, value) {
@@ -172,7 +173,7 @@ pub(super) fn check_map_literal_entry_expr(
     let Some(actual) = hir_expr_type_name(value) else {
         return;
     };
-    if unresolved_generic_type(analyzer, actual) || argument_type_matches(expected, actual) {
+    if has_unresolved_generic_fact(analyzer, actual) || argument_type_matches(expected, actual) {
         return;
     }
     analyzer.diagnostics.push(
@@ -221,7 +222,7 @@ pub(super) fn check_list_literal_item_expr(
     value: &HirExpr,
     context: &str,
 ) {
-    if unresolved_generic_type(analyzer, expected) {
+    if has_unresolved_generic_fact(analyzer, expected) {
         return;
     }
     if json_value_accepts_literal(expected, value) {
@@ -236,7 +237,7 @@ pub(super) fn check_list_literal_item_expr(
     let Some(actual) = hir_expr_type_name(value) else {
         return;
     };
-    if unresolved_generic_type(analyzer, actual) || argument_type_matches(expected, actual) {
+    if has_unresolved_generic_fact(analyzer, actual) || argument_type_matches(expected, actual) {
         return;
     }
     analyzer.diagnostics.push(
@@ -298,53 +299,27 @@ pub(super) fn type_ref_name(ty: &TypeRef) -> String {
     }
 }
 
-pub(super) fn type_contains_unresolved_generic(type_name: &str, generics: &[String]) -> bool {
-    generics.iter().any(|generic| {
-        type_name == generic
-            || fresh_type_target(type_name)
-                .is_some_and(|target| type_contains_unresolved_generic(target, generics))
-            || noescape_return_type(type_name)
-                .is_some_and(|return_type| type_contains_unresolved_generic(return_type, generics))
-            || noescape_param_types(type_name)
-                .iter()
-                .any(|param_type| type_contains_unresolved_generic(param_type, generics))
-            || type_arg_names(type_name).is_some_and(|args| {
-                args.iter()
-                    .any(|arg| type_contains_unresolved_generic(arg, generics))
-            })
-    })
-}
-
-pub(crate) fn unresolved_generic_type(analyzer: &Analyzer<'_>, type_name: &str) -> bool {
-    let root = type_root_name(type_name);
-    let declared_type = analyzer
-        .syntax_program
-        .items
-        .iter()
-        .chain(
-            analyzer
-                .interface_programs
-                .iter()
-                .flat_map(|program| program.items.iter()),
-        )
-        .any(|item| match item {
-            Item::Type(decl) => decl.name == root,
-            Item::SumType(decl) => decl.name == root,
-            Item::TypeAlias(decl) => decl.name == root,
-            _ => false,
-        });
-    (root.len() == 1 && root.chars().all(|ch| ch.is_ascii_uppercase()) && !declared_type)
-        || fresh_type_target(type_name)
-            .is_some_and(|target| unresolved_generic_type(analyzer, target))
-        || type_arg_names(type_name).is_some_and(|args| {
-            args.iter()
-                .any(|arg| unresolved_generic_type(analyzer, arg))
-        })
-        || noescape_return_type(type_name)
-            .is_some_and(|return_type| unresolved_generic_type(analyzer, return_type))
-        || noescape_param_types(type_name)
+pub(crate) fn has_unresolved_generic_fact(analyzer: &Analyzer<'_>, type_name: &str) -> bool {
+    let mut facts = rsscript_semantics::UnresolvedGenericFacts::default();
+    facts.declared_type_names.extend(
+        analyzer
+            .syntax_program
+            .items
             .iter()
-            .any(|param_type| unresolved_generic_type(analyzer, param_type))
+            .chain(
+                analyzer
+                    .interface_programs
+                    .iter()
+                    .flat_map(|program| program.items.iter()),
+            )
+            .filter_map(|item| match item {
+                Item::Type(decl) => Some(decl.name.clone()),
+                Item::SumType(decl) => Some(decl.name.clone()),
+                Item::TypeAlias(decl) => Some(decl.name.clone()),
+                _ => None,
+            }),
+    );
+    rsscript_semantics::contains_unresolved_generic_type(type_name, &facts)
 }
 
 pub(super) fn hir_expr_span(expr: &HirExpr) -> &Span {

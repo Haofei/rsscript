@@ -105,7 +105,7 @@ pub(super) fn check_callback_call_args(
         let Some(actual) = hir_expr_type_name(&arg.value) else {
             continue;
         };
-        if unresolved_generic_type(analyzer, actual) {
+        if has_unresolved_generic_fact(analyzer, actual) {
             continue;
         }
         if !argument_type_matches(expected, actual) {
@@ -761,7 +761,7 @@ pub(super) fn check_callback_resolved_call_argument_types(
         else {
             continue;
         };
-        if unresolved_generic_type(analyzer, &actual_type) {
+        if has_unresolved_generic_fact(analyzer, &actual_type) {
             continue;
         }
         if !argument_type_matches(&expected_type, &actual_type) {
@@ -1828,13 +1828,6 @@ pub(super) fn is_fn_type(type_name: &str) -> bool {
         .is_some()
 }
 
-pub(super) fn noescape_return_type(type_name: &str) -> Option<&str> {
-    type_name
-        .trim()
-        .strip_prefix("noescape ")
-        .and_then(fn_return_type)
-}
-
 pub(super) fn fn_return_type(type_name: &str) -> Option<&str> {
     let type_name = type_name.trim();
     type_name
@@ -1845,14 +1838,6 @@ pub(super) fn fn_return_type(type_name: &str) -> Option<&str> {
         .and_then(|rest| rest.split_once(')'))
         .and_then(|(_, rest)| rest.trim_start().strip_prefix("->"))
         .map(str::trim)
-}
-
-pub(super) fn noescape_param_types(type_name: &str) -> Vec<&str> {
-    type_name
-        .trim()
-        .strip_prefix("noescape ")
-        .map(fn_param_types)
-        .unwrap_or_default()
 }
 
 pub(super) fn fn_param_types(type_name: &str) -> Vec<&str> {

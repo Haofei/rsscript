@@ -567,21 +567,13 @@ impl<'a> AssignChecker<'a> {
     }
 
     fn unresolved_generic_type(&self, type_name: &str) -> bool {
-        let root = type_root_name(type_name);
-        if self.generic_types.contains(root) {
-            return true;
-        }
-        if self.declared_types.contains(root) {
-            return false;
-        }
-        if root.len() == 1 && root.chars().all(|character| character.is_ascii_uppercase()) {
-            return true;
-        }
-        type_arg_names(type_name).is_some_and(|arguments| {
-            arguments
-                .iter()
-                .any(|argument| self.unresolved_generic_type(argument))
-        })
+        rsscript_semantics::contains_unresolved_generic_type(
+            type_name,
+            &rsscript_semantics::UnresolvedGenericFacts {
+                declared_type_names: self.declared_types.clone(),
+                active_generic_names: self.generic_types.clone(),
+            },
+        )
     }
 }
 

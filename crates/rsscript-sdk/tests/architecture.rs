@@ -1453,6 +1453,8 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "pub fn ambiguous_receiver_call_diagnostic",
         "pub fn message_payload_not_transferable_diagnostic",
         "pub fn type_compatible",
+        "pub fn contains_unresolved_generic_type",
+        "pub fn type_contains_unresolved_generic",
     ] {
         assert!(semantic_type_compatibility.contains(exported));
     }
@@ -1478,12 +1480,27 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
             .contains("rsscript_semantics::list_literal_item_type_mismatch_diagnostic")
     );
     assert!(compiler_type_compatibility.contains("rsscript_semantics::type_compatible"));
-    for forbidden in ["fn argument_type_matches", "fn function_type_matches"] {
+    for forbidden in [
+        "fn argument_type_matches",
+        "fn function_type_matches",
+        "fn unresolved_generic_type",
+        "fn type_contains_unresolved_generic",
+    ] {
         assert!(
             !compiler_type_compatibility.contains(forbidden),
             "compiler must not re-own structural type compatibility rule `{forbidden}`"
         );
     }
+    assert!(
+        compiler_type_compatibility
+            .contains("rsscript_semantics::contains_unresolved_generic_type")
+    );
+    let compiler_assignment = read(&root.join("crates/rsscript-compiler/src/analyzer/assign.rs"));
+    assert!(compiler_assignment.contains("rsscript_semantics::contains_unresolved_generic_type"));
+    assert!(
+        !compiler_assignment.contains("root.len() == 1"),
+        "assignment checking must not re-own unresolved-generic inference"
+    );
     assert!(
         !compiler_calls.contains("The callee is not a user function"),
         "compiler must not re-own resolved call diagnostic text"

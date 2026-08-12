@@ -216,7 +216,7 @@ pub(super) fn check_enum_variant_form(
                 continue;
             }
             if let Some(actual) = hir_expr_type_name(&arg.value)
-                && !unresolved_generic_type(analyzer, actual)
+                && !has_unresolved_generic_fact(analyzer, actual)
                 && !argument_type_matches(expected, actual)
             {
                 analyzer.diagnostics.push(

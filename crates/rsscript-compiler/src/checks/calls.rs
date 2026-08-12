@@ -306,7 +306,7 @@ fn check_binding_type(
     let Some(expected) = expected.as_deref() else {
         return;
     };
-    if unresolved_generic_type(analyzer, expected) {
+    if has_unresolved_generic_fact(analyzer, expected) {
         return;
     }
     if check_variant_payload_type(
@@ -320,7 +320,7 @@ fn check_binding_type(
     let Some(actual) = actual.as_deref() else {
         return;
     };
-    if unresolved_generic_type(analyzer, actual) {
+    if has_unresolved_generic_fact(analyzer, actual) {
         return;
     }
     let resolved_expected = analyzer.expand_type_alias(expected);
@@ -493,7 +493,7 @@ fn check_payload_type(
     let Some(actual) = hir_expr_type_name(payload) else {
         return;
     };
-    if unresolved_generic_type(analyzer, actual) {
+    if has_unresolved_generic_fact(analyzer, actual) {
         return;
     }
     if !argument_type_matches(expected, actual) {
@@ -699,7 +699,7 @@ fn check_return_expr_type(
     let Some(actual) = hir_expr_type_name(value) else {
         return;
     };
-    if unresolved_generic_type(analyzer, actual) {
+    if has_unresolved_generic_fact(analyzer, actual) {
         return;
     }
     if json_value_accepts_literal(&expected, value) {
@@ -749,7 +749,7 @@ fn check_result_return_expr_type(
             let Some(actual) = hir_expr_type_name(value) else {
                 return;
             };
-            if unresolved_generic_type(analyzer, actual) {
+            if has_unresolved_generic_fact(analyzer, actual) {
                 return;
             }
             let expected_result = type_ref_name(return_ty);
@@ -792,7 +792,7 @@ fn check_option_return_expr_type(
             let Some(actual) = hir_expr_type_name(value) else {
                 return;
             };
-            if unresolved_generic_type(analyzer, actual) {
+            if has_unresolved_generic_fact(analyzer, actual) {
                 return;
             }
             let expected_option = type_ref_name(return_ty);
@@ -861,7 +861,7 @@ fn check_return_payload_type(
     let Some(actual) = hir_expr_type_name(payload) else {
         return;
     };
-    if unresolved_generic_type(analyzer, actual) {
+    if has_unresolved_generic_fact(analyzer, actual) {
         return;
     }
     if !argument_type_matches(expected, actual) {
@@ -1242,7 +1242,7 @@ fn check_argument_types(
         let Some(actual_type) = hir_expr_type_name(&arg.value) else {
             continue;
         };
-        if unresolved_generic_type(analyzer, actual_type) {
+        if has_unresolved_generic_fact(analyzer, actual_type) {
             continue;
         }
         if json_value_accepts_literal(&expected_type, &arg.value) {
