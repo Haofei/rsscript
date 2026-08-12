@@ -217,6 +217,9 @@ mechanical acceptance condition holds.
   - [ ] **S02.4 — Move ownership and resource checks.** Relocate moves, escapes,
     borrows, `fresh`/`owned`/`noescape`, resource declarations, and cleanup
     validation with property and hostile-corpus coverage.
+    - [x] **S02.4a — Move weak-field upgrade validation.** Checked-HIR traversal
+      for weak handle use and the required explicit `Weak.upgrade` boundary now
+      belongs to `rsscript-semantics`; compiler only invokes the semantic rule.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.

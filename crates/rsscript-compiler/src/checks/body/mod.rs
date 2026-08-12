@@ -21,7 +21,6 @@ use super::local::{
     is_copy_type_name, merge_if_state, merge_loop_state,
 };
 
-mod async_checks;
 mod binding;
 mod closure_captures;
 mod effects;
@@ -31,7 +30,6 @@ mod resources;
 mod semantics;
 mod try_checks;
 
-use async_checks::*;
 use binding::*;
 use closure_captures::*;
 use effects::*;

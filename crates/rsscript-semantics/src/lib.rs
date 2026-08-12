@@ -30,6 +30,7 @@ mod source_rules;
 mod symbols;
 mod type_aliases;
 mod types;
+mod weak_fields;
 pub use await_placement::{
     AwaitLiveValueFact, async_call_consumption_diagnostic, await_live_value_diagnostics,
     await_operand_diagnostic, await_placement_diagnostics,
@@ -52,6 +53,7 @@ pub use derive_fields::derive_field_diagnostics;
 pub use derives::derive_syntax_diagnostics;
 pub use external_types::{external_binding_type_diagnostics, unknown_type_diagnostics};
 pub use generic_constraints::generic_constraint_diagnostics;
+pub use weak_fields::{is_weak_upgrade_call, weak_field_upgrade_diagnostic};
 
 /// Builtin source type roots recognized before backend lowering.
 pub const BUILTIN_TYPE_NAMES: &[&str] = &[

@@ -1181,7 +1181,7 @@ pub(super) fn check_expr_semantics_with_context(
             }
             check_constructor_field_initializers(analyzer, callee, args, expr, state);
             check_call_place_conflicts(analyzer, args, resolution, state);
-            let weak_upgrade = is_weak_upgrade_callee(callee);
+            let weak_upgrade = rsscript_semantics::is_weak_upgrade_call(callee);
             let mut arg_live_after = live_after.clone();
             for arg in args.iter().rev() {
                 if !tempdir_keep_consumes_resource_arg(callee, arg, state) {
@@ -1284,8 +1284,9 @@ pub(super) fn check_expr_semantics_with_context(
                 check_take_operand_is_local(analyzer, value, span, state);
             } else if !(allow_weak_upgrade_arg && *effect == ParamEffect::Read)
                 && matches!(effect, ParamEffect::Read | ParamEffect::Mut)
+                && let Some(diagnostic) = rsscript_semantics::weak_field_upgrade_diagnostic(value)
             {
-                check_weak_field_requires_upgrade(analyzer, value);
+                analyzer.diagnostics.push(diagnostic);
             }
             check_expr_semantics_with_context(
                 analyzer,

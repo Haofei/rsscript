@@ -1175,6 +1175,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "await_operand_diagnostic",
         "async_call_consumption_diagnostic",
         "await_live_value_diagnostics",
+        "weak_field_upgrade_diagnostic",
         "function_fallthrough_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
@@ -1309,50 +1310,34 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         read(&root.join("crates/rsscript-semantics/src/await_placement.rs"));
     assert!(semantic_await_placement.contains("pub fn await_placement_diagnostics"));
     let compiler_body = read(&root.join("crates/rsscript-compiler/src/checks/body/mod.rs"));
-    let compiler_async_checks =
-        read(&root.join("crates/rsscript-compiler/src/checks/body/async_checks.rs"));
+    assert!(
+        !root
+            .join("crates/rsscript-compiler/src/checks/body/async_checks.rs")
+            .exists(),
+        "compiler async diagnostics module must stay removed after semantic migration"
+    );
     assert!(compiler_body.contains("rsscript_semantics::await_placement_diagnostics"));
-    for forbidden in [
-        "fn check_await_placement",
-        "fn check_await_placement_stmt",
-        "fn check_await_placement_expr",
-    ] {
-        assert!(
-            !compiler_async_checks.contains(forbidden),
-            "compiler must not re-own await placement rule `{forbidden}`"
-        );
-    }
     assert!(semantic_await_placement.contains("pub fn await_operand_diagnostic"));
     let compiler_body_semantics =
         read(&root.join("crates/rsscript-compiler/src/checks/body/semantics.rs"));
     assert!(compiler_body_semantics.contains("rsscript_semantics::await_operand_diagnostic"));
-    for forbidden in [
-        "fn check_await_operand",
-        "fn await_targets_async_let_binding",
-        "fn await_expr_targets_async_call",
-    ] {
-        assert!(
-            !compiler_async_checks.contains(forbidden),
-            "compiler must not re-own await operand rule `{forbidden}`"
-        );
-    }
     assert!(semantic_await_placement.contains("pub fn async_call_consumption_diagnostic"));
     assert!(
         compiler_body_semantics.contains("rsscript_semantics::async_call_consumption_diagnostic")
     );
-    assert!(
-        !compiler_async_checks.contains("fn check_async_call_consumed"),
-        "compiler must not re-own async-call consumption diagnostics"
-    );
     assert!(semantic_await_placement.contains("pub fn await_live_value_diagnostics"));
     assert!(compiler_body_semantics.contains("rsscript_semantics::await_live_value_diagnostics"));
+    let semantic_weak_fields = read(&root.join("crates/rsscript-semantics/src/weak_fields.rs"));
+    assert!(semantic_weak_fields.contains("pub fn weak_field_upgrade_diagnostic"));
+    assert!(compiler_body_semantics.contains("rsscript_semantics::weak_field_upgrade_diagnostic"));
+    let compiler_fresh = read(&root.join("crates/rsscript-compiler/src/checks/body/fresh.rs"));
     for forbidden in [
-        "fn check_await_live_values",
-        "fn await_live_value_diagnostic",
+        "fn weak_field_access_requiring_upgrade",
+        "fn weak_field_access_requiring_upgrade_in_stmt",
     ] {
         assert!(
-            !compiler_async_checks.contains(forbidden),
-            "compiler must not re-own await live-value rule `{forbidden}`"
+            !compiler_fresh.contains(forbidden),
+            "compiler must not re-own weak-field rule `{forbidden}`"
         );
     }
 
