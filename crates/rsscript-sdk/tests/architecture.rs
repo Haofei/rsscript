@@ -1181,6 +1181,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "integer_literal_range_diagnostic",
         "char_literal_scalar_diagnostic",
         "bool_condition_diagnostic",
+        "for_iterable_diagnostic",
         "function_fallthrough_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
@@ -1390,6 +1391,12 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     assert!(
         !compiler_body_semantics.contains("fn check_bool_condition"),
         "compiler must not re-own boolean control-flow condition diagnostics"
+    );
+    assert!(semantic_control_flow.contains("pub fn for_iterable_diagnostic"));
+    assert!(compiler_body_semantics.contains("rsscript_semantics::for_iterable_diagnostic"));
+    assert!(
+        !compiler_body_semantics.contains("fn check_for_iterable_type"),
+        "compiler must not re-own for iterable diagnostics"
     );
 
     let semantic_generic_constraints =

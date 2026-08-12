@@ -171,7 +171,13 @@ pub(super) fn check_stmt_semantics(
             body,
             ..
         } => {
-            check_for_iterable_type(analyzer, iterable, iterable_type_name.as_deref(), *is_async);
+            if let Some(diagnostic) = rsscript_semantics::for_iterable_diagnostic(
+                iterable,
+                iterable_type_name.as_deref(),
+                *is_async,
+            ) {
+                analyzer.diagnostics.push(diagnostic);
+            }
             check_expr_semantics(analyzer, local_analysis, iterable, state, live_after);
             if check_resource_contexts {
                 check_resource_producer_expr(analyzer, iterable, false);
@@ -349,41 +355,6 @@ pub(super) fn check_expr_semantics(
         false,
         live_after,
     );
-}
-
-pub(super) fn check_for_iterable_type(
-    analyzer: &mut Analyzer<'_>,
-    expr: &HirExpr,
-    type_name: Option<&str>,
-    is_async: bool,
-) {
-    let Some(type_name) = type_name else {
-        return;
-    };
-    let bare_type_name = strip_fresh_type(type_name);
-    if (!is_async && list_element_type(bare_type_name).is_some())
-        || (is_async && stream_item_type(bare_type_name).is_some())
-    {
-        return;
-    }
-    let expected = if is_async { "Stream<T>" } else { "List<T>" };
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::CONTROL_FLOW_TYPE_MISMATCH,
-        format!("for iterable has type `{type_name}`, expected `{expected}`."),
-        hir_expr_span(expr).clone(),
-        "control-flow type mismatch",
-        if is_async {
-            "RSScript `await for` iterates `Stream<T>` values by repeatedly awaiting `Stream.next`."
-        } else {
-            "RSScript v0.7 `for` iteration is limited to `List<T>` so loop ownership and review metadata stay explicit."
-        },
-        if is_async { "iterate_stream" } else { "iterate_list" },
-        if is_async {
-            "Iterate a `Stream<T>` value or convert the input to a Stream before the loop."
-        } else {
-            "Iterate a `List<T>` value or convert the input to a List before the loop."
-        },
-    ));
 }
 
 pub(super) fn check_match_scrutinee_type(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {

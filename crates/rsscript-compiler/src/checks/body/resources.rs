@@ -260,20 +260,6 @@ pub(super) fn result_ok_type_name(type_name: &str) -> Option<&str> {
     split_top_level_type_args(inner).into_iter().next()
 }
 
-pub(super) fn list_element_type(type_name: &str) -> Option<&str> {
-    let inner = type_name
-        .strip_prefix("List<")
-        .and_then(|type_name| type_name.strip_suffix('>'))?;
-    split_top_level_type_args(inner).into_iter().next()
-}
-
-pub(super) fn stream_item_type(type_name: &str) -> Option<&str> {
-    let inner = type_name
-        .strip_prefix("Stream<")
-        .and_then(|type_name| type_name.strip_suffix('>'))?;
-    split_top_level_type_args(inner).into_iter().next()
-}
-
 pub(super) fn resource_is_active_at(
     local_analysis: &LocalAnalysis<'_>,
     binding: &str,

@@ -76,6 +76,48 @@ pub fn bool_condition_diagnostic(expr: &HirExpr, construct: &str) -> Option<Diag
     )
 }
 
+/// Diagnose a `for` iterable whose resolved type does not match the loop mode.
+/// An unresolved iterable type remains the responsibility of earlier passes.
+pub fn for_iterable_diagnostic(
+    expr: &HirExpr,
+    type_name: Option<&str>,
+    is_async: bool,
+) -> Option<Diagnostic> {
+    let type_name = type_name?;
+    let bare_type_name = strip_fresh_type(type_name);
+    if (!is_async && generic_item_type(bare_type_name, "List").is_some())
+        || (is_async && generic_item_type(bare_type_name, "Stream").is_some())
+    {
+        return None;
+    }
+    let expected = if is_async { "Stream<T>" } else { "List<T>" };
+    let cause = if is_async {
+        "RSScript `await for` iterates `Stream<T>` values by repeatedly awaiting `Stream.next`."
+    } else {
+        "RSScript v0.7 `for` iteration is limited to `List<T>` so loop ownership and review metadata stay explicit."
+    };
+    let fix_id = if is_async {
+        "iterate_stream"
+    } else {
+        "iterate_list"
+    };
+    let fix = if is_async {
+        "Iterate a `Stream<T>` value or convert the input to a Stream before the loop."
+    } else {
+        "Iterate a `List<T>` value or convert the input to a List before the loop."
+    };
+    Some(
+        Diagnostic::error(
+            code::CONTROL_FLOW_TYPE_MISMATCH,
+            format!("for iterable has type `{type_name}`, expected `{expected}`."),
+            expr_span(expr).clone(),
+            "control-flow type mismatch",
+        )
+        .with_cause(cause)
+        .with_fix(fix_id, fix, "manual"),
+    )
+}
+
 fn collect_bare_returns(
     block: &HirBlock,
     function: &FunctionDecl,
@@ -255,6 +297,17 @@ fn expr_span(expr: &HirExpr) -> &rsscript_diagnostics::Span {
     }
 }
 
+fn strip_fresh_type(type_name: &str) -> &str {
+    type_name.strip_prefix("fresh ").unwrap_or(type_name)
+}
+
+fn generic_item_type<'a>(type_name: &'a str, root: &str) -> Option<&'a str> {
+    let inner = type_name
+        .strip_prefix(&format!("{root}<"))
+        .and_then(|type_name| type_name.strip_suffix('>'))?;
+    (!inner.is_empty()).then_some(inner)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,5 +360,25 @@ mod tests {
             panic!("if statement")
         };
         assert!(bool_condition_diagnostic(condition, "if").is_none());
+    }
+
+    #[test]
+    fn validates_sync_and_async_for_iterables() {
+        let span = rsscript_diagnostics::Span {
+            file: "loop.rss".to_owned(),
+            line: 1,
+            column: 1,
+            length: 1,
+        };
+        let value = HirExpr::Ident {
+            name: "items".to_owned(),
+            type_name: Some("Map<String, Int>".to_owned()),
+            span: span.clone(),
+        };
+        let diagnostic = for_iterable_diagnostic(&value, Some("Map<String, Int>"), false)
+            .expect("must reject a non-list sync iterable");
+        assert_eq!(diagnostic.code, code::CONTROL_FLOW_TYPE_MISMATCH);
+        assert!(for_iterable_diagnostic(&value, Some("fresh List<Int>"), false).is_none());
+        assert!(for_iterable_diagnostic(&value, Some("Stream<Int>"), true).is_none());
     }
 }

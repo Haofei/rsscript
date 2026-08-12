@@ -1,6 +1,5 @@
 use crate::text_util::{
-    split_top_level_type_args, strip_fresh_type, substitute_type_args, type_arg_names,
-    type_root_name,
+    split_top_level_type_args, substitute_type_args, type_arg_names, type_root_name,
 };
 use std::collections::{HashMap, HashSet};
 
