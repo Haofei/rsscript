@@ -417,6 +417,45 @@ pub fn duplicate_pattern_field_diagnostic(
     )
 }
 
+/// Diagnose a structured pattern field absent from the resolved declaration.
+pub fn unknown_pattern_field_diagnostic(
+    field_name: &str,
+    pattern_name: &str,
+    span: &rsscript_diagnostics::Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::UNKNOWN_FIELD,
+        format!("unknown field `{field_name}` on type `{pattern_name}`."),
+        span.clone(),
+        "unknown field",
+    )
+    .with_cause("Structured match patterns may only project declared fields.")
+    .with_fix(
+        "use_declared_pattern_field",
+        format!("Use a field declared on `{pattern_name}` or update the pattern."),
+        "manual",
+    )
+}
+
+/// Diagnose a structured pattern that omits declared fields without `..`.
+pub fn omitted_pattern_fields_diagnostic(
+    pattern_name: &str,
+    span: &rsscript_diagnostics::Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::CONTROL_FLOW_TYPE_MISMATCH,
+        format!("pattern `{pattern_name} {{ ... }}` omits fields without `..`."),
+        span.clone(),
+        "pattern omits fields",
+    )
+    .with_cause("Omitted fields must be visible in review; write `..` when intentionally ignoring the rest.")
+    .with_fix(
+        "add_pattern_rest",
+        format!("Write `{pattern_name} {{ ..., .. }}` when omitting fields."),
+        "manual",
+    )
+}
+
 fn collect_bare_returns(
     block: &HirBlock,
     function: &FunctionDecl,
@@ -857,5 +896,19 @@ mod tests {
         assert_eq!(duplicate.code, code::FIELD_PARTIAL_ACCESS_CONFLICT);
         let conflict = conflicting_pattern_field_effect_diagnostic("value", &current, &previous);
         assert_eq!(conflict.code, code::FIELD_PARTIAL_ACCESS_CONFLICT);
+    }
+
+    #[test]
+    fn reports_unknown_and_omitted_pattern_fields() {
+        let span = rsscript_diagnostics::Span {
+            file: "match.rss".to_owned(),
+            line: 1,
+            column: 1,
+            length: 1,
+        };
+        let unknown = unknown_pattern_field_diagnostic("missing", "Record", &span);
+        assert_eq!(unknown.code, code::UNKNOWN_FIELD);
+        let omitted = omitted_pattern_fields_diagnostic("Record", &span);
+        assert_eq!(omitted.code, code::CONTROL_FLOW_TYPE_MISMATCH);
     }
 }

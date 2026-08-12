@@ -238,6 +238,9 @@ mechanical acceptance condition holds.
     - [x] **S02.4g — Move duplicate pattern field diagnostics.** Semantics owns
       diagnostics for duplicate fields and mutable/taking partial-access
       conflicts; compiler only tracks the preceding binding facts.
+    - [x] **S02.5o — Move declared pattern field diagnostics.** Semantics owns
+      diagnostics for unknown structured fields and omitted fields without `..`;
+      compiler supplies the resolved declaration facts.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.

@@ -1,5 +1,4 @@
 use super::*;
-use crate::checks::diagnostic_helpers::error_cause_manual_fix;
 
 pub(super) fn check_stmt_semantics(
     analyzer: &mut Analyzer<'_>,
@@ -791,30 +790,26 @@ pub(super) fn check_struct_pattern_fields(
                 ));
         }
         if !declared_names.contains(field.name.as_str()) {
-            analyzer.diagnostics.push(error_cause_manual_fix(
-                code::UNKNOWN_FIELD,
-                format!("unknown field `{}` on type `{pattern_name}`.", field.name),
-                field.span.clone(),
-                "unknown field",
-                "Structured match patterns may only project declared fields.",
-                "use_declared_pattern_field",
-                format!("Use a field declared on `{pattern_name}` or update the pattern."),
-            ));
+            analyzer
+                .diagnostics
+                .push(rsscript_semantics::unknown_pattern_field_diagnostic(
+                    &field.name,
+                    pattern_name,
+                    &field.span,
+                ));
         }
     }
     if !has_rest && fields.len() < declared_fields.len() {
-        analyzer.diagnostics.push(error_cause_manual_fix(
-            code::CONTROL_FLOW_TYPE_MISMATCH,
-            format!("pattern `{pattern_name} {{ ... }}` omits fields without `..`."),
-            fields
-                .last()
-                .map(|field| field.span.clone())
-                .unwrap_or_else(|| pattern_span.clone()),
-            "pattern omits fields",
-            "Omitted fields must be visible in review; write `..` when intentionally ignoring the rest.",
-            "add_pattern_rest",
-            format!("Write `{pattern_name} {{ ..., .. }}` when omitting fields."),
-        ));
+        let span = fields
+            .last()
+            .map(|field| &field.span)
+            .unwrap_or(pattern_span);
+        analyzer
+            .diagnostics
+            .push(rsscript_semantics::omitted_pattern_fields_diagnostic(
+                pattern_name,
+                span,
+            ));
     }
 }
 
