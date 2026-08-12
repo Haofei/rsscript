@@ -1220,7 +1220,33 @@ pub(super) fn check_expr_semantics_with_context(
             }
             let mut await_live_after = live_after.clone();
             collect_await_operand_live_uses(value, &mut await_live_after);
-            check_await_live_values(analyzer, state, expr, &await_live_after);
+            let mut await_live_facts = state
+                .resources
+                .iter()
+                .map(|name| rsscript_semantics::AwaitLiveValueFact {
+                    kind: "resource",
+                    name: name.clone(),
+                })
+                .collect::<Vec<_>>();
+            await_live_facts.extend(
+                state
+                    .locals
+                    .iter()
+                    .filter(|name| {
+                        await_live_after.contains(*name)
+                            && !state.value_type(name).is_some_and(is_copy_type_name)
+                    })
+                    .map(|name| rsscript_semantics::AwaitLiveValueFact {
+                        kind: "local value",
+                        name: name.clone(),
+                    }),
+            );
+            analyzer
+                .diagnostics
+                .extend(rsscript_semantics::await_live_value_diagnostics(
+                    hir_expr_span(expr),
+                    &await_live_facts,
+                ));
             check_expr_semantics_with_context(
                 analyzer,
                 local_analysis,

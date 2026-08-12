@@ -31,7 +31,8 @@ mod symbols;
 mod type_aliases;
 mod types;
 pub use await_placement::{
-    async_call_consumption_diagnostic, await_operand_diagnostic, await_placement_diagnostics,
+    AwaitLiveValueFact, async_call_consumption_diagnostic, await_live_value_diagnostics,
+    await_operand_diagnostic, await_placement_diagnostics,
 };
 pub use call_arguments::{
     CallArgumentFact, CallParameterFact, ReceiverCallEffectFact, call_argument_diagnostics,

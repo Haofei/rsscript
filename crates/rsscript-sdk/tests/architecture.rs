@@ -1174,6 +1174,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "await_placement_diagnostics",
         "await_operand_diagnostic",
         "async_call_consumption_diagnostic",
+        "await_live_value_diagnostics",
         "function_fallthrough_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
@@ -1343,6 +1344,17 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         !compiler_async_checks.contains("fn check_async_call_consumed"),
         "compiler must not re-own async-call consumption diagnostics"
     );
+    assert!(semantic_await_placement.contains("pub fn await_live_value_diagnostics"));
+    assert!(compiler_body_semantics.contains("rsscript_semantics::await_live_value_diagnostics"));
+    for forbidden in [
+        "fn check_await_live_values",
+        "fn await_live_value_diagnostic",
+    ] {
+        assert!(
+            !compiler_async_checks.contains(forbidden),
+            "compiler must not re-own await live-value rule `{forbidden}`"
+        );
+    }
 
     let semantic_generic_constraints =
         read(&root.join("crates/rsscript-semantics/src/generic_constraints.rs"));

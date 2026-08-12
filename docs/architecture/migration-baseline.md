@@ -240,6 +240,9 @@ mechanical acceptance condition holds.
     - [x] **S02.5e — Move async-call consumption diagnostics.** Resolved async
       calls evaluated without `await` or `spawn` are diagnosed by semantics;
       compiler supplies only resolved call facts.
+    - [x] **S02.5f — Move await live-value diagnostics.** Compiler flow analysis
+      supplies live resource/local facts, while semantics owns the canonical
+      cross-suspension diagnostic, cause, and fix.
   - [ ] **S02.6 — Delete compiler semantic-rule modules.** Add architecture
     tests that permit compiler orchestration only and reject semantic-rule
     implementations outside `rsscript-semantics`.

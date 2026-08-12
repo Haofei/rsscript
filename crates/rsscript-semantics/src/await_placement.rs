@@ -68,6 +68,33 @@ pub fn async_call_consumption_diagnostic(
     )
 }
 
+/// A value whose current flow state would retain it across an `await`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AwaitLiveValueFact {
+    pub kind: &'static str,
+    pub name: String,
+}
+
+/// Diagnose flow facts that are invalid across a suspension boundary.
+pub fn await_live_value_diagnostics(
+    span: &rsscript_diagnostics::Span,
+    facts: &[AwaitLiveValueFact],
+) -> Vec<Diagnostic> {
+    facts
+        .iter()
+        .map(|fact| {
+            Diagnostic::error(
+                code::AWAIT_LIVE_LOCAL,
+                format!("{} `{}` cannot live across `await`.", fact.kind, fact.name),
+                span.clone(),
+                "value live across await",
+            )
+            .with_cause("Suspending an RSScript async frame may keep managed handles and Copy snapshots, but local values, resources, and runtime guards must not be retained across suspension.")
+            .with_fix("drop_before_await", format!("End the lifetime of `{}` before this `await`.", fact.name), "manual")
+        })
+        .collect()
+}
+
 fn await_targets_async_let_binding<'a>(
     expr: &'a HirExpr,
     async_let_names: &'a [String],
@@ -327,5 +354,28 @@ mod tests {
         assert_eq!(diagnostic.code, code::ASYNC_CALL_NOT_CONSUMED);
         assert!(async_call_consumption_diagnostic("fetch", &span(), true, true).is_none());
         assert!(async_call_consumption_diagnostic("fetch", &span(), false, false).is_none());
+    }
+
+    #[test]
+    fn live_value_facts_preserve_resource_and_local_diagnostics() {
+        let facts = [
+            AwaitLiveValueFact {
+                kind: "resource",
+                name: "file".to_owned(),
+            },
+            AwaitLiveValueFact {
+                kind: "local value",
+                name: "payload".to_owned(),
+            },
+        ];
+        let diagnostics = await_live_value_diagnostics(&span(), &facts);
+        assert_eq!(diagnostics.len(), 2);
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.code == code::AWAIT_LIVE_LOCAL)
+        );
+        assert!(diagnostics[0].summary.contains("resource `file`"));
+        assert!(diagnostics[1].summary.contains("local value `payload`"));
     }
 }
