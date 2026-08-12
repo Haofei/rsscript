@@ -2,14 +2,6 @@
 
 use super::*;
 
-pub(super) fn initial_state_from_body(body: Option<&HirFunctionBody>) -> BodyState {
-    let mut state = BodyState::default();
-    if let Some(body) = body {
-        state.seed_params(&body.bindings);
-    }
-    state
-}
-
 pub(super) fn collect_fresh_return_issues_from_block(
     block: &HirBlock,
     entry_states: &HashMap<Span, BodyState>,
@@ -387,7 +379,7 @@ pub(super) fn collect_field_move_use(
     moved_uses: &mut Vec<MovedUse>,
 ) {
     if let Some((path, span)) = rsscript_semantics::hir_expr_path(expr) {
-        if let Some(root) = path_root(&path)
+        if let Some(root) = rsscript_semantics::path_root(&path)
             && let Some(move_span) = state.move_span(root)
         {
             push_moved_use(moved_uses, root.to_string(), span, move_span.clone());
@@ -672,10 +664,6 @@ pub(super) fn push_moved_use(
     if !moved_uses.contains(&moved_use) {
         moved_uses.push(moved_use);
     }
-}
-
-pub(super) fn path_root(path: &str) -> Option<&str> {
-    path.split('.').next().filter(|root| !root.is_empty())
 }
 
 pub(super) fn collect_retained_closure_captures_from_stmt(

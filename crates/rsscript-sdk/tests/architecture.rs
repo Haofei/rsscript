@@ -1488,6 +1488,19 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         !compiler_local_flow.contains("impl BodyState"),
         "compiler must not re-own local-flow state transitions"
     );
+    let compiler_local_ownership =
+        read(&root.join("crates/rsscript-compiler/src/checks/local/ownership.rs"));
+    assert!(compiler_local_analysis.contains("rsscript_semantics::initial_local_flow_state"));
+    assert!(compiler_local_flow.contains("rsscript_semantics::path_root"));
+    assert!(compiler_local_ownership.contains("rsscript_semantics::path_root"));
+    assert!(
+        !compiler_local_ownership.contains("fn initial_state_from_body"),
+        "compiler must not re-own local-flow entry-state construction"
+    );
+    assert!(
+        !compiler_local_ownership.contains("fn path_root"),
+        "compiler must not re-own place-path root resolution"
+    );
     let compiler_assign = read(&root.join("crates/rsscript-compiler/src/analyzer/assign.rs"));
     assert!(compiler_assign.contains("rsscript_semantics::is_copy_type_name"));
     let compiler_calls = read(&root.join("crates/rsscript-compiler/src/checks/calls.rs"));

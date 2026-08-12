@@ -665,7 +665,9 @@ pub(super) fn merge_flow_states(left: &BodyState, right: &BodyState) -> BodyStat
             .entry(path.clone())
             .or_insert_with(|| span.clone());
     }
-    moved_paths.retain(|path, _| path_root(path).is_some_and(|root| locals.contains(root)));
+    moved_paths.retain(|path, _| {
+        rsscript_semantics::path_root(path).is_some_and(|root| locals.contains(root))
+    });
 
     // A fresh binding survives the merge when it is clean in both predecessors
     // and still tracked as either an exclusive `local` or a managed `let`/`let
@@ -977,7 +979,7 @@ pub(super) fn merge_moved_paths_from_branch(
     branch: &BodyState,
 ) {
     for (path, span) in &branch.moved_paths {
-        if path_root(path).is_some_and(|root| base.locals.contains(root))
+        if rsscript_semantics::path_root(path).is_some_and(|root| base.locals.contains(root))
             || base.moved_paths.contains_key(path)
         {
             moved_paths

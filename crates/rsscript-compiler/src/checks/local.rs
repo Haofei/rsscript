@@ -100,8 +100,10 @@ impl<'a> LocalAnalysis<'a> {
         let flow_steps = body
             .and_then(|body| body.block.as_ref())
             .map_or_else(Vec::new, collect_local_flow_steps);
-        let flow_entry_states_by_span =
-            collect_flow_entry_states(&flow_steps, initial_state_from_body(body));
+        let flow_entry_states_by_span = collect_flow_entry_states(
+            &flow_steps,
+            rsscript_semantics::initial_local_flow_state(body),
+        );
 
         Self {
             body,
@@ -114,7 +116,7 @@ impl<'a> LocalAnalysis<'a> {
     }
 
     pub(crate) fn initial_state(&self) -> BodyState {
-        initial_state_from_body(self.body)
+        rsscript_semantics::initial_local_flow_state(self.body)
     }
 
     pub(crate) fn managed_closure_ident_uses(&self, span: &Span) -> Option<&[(String, Span)]> {

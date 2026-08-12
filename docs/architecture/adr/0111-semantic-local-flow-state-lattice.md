@@ -7,9 +7,10 @@
 
 `rsscript-semantics::LocalFlowState` owns the local ownership-state lattice:
 locals, managed values, read views, resources, move paths, freshness state, and
-value-type projections. Parameter seeding and move/retention transitions move
-with the state. The compiler retains a private `BodyState` alias while its CFG
-construction and lattice-merge mechanics are migrated in subsequent steps.
+value-type projections. Parameter seeding, entry-state construction, resolved
+place-path roots, and move/retention transitions move with the state. The
+compiler retains a private `BodyState` alias while its CFG construction and
+lattice-merge mechanics are migrated in subsequent steps.
 
 ## Consequences
 

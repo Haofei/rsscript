@@ -403,6 +403,10 @@ mechanical acceptance condition holds.
       local/managed/resource/move state, parameter seeding, and move/retention
       transitions; compiler preserves only its compatibility alias while CFG
       transfer and merge migration continues.
+    - [x] **S02.4ad — Move local-flow entry construction and path roots.**
+      Semantics owns creation of the parameter-derived entry state and resolved
+      place-path root projection, so compiler flow consumers no longer recreate
+      either semantic convention.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.

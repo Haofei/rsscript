@@ -1,6 +1,8 @@
 //! State lattice for local ownership and structured flow analysis.
 
-use crate::hir::{HirBinding, HirBindingKind, HirEffectEvent, HirEffectEventKind, ParamEffect};
+use crate::hir::{
+    HirBinding, HirBindingKind, HirEffectEvent, HirEffectEventKind, HirFunctionBody, ParamEffect,
+};
 use crate::is_copy_type_name;
 use rsscript_syntax::Span;
 use std::collections::{HashMap, HashSet};
@@ -186,6 +188,18 @@ impl LocalFlowState {
             }
         }
     }
+}
+
+/// Construct the entry ownership state for an optional checked function body.
+///
+/// Keeping this beside parameter seeding prevents compiler orchestration from
+/// re-implementing which parameter effects create local or managed state.
+pub fn initial_local_flow_state(body: Option<&HirFunctionBody>) -> LocalFlowState {
+    let mut state = LocalFlowState::default();
+    if let Some(body) = body {
+        state.seed_params(&body.bindings);
+    }
+    state
 }
 
 /// Return the root segment of a resolved local place path.
