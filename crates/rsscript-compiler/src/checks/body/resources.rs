@@ -64,14 +64,6 @@ pub(super) fn check_resource_producer_expr(
         ));
 }
 
-pub(super) fn check_result_resource_with_has_try(analyzer: &mut Analyzer<'_>, resource: &HirExpr) {
-    if let Some(diagnostic) =
-        rsscript_semantics::result_resource_with_try_diagnostic(&analyzer.hir, resource)
-    {
-        analyzer.diagnostics.push(diagnostic);
-    }
-}
-
 pub(super) fn resource_is_active_at(
     local_analysis: &LocalAnalysis<'_>,
     binding: &str,

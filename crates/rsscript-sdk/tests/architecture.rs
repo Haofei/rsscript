@@ -1418,9 +1418,6 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     let compiler_resource_rules =
         read(&root.join("crates/rsscript-compiler/src/checks/body/resources.rs"));
     assert!(compiler_resource_rules.contains("rsscript_semantics::resource_producer_diagnostics"));
-    assert!(
-        compiler_resource_rules.contains("rsscript_semantics::result_resource_with_try_diagnostic")
-    );
     for forbidden in [
         "fn expr_is_resource_producer",
         "fn expr_type_is_resource",
@@ -2060,7 +2057,6 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "rsscript_semantics::resource_escape_diagnostic",
         "rsscript_semantics::resource_capture_diagnostic",
         "rsscript_semantics::resource_producer_diagnostics",
-        "rsscript_semantics::result_resource_with_try_diagnostic",
     ] {
         assert!(compiler_body_resources.contains(delegated));
     }

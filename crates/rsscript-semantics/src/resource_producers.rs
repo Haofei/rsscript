@@ -59,6 +59,11 @@ pub fn resource_producer_diagnostics(
     allowed_resource_context: bool,
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
+    if allowed_resource_context
+        && let Some(diagnostic) = result_resource_with_try_diagnostic(hir, expr)
+    {
+        diagnostics.push(diagnostic);
+    }
     collect_resource_producer_expr_diagnostics(
         hir,
         expr,
@@ -363,7 +368,13 @@ fn main(path: Path) -> Unit {
                 .code,
             code::RESOURCE_PRODUCER_MISSING_TRY
         );
-        assert!(resource_producer_diagnostics(&hir, resource, true).is_empty());
+        assert_eq!(
+            resource_producer_diagnostics(&hir, resource, true)
+                .into_iter()
+                .map(|diagnostic| diagnostic.code)
+                .collect::<Vec<_>>(),
+            vec![code::RESOURCE_PRODUCER_MISSING_TRY]
+        );
     }
 
     #[test]

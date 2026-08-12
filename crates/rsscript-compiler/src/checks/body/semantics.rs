@@ -69,7 +69,6 @@ pub(super) fn check_stmt_semantics(
         } => {
             check_expr_semantics(analyzer, local_analysis, resource, state, live_after);
             if check_resource_contexts {
-                check_result_resource_with_has_try(analyzer, resource);
                 check_resource_producer_expr(analyzer, resource, true);
                 check_resource_escape(analyzer, local_analysis, span);
             }
