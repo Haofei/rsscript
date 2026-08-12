@@ -205,6 +205,68 @@ pub fn match_literal_type_diagnostic(
     })
 }
 
+/// Diagnose a variant or structured pattern that does not belong to the
+/// resolved scrutinee type.
+pub fn match_pattern_type_diagnostic(
+    pattern_name: &str,
+    scrutinee_type: &str,
+    span: &rsscript_diagnostics::Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::CONTROL_FLOW_TYPE_MISMATCH,
+        format!("match pattern `{pattern_name}` cannot match scrutinee type `{scrutinee_type}`."),
+        span.clone(),
+        "match pattern type mismatch",
+    )
+    .with_cause("RSScript match patterns must belong to the scrutinee's type.")
+}
+
+/// Diagnose a variant name outside the available family for a scrutinee type.
+pub fn match_variant_family_diagnostic(
+    variant_name: &str,
+    scrutinee_type: &str,
+    allowed: &[String],
+    span: &rsscript_diagnostics::Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::CONTROL_FLOW_TYPE_MISMATCH,
+        format!("match pattern `{variant_name}` cannot match scrutinee type `{scrutinee_type}`."),
+        span.clone(),
+        "match variant type mismatch",
+    )
+    .with_cause("RSScript match patterns must belong to the scrutinee's type.")
+    .with_fix(
+        "match_matching_variant_family",
+        format!(
+            "Use variants of `{}`: {}.",
+            type_root_name(scrutinee_type),
+            allowed.join(", ")
+        ),
+        "manual",
+    )
+}
+
+/// Diagnose positional variant bindings that do not match the declared arity.
+pub fn variant_pattern_arity_diagnostic(
+    variant_name: &str,
+    expected: usize,
+    found: usize,
+    span: &rsscript_diagnostics::Span,
+) -> Diagnostic {
+    let field_word = if expected == 1 { "field" } else { "fields" };
+    Diagnostic::error(
+        code::VARIANT_PATTERN_ARITY_MISMATCH,
+        format!(
+            "variant pattern `{variant_name}` binds {found} sub-pattern(s) but `{variant_name}` declares {expected} {field_word}."
+        ),
+        span.clone(),
+        "variant pattern arity mismatch",
+    )
+    .with_cause(
+        "A positional variant pattern must bind exactly as many sub-patterns as the variant declares fields, in declared order.",
+    )
+}
+
 fn collect_bare_returns(
     block: &HirBlock,
     function: &FunctionDecl,
@@ -551,5 +613,26 @@ mod tests {
                 .expect("must reject integer pattern for string");
         assert_eq!(diagnostic.code, code::CONTROL_FLOW_TYPE_MISMATCH);
         assert!(match_literal_type_diagnostic(&MatchLiteral::Bool(true), &span, "Bool").is_none());
+    }
+
+    #[test]
+    fn reports_variant_pattern_family_and_arity_diagnostics() {
+        let span = rsscript_diagnostics::Span {
+            file: "match.rss".to_owned(),
+            line: 1,
+            column: 1,
+            length: 1,
+        };
+        let family = match_variant_family_diagnostic(
+            "Other",
+            "Option<Int>",
+            &["Some".to_owned(), "None".to_owned()],
+            &span,
+        );
+        assert_eq!(family.code, code::CONTROL_FLOW_TYPE_MISMATCH);
+        let arity = variant_pattern_arity_diagnostic("Some", 1, 2, &span);
+        assert_eq!(arity.code, code::VARIANT_PATTERN_ARITY_MISMATCH);
+        let pattern = match_pattern_type_diagnostic("[..]", "Int", &span);
+        assert_eq!(pattern.code, code::CONTROL_FLOW_TYPE_MISMATCH);
     }
 }

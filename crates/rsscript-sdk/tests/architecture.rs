@@ -1186,6 +1186,9 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "match_expression_arm_type_diagnostics",
         "match_scrutinee_diagnostic",
         "match_literal_type_diagnostic",
+        "match_pattern_type_diagnostic",
+        "match_variant_family_diagnostic",
+        "variant_pattern_arity_diagnostic",
         "function_fallthrough_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
@@ -1437,6 +1440,30 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         !compiler_body_semantics.contains("literal match pattern cannot match"),
         "compiler must not re-own literal match-pattern diagnostics"
     );
+    for exported in [
+        "pub fn match_pattern_type_diagnostic",
+        "pub fn match_variant_family_diagnostic",
+        "pub fn variant_pattern_arity_diagnostic",
+    ] {
+        assert!(semantic_control_flow.contains(exported));
+    }
+    for delegated in [
+        "rsscript_semantics::match_pattern_type_diagnostic",
+        "rsscript_semantics::match_variant_family_diagnostic",
+        "rsscript_semantics::variant_pattern_arity_diagnostic",
+    ] {
+        assert!(compiler_body_semantics.contains(delegated));
+    }
+    for forbidden in [
+        "fn push_variant_or_struct_cannot_match",
+        "fn push_variant_pattern_arity_mismatch",
+        "fn push_match_variant_type_mismatch",
+    ] {
+        assert!(
+            !compiler_body_semantics.contains(forbidden),
+            "compiler must not re-own match pattern rule `{forbidden}`"
+        );
+    }
 
     let semantic_generic_constraints =
         read(&root.join("crates/rsscript-semantics/src/generic_constraints.rs"));

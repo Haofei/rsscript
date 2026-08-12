@@ -274,6 +274,9 @@ mechanical acceptance condition holds.
     - [x] **S02.5k — Move literal `match` pattern type diagnostics.** Semantics
       owns the canonical compatibility rule and diagnostic for literal patterns;
       compiler retains only recursive pattern traversal and alias expansion.
+    - [x] **S02.5l — Move variant pattern diagnostics.** Semantics now owns
+      canonical diagnostics for non-matching patterns, invalid variant families,
+      and positional binding arity; compiler only resolves fields and recurses.
   - [ ] **S02.6 — Delete compiler semantic-rule modules.** Add architecture
     tests that permit compiler orchestration only and reject semantic-rule
     implementations outside `rsscript-semantics`.

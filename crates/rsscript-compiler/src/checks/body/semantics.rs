@@ -417,19 +417,27 @@ pub(super) fn check_match_pattern_matches_type(
             ..
         } if root == "Option" => {
             if !matches!(name.as_str(), "Some" | "None") {
-                push_match_variant_type_mismatch(
-                    analyzer,
-                    name,
-                    &type_name,
-                    &["Some".to_string(), "None".to_string()],
-                    span,
-                );
+                analyzer
+                    .diagnostics
+                    .push(rsscript_semantics::match_variant_family_diagnostic(
+                        name,
+                        &type_name,
+                        &["Some".to_string(), "None".to_string()],
+                        span,
+                    ));
                 return;
             }
             // `Some` carries one payload, `None` carries none.
             let expected = if name == "Some" { 1 } else { 0 };
             if !bindings.is_empty() && bindings.len() != expected {
-                push_variant_pattern_arity_mismatch(analyzer, name, expected, bindings.len(), span);
+                analyzer
+                    .diagnostics
+                    .push(rsscript_semantics::variant_pattern_arity_diagnostic(
+                        name,
+                        expected,
+                        bindings.len(),
+                        span,
+                    ));
                 return;
             }
             if name == "Some"
@@ -447,17 +455,25 @@ pub(super) fn check_match_pattern_matches_type(
             ..
         } if root == "Result" => {
             if !matches!(name.as_str(), "Ok" | "Err") {
-                push_match_variant_type_mismatch(
-                    analyzer,
-                    name,
-                    &type_name,
-                    &["Ok".to_string(), "Err".to_string()],
-                    span,
-                );
+                analyzer
+                    .diagnostics
+                    .push(rsscript_semantics::match_variant_family_diagnostic(
+                        name,
+                        &type_name,
+                        &["Ok".to_string(), "Err".to_string()],
+                        span,
+                    ));
                 return;
             }
             if !bindings.is_empty() && bindings.len() != 1 {
-                push_variant_pattern_arity_mismatch(analyzer, name, 1, bindings.len(), span);
+                analyzer
+                    .diagnostics
+                    .push(rsscript_semantics::variant_pattern_arity_diagnostic(
+                        name,
+                        1,
+                        bindings.len(),
+                        span,
+                    ));
                 return;
             }
             if let Some(binding) = bindings.first()
@@ -482,9 +498,17 @@ pub(super) fn check_match_pattern_matches_type(
             let Some((_, fields)) = pattern_sum_variant_fields(analyzer, root, name) else {
                 let allowed = allowed_sum_variant_names(analyzer, root);
                 if allowed.is_empty() {
-                    push_variant_or_struct_cannot_match(analyzer, name, &type_name, span);
+                    analyzer
+                        .diagnostics
+                        .push(rsscript_semantics::match_pattern_type_diagnostic(
+                            name, &type_name, span,
+                        ));
                 } else {
-                    push_match_variant_type_mismatch(analyzer, name, &type_name, &allowed, span);
+                    analyzer
+                        .diagnostics
+                        .push(rsscript_semantics::match_variant_family_diagnostic(
+                            name, &type_name, &allowed, span,
+                        ));
                 }
                 return;
             };
@@ -493,13 +517,14 @@ pub(super) fn check_match_pattern_matches_type(
             // field count, and each sub-pattern is checked against the field type
             // at the same position (the RS0037 safety net for positional binding).
             if !bindings.is_empty() && bindings.len() != fields.len() {
-                push_variant_pattern_arity_mismatch(
-                    analyzer,
-                    name,
-                    fields.len(),
-                    bindings.len(),
-                    span,
-                );
+                analyzer
+                    .diagnostics
+                    .push(rsscript_semantics::variant_pattern_arity_diagnostic(
+                        name,
+                        fields.len(),
+                        bindings.len(),
+                        span,
+                    ));
                 return;
             }
             for (binding, field) in bindings.iter().zip(fields.iter()) {
@@ -522,7 +547,11 @@ pub(super) fn check_match_pattern_matches_type(
                 pattern_sum_variant_fields(analyzer, root, name).map(|(_, fields)| fields)
             };
             let Some(declared) = declared else {
-                push_variant_or_struct_cannot_match(analyzer, name, &type_name, span);
+                analyzer
+                    .diagnostics
+                    .push(rsscript_semantics::match_pattern_type_diagnostic(
+                        name, &type_name, span,
+                    ));
                 return;
             };
             // Map the type's declared parameters (`A`, `B`) to the scrutinee's
@@ -552,7 +581,11 @@ pub(super) fn check_match_pattern_matches_type(
             ..
         } => {
             if root != "List" {
-                push_variant_or_struct_cannot_match(analyzer, "[..]", &type_name, span);
+                analyzer
+                    .diagnostics
+                    .push(rsscript_semantics::match_pattern_type_diagnostic(
+                        "[..]", &type_name, span,
+                    ));
                 return;
             }
             // Each element pattern is checked against the list's element type `T`
@@ -566,68 +599,6 @@ pub(super) fn check_match_pattern_matches_type(
             }
         }
     }
-}
-
-pub(super) fn push_variant_or_struct_cannot_match(
-    analyzer: &mut Analyzer<'_>,
-    name: &str,
-    type_name: &str,
-    span: &Span,
-) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::CONTROL_FLOW_TYPE_MISMATCH,
-            format!("match pattern `{name}` cannot match scrutinee type `{type_name}`."),
-            span.clone(),
-            "match pattern type mismatch",
-        )
-        .with_cause("RSScript match patterns must belong to the scrutinee's type."),
-    );
-}
-
-pub(super) fn push_variant_pattern_arity_mismatch(
-    analyzer: &mut Analyzer<'_>,
-    name: &str,
-    expected: usize,
-    found: usize,
-    span: &Span,
-) {
-    let field_word = if expected == 1 { "field" } else { "fields" };
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::VARIANT_PATTERN_ARITY_MISMATCH,
-            format!(
-                "variant pattern `{name}` binds {found} sub-pattern(s) but `{name}` declares {expected} {field_word}."
-            ),
-            span.clone(),
-            "variant pattern arity mismatch",
-        )
-        .with_cause(
-            "A positional variant pattern must bind exactly as many sub-patterns as the variant declares fields, in declared order.",
-        ),
-    );
-}
-
-pub(super) fn push_match_variant_type_mismatch(
-    analyzer: &mut Analyzer<'_>,
-    name: &str,
-    type_name: &str,
-    allowed: &[String],
-    span: &Span,
-) {
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::CONTROL_FLOW_TYPE_MISMATCH,
-        format!("match pattern `{name}` cannot match scrutinee type `{type_name}`."),
-        span.clone(),
-        "match variant type mismatch",
-        "RSScript match patterns must belong to the scrutinee's type.",
-        "match_matching_variant_family",
-        format!(
-            "Use variants of `{}`: {}.",
-            type_root_name(type_name),
-            allowed.join(", ")
-        ),
-    ));
 }
 
 pub(super) fn allowed_sum_variant_names(analyzer: &Analyzer<'_>, root: &str) -> Vec<String> {
