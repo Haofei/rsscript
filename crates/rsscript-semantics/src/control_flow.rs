@@ -2,7 +2,7 @@
 
 use crate::hir::{Hir, HirBlock, HirExpr, HirMatchArm, HirStmt, number_literal_type_name};
 use rsscript_diagnostics::{Diagnostic, code};
-use rsscript_syntax::ast::{FunctionDecl, Item, Program, TypeRef};
+use rsscript_syntax::ast::{FunctionDecl, Item, MatchLiteral, Program, TypeRef};
 use std::collections::HashSet;
 
 pub fn function_fallthrough_diagnostics(program: &Program, hir: &Hir) -> Vec<Diagnostic> {
@@ -178,6 +178,31 @@ pub fn match_scrutinee_diagnostic(
             "manual",
         ),
     )
+}
+
+/// Diagnose a literal pattern that cannot match the resolved scrutinee type.
+pub fn match_literal_type_diagnostic(
+    literal: &MatchLiteral,
+    span: &rsscript_diagnostics::Span,
+    scrutinee_type: &str,
+) -> Option<Diagnostic> {
+    let literal_type = match literal {
+        MatchLiteral::Int(_) => "Int",
+        MatchLiteral::String(_) => "String",
+        MatchLiteral::Char(_) => "Char",
+        MatchLiteral::Bool(_) => "Bool",
+    };
+    (literal_type != scrutinee_type).then(|| {
+        Diagnostic::error(
+            code::CONTROL_FLOW_TYPE_MISMATCH,
+            format!("literal match pattern cannot match scrutinee type `{scrutinee_type}`."),
+            span.clone(),
+            "match literal type mismatch",
+        )
+        .with_cause(
+            "Literal patterns are only allowed when matching `Int`, `String`, or `Bool` values.",
+        )
+    })
 }
 
 fn collect_bare_returns(
@@ -511,5 +536,20 @@ mod tests {
         assert_eq!(diagnostic.code, code::CONTROL_FLOW_TYPE_MISMATCH);
         assert!(match_scrutinee_diagnostic(&value, Some("Result<Int, Error>"), false).is_none());
         assert!(match_scrutinee_diagnostic(&value, Some("Token"), true).is_none());
+    }
+
+    #[test]
+    fn validates_match_literal_types() {
+        let span = rsscript_diagnostics::Span {
+            file: "match.rss".to_owned(),
+            line: 1,
+            column: 1,
+            length: 1,
+        };
+        let diagnostic =
+            match_literal_type_diagnostic(&MatchLiteral::Int("1".to_owned()), &span, "String")
+                .expect("must reject integer pattern for string");
+        assert_eq!(diagnostic.code, code::CONTROL_FLOW_TYPE_MISMATCH);
+        assert!(match_literal_type_diagnostic(&MatchLiteral::Bool(true), &span, "Bool").is_none());
     }
 }

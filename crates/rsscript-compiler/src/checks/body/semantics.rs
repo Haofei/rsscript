@@ -404,24 +404,10 @@ pub(super) fn check_match_pattern_matches_type(
             {
                 analyzer.diagnostics.push(diagnostic);
             }
-            let literal_type = match value {
-                MatchLiteral::Int(_) => "Int",
-                MatchLiteral::String(_) => "String",
-                MatchLiteral::Char(_) => "Char",
-                MatchLiteral::Bool(_) => "Bool",
-            };
-            if literal_type != type_name {
-                analyzer.diagnostics.push(
-                    Diagnostic::error(
-                        code::CONTROL_FLOW_TYPE_MISMATCH,
-                        format!("literal match pattern cannot match scrutinee type `{type_name}`."),
-                        span.clone(),
-                        "match literal type mismatch",
-                    )
-                    .with_cause(
-                        "Literal patterns are only allowed when matching `Int`, `String`, or `Bool` values.",
-                    ),
-                );
+            if let Some(diagnostic) =
+                rsscript_semantics::match_literal_type_diagnostic(value, span, &type_name)
+            {
+                analyzer.diagnostics.push(diagnostic);
             }
         }
         MatchPattern::Variant {

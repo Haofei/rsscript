@@ -1185,6 +1185,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "for_iterable_diagnostic",
         "match_expression_arm_type_diagnostics",
         "match_scrutinee_diagnostic",
+        "match_literal_type_diagnostic",
         "function_fallthrough_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
@@ -1429,6 +1430,12 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     assert!(
         !compiler_body_semantics.contains("match scrutinee has type"),
         "compiler must not re-own match scrutinee diagnostic text"
+    );
+    assert!(semantic_control_flow.contains("pub fn match_literal_type_diagnostic"));
+    assert!(compiler_body_semantics.contains("rsscript_semantics::match_literal_type_diagnostic"));
+    assert!(
+        !compiler_body_semantics.contains("literal match pattern cannot match"),
+        "compiler must not re-own literal match-pattern diagnostics"
     );
 
     let semantic_generic_constraints =

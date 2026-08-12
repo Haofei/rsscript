@@ -271,6 +271,9 @@ mechanical acceptance condition holds.
       supported scrutinee-type rule and canonical diagnostic; compiler supplies
       alias-expanded type and declared pattern-kind facts from its current HIR
       adapter.
+    - [x] **S02.5k — Move literal `match` pattern type diagnostics.** Semantics
+      owns the canonical compatibility rule and diagnostic for literal patterns;
+      compiler retains only recursive pattern traversal and alias expansion.
   - [ ] **S02.6 — Delete compiler semantic-rule modules.** Add architecture
     tests that permit compiler orchestration only and reject semantic-rule
     implementations outside `rsscript-semantics`.
