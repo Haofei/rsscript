@@ -1,6 +1,6 @@
 //! Source-token semantic rules that do not require compiler orchestration.
 
-use rsscript_diagnostics::{Diagnostic, code};
+use rsscript_diagnostics::{Diagnostic, Span, code};
 use rsscript_syntax::lexer::{Token, TokenKind};
 
 /// Derive diagnostics for deliberately unsupported surface forms.
@@ -14,6 +14,31 @@ pub fn forbidden_surface_syntax_diagnostics(tokens: &[Token]) -> Vec<Diagnostic>
     check_surface_reference_attempts(tokens, &mut diagnostics);
     check_implicit_conversion_attempts(tokens, &mut diagnostics);
     diagnostics
+}
+
+/// Build the canonical diagnostic for a parsed construct that RSScript does
+/// not support.
+///
+/// The compiler may still discover the construct while adapting syntax into
+/// transitional HIR, but the user-facing language contract belongs to the
+/// platform-neutral semantics layer.
+pub fn unsupported_syntax_diagnostic(
+    span: Span,
+    label: impl Into<String>,
+    cause: impl Into<String>,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::UNSUPPORTED_SYNTAX,
+        "unsupported RSScript syntax.",
+        span,
+        label,
+    )
+    .with_cause(cause)
+    .with_fix(
+        "rewrite_supported_syntax",
+        "Rewrite this construct using the currently supported RSScript syntax.",
+        "manual",
+    )
 }
 
 fn check_own_struct_attempts(tokens: &[Token], diagnostics: &mut Vec<Diagnostic>) {
@@ -187,5 +212,28 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn unsupported_syntax_contract_is_canonical() {
+        let diagnostic = unsupported_syntax_diagnostic(
+            Span {
+                file: "forms.rss".into(),
+                line: 1,
+                column: 4,
+                length: 7,
+            },
+            "unsupported form",
+            "the form has no RSScript semantic contract.",
+        );
+
+        assert_eq!(diagnostic.code, code::UNSUPPORTED_SYNTAX);
+        assert_eq!(diagnostic.summary, "unsupported RSScript syntax.");
+        assert_eq!(diagnostic.label, "unsupported form");
+        assert_eq!(
+            diagnostic.causes[0],
+            "the form has no RSScript semantic contract."
+        );
+        assert_eq!(diagnostic.fixes[0].kind, "rewrite_supported_syntax");
     }
 }

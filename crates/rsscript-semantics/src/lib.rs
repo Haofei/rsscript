@@ -195,7 +195,7 @@ pub use resource_types::{
 };
 pub use rsscript_source_model::{FileId, InterfaceId, ModuleId, SourceRevision};
 pub use signatures::signature_diagnostics;
-pub use source_rules::forbidden_surface_syntax_diagnostics;
+pub use source_rules::{forbidden_surface_syntax_diagnostics, unsupported_syntax_diagnostic};
 pub use symbols::{
     Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
     document_symbols, symbol_index,

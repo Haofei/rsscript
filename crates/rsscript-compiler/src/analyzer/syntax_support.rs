@@ -678,19 +678,9 @@ impl Analyzer<'_> {
         label: &str,
         cause: &str,
     ) {
-        self.diagnostics.push(
-            Diagnostic::error(
-                code::UNSUPPORTED_SYNTAX,
-                "unsupported RSScript syntax.",
-                span,
-                label,
-            )
-            .with_cause(cause)
-            .with_fix(
-                "rewrite_supported_syntax",
-                "Rewrite this construct using the currently supported RSScript syntax.",
-                "manual",
-            ),
-        );
+        self.diagnostics
+            .push(rsscript_semantics::unsupported_syntax_diagnostic(
+                span, label, cause,
+            ));
     }
 }

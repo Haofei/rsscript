@@ -146,6 +146,10 @@ mechanical acceptance condition holds.
       of legacy `own struct`, surface-reference, and cast-style syntax is now
       derived by `rsscript-semantics` from syntax tokens. Compiler retains only
       HIR/type-dependent operator validation.
+    - [x] **S02.1h — Move unsupported-syntax diagnostic contract.** Compiler
+      retains detection while adapting source forms, but
+      `rsscript-semantics` owns the canonical unsupported-syntax diagnostic,
+      including its code, message, cause, and fix.
     - [x] **S02.2g — Move resolved builtin operator diagnostics.** Compiler
       extracts HIR operand/type facts; semantics owns non-numeric arithmetic and
       fixed-operand compatibility diagnostic contracts.
