@@ -47,7 +47,12 @@ pub(super) fn check_read_view_not_exclusive(
     if !state.is_read_view(&path.base) {
         return false;
     }
-    read_view_mutation_diagnostic(analyzer, &path.base, span.clone());
+    analyzer
+        .diagnostics
+        .push(rsscript_semantics::read_view_mutation_diagnostic(
+            &path.base,
+            span.clone(),
+        ));
     true
 }
 

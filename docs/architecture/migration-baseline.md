@@ -253,6 +253,10 @@ mechanical acceptance condition holds.
       Compiler supplies constructor, field, effect, and capture facts; semantics
       owns fresh-temporary, weak-field, constructor-field, managed-inline, and
       spawn-local-capture diagnostics.
+    - [x] **S02.4l — Move read-view and closure-contract diagnostics.**
+      Compiler gathers local/capture/place facts; semantics owns read-view
+      exclusivity, noescape capture consumption, and explicit capture contract
+      diagnostics.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.

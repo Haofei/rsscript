@@ -381,6 +381,100 @@ pub fn spawn_local_capture_diagnostic(name: &str, span: Span) -> Diagnostic {
     )
 }
 
+/// Diagnose an exclusive operation on a read-only loop view.
+pub fn read_view_mutation_diagnostic(name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        code::READ_VIEW_MUTATION,
+        format!("`{name}` is a read view from a `for` loop and cannot be used as an exclusive value."),
+        span,
+        "read view mutation",
+    )
+    .with_cause(
+        "RSScript `for` iterates `List<T>` by read view for non-Copy struct elements, so the loop variable does not own the element.",
+    )
+    .with_fix(
+        "copy_before_mutating",
+        "Create a fresh local copy before mutation, or use an explicit partitioning API that grants exclusive element ownership.",
+        "manual",
+    )
+}
+
+/// Diagnose consuming a local captured by a `noescape` callback.
+pub fn noescape_consumes_capture_diagnostic(name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        code::NOESCAPE_CONSUMES_CAPTURE,
+        format!("noescape closure cannot consume captured local value `{name}`."),
+        span,
+        "captured local consumed here",
+    )
+    .with_cause(
+        "`noescape Fn()` callbacks are non-consuming; the callee may call this closure more than once.",
+    )
+    .with_cause(
+        "Read or mutate the captured local inside the noescape closure, or move/manage it before constructing the closure.",
+    )
+    .with_fix(
+        "avoid_consuming_capture",
+        "Do not use `take` or `manage` on captured local values inside noescape callbacks.",
+        "manual",
+    )
+}
+
+/// Diagnose a closure use omitted from an explicit capture declaration.
+pub fn explicit_closure_missing_capture_diagnostic(
+    name: &str,
+    actual_effect: &str,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::CLOSURE_CAPTURE_CONTRACT,
+        format!("closure uses `{name}` without declaring it in captures"),
+        span,
+        "missing closure capture",
+    )
+    .with_cause(
+        "Escaping function values must make every external input explicit in `captures(...)`.",
+    )
+    .with_cause(format!(
+        "Add `captures({actual_effect} {name})` or remove the external use."
+    ))
+}
+
+/// Diagnose an explicit closure capture that has no corresponding use.
+pub fn explicit_closure_unused_capture_diagnostic(name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        code::CLOSURE_CAPTURE_CONTRACT,
+        format!("closure declares capture `{name}` but does not use it"),
+        span,
+        "unused closure capture",
+    )
+    .with_cause(
+        "A closure capture list is review evidence and must describe the function value's real inputs.",
+    )
+    .with_cause("Remove the capture entry or use the value inside the closure body.")
+}
+
+/// Diagnose a mismatch between a declared closure capture effect and its use.
+pub fn explicit_closure_capture_contract_diagnostic(
+    name: &str,
+    declared_effect: &str,
+    actual_effect: &str,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::CLOSURE_CAPTURE_CONTRACT,
+        format!(
+            "closure capture `{name}` is declared as `{declared_effect}` but used as `{actual_effect}`"
+        ),
+        span,
+        "closure capture effect mismatch",
+    )
+    .with_cause("Closure captures use the same read/mut/take ownership vocabulary as parameters.")
+    .with_cause(format!(
+        "Change the capture to `{actual_effect} {name}` or change the closure body to match the declared access."
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,6 +574,26 @@ mod tests {
         assert_eq!(
             spawn_local_capture_diagnostic("value", span(1)).code,
             code::LOCAL_VALUE_RETAINED
+        );
+        assert_eq!(
+            read_view_mutation_diagnostic("item", span(1)).code,
+            code::READ_VIEW_MUTATION
+        );
+        assert_eq!(
+            noescape_consumes_capture_diagnostic("item", span(1)).code,
+            code::NOESCAPE_CONSUMES_CAPTURE
+        );
+        assert_eq!(
+            explicit_closure_missing_capture_diagnostic("item", "read", span(1)).code,
+            code::CLOSURE_CAPTURE_CONTRACT
+        );
+        assert_eq!(
+            explicit_closure_unused_capture_diagnostic("item", span(1)).code,
+            code::CLOSURE_CAPTURE_CONTRACT
+        );
+        assert_eq!(
+            explicit_closure_capture_contract_diagnostic("item", "read", "take", span(1)).code,
+            code::CLOSURE_CAPTURE_CONTRACT
         );
     }
 }

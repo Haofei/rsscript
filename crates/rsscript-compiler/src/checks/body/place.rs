@@ -74,7 +74,12 @@ pub(super) fn check_noescape_consuming_captured_locals(
 ) {
     for access in accesses {
         if access.moves_path && state.is_local(&access.path.base) {
-            noescape_consumes_capture_diagnostic(analyzer, access);
+            analyzer
+                .diagnostics
+                .push(rsscript_semantics::noescape_consumes_capture_diagnostic(
+                    &access.path.base,
+                    access.span.clone(),
+                ));
         }
     }
 }

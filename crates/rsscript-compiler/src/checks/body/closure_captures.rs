@@ -180,28 +180,32 @@ pub(super) fn check_one_explicit_closure_capture_contract(
             Some((declared_effect, span))
                 if capture_effect_rank(*effect) > capture_effect_rank(*declared_effect) =>
             {
-                explicit_closure_capture_contract_diagnostic(
-                    analyzer,
-                    name,
-                    *declared_effect,
-                    *effect,
-                    span.clone(),
+                analyzer.diagnostics.push(
+                    rsscript_semantics::explicit_closure_capture_contract_diagnostic(
+                        name,
+                        declared_effect.as_str(),
+                        effect.as_str(),
+                        span.clone(),
+                    ),
                 );
             }
             Some(_) => {}
             None => {
-                explicit_closure_missing_capture_diagnostic(
-                    analyzer,
-                    name,
-                    *effect,
-                    body.span.clone(),
+                analyzer.diagnostics.push(
+                    rsscript_semantics::explicit_closure_missing_capture_diagnostic(
+                        name,
+                        effect.as_str(),
+                        body.span.clone(),
+                    ),
                 );
             }
         }
     }
     for (name, (_, span)) in declared {
         if !actual.contains_key(&name) {
-            explicit_closure_unused_capture_diagnostic(analyzer, &name, span);
+            analyzer
+                .diagnostics
+                .push(rsscript_semantics::explicit_closure_unused_capture_diagnostic(&name, span));
         }
     }
 }
@@ -671,12 +675,13 @@ pub(super) fn check_explicit_closure_capture_effects_syntax_expr(
                     if let Some(actual_effect) = actual.get(&capture.name)
                         && data_effect_rank(*actual_effect) > data_effect_rank(capture.effect)
                     {
-                        explicit_closure_capture_contract_diagnostic(
-                            analyzer,
-                            &capture.name,
-                            param_effect_from_data_effect_syntax(capture.effect),
-                            param_effect_from_data_effect_syntax(*actual_effect),
-                            capture.span.clone(),
+                        analyzer.diagnostics.push(
+                            rsscript_semantics::explicit_closure_capture_contract_diagnostic(
+                                &capture.name,
+                                param_effect_from_data_effect_syntax(capture.effect).as_str(),
+                                param_effect_from_data_effect_syntax(*actual_effect).as_str(),
+                                capture.span.clone(),
+                            ),
                         );
                     }
                 }

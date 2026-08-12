@@ -1577,6 +1577,11 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "pub fn retained_local_diagnostic",
         "pub fn retained_closure_capture_diagnostic",
         "pub fn take_handle_field_diagnostic",
+        "pub fn read_view_mutation_diagnostic",
+        "pub fn noescape_consumes_capture_diagnostic",
+        "pub fn explicit_closure_missing_capture_diagnostic",
+        "pub fn explicit_closure_unused_capture_diagnostic",
+        "pub fn explicit_closure_capture_contract_diagnostic",
     ] {
         assert!(semantic_ownership.contains(exported));
     }
@@ -1645,6 +1650,25 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         compiler_body_semantics
             .contains("rsscript_semantics::fresh_requires_local_binding_diagnostic")
     );
+    assert!(compiler_body_effects.contains("rsscript_semantics::read_view_mutation_diagnostic"));
+    assert!(compiler_body_fresh.contains("rsscript_semantics::read_view_mutation_diagnostic"));
+    let compiler_body_places =
+        read(&root.join("crates/rsscript-compiler/src/checks/body/place.rs"));
+    assert!(
+        compiler_body_places.contains("rsscript_semantics::noescape_consumes_capture_diagnostic")
+    );
+    assert!(
+        compiler_body_closures
+            .contains("rsscript_semantics::explicit_closure_missing_capture_diagnostic")
+    );
+    assert!(
+        compiler_body_closures
+            .contains("rsscript_semantics::explicit_closure_unused_capture_diagnostic")
+    );
+    assert!(
+        compiler_body_closures
+            .contains("rsscript_semantics::explicit_closure_capture_contract_diagnostic")
+    );
     for forbidden in [
         "fn resource_escape_diagnostic",
         "fn resource_capture_diagnostic",
@@ -1656,6 +1680,18 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         assert!(
             !compiler_body_resources.contains(forbidden),
             "compiler must not re-own resource-boundary diagnostic `{forbidden}`"
+        );
+    }
+    for forbidden in [
+        "fn read_view_mutation_diagnostic",
+        "fn noescape_consumes_capture_diagnostic",
+        "fn explicit_closure_missing_capture_diagnostic",
+        "fn explicit_closure_unused_capture_diagnostic",
+        "fn explicit_closure_capture_contract_diagnostic",
+    ] {
+        assert!(
+            !compiler_body_effects.contains(forbidden),
+            "compiler must not re-own closure or read-view diagnostic `{forbidden}`"
         );
     }
     for forbidden in [

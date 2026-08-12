@@ -1,5 +1,4 @@
 use super::*;
-use crate::checks::diagnostic_helpers::error_cause_manual_fix;
 
 pub(super) fn check_manage_operand_is_local(
     analyzer: &mut Analyzer<'_>,
@@ -28,7 +27,12 @@ pub(super) fn check_manage_operand_is_local(
     };
     if !state.is_local(name) {
         if state.is_read_view(name) {
-            read_view_mutation_diagnostic(analyzer, name, span.clone());
+            analyzer
+                .diagnostics
+                .push(rsscript_semantics::read_view_mutation_diagnostic(
+                    name,
+                    span.clone(),
+                ));
             return;
         }
         analyzer
@@ -38,18 +42,6 @@ pub(super) fn check_manage_operand_is_local(
                 span.clone(),
             ));
     }
-}
-
-pub(super) fn read_view_mutation_diagnostic(analyzer: &mut Analyzer<'_>, name: &str, span: Span) {
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::READ_VIEW_MUTATION,
-        format!("`{name}` is a read view from a `for` loop and cannot be used as an exclusive value."),
-        span,
-        "read view mutation",
-        "RSScript `for` iterates `List<T>` by read view for non-Copy struct elements, so the loop variable does not own the element.",
-        "copy_before_mutating",
-        "Create a fresh local copy before mutation, or use an explicit partitioning API that grants exclusive element ownership.",
-    ));
 }
 
 pub(super) fn check_take_operand_is_local(
@@ -352,100 +344,4 @@ pub(super) fn fresh_return_target_type(return_ty: &TypeRef) -> &TypeRef {
         return first_arg;
     }
     return_ty
-}
-
-pub(super) fn noescape_consumes_capture_diagnostic(
-    analyzer: &mut Analyzer<'_>,
-    access: &CallPlaceAccess,
-) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::NOESCAPE_CONSUMES_CAPTURE,
-            format!(
-                "noescape closure cannot consume captured local value `{}`.",
-                access.path.base
-            ),
-            access.span.clone(),
-            "captured local consumed here",
-        )
-        .with_cause(
-            "`noescape Fn()` callbacks are non-consuming; the callee may call this closure more than once.",
-        )
-        .with_cause(
-            "Read or mutate the captured local inside the noescape closure, or move/manage it before constructing the closure.",
-        )
-        .with_fix(
-            "avoid_consuming_capture",
-            "Do not use `take` or `manage` on captured local values inside noescape callbacks.",
-            "manual",
-        ),
-    );
-}
-
-pub(super) fn explicit_closure_missing_capture_diagnostic(
-    analyzer: &mut Analyzer<'_>,
-    name: &str,
-    actual: ParamEffect,
-    span: Span,
-) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::CLOSURE_CAPTURE_CONTRACT,
-            format!("closure uses `{name}` without declaring it in captures"),
-            span,
-            "missing closure capture",
-        )
-        .with_cause(
-            "Escaping function values must make every external input explicit in `captures(...)`.",
-        )
-        .with_cause(format!(
-            "Add `captures({} {name})` or remove the external use.",
-            actual.as_str()
-        )),
-    );
-}
-
-pub(super) fn explicit_closure_unused_capture_diagnostic(
-    analyzer: &mut Analyzer<'_>,
-    name: &str,
-    span: Span,
-) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::CLOSURE_CAPTURE_CONTRACT,
-            format!("closure declares capture `{name}` but does not use it"),
-            span,
-            "unused closure capture",
-        )
-        .with_cause(
-            "A closure capture list is review evidence and must describe the function value's real inputs.",
-        )
-        .with_cause("Remove the capture entry or use the value inside the closure body."),
-    );
-}
-
-pub(super) fn explicit_closure_capture_contract_diagnostic(
-    analyzer: &mut Analyzer<'_>,
-    name: &str,
-    declared: ParamEffect,
-    actual: ParamEffect,
-    span: Span,
-) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::CLOSURE_CAPTURE_CONTRACT,
-            format!(
-                "closure capture `{name}` is declared as `{}` but used as `{}`",
-                declared.as_str(),
-                actual.as_str()
-            ),
-            span,
-            "closure capture effect mismatch",
-        )
-        .with_cause("Closure captures use the same read/mut/take ownership vocabulary as parameters.")
-        .with_cause(format!(
-            "Change the capture to `{} {name}` or change the closure body to match the declared access.",
-            actual.as_str()
-        )),
-    );
 }
