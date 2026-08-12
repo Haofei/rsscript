@@ -114,7 +114,7 @@ pub use generic_constraints::{
     variant_field_type_mismatch_diagnostic,
 };
 pub use hir_uses::{
-    hir_block_identifier_uses, hir_block_inline_capture_uses, hir_expr_path,
+    hir_block_identifier_uses, hir_block_inline_capture_uses, hir_expr_path, hir_expr_type_name,
     hir_stmt_effect_events, hir_stmt_identifier_uses, managed_closure_uses_by_statement,
     retained_closure_argument,
 };

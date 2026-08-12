@@ -393,6 +393,9 @@ mechanical acceptance condition holds.
     - [x] **S02.4aa — Move local-binding HIR facts.** Semantics owns the
       initializer's source, handle-field, and fresh-value projections; compiler
       CFG consumes one fact object when constructing a binding node.
+    - [x] **S02.4ab — Move HIR type-name projection.** Semantics owns the
+      temporary normalized rendered type view used by local CFG while consumers
+      migrate to structural type identities.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.

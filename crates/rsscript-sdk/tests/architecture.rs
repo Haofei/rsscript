@@ -1280,6 +1280,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "hir_block_identifier_uses",
         "hir_block_inline_capture_uses",
         "hir_expr_path",
+        "hir_expr_type_name",
         "hir_stmt_effect_events",
         "hir_stmt_identifier_uses",
         "managed_closure_uses_by_statement",
@@ -1460,6 +1461,11 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     assert!(compiler_local_flow.contains("rsscript_semantics::hir_stmt_identifier_uses"));
     assert!(compiler_local_flow.contains("rsscript_semantics::hir_stmt_effect_events"));
     assert!(compiler_local_flow.contains("rsscript_semantics::is_copy_type_name"));
+    assert!(compiler_local_flow.contains("rsscript_semantics::hir_expr_type_name"));
+    assert!(
+        !compiler_local_flow.contains("fn hir_expr_type_name"),
+        "compiler must not re-own the HIR type projection"
+    );
     let compiler_assign = read(&root.join("crates/rsscript-compiler/src/analyzer/assign.rs"));
     assert!(compiler_assign.contains("rsscript_semantics::is_copy_type_name"));
     let compiler_calls = read(&root.join("crates/rsscript-compiler/src/checks/calls.rs"));

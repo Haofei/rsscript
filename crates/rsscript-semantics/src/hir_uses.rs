@@ -105,6 +105,32 @@ pub fn hir_expr_path(expr: &HirExpr) -> Option<(String, Span)> {
     }
 }
 
+/// Return the normalized rendered type carried by a resolved HIR expression.
+/// This transitional projection centralizes the legacy string view while the
+/// compiler migrates consumers to structural type identities.
+pub fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
+    match expr {
+        HirExpr::Ident { type_name, .. }
+        | HirExpr::Call { type_name, .. }
+        | HirExpr::Effect { type_name, .. }
+        | HirExpr::Manage { type_name, .. }
+        | HirExpr::Spawn { type_name, .. }
+        | HirExpr::Await { type_name, .. }
+        | HirExpr::Try { type_name, .. }
+        | HirExpr::Match { type_name, .. }
+        | HirExpr::MapLiteral { type_name, .. } => type_name.as_deref(),
+        HirExpr::Field { access, .. } => access.type_name.as_deref(),
+        HirExpr::Binary { .. } | HirExpr::Index { .. } => None,
+        HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Char { .. }
+        | HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Closure { .. }
+        | HirExpr::Unknown(_) => None,
+    }
+}
+
 fn collect_block_identifier_uses(block: &HirBlock, uses: &mut Vec<(String, Span)>) {
     for statement in &block.statements {
         collect_stmt_identifier_uses(statement, uses);

@@ -183,7 +183,8 @@ pub(super) fn collect_select_local_flow(
             let binding = LocalFlowBinding {
                 name: arm.binding.clone(),
                 kind: HirBindingKind::ManagedLet,
-                type_name: hir_expr_type_name(&arm.operation).map(str::to_string),
+                type_name: rsscript_semantics::hir_expr_type_name(&arm.operation)
+                    .map(str::to_string),
                 value_ident: None,
                 value_handle_field: None,
                 fresh_from_local_source: None,
@@ -765,7 +766,7 @@ pub(super) fn local_flow_step_resource_binding(
             binding, resource, ..
         } => Some(LocalFlowResourceBinding {
             name: binding.clone(),
-            type_name: hir_expr_type_name(resource).map(str::to_string),
+            type_name: rsscript_semantics::hir_expr_type_name(resource).map(str::to_string),
         }),
         HirStmt::Let { .. }
         | HirStmt::Return { .. }
@@ -779,29 +780,6 @@ pub(super) fn local_flow_step_resource_binding(
         | HirStmt::Expr(_)
         | HirStmt::Assign { .. }
         | HirStmt::Unknown(_) => None,
-    }
-}
-
-pub(super) fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
-    match expr {
-        HirExpr::Ident { type_name, .. }
-        | HirExpr::Call { type_name, .. }
-        | HirExpr::Effect { type_name, .. }
-        | HirExpr::Manage { type_name, .. }
-        | HirExpr::Spawn { type_name, .. }
-        | HirExpr::Await { type_name, .. }
-        | HirExpr::Try { type_name, .. }
-        | HirExpr::Match { type_name, .. }
-        | HirExpr::MapLiteral { type_name, .. } => type_name.as_deref(),
-        HirExpr::Field { access, .. } => access.type_name.as_deref(),
-        HirExpr::Binary { .. } | HirExpr::Index { .. } => None,
-        HirExpr::Number { .. }
-        | HirExpr::String { .. }
-        | HirExpr::Char { .. }
-        | HirExpr::ObjectLiteral { .. }
-        | HirExpr::ArrayLiteral { .. }
-        | HirExpr::Closure { .. }
-        | HirExpr::Unknown(_) => None,
     }
 }
 
