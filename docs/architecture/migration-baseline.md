@@ -202,6 +202,10 @@ mechanical acceptance condition holds.
       evaluates builtin, structural-container, generic-bound, implementation,
       and derive protocol facts. Compiler supplies the resolved call type and
       visible source inventory only.
+    - [x] **S02.2i — Move structural call type compatibility.** Semantics owns
+      alias-expanded rendered type compatibility for qualifiers, function
+      parameter effects, containers, and open `Option`/`Result` variants;
+      compiler only supplies resolved types and invokes the semantic rule.
   - [ ] **S02.3 — Move call binding and effect checks.** Relocate positional and
     named argument binding, `read`/`mut`/`take`, external signature matching,
     and retention facts.

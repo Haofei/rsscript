@@ -118,7 +118,7 @@ pub use type_compatibility::{
     argument_type_mismatch_diagnostic, binding_payload_type_mismatch_diagnostic,
     binding_type_mismatch_diagnostic, list_literal_item_type_mismatch_diagnostic,
     map_literal_entry_type_mismatch_diagnostic, message_payload_not_transferable_diagnostic,
-    unknown_callee_diagnostic,
+    type_compatible, unknown_callee_diagnostic,
 };
 pub use weak_fields::{is_weak_upgrade_call, weak_field_upgrade_diagnostic};
 

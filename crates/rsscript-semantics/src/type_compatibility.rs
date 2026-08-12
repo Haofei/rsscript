@@ -2,6 +2,144 @@
 
 use rsscript_diagnostics::{Diagnostic, Span, code};
 
+/// Compare two rendered, alias-expanded source types using the language's
+/// structural compatibility rule. Callers resolve aliases and generic
+/// substitutions first; this function owns qualifier/function/container
+/// comparison itself.
+pub fn type_compatible(expected: &str, actual: &str) -> bool {
+    if expected == actual || expected == "Self" {
+        return true;
+    }
+    if strip_fresh_type(expected) == strip_fresh_type(actual) {
+        return true;
+    }
+    if function_type_compatible(expected, actual) {
+        return true;
+    }
+    if crate::type_root_name(expected) == crate::type_root_name(actual)
+        && let (Some(expected_args), Some(actual_args)) = (
+            crate::type_arg_names(expected),
+            crate::type_arg_names(actual),
+        )
+        && expected_args.len() == actual_args.len()
+        && expected_args
+            .into_iter()
+            .zip(actual_args)
+            .all(|(expected, actual)| type_compatible(expected.trim(), actual.trim()))
+    {
+        return true;
+    }
+    matches!(
+        (actual, crate::type_root_name(expected)),
+        ("Option<?>", "Option") | ("Result<?>", "Result")
+    )
+}
+
+fn function_type_compatible(expected: &str, actual: &str) -> bool {
+    if !is_function_type(expected)
+        || !is_function_type(actual)
+        || function_type_prefix(expected) != function_type_prefix(actual)
+    {
+        return false;
+    }
+    let expected_params = function_parameter_types(expected);
+    let actual_params = function_parameter_types(actual);
+    if expected_params.len() != actual_params.len()
+        || !expected_params
+            .iter()
+            .zip(actual_params.iter())
+            .all(|(expected, actual)| type_compatible(expected, actual))
+    {
+        return false;
+    }
+    match (function_return_type(expected), function_return_type(actual)) {
+        (Some(expected), Some(actual)) => type_compatible(expected, actual),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn strip_fresh_type(type_name: &str) -> &str {
+    type_name
+        .trim()
+        .strip_prefix("fresh ")
+        .unwrap_or(type_name.trim())
+}
+
+fn is_function_type(type_name: &str) -> bool {
+    function_body(type_name).is_some()
+}
+
+fn function_body(type_name: &str) -> Option<&str> {
+    type_name
+        .trim()
+        .strip_prefix("noescape ")
+        .or_else(|| type_name.trim().strip_prefix("owned "))
+        .unwrap_or(type_name.trim())
+        .strip_prefix("Fn(")
+}
+
+fn function_return_type(type_name: &str) -> Option<&str> {
+    function_body(type_name)
+        .and_then(|body| body.split_once(')'))
+        .and_then(|(_, rest)| rest.trim_start().strip_prefix("->"))
+        .map(str::trim)
+}
+
+fn function_parameter_types(type_name: &str) -> Vec<&str> {
+    let Some(params) = function_body(type_name)
+        .and_then(|body| body.split_once(')').map(|(params, _)| params.trim()))
+    else {
+        return Vec::new();
+    };
+    if params.is_empty() {
+        return Vec::new();
+    }
+    split_top_level(params)
+        .into_iter()
+        .map(strip_parameter_effect)
+        .collect()
+}
+
+fn split_top_level(value: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut depth = 0usize;
+    for (index, character) in value.char_indices() {
+        match character {
+            '<' | '(' => depth += 1,
+            '>' | ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(value[start..index].trim());
+                start = index + character.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    if start < value.len() {
+        parts.push(value[start..].trim());
+    }
+    parts
+}
+
+fn strip_parameter_effect(parameter: &str) -> &str {
+    ["read ", "mut ", "take "]
+        .into_iter()
+        .find_map(|prefix| parameter.trim().strip_prefix(prefix).map(str::trim))
+        .unwrap_or_else(|| parameter.trim())
+}
+
+fn function_type_prefix(type_name: &str) -> &'static str {
+    let type_name = type_name.trim();
+    if type_name.starts_with("noescape ") {
+        "noescape "
+    } else if type_name.starts_with("owned ") {
+        "owned "
+    } else {
+        ""
+    }
+}
+
 pub fn binding_type_mismatch_diagnostic(
     name: &str,
     actual: &str,
@@ -245,5 +383,19 @@ mod tests {
             message_payload_not_transferable_diagnostic("Handle", span()).code,
             code::MESSAGE_PAYLOAD_NOT_TRANSFERABLE
         );
+    }
+
+    #[test]
+    fn structurally_compares_function_and_container_types() {
+        assert!(type_compatible("Fn(Int) -> Int", "Fn(read Int) -> Int"));
+        assert!(type_compatible(
+            "List<owned Fn(Int) -> Int>",
+            "List<owned Fn(read Int) -> Int>"
+        ));
+        assert!(!type_compatible("Fn(Int) -> Int", "Fn(Int) -> String"));
+        assert!(!type_compatible(
+            "noescape Fn(Int) -> Int",
+            "Fn(read Int) -> Int"
+        ));
     }
 }

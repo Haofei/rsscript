@@ -2,6 +2,8 @@
 
 use super::*;
 
+pub(crate) use rsscript_semantics::type_compatible as argument_type_matches;
+
 pub(super) fn callee_name(callee: &Callee) -> String {
     match callee {
         Callee::Name(name) => name.clone(),
@@ -104,66 +106,6 @@ pub(super) fn enum_variant_type_name(callee: &Callee) -> Option<&'static str> {
         "Some" | "None" => Some("Option<?>"),
         "Ok" | "Err" => Some("Result<?>"),
         _ => None,
-    }
-}
-
-pub(crate) fn argument_type_matches(expected: &str, actual: &str) -> bool {
-    if expected == actual {
-        return true;
-    }
-    if expected == "Self" {
-        return true;
-    }
-    if strip_fresh_type(expected) == strip_fresh_type(actual) {
-        return true;
-    }
-    if function_type_matches(expected, actual) {
-        return true;
-    }
-    if type_root_name(expected) == type_root_name(actual)
-        && let (Some(expected_args), Some(actual_args)) =
-            (type_arg_names(expected), type_arg_names(actual))
-        && expected_args.len() == actual_args.len()
-        && expected_args
-            .into_iter()
-            .zip(actual_args)
-            .all(|(expected, actual)| argument_type_matches(expected.trim(), actual.trim()))
-    {
-        return true;
-    }
-    if actual == "Option<?>" {
-        return type_root_name(expected) == "Option";
-    }
-    if actual == "Result<?>" {
-        return type_root_name(expected) == "Result";
-    }
-    false
-}
-
-/// Function-type parameter effects are checked at closure/call boundaries.
-/// Type identity therefore compares their parameter types after normalizing an
-/// omitted effect to the same bare type as an explicit `read`.
-pub(super) fn function_type_matches(expected: &str, actual: &str) -> bool {
-    if !is_fn_type(expected)
-        || !is_fn_type(actual)
-        || fn_type_prefix(expected) != fn_type_prefix(actual)
-    {
-        return false;
-    }
-    let expected_params = fn_param_types(expected);
-    let actual_params = fn_param_types(actual);
-    if expected_params.len() != actual_params.len()
-        || !expected_params
-            .iter()
-            .zip(actual_params.iter())
-            .all(|(expected, actual)| argument_type_matches(expected, actual))
-    {
-        return false;
-    }
-    match (fn_return_type(expected), fn_return_type(actual)) {
-        (Some(expected), Some(actual)) => argument_type_matches(expected, actual),
-        (None, None) => true,
-        _ => false,
     }
 }
 
