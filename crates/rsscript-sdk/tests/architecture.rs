@@ -1197,6 +1197,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "TypeQualifiers",
         "ValidatedProgram",
         "cyclic_type_alias_diagnostics",
+        "declaration_item_surface_diagnostics",
         "declaration_surface_diagnostics",
         "duplicate_declaration_diagnostics",
         "derive_syntax_diagnostics",
@@ -1335,6 +1336,10 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     assert!(!compiler_syntax_support.contains("fn check_module_use_layout"));
     assert!(
         compiler_syntax_support.contains("rsscript_semantics::declaration_surface_diagnostics")
+    );
+    assert!(
+        compiler_syntax_support
+            .contains("rsscript_semantics::declaration_item_surface_diagnostics")
     );
     for forbidden in [
         "fn check_reserved_protocol_generics",

@@ -14,22 +14,12 @@ impl Analyzer<'_> {
     }
 
     pub(super) fn check_unsupported_syntax_item(&mut self, item: &Item) {
+        self.diagnostics
+            .extend(rsscript_semantics::declaration_item_surface_diagnostics(
+                item,
+            ));
         match item {
             Item::Function(function) => {
-                for span in &function.malformed_generic_param_spans {
-                    self.unsupported_syntax(
-                        span.clone(),
-                        "malformed generic parameter declaration",
-                        "Generic parameters must use `T`, `T: Managed`, `T: Struct`, `T: Resource`, or a single protocol bound such as `T: Writer`.",
-                    );
-                }
-                for span in &function.malformed_param_spans {
-                    self.unsupported_syntax(
-                        span.clone(),
-                        "malformed parameter declaration",
-                        "Function parameters must use `name: Type`, `name: read Type`, `name: mut Type`, or `name: take Type`.",
-                    );
-                }
                 for param in &function.params {
                     let canonical = self.canonical_type_ref(&param.ty);
                     if param.effect == Some(DataEffect::Take)
@@ -59,48 +49,11 @@ impl Analyzer<'_> {
                         &type_decl.span,
                         type_decl.kind == TypeKind::Resource,
                     ));
-                for span in &type_decl.malformed_generic_param_spans {
-                    self.unsupported_syntax(
-                        span.clone(),
-                        "malformed generic parameter declaration",
-                        "Generic parameters must use `T`, `T: Managed`, `T: Struct`, `T: Resource`, or a single protocol bound such as `T: Writer`.",
-                    );
-                }
-                for span in &type_decl.malformed_field_spans {
-                    self.unsupported_syntax(
-                        span.clone(),
-                        "malformed field declaration",
-                        "Type fields must use `name: Type`, `name: handle Type`, or `name: weak Type`.",
-                    );
-                }
-                if type_decl.is_opaque && !type_decl.fields.is_empty() {
-                    self.unsupported_syntax(
-                        type_decl.span.clone(),
-                        "unsupported opaque type body",
-                        "Opaque interface types hide their representation. Declare `opaque struct Name`, `opaque class Name`, or `opaque resource Name` without fields.",
-                    );
-                }
-                if type_decl.is_opaque && type_decl.drop_body.is_some() {
-                    self.unsupported_syntax(
-                        type_decl.span.clone(),
-                        "unsupported opaque type body",
-                        "Opaque resource contracts hide their implementation details, including drop bodies. Resource cleanup belongs to the implementation, not the `.rssi` contract.",
-                    );
-                }
                 for field in &type_decl.fields {
                     // Struct/class fields are storable positions: an `owned Fn`
                     // field is first-class; `noescape` fields are rejected.
                     let canonical = self.canonical_type_ref(&field.ty);
                     self.check_unsupported_syntax_type_ref(&canonical, false, true);
-                }
-                if type_decl.kind != TypeKind::Resource
-                    && let Some(drop_body) = &type_decl.drop_body
-                {
-                    self.unsupported_syntax(
-                        drop_body.span.clone(),
-                        "unsupported managed drop",
-                        "Managed class and struct values do not have user-observable destructors in v0.7. Use `resource` with `with` for deterministic cleanup.",
-                    );
                 }
             }
             Item::SumType(sum) => {
@@ -115,23 +68,7 @@ impl Analyzer<'_> {
                     self.check_unsupported_syntax_type_ref(&canonical, false, true);
                 }
             }
-            Item::Const(decl) => {
-                // v0.7 `const` initializers must be literals (mirroring
-                // `lower_const_value`). Reject anything else with a stable
-                // diagnostic instead of lowering it to a `()` placeholder, which
-                // produced an unmappable backend type error (RS1102/E0308).
-                let is_literal = matches!(
-                    &decl.value,
-                    Expr::Number(_, _) | Expr::String(_, _) | Expr::MultilineString(_, _)
-                ) || matches!(&decl.value, Expr::Ident(name, _) if name == "true" || name == "false");
-                if !is_literal {
-                    self.unsupported_syntax(
-                        decl.span.clone(),
-                        "unsupported const initializer",
-                        "A v0.7 `const` initializer must be a literal (number, string, or `true`/`false`). Compute the value and write it as a literal; expressions and calls in `const` position are not supported yet.",
-                    );
-                }
-            }
+            Item::Const(_) => {}
             Item::Module(_) | Item::Use(_) | Item::TypeAlias(_) => {}
         }
     }

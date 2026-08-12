@@ -167,6 +167,10 @@ mechanical acceptance condition holds.
     - [x] **S02.1m — Move declaration surface rules.** Semantics owns removed
       markers, malformed top-level forms, generated-name reservation, generic
       protocol reservation, and the `.rss` function-body requirement.
+    - [x] **S02.1n — Move item declaration surface rules.** Semantics owns
+      malformed declaration fragments, opaque/drop restrictions, and literal
+      const-initializer validation; compiler retains only alias-aware type
+      placement and recursive syntax adaptation.
     - [x] **S02.2g — Move resolved builtin operator diagnostics.** Compiler
       extracts HIR operand/type facts; semantics owns non-numeric arithmetic and
       fixed-operand compatibility diagnostic contracts.

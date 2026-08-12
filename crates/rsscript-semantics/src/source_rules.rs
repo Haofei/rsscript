@@ -196,6 +196,89 @@ pub fn declaration_surface_diagnostics(tokens: &[Token], program: &Program) -> V
     diagnostics
 }
 
+/// Derive source-only diagnostics for one declaration item.
+///
+/// Type-alias-aware callback placement remains a later semantic query, but
+/// malformed declaration fragments, opaque/drop restrictions, and const
+/// literal requirements need no resolved type facts.
+pub fn declaration_item_surface_diagnostics(item: &Item) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    match item {
+        Item::Function(function) => {
+            for span in &function.malformed_generic_param_spans {
+                diagnostics.push(unsupported_syntax_diagnostic(
+                    span.clone(),
+                    "malformed generic parameter declaration",
+                    "Generic parameters must use `T`, `T: Managed`, `T: Struct`, `T: Resource`, or a single protocol bound such as `T: Writer`.",
+                ));
+            }
+            for span in &function.malformed_param_spans {
+                diagnostics.push(unsupported_syntax_diagnostic(
+                    span.clone(),
+                    "malformed parameter declaration",
+                    "Function parameters must use `name: Type`, `name: read Type`, `name: mut Type`, or `name: take Type`.",
+                ));
+            }
+        }
+        Item::Type(type_decl) => {
+            for span in &type_decl.malformed_generic_param_spans {
+                diagnostics.push(unsupported_syntax_diagnostic(
+                    span.clone(),
+                    "malformed generic parameter declaration",
+                    "Generic parameters must use `T`, `T: Managed`, `T: Struct`, `T: Resource`, or a single protocol bound such as `T: Writer`.",
+                ));
+            }
+            for span in &type_decl.malformed_field_spans {
+                diagnostics.push(unsupported_syntax_diagnostic(
+                    span.clone(),
+                    "malformed field declaration",
+                    "Type fields must use `name: Type`, `name: handle Type`, or `name: weak Type`.",
+                ));
+            }
+            if type_decl.is_opaque && !type_decl.fields.is_empty() {
+                diagnostics.push(unsupported_syntax_diagnostic(
+                    type_decl.span.clone(),
+                    "unsupported opaque type body",
+                    "Opaque interface types hide their representation. Declare `opaque struct Name`, `opaque class Name`, or `opaque resource Name` without fields.",
+                ));
+            }
+            if type_decl.is_opaque && type_decl.drop_body.is_some() {
+                diagnostics.push(unsupported_syntax_diagnostic(
+                    type_decl.span.clone(),
+                    "unsupported opaque type body",
+                    "Opaque resource contracts hide their implementation details, including drop bodies. Resource cleanup belongs to the implementation, not the `.rssi` contract.",
+                ));
+            }
+            if !matches!(type_decl.kind, rsscript_syntax::ast::TypeKind::Resource)
+                && let Some(drop_body) = &type_decl.drop_body
+            {
+                diagnostics.push(unsupported_syntax_diagnostic(
+                    drop_body.span.clone(),
+                    "unsupported managed drop",
+                    "Managed class and struct values do not have user-observable destructors in v0.7. Use `resource` with `with` for deterministic cleanup.",
+                ));
+            }
+        }
+        Item::Const(decl) => {
+            let is_literal = matches!(
+                &decl.value,
+                rsscript_syntax::ast::Expr::Number(_, _)
+                    | rsscript_syntax::ast::Expr::String(_, _)
+                    | rsscript_syntax::ast::Expr::MultilineString(_, _)
+            ) || matches!(&decl.value, rsscript_syntax::ast::Expr::Ident(name, _) if name == "true" || name == "false");
+            if !is_literal {
+                diagnostics.push(unsupported_syntax_diagnostic(
+                    decl.span.clone(),
+                    "unsupported const initializer",
+                    "A v0.7 `const` initializer must be a literal (number, string, or `true`/`false`). Compute the value and write it as a literal; expressions and calls in `const` position are not supported yet.",
+                ));
+            }
+        }
+        Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) => {}
+    }
+    diagnostics
+}
+
 fn declaration_name_and_span(item: &Item) -> Option<(&str, &Span)> {
     match item {
         Item::Function(decl) => Some((&decl.name, &decl.span)),
@@ -454,5 +537,14 @@ mod tests {
         assert_eq!(diagnostics.len(), 2);
         assert_eq!(diagnostics[0].label, "reserved declaration name");
         assert_eq!(diagnostics[1].label, "bodyless source function");
+    }
+
+    #[test]
+    fn declaration_item_rules_reject_non_literal_constants() {
+        let program = rsscript_syntax::parse_source("const.rss", "const value = make()\n");
+        assert_eq!(
+            declaration_item_surface_diagnostics(&program.items[0])[0].label,
+            "unsupported const initializer"
+        );
     }
 }
