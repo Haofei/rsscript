@@ -1219,6 +1219,15 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "item_body_surface_diagnostics",
         "char_literal_scalar_diagnostic",
         "match_char_literal_scalar_diagnostic",
+        "FreshReturnIssue",
+        "FreshReturnIssueKind",
+        "ManagedToLocalUse",
+        "MovedUse",
+        "ResourceEscape",
+        "ResourceEscapeKind",
+        "RetainedClosureCapture",
+        "RetainedLocalUse",
+        "TakeHandleField",
         "bool_condition_diagnostic",
         "for_iterable_diagnostic",
         "match_expression_arm_type_diagnostics",
@@ -1310,6 +1319,25 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         );
     }
     assert!(compiler_projection.contains("pub use rsscript_semantics"));
+
+    let compiler_local_facts = read(&root.join("crates/rsscript-compiler/src/checks/local.rs"));
+    assert!(compiler_local_facts.contains("pub(crate) use rsscript_semantics"));
+    for forbidden in [
+        "pub(crate) struct MovedUse",
+        "pub(crate) struct ManagedToLocalUse",
+        "pub(crate) struct RetainedLocalUse",
+        "pub(crate) struct RetainedClosureCapture",
+        "pub(crate) struct TakeHandleField",
+        "pub(crate) struct FreshReturnIssue",
+        "pub(crate) enum FreshReturnIssueKind",
+        "pub(crate) struct ResourceEscape",
+        "pub(crate) enum ResourceEscapeKind",
+    ] {
+        assert!(
+            !compiler_local_facts.contains(forbidden),
+            "compiler must not re-own local-flow fact `{forbidden}`"
+        );
+    }
 
     let semantic_declarations = read(&root.join("crates/rsscript-semantics/src/declarations.rs"));
     assert!(semantic_declarations.contains("pub fn duplicate_declaration_diagnostics"));

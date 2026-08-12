@@ -34,55 +34,10 @@ pub(crate) struct BodyState {
     pub(crate) value_types: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct MovedUse {
-    pub(crate) name: String,
-    pub(crate) use_span: Span,
-    pub(crate) move_span: Span,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ManagedToLocalUse {
-    pub(crate) local_name: String,
-    pub(crate) managed_name: String,
-    pub(crate) span: Span,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RetainedLocalUse {
-    pub(crate) name: String,
-    pub(crate) callee: String,
-    pub(crate) param: String,
-    pub(crate) span: Span,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RetainedClosureCapture {
-    pub(crate) name: String,
-    pub(crate) callee: String,
-    pub(crate) param: String,
-    pub(crate) capture_span: Span,
-    pub(crate) closure_span: Span,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TakeHandleField {
-    pub(crate) name: String,
-    pub(crate) span: Span,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum FreshReturnIssueKind {
-    NotClean { name: String },
-    UnknownIdent { name: String },
-    Unknown,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FreshReturnIssue {
-    pub(crate) kind: FreshReturnIssueKind,
-    pub(crate) span: Span,
-}
+pub(crate) use rsscript_semantics::{
+    FreshReturnIssue, FreshReturnIssueKind, ManagedToLocalUse, MovedUse, ResourceEscape,
+    ResourceEscapeKind, RetainedClosureCapture, RetainedLocalUse, TakeHandleField,
+};
 
 pub(crate) struct LocalAnalysis<'a> {
     body: Option<&'a HirFunctionBody>,
@@ -142,19 +97,6 @@ struct LocalFlowResourceBinding {
 struct LocalFlowEdge {
     to: usize,
     drop_resources: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ResourceEscapeKind {
-    Escape,
-    Capture,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ResourceEscape {
-    pub(crate) binding: String,
-    pub(crate) kind: ResourceEscapeKind,
-    pub(crate) span: Span,
 }
 
 impl<'a> LocalAnalysis<'a> {

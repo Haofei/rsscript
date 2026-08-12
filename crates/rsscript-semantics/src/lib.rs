@@ -27,6 +27,7 @@ pub mod hir;
 mod identities;
 mod interface_descriptor;
 mod literals;
+mod local_flow_facts;
 mod operators;
 mod ownership;
 mod place;
@@ -103,6 +104,10 @@ pub use generic_constraints::{
 pub use literals::{
     char_literal_scalar_diagnostic, integer_literal_range_diagnostic,
     match_char_literal_scalar_diagnostic,
+};
+pub use local_flow_facts::{
+    FreshReturnIssue, FreshReturnIssueKind, ManagedToLocalUse, MovedUse, ResourceEscape,
+    ResourceEscapeKind, RetainedClosureCapture, RetainedLocalUse, TakeHandleField,
 };
 pub use operators::{operator_overload_attempt_diagnostic, operator_type_mismatch_diagnostic};
 pub use ownership::{

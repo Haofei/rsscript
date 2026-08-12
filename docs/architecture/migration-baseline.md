@@ -348,6 +348,10 @@ mechanical acceptance condition holds.
     - [x] **S02.4n — Move uninferable binding diagnostics.** Compiler gathers
       raw binding-use facts and recognizes open variant constructors; semantics
       owns the canonical ambiguous-binding diagnostic and fix.
+    - [x] **S02.4o — Move local-flow fact model.** The moved-use, retention,
+      managed-to-local, fresh-return, handle-take, and resource-escape fact
+      types are owned by `rsscript-semantics`; compiler flow only produces them
+      while its CFG implementation is migrated.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.
