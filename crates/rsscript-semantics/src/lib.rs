@@ -107,6 +107,7 @@ pub use generic_constraints::{
 pub use hir_uses::{
     hir_block_identifier_uses, hir_block_inline_capture_uses, hir_expr_path,
     hir_stmt_effect_events, hir_stmt_identifier_uses, managed_closure_uses_by_statement,
+    retained_closure_argument,
 };
 pub use literals::{
     char_literal_scalar_diagnostic, integer_literal_range_diagnostic,

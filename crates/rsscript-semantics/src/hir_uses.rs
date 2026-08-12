@@ -50,6 +50,45 @@ pub fn managed_closure_uses_by_statement(block: &HirBlock) -> HashMap<Span, Vec<
     closures
 }
 
+/// Resolve a closure value that a retaining call receives through the allowed
+/// read/wrapper forms. This is a HIR semantic query shared by local flow and
+/// retained-capture analysis.
+pub fn retained_closure_argument(expr: &HirExpr) -> Option<(&HirBlock, &Span)> {
+    match expr {
+        HirExpr::Closure { body, span, .. } => Some((body, span)),
+        HirExpr::Effect {
+            effect: crate::hir::ParamEffect::Read,
+            value,
+            ..
+        } => retained_closure_argument(value),
+        HirExpr::Call { callee, args, .. } if retained_closure_wrapper_callee(callee) => args
+            .iter()
+            .find_map(|arg| retained_closure_argument(&arg.value)),
+        HirExpr::Effect { .. }
+        | HirExpr::MapLiteral { .. }
+        | HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Manage { .. }
+        | HirExpr::Spawn { .. }
+        | HirExpr::Await { .. }
+        | HirExpr::Try { .. }
+        | HirExpr::Match { .. }
+        | HirExpr::Binary { .. }
+        | HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Char { .. }
+        | HirExpr::Field { .. }
+        | HirExpr::Index { .. }
+        | HirExpr::Call { .. }
+        | HirExpr::Unknown(_) => None,
+    }
+}
+
+fn retained_closure_wrapper_callee(callee: &rsscript_syntax::ast::Callee) -> bool {
+    matches!(callee, rsscript_syntax::ast::Callee::Name(name) if matches!(name.as_str(), "Ok" | "Err" | "Some"))
+}
+
 /// Return the canonical HIR place path for an identifier or field chain.
 pub fn hir_expr_path(expr: &HirExpr) -> Option<(String, Span)> {
     match expr {
@@ -724,6 +763,36 @@ fn main(session: Session) -> Unit {
             .map(|(name, _)| name.as_str())
             .collect::<Vec<_>>(),
             ["session"]
+        );
+    }
+
+    #[test]
+    fn resolves_retained_closure_through_read_and_option_wrappers() {
+        let program = parse_source(
+            "retained-closure.rss",
+            r#"
+fn main(value: Int) -> Unit {
+    Some(read || { value })
+}
+"#,
+        );
+        let hir = Hir::from_syntax(&program);
+        let HirStmt::Expr(expr) = &hir
+            .function_body("main")
+            .and_then(|body| body.block.as_ref())
+            .unwrap()
+            .statements[0]
+        else {
+            panic!("expected an expression statement");
+        };
+
+        let (body, _) = retained_closure_argument(expr).expect("expected wrapped closure");
+        assert_eq!(
+            hir_block_inline_capture_uses(body)
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>(),
+            ["value"]
         );
     }
 }

@@ -1030,7 +1030,9 @@ pub(super) fn collect_retained_closure_captures_from_expr(
                     if !signature.retained_params.contains(name) {
                         continue;
                     }
-                    let Some((body, closure_span)) = retained_closure_arg(&arg.value) else {
+                    let Some((body, closure_span)) =
+                        rsscript_semantics::retained_closure_argument(&arg.value)
+                    else {
                         continue;
                     };
                     for (used_name, capture_span) in
@@ -1107,45 +1109,6 @@ pub(super) fn collect_retained_closure_captures_from_expr(
         | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
-}
-
-pub(super) fn retained_closure_arg(expr: &HirExpr) -> Option<(&HirBlock, &Span)> {
-    match expr {
-        HirExpr::Closure { body, span, .. } => Some((body, span)),
-        HirExpr::Effect {
-            effect: ParamEffect::Read,
-            value,
-            ..
-        } => retained_closure_arg(value),
-        HirExpr::Call { callee, args, .. } if retained_closure_wrapper_callee(callee) => {
-            args.iter().find_map(|arg| retained_closure_arg(&arg.value))
-        }
-        HirExpr::Effect { .. }
-        | HirExpr::MapLiteral { .. }
-        | HirExpr::ObjectLiteral { .. }
-        | HirExpr::ArrayLiteral { .. }
-        | HirExpr::Manage { .. }
-        | HirExpr::Spawn { .. }
-        | HirExpr::Await { .. }
-        | HirExpr::Try { .. }
-        | HirExpr::Match { .. }
-        | HirExpr::Binary { .. }
-        | HirExpr::Ident { .. }
-        | HirExpr::Number { .. }
-        | HirExpr::String { .. }
-        | HirExpr::Char { .. }
-        | HirExpr::Field { .. }
-        | HirExpr::Index { .. }
-        | HirExpr::Call { .. }
-        | HirExpr::Unknown(_) => None,
-    }
-}
-
-pub(super) fn retained_closure_wrapper_callee(callee: &Callee) -> bool {
-    matches!(
-        callee,
-        Callee::Name(name) if matches!(name.as_str(), "Ok" | "Err" | "Some")
-    )
 }
 
 pub(super) fn push_retained_closure_capture(

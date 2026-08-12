@@ -1284,6 +1284,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "hir_stmt_identifier_uses",
         "managed_closure_uses_by_statement",
         "resource_escapes_by_with_statement",
+        "retained_closure_argument",
         "fd_surface_diagnostics",
         "unknown_binding_diagnostics",
         "unknown_field_diagnostics",
@@ -1449,6 +1450,19 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     assert!(compiler_local_flow.contains("rsscript_semantics::hir_stmt_identifier_uses"));
     assert!(compiler_local_flow.contains("rsscript_semantics::hir_stmt_effect_events"));
     assert!(compiler_local_flow.contains("rsscript_semantics::hir_expr_path"));
+    let compiler_local_ownership =
+        read(&root.join("crates/rsscript-compiler/src/checks/local/ownership.rs"));
+    assert!(compiler_local_ownership.contains("rsscript_semantics::retained_closure_argument"));
+    assert!(compiler_local_flow.contains("rsscript_semantics::retained_closure_argument"));
+    for forbidden in [
+        "fn retained_closure_arg",
+        "fn retained_closure_wrapper_callee",
+    ] {
+        assert!(
+            !compiler_local_ownership.contains(forbidden),
+            "compiler must not re-own retained closure query `{forbidden}`"
+        );
+    }
     assert!(
         !root
             .join("crates/rsscript-compiler/src/checks/local/resources.rs")

@@ -502,7 +502,9 @@ pub(super) fn collect_expr_managed_closure_capture_names(
                     if !signature.retained_params.contains(name) {
                         continue;
                     }
-                    if let Some((body, _)) = retained_closure_arg(&arg.value) {
+                    if let Some((body, _)) =
+                        rsscript_semantics::retained_closure_argument(&arg.value)
+                    {
                         push_hir_block_inline_capture_names(body, captures);
                     }
                 }

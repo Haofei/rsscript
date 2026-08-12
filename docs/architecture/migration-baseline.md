@@ -374,6 +374,9 @@ mechanical acceptance condition holds.
       recursive `with` escape/capture index, including retain, `manage`,
       wrapper, and intentional `TempDir.keep(take ...)` transfer semantics;
       compiler only reads the span-keyed neutral facts.
+    - [x] **S02.4v — Move retained-closure argument resolution.** Semantics
+      owns extraction of closure payloads through `read` and option/result
+      wrappers; CFG and retained-capture checks consume the same HIR query.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.
