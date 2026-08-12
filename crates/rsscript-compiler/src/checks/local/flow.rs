@@ -239,77 +239,17 @@ pub(super) fn fresh_match_pattern_binding(
     value: &HirExpr,
     arm: &crate::hir::HirMatchArm,
 ) -> Option<LocalFlowBinding> {
-    let value_type = hir_expr_type_name(value)?;
-    let source = hir_expr_ident_name(value);
-    let fresh_from_scrutinee = is_fresh_match_scrutinee(value);
-    if source.is_none() && !fresh_from_scrutinee {
-        return None;
-    }
-    let crate::syntax::ast::MatchPattern::Variant { name, bindings, .. } = &arm.pattern else {
-        return None;
-    };
-    // Fresh-payload tracking applies only to the single-payload sugar.
-    let [binding] = bindings.as_slice() else {
-        return None;
-    };
-    let crate::syntax::ast::MatchPattern::Binding { name: binding, .. } = binding else {
-        return None;
-    };
-    let payload_type = fresh_payload_type_for_variant(value_type, name)?;
+    let fact = rsscript_semantics::fresh_match_binding(value, arm)?;
     Some(LocalFlowBinding {
-        name: binding.clone(),
+        name: fact.name,
         kind: HirBindingKind::LocalLet,
-        type_name: Some(strip_fresh_type(payload_type).to_string()),
+        type_name: Some(strip_fresh_type(&fact.payload_type_name).to_string()),
         value_ident: None,
         value_handle_field: None,
-        fresh_from_local_source: source.map(str::to_string),
-        fresh_from_scrutinee,
+        fresh_from_local_source: fact.source_ident,
+        fresh_from_scrutinee: fact.fresh_from_scrutinee,
         fresh_from_fresh_value: false,
     })
-}
-
-pub(super) fn fresh_payload_type_for_variant<'a>(
-    value_type: &'a str,
-    variant: &str,
-) -> Option<&'a str> {
-    let inner = value_type
-        .trim()
-        .strip_prefix("Option<")
-        .and_then(|rest| rest.strip_suffix('>'));
-    if variant == "Some" {
-        let payload = inner?.trim();
-        return payload.strip_prefix("fresh ").map(str::trim);
-    }
-
-    let inner = value_type
-        .trim()
-        .strip_prefix("Result<")
-        .and_then(|rest| rest.strip_suffix('>'))?;
-    let args = split_top_level_type_args(inner);
-    let payload = match variant {
-        "Ok" => args.first().copied()?,
-        _ => return None,
-    }
-    .trim();
-    payload.strip_prefix("fresh ").map(str::trim)
-}
-
-pub(super) fn is_fresh_match_scrutinee(expr: &HirExpr) -> bool {
-    match expr {
-        HirExpr::Call { resolution, .. } => {
-            matches!(resolution, CallResolution::Resolved { signature, .. } if signature.returns_fresh)
-        }
-        HirExpr::Try { value, .. } => is_fresh_match_scrutinee(value),
-        _ => false,
-    }
-}
-
-pub(super) fn hir_expr_ident_name(expr: &HirExpr) -> Option<&str> {
-    match expr {
-        HirExpr::Ident { name, .. } => Some(name.as_str()),
-        HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => hir_expr_ident_name(value),
-        _ => None,
-    }
 }
 
 pub(super) fn collect_if_local_flow(

@@ -387,6 +387,9 @@ mechanical acceptance condition holds.
     - [x] **S02.4y — Move fresh-return HIR projections.** Semantics owns fresh
       field-base, handle/weak-path, and operand-span projection rules; compiler
       local flow provides only state-dependent freshness evidence.
+    - [x] **S02.4z — Move fresh match-binding facts.** Semantics owns the
+      single-payload `Some`/`Ok` fresh binding contract and resolved-HIR
+      projection; compiler CFG only turns that fact into a flow node.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.

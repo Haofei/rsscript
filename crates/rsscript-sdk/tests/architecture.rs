@@ -1291,6 +1291,8 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "fresh_field_access_base",
         "fresh_handle_or_weak_field_path",
         "fresh_return_value_span",
+        "fresh_match_binding",
+        "FreshMatchBinding",
         "fd_surface_diagnostics",
         "unknown_binding_diagnostics",
         "unknown_field_diagnostics",
@@ -1488,6 +1490,17 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         );
     }
     assert!(compiler_local_ownership.contains("rsscript_semantics::fresh_return_value_span"));
+    assert!(compiler_local_flow.contains("rsscript_semantics::fresh_match_binding"));
+    for forbidden in [
+        "fn fresh_payload_type_for_variant",
+        "fn is_fresh_match_scrutinee",
+        "fn hir_expr_ident_name",
+    ] {
+        assert!(
+            !compiler_local_flow.contains(forbidden),
+            "compiler must not re-own fresh-match fact rule `{forbidden}`"
+        );
+    }
     for forbidden in ["fn is_copy_type_name", "fn is_cross_isolate_transferable"] {
         assert!(
             !compiler_local_flow.contains(forbidden),

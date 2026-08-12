@@ -1,4 +1,4 @@
-use crate::text_util::{split_top_level_type_args, strip_fresh_type};
+use crate::text_util::strip_fresh_type;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::checks::shared::hir_expr_span;

@@ -22,6 +22,7 @@ mod declarations;
 mod derive_fields;
 mod derives;
 mod external_types;
+mod fresh_match_bindings;
 mod fresh_return_projection;
 mod generic_constraints;
 pub mod hir;
@@ -97,6 +98,7 @@ pub use derives::derive_syntax_diagnostics;
 pub use external_types::{
     external_binding_type_diagnostics, unknown_type_diagnostics, unknown_type_name_diagnostic,
 };
+pub use fresh_match_bindings::{FreshMatchBinding, fresh_match_binding};
 pub use fresh_return_projection::{
     fresh_field_access_base, fresh_handle_or_weak_field_path, fresh_return_value_span,
 };
