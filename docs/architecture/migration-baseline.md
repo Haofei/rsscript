@@ -212,6 +212,9 @@ mechanical acceptance condition holds.
     - [x] **S02.5p — Move assignment diagnostics.** Compiler retains lexical
       scope/place fact extraction, while semantics owns invalid-target,
       mutability, type-mismatch, and indexed-target diagnostic contracts.
+    - [x] **S02.5q — Move exhaustiveness diagnostics.** Compiler determines
+      match coverage from resolved HIR/declarations; semantics owns the
+      canonical statement/expression non-exhaustiveness diagnostic contract.
     - [x] **S02.2j — Move bounded generic substitution.** Semantics owns the
       recursive substitution algorithm; compiler contributes only a narrow
       adapter to its shared cancellation and substitution budget.

@@ -80,22 +80,11 @@ impl Analyzer<'_> {
                     self.check_match_exhaustiveness_block(&arm.body);
                 }
                 if !self.match_is_exhaustive_with_context(value, arms) {
-                    self.diagnostics.push(
-                        Diagnostic::error(
-                            code::NON_EXHAUSTIVE_MATCH,
-                            "match statement is not exhaustive.",
+                    self.diagnostics
+                        .push(rsscript_semantics::non_exhaustive_match_diagnostic(
+                            false,
                             span.clone(),
-                            "non-exhaustive match",
-                        )
-                        .with_cause(
-                            "Supported match statements must cover `Some`/`None`, `Ok`/`Err`, all sum type variants, or include `_`.",
-                        )
-                        .with_fix(
-                            "add_missing_arm",
-                            "Add the missing variant arm or a final `_` fallback.",
-                            "manual",
-                        ),
-                    );
+                        ));
                 }
             }
             HirStmt::Select { arms, .. } => {
@@ -557,22 +546,11 @@ impl Analyzer<'_> {
                     self.check_match_exhaustiveness_block(&arm.body);
                 }
                 if !self.match_is_exhaustive_with_context(value, arms) {
-                    self.diagnostics.push(
-                        Diagnostic::error(
-                            code::NON_EXHAUSTIVE_MATCH,
-                            "match expression is not exhaustive.",
+                    self.diagnostics
+                        .push(rsscript_semantics::non_exhaustive_match_diagnostic(
+                            true,
                             span.clone(),
-                            "non-exhaustive match",
-                        )
-                        .with_cause(
-                            "Supported match expressions must cover `Some`/`None`, `Ok`/`Err`, all sum type variants, or include `_`.",
-                        )
-                        .with_fix(
-                            "add_missing_arm",
-                            "Add the missing variant arm or a final `_` fallback.",
-                            "manual",
-                        ),
-                    );
+                        ));
                 }
             }
             HirExpr::ObjectLiteral { .. }

@@ -1,11 +1,34 @@
 //! Semantic control-flow diagnostics over resolved HIR.
 
 use crate::hir::{Hir, HirBlock, HirExpr, HirMatchArm, HirStmt, number_literal_type_name};
-use rsscript_diagnostics::{Diagnostic, code};
+use rsscript_diagnostics::{Diagnostic, Span, code};
 use rsscript_syntax::ast::{
     DataEffect, FunctionDecl, Item, MatchLiteral, MatchPattern, Program, TypeRef,
 };
 use std::collections::HashSet;
+
+/// Construct the canonical diagnostic for a resolved non-exhaustive `match`.
+pub fn non_exhaustive_match_diagnostic(expression: bool, span: Span) -> Diagnostic {
+    let subject = if expression {
+        "match expression"
+    } else {
+        "match statement"
+    };
+    Diagnostic::error(
+        code::NON_EXHAUSTIVE_MATCH,
+        format!("{subject} is not exhaustive."),
+        span,
+        "non-exhaustive match",
+    )
+    .with_cause(
+        "Supported match statements must cover `Some`/`None`, `Ok`/`Err`, all sum type variants, or include `_`.",
+    )
+    .with_fix(
+        "add_missing_arm",
+        "Add the missing variant arm or a final `_` fallback.",
+        "manual",
+    )
+}
 
 pub fn function_fallthrough_diagnostics(program: &Program, hir: &Hir) -> Vec<Diagnostic> {
     program
@@ -669,6 +692,25 @@ fn match_arm_value_type(block: &HirBlock) -> Option<&str> {
 mod tests {
     use super::*;
     use rsscript_syntax::parse_source;
+
+    #[test]
+    fn derives_non_exhaustive_match_diagnostics_from_resolved_facts() {
+        let span = Span {
+            file: "match.rss".to_owned(),
+            line: 1,
+            column: 1,
+            length: 1,
+        };
+        assert_eq!(
+            non_exhaustive_match_diagnostic(false, span.clone()).code,
+            code::NON_EXHAUSTIVE_MATCH
+        );
+        assert_eq!(
+            non_exhaustive_match_diagnostic(true, span).code,
+            code::NON_EXHAUSTIVE_MATCH
+        );
+    }
+
     #[test]
     fn detects_non_unit_fallthrough() {
         let program = parse_source(

@@ -1355,6 +1355,16 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
             "compiler must not re-own control-flow rule `{forbidden}`"
         );
     }
+    assert!(semantic_control_flow.contains("pub fn non_exhaustive_match_diagnostic"));
+    let compiler_exhaustiveness =
+        read(&root.join("crates/rsscript-compiler/src/analyzer/exhaustiveness.rs"));
+    assert!(
+        compiler_exhaustiveness.contains("rsscript_semantics::non_exhaustive_match_diagnostic")
+    );
+    assert!(
+        !compiler_exhaustiveness.contains("Diagnostic::"),
+        "compiler must not construct non-exhaustive match diagnostics"
+    );
 
     let semantic_call_arguments =
         read(&root.join("crates/rsscript-semantics/src/call_arguments.rs"));
