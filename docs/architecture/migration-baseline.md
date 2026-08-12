@@ -367,6 +367,9 @@ mechanical acceptance condition holds.
     - [x] **S02.4s — Move HIR inline-capture queries.** Semantics owns the
       handle-aware closure capture-use traversal; compiler consumes its facts
       for managed closures, local flow, and retained-closure diagnostics.
+    - [x] **S02.4t — Move managed-closure fact indexing.** Semantics owns
+      statement-keyed managed-closure capture indexing, including nested
+      closure discovery; compiler flow only reads the neutral index.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.

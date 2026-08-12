@@ -101,9 +101,10 @@ struct LocalFlowEdge {
 
 impl<'a> LocalAnalysis<'a> {
     pub(crate) fn new(body: Option<&'a HirFunctionBody>) -> Self {
-        let managed_closure_uses_by_span = body
-            .and_then(|body| body.block.as_ref())
-            .map_or_else(HashMap::new, index_managed_closure_uses_from_block);
+        let managed_closure_uses_by_span = body.and_then(|body| body.block.as_ref()).map_or_else(
+            HashMap::new,
+            rsscript_semantics::managed_closure_uses_by_statement,
+        );
         let resource_escapes_by_with_span = body
             .and_then(|body| body.block.as_ref())
             .map_or_else(HashMap::new, index_resource_escapes_from_block);

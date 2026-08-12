@@ -1282,6 +1282,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "hir_expr_path",
         "hir_stmt_effect_events",
         "hir_stmt_identifier_uses",
+        "managed_closure_uses_by_statement",
         "fd_surface_diagnostics",
         "unknown_binding_diagnostics",
         "unknown_field_diagnostics",
@@ -1440,7 +1441,10 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         read(&root.join("crates/rsscript-compiler/src/checks/local/resources.rs"));
     let compiler_local_flow = read(&root.join("crates/rsscript-compiler/src/checks/local/flow.rs"));
     assert!(compiler_local_resources.contains("rsscript_semantics::hir_block_identifier_uses"));
-    assert!(compiler_local_resources.contains("rsscript_semantics::hir_block_inline_capture_uses"));
+    let compiler_local_analysis = read(&root.join("crates/rsscript-compiler/src/checks/local.rs"));
+    assert!(
+        compiler_local_analysis.contains("rsscript_semantics::managed_closure_uses_by_statement")
+    );
     assert!(compiler_local_flow.contains("rsscript_semantics::hir_stmt_identifier_uses"));
     assert!(compiler_local_flow.contains("rsscript_semantics::hir_stmt_effect_events"));
     assert!(compiler_local_flow.contains("rsscript_semantics::hir_expr_path"));
@@ -1453,6 +1457,10 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "fn collect_hir_block_inline_capture_uses",
         "fn collect_hir_stmt_inline_capture_uses",
         "fn collect_hir_expr_inline_capture_uses",
+        "fn index_managed_closure_uses_from_block",
+        "fn collect_block_managed_closure_uses",
+        "fn collect_stmt_managed_closure_uses",
+        "fn collect_expr_managed_closure_uses",
     ] {
         assert!(
             !compiler_local_resources.contains(forbidden),
