@@ -1094,7 +1094,12 @@ pub(super) fn check_expr_semantics_with_context(
             }
             if matches!(effect, ParamEffect::Mut | ParamEffect::Take) && expr_is_fresh_shell(value)
             {
-                fresh_requires_local_binding_diagnostic(analyzer, value, span);
+                analyzer.diagnostics.push(
+                    rsscript_semantics::fresh_requires_local_binding_diagnostic(
+                        &hir_expr_hint(value),
+                        span.clone(),
+                    ),
+                );
             } else if *effect == ParamEffect::Take {
                 check_take_operand_is_local(analyzer, value, span, state);
             } else if !(allow_weak_upgrade_arg && *effect == ParamEffect::Read)

@@ -1213,6 +1213,11 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "fresh_return_not_clean_diagnostic",
         "freshness_unknown_diagnostic",
         "invalid_fresh_return_type_diagnostic",
+        "fresh_requires_local_binding_diagnostic",
+        "weak_field_requires_weak_handle_diagnostic",
+        "constructor_field_effect_diagnostic",
+        "managed_inline_constructor_field_diagnostic",
+        "spawn_local_capture_diagnostic",
         "function_fallthrough_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
@@ -1628,6 +1633,18 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     }
     assert!(compiler_body_closures.contains("rsscript_semantics::local_class_binding_diagnostic"));
     assert!(compiler_body_fresh.contains("rsscript_semantics::resource_escape_diagnostic"));
+    for delegated in [
+        "rsscript_semantics::weak_field_requires_weak_handle_diagnostic",
+        "rsscript_semantics::constructor_field_effect_diagnostic",
+        "rsscript_semantics::managed_inline_constructor_field_diagnostic",
+        "rsscript_semantics::spawn_local_capture_diagnostic",
+    ] {
+        assert!(compiler_body_fresh.contains(delegated));
+    }
+    assert!(
+        compiler_body_semantics
+            .contains("rsscript_semantics::fresh_requires_local_binding_diagnostic")
+    );
     for forbidden in [
         "fn resource_escape_diagnostic",
         "fn resource_capture_diagnostic",
@@ -1639,6 +1656,18 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         assert!(
             !compiler_body_resources.contains(forbidden),
             "compiler must not re-own resource-boundary diagnostic `{forbidden}`"
+        );
+    }
+    for forbidden in [
+        "fn fresh_requires_local_binding_diagnostic",
+        "fn constructor_field_effect_diagnostic",
+        "fn managed_inline_constructor_field_diagnostic",
+        "Weak fields are non-owning handles",
+        "spawn cannot capture local value",
+    ] {
+        assert!(
+            !compiler_body_fresh.contains(forbidden),
+            "compiler must not re-own fresh or constructor diagnostic `{forbidden}`"
         );
     }
 

@@ -1,5 +1,4 @@
 use super::*;
-use crate::checks::diagnostic_helpers::error_cause_manual_fix;
 
 pub(super) fn expr_is_fresh_shell(expr: &HirExpr) -> bool {
     match expr {
@@ -34,25 +33,6 @@ pub(super) fn expr_is_fresh_shell(expr: &HirExpr) -> bool {
         | HirExpr::Closure { .. }
         | HirExpr::Unknown(_) => false,
     }
-}
-
-pub(super) fn fresh_requires_local_binding_diagnostic(
-    analyzer: &mut Analyzer<'_>,
-    value: &HirExpr,
-    span: &Span,
-) {
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::FRESH_REQUIRES_LOCAL_BINDING,
-        "`fresh` expression must be bound locally before `mut` or `take` use.",
-        span.clone(),
-        "fresh value requires local binding",
-        "Direct fresh expressions can materialize as managed temporaries for `read`; `mut` and `take` require an explicit local owner.",
-        "bind_fresh_local",
-        format!(
-            "Bind the value first, for example `local value = {}`.",
-            hir_expr_hint(value)
-        ),
-    ));
 }
 
 pub(super) fn check_read_view_not_exclusive(
@@ -147,38 +127,36 @@ pub(super) fn check_constructor_field_initializers(
         };
         let actual_effect = expr_data_effect(&arg.value);
         if field.is_weak && !is_weak_handle_producing_expr(&arg.value) {
-            analyzer.diagnostics.push(error_cause_manual_fix(
-                code::WEAK_FIELD_REQUIRES_WEAK_HANDLE,
-                format!(
-                    "weak field `{name}` for `{constructor_name}` must be initialized from an explicit weak handle."
+            analyzer.diagnostics.push(
+                rsscript_semantics::weak_field_requires_weak_handle_diagnostic(
+                    &constructor_name,
+                    name,
+                    hir_expr_span(&arg.value).clone(),
                 ),
-                hir_expr_span(&arg.value).clone(),
-                "weak field requires weak handle",
-                "Weak fields are non-owning handles. Initializing them must be syntax-visible.",
-                "wrap_with_weak_from",
-                format!("Write `{name}: Weak.from(value: read target)` in the constructor."),
-            ));
-        } else if field.is_handle && actual_effect != Some("read") {
-            constructor_field_effect_diagnostic(
-                analyzer,
-                &constructor_name,
-                name,
-                "read",
-                &arg.value,
-                "Handle fields store managed handles and must be initialized from an explicit `read` value.",
             );
+        } else if field.is_handle && actual_effect != Some("read") {
+            analyzer
+                .diagnostics
+                .push(rsscript_semantics::constructor_field_effect_diagnostic(
+                    &constructor_name,
+                    name,
+                    "read",
+                    hir_expr_span(&arg.value),
+                    "Handle fields store managed handles and must be initialized from an explicit `read` value.",
+                ));
         } else if !field.is_handle
             && constructor_arg_uses_local_inline_place(&arg.value, state)
             && actual_effect != Some("take")
         {
-            constructor_field_effect_diagnostic(
-                analyzer,
-                &constructor_name,
-                name,
-                "take",
-                &arg.value,
-                "Inline fields take ownership of non-Copy local values stored inside the constructed struct.",
-            );
+            analyzer
+                .diagnostics
+                .push(rsscript_semantics::constructor_field_effect_diagnostic(
+                    &constructor_name,
+                    name,
+                    "take",
+                    hir_expr_span(&arg.value),
+                    "Inline fields take ownership of non-Copy local values stored inside the constructed struct.",
+                ));
         } else if !field.is_handle
             && field
                 .ty
@@ -188,11 +166,12 @@ pub(super) fn check_constructor_field_initializers(
             && !is_copy_type_name(&field.ty.to_string())
             && constructor_arg_uses_managed_inline_value(analyzer, &arg.value, state)
         {
-            managed_inline_constructor_field_diagnostic(
-                analyzer,
-                &constructor_name,
-                name,
-                &arg.value,
+            analyzer.diagnostics.push(
+                rsscript_semantics::managed_inline_constructor_field_diagnostic(
+                    &constructor_name,
+                    name,
+                    hir_expr_span(&arg.value).clone(),
+                ),
             );
         }
     }
@@ -336,51 +315,6 @@ pub(super) fn expr_data_effect(expr: &HirExpr) -> Option<&'static str> {
     }
 }
 
-pub(super) fn constructor_field_effect_diagnostic(
-    analyzer: &mut Analyzer<'_>,
-    constructor_name: &str,
-    field_name: &str,
-    expected: &str,
-    value: &HirExpr,
-    cause: &str,
-) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::MISSING_DATA_EFFECT,
-            format!(
-                "field `{field_name}` for `{constructor_name}` must be initialized with `{expected}`."
-            ),
-            hir_expr_span(value).clone(),
-            "missing constructor field effect",
-        )
-        .with_cause(cause)
-        .with_fix_edit(
-            "add_constructor_field_effect",
-            format!("Write `{field_name}: {expected} ...` in the constructor."),
-            FixEdit::insert_before(hir_expr_span(value), format!("{expected} ")),
-        ),
-    );
-}
-
-pub(super) fn managed_inline_constructor_field_diagnostic(
-    analyzer: &mut Analyzer<'_>,
-    constructor_name: &str,
-    field_name: &str,
-    value: &HirExpr,
-) {
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::MISSING_DATA_EFFECT,
-        format!(
-            "field `{field_name}` for `{constructor_name}` cannot be initialized from a managed value."
-        ),
-        hir_expr_span(value).clone(),
-        "managed value used for inline field",
-        "Inline non-Copy fields own their stored value. RSScript has no implicit clone from managed values into inline fields.",
-        "make_field_handle_or_bind_local",
-        "Use a `handle` field, construct a fresh inline value, or bind the value as `local` and pass it with `take`.",
-    ));
-}
-
 pub(super) fn check_spawn_captures(
     analyzer: &mut Analyzer<'_>,
     value: &HirExpr,
@@ -390,15 +324,11 @@ pub(super) fn check_spawn_captures(
     collect_spawn_capture_idents(value, &mut captures);
     for (name, span) in captures {
         if state.is_local(&name) {
-            analyzer.diagnostics.push(error_cause_manual_fix(
-                code::LOCAL_VALUE_RETAINED,
-                format!("spawn cannot capture local value `{name}`."),
-                span,
-                "local captured by spawn",
-                "`spawn` may retain captured values until task completion.",
-                "manage_before_spawn",
-                format!("Convert `{name}` through `manage` before spawning the task."),
-            ));
+            analyzer
+                .diagnostics
+                .push(rsscript_semantics::spawn_local_capture_diagnostic(
+                    &name, span,
+                ));
         } else if state.is_resource(&name) {
             analyzer
                 .diagnostics

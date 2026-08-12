@@ -1,6 +1,6 @@
 //! Ownership diagnostics derived from checked local-flow facts.
 
-use rsscript_diagnostics::{Diagnostic, Span, code};
+use rsscript_diagnostics::{Diagnostic, FixEdit, Span, code};
 
 /// Diagnose use of a value after it moved into managed storage.
 pub fn moved_use_diagnostic(name: &str, use_span: Span, move_span: &Span) -> Diagnostic {
@@ -277,6 +277,110 @@ pub fn invalid_fresh_return_type_diagnostic(
     )
 }
 
+/// Diagnose an exclusive use of an unbound fresh temporary.
+pub fn fresh_requires_local_binding_diagnostic(expression_hint: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        code::FRESH_REQUIRES_LOCAL_BINDING,
+        "`fresh` expression must be bound locally before `mut` or `take` use.",
+        span,
+        "fresh value requires local binding",
+    )
+    .with_cause(
+        "Direct fresh expressions can materialize as managed temporaries for `read`; `mut` and `take` require an explicit local owner.",
+    )
+    .with_fix(
+        "bind_fresh_local",
+        format!("Bind the value first, for example `local value = {expression_hint}."),
+        "manual",
+    )
+}
+
+/// Diagnose a weak constructor field initialized without an explicit weak handle.
+pub fn weak_field_requires_weak_handle_diagnostic(
+    constructor_name: &str,
+    field_name: &str,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::WEAK_FIELD_REQUIRES_WEAK_HANDLE,
+        format!(
+            "weak field `{field_name}` for `{constructor_name}` must be initialized from an explicit weak handle."
+        ),
+        span,
+        "weak field requires weak handle",
+    )
+    .with_cause("Weak fields are non-owning handles. Initializing them must be syntax-visible.")
+    .with_fix(
+        "wrap_with_weak_from",
+        format!("Write `{field_name}: Weak.from(value: read target)` in the constructor."),
+        "manual",
+    )
+}
+
+/// Diagnose a constructor field which omits its ownership data effect.
+pub fn constructor_field_effect_diagnostic(
+    constructor_name: &str,
+    field_name: &str,
+    expected_effect: &str,
+    span: &Span,
+    cause: &str,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::MISSING_DATA_EFFECT,
+        format!(
+            "field `{field_name}` for `{constructor_name}` must be initialized with `{expected_effect}`."
+        ),
+        span.clone(),
+        "missing constructor field effect",
+    )
+    .with_cause(cause)
+    .with_fix_edit(
+        "add_constructor_field_effect",
+        format!("Write `{field_name}: {expected_effect} ...` in the constructor."),
+        FixEdit::insert_before(span, format!("{expected_effect} ")),
+    )
+}
+
+/// Diagnose an inline constructor field initialized from a managed value.
+pub fn managed_inline_constructor_field_diagnostic(
+    constructor_name: &str,
+    field_name: &str,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::MISSING_DATA_EFFECT,
+        format!(
+            "field `{field_name}` for `{constructor_name}` cannot be initialized from a managed value."
+        ),
+        span,
+        "managed value used for inline field",
+    )
+    .with_cause(
+        "Inline non-Copy fields own their stored value. RSScript has no implicit clone from managed values into inline fields.",
+    )
+    .with_fix(
+        "make_field_handle_or_bind_local",
+        "Use a `handle` field, construct a fresh inline value, or bind the value as `local` and pass it with `take`.",
+        "manual",
+    )
+}
+
+/// Diagnose a spawned task that captures a local value.
+pub fn spawn_local_capture_diagnostic(name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        code::LOCAL_VALUE_RETAINED,
+        format!("spawn cannot capture local value `{name}`."),
+        span,
+        "local captured by spawn",
+    )
+    .with_cause("`spawn` may retain captured values until task completion.")
+    .with_fix(
+        "manage_before_spawn",
+        format!("Convert `{name}` through `manage` before spawning the task."),
+        "manual",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -356,6 +460,26 @@ mod tests {
         assert_eq!(
             invalid_fresh_return_type_diagnostic("build", "Class", span(1)).code,
             code::INVALID_FRESH_RETURN_TYPE
+        );
+        assert_eq!(
+            fresh_requires_local_binding_diagnostic("make()", span(1)).code,
+            code::FRESH_REQUIRES_LOCAL_BINDING
+        );
+        assert_eq!(
+            weak_field_requires_weak_handle_diagnostic("Node", "parent", span(1)).code,
+            code::WEAK_FIELD_REQUIRES_WEAK_HANDLE
+        );
+        assert_eq!(
+            constructor_field_effect_diagnostic("Node", "child", "take", &span(1), "owns").code,
+            code::MISSING_DATA_EFFECT
+        );
+        assert_eq!(
+            managed_inline_constructor_field_diagnostic("Node", "child", span(1)).code,
+            code::MISSING_DATA_EFFECT
+        );
+        assert_eq!(
+            spawn_local_capture_diagnostic("value", span(1)).code,
+            code::LOCAL_VALUE_RETAINED
         );
     }
 }

@@ -249,6 +249,10 @@ mechanical acceptance condition holds.
     - [x] **S02.4j — Move `fresh` return diagnostics.** Compiler flow supplies
       clean/unknown return facts and the resolved return type; semantics owns
       non-fresh, unknown-freshness, and invalid-fresh-return-type diagnostics.
+    - [x] **S02.4k — Move `fresh` and constructor ownership diagnostics.**
+      Compiler supplies constructor, field, effect, and capture facts; semantics
+      owns fresh-temporary, weak-field, constructor-field, managed-inline, and
+      spawn-local-capture diagnostics.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.

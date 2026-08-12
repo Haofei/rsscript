@@ -4,7 +4,7 @@ use crate::text_util::{
 use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::Analyzer;
-use crate::diagnostic::{Diagnostic, FixEdit, Span, code};
+use crate::diagnostic::{Diagnostic, Span, code};
 use crate::hir::{
     CallResolution, FieldInfo, HirBindingKind, HirBlock, HirCallArg, HirExpr, HirMatchArm, HirStmt,
     HirTypeKind, ParamEffect, ResolvedCalleeKind,
