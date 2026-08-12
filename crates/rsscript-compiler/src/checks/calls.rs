@@ -891,23 +891,15 @@ fn return_payload_type_mismatch_diagnostic(
     label: &str,
     span: &Span,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::RETURN_TYPE_MISMATCH,
-            format!(
-                "{label} in `{}` has type `{actual}`, expected `{expected}`.",
-                function.name
-            ),
+    analyzer
+        .diagnostics
+        .push(rsscript_semantics::return_payload_type_mismatch_diagnostic(
+            &function.name,
+            actual,
+            expected,
+            label,
             span.clone(),
-            "return type mismatch",
-        )
-        .with_cause("Result and Option return constructors are checked against the declared return payload before Rust lowering.")
-        .with_fix(
-            "match_return_payload_type",
-            format!("Return a `{expected}` payload here."),
-            "manual",
-        ),
-    );
+        ));
 }
 
 fn enum_variant_payload(expr: &HirExpr) -> Option<(&'static str, Option<&HirExpr>)> {
@@ -974,20 +966,14 @@ fn return_type_mismatch_diagnostic(
     expected: &str,
     span: &Span,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::RETURN_TYPE_MISMATCH,
-            format!("return in `{function_name}` has type `{actual}`, expected `{expected}`."),
+    analyzer
+        .diagnostics
+        .push(rsscript_semantics::return_type_mismatch_diagnostic(
+            function_name,
+            actual,
+            expected,
             span.clone(),
-            "return type mismatch",
-        )
-        .with_cause("RSScript return types are part of the review contract and must be checked before Rust lowering.")
-        .with_fix(
-            "match_return_type",
-            format!("Return a value of type `{expected}` here."),
-            "manual",
-        ),
-    );
+        ));
 }
 
 fn check_call_args(

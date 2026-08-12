@@ -41,7 +41,8 @@ pub use await_placement::{
 };
 pub use call_arguments::{
     CallArgumentFact, CallParameterFact, ReceiverCallEffectFact, call_argument_diagnostics,
-    receiver_call_effect_diagnostics,
+    receiver_call_effect_diagnostics, return_payload_type_mismatch_diagnostic,
+    return_type_mismatch_diagnostic,
 };
 pub use call_binding::{BoundArgument, BoundArgumentSource, CallBinding, CallBindingIssue};
 pub use control_flow::{

@@ -261,6 +261,53 @@ pub fn call_argument_diagnostics(
     diagnostics
 }
 
+/// Diagnose a return value that does not match its resolved declared type.
+pub fn return_type_mismatch_diagnostic(
+    function_name: &str,
+    actual: &str,
+    expected: &str,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::RETURN_TYPE_MISMATCH,
+        format!("return in `{function_name}` has type `{actual}`, expected `{expected}`."),
+        span,
+        "return type mismatch",
+    )
+    .with_cause(
+        "RSScript return types are part of the review contract and must be checked before Rust lowering.",
+    )
+    .with_fix(
+        "match_return_type",
+        format!("Return a value of type `{expected}` here."),
+        "manual",
+    )
+}
+
+/// Diagnose a `Result` or `Option` return constructor payload type mismatch.
+pub fn return_payload_type_mismatch_diagnostic(
+    function_name: &str,
+    actual: &str,
+    expected: &str,
+    label: &str,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::RETURN_TYPE_MISMATCH,
+        format!("{label} in `{function_name}` has type `{actual}`, expected `{expected}`."),
+        span,
+        "return type mismatch",
+    )
+    .with_cause(
+        "Result and Option return constructors are checked against the declared return payload before Rust lowering.",
+    )
+    .with_fix(
+        "match_return_payload_type",
+        format!("Return a `{expected}` payload here."),
+        "manual",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,5 +420,18 @@ mod tests {
         let diagnostics = receiver_call_effect_diagnostics(&missing_parameter);
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].code, code::UNKNOWN_CALLEE);
+    }
+
+    #[test]
+    fn derives_return_type_diagnostics_from_resolved_types() {
+        assert_eq!(
+            return_type_mismatch_diagnostic("build", "String", "Int", span()).code,
+            code::RETURN_TYPE_MISMATCH
+        );
+        assert_eq!(
+            return_payload_type_mismatch_diagnostic("build", "String", "Int", "Ok payload", span())
+                .code,
+            code::RETURN_TYPE_MISMATCH
+        );
     }
 }

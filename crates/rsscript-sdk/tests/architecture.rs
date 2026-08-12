@@ -1347,6 +1347,18 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         !compiler_generic_constraints.contains("fn check_receiver_call_self_effect"),
         "compiler must not re-own receiver-call effect diagnostics"
     );
+    for exported in [
+        "pub fn return_type_mismatch_diagnostic",
+        "pub fn return_payload_type_mismatch_diagnostic",
+    ] {
+        assert!(semantic_call_arguments.contains(exported));
+    }
+    assert!(compiler_calls.contains("rsscript_semantics::return_type_mismatch_diagnostic"));
+    assert!(compiler_calls.contains("rsscript_semantics::return_payload_type_mismatch_diagnostic"));
+    assert!(
+        !compiler_calls.contains("RSScript return types are part of the review contract"),
+        "compiler must not re-own return type diagnostic text"
+    );
 
     let semantic_await_placement =
         read(&root.join("crates/rsscript-semantics/src/await_placement.rs"));

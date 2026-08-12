@@ -214,6 +214,9 @@ mechanical acceptance condition holds.
         receiver's declared and call-site `read`/`mut`/`take` contract is now a
         semantic query over resolved receiver facts; compiler only resolves the
         receiver expression and signature slot.
+      - [x] **S02.3.2d — Move return type diagnostics.** Compiler resolves
+        return and variant-payload type facts; semantics owns both canonical
+        return mismatch diagnostics and fixes.
   - [ ] **S02.4 — Move ownership and resource checks.** Relocate moves, escapes,
     borrows, `fresh`/`owned`/`noescape`, resource declarations, and cleanup
     validation with property and hostile-corpus coverage.
