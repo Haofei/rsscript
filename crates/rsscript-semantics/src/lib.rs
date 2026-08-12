@@ -38,6 +38,7 @@ mod local_flow_facts;
 mod local_flow_graph;
 mod local_flow_solver;
 mod local_flow_state;
+mod moved_use_flow;
 mod operators;
 mod ownership;
 mod place;
@@ -145,6 +146,7 @@ pub use local_flow_solver::{
     merge_local_if_state, merge_local_loop_state, transfer_local_flow_step,
 };
 pub use local_flow_state::{LocalFlowState, initial_local_flow_state, path_root};
+pub use moved_use_flow::moved_uses_from_flow;
 pub use operators::{operator_overload_attempt_diagnostic, operator_type_mismatch_diagnostic};
 pub use ownership::{
     constructor_field_effect_diagnostic, explicit_closure_capture_contract_diagnostic,

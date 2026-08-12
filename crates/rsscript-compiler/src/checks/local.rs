@@ -5,15 +5,13 @@ use crate::diagnostic::Span;
 use crate::hir::HirEffectEvent;
 #[cfg(test)]
 use crate::hir::HirReturnProof;
-use crate::hir::{HirBindingKind, HirBlock, HirEffectEventKind, HirExpr, HirFunctionBody, HirStmt};
+use crate::hir::{HirBindingKind, HirBlock, HirEffectEventKind, HirFunctionBody};
 
 use super::body::Flow;
 
 mod flow;
-mod ownership;
 
 pub(crate) use flow::*;
-use ownership::*;
 
 pub(crate) use rsscript_semantics::LocalFlowState as BodyState;
 pub(crate) use rsscript_semantics::LocalFlowStep;
@@ -90,16 +88,12 @@ impl<'a> LocalAnalysis<'a> {
     }
 
     pub(crate) fn moved_uses(&self) -> Vec<MovedUse> {
-        let mut moved_uses = Vec::new();
-        if let Some(block) = self.body.and_then(|body| body.block.as_ref()) {
-            collect_ordered_moved_uses_from_block(
-                block,
-                &self.flow_entry_states_by_span,
-                &mut moved_uses,
-            );
-            collect_closure_local_moved_uses_from_block(block, &mut moved_uses);
-        }
-        moved_uses
+        self.body
+            .and_then(|body| body.block.as_ref())
+            .map(|block| {
+                rsscript_semantics::moved_uses_from_flow(block, &self.flow_entry_states_by_span)
+            })
+            .unwrap_or_default()
     }
 
     pub(crate) fn managed_to_local_uses(&self) -> Vec<ManagedToLocalUse> {

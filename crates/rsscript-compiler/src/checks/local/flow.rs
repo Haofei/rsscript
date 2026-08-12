@@ -6,10 +6,6 @@ pub(super) fn collect_local_flow_steps(block: &HirBlock) -> Vec<LocalFlowStep> {
     rsscript_semantics::local_flow_graph(block)
 }
 
-pub(super) fn hir_stmt_span(statement: &HirStmt) -> &Span {
-    rsscript_semantics::local_flow_statement_span(statement)
-}
-
 pub(crate) fn merge_if_state(
     state: &mut BodyState,
     base: &BodyState,

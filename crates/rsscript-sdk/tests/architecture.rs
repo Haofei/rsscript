@@ -1522,82 +1522,36 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
             "compiler must not re-own local-flow solver `{forbidden}`"
         );
     }
-    let compiler_local_ownership =
-        read(&root.join("crates/rsscript-compiler/src/checks/local/ownership.rs"));
     assert!(compiler_local_analysis.contains("rsscript_semantics::initial_local_flow_state"));
     assert!(semantic_local_flow_solver.contains("path_root"));
-    assert!(compiler_local_ownership.contains("rsscript_semantics::path_root"));
     assert!(
-        !compiler_local_ownership.contains("fn initial_state_from_body"),
-        "compiler must not re-own local-flow entry-state construction"
-    );
-    assert!(
-        !compiler_local_ownership.contains("fn path_root"),
-        "compiler must not re-own place-path root resolution"
+        !root
+            .join("crates/rsscript-compiler/src/checks/local/ownership.rs")
+            .exists(),
+        "compiler must not retain moved-use or ownership flow traversal"
     );
     let compiler_assign = read(&root.join("crates/rsscript-compiler/src/analyzer/assign.rs"));
     assert!(compiler_assign.contains("rsscript_semantics::is_copy_type_name"));
     let compiler_calls = read(&root.join("crates/rsscript-compiler/src/checks/calls.rs"));
     assert!(compiler_calls.contains("rsscript_semantics::is_cross_isolate_transferable"));
     assert!(compiler_local_analysis.contains("rsscript_semantics::take_handle_fields"));
-    let compiler_local_ownership =
-        read(&root.join("crates/rsscript-compiler/src/checks/local/ownership.rs"));
-    assert!(compiler_local_ownership.contains("rsscript_semantics::hir_expr_path"));
-    for forbidden in [
-        "fn collect_take_handle_fields",
-        "fn collect_block_take_handle_fields",
-        "fn collect_stmt_take_handle_fields",
-        "fn collect_expr_take_handle_fields",
-    ] {
-        assert!(
-            !compiler_local_ownership.contains(forbidden),
-            "compiler must not re-own semantic handle-field traversal `{forbidden}`"
-        );
-    }
-    for forbidden in [
-        "fn fresh_field_access_base",
-        "fn fresh_handle_or_weak_field_path",
-        "fn fresh_expr_path",
-        "fn fresh_wrapper_callee",
-        "fn fresh_return_value_span",
-    ] {
-        assert!(
-            !compiler_local_ownership.contains(forbidden),
-            "compiler must not re-own fresh-return projection `{forbidden}`"
-        );
-    }
     let semantic_fresh_return_flow =
         read(&root.join("crates/rsscript-semantics/src/fresh_return_flow.rs"));
     assert!(semantic_fresh_return_flow.contains("fresh_return_issues_from_flow"));
     assert!(semantic_fresh_return_flow.contains("fresh_return_value_span"));
     assert!(compiler_local_analysis.contains("rsscript_semantics::fresh_return_issues_from_flow"));
-    for forbidden in [
-        "fn collect_fresh_return_issues_from_block",
-        "fn collect_fresh_return_issues_from_stmt",
-        "fn collect_fresh_return_issue",
-    ] {
-        assert!(
-            !compiler_local_ownership.contains(forbidden),
-            "compiler must not re-own fresh-return flow rule `{forbidden}`"
-        );
-    }
     let semantic_retained_closure_flow =
         read(&root.join("crates/rsscript-semantics/src/retained_closure_flow.rs"));
     assert!(semantic_retained_closure_flow.contains("retained_closure_captures_from_flow"));
     assert!(
         compiler_local_analysis.contains("rsscript_semantics::retained_closure_captures_from_flow")
     );
-    for forbidden in [
-        "fn collect_retained_closure_captures_from_block",
-        "fn collect_retained_closure_captures_from_stmt",
-        "fn collect_retained_closure_captures_from_expr",
-        "fn push_retained_closure_capture",
-    ] {
-        assert!(
-            !compiler_local_ownership.contains(forbidden),
-            "compiler must not re-own retained-closure flow rule `{forbidden}`"
-        );
-    }
+    let semantic_moved_use_flow =
+        read(&root.join("crates/rsscript-semantics/src/moved_use_flow.rs"));
+    assert!(semantic_moved_use_flow.contains("moved_uses_from_flow"));
+    assert!(semantic_moved_use_flow.contains("collect_closure_local_moved_uses_from_block"));
+    assert!(semantic_moved_use_flow.contains("apply_match_take_move"));
+    assert!(compiler_local_analysis.contains("rsscript_semantics::moved_uses_from_flow"));
     assert!(semantic_local_flow_builder.contains("fresh_match_binding"));
     for forbidden in [
         "fn fresh_payload_type_for_variant",
@@ -1629,15 +1583,6 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     }
     assert!(semantic_retained_closure_flow.contains("retained_closure_argument"));
     assert!(semantic_local_flow_builder.contains("retained_closure_argument"));
-    for forbidden in [
-        "fn retained_closure_arg",
-        "fn retained_closure_wrapper_callee",
-    ] {
-        assert!(
-            !compiler_local_ownership.contains(forbidden),
-            "compiler must not re-own retained closure query `{forbidden}`"
-        );
-    }
     assert!(
         !root
             .join("crates/rsscript-compiler/src/checks/local/resources.rs")

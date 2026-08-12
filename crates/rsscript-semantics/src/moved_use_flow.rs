@@ -1,10 +1,24 @@
-//! Local move, freshness, retained capture, and handle-field ownership analysis.
+//! Flow-sensitive use-after-move facts derived from checked HIR.
 
-use super::*;
+use crate::hir::{HirBlock, HirExpr, HirStmt};
+use crate::{LocalFlowState, MovedUse};
+use rsscript_syntax::Span;
+use std::collections::HashMap;
 
-pub(super) fn collect_ordered_moved_uses_from_block(
+/// Collect all use-after-move facts for a checked function body.
+pub fn moved_uses_from_flow(
     block: &HirBlock,
-    entry_states: &HashMap<Span, BodyState>,
+    entry_states: &HashMap<Span, LocalFlowState>,
+) -> Vec<MovedUse> {
+    let mut moved_uses = Vec::new();
+    collect_ordered_moved_uses_from_block(block, entry_states, &mut moved_uses);
+    collect_closure_local_moved_uses_from_block(block, &mut moved_uses);
+    moved_uses
+}
+
+fn collect_ordered_moved_uses_from_block(
+    block: &HirBlock,
+    entry_states: &HashMap<Span, LocalFlowState>,
     moved_uses: &mut Vec<MovedUse>,
 ) {
     for statement in &block.statements {
@@ -12,12 +26,14 @@ pub(super) fn collect_ordered_moved_uses_from_block(
     }
 }
 
-pub(super) fn collect_ordered_moved_uses_from_stmt(
+fn collect_ordered_moved_uses_from_stmt(
     statement: &HirStmt,
-    entry_states: &HashMap<Span, BodyState>,
+    entry_states: &HashMap<Span, LocalFlowState>,
     moved_uses: &mut Vec<MovedUse>,
 ) {
-    let entry_state = entry_states.get(hir_stmt_span(statement)).cloned();
+    let entry_state = entry_states
+        .get(crate::local_flow_statement_span(statement))
+        .cloned();
     match statement {
         HirStmt::Let {
             value: Some(value), ..
@@ -105,9 +121,9 @@ pub(super) fn collect_ordered_moved_uses_from_stmt(
     }
 }
 
-pub(super) fn collect_ordered_moved_uses_from_expr(
+fn collect_ordered_moved_uses_from_expr(
     expr: &HirExpr,
-    state: &mut BodyState,
+    state: &mut LocalFlowState,
     moved_uses: &mut Vec<MovedUse>,
 ) {
     match expr {
@@ -136,7 +152,7 @@ pub(super) fn collect_ordered_moved_uses_from_expr(
         } => {
             collect_ordered_moved_uses_from_expr(value, state, moved_uses);
             state.apply_move_events(events);
-            if let Some((path, _)) = rsscript_semantics::hir_expr_path(value) {
+            if let Some((path, _)) = crate::hir_expr_path(value) {
                 state.mark_moved(&path, span.clone());
             }
         }
@@ -177,7 +193,7 @@ pub(super) fn collect_ordered_moved_uses_from_expr(
             }
         }
         HirExpr::Closure { body, .. } => {
-            for (name, span) in rsscript_semantics::hir_block_identifier_uses(body) {
+            for (name, span) in crate::hir_block_identifier_uses(body) {
                 if let Some(move_span) = state.move_span(&name) {
                     push_moved_use(moved_uses, name, span, move_span.clone());
                 }
@@ -217,14 +233,14 @@ pub(super) fn collect_ordered_moved_uses_from_expr(
 /// Handle the `HirExpr::Field` branch of move-use collection: resolve the field
 /// access to a path, recording a moved-use against the moved root or the moved
 /// path, falling back to recursing into the base when no path resolves.
-pub(super) fn collect_field_move_use(
+fn collect_field_move_use(
     expr: &HirExpr,
     base: &HirExpr,
-    state: &mut BodyState,
+    state: &mut LocalFlowState,
     moved_uses: &mut Vec<MovedUse>,
 ) {
-    if let Some((path, span)) = rsscript_semantics::hir_expr_path(expr) {
-        if let Some(root) = rsscript_semantics::path_root(&path)
+    if let Some((path, span)) = crate::hir_expr_path(expr) {
+        if let Some(root) = crate::path_root(&path)
             && let Some(move_span) = state.move_span(root)
         {
             push_moved_use(moved_uses, root.to_string(), span, move_span.clone());
@@ -245,9 +261,9 @@ pub(super) fn collect_field_move_use(
 /// under-report across complex branches but never over-reports (no false positive
 /// move errors). The expr walker mutates `state` as it applies each statement's
 /// move events, so sequential moves are visible to later statements.
-pub(super) fn collect_ordered_moved_uses_from_block_threaded(
+fn collect_ordered_moved_uses_from_block_threaded(
     block: &HirBlock,
-    state: &mut BodyState,
+    state: &mut LocalFlowState,
     moved_uses: &mut Vec<MovedUse>,
 ) {
     for statement in &block.statements {
@@ -339,32 +355,26 @@ pub(super) fn collect_ordered_moved_uses_from_block_threaded(
     }
 }
 
-pub(super) fn apply_match_take_move(
-    effect: Option<crate::syntax::ast::DataEffect>,
+fn apply_match_take_move(
+    effect: Option<rsscript_syntax::ast::DataEffect>,
     value: &HirExpr,
-    state: &mut BodyState,
+    state: &mut LocalFlowState,
 ) {
-    if effect != Some(crate::syntax::ast::DataEffect::Take) {
+    if effect != Some(rsscript_syntax::ast::DataEffect::Take) {
         return;
     }
-    if let Some((path, span)) = rsscript_semantics::hir_expr_path(value) {
+    if let Some((path, span)) = crate::hir_expr_path(value) {
         state.mark_moved(&path, span);
     }
 }
 
-pub(super) fn collect_closure_local_moved_uses_from_block(
-    block: &HirBlock,
-    moved_uses: &mut Vec<MovedUse>,
-) {
+fn collect_closure_local_moved_uses_from_block(block: &HirBlock, moved_uses: &mut Vec<MovedUse>) {
     for statement in &block.statements {
         collect_closure_local_moved_uses_from_stmt(statement, moved_uses);
     }
 }
 
-pub(super) fn collect_closure_local_moved_uses_from_stmt(
-    statement: &HirStmt,
-    moved_uses: &mut Vec<MovedUse>,
-) {
+fn collect_closure_local_moved_uses_from_stmt(statement: &HirStmt, moved_uses: &mut Vec<MovedUse>) {
     match statement {
         HirStmt::Let {
             value: Some(value), ..
@@ -427,15 +437,11 @@ pub(super) fn collect_closure_local_moved_uses_from_stmt(
     }
 }
 
-pub(super) fn collect_closure_local_moved_uses_from_expr(
-    expr: &HirExpr,
-    moved_uses: &mut Vec<MovedUse>,
-) {
+fn collect_closure_local_moved_uses_from_expr(expr: &HirExpr, moved_uses: &mut Vec<MovedUse>) {
     match expr {
         HirExpr::Closure { body, .. } => {
-            let steps = collect_local_flow_steps(body);
-            let entry_states =
-                rsscript_semantics::local_flow_entry_states(&steps, BodyState::default());
+            let steps = crate::local_flow_graph(body);
+            let entry_states = crate::local_flow_entry_states(&steps, LocalFlowState::default());
             collect_ordered_moved_uses_from_block(body, &entry_states, moved_uses);
             collect_closure_local_moved_uses_from_block(body, moved_uses);
         }
@@ -496,12 +502,7 @@ pub(super) fn collect_closure_local_moved_uses_from_expr(
     }
 }
 
-pub(super) fn push_moved_use(
-    moved_uses: &mut Vec<MovedUse>,
-    name: String,
-    use_span: Span,
-    move_span: Span,
-) {
+fn push_moved_use(moved_uses: &mut Vec<MovedUse>, name: String, use_span: Span, move_span: Span) {
     let moved_use = MovedUse {
         name,
         use_span,
