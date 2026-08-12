@@ -47,7 +47,8 @@ pub use assignment::{
 };
 pub use await_placement::{
     AwaitLiveValueFact, async_call_consumption_diagnostic, async_fn_lowering_diagnostic,
-    await_live_value_diagnostics, await_operand_diagnostic, await_placement_diagnostics,
+    async_function_cancellation_diagnostics, await_live_value_diagnostics,
+    await_operand_diagnostic, await_placement_diagnostics,
     cancellation_token_outside_task_group_diagnostic,
 };
 pub use call_arguments::{

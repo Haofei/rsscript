@@ -2,6 +2,9 @@
 
 use crate::hir::{CallResolution, HirBlock, HirExpr, HirStmt, assign_target_reads};
 use rsscript_diagnostics::{Diagnostic, code};
+use rsscript_syntax::ast::{
+    Block as AstBlock, Callee, Expr as AstExpr, FunctionDecl, Stmt as AstStmt,
+};
 
 /// Diagnose `await` expressions outside an async function or structured task
 /// group. Operand type and lifetime validation are separate semantic passes.
@@ -108,6 +111,121 @@ pub fn cancellation_token_outside_task_group_diagnostic(
         "Call `Task.cancellation_token()` inside the `task_group` block and pass the token into this function as a `read CancellationToken` parameter.",
         "manual",
     )
+}
+
+/// Validate cancellation-token ownership for one source async function.
+///
+/// `Task.cancellation_token()` is meaningful only in the lexical body of a
+/// task group. A nested task group owns an independent token and is therefore
+/// intentionally excluded from this traversal.
+pub fn async_function_cancellation_diagnostics(function: &FunctionDecl) -> Vec<Diagnostic> {
+    if !function.is_async {
+        return Vec::new();
+    }
+    first_cancellation_token_in_block(&function.body)
+        .map(cancellation_token_outside_task_group_diagnostic)
+        .into_iter()
+        .collect()
+}
+
+fn first_cancellation_token_in_block(block: &AstBlock) -> Option<rsscript_diagnostics::Span> {
+    block
+        .statements
+        .iter()
+        .find_map(first_cancellation_token_in_statement)
+}
+
+fn first_cancellation_token_in_statement(
+    statement: &AstStmt,
+) -> Option<rsscript_diagnostics::Span> {
+    match statement {
+        AstStmt::Let(statement) => statement
+            .value
+            .as_ref()
+            .and_then(first_cancellation_token_in_expr),
+        AstStmt::Return(statement) => statement
+            .value
+            .as_ref()
+            .and_then(first_cancellation_token_in_expr),
+        AstStmt::Expr(expr) => first_cancellation_token_in_expr(expr),
+        AstStmt::With(statement) => first_cancellation_token_in_expr(&statement.resource)
+            .or_else(|| first_cancellation_token_in_block(&statement.body)),
+        AstStmt::If(statement) => first_cancellation_token_in_expr(&statement.condition)
+            .or_else(|| first_cancellation_token_in_block(&statement.then_body))
+            .or_else(|| {
+                statement
+                    .else_body
+                    .as_ref()
+                    .and_then(first_cancellation_token_in_block)
+            }),
+        AstStmt::Loop(statement) => statement
+            .condition
+            .as_ref()
+            .and_then(first_cancellation_token_in_expr)
+            .or_else(|| first_cancellation_token_in_block(&statement.body)),
+        AstStmt::For(statement) => first_cancellation_token_in_expr(&statement.iterable)
+            .or_else(|| first_cancellation_token_in_block(&statement.body)),
+        AstStmt::Match(statement) => {
+            first_cancellation_token_in_expr(&statement.value).or_else(|| {
+                statement
+                    .arms
+                    .iter()
+                    .find_map(|arm| first_cancellation_token_in_block(&arm.body))
+            })
+        }
+        AstStmt::TaskGroup(_) => None,
+        AstStmt::LetElse(statement) => first_cancellation_token_in_expr(&statement.value)
+            .or_else(|| first_cancellation_token_in_block(&statement.else_body)),
+        _ => None,
+    }
+}
+
+fn first_cancellation_token_in_expr(expr: &AstExpr) -> Option<rsscript_diagnostics::Span> {
+    match expr {
+        AstExpr::Call { callee, args, span } => {
+            if let Callee::Qualified { namespace, name } = callee
+                && namespace == "Task"
+                && name == "cancellation_token"
+            {
+                return Some(span.clone());
+            }
+            args.iter()
+                .find_map(|argument| first_cancellation_token_in_expr(&argument.value))
+        }
+        AstExpr::Binary { left, right, .. } => first_cancellation_token_in_expr(left)
+            .or_else(|| first_cancellation_token_in_expr(right)),
+        AstExpr::Field { base, .. } => first_cancellation_token_in_expr(base),
+        AstExpr::Index { base, index, .. } => first_cancellation_token_in_expr(base)
+            .or_else(|| first_cancellation_token_in_expr(index)),
+        AstExpr::Effect { value, .. }
+        | AstExpr::Manage { value, .. }
+        | AstExpr::Spawn { value, .. }
+        | AstExpr::Await { value, .. }
+        | AstExpr::Try { value, .. } => first_cancellation_token_in_expr(value),
+        AstExpr::Closure { body, .. } => first_cancellation_token_in_block(body),
+        AstExpr::Match { value, arms, .. } => {
+            first_cancellation_token_in_expr(value).or_else(|| {
+                arms.iter()
+                    .find_map(|arm| first_cancellation_token_in_block(&arm.body))
+            })
+        }
+        AstExpr::MapLiteral { entries, .. } => entries
+            .iter()
+            .find_map(|entry| first_cancellation_token_in_expr(&entry.key))
+            .or_else(|| {
+                entries
+                    .iter()
+                    .find_map(|entry| first_cancellation_token_in_expr(&entry.value))
+            }),
+        AstExpr::ObjectLiteral { .. }
+        | AstExpr::ArrayLiteral { .. }
+        | AstExpr::Ident(..)
+        | AstExpr::Number(..)
+        | AstExpr::String(..)
+        | AstExpr::CharLiteral(..)
+        | AstExpr::MultilineString(..)
+        | AstExpr::Unknown(_) => None,
+    }
 }
 
 /// A value whose current flow state would retain it across an `await`.
@@ -414,6 +532,27 @@ mod tests {
             code::CANCELLATION_TOKEN_OUTSIDE_TASK_GROUP
         );
         assert_eq!(cancellation.fixes[0].kind, "pass_cancellation_token");
+    }
+
+    #[test]
+    fn async_function_cancellation_rule_stops_at_task_group_boundaries() {
+        let program = rsscript_syntax::parse_source(
+            "async.rss",
+            "async fn invalid() { Task.cancellation_token() }\nasync fn valid() { task_group { Task.cancellation_token() } }",
+        );
+        let functions = program
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                rsscript_syntax::ast::Item::Function(function) => Some(function),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            async_function_cancellation_diagnostics(functions[0]).len(),
+            1
+        );
+        assert!(async_function_cancellation_diagnostics(functions[1]).is_empty());
     }
 
     #[test]

@@ -1357,16 +1357,9 @@ impl Analyzer<'_> {
                     "Move the await to a statement boundary, or put it inside an `if`/`loop`/`match` body where RSScript can create an explicit async boundary.",
                 ));
             }
-            // Independent of lowerability: a `Task.cancellation_token()` call in
-            // A `Task.cancellation_token()` call in an async fn outside an
-            // actual task_group still has no lexical cancellation owner, so it
-            // would silently lower to a never-cancelled token. Reject it instead
-            // of handing out fake structured cancellation.
-            if let Some(span) = block_first_cancellation_token(&function.body) {
-                diagnostics.push(
-                    rsscript_semantics::cancellation_token_outside_task_group_diagnostic(span),
-                );
-            }
+            diagnostics.extend(rsscript_semantics::async_function_cancellation_diagnostics(
+                function,
+            ));
         }
         self.diagnostics.extend(diagnostics);
     }
@@ -1468,95 +1461,6 @@ fn fn_type_param_type_name(type_name: &str, index: usize) -> Option<String> {
         .or_else(|| param.strip_prefix("take "))
         .unwrap_or(param);
     Some(bare.trim().to_string())
-}
-
-/// First `Task.cancellation_token()` call span anywhere in a function body.
-fn block_first_cancellation_token(block: &Block) -> Option<crate::diagnostic::Span> {
-    block
-        .statements
-        .iter()
-        .find_map(stmt_first_cancellation_token)
-}
-
-fn stmt_first_cancellation_token(statement: &Stmt) -> Option<crate::diagnostic::Span> {
-    match statement {
-        Stmt::Let(stmt) => stmt.value.as_ref().and_then(expr_first_cancellation_token),
-        Stmt::Return(stmt) => stmt.value.as_ref().and_then(expr_first_cancellation_token),
-        Stmt::Expr(expr) => expr_first_cancellation_token(expr),
-        Stmt::With(stmt) => expr_first_cancellation_token(&stmt.resource)
-            .or_else(|| block_first_cancellation_token(&stmt.body)),
-        Stmt::If(stmt) => expr_first_cancellation_token(&stmt.condition)
-            .or_else(|| block_first_cancellation_token(&stmt.then_body))
-            .or_else(|| {
-                stmt.else_body
-                    .as_ref()
-                    .and_then(block_first_cancellation_token)
-            }),
-        Stmt::Loop(stmt) => stmt
-            .condition
-            .as_ref()
-            .and_then(expr_first_cancellation_token)
-            .or_else(|| block_first_cancellation_token(&stmt.body)),
-        Stmt::For(stmt) => expr_first_cancellation_token(&stmt.iterable)
-            .or_else(|| block_first_cancellation_token(&stmt.body)),
-        Stmt::Match(stmt) => expr_first_cancellation_token(&stmt.value).or_else(|| {
-            stmt.arms
-                .iter()
-                .find_map(|arm| block_first_cancellation_token(&arm.body))
-        }),
-        Stmt::TaskGroup(_) => None,
-        Stmt::LetElse(stmt) => expr_first_cancellation_token(&stmt.value)
-            .or_else(|| block_first_cancellation_token(&stmt.else_body)),
-        _ => None,
-    }
-}
-
-fn expr_first_cancellation_token(expr: &Expr) -> Option<crate::diagnostic::Span> {
-    match expr {
-        Expr::Call { callee, args, span } => {
-            if let Callee::Qualified { namespace, name } = callee
-                && namespace == "Task"
-                && name == "cancellation_token"
-            {
-                return Some(span.clone());
-            }
-            args.iter()
-                .find_map(|arg| expr_first_cancellation_token(&arg.value))
-        }
-        Expr::Binary { left, right, .. } => {
-            expr_first_cancellation_token(left).or_else(|| expr_first_cancellation_token(right))
-        }
-        Expr::Field { base, .. } => expr_first_cancellation_token(base),
-        Expr::Index { base, index, .. } => {
-            expr_first_cancellation_token(base).or_else(|| expr_first_cancellation_token(index))
-        }
-        Expr::Effect { value, .. }
-        | Expr::Manage { value, .. }
-        | Expr::Spawn { value, .. }
-        | Expr::Await { value, .. }
-        | Expr::Try { value, .. } => expr_first_cancellation_token(value),
-        Expr::Closure { body, .. } => block_first_cancellation_token(body),
-        Expr::Match { value, arms, .. } => expr_first_cancellation_token(value).or_else(|| {
-            arms.iter()
-                .find_map(|arm| block_first_cancellation_token(&arm.body))
-        }),
-        Expr::MapLiteral { entries, .. } => entries
-            .iter()
-            .find_map(|entry| expr_first_cancellation_token(&entry.key))
-            .or_else(|| {
-                entries
-                    .iter()
-                    .find_map(|entry| expr_first_cancellation_token(&entry.value))
-            }),
-        Expr::ObjectLiteral { .. }
-        | Expr::ArrayLiteral { .. }
-        | Expr::Ident(..)
-        | Expr::Number(..)
-        | Expr::String(..)
-        | Expr::CharLiteral(..)
-        | Expr::MultilineString(..)
-        | Expr::Unknown(_) => None,
-    }
 }
 
 /// AST analogue of [`crate::hir::assign_target_reads`]: the evaluated

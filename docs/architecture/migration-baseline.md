@@ -230,6 +230,9 @@ mechanical acceptance condition holds.
       source-AST traversal and validation of async-let lexical scope, direct
       await placement, declaration order, and exactly-once consumption;
       compiler only appends the resulting semantic diagnostics.
+    - [x] **S02.5t — Move async cancellation-token ownership traversal.**
+      Semantics owns the source-AST traversal that excludes nested task-group
+      boundaries and derives cancellation-token diagnostics for async functions.
     - [x] **S02.2j — Move bounded generic substitution.** Semantics owns the
       recursive substitution algorithm; compiler contributes only a narrow
       adapter to its shared cancellation and substitution budget.
