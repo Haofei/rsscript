@@ -22,6 +22,7 @@ mod declarations;
 mod derive_fields;
 mod derives;
 mod external_types;
+mod fresh_return_projection;
 mod generic_constraints;
 pub mod hir;
 mod hir_uses;
@@ -95,6 +96,9 @@ pub use derive_fields::derive_field_diagnostics;
 pub use derives::derive_syntax_diagnostics;
 pub use external_types::{
     external_binding_type_diagnostics, unknown_type_diagnostics, unknown_type_name_diagnostic,
+};
+pub use fresh_return_projection::{
+    fresh_field_access_base, fresh_handle_or_weak_field_path, fresh_return_value_span,
 };
 pub use generic_constraints::{
     ProtocolSatisfactionFacts, SubstitutionBudget, SubstitutionError,

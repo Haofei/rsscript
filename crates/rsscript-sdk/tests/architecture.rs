@@ -1288,6 +1288,9 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "is_copy_type_name",
         "is_cross_isolate_transferable",
         "take_handle_fields",
+        "fresh_field_access_base",
+        "fresh_handle_or_weak_field_path",
+        "fresh_return_value_span",
         "fd_surface_diagnostics",
         "unknown_binding_diagnostics",
         "unknown_field_diagnostics",
@@ -1472,6 +1475,19 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
             "compiler must not re-own semantic handle-field traversal `{forbidden}`"
         );
     }
+    for forbidden in [
+        "fn fresh_field_access_base",
+        "fn fresh_handle_or_weak_field_path",
+        "fn fresh_expr_path",
+        "fn fresh_wrapper_callee",
+        "fn fresh_return_value_span",
+    ] {
+        assert!(
+            !compiler_local_ownership.contains(forbidden),
+            "compiler must not re-own fresh-return projection `{forbidden}`"
+        );
+    }
+    assert!(compiler_local_ownership.contains("rsscript_semantics::fresh_return_value_span"));
     for forbidden in ["fn is_copy_type_name", "fn is_cross_isolate_transferable"] {
         assert!(
             !compiler_local_flow.contains(forbidden),

@@ -76,7 +76,7 @@ pub(super) fn collect_fresh_return_issue(
 ) {
     match proof {
         HirReturnProof::Ident { name } => {
-            let span = fresh_return_value_span(value)
+            let span = rsscript_semantics::fresh_return_value_span(value)
                 .unwrap_or(return_span)
                 .clone();
             if let Some(state) = entry_states.get(return_span) {
@@ -107,19 +107,19 @@ pub(super) fn collect_fresh_return_issue(
         }
         HirReturnProof::Unknown => {
             if let Some(value) = value
-                && let Some(path) = fresh_handle_or_weak_field_path(value)
+                && let Some(path) = rsscript_semantics::fresh_handle_or_weak_field_path(value)
             {
                 push_fresh_return_issue(
                     issues,
                     FreshReturnIssueKind::NotClean { name: path },
-                    fresh_return_value_span(Some(value))
+                    rsscript_semantics::fresh_return_value_span(Some(value))
                         .unwrap_or(return_span)
                         .clone(),
                 );
                 return;
             }
             if let Some(value) = value
-                && fresh_field_access_base(value).is_some_and(|name| {
+                && rsscript_semantics::fresh_field_access_base(value).is_some_and(|name| {
                     entry_states.get(return_span).is_some_and(|state| {
                         state.is_local(name)
                             && state.is_clean_local(name)
@@ -132,7 +132,7 @@ pub(super) fn collect_fresh_return_issue(
             push_fresh_return_issue(
                 issues,
                 FreshReturnIssueKind::Unknown,
-                fresh_return_value_span(value)
+                rsscript_semantics::fresh_return_value_span(value)
                     .unwrap_or(return_span)
                     .clone(),
             );
@@ -141,99 +141,6 @@ pub(super) fn collect_fresh_return_issue(
         | HirReturnProof::StructConstructor
         | HirReturnProof::FreshCall
         | HirReturnProof::Literal => {}
-    }
-}
-
-pub(super) fn fresh_field_access_base(expr: &HirExpr) -> Option<&str> {
-    match expr {
-        HirExpr::Field { base, access, .. } if !access.is_handle && !access.is_weak => {
-            fresh_field_access_base(base)
-        }
-        HirExpr::Ident { name, .. } => Some(name),
-        HirExpr::Call { callee, args, .. } if fresh_wrapper_callee(callee) => args
-            .first()
-            .and_then(|arg| fresh_field_access_base(&arg.value)),
-        HirExpr::Effect { value, .. }
-        | HirExpr::Spawn { value, .. }
-        | HirExpr::Await { value, .. }
-        | HirExpr::Try { value, .. } => fresh_field_access_base(value),
-        HirExpr::Manage { .. }
-        | HirExpr::MapLiteral { .. }
-        | HirExpr::ObjectLiteral { .. }
-        | HirExpr::ArrayLiteral { .. }
-        | HirExpr::Match { .. }
-        | HirExpr::Field { .. }
-        | HirExpr::Index { .. }
-        | HirExpr::Call { .. }
-        | HirExpr::Binary { .. }
-        | HirExpr::Closure { .. }
-        | HirExpr::Number { .. }
-        | HirExpr::String { .. }
-        | HirExpr::Char { .. }
-        | HirExpr::Unknown(_) => None,
-    }
-}
-
-pub(super) fn fresh_handle_or_weak_field_path(expr: &HirExpr) -> Option<String> {
-    match expr {
-        HirExpr::Field {
-            base, name, access, ..
-        } if access.is_handle || access.is_weak => {
-            let base = fresh_expr_path(base).unwrap_or_else(|| "<expr>".to_string());
-            Some(format!("{base}.{name}"))
-        }
-        HirExpr::Field { base, .. } => fresh_handle_or_weak_field_path(base),
-        HirExpr::Call { callee, args, .. } if fresh_wrapper_callee(callee) => args
-            .first()
-            .and_then(|arg| fresh_handle_or_weak_field_path(&arg.value)),
-        HirExpr::Effect { value, .. }
-        | HirExpr::Spawn { value, .. }
-        | HirExpr::Await { value, .. }
-        | HirExpr::Try { value, .. } => fresh_handle_or_weak_field_path(value),
-        HirExpr::Ident { .. }
-        | HirExpr::MapLiteral { .. }
-        | HirExpr::ObjectLiteral { .. }
-        | HirExpr::ArrayLiteral { .. }
-        | HirExpr::Match { .. }
-        | HirExpr::Manage { .. }
-        | HirExpr::Index { .. }
-        | HirExpr::Call { .. }
-        | HirExpr::Binary { .. }
-        | HirExpr::Closure { .. }
-        | HirExpr::Number { .. }
-        | HirExpr::String { .. }
-        | HirExpr::Char { .. }
-        | HirExpr::Unknown(_) => None,
-    }
-}
-
-pub(super) fn fresh_expr_path(expr: &HirExpr) -> Option<String> {
-    match expr {
-        HirExpr::Ident { name, .. } => Some(name.clone()),
-        HirExpr::Field { base, name, .. } => {
-            fresh_expr_path(base).map(|base| format!("{base}.{name}"))
-        }
-        HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => fresh_expr_path(value),
-        _ => None,
-    }
-}
-
-pub(super) fn fresh_wrapper_callee(callee: &Callee) -> bool {
-    matches!(
-        callee,
-        Callee::Name(name) if matches!(name.as_str(), "Ok" | "Some")
-    )
-}
-
-pub(super) fn fresh_return_value_span(value: Option<&HirExpr>) -> Option<&Span> {
-    let mut value = value?;
-    loop {
-        match value {
-            HirExpr::Effect { value: inner, .. } | HirExpr::Manage { value: inner, .. } => {
-                value = inner;
-            }
-            _ => return Some(hir_expr_span(value)),
-        }
     }
 }
 

@@ -384,6 +384,9 @@ mechanical acceptance condition holds.
     - [x] **S02.4x — Move taken handle-field traversal.** Semantics owns the
       nested HIR traversal that identifies `take` on handle fields; compiler
       local analysis only retains the resulting ownership facts.
+    - [x] **S02.4y — Move fresh-return HIR projections.** Semantics owns fresh
+      field-base, handle/weak-path, and operand-span projection rules; compiler
+      local flow provides only state-dependent freshness evidence.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.
