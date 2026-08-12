@@ -554,9 +554,7 @@ pub(super) fn collect_expr_managed_closure_capture_names(
 }
 
 pub(super) fn push_hir_block_inline_capture_names(block: &HirBlock, captures: &mut Vec<String>) {
-    let mut uses = Vec::new();
-    collect_hir_block_inline_capture_uses(block, &mut uses);
-    for (name, _) in uses {
+    for (name, _) in rsscript_semantics::hir_block_inline_capture_uses(block) {
         if !captures.contains(&name) {
             captures.push(name);
         }

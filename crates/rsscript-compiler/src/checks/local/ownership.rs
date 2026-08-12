@@ -1033,9 +1033,9 @@ pub(super) fn collect_retained_closure_captures_from_expr(
                     let Some((body, closure_span)) = retained_closure_arg(&arg.value) else {
                         continue;
                     };
-                    let mut uses = Vec::new();
-                    collect_hir_block_inline_capture_uses(body, &mut uses);
-                    for (used_name, capture_span) in uses {
+                    for (used_name, capture_span) in
+                        rsscript_semantics::hir_block_inline_capture_uses(body)
+                    {
                         if state.is_local(&used_name) {
                             push_retained_closure_capture(
                                 captures,

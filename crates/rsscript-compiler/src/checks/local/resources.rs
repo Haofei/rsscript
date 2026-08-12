@@ -434,9 +434,10 @@ pub(super) fn collect_stmt_managed_closure_uses(
             span,
             ..
         } => {
-            let mut uses = Vec::new();
-            collect_hir_block_inline_capture_uses(body, &mut uses);
-            closures.insert(span.clone(), uses);
+            closures.insert(
+                span.clone(),
+                rsscript_semantics::hir_block_inline_capture_uses(body),
+            );
             collect_block_managed_closure_uses(body, closures);
         }
         HirStmt::Let {
@@ -551,142 +552,6 @@ pub(super) fn collect_expr_managed_closure_uses(
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Char { .. }
-        | HirExpr::Unknown(_) => {}
-    }
-}
-
-pub(super) fn collect_hir_block_inline_capture_uses(
-    block: &HirBlock,
-    uses: &mut Vec<(String, Span)>,
-) {
-    for statement in &block.statements {
-        collect_hir_stmt_inline_capture_uses(statement, uses);
-        match statement {
-            HirStmt::With { body, .. } => collect_hir_block_inline_capture_uses(body, uses),
-            HirStmt::If {
-                then_body,
-                else_body,
-                ..
-            } => {
-                collect_hir_block_inline_capture_uses(then_body, uses);
-                if let Some(else_body) = else_body {
-                    collect_hir_block_inline_capture_uses(else_body, uses);
-                }
-            }
-            HirStmt::Loop { body, .. } => collect_hir_block_inline_capture_uses(body, uses),
-            HirStmt::For { body, .. } => collect_hir_block_inline_capture_uses(body, uses),
-            HirStmt::Match { arms, .. } => {
-                for arm in arms {
-                    collect_hir_block_inline_capture_uses(&arm.body, uses);
-                }
-            }
-            HirStmt::Select { arms, .. } => {
-                for arm in arms {
-                    collect_hir_block_inline_capture_uses(&arm.body, uses);
-                }
-            }
-            HirStmt::Let { .. }
-            | HirStmt::Return { .. }
-            | HirStmt::Expr(_)
-            | HirStmt::Assign { .. }
-            | HirStmt::Break(_)
-            | HirStmt::Continue(_)
-            | HirStmt::Unknown(_) => {}
-        }
-    }
-}
-
-pub(super) fn collect_hir_stmt_inline_capture_uses(
-    statement: &HirStmt,
-    uses: &mut Vec<(String, Span)>,
-) {
-    match statement {
-        HirStmt::Let {
-            value: Some(value), ..
-        }
-        | HirStmt::Return {
-            value: Some(value), ..
-        }
-        | HirStmt::Expr(value) => collect_hir_expr_inline_capture_uses(value, uses),
-        HirStmt::Assign { target, value, .. } => {
-            for read in crate::hir::assign_target_reads(target) {
-                collect_hir_expr_inline_capture_uses(read, uses);
-            }
-            collect_hir_expr_inline_capture_uses(value, uses);
-        }
-        HirStmt::With { resource, .. } => collect_hir_expr_inline_capture_uses(resource, uses),
-        HirStmt::If { condition, .. } => collect_hir_expr_inline_capture_uses(condition, uses),
-        HirStmt::Loop {
-            condition: Some(condition),
-            ..
-        } => collect_hir_expr_inline_capture_uses(condition, uses),
-        HirStmt::For { iterable, .. } => collect_hir_expr_inline_capture_uses(iterable, uses),
-        HirStmt::Match { value, .. } => collect_hir_expr_inline_capture_uses(value, uses),
-        HirStmt::Select { arms, .. } => {
-            for arm in arms {
-                collect_hir_expr_inline_capture_uses(&arm.operation, uses);
-            }
-        }
-        HirStmt::Let { value: None, .. }
-        | HirStmt::Return { value: None, .. }
-        | HirStmt::Loop {
-            condition: None, ..
-        }
-        | HirStmt::Break(_)
-        | HirStmt::Continue(_)
-        | HirStmt::Unknown(_) => {}
-    }
-}
-
-pub(super) fn collect_hir_expr_inline_capture_uses(expr: &HirExpr, uses: &mut Vec<(String, Span)>) {
-    match expr {
-        HirExpr::Ident { name, span, .. } => uses.push((name.clone(), span.clone())),
-        HirExpr::Field { base, access, .. } => {
-            if !access.is_handle {
-                collect_hir_expr_inline_capture_uses(base, uses);
-            }
-        }
-        HirExpr::Index { base, index, .. } => {
-            collect_hir_expr_inline_capture_uses(base, uses);
-            collect_hir_expr_inline_capture_uses(index, uses);
-        }
-        HirExpr::Call { args, .. } => {
-            for arg in args {
-                collect_hir_expr_inline_capture_uses(&arg.value, uses);
-            }
-        }
-        HirExpr::ObjectLiteral { fields, .. } => {
-            for field in fields {
-                collect_hir_expr_inline_capture_uses(&field.value, uses);
-            }
-        }
-        HirExpr::MapLiteral { entries, .. } => {
-            for entry in entries {
-                collect_hir_expr_inline_capture_uses(&entry.key, uses);
-                collect_hir_expr_inline_capture_uses(&entry.value, uses);
-            }
-        }
-        HirExpr::ArrayLiteral { items, .. } => {
-            for item in items {
-                collect_hir_expr_inline_capture_uses(item, uses);
-            }
-        }
-        HirExpr::Effect { value, .. }
-        | HirExpr::Manage { value, .. }
-        | HirExpr::Spawn { value, .. }
-        | HirExpr::Await { value, .. }
-        | HirExpr::Try { value, .. } => {
-            collect_hir_expr_inline_capture_uses(value, uses);
-        }
-        HirExpr::Binary { left, right, .. } => {
-            collect_hir_expr_inline_capture_uses(left, uses);
-            collect_hir_expr_inline_capture_uses(right, uses);
-        }
-        HirExpr::Closure { body, .. } => collect_hir_block_inline_capture_uses(body, uses),
-        HirExpr::Number { .. }
-        | HirExpr::String { .. }
-        | HirExpr::Char { .. }
-        | HirExpr::Match { .. }
         | HirExpr::Unknown(_) => {}
     }
 }

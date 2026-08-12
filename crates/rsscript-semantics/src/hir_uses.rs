@@ -32,6 +32,15 @@ pub fn hir_stmt_effect_events(statement: &HirStmt) -> Vec<HirEffectEvent> {
     events
 }
 
+/// Return identifier uses that an inline closure captures by value. Handle
+/// field projections are deliberately excluded because they do not capture the
+/// managed object itself.
+pub fn hir_block_inline_capture_uses(block: &HirBlock) -> Vec<(String, Span)> {
+    let mut uses = Vec::new();
+    collect_block_inline_capture_uses(block, &mut uses);
+    uses
+}
+
 /// Return the canonical HIR place path for an identifier or field chain.
 pub fn hir_expr_path(expr: &HirExpr) -> Option<(String, Span)> {
     match expr {
@@ -298,6 +307,134 @@ fn collect_expr_effect_events(expr: &HirExpr, events: &mut Vec<HirEffectEvent>) 
     }
 }
 
+fn collect_block_inline_capture_uses(block: &HirBlock, uses: &mut Vec<(String, Span)>) {
+    for statement in &block.statements {
+        collect_stmt_inline_capture_uses(statement, uses);
+        match statement {
+            HirStmt::With { body, .. } => collect_block_inline_capture_uses(body, uses),
+            HirStmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_block_inline_capture_uses(then_body, uses);
+                if let Some(else_body) = else_body {
+                    collect_block_inline_capture_uses(else_body, uses);
+                }
+            }
+            HirStmt::Loop { body, .. } => collect_block_inline_capture_uses(body, uses),
+            HirStmt::For { body, .. } => collect_block_inline_capture_uses(body, uses),
+            HirStmt::Match { arms, .. } => {
+                for arm in arms {
+                    collect_block_inline_capture_uses(&arm.body, uses);
+                }
+            }
+            HirStmt::Select { arms, .. } => {
+                for arm in arms {
+                    collect_block_inline_capture_uses(&arm.body, uses);
+                }
+            }
+            HirStmt::Let { .. }
+            | HirStmt::Return { .. }
+            | HirStmt::Expr(_)
+            | HirStmt::Assign { .. }
+            | HirStmt::Break(_)
+            | HirStmt::Continue(_)
+            | HirStmt::Unknown(_) => {}
+        }
+    }
+}
+
+fn collect_stmt_inline_capture_uses(statement: &HirStmt, uses: &mut Vec<(String, Span)>) {
+    match statement {
+        HirStmt::Let {
+            value: Some(value), ..
+        }
+        | HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => collect_expr_inline_capture_uses(value, uses),
+        HirStmt::Assign { target, value, .. } => {
+            for read in assign_target_reads(target) {
+                collect_expr_inline_capture_uses(read, uses);
+            }
+            collect_expr_inline_capture_uses(value, uses);
+        }
+        HirStmt::With { resource, .. } => collect_expr_inline_capture_uses(resource, uses),
+        HirStmt::If { condition, .. } => collect_expr_inline_capture_uses(condition, uses),
+        HirStmt::Loop {
+            condition: Some(condition),
+            ..
+        } => collect_expr_inline_capture_uses(condition, uses),
+        HirStmt::For { iterable, .. } => collect_expr_inline_capture_uses(iterable, uses),
+        HirStmt::Match { value, .. } => collect_expr_inline_capture_uses(value, uses),
+        HirStmt::Select { arms, .. } => {
+            for arm in arms {
+                collect_expr_inline_capture_uses(&arm.operation, uses);
+            }
+        }
+        HirStmt::Let { value: None, .. }
+        | HirStmt::Return { value: None, .. }
+        | HirStmt::Loop {
+            condition: None, ..
+        }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn collect_expr_inline_capture_uses(expr: &HirExpr, uses: &mut Vec<(String, Span)>) {
+    match expr {
+        HirExpr::Ident { name, span, .. } => uses.push((name.clone(), span.clone())),
+        HirExpr::Field { base, access, .. } => {
+            if !access.is_handle {
+                collect_expr_inline_capture_uses(base, uses);
+            }
+        }
+        HirExpr::Index { base, index, .. } => {
+            collect_expr_inline_capture_uses(base, uses);
+            collect_expr_inline_capture_uses(index, uses);
+        }
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                collect_expr_inline_capture_uses(&arg.value, uses);
+            }
+        }
+        HirExpr::ObjectLiteral { fields, .. } => {
+            for field in fields {
+                collect_expr_inline_capture_uses(&field.value, uses);
+            }
+        }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                collect_expr_inline_capture_uses(&entry.key, uses);
+                collect_expr_inline_capture_uses(&entry.value, uses);
+            }
+        }
+        HirExpr::ArrayLiteral { items, .. } => {
+            for item in items {
+                collect_expr_inline_capture_uses(item, uses);
+            }
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
+        | HirExpr::Try { value, .. } => collect_expr_inline_capture_uses(value, uses),
+        HirExpr::Binary { left, right, .. } => {
+            collect_expr_inline_capture_uses(left, uses);
+            collect_expr_inline_capture_uses(right, uses);
+        }
+        HirExpr::Closure { body, .. } => collect_block_inline_capture_uses(body, uses),
+        HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Char { .. }
+        | HirExpr::Match { .. }
+        | HirExpr::Unknown(_) => {}
+    }
+}
+
 fn push_match_take_event(
     scrutinee_effect: Option<DataEffect>,
     value: &HirExpr,
@@ -374,5 +511,37 @@ fn main(value: Int) -> Unit {
                 ..
             }] if binding_name == "value"
         ));
+    }
+
+    #[test]
+    fn collects_inline_closure_capture_uses() {
+        let program = parse_source(
+            "captures.rss",
+            r#"
+fn main(value: Int) -> Unit {
+    let callback = || { value }
+}
+"#,
+        );
+        let hir = Hir::from_syntax(&program);
+        let HirStmt::Let {
+            value: Some(HirExpr::Closure { body, .. }),
+            ..
+        } = &hir
+            .function_body("main")
+            .and_then(|body| body.block.as_ref())
+            .unwrap()
+            .statements[0]
+        else {
+            panic!("expected a closure binding");
+        };
+
+        assert_eq!(
+            hir_block_inline_capture_uses(body)
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>(),
+            ["value"]
+        );
     }
 }

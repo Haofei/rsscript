@@ -364,6 +364,9 @@ mechanical acceptance condition holds.
       owns canonical HIR effect-event extraction and identifier/field path
       resolution; compiler CFG consumes those neutral facts without traversing
       expressions to reconstruct `take` events.
+    - [x] **S02.4s — Move HIR inline-capture queries.** Semantics owns the
+      handle-aware closure capture-use traversal; compiler consumes its facts
+      for managed closures, local flow, and retained-closure diagnostics.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.
