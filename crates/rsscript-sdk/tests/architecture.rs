@@ -1182,6 +1182,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "char_literal_scalar_diagnostic",
         "bool_condition_diagnostic",
         "for_iterable_diagnostic",
+        "match_expression_arm_type_diagnostics",
         "function_fallthrough_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
@@ -1398,6 +1399,20 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         !compiler_body_semantics.contains("fn check_for_iterable_type"),
         "compiler must not re-own for iterable diagnostics"
     );
+    assert!(semantic_control_flow.contains("pub fn match_expression_arm_type_diagnostics"));
+    assert!(
+        compiler_body_semantics
+            .contains("rsscript_semantics::match_expression_arm_type_diagnostics")
+    );
+    for forbidden in [
+        "fn check_match_expression_arm_types",
+        "fn match_arm_value_type",
+    ] {
+        assert!(
+            !compiler_body_semantics.contains(forbidden),
+            "compiler must not re-own match arm result rule `{forbidden}`"
+        );
+    }
 
     let semantic_generic_constraints =
         read(&root.join("crates/rsscript-semantics/src/generic_constraints.rs"));

@@ -261,6 +261,9 @@ mechanical acceptance condition holds.
     - [x] **S02.5h — Move `for` iterable diagnostics.** Checked-HIR type
       validation for synchronous `List<T>` and asynchronous `Stream<T>` loop
       inputs now belongs to semantics; compiler retains loop flow handling.
+    - [x] **S02.5i — Move `match` expression arm result diagnostics.** Checked-HIR
+      validation that all value-producing match arms agree with the resolved
+      expression result type now belongs to semantics.
   - [ ] **S02.6 — Delete compiler semantic-rule modules.** Add architecture
     tests that permit compiler orchestration only and reject semantic-rule
     implementations outside `rsscript-semantics`.

@@ -1327,7 +1327,12 @@ pub(super) fn check_expr_semantics_with_context(
             if *scrutinee_effect == Some(DataEffect::Take) {
                 check_take_operand_is_local(analyzer, value, &arm_span(arms), state);
             }
-            check_match_expression_arm_types(analyzer, arms, type_name.as_deref());
+            analyzer
+                .diagnostics
+                .extend(rsscript_semantics::match_expression_arm_type_diagnostics(
+                    arms,
+                    type_name.as_deref(),
+                ));
             check_expr_semantics_with_context(
                 analyzer,
                 local_analysis,
@@ -1414,45 +1419,5 @@ pub(super) fn check_expr_semantics_with_context(
         | HirExpr::String { .. }
         | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
-    }
-}
-
-pub(super) fn check_match_expression_arm_types(
-    analyzer: &mut Analyzer<'_>,
-    arms: &[HirMatchArm],
-    expected_type: Option<&str>,
-) {
-    let Some(expected_type) = expected_type else {
-        return;
-    };
-    for arm in arms {
-        let Some(arm_type) = match_arm_value_type(&arm.body) else {
-            continue;
-        };
-        if arm_type == expected_type {
-            continue;
-        }
-        analyzer.diagnostics.push(error_cause_manual_fix(
-            code::CONTROL_FLOW_TYPE_MISMATCH,
-            format!(
-                "match arm has type `{arm_type}`, expected `{expected_type}` from the first produced arm."
-            ),
-            arm.span.clone(),
-            "match arm type mismatch",
-            "A match expression must produce one compatible value type across every arm.",
-            "align_match_arm_types",
-            "Return the same value type from every match expression arm.",
-        ));
-    }
-}
-
-pub(super) fn match_arm_value_type(block: &HirBlock) -> Option<&str> {
-    match block.statements.iter().next_back()? {
-        HirStmt::Return {
-            value: Some(value), ..
-        }
-        | HirStmt::Expr(value)
-        | HirStmt::Assign { value, .. } => hir_expr_type_name(value),
-        _ => None,
     }
 }

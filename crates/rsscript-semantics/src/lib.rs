@@ -44,7 +44,7 @@ pub use call_arguments::{
 pub use call_binding::{BoundArgument, BoundArgumentSource, CallBinding, CallBindingIssue};
 pub use control_flow::{
     bool_condition_diagnostic, for_iterable_diagnostic, function_fallthrough_diagnostics,
-    missing_return_value_diagnostics,
+    match_expression_arm_type_diagnostics, missing_return_value_diagnostics,
 };
 pub use database::{
     AnalysisResult, CompilationSession, CompilationSessionStats, FrontendCompletion,

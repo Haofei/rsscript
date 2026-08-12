@@ -1,6 +1,6 @@
 //! Semantic control-flow diagnostics over resolved HIR.
 
-use crate::hir::{Hir, HirBlock, HirExpr, HirStmt, number_literal_type_name};
+use crate::hir::{Hir, HirBlock, HirExpr, HirMatchArm, HirStmt, number_literal_type_name};
 use rsscript_diagnostics::{Diagnostic, code};
 use rsscript_syntax::ast::{FunctionDecl, Item, Program, TypeRef};
 use std::collections::HashSet;
@@ -116,6 +116,38 @@ pub fn for_iterable_diagnostic(
         .with_cause(cause)
         .with_fix(fix_id, fix, "manual"),
     )
+}
+
+/// Diagnose `match` expression arms that produce a value incompatible with the
+/// resolved expression result type.
+pub fn match_expression_arm_type_diagnostics(
+    arms: &[HirMatchArm],
+    expected_type: Option<&str>,
+) -> Vec<Diagnostic> {
+    let Some(expected_type) = expected_type else {
+        return Vec::new();
+    };
+    arms.iter()
+        .filter_map(|arm| {
+            let arm_type = match_arm_value_type(&arm.body)?;
+            (arm_type != expected_type).then(|| {
+                Diagnostic::error(
+                    code::CONTROL_FLOW_TYPE_MISMATCH,
+                    format!(
+                        "match arm has type `{arm_type}`, expected `{expected_type}` from the first produced arm."
+                    ),
+                    arm.span.clone(),
+                    "match arm type mismatch",
+                )
+                .with_cause("A match expression must produce one compatible value type across every arm.")
+                .with_fix(
+                    "align_match_arm_types",
+                    "Return the same value type from every match expression arm.",
+                    "manual",
+                )
+            })
+        })
+        .collect()
 }
 
 fn collect_bare_returns(
@@ -308,6 +340,17 @@ fn generic_item_type<'a>(type_name: &'a str, root: &str) -> Option<&'a str> {
     (!inner.is_empty()).then_some(inner)
 }
 
+fn match_arm_value_type(block: &HirBlock) -> Option<&str> {
+    match block.statements.iter().next_back()? {
+        HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value)
+        | HirStmt::Assign { value, .. } => expr_type_name(value),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,5 +423,35 @@ mod tests {
         assert_eq!(diagnostic.code, code::CONTROL_FLOW_TYPE_MISMATCH);
         assert!(for_iterable_diagnostic(&value, Some("fresh List<Int>"), false).is_none());
         assert!(for_iterable_diagnostic(&value, Some("Stream<Int>"), true).is_none());
+    }
+
+    #[test]
+    fn validates_match_expression_arm_value_types() {
+        let program = parse_source(
+            "match.rss",
+            r#"fn value(flag: Bool) -> Int {
+                return match flag {
+                    true => { 1 }
+                    false => { "no" }
+                }
+            }"#,
+        );
+        let hir = Hir::from_syntax(&program);
+        let body = hir
+            .function_body("value")
+            .and_then(|body| body.block.as_ref())
+            .expect("function body");
+        let HirStmt::Return {
+            value: Some(HirExpr::Match {
+                arms, type_name, ..
+            }),
+            ..
+        } = &body.statements[0]
+        else {
+            panic!("match return")
+        };
+        let diagnostics = match_expression_arm_type_diagnostics(arms, type_name.as_deref());
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, code::CONTROL_FLOW_TYPE_MISMATCH);
     }
 }
