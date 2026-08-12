@@ -5,7 +5,6 @@ use crate::text_util::{
 use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::Analyzer;
-use crate::checks::diagnostic_helpers::error_cause_manual_fix;
 use crate::checks::shared::builtin_value_type_name;
 use crate::diagnostic::{Diagnostic, Span, code};
 use crate::hir::{
@@ -338,15 +337,14 @@ fn check_binding_type(
     if argument_type_matches(&resolved_expected, &resolved_actual) {
         return;
     }
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::ARGUMENT_TYPE_MISMATCH,
-        format!("binding `{name}` has initializer type `{actual}`, expected `{expected}`."),
-        hir_expr_span(value).clone(),
-        "binding type mismatch",
-        "Explicit `let` and `local` type annotations are source-level contracts and must match the initializer before Rust lowering.",
-        "match_binding_type",
-        format!("Initialize `{name}` with a `{expected}` value, or change the binding annotation."),
-    ));
+    analyzer
+        .diagnostics
+        .push(rsscript_semantics::binding_type_mismatch_diagnostic(
+            name,
+            actual,
+            expected,
+            hir_expr_span(value).clone(),
+        ));
 }
 
 /// Identifies which call site is performing the Result/Option variant
@@ -383,33 +381,28 @@ impl PayloadCheckSite<'_> {
     ) {
         match self {
             PayloadCheckSite::Binding { name } => {
-                analyzer.diagnostics.push(error_cause_manual_fix(
-                    code::ARGUMENT_TYPE_MISMATCH,
-                    format!(
-                        "binding `{name}` has initializer payload type `{actual}`, expected `{expected}`."
+                analyzer.diagnostics.push(
+                    rsscript_semantics::binding_payload_type_mismatch_diagnostic(
+                        name,
+                        actual,
+                        expected,
+                        span.clone(),
                     ),
-                    span.clone(),
-                    "binding type mismatch",
-                    "Result and Option binding initializers are checked against explicit binding payload types before Rust lowering.",
-                    "match_binding_payload_type",
-                    format!("Initialize `{name}` with a `{expected}` payload, or change the binding annotation."),
-                ));
+                );
             }
             PayloadCheckSite::Argument {
                 call_name,
                 arg_name,
             } => {
-                analyzer.diagnostics.push(error_cause_manual_fix(
-                    code::ARGUMENT_TYPE_MISMATCH,
-                    format!(
-                        "argument `{arg_name}` for `{call_name}` has payload type `{actual}`, expected `{expected}`."
+                analyzer.diagnostics.push(
+                    rsscript_semantics::argument_payload_type_mismatch_diagnostic(
+                        call_name,
+                        arg_name,
+                        actual,
+                        expected,
+                        span.clone(),
                     ),
-                    span.clone(),
-                    "argument type mismatch",
-                    "Result and Option argument constructors are checked against the resolved parameter payload before Rust lowering.",
-                    "match_argument_payload_type",
-                    format!("Pass a `{expected}` payload for `{arg_name}`."),
-                ));
+                );
             }
         }
     }
@@ -1010,45 +1003,22 @@ fn check_call_args(
     let signature = match resolution {
         CallResolution::Resolved { signature, .. } => signature,
         CallResolution::Unknown => {
-            analyzer.diagnostics.push(
-                Diagnostic::error(
-                    code::UNKNOWN_CALLEE,
-                    format!("call to `{}` does not resolve.", callee_display(callee)),
+            analyzer
+                .diagnostics
+                .push(rsscript_semantics::unknown_callee_diagnostic(
+                    &callee_display(callee),
                     call_span.clone(),
-                    "unknown callee",
-                )
-                .with_cause(
-                    "The callee is not a user function, known type constructor, enum variant, or builtin signature.",
-                )
-                .with_fix(
-                    "declare_or_import_callee",
-                    "Declare the function or add a builtin signature for this API.",
-                    "manual",
-                ),
-            );
+                ));
             return;
         }
         CallResolution::Ambiguous { candidates } => {
-            analyzer.diagnostics.push(
-                Diagnostic::error(
-                    code::UNKNOWN_CALLEE,
-                    format!(
-                        "receiver-call `{}` is ambiguous between {}.",
-                        callee_display(callee),
-                        candidates.join(", ")
-                    ),
+            analyzer
+                .diagnostics
+                .push(rsscript_semantics::ambiguous_receiver_call_diagnostic(
+                    &callee_display(callee),
+                    candidates,
                     call_span.clone(),
-                    "ambiguous receiver call",
-                )
-                .with_cause(
-                    "Receiver-call shorthand is only allowed when exactly one inherent or protocol method candidate is visible.",
-                )
-                .with_fix(
-                    "use_canonical_call",
-                    "Write the canonical qualified call explicitly.",
-                    "manual",
-                ),
-            );
+                ));
             return;
         }
         CallResolution::EnumVariant => return,
@@ -1288,20 +1258,15 @@ fn check_argument_types(
             &analyzer.expand_type_alias(&expected_type),
             &analyzer.expand_type_alias(actual_type),
         ) {
-            analyzer.diagnostics.push(error_cause_manual_fix(
-                code::ARGUMENT_TYPE_MISMATCH,
-                format!(
-                    "argument `{name}` for `{call_name}` has type `{actual_type}`, expected `{}`.",
-                    expected_type
-                ),
-                hir_expr_span(&arg.value).clone(),
-                "argument type mismatch",
-                "RSScript call argument types must match the resolved callee signature before Rust lowering.",
-                "match_argument_type",
-                format!(
-                    "Pass a value of type `{expected_type}` for `{name}`.",
-                ),
-            ));
+            analyzer
+                .diagnostics
+                .push(rsscript_semantics::argument_type_mismatch_diagnostic(
+                    call_name,
+                    name,
+                    actual_type,
+                    &expected_type,
+                    hir_expr_span(&arg.value).clone(),
+                ));
         }
     }
 }
@@ -1423,21 +1388,6 @@ fn check_message_channel_payload(
         return;
     }
     analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::MESSAGE_PAYLOAD_NOT_TRANSFERABLE,
-            format!("message channel payload `{element}` is not cross-isolate-transferable."),
-            call_span.clone(),
-            "non-transferable message payload",
-        )
-        .with_cause(
-            "A message must be self-contained data with no managed handle, so it can cross an isolate boundary without sharing mutable state. v1 allows Copy scalars, `String`, and `Bytes`.",
-        )
-        .with_fix(
-            "use_transferable_message_payload",
-            format!(
-                "Send a transferable value (a Copy scalar, `String`, or `Bytes`) instead of `{element}`, or use `Channel.bounded` for an in-isolate channel."
-            ),
-            "manual",
-        ),
+        rsscript_semantics::message_payload_not_transferable_diagnostic(element, call_span.clone()),
     );
 }

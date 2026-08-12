@@ -233,17 +233,15 @@ pub(super) fn check_map_literal_entry_expr(
     if unresolved_generic_type(analyzer, actual) || argument_type_matches(expected, actual) {
         return;
     }
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::ARGUMENT_TYPE_MISMATCH,
-        format!("map literal {role} has type `{actual}`, expected `{expected}`."),
-        hir_expr_span(value).clone(),
-        "map literal entry type mismatch",
-        format!(
-            "The {context} is typed as a `Map`, so every map literal {role} must match the corresponding `Map` type argument before Rust lowering."
+    analyzer.diagnostics.push(
+        rsscript_semantics::map_literal_entry_type_mismatch_diagnostic(
+            role,
+            actual,
+            expected,
+            context,
+            hir_expr_span(value).clone(),
         ),
-        "match_map_literal_entry_type",
-        format!("Use a {role} expression of type `{expected}`."),
-    ));
+    );
 }
 
 pub(super) fn check_list_literal_type(
@@ -299,17 +297,14 @@ pub(super) fn check_list_literal_item_expr(
     if unresolved_generic_type(analyzer, actual) || argument_type_matches(expected, actual) {
         return;
     }
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::ARGUMENT_TYPE_MISMATCH,
-        format!("list literal item has type `{actual}`, expected `{expected}`."),
-        hir_expr_span(value).clone(),
-        "list literal item type mismatch",
-        format!(
-            "The {context} is typed as a `List`, so every array literal item must match the `List` item type before Rust lowering."
+    analyzer.diagnostics.push(
+        rsscript_semantics::list_literal_item_type_mismatch_diagnostic(
+            actual,
+            expected,
+            context,
+            hir_expr_span(value).clone(),
         ),
-        "match_list_literal_item_type",
-        format!("Use a `{expected}` value for this list literal item."),
-    ));
+    );
 }
 
 pub(super) fn is_result_type_name(type_name: &str) -> bool {

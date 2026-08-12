@@ -35,6 +35,7 @@ mod source_rules;
 mod symbols;
 mod try_checks;
 mod type_aliases;
+mod type_compatibility;
 mod types;
 mod weak_fields;
 pub use await_placement::{
@@ -102,6 +103,13 @@ pub use place::{
     move_base_field_conflict_diagnostic,
 };
 pub use try_checks::{try_error_type_diagnostics, try_operand_diagnostic};
+pub use type_compatibility::{
+    ambiguous_receiver_call_diagnostic, argument_payload_type_mismatch_diagnostic,
+    argument_type_mismatch_diagnostic, binding_payload_type_mismatch_diagnostic,
+    binding_type_mismatch_diagnostic, list_literal_item_type_mismatch_diagnostic,
+    map_literal_entry_type_mismatch_diagnostic, message_payload_not_transferable_diagnostic,
+    unknown_callee_diagnostic,
+};
 pub use weak_fields::{is_weak_upgrade_call, weak_field_upgrade_diagnostic};
 
 /// Builtin source type roots recognized before backend lowering.

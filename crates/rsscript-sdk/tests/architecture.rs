@@ -1409,6 +1409,46 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         !compiler_closure_contracts.contains("noescape callback `{name}` cannot be stored"),
         "compiler must not re-own closure escape diagnostic text"
     );
+    let semantic_type_compatibility =
+        read(&root.join("crates/rsscript-semantics/src/type_compatibility.rs"));
+    for exported in [
+        "pub fn binding_type_mismatch_diagnostic",
+        "pub fn binding_payload_type_mismatch_diagnostic",
+        "pub fn argument_payload_type_mismatch_diagnostic",
+        "pub fn argument_type_mismatch_diagnostic",
+        "pub fn map_literal_entry_type_mismatch_diagnostic",
+        "pub fn list_literal_item_type_mismatch_diagnostic",
+        "pub fn unknown_callee_diagnostic",
+        "pub fn ambiguous_receiver_call_diagnostic",
+        "pub fn message_payload_not_transferable_diagnostic",
+    ] {
+        assert!(semantic_type_compatibility.contains(exported));
+    }
+    for delegated in [
+        "rsscript_semantics::binding_type_mismatch_diagnostic",
+        "rsscript_semantics::binding_payload_type_mismatch_diagnostic",
+        "rsscript_semantics::argument_payload_type_mismatch_diagnostic",
+        "rsscript_semantics::argument_type_mismatch_diagnostic",
+        "rsscript_semantics::unknown_callee_diagnostic",
+        "rsscript_semantics::ambiguous_receiver_call_diagnostic",
+        "rsscript_semantics::message_payload_not_transferable_diagnostic",
+    ] {
+        assert!(compiler_calls.contains(delegated));
+    }
+    let compiler_type_compatibility =
+        read(&root.join("crates/rsscript-compiler/src/checks/calls/type_compatibility.rs"));
+    assert!(
+        compiler_type_compatibility
+            .contains("rsscript_semantics::map_literal_entry_type_mismatch_diagnostic")
+    );
+    assert!(
+        compiler_type_compatibility
+            .contains("rsscript_semantics::list_literal_item_type_mismatch_diagnostic")
+    );
+    assert!(
+        !compiler_calls.contains("The callee is not a user function"),
+        "compiler must not re-own resolved call diagnostic text"
+    );
 
     let semantic_await_placement =
         read(&root.join("crates/rsscript-semantics/src/await_placement.rs"));

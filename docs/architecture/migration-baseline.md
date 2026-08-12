@@ -223,6 +223,10 @@ mechanical acceptance condition holds.
       - [x] **S02.3.2f — Move callback escape diagnostics.** Semantics owns the
         noescape/local closure escape-context model and diagnostics; compiler
         only finds escape uses and supplies resolved context/span facts.
+      - [x] **S02.3.2g — Move resolved call type diagnostics.** Compiler keeps
+        alias expansion and type matching, while semantics owns binding,
+        argument/payload, map/list literal, resolution, and message-transfer
+        diagnostic contracts.
   - [ ] **S02.4 — Move ownership and resource checks.** Relocate moves, escapes,
     borrows, `fresh`/`owned`/`noescape`, resource declarations, and cleanup
     validation with property and hostile-corpus coverage.
