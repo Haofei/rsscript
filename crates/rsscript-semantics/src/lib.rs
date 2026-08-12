@@ -33,6 +33,7 @@ mod interface_descriptor;
 mod literals;
 mod local_binding_facts;
 mod local_flow_facts;
+mod local_flow_graph;
 mod local_flow_state;
 mod operators;
 mod ownership;
@@ -129,6 +130,9 @@ pub use local_binding_facts::{LocalBindingValueFacts, local_binding_value_facts}
 pub use local_flow_facts::{
     FreshReturnIssue, FreshReturnIssueKind, ManagedToLocalUse, MovedUse, ResourceEscape,
     ResourceEscapeKind, RetainedClosureCapture, RetainedLocalUse, TakeHandleField,
+};
+pub use local_flow_graph::{
+    LocalFlowBinding, LocalFlowEdge, LocalFlowResourceBinding, LocalFlowStep, LocalFlowStepKind,
 };
 pub use local_flow_state::{LocalFlowState, initial_local_flow_state, path_root};
 pub use operators::{operator_overload_attempt_diagnostic, operator_type_mismatch_diagnostic};

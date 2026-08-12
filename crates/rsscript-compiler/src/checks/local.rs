@@ -3,9 +3,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::checks::shared::hir_expr_span;
 use crate::diagnostic::Span;
+#[cfg(test)]
+use crate::hir::HirEffectEvent;
 use crate::hir::{
-    CallResolution, HirBindingKind, HirBlock, HirEffectEvent, HirEffectEventKind, HirExpr,
-    HirFunctionBody, HirReturnProof, HirStmt,
+    CallResolution, HirBindingKind, HirBlock, HirEffectEventKind, HirExpr, HirFunctionBody,
+    HirReturnProof, HirStmt,
 };
 use crate::syntax::ast::{Callee, Expr};
 
@@ -18,6 +20,9 @@ pub(crate) use flow::*;
 use ownership::*;
 
 pub(crate) use rsscript_semantics::LocalFlowState as BodyState;
+pub(crate) use rsscript_semantics::{
+    LocalFlowBinding, LocalFlowEdge, LocalFlowResourceBinding, LocalFlowStep, LocalFlowStepKind,
+};
 
 pub(crate) use rsscript_semantics::{
     FreshReturnIssue, FreshReturnIssueKind, ManagedToLocalUse, MovedUse, ResourceEscape,
@@ -31,57 +36,6 @@ pub(crate) struct LocalAnalysis<'a> {
     take_handle_fields: Vec<TakeHandleField>,
     flow_steps: Vec<LocalFlowStep>,
     flow_entry_states_by_span: HashMap<Span, BodyState>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LocalFlowStepKind {
-    Statement,
-    Branch,
-    Loop,
-    Return,
-    Break,
-    Continue,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LocalFlowStep {
-    id: usize,
-    span: Span,
-    kind: LocalFlowStepKind,
-    uses: Vec<(String, Span)>,
-    managed_closure_captures: Vec<String>,
-    binding: Option<LocalFlowBinding>,
-    resource_binding: Option<LocalFlowResourceBinding>,
-    events: Vec<HirEffectEvent>,
-    successors: Vec<LocalFlowEdge>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LocalFlowBinding {
-    name: String,
-    kind: HirBindingKind,
-    type_name: Option<String>,
-    value_ident: Option<(String, Span)>,
-    value_handle_field: Option<(String, Span)>,
-    fresh_from_local_source: Option<String>,
-    fresh_from_scrutinee: bool,
-    /// The binding's initializer is itself a fresh value (a fresh-returning call,
-    /// a struct/variant constructor, or a literal). Such a binding holds a fresh,
-    /// unaliased value, so returning it directly preserves freshness — until it is
-    /// moved, retained, or captured (which clears its fresh-returnable status).
-    fresh_from_fresh_value: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LocalFlowResourceBinding {
-    name: String,
-    type_name: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LocalFlowEdge {
-    to: usize,
-    drop_resources: Vec<String>,
 }
 
 impl<'a> LocalAnalysis<'a> {

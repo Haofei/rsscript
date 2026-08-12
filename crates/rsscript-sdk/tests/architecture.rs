@@ -1480,10 +1480,23 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     assert!(
         compiler_local_analysis.contains("use rsscript_semantics::LocalFlowState as BodyState")
     );
+    assert!(compiler_local_analysis.contains("LocalFlowBinding, LocalFlowEdge"));
     assert!(
         !compiler_local_analysis.contains("pub(crate) struct BodyState"),
         "compiler must not re-own the local-flow state lattice"
     );
+    for forbidden in [
+        "enum LocalFlowStepKind",
+        "struct LocalFlowStep",
+        "struct LocalFlowBinding",
+        "struct LocalFlowResourceBinding",
+        "struct LocalFlowEdge",
+    ] {
+        assert!(
+            !compiler_local_analysis.contains(forbidden),
+            "compiler must not re-own local-flow graph model `{forbidden}`"
+        );
+    }
     assert!(
         !compiler_local_flow.contains("impl BodyState"),
         "compiler must not re-own local-flow state transitions"

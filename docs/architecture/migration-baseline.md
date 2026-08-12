@@ -407,6 +407,10 @@ mechanical acceptance condition holds.
       Semantics owns creation of the parameter-derived entry state and resolved
       place-path root projection, so compiler flow consumers no longer recreate
       either semantic convention.
+    - [x] **S02.4ae — Move local-flow graph model.** Semantics owns the neutral
+      graph step, binding, resource-binding, and cleanup-edge data model;
+      compiler graph construction and fixed-point solving remain the next
+      migration stages.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.
