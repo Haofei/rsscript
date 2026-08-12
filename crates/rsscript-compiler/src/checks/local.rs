@@ -4,8 +4,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use crate::checks::shared::hir_expr_span;
 use crate::diagnostic::Span;
 use crate::hir::{
-    CallResolution, HirBinding, HirBindingKind, HirBlock, HirEffectEvent, HirEffectEventKind,
-    HirExpr, HirFunctionBody, HirReturnProof, HirStmt, ParamEffect,
+    CallResolution, HirBindingKind, HirBlock, HirEffectEvent, HirEffectEventKind, HirExpr,
+    HirFunctionBody, HirReturnProof, HirStmt,
 };
 use crate::syntax::ast::{Callee, Expr};
 
@@ -17,19 +17,7 @@ mod ownership;
 pub(crate) use flow::*;
 use ownership::*;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct BodyState {
-    pub(crate) locals: HashSet<String>,
-    pub(crate) field_splittable_locals: HashSet<String>,
-    pub(crate) clean_locals: HashSet<String>,
-    pub(crate) fresh_returnable_locals: HashSet<String>,
-    pub(crate) managed: HashSet<String>,
-    pub(crate) read_views: HashSet<String>,
-    pub(crate) resources: HashSet<String>,
-    pub(crate) moved: HashMap<String, Span>,
-    pub(crate) moved_paths: HashMap<String, Span>,
-    pub(crate) value_types: HashMap<String, String>,
-}
+pub(crate) use rsscript_semantics::LocalFlowState as BodyState;
 
 pub(crate) use rsscript_semantics::{
     FreshReturnIssue, FreshReturnIssueKind, ManagedToLocalUse, MovedUse, ResourceEscape,

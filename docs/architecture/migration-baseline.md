@@ -399,6 +399,10 @@ mechanical acceptance condition holds.
     - [x] **S02.5w — Move structured control-flow exit state.** Semantics owns
       `Flow` and its conservative non-fallthrough merge rule; compiler CFG and
       block checks consume the shared state model.
+    - [x] **S02.4ac — Move local ownership-state lattice.** Semantics owns the
+      local/managed/resource/move state, parameter seeding, and move/retention
+      transitions; compiler preserves only its compatibility alias while CFG
+      transfer and merge migration continues.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.

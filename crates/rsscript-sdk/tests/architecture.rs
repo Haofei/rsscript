@@ -1283,6 +1283,8 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "hir_expr_type_name",
         "Flow",
         "merge_non_fallthrough",
+        "LocalFlowState",
+        "path_root",
         "hir_stmt_effect_events",
         "hir_stmt_identifier_uses",
         "managed_closure_uses_by_statement",
@@ -1454,6 +1456,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     }
     let compiler_local_flow = read(&root.join("crates/rsscript-compiler/src/checks/local/flow.rs"));
     let compiler_local_analysis = read(&root.join("crates/rsscript-compiler/src/checks/local.rs"));
+    let compiler_body = read(&root.join("crates/rsscript-compiler/src/checks/body/mod.rs"));
     assert!(
         compiler_local_analysis.contains("rsscript_semantics::managed_closure_uses_by_statement")
     );
@@ -1462,19 +1465,29 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     );
     assert!(compiler_local_flow.contains("rsscript_semantics::hir_stmt_identifier_uses"));
     assert!(compiler_local_flow.contains("rsscript_semantics::hir_stmt_effect_events"));
-    assert!(compiler_local_flow.contains("rsscript_semantics::is_copy_type_name"));
+    assert!(compiler_body.contains("rsscript_semantics::is_copy_type_name"));
     assert!(compiler_local_flow.contains("rsscript_semantics::hir_expr_type_name"));
     assert!(
         !compiler_local_flow.contains("fn hir_expr_type_name"),
         "compiler must not re-own the HIR type projection"
     );
-    let compiler_body = read(&root.join("crates/rsscript-compiler/src/checks/body/mod.rs"));
     assert!(compiler_body.contains("pub(crate) use rsscript_semantics::Flow"));
     assert!(
         !compiler_body.contains("pub(crate) enum Flow"),
         "compiler must not re-own the structured flow-state enum"
     );
     assert!(compiler_local_flow.contains("rsscript_semantics::merge_non_fallthrough"));
+    assert!(
+        compiler_local_analysis.contains("use rsscript_semantics::LocalFlowState as BodyState")
+    );
+    assert!(
+        !compiler_local_analysis.contains("pub(crate) struct BodyState"),
+        "compiler must not re-own the local-flow state lattice"
+    );
+    assert!(
+        !compiler_local_flow.contains("impl BodyState"),
+        "compiler must not re-own local-flow state transitions"
+    );
     let compiler_assign = read(&root.join("crates/rsscript-compiler/src/analyzer/assign.rs"));
     assert!(compiler_assign.contains("rsscript_semantics::is_copy_type_name"));
     let compiler_calls = read(&root.join("crates/rsscript-compiler/src/checks/calls.rs"));

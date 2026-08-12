@@ -33,6 +33,7 @@ mod interface_descriptor;
 mod literals;
 mod local_binding_facts;
 mod local_flow_facts;
+mod local_flow_state;
 mod operators;
 mod ownership;
 mod place;
@@ -129,6 +130,7 @@ pub use local_flow_facts::{
     FreshReturnIssue, FreshReturnIssueKind, ManagedToLocalUse, MovedUse, ResourceEscape,
     ResourceEscapeKind, RetainedClosureCapture, RetainedLocalUse, TakeHandleField,
 };
+pub use local_flow_state::{LocalFlowState, path_root};
 pub use operators::{operator_overload_attempt_diagnostic, operator_type_mismatch_diagnostic};
 pub use ownership::{
     constructor_field_effect_diagnostic, explicit_closure_capture_contract_diagnostic,
