@@ -1176,6 +1176,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "async_call_consumption_diagnostic",
         "await_live_value_diagnostics",
         "weak_field_upgrade_diagnostic",
+        "try_operand_diagnostic",
         "function_fallthrough_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
@@ -1340,6 +1341,15 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
             "compiler must not re-own weak-field rule `{forbidden}`"
         );
     }
+    let semantic_try_checks = read(&root.join("crates/rsscript-semantics/src/try_checks.rs"));
+    assert!(semantic_try_checks.contains("pub fn try_operand_diagnostic"));
+    assert!(compiler_body_semantics.contains("rsscript_semantics::try_operand_diagnostic"));
+    let compiler_try_checks =
+        read(&root.join("crates/rsscript-compiler/src/checks/body/try_checks.rs"));
+    assert!(
+        !compiler_try_checks.contains("fn check_try_value_is_result"),
+        "compiler must not re-own try operand diagnostics"
+    );
 
     let semantic_generic_constraints =
         read(&root.join("crates/rsscript-semantics/src/generic_constraints.rs"));

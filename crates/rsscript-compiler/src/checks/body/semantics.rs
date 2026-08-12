@@ -1299,8 +1299,11 @@ pub(super) fn check_expr_semantics_with_context(
             );
         }
         HirExpr::Try { value, .. } => {
-            if let HirExpr::Try { span, .. } = expr {
-                check_try_value_is_result(analyzer, value, span);
+            if let HirExpr::Try { span, .. } = expr
+                && let Some(diagnostic) =
+                    rsscript_semantics::try_operand_diagnostic(hir_expr_type_name(value), span)
+            {
+                analyzer.diagnostics.push(diagnostic);
             }
             check_expr_semantics_with_context(
                 analyzer,

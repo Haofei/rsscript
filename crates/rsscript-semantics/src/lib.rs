@@ -28,6 +28,7 @@ mod resource_types;
 mod signatures;
 mod source_rules;
 mod symbols;
+mod try_checks;
 mod type_aliases;
 mod types;
 mod weak_fields;
@@ -53,6 +54,7 @@ pub use derive_fields::derive_field_diagnostics;
 pub use derives::derive_syntax_diagnostics;
 pub use external_types::{external_binding_type_diagnostics, unknown_type_diagnostics};
 pub use generic_constraints::generic_constraint_diagnostics;
+pub use try_checks::try_operand_diagnostic;
 pub use weak_fields::{is_weak_upgrade_call, weak_field_upgrade_diagnostic};
 
 /// Builtin source type roots recognized before backend lowering.

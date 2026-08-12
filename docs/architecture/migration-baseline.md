@@ -220,6 +220,9 @@ mechanical acceptance condition holds.
     - [x] **S02.4a — Move weak-field upgrade validation.** Checked-HIR traversal
       for weak handle use and the required explicit `Weak.upgrade` boundary now
       belongs to `rsscript-semantics`; compiler only invokes the semantic rule.
+    - [x] **S02.4b — Move `?` operand validation.** Known operand type validation
+      for `Result`/`Option` short-circuiting is now a semantic query; function
+      error-type compatibility remains a separate follow-up.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.
