@@ -147,7 +147,10 @@ pub use local_flow_solver::{
 };
 pub use local_flow_state::{LocalFlowState, initial_local_flow_state, path_root};
 pub use moved_use_flow::moved_uses_from_flow;
-pub use operators::{operator_overload_attempt_diagnostic, operator_type_mismatch_diagnostic};
+pub use operators::{
+    builtin_operator_diagnostics, operator_overload_attempt_diagnostic,
+    operator_type_mismatch_diagnostic,
+};
 pub use ownership::{
     constructor_field_effect_diagnostic, explicit_closure_capture_contract_diagnostic,
     explicit_closure_missing_capture_diagnostic, explicit_closure_unused_capture_diagnostic,

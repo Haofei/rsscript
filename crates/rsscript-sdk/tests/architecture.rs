@@ -1916,13 +1916,22 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "compiler must not re-own resolved protocol and variant diagnostic text"
     );
     let semantic_operators = read(&root.join("crates/rsscript-semantics/src/operators.rs"));
+    assert!(semantic_operators.contains("pub fn builtin_operator_diagnostics"));
     assert!(semantic_operators.contains("pub fn operator_overload_attempt_diagnostic"));
     assert!(semantic_operators.contains("pub fn operator_type_mismatch_diagnostic"));
     let compiler_forbidden = read(&root.join("crates/rsscript-compiler/src/checks/forbidden.rs"));
-    assert!(
-        compiler_forbidden.contains("rsscript_semantics::operator_overload_attempt_diagnostic")
-    );
-    assert!(compiler_forbidden.contains("rsscript_semantics::operator_type_mismatch_diagnostic"));
+    assert!(compiler_forbidden.contains("rsscript_semantics::builtin_operator_diagnostics"));
+    for forbidden in [
+        "fn check_operator_overload_attempts",
+        "fn inferred_operand_type",
+        "fn is_numeric_type",
+        "fn operator_label",
+    ] {
+        assert!(
+            !compiler_forbidden.contains(forbidden),
+            "compiler must not re-own builtin operator rule {forbidden}"
+        );
+    }
     assert!(
         !compiler_forbidden.contains("RSScript does not support user-defined operator overloads"),
         "compiler must not re-own builtin operator diagnostic text"

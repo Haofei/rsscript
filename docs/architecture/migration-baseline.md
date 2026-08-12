@@ -178,9 +178,9 @@ mechanical acceptance condition holds.
       malformed/unsupported statement and expression diagnostics, select-arm
       shape, spawn rejection, and task-group context. Compiler only traverses
       bodies to extract alias-canonical type-reference facts.
-    - [x] **S02.2g — Move resolved builtin operator diagnostics.** Compiler
-      extracts HIR operand/type facts; semantics owns non-numeric arithmetic and
-      fixed-operand compatibility diagnostic contracts.
+    - [x] **S02.2g — Move resolved builtin operator diagnostics.** Semantics
+      owns checked-HIR traversal, alias normalization, numeric classification,
+      and fixed-operand compatibility; compiler only invokes the query.
     - [x] **S02.1c — Move lexical unknown-binding diagnostics.** Global source
       values and lexical visibility across HIR blocks, patterns, closures,
       resource scopes, and task/select bodies are now interpreted once by
