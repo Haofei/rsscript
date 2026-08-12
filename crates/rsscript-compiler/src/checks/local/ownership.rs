@@ -547,7 +547,7 @@ pub(super) fn collect_ordered_moved_uses_from_expr(
         } => {
             collect_ordered_moved_uses_from_expr(value, state, moved_uses);
             state.apply_move_events(events);
-            if let Some((path, _)) = hir_expr_path(value) {
+            if let Some((path, _)) = rsscript_semantics::hir_expr_path(value) {
                 state.mark_moved(&path, span.clone());
             }
         }
@@ -634,7 +634,7 @@ pub(super) fn collect_field_move_use(
     state: &mut BodyState,
     moved_uses: &mut Vec<MovedUse>,
 ) {
-    if let Some((path, span)) = hir_expr_path(expr) {
+    if let Some((path, span)) = rsscript_semantics::hir_expr_path(expr) {
         if let Some(root) = path_root(&path)
             && let Some(move_span) = state.move_span(root)
         {
@@ -758,7 +758,7 @@ pub(super) fn apply_match_take_move(
     if effect != Some(crate::syntax::ast::DataEffect::Take) {
         return;
     }
-    if let Some((path, span)) = hir_expr_path(value) {
+    if let Some((path, span)) = rsscript_semantics::hir_expr_path(value) {
         state.mark_moved(&path, span);
     }
 }
@@ -919,21 +919,6 @@ pub(super) fn push_moved_use(
     };
     if !moved_uses.contains(&moved_use) {
         moved_uses.push(moved_use);
-    }
-}
-
-pub(super) fn hir_expr_path(expr: &HirExpr) -> Option<(String, Span)> {
-    match expr {
-        HirExpr::Ident { name, span, .. } => Some((name.clone(), span.clone())),
-        HirExpr::Field {
-            base, name, span, ..
-        } => {
-            let (mut base_path, _) = hir_expr_path(base)?;
-            base_path.push('.');
-            base_path.push_str(name);
-            Some((base_path, span.clone()))
-        }
-        _ => None,
     }
 }
 

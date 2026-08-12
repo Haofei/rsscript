@@ -410,8 +410,7 @@ pub(super) fn drop_resource_on_exits(
 
 pub(super) fn push_local_flow_step(steps: &mut Vec<LocalFlowStep>, statement: &HirStmt) -> usize {
     let uses = rsscript_semantics::hir_stmt_identifier_uses(statement);
-    let mut events = Vec::new();
-    collect_hir_stmt_effect_events(statement, &mut events);
+    let events = rsscript_semantics::hir_stmt_effect_events(statement);
     let id = steps.len();
     steps.push(LocalFlowStep {
         id,
@@ -879,7 +878,7 @@ pub(super) fn local_binding_source_ident(value: &HirExpr) -> Option<(String, Spa
 pub(super) fn local_binding_handle_field_source(value: &HirExpr) -> Option<(String, Span)> {
     match value {
         HirExpr::Field { base, access, .. } if access.is_handle => {
-            hir_expr_path(base).map(|(mut path, _)| {
+            rsscript_semantics::hir_expr_path(base).map(|(mut path, _)| {
                 path.push('.');
                 path.push_str(&access.name);
                 (path, access.span.clone())

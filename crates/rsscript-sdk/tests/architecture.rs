@@ -1278,6 +1278,8 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "protocol_signature_mismatch",
         "generic_constraint_diagnostics",
         "hir_block_identifier_uses",
+        "hir_expr_path",
+        "hir_stmt_effect_events",
         "hir_stmt_identifier_uses",
         "fd_surface_diagnostics",
         "unknown_binding_diagnostics",
@@ -1438,10 +1440,14 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     let compiler_local_flow = read(&root.join("crates/rsscript-compiler/src/checks/local/flow.rs"));
     assert!(compiler_local_resources.contains("rsscript_semantics::hir_block_identifier_uses"));
     assert!(compiler_local_flow.contains("rsscript_semantics::hir_stmt_identifier_uses"));
+    assert!(compiler_local_flow.contains("rsscript_semantics::hir_stmt_effect_events"));
+    assert!(compiler_local_flow.contains("rsscript_semantics::hir_expr_path"));
     for forbidden in [
         "fn collect_hir_block_idents",
         "fn collect_hir_stmt_idents",
         "fn collect_hir_expr_idents",
+        "fn collect_hir_stmt_effect_events",
+        "fn collect_hir_expr_effect_events",
     ] {
         assert!(
             !compiler_local_resources.contains(forbidden),

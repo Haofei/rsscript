@@ -360,6 +360,10 @@ mechanical acceptance condition holds.
       owns the source-order HIR identifier-use queries consumed by compiler CFG,
       closure-move, and resource checks; compiler only derives its local-flow
       facts from the neutral query output.
+    - [x] **S02.4r — Move HIR effect-event and place-path queries.** Semantics
+      owns canonical HIR effect-event extraction and identifier/field path
+      resolution; compiler CFG consumes those neutral facts without traversing
+      expressions to reconstruct `take` events.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.
