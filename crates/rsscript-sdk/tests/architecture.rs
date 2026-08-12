@@ -1180,6 +1180,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "try_error_type_diagnostics",
         "integer_literal_range_diagnostic",
         "char_literal_scalar_diagnostic",
+        "match_char_literal_scalar_diagnostic",
         "bool_condition_diagnostic",
         "for_iterable_diagnostic",
         "match_expression_arm_type_diagnostics",
@@ -1373,10 +1374,15 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     let semantic_literals = read(&root.join("crates/rsscript-semantics/src/literals.rs"));
     assert!(semantic_literals.contains("pub fn integer_literal_range_diagnostic"));
     assert!(semantic_literals.contains("pub fn char_literal_scalar_diagnostic"));
+    assert!(semantic_literals.contains("pub fn match_char_literal_scalar_diagnostic"));
     assert!(
         compiler_body_semantics.contains("rsscript_semantics::integer_literal_range_diagnostic")
     );
     assert!(compiler_body_semantics.contains("rsscript_semantics::char_literal_scalar_diagnostic"));
+    assert!(
+        compiler_body_semantics
+            .contains("rsscript_semantics::match_char_literal_scalar_diagnostic")
+    );
     for forbidden in [
         "fn check_integer_literal_range",
         "fn check_char_literal_scalar",
@@ -1386,6 +1392,10 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
             "compiler must not re-own literal validity rule `{forbidden}`"
         );
     }
+    assert!(
+        !compiler_body_semantics.contains("char_literal_scalar_count"),
+        "compiler must not re-own character scalar validation for match patterns"
+    );
 
     let semantic_control_flow = read(&root.join("crates/rsscript-semantics/src/control_flow.rs"));
     assert!(semantic_control_flow.contains("pub fn bool_condition_diagnostic"));

@@ -399,20 +399,10 @@ pub(super) fn check_match_pattern_matches_type(
         MatchPattern::Binding { .. } | MatchPattern::Wildcard(_) => {}
         MatchPattern::Literal { value, span } => {
             if let MatchLiteral::Char(raw) = value
-                && crate::text_util::char_literal_scalar_count(raw) != 1
+                && let Some(diagnostic) =
+                    rsscript_semantics::match_char_literal_scalar_diagnostic(raw, span)
             {
-                analyzer.diagnostics.push(error_cause_manual_fix(
-                        code::CHAR_LITERAL_NOT_SINGLE_SCALAR,
-                        format!(
-                            "character literal must contain exactly one character, found {}.",
-                            crate::text_util::char_literal_scalar_count(raw)
-                        ),
-                        span.clone(),
-                        "invalid character literal",
-                        "A `Char` is a single Unicode scalar value; `''` is empty and `'ab'` holds more than one.",
-                        "use_single_char_literal",
-                        "Put exactly one character between the single quotes.",
-                ));
+                analyzer.diagnostics.push(diagnostic);
             }
             let literal_type = match value {
                 MatchLiteral::Int(_) => "Int",

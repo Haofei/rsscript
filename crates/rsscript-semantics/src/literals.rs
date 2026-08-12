@@ -33,6 +33,31 @@ pub fn char_literal_scalar_diagnostic(expr: &HirExpr) -> Option<Diagnostic> {
     let HirExpr::Char { value, span } = expr else {
         return None;
     };
+    char_literal_scalar_diagnostic_with_fix(
+        value,
+        span,
+        "Put exactly one character between the single quotes, or use a `String` literal (double quotes) for text.",
+    )
+}
+
+/// Diagnose a character literal used as a `match` pattern when it contains
+/// other than one Unicode scalar.
+pub fn match_char_literal_scalar_diagnostic(
+    value: &str,
+    span: &rsscript_diagnostics::Span,
+) -> Option<Diagnostic> {
+    char_literal_scalar_diagnostic_with_fix(
+        value,
+        span,
+        "Put exactly one character between the single quotes.",
+    )
+}
+
+fn char_literal_scalar_diagnostic_with_fix(
+    value: &str,
+    span: &rsscript_diagnostics::Span,
+    fix: &str,
+) -> Option<Diagnostic> {
     let count = value.chars().count();
     if count == 1 {
         return None;
@@ -47,7 +72,7 @@ pub fn char_literal_scalar_diagnostic(expr: &HirExpr) -> Option<Diagnostic> {
         .with_cause("A `Char` is a single Unicode scalar value; `''` is empty and `'ab'` holds more than one.")
         .with_fix(
             "use_single_char_literal",
-            "Put exactly one character between the single quotes, or use a `String` literal (double quotes) for text.",
+            fix,
             "manual",
         ),
     )
@@ -90,5 +115,17 @@ mod tests {
             span: span(),
         };
         assert!(char_literal_scalar_diagnostic(&scalar).is_none());
+    }
+
+    #[test]
+    fn requires_one_scalar_in_match_char_patterns() {
+        let diagnostic =
+            match_char_literal_scalar_diagnostic("ab", &span()).expect("must reject two chars");
+        assert_eq!(diagnostic.code, code::CHAR_LITERAL_NOT_SINGLE_SCALAR);
+        assert_eq!(
+            diagnostic.fixes[0].title,
+            "Put exactly one character between the single quotes."
+        );
+        assert!(match_char_literal_scalar_diagnostic("🦀", &span()).is_none());
     }
 }

@@ -59,7 +59,10 @@ pub use derive_fields::derive_field_diagnostics;
 pub use derives::derive_syntax_diagnostics;
 pub use external_types::{external_binding_type_diagnostics, unknown_type_diagnostics};
 pub use generic_constraints::generic_constraint_diagnostics;
-pub use literals::{char_literal_scalar_diagnostic, integer_literal_range_diagnostic};
+pub use literals::{
+    char_literal_scalar_diagnostic, integer_literal_range_diagnostic,
+    match_char_literal_scalar_diagnostic,
+};
 pub use try_checks::{try_error_type_diagnostics, try_operand_diagnostic};
 pub use weak_fields::{is_weak_upgrade_call, weak_field_upgrade_diagnostic};
 

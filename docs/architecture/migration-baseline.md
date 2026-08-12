@@ -229,6 +229,9 @@ mechanical acceptance condition holds.
     - [x] **S02.4d — Move literal validity diagnostics.** Checked-HIR validation
       for `i64` integer bounds and single-scalar `Char` literals is now owned by
       `rsscript-semantics`; the compiler only appends the semantic result.
+    - [x] **S02.4e — Move `match` character-pattern validity.** The same
+      single-scalar `Char` rule, including the pattern-specific fix, is now
+      owned by `rsscript-semantics` rather than compiler pattern traversal.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.
