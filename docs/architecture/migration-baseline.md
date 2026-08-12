@@ -238,9 +238,9 @@ mechanical acceptance condition holds.
     - [x] **S02.4g — Move duplicate pattern field diagnostics.** Semantics owns
       diagnostics for duplicate fields and mutable/taking partial-access
       conflicts; compiler only tracks the preceding binding facts.
-    - [x] **S02.5o — Move declared pattern field diagnostics.** Semantics owns
-      diagnostics for unknown structured fields and omitted fields without `..`;
-      compiler supplies the resolved declaration facts.
+    - [x] **S02.4h — Move LocalAnalysis ownership diagnostics.** Compiler flow
+      derives moved, managed-to-local, retained-local, retained-closure, and
+      handle-field facts; semantics now owns each resulting diagnostic.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.
@@ -292,6 +292,9 @@ mechanical acceptance condition holds.
     - [x] **S02.5n — Move `match` guard mutation diagnostics.** Compiler still
       locates the first effect in checked HIR, while semantics owns the
       read-only-guard diagnostic, cause, and fix.
+    - [x] **S02.5o — Move declared pattern field diagnostics.** Semantics owns
+      diagnostics for unknown structured fields and omitted fields without `..`;
+      compiler supplies the resolved declaration facts.
   - [ ] **S02.6 — Delete compiler semantic-rule modules.** Add architecture
     tests that permit compiler orchestration only and reject semantic-rule
     implementations outside `rsscript-semantics`.

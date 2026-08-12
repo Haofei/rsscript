@@ -1197,6 +1197,11 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "duplicate_pattern_field_diagnostic",
         "unknown_pattern_field_diagnostic",
         "omitted_pattern_fields_diagnostic",
+        "moved_use_diagnostic",
+        "managed_to_local_diagnostic",
+        "retained_local_diagnostic",
+        "retained_closure_capture_diagnostic",
+        "take_handle_field_diagnostic",
         "function_fallthrough_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
@@ -1546,6 +1551,40 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         assert!(
             !compiler_body_semantics.contains(forbidden),
             "compiler must not re-own structured pattern diagnostic `{forbidden}`"
+        );
+    }
+
+    let semantic_ownership = read(&root.join("crates/rsscript-semantics/src/ownership.rs"));
+    for exported in [
+        "pub fn moved_use_diagnostic",
+        "pub fn managed_to_local_diagnostic",
+        "pub fn retained_local_diagnostic",
+        "pub fn retained_closure_capture_diagnostic",
+        "pub fn take_handle_field_diagnostic",
+    ] {
+        assert!(semantic_ownership.contains(exported));
+    }
+    let compiler_body_effects =
+        read(&root.join("crates/rsscript-compiler/src/checks/body/effects.rs"));
+    for delegated in [
+        "rsscript_semantics::moved_use_diagnostic",
+        "rsscript_semantics::managed_to_local_diagnostic",
+        "rsscript_semantics::retained_local_diagnostic",
+        "rsscript_semantics::retained_closure_capture_diagnostic",
+        "rsscript_semantics::take_handle_field_diagnostic",
+    ] {
+        assert!(compiler_body_effects.contains(delegated));
+    }
+    for forbidden in [
+        "fn moved_use_diagnostic",
+        "fn managed_to_local_diagnostic",
+        "fn retained_local_diagnostic",
+        "fn retained_closure_capture_diagnostic",
+        "fn take_handle_field_diagnostic",
+    ] {
+        assert!(
+            !compiler_body_effects.contains(forbidden),
+            "compiler must not re-own local-flow ownership diagnostic `{forbidden}`"
         );
     }
 

@@ -212,7 +212,13 @@ pub(super) fn arm_span(arms: &[HirMatchArm]) -> Span {
 
 pub(super) fn check_moved_uses(analyzer: &mut Analyzer<'_>, local_analysis: &LocalAnalysis<'_>) {
     for moved_use in local_analysis.moved_uses() {
-        moved_use_diagnostic(analyzer, moved_use);
+        analyzer
+            .diagnostics
+            .push(rsscript_semantics::moved_use_diagnostic(
+                &moved_use.name,
+                moved_use.use_span,
+                &moved_use.move_span,
+            ));
     }
 }
 
@@ -221,7 +227,13 @@ pub(super) fn check_managed_to_local_uses(
     local_analysis: &LocalAnalysis<'_>,
 ) {
     for managed_to_local in local_analysis.managed_to_local_uses() {
-        managed_to_local_diagnostic(analyzer, managed_to_local);
+        analyzer
+            .diagnostics
+            .push(rsscript_semantics::managed_to_local_diagnostic(
+                &managed_to_local.local_name,
+                &managed_to_local.managed_name,
+                managed_to_local.span,
+            ));
     }
 }
 
@@ -230,7 +242,14 @@ pub(super) fn check_retained_local_uses(
     local_analysis: &LocalAnalysis<'_>,
 ) {
     for retained in local_analysis.retained_local_uses() {
-        retained_local_diagnostic(analyzer, retained);
+        analyzer
+            .diagnostics
+            .push(rsscript_semantics::retained_local_diagnostic(
+                &retained.name,
+                &retained.callee,
+                &retained.param,
+                retained.span,
+            ));
     }
 }
 
@@ -239,7 +258,15 @@ pub(super) fn check_retained_closure_captures(
     local_analysis: &LocalAnalysis<'_>,
 ) {
     for capture in local_analysis.retained_closure_captures() {
-        retained_closure_capture_diagnostic(analyzer, capture);
+        analyzer
+            .diagnostics
+            .push(rsscript_semantics::retained_closure_capture_diagnostic(
+                &capture.name,
+                &capture.callee,
+                &capture.param,
+                capture.capture_span,
+                &capture.closure_span,
+            ));
     }
 }
 
@@ -248,7 +275,12 @@ pub(super) fn check_take_handle_fields(
     local_analysis: &LocalAnalysis<'_>,
 ) {
     for field in local_analysis.take_handle_fields() {
-        take_handle_field_diagnostic(analyzer, field);
+        analyzer
+            .diagnostics
+            .push(rsscript_semantics::take_handle_field_diagnostic(
+                &field.name,
+                field.span.clone(),
+            ));
     }
 }
 
@@ -294,92 +326,6 @@ pub(super) fn fresh_return_target_type(return_ty: &TypeRef) -> &TypeRef {
         return first_arg;
     }
     return_ty
-}
-
-pub(super) fn managed_to_local_diagnostic(
-    analyzer: &mut Analyzer<'_>,
-    managed_to_local: ManagedToLocalUse,
-) {
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::MANAGED_TO_LOCAL,
-        format!(
-            "managed value cannot be converted to local binding `{}`.",
-            managed_to_local.local_name
-        ),
-        managed_to_local.span,
-        "managed value used as local",
-        format!(
-            "`{}` is already managed; RSScript has no managed -> local conversion.",
-            managed_to_local.managed_name
-        ),
-        "create_local",
-        "Create the value as `local` at its creation point.",
-    ));
-}
-
-pub(super) fn take_handle_field_diagnostic(analyzer: &mut Analyzer<'_>, field: &TakeHandleField) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::TAKE_HANDLE_FIELD,
-            format!("cannot `take` handle field `{}`.", field.name),
-            field.span.clone(),
-            "take of handle field",
-        )
-        .with_cause(
-            "Handle fields are managed references and cannot be consumed as local inline values.",
-        ),
-    );
-}
-
-pub(super) fn retained_local_diagnostic(analyzer: &mut Analyzer<'_>, retained: RetainedLocalUse) {
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::LOCAL_VALUE_RETAINED,
-        format!(
-            "retaining API `{}` cannot retain local value `{}`.",
-            retained.callee, retained.name
-        ),
-        retained.span,
-        "local value retained",
-        format!(
-            "`{}` declares `retains({})`.",
-            retained.callee, retained.param
-        ),
-        "manage_local",
-        format!(
-            "Pass `{}` through `manage {}` before retaining it.",
-            retained.param, retained.name
-        ),
-    ));
-}
-
-pub(super) fn retained_closure_capture_diagnostic(
-    analyzer: &mut Analyzer<'_>,
-    capture: RetainedClosureCapture,
-) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::LOCAL_CAPTURED_BY_MANAGED_CLOSURE,
-            format!(
-                "retained closure passed to `{}` captures local value `{}`.",
-                capture.callee, capture.name
-            ),
-            capture.capture_span,
-            "local captured here",
-        )
-        .with_cause(format!(
-            "`{}` declares `retains({})`; the closure may outlive local values.",
-            capture.callee, capture.param
-        ))
-        .with_cause(format!(
-            "The retained closure starts at {}:{}.",
-            capture.closure_span.line, capture.closure_span.column
-        ))
-        .with_fix(
-            "avoid_retained_capture",
-            "Do not capture local values in closures passed to retaining APIs.",
-            "manual",
-        ),
-    );
 }
 
 pub(super) fn noescape_consumes_capture_diagnostic(
@@ -476,22 +422,4 @@ pub(super) fn explicit_closure_capture_contract_diagnostic(
             actual.as_str()
         )),
     );
-}
-
-pub(super) fn moved_use_diagnostic(analyzer: &mut Analyzer<'_>, moved_use: MovedUse) {
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::USE_AFTER_MANAGE,
-        format!(
-            "`{}` was moved into the managed runtime by `manage {}`.",
-            moved_use.name, moved_use.name
-        ),
-        moved_use.use_span,
-        "used after manage",
-        format!(
-            "The move happened at {}:{}.",
-            moved_use.move_span.line, moved_use.move_span.column
-        ),
-        "move_use_before_manage",
-        format!("Move this use before `manage {}`.", moved_use.name),
-    ));
 }
