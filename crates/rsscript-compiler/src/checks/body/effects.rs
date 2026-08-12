@@ -305,11 +305,22 @@ pub(super) fn check_fresh_returns(
     for issue in local_analysis.fresh_return_issues() {
         match &issue.kind {
             FreshReturnIssueKind::NotClean { name } => {
-                fresh_return_diagnostic(analyzer, &function.name, name, issue.span);
+                analyzer
+                    .diagnostics
+                    .push(rsscript_semantics::fresh_return_not_clean_diagnostic(
+                        &function.name,
+                        name,
+                        issue.span.clone(),
+                    ));
             }
             FreshReturnIssueKind::UnknownIdent { name } if trusted_fresh_ident(analyzer, name) => {}
             FreshReturnIssueKind::UnknownIdent { .. } | FreshReturnIssueKind::Unknown => {
-                freshness_unknown_diagnostic(analyzer, &function.name, issue);
+                analyzer
+                    .diagnostics
+                    .push(rsscript_semantics::freshness_unknown_diagnostic(
+                        &function.name,
+                        issue.span.clone(),
+                    ));
             }
         }
     }
@@ -323,7 +334,13 @@ pub(super) fn check_fresh_return_type(analyzer: &mut Analyzer<'_>, function: &Fu
     match analyzer.hir.type_kind(&target.name) {
         Some(HirTypeKind::Struct) | Some(HirTypeKind::Sum) | None => {}
         Some(HirTypeKind::Class) | Some(HirTypeKind::Resource) => {
-            invalid_fresh_return_type_diagnostic(analyzer, function, target);
+            analyzer
+                .diagnostics
+                .push(rsscript_semantics::invalid_fresh_return_type_diagnostic(
+                    &function.name,
+                    &target.name,
+                    target.span.clone(),
+                ));
         }
     }
 }

@@ -220,6 +220,63 @@ pub fn invalid_take_operand_diagnostic(cause: impl Into<String>, span: Span) -> 
     )
 }
 
+/// Diagnose a `fresh` function that returns a value which is not fresh.
+pub fn fresh_return_not_clean_diagnostic(
+    function_name: &str,
+    name: &str,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::FRESH_RETURN_NOT_CLEAN,
+        format!("fresh function `{function_name}` returns non-fresh value `{name}`."),
+        span,
+        "non-fresh value returned",
+    )
+    .with_cause(
+        "A `fresh` return must be newly created or a clean local binding created inside the function.",
+    )
+    .with_fix(
+        "return_fresh_value",
+        "Return a struct constructor, fresh call, or clean local binding created inside the function.",
+        "manual",
+    )
+}
+
+/// Warn when the checked facts cannot prove a `fresh` return.
+pub fn freshness_unknown_diagnostic(function_name: &str, span: Span) -> Diagnostic {
+    Diagnostic::warning(
+        code::FRESHNESS_UNKNOWN,
+        format!("freshness of return value in `{function_name}` could not be proven."),
+        span,
+        "freshness unknown",
+    )
+    .with_cause(
+        "This MVP checker trusts clean locals, clean inline fields of locals, struct constructors, known fresh functions, and literals.",
+    )
+}
+
+/// Diagnose a `fresh` return annotation on a non-struct type.
+pub fn invalid_fresh_return_type_diagnostic(
+    function_name: &str,
+    target_name: &str,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::INVALID_FRESH_RETURN_TYPE,
+        format!(
+            "function `{function_name}` declares `fresh {target_name}` but `{target_name}` is not a struct."
+        ),
+        span,
+        "invalid fresh type",
+    )
+    .with_cause("RSScript `fresh` is a shallow guarantee for newly created struct shells.")
+    .with_fix(
+        "use_struct_fresh_type",
+        "Return a struct type as fresh, or remove `fresh` from this return contract.",
+        "manual",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,6 +344,18 @@ mod tests {
         assert_eq!(
             invalid_take_operand_diagnostic("not local", span(1)).code,
             code::INVALID_TAKE_OPERAND
+        );
+        assert_eq!(
+            fresh_return_not_clean_diagnostic("build", "value", span(1)).code,
+            code::FRESH_RETURN_NOT_CLEAN
+        );
+        assert_eq!(
+            freshness_unknown_diagnostic("build", span(1)).code,
+            code::FRESHNESS_UNKNOWN
+        );
+        assert_eq!(
+            invalid_fresh_return_type_diagnostic("build", "Class", span(1)).code,
+            code::INVALID_FRESH_RETURN_TYPE
         );
     }
 }

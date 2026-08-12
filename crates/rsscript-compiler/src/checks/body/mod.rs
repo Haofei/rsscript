@@ -15,8 +15,8 @@ use crate::syntax::ast::{
 };
 
 use super::local::{
-    BodyState, FreshReturnIssue, FreshReturnIssueKind, LocalAnalysis, ResourceEscapeKind,
-    is_copy_type_name, merge_if_state, merge_loop_state,
+    BodyState, FreshReturnIssueKind, LocalAnalysis, ResourceEscapeKind, is_copy_type_name,
+    merge_if_state, merge_loop_state,
 };
 
 mod binding;

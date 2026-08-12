@@ -246,6 +246,9 @@ mechanical acceptance condition holds.
       managed-closure captures, resource escapes/captures/producers, `with`
       result unwrapping, class-local bindings, and invalid `manage`/`take`
       diagnostics.
+    - [x] **S02.4j — Move `fresh` return diagnostics.** Compiler flow supplies
+      clean/unknown return facts and the resolved return type; semantics owns
+      non-fresh, unknown-freshness, and invalid-fresh-return-type diagnostics.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.

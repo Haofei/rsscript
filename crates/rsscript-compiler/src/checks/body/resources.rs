@@ -1,5 +1,4 @@
 use super::*;
-use crate::checks::diagnostic_helpers::error_cause_manual_fix;
 
 pub(super) fn check_managed_closure_captures(
     analyzer: &mut Analyzer<'_>,
@@ -267,63 +266,6 @@ pub(super) fn resource_is_active_at(
     local_analysis
         .flow_entry_state(span)
         .is_none_or(|state| state.is_resource(binding))
-}
-
-pub(super) fn fresh_return_diagnostic(
-    analyzer: &mut Analyzer<'_>,
-    function_name: &str,
-    name: &str,
-    span: crate::diagnostic::Span,
-) {
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::FRESH_RETURN_NOT_CLEAN,
-        format!(
-            "fresh function `{}` returns non-fresh value `{name}`.",
-            function_name
-        ),
-        span,
-        "non-fresh value returned",
-        "A `fresh` return must be newly created or a clean local binding created inside the function.",
-        "return_fresh_value",
-        "Return a struct constructor, fresh call, or clean local binding created inside the function.",
-    ));
-}
-
-pub(super) fn freshness_unknown_diagnostic(
-    analyzer: &mut Analyzer<'_>,
-    function_name: &str,
-    issue: FreshReturnIssue,
-) {
-    analyzer.diagnostics.push(
-        Diagnostic::warning(
-            code::FRESHNESS_UNKNOWN,
-            format!("freshness of return value in `{function_name}` could not be proven."),
-            issue.span,
-            "freshness unknown",
-        )
-        .with_cause(
-            "This MVP checker trusts clean locals, clean inline fields of locals, struct constructors, known fresh functions, and literals.",
-        ),
-    );
-}
-
-pub(super) fn invalid_fresh_return_type_diagnostic(
-    analyzer: &mut Analyzer<'_>,
-    function: &FunctionDecl,
-    target: &TypeRef,
-) {
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::INVALID_FRESH_RETURN_TYPE,
-        format!(
-            "function `{}` declares `fresh {}` but `{}` is not a struct.",
-            function.name, target.name, target.name
-        ),
-        target.span.clone(),
-        "invalid fresh type",
-        "RSScript `fresh` is a shallow guarantee for newly created struct shells.",
-        "use_struct_fresh_type",
-        "Return a struct type as fresh, or remove `fresh` from this return contract.",
-    ));
 }
 
 pub(super) fn trusted_fresh_ident(analyzer: &Analyzer<'_>, name: &str) -> bool {

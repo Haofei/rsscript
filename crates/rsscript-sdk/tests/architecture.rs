@@ -1210,6 +1210,9 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "local_class_binding_diagnostic",
         "invalid_manage_operand_diagnostic",
         "invalid_take_operand_diagnostic",
+        "fresh_return_not_clean_diagnostic",
+        "freshness_unknown_diagnostic",
+        "invalid_fresh_return_type_diagnostic",
         "function_fallthrough_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
@@ -1580,6 +1583,9 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "rsscript_semantics::retained_local_diagnostic",
         "rsscript_semantics::retained_closure_capture_diagnostic",
         "rsscript_semantics::take_handle_field_diagnostic",
+        "rsscript_semantics::fresh_return_not_clean_diagnostic",
+        "rsscript_semantics::freshness_unknown_diagnostic",
+        "rsscript_semantics::invalid_fresh_return_type_diagnostic",
     ] {
         assert!(compiler_body_effects.contains(delegated));
     }
@@ -1589,6 +1595,9 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "fn retained_local_diagnostic",
         "fn retained_closure_capture_diagnostic",
         "fn take_handle_field_diagnostic",
+        "fn fresh_return_diagnostic",
+        "fn freshness_unknown_diagnostic",
+        "fn invalid_fresh_return_type_diagnostic",
     ] {
         assert!(
             !compiler_body_effects.contains(forbidden),
