@@ -3,9 +3,10 @@ use std::collections::HashMap;
 use crate::diagnostic::Span;
 #[cfg(test)]
 use crate::hir::HirEffectEvent;
+#[cfg(test)]
+use crate::hir::HirReturnProof;
 use crate::hir::{
-    CallResolution, HirBindingKind, HirBlock, HirEffectEventKind, HirExpr, HirFunctionBody,
-    HirReturnProof, HirStmt,
+    CallResolution, HirBindingKind, HirBlock, HirEffectEventKind, HirExpr, HirFunctionBody, HirStmt,
 };
 use crate::syntax::ast::{Callee, Expr};
 
@@ -175,14 +176,14 @@ impl<'a> LocalAnalysis<'a> {
     }
 
     pub(crate) fn fresh_return_issues(&self) -> Vec<FreshReturnIssue> {
-        let mut issues = Vec::new();
-        if let Some(block) = self.body.and_then(|body| body.block.as_ref()) {
-            collect_fresh_return_issues_from_block(
-                block,
-                &self.flow_entry_states_by_span,
-                &mut issues,
-            );
-        }
-        issues
+        self.body
+            .and_then(|body| body.block.as_ref())
+            .map(|block| {
+                rsscript_semantics::fresh_return_issues_from_flow(
+                    block,
+                    &self.flow_entry_states_by_span,
+                )
+            })
+            .unwrap_or_default()
     }
 }

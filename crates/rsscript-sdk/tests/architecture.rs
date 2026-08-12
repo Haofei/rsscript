@@ -1566,7 +1566,21 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
             "compiler must not re-own fresh-return projection `{forbidden}`"
         );
     }
-    assert!(compiler_local_ownership.contains("rsscript_semantics::fresh_return_value_span"));
+    let semantic_fresh_return_flow =
+        read(&root.join("crates/rsscript-semantics/src/fresh_return_flow.rs"));
+    assert!(semantic_fresh_return_flow.contains("fresh_return_issues_from_flow"));
+    assert!(semantic_fresh_return_flow.contains("fresh_return_value_span"));
+    assert!(compiler_local_analysis.contains("rsscript_semantics::fresh_return_issues_from_flow"));
+    for forbidden in [
+        "fn collect_fresh_return_issues_from_block",
+        "fn collect_fresh_return_issues_from_stmt",
+        "fn collect_fresh_return_issue",
+    ] {
+        assert!(
+            !compiler_local_ownership.contains(forbidden),
+            "compiler must not re-own fresh-return flow rule `{forbidden}`"
+        );
+    }
     assert!(semantic_local_flow_builder.contains("fresh_match_binding"));
     for forbidden in [
         "fn fresh_payload_type_for_variant",

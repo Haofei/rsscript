@@ -419,6 +419,9 @@ mechanical acceptance condition holds.
       lowers checked HIR into the local ownership graph, including structured
       branches, loops, resource-cleanup edges, and closure-capture facts;
       compiler has only compatibility adapters for legacy callers.
+    - [x] **S02.4ah — Move fresh-return flow facts.** Semantics derives failed
+      `fresh` return proofs from checked HIR plus local-flow entry states;
+      compiler consumes the resulting facts to emit diagnostics.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.
