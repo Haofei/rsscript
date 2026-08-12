@@ -299,6 +299,26 @@ pub fn structured_match_effect_diagnostic(
     })
 }
 
+/// Diagnose a mutating effect inside a `match` guard. The caller supplies the
+/// first effect fact and source span discovered during checked-HIR traversal.
+pub fn match_guard_mutation_diagnostic(
+    effect: DataEffect,
+    span: &rsscript_diagnostics::Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::READ_VIEW_MUTATION,
+        format!("match guard cannot use `{}`.", effect.as_str()),
+        span.clone(),
+        "guard mutation is not allowed",
+    )
+    .with_cause("A guard runs before the arm is selected and may only read pattern bindings.")
+    .with_fix(
+        "make_guard_read_only",
+        "Move mutation into the selected arm body or rewrite the guard as a read-only predicate.",
+        "manual",
+    )
+}
+
 fn collect_bare_returns(
     block: &HirBlock,
     function: &FunctionDecl,
@@ -688,5 +708,18 @@ mod tests {
         assert!(
             structured_match_effect_diagnostic(&pattern, Some(DataEffect::Read), &span).is_none()
         );
+    }
+
+    #[test]
+    fn rejects_mutating_match_guards() {
+        let span = rsscript_diagnostics::Span {
+            file: "match.rss".to_owned(),
+            line: 1,
+            column: 1,
+            length: 1,
+        };
+        let diagnostic = match_guard_mutation_diagnostic(DataEffect::Take, &span);
+        assert_eq!(diagnostic.code, code::READ_VIEW_MUTATION);
+        assert!(diagnostic.summary.contains("take"));
     }
 }

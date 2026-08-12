@@ -686,15 +686,11 @@ pub(super) fn check_match_pattern_effects(
         if let Some(guard) = &arm.guard
             && let Some((effect, span)) = first_mutating_effect_expr(guard)
         {
-            analyzer.diagnostics.push(error_cause_manual_fix(
-                code::READ_VIEW_MUTATION,
-                format!("match guard cannot use `{}`.", effect.as_str()),
-                span.clone(),
-                "guard mutation is not allowed",
-                "A guard runs before the arm is selected and may only read pattern bindings.",
-                "make_guard_read_only",
-                "Move mutation into the selected arm body or rewrite the guard as a read-only predicate.",
-            ));
+            analyzer
+                .diagnostics
+                .push(rsscript_semantics::match_guard_mutation_diagnostic(
+                    effect, span,
+                ));
         }
     }
 }

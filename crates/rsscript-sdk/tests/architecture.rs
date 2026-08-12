@@ -1190,6 +1190,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "match_variant_family_diagnostic",
         "variant_pattern_arity_diagnostic",
         "structured_match_effect_diagnostic",
+        "match_guard_mutation_diagnostic",
         "function_fallthrough_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
@@ -1472,6 +1473,14 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     assert!(
         !compiler_body_semantics.contains("structured match patterns require an explicit"),
         "compiler must not re-own structured match effect diagnostics"
+    );
+    assert!(semantic_control_flow.contains("pub fn match_guard_mutation_diagnostic"));
+    assert!(
+        compiler_body_semantics.contains("rsscript_semantics::match_guard_mutation_diagnostic")
+    );
+    assert!(
+        !compiler_body_semantics.contains("match guard cannot use"),
+        "compiler must not re-own match guard mutation diagnostics"
     );
 
     let semantic_generic_constraints =
