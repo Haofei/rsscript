@@ -1,6 +1,6 @@
 //! Semantic control-flow diagnostics over resolved HIR.
 
-use crate::hir::{Hir, HirBlock, HirStmt};
+use crate::hir::{Hir, HirBlock, HirExpr, HirStmt, number_literal_type_name};
 use rsscript_diagnostics::{Diagnostic, code};
 use rsscript_syntax::ast::{FunctionDecl, Item, Program, TypeRef};
 use std::collections::HashSet;
@@ -51,6 +51,29 @@ pub fn missing_return_value_diagnostics(program: &Program, hir: &Hir) -> Vec<Dia
         );
     }
     diagnostics
+}
+
+/// Diagnose a control-flow condition whose checked HIR type is not `Bool`.
+/// Unknown expression types are left to the resolving/type-checking passes.
+pub fn bool_condition_diagnostic(expr: &HirExpr, construct: &str) -> Option<Diagnostic> {
+    let type_name = expr_type_name(expr)?;
+    if type_name == "Bool" {
+        return None;
+    }
+    Some(
+        Diagnostic::error(
+            code::CONTROL_FLOW_TYPE_MISMATCH,
+            format!("{construct} condition has type `{type_name}`, expected `Bool`."),
+            expr_span(expr).clone(),
+            "control-flow type mismatch",
+        )
+        .with_cause("RSScript control-flow conditions are explicit `Bool` values; non-empty strings, numbers, and managed handles do not coerce to truthy or falsey values.")
+        .with_fix(
+            "use_bool_condition",
+            "Compare explicitly or call a function that returns `Bool`.",
+            "manual",
+        ),
+    )
 }
 
 fn collect_bare_returns(
@@ -176,6 +199,62 @@ fn render_type_ref(ty: &TypeRef) -> String {
     }
 }
 
+fn expr_type_name(expr: &HirExpr) -> Option<&str> {
+    match expr {
+        HirExpr::Ident {
+            name, type_name, ..
+        } => type_name.as_deref().or(match name.as_str() {
+            "true" | "false" => Some("Bool"),
+            "null" => Some("JsonLiteral"),
+            "Unit" => Some("Unit"),
+            "None" => Some("Option<?>"),
+            _ => None,
+        }),
+        HirExpr::Call { type_name, .. }
+        | HirExpr::Effect { type_name, .. }
+        | HirExpr::Manage { type_name, .. }
+        | HirExpr::Spawn { type_name, .. }
+        | HirExpr::Await { type_name, .. }
+        | HirExpr::Try { type_name, .. }
+        | HirExpr::Match { type_name, .. }
+        | HirExpr::MapLiteral { type_name, .. } => type_name.as_deref(),
+        HirExpr::Field { access, .. } => access.type_name.as_deref(),
+        HirExpr::Number { value, .. } => Some(number_literal_type_name(value)),
+        HirExpr::String { .. } => Some("String"),
+        HirExpr::Char { .. } => Some("Char"),
+        HirExpr::Binary { .. }
+        | HirExpr::Index { .. }
+        | HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Closure { .. }
+        | HirExpr::Unknown(_) => None,
+    }
+}
+
+fn expr_span(expr: &HirExpr) -> &rsscript_diagnostics::Span {
+    match expr {
+        HirExpr::Ident { span, .. }
+        | HirExpr::Number { span, .. }
+        | HirExpr::String { span, .. }
+        | HirExpr::Char { span, .. }
+        | HirExpr::ObjectLiteral { span, .. }
+        | HirExpr::MapLiteral { span, .. }
+        | HirExpr::ArrayLiteral { span, .. }
+        | HirExpr::Binary { span, .. }
+        | HirExpr::Field { span, .. }
+        | HirExpr::Index { span, .. }
+        | HirExpr::Call { span, .. }
+        | HirExpr::Effect { span, .. }
+        | HirExpr::Manage { span, .. }
+        | HirExpr::Spawn { span, .. }
+        | HirExpr::Await { span, .. }
+        | HirExpr::Try { span, .. }
+        | HirExpr::Closure { span, .. }
+        | HirExpr::Match { span, .. }
+        | HirExpr::Unknown(span) => span,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,5 +281,31 @@ mod tests {
         let diagnostics = missing_return_value_diagnostics(&program, &hir);
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].code, code::RETURN_TYPE_MISMATCH);
+    }
+
+    #[test]
+    fn requires_explicit_boolean_control_flow_conditions() {
+        let program = parse_source("condition.rss", "fn value() { if 1 {} }");
+        let hir = Hir::from_syntax(&program);
+        let body = hir
+            .function_body("value")
+            .and_then(|body| body.block.as_ref())
+            .expect("function body");
+        let HirStmt::If { condition, .. } = &body.statements[0] else {
+            panic!("if statement")
+        };
+        let diagnostic = bool_condition_diagnostic(condition, "if").expect("must reject Int");
+        assert_eq!(diagnostic.code, code::CONTROL_FLOW_TYPE_MISMATCH);
+
+        let program = parse_source("condition.rss", "fn value() { if true {} }");
+        let hir = Hir::from_syntax(&program);
+        let body = hir
+            .function_body("value")
+            .and_then(|body| body.block.as_ref())
+            .expect("function body");
+        let HirStmt::If { condition, .. } = &body.statements[0] else {
+            panic!("if statement")
+        };
+        assert!(bool_condition_diagnostic(condition, "if").is_none());
     }
 }

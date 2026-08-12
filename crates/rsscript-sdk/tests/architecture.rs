@@ -1180,6 +1180,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "try_error_type_diagnostics",
         "integer_literal_range_diagnostic",
         "char_literal_scalar_diagnostic",
+        "bool_condition_diagnostic",
         "function_fallthrough_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
@@ -1382,6 +1383,14 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
             "compiler must not re-own literal validity rule `{forbidden}`"
         );
     }
+
+    let semantic_control_flow = read(&root.join("crates/rsscript-semantics/src/control_flow.rs"));
+    assert!(semantic_control_flow.contains("pub fn bool_condition_diagnostic"));
+    assert!(compiler_body_semantics.contains("rsscript_semantics::bool_condition_diagnostic"));
+    assert!(
+        !compiler_body_semantics.contains("fn check_bool_condition"),
+        "compiler must not re-own boolean control-flow condition diagnostics"
+    );
 
     let semantic_generic_constraints =
         read(&root.join("crates/rsscript-semantics/src/generic_constraints.rs"));

@@ -42,7 +42,9 @@ pub use call_arguments::{
     receiver_call_effect_diagnostics,
 };
 pub use call_binding::{BoundArgument, BoundArgumentSource, CallBinding, CallBindingIssue};
-pub use control_flow::{function_fallthrough_diagnostics, missing_return_value_diagnostics};
+pub use control_flow::{
+    bool_condition_diagnostic, function_fallthrough_diagnostics, missing_return_value_diagnostics,
+};
 pub use database::{
     AnalysisResult, CompilationSession, CompilationSessionStats, FrontendCompletion,
     FrontendStopReason, SemanticDatabase, SessionSourceStore, SourceFileSnapshot, SourceSnapshot,

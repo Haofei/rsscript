@@ -91,7 +91,10 @@ pub(super) fn check_stmt_semantics(
             else_body,
             ..
         } => {
-            check_bool_condition(analyzer, condition, "if");
+            if let Some(diagnostic) = rsscript_semantics::bool_condition_diagnostic(condition, "if")
+            {
+                analyzer.diagnostics.push(diagnostic);
+            }
             check_expr_semantics(analyzer, local_analysis, condition, state, live_after);
             if check_resource_contexts {
                 check_resource_producer_expr(analyzer, condition, false);
@@ -128,7 +131,11 @@ pub(super) fn check_stmt_semantics(
             condition, body, ..
         } => {
             if let Some(condition) = condition {
-                check_bool_condition(analyzer, condition, "while");
+                if let Some(diagnostic) =
+                    rsscript_semantics::bool_condition_diagnostic(condition, "while")
+                {
+                    analyzer.diagnostics.push(diagnostic);
+                }
                 check_expr_semantics(analyzer, local_analysis, condition, state, live_after);
                 if check_resource_contexts {
                     check_resource_producer_expr(analyzer, condition, false);
@@ -342,24 +349,6 @@ pub(super) fn check_expr_semantics(
         false,
         live_after,
     );
-}
-
-pub(super) fn check_bool_condition(analyzer: &mut Analyzer<'_>, expr: &HirExpr, construct: &str) {
-    let Some(type_name) = hir_expr_type_name(expr) else {
-        return;
-    };
-    if type_name == "Bool" {
-        return;
-    }
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::CONTROL_FLOW_TYPE_MISMATCH,
-        format!("{construct} condition has type `{type_name}`, expected `Bool`."),
-        hir_expr_span(expr).clone(),
-        "control-flow type mismatch",
-        "RSScript control-flow conditions are explicit `Bool` values; non-empty strings, numbers, and managed handles do not coerce to truthy or falsey values.",
-        "use_bool_condition",
-        "Compare explicitly or call a function that returns `Bool`.",
-    ));
 }
 
 pub(super) fn check_for_iterable_type(
