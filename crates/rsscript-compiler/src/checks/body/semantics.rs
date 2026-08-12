@@ -725,21 +725,13 @@ pub(super) fn check_pattern_field_effects(
             let conflicts = matches!(previous_effect, DataEffect::Mut | DataEffect::Take)
                 || matches!(effective_effect, DataEffect::Mut | DataEffect::Take);
             if conflicts {
-                analyzer.diagnostics.push(error_cause_manual_fix(
-                    code::FIELD_PARTIAL_ACCESS_CONFLICT,
-                    format!(
-                        "pattern field `{}` is bound more than once with mutable or taking access.",
-                        field.name
+                analyzer.diagnostics.push(
+                    rsscript_semantics::conflicting_pattern_field_effect_diagnostic(
+                        &field.name,
+                        &field.span,
+                        &previous_span,
                     ),
-                    field.span.clone(),
-                    "pattern field conflict",
-                    format!(
-                        "The previous binding for `{}` was at {}:{}.",
-                        field.name, previous_span.line, previous_span.column
-                    ),
-                    "remove_overlapping_pattern_binding",
-                    "Bind each mutable or taking field place at most once in a pattern.",
-                ));
+                );
             }
         }
         if field.ignored {
@@ -790,18 +782,13 @@ pub(super) fn check_struct_pattern_fields(
     let mut seen_fields: HashMap<&str, Span> = HashMap::new();
     for field in fields {
         if let Some(previous_span) = seen_fields.insert(field.name.as_str(), field.span.clone()) {
-            analyzer.diagnostics.push(error_cause_manual_fix(
-                code::FIELD_PARTIAL_ACCESS_CONFLICT,
-                format!("pattern field `{}` is listed more than once.", field.name),
-                field.span.clone(),
-                "duplicate pattern field",
-                format!(
-                    "The previous projection of `{}` was at {}:{}.",
-                    field.name, previous_span.line, previous_span.column
-                ),
-                "remove_duplicate_pattern_field",
-                "List each field at most once in a structured pattern.",
-            ));
+            analyzer
+                .diagnostics
+                .push(rsscript_semantics::duplicate_pattern_field_diagnostic(
+                    &field.name,
+                    &field.span,
+                    &previous_span,
+                ));
         }
         if !declared_names.contains(field.name.as_str()) {
             analyzer.diagnostics.push(error_cause_manual_fix(

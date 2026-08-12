@@ -368,6 +368,55 @@ pub fn weakened_pattern_field_effect_diagnostic(
     )
 }
 
+/// Diagnose a repeated structured pattern field when either projection requests
+/// mutable or taking access.
+pub fn conflicting_pattern_field_effect_diagnostic(
+    field_name: &str,
+    span: &rsscript_diagnostics::Span,
+    previous_span: &rsscript_diagnostics::Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::FIELD_PARTIAL_ACCESS_CONFLICT,
+        format!(
+            "pattern field `{field_name}` is bound more than once with mutable or taking access."
+        ),
+        span.clone(),
+        "pattern field conflict",
+    )
+    .with_cause(format!(
+        "The previous binding for `{field_name}` was at {}:{}.",
+        previous_span.line, previous_span.column
+    ))
+    .with_fix(
+        "remove_overlapping_pattern_binding",
+        "Bind each mutable or taking field place at most once in a pattern.",
+        "manual",
+    )
+}
+
+/// Diagnose a structured pattern field that is listed more than once.
+pub fn duplicate_pattern_field_diagnostic(
+    field_name: &str,
+    span: &rsscript_diagnostics::Span,
+    previous_span: &rsscript_diagnostics::Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::FIELD_PARTIAL_ACCESS_CONFLICT,
+        format!("pattern field `{field_name}` is listed more than once."),
+        span.clone(),
+        "duplicate pattern field",
+    )
+    .with_cause(format!(
+        "The previous projection of `{field_name}` was at {}:{}.",
+        previous_span.line, previous_span.column
+    ))
+    .with_fix(
+        "remove_duplicate_pattern_field",
+        "List each field at most once in a structured pattern.",
+        "manual",
+    )
+}
+
 fn collect_bare_returns(
     block: &HirBlock,
     function: &FunctionDecl,
@@ -788,5 +837,25 @@ mod tests {
         );
         let weaker = weakened_pattern_field_effect_diagnostic("value", DataEffect::Take, &span);
         assert_eq!(weaker.code, code::READ_VIEW_MUTATION);
+    }
+
+    #[test]
+    fn reports_duplicate_and_conflicting_pattern_fields() {
+        let previous = rsscript_diagnostics::Span {
+            file: "match.rss".to_owned(),
+            line: 1,
+            column: 4,
+            length: 1,
+        };
+        let current = rsscript_diagnostics::Span {
+            file: "match.rss".to_owned(),
+            line: 1,
+            column: 12,
+            length: 1,
+        };
+        let duplicate = duplicate_pattern_field_diagnostic("value", &current, &previous);
+        assert_eq!(duplicate.code, code::FIELD_PARTIAL_ACCESS_CONFLICT);
+        let conflict = conflicting_pattern_field_effect_diagnostic("value", &current, &previous);
+        assert_eq!(conflict.code, code::FIELD_PARTIAL_ACCESS_CONFLICT);
     }
 }

@@ -1193,6 +1193,8 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "match_guard_mutation_diagnostic",
         "managed_pattern_field_effect_diagnostic",
         "weakened_pattern_field_effect_diagnostic",
+        "conflicting_pattern_field_effect_diagnostic",
+        "duplicate_pattern_field_diagnostic",
         "function_fallthrough_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
@@ -1503,6 +1505,24 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         assert!(
             !compiler_body_semantics.contains(forbidden),
             "compiler must not re-own pattern field effect diagnostic `{forbidden}`"
+        );
+    }
+    for exported in [
+        "pub fn conflicting_pattern_field_effect_diagnostic",
+        "pub fn duplicate_pattern_field_diagnostic",
+    ] {
+        assert!(semantic_control_flow.contains(exported));
+    }
+    for delegated in [
+        "rsscript_semantics::conflicting_pattern_field_effect_diagnostic",
+        "rsscript_semantics::duplicate_pattern_field_diagnostic",
+    ] {
+        assert!(compiler_body_semantics.contains(delegated));
+    }
+    for forbidden in ["pattern field conflict", "duplicate pattern field"] {
+        assert!(
+            !compiler_body_semantics.contains(forbidden),
+            "compiler must not re-own duplicate pattern field diagnostic `{forbidden}`"
         );
     }
 
