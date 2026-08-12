@@ -1,6 +1,9 @@
-//! Source-token semantic rules that do not require compiler orchestration.
+//! Source-level semantic rules that do not require compiler orchestration.
+
+use std::collections::{HashMap, HashSet};
 
 use rsscript_diagnostics::{Diagnostic, Span, code};
+use rsscript_syntax::ast::Item;
 use rsscript_syntax::lexer::{Token, TokenKind};
 
 /// Derive diagnostics for deliberately unsupported surface forms.
@@ -14,6 +17,92 @@ pub fn forbidden_surface_syntax_diagnostics(tokens: &[Token]) -> Vec<Diagnostic>
     check_surface_reference_attempts(tokens, &mut diagnostics);
     check_implicit_conversion_attempts(tokens, &mut diagnostics);
     diagnostics
+}
+
+/// Derive per-file module/use organization diagnostics.
+///
+/// A merged workspace contains declarations from multiple files, so every
+/// ordering and local-import binding rule is keyed by its source file rather
+/// than by the merged item stream as a whole.
+pub fn module_use_layout_diagnostics(items: &[Item]) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    let mut seen_module = HashSet::new();
+    let mut seen_use = HashSet::new();
+    let mut seen_non_organization_item = HashSet::new();
+    let mut seen_import_local: HashMap<String, HashSet<String>> = HashMap::new();
+
+    for item in items {
+        let file = item_span_file(item);
+        match item {
+            Item::Module(module) => {
+                if seen_module.contains(&file) {
+                    diagnostics.push(unsupported_syntax_diagnostic(
+                        module.span.clone(),
+                        "duplicate module declaration",
+                        "A source or interface file may declare at most one `module` identity.",
+                    ));
+                }
+                if seen_non_organization_item.contains(&file) {
+                    diagnostics.push(unsupported_syntax_diagnostic(
+                        module.span.clone(),
+                        "misplaced module declaration",
+                        "`module` is source-organization metadata and must appear before declarations.",
+                    ));
+                }
+                if seen_use.contains(&file) {
+                    diagnostics.push(unsupported_syntax_diagnostic(
+                        module.span.clone(),
+                        "misplaced module declaration",
+                        "`module` must be the first organization declaration when present; `use` declarations follow it.",
+                    ));
+                }
+                seen_module.insert(file);
+            }
+            Item::Use(use_decl) => {
+                if seen_non_organization_item.contains(&file) {
+                    diagnostics.push(unsupported_syntax_diagnostic(
+                        use_decl.span.clone(),
+                        "misplaced use declaration",
+                        "`use` is source-organization metadata and must appear before declarations.",
+                    ));
+                }
+                if let Some(local) = use_decl.local_name()
+                    && !seen_import_local
+                        .entry(file.clone())
+                        .or_default()
+                        .insert(local.to_owned())
+                {
+                    diagnostics.push(unsupported_syntax_diagnostic(
+                        use_decl.span.clone(),
+                        "duplicate import name",
+                        "Two `use` declarations bind the same local name in this file. Rename one with `use module.name as other_name` so each import is unambiguous.",
+                    ));
+                }
+                seen_use.insert(file);
+            }
+            Item::Type(_)
+            | Item::SumType(_)
+            | Item::TypeAlias(_)
+            | Item::Const(_)
+            | Item::Function(_) => {
+                seen_non_organization_item.insert(file);
+            }
+        }
+    }
+
+    diagnostics
+}
+
+fn item_span_file(item: &Item) -> String {
+    match item {
+        Item::Function(decl) => decl.span.file.clone(),
+        Item::Const(decl) => decl.span.file.clone(),
+        Item::Type(decl) => decl.span.file.clone(),
+        Item::SumType(decl) => decl.span.file.clone(),
+        Item::TypeAlias(decl) => decl.span.file.clone(),
+        Item::Module(decl) => decl.span.file.clone(),
+        Item::Use(decl) => decl.span.file.clone(),
+    }
 }
 
 /// Build the canonical diagnostic for a parsed construct that RSScript does
@@ -235,5 +324,18 @@ mod tests {
             "the form has no RSScript semantic contract."
         );
         assert_eq!(diagnostic.fixes[0].kind, "rewrite_supported_syntax");
+    }
+
+    #[test]
+    fn module_use_layout_is_checked_per_source_file() {
+        let source = rsscript_syntax::parse_source(
+            "one.rss",
+            "use dep.item\nuse other.item as item\nfn work() -> Unit {}\nmodule late\n",
+        );
+        let diagnostics = module_use_layout_diagnostics(&source.items);
+        assert_eq!(diagnostics.len(), 3);
+        assert_eq!(diagnostics[0].label, "duplicate import name");
+        assert_eq!(diagnostics[1].label, "misplaced module declaration");
+        assert_eq!(diagnostics[2].label, "misplaced module declaration");
     }
 }

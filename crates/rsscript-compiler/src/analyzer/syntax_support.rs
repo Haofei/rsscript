@@ -36,7 +36,10 @@ impl Analyzer<'_> {
                 "This declaration starts like RSScript syntax but does not match the supported declaration grammar.",
             );
         }
-        self.check_module_use_layout();
+        self.diagnostics
+            .extend(rsscript_semantics::module_use_layout_diagnostics(
+                &self.syntax_program.items,
+            ));
         self.check_reserved_declaration_names();
         self.check_reserved_protocol_generics();
         let protocol_names = self
@@ -105,77 +108,6 @@ impl Analyzer<'_> {
                     "reserved declaration name",
                     "The `__rss_` and `__rsscript_` prefixes are reserved for compiler-generated symbols; rename this declaration.",
                 );
-            }
-        }
-    }
-
-    pub(super) fn check_module_use_layout(&mut self) {
-        // Layout is per source file: a merged multi-file program legitimately has
-        // one `module` declaration per file, so the "at most one module" /
-        // ordering rules are tracked by the declaration's originating file.
-        let mut seen_module: HashSet<String> = HashSet::new();
-        let mut seen_use: HashSet<String> = HashSet::new();
-        let mut seen_non_organization_item: HashSet<String> = HashSet::new();
-        // Per file, the local import names already bound, so a second import that
-        // would silently shadow the first is rejected instead of overwritten.
-        let mut seen_import_local: HashMap<String, HashSet<String>> = HashMap::new();
-        let items = self.syntax_program.items.clone();
-        for item in &items {
-            let file = item_span_file(item);
-            match item {
-                Item::Module(module) => {
-                    if seen_module.contains(&file) {
-                        self.unsupported_syntax(
-                            module.span.clone(),
-                            "duplicate module declaration",
-                            "A source or interface file may declare at most one `module` identity.",
-                        );
-                    }
-                    if seen_non_organization_item.contains(&file) {
-                        self.unsupported_syntax(
-                            module.span.clone(),
-                            "misplaced module declaration",
-                            "`module` is source-organization metadata and must appear before declarations.",
-                        );
-                    }
-                    if seen_use.contains(&file) {
-                        self.unsupported_syntax(
-                            module.span.clone(),
-                            "misplaced module declaration",
-                            "`module` must be the first organization declaration when present; `use` declarations follow it.",
-                        );
-                    }
-                    seen_module.insert(file);
-                }
-                Item::Use(use_decl) => {
-                    if seen_non_organization_item.contains(&file) {
-                        self.unsupported_syntax(
-                            use_decl.span.clone(),
-                            "misplaced use declaration",
-                            "`use` is source-organization metadata and must appear before declarations.",
-                        );
-                    }
-                    if let Some(local) = use_decl.local_name()
-                        && !seen_import_local
-                            .entry(file.clone())
-                            .or_default()
-                            .insert(local.to_string())
-                    {
-                        self.unsupported_syntax(
-                            use_decl.span.clone(),
-                            "duplicate import name",
-                            "Two `use` declarations bind the same local name in this file. Rename one with `use module.name as other_name` so each import is unambiguous.",
-                        );
-                    }
-                    seen_use.insert(file);
-                }
-                Item::Type(_)
-                | Item::SumType(_)
-                | Item::TypeAlias(_)
-                | Item::Const(_)
-                | Item::Function(_) => {
-                    seen_non_organization_item.insert(file);
-                }
             }
         }
     }

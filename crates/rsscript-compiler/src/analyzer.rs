@@ -1614,19 +1614,6 @@ fn type_ref_name(ty: &TypeRef) -> String {
     }
 }
 
-/// The originating source file of a top-level item (from its span).
-fn item_span_file(item: &Item) -> String {
-    match item {
-        Item::Function(decl) => decl.span.file.clone(),
-        Item::Const(decl) => decl.span.file.clone(),
-        Item::Type(decl) => decl.span.file.clone(),
-        Item::SumType(decl) => decl.span.file.clone(),
-        Item::TypeAlias(decl) => decl.span.file.clone(),
-        Item::Module(decl) => decl.span.file.clone(),
-        Item::Use(decl) => decl.span.file.clone(),
-    }
-}
-
 /// Whether `name` is a plain Rust identifier (used verbatim as a pinned backend
 /// symbol): non-empty, starts with a letter or `_`, and otherwise alphanumeric or
 /// `_`. Raw identifiers and keywords are intentionally rejected.

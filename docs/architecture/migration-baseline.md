@@ -161,6 +161,9 @@ mechanical acceptance condition holds.
       source-level protocol method index plus the bodyless-contract and default
       implementation-marker diagnostics; compiler only supplies visible items
       and protocol names.
+    - [x] **S02.1l — Move module/use layout rules.** Semantics owns per-file
+      module ordering, import ordering, and duplicate local import binding
+      diagnostics; compiler only supplies the parsed item stream.
     - [x] **S02.2g — Move resolved builtin operator diagnostics.** Compiler
       extracts HIR operand/type facts; semantics owns non-numeric arithmetic and
       fixed-operand compatibility diagnostic contracts.

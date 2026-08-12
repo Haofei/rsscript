@@ -1253,6 +1253,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "spawn_local_capture_diagnostic",
         "function_fallthrough_diagnostics",
         "forbidden_surface_syntax_diagnostics",
+        "module_use_layout_diagnostics",
         "unsupported_syntax_diagnostic",
         "external_binding_type_diagnostics",
         "unknown_type_name_diagnostic",
@@ -1330,6 +1331,8 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         read(&root.join("crates/rsscript-compiler/src/analyzer/syntax_support.rs"));
     assert!(compiler_syntax_support.contains("rsscript_semantics::derive_syntax_diagnostics"));
     assert!(compiler_syntax_support.contains("rsscript_semantics::unsupported_syntax_diagnostic"));
+    assert!(compiler_syntax_support.contains("rsscript_semantics::module_use_layout_diagnostics"));
+    assert!(!compiler_syntax_support.contains("fn check_module_use_layout"));
     assert!(!compiler_syntax_support.contains("Diagnostic::"));
     let compiler_declaration_diagnostics =
         read(&root.join("crates/rsscript-compiler/src/analyzer/diagnostics.rs"));
