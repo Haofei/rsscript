@@ -127,11 +127,11 @@ mechanical acceptance condition holds.
   source snapshots, `SemanticDatabase`, completion state, `AnalysisResult`, and
   `ValidatedProgram` are owned there; architecture tests prevent compiler
   re-ownership.
-- [ ] **S02 — Move name/type/call checks into semantics.** Migrate analyzer,
+- [x] **S02 — Move name/type/call checks into semantics.** Migrate analyzer,
   ownership, retention, resource, task-group, call-binding, exhaustiveness, and
   type checks out of `rsscript-compiler`. Completion means compiler only
   orchestrates semantic queries and contains no semantic rule implementation.
-  - [ ] **S02.1 — Move declaration/name-resolution facts.** Relocate symbol,
+  - [x] **S02.1 — Move declaration/name-resolution facts.** Relocate symbol,
     namespace, import, and declaration validation with identical diagnostic
     fixtures and spans. The complete file-local editor symbol index (declarations,
     lexical scopes, references, pattern bindings, and document outlines) now
@@ -213,7 +213,7 @@ mechanical acceptance condition holds.
       protocol-bound resolution across interface and source snapshots is owned
       by `rsscript-semantics`; compiler retains protocol implementation mapping
       checks only.
-  - [ ] **S02.2 — Move type and generic-constraint checks.** Relocate type
+  - [x] **S02.2 — Move type and generic-constraint checks.** Relocate type
     inference, substitutions, generic constraints, and call result facts behind
     the semantic crate API.
     - [x] **S02.2a — Move cyclic type-alias diagnostics.** Alias dependency
@@ -263,14 +263,14 @@ mechanical acceptance condition holds.
     - [x] **S02.2j — Move bounded generic substitution.** Semantics owns the
       recursive substitution algorithm; compiler contributes only a narrow
       adapter to its shared cancellation and substitution budget.
-  - [ ] **S02.3 — Move call binding and effect checks.** Relocate positional and
+  - [x] **S02.3 — Move call binding and effect checks.** Relocate positional and
     named argument binding, `read`/`mut`/`take`, external signature matching,
     and retention facts.
     - [x] **S02.3.1 — Remove compiler call-binding compatibility ownership.**
       `CallBinding` and its source/evaluation-order contract are owned and
       consumed directly from `rsscript-semantics`; architecture tests reject the
       old compiler module and re-export path.
-    - [ ] **S02.3.2 — Move effect and signature diagnostics.** Relocate call-site
+    - [x] **S02.3.2 — Move effect and signature diagnostics.** Relocate call-site
       `read`/`mut`/`take`, external signature, retention, and argument-shape
       validation from compiler checks into semantic queries.
       - [x] **S02.3.2b — Move call argument shape and data-effect diagnostics.**
@@ -299,7 +299,7 @@ mechanical acceptance condition holds.
         Compiler resolves protocol satisfaction, `Dyn` construction, and
         variant-field facts; semantics owns the canonical generic-bound,
         protocol-receiver, and variant-construction diagnostic contracts.
-  - [ ] **S02.4 — Move ownership and resource checks.** Relocate moves, escapes,
+  - [x] **S02.4 — Move ownership and resource checks.** Relocate moves, escapes,
     borrows, `fresh`/`owned`/`noescape`, resource declarations, and cleanup
     validation with property and hostile-corpus coverage.
     - [x] **S02.4a — Move weak-field upgrade validation.** Checked-HIR traversal
@@ -429,7 +429,7 @@ mechanical acceptance condition holds.
       use-after-move facts from checked HIR plus local-flow entry states,
       including field paths, match `take`, and nested closures; compiler has
       no local ownership traversal.
-  - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
+  - [x] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.
     - [x] **S02.5a — Move function fallthrough diagnostics.** The resolved-HIR
