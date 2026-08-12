@@ -319,6 +319,55 @@ pub fn match_guard_mutation_diagnostic(
     )
 }
 
+/// Diagnose a structured pattern field that requests mutable/taking access to
+/// a managed class value.
+pub fn managed_pattern_field_effect_diagnostic(
+    field_name: &str,
+    effect: DataEffect,
+    span: &rsscript_diagnostics::Span,
+) -> Option<Diagnostic> {
+    matches!(effect, DataEffect::Mut | DataEffect::Take).then(|| {
+        Diagnostic::error(
+            code::READ_VIEW_MUTATION,
+            format!(
+                "managed pattern field `{field_name}` cannot request `{}`.",
+                effect.as_str()
+            ),
+            span.clone(),
+            "managed pattern field is read-only",
+        )
+        .with_cause("Managed class values are shared runtime objects; structured patterns expose only read views of their fields.")
+        .with_fix(
+            "use_read_pattern",
+            "Use a read field binding and perform managed mutation through an explicit method.",
+            "manual",
+        )
+    })
+}
+
+/// Diagnose a child field effect that exceeds its match scrutinee effect.
+pub fn weakened_pattern_field_effect_diagnostic(
+    field_name: &str,
+    effect: DataEffect,
+    span: &rsscript_diagnostics::Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::READ_VIEW_MUTATION,
+        format!(
+            "field pattern `{field_name}` requests `{}` from a weaker match scrutinee.",
+            effect.as_str()
+        ),
+        span.clone(),
+        "pattern effect is not allowed",
+    )
+    .with_cause("Pattern binding effects are monotonic: a child field cannot request more authority than the scrutinee effect provides.")
+    .with_fix(
+        "weaken_pattern_effect",
+        "Use `read` for this field or strengthen the match scrutinee effect when the value is local and mutable.",
+        "manual",
+    )
+}
+
 fn collect_bare_returns(
     block: &HirBlock,
     function: &FunctionDecl,
@@ -721,5 +770,23 @@ mod tests {
         let diagnostic = match_guard_mutation_diagnostic(DataEffect::Take, &span);
         assert_eq!(diagnostic.code, code::READ_VIEW_MUTATION);
         assert!(diagnostic.summary.contains("take"));
+    }
+
+    #[test]
+    fn validates_structured_pattern_field_effects() {
+        let span = rsscript_diagnostics::Span {
+            file: "match.rss".to_owned(),
+            line: 1,
+            column: 1,
+            length: 1,
+        };
+        let managed = managed_pattern_field_effect_diagnostic("value", DataEffect::Mut, &span)
+            .expect("managed fields are read-only");
+        assert_eq!(managed.code, code::READ_VIEW_MUTATION);
+        assert!(
+            managed_pattern_field_effect_diagnostic("value", DataEffect::Read, &span).is_none()
+        );
+        let weaker = weakened_pattern_field_effect_diagnostic("value", DataEffect::Take, &span);
+        assert_eq!(weaker.code, code::READ_VIEW_MUTATION);
     }
 }

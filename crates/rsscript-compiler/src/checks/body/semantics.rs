@@ -747,19 +747,13 @@ pub(super) fn check_pattern_field_effects(
         };
         let effect = effective_effect;
         if managed_class_scrutinee && matches!(effect, DataEffect::Mut | DataEffect::Take) {
-            analyzer.diagnostics.push(error_cause_manual_fix(
-                code::READ_VIEW_MUTATION,
-                format!(
-                    "managed pattern field `{}` cannot request `{}`.",
-                    field.name,
-                    effect.as_str()
-                ),
-                field.span.clone(),
-                "managed pattern field is read-only",
-                "Managed class values are shared runtime objects; structured patterns expose only read views of their fields.",
-                "use_read_pattern",
-                "Use a read field binding and perform managed mutation through an explicit method.",
-            ));
+            let diagnostic = rsscript_semantics::managed_pattern_field_effect_diagnostic(
+                &field.name,
+                effect,
+                &field.span,
+            )
+            .expect("mutating managed pattern fields must produce a diagnostic");
+            analyzer.diagnostics.push(diagnostic);
             continue;
         }
         let allowed = match scrutinee_effect {
@@ -769,19 +763,13 @@ pub(super) fn check_pattern_field_effects(
             None => effect == DataEffect::Read,
         };
         if !allowed {
-            analyzer.diagnostics.push(error_cause_manual_fix(
-                code::READ_VIEW_MUTATION,
-                format!(
-                    "field pattern `{}` requests `{}` from a weaker match scrutinee.",
-                    field.name,
-                    effect.as_str()
+            analyzer.diagnostics.push(
+                rsscript_semantics::weakened_pattern_field_effect_diagnostic(
+                    &field.name,
+                    effect,
+                    &field.span,
                 ),
-                field.span.clone(),
-                "pattern effect is not allowed",
-                "Pattern binding effects are monotonic: a child field cannot request more authority than the scrutinee effect provides.",
-                "weaken_pattern_effect",
-                "Use `read` for this field or strengthen the match scrutinee effect when the value is local and mutable.",
-            ));
+            );
         }
     }
 }

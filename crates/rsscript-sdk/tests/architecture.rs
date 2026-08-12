@@ -1191,6 +1191,8 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "variant_pattern_arity_diagnostic",
         "structured_match_effect_diagnostic",
         "match_guard_mutation_diagnostic",
+        "managed_pattern_field_effect_diagnostic",
+        "weakened_pattern_field_effect_diagnostic",
         "function_fallthrough_diagnostics",
         "forbidden_surface_syntax_diagnostics",
         "external_binding_type_diagnostics",
@@ -1482,6 +1484,27 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         !compiler_body_semantics.contains("match guard cannot use"),
         "compiler must not re-own match guard mutation diagnostics"
     );
+    for exported in [
+        "pub fn managed_pattern_field_effect_diagnostic",
+        "pub fn weakened_pattern_field_effect_diagnostic",
+    ] {
+        assert!(semantic_control_flow.contains(exported));
+    }
+    for delegated in [
+        "rsscript_semantics::managed_pattern_field_effect_diagnostic",
+        "rsscript_semantics::weakened_pattern_field_effect_diagnostic",
+    ] {
+        assert!(compiler_body_semantics.contains(delegated));
+    }
+    for forbidden in [
+        "managed pattern field is read-only",
+        "field pattern `{}` requests `{}` from a weaker match scrutinee.",
+    ] {
+        assert!(
+            !compiler_body_semantics.contains(forbidden),
+            "compiler must not re-own pattern field effect diagnostic `{forbidden}`"
+        );
+    }
 
     let semantic_generic_constraints =
         read(&root.join("crates/rsscript-semantics/src/generic_constraints.rs"));

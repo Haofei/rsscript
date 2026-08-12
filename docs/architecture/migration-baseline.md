@@ -232,6 +232,9 @@ mechanical acceptance condition holds.
     - [x] **S02.4e — Move `match` character-pattern validity.** The same
       single-scalar `Char` rule, including the pattern-specific fix, is now
       owned by `rsscript-semantics` rather than compiler pattern traversal.
+    - [x] **S02.4f — Move pattern field effect diagnostics.** Semantics owns
+      managed-class read-only and child-effect monotonicity diagnostics; compiler
+      provides the resolved class and scrutinee-effect facts.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.

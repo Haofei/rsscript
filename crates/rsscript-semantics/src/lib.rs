@@ -44,10 +44,11 @@ pub use call_arguments::{
 pub use call_binding::{BoundArgument, BoundArgumentSource, CallBinding, CallBindingIssue};
 pub use control_flow::{
     bool_condition_diagnostic, for_iterable_diagnostic, function_fallthrough_diagnostics,
-    match_expression_arm_type_diagnostics, match_guard_mutation_diagnostic,
-    match_literal_type_diagnostic, match_pattern_type_diagnostic, match_scrutinee_diagnostic,
-    match_variant_family_diagnostic, missing_return_value_diagnostics,
+    managed_pattern_field_effect_diagnostic, match_expression_arm_type_diagnostics,
+    match_guard_mutation_diagnostic, match_literal_type_diagnostic, match_pattern_type_diagnostic,
+    match_scrutinee_diagnostic, match_variant_family_diagnostic, missing_return_value_diagnostics,
     structured_match_effect_diagnostic, variant_pattern_arity_diagnostic,
+    weakened_pattern_field_effect_diagnostic,
 };
 pub use database::{
     AnalysisResult, CompilationSession, CompilationSessionStats, FrontendCompletion,
