@@ -381,6 +381,9 @@ mechanical acceptance condition holds.
       Copy and cross-isolate transfer eligibility; compiler assignment, call,
       and CFG checks consume the shared query instead of reinterpreting type
       names.
+    - [x] **S02.4x — Move taken handle-field traversal.** Semantics owns the
+      nested HIR traversal that identifies `take` on handle fields; compiler
+      local analysis only retains the resulting ownership facts.
   - [ ] **S02.5 — Move async and control-flow checks.** Relocate task groups,
     cancellation, await/select, assignment, exhaustiveness, and reachability
     checks.

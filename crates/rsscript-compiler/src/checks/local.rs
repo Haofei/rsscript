@@ -109,7 +109,7 @@ impl<'a> LocalAnalysis<'a> {
         );
         let take_handle_fields = body
             .and_then(|body| body.block.as_ref())
-            .map_or_else(Vec::new, collect_take_handle_fields);
+            .map_or_else(Vec::new, rsscript_semantics::take_handle_fields);
         let flow_steps = body
             .and_then(|body| body.block.as_ref())
             .map_or_else(Vec::new, collect_local_flow_steps);

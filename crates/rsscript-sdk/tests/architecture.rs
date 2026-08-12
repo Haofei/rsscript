@@ -1287,6 +1287,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "retained_closure_argument",
         "is_copy_type_name",
         "is_cross_isolate_transferable",
+        "take_handle_fields",
         "fd_surface_diagnostics",
         "unknown_binding_diagnostics",
         "unknown_field_diagnostics",
@@ -1457,14 +1458,26 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     assert!(compiler_assign.contains("rsscript_semantics::is_copy_type_name"));
     let compiler_calls = read(&root.join("crates/rsscript-compiler/src/checks/calls.rs"));
     assert!(compiler_calls.contains("rsscript_semantics::is_cross_isolate_transferable"));
+    assert!(compiler_local_analysis.contains("rsscript_semantics::take_handle_fields"));
+    let compiler_local_ownership =
+        read(&root.join("crates/rsscript-compiler/src/checks/local/ownership.rs"));
+    for forbidden in [
+        "fn collect_take_handle_fields",
+        "fn collect_block_take_handle_fields",
+        "fn collect_stmt_take_handle_fields",
+        "fn collect_expr_take_handle_fields",
+    ] {
+        assert!(
+            !compiler_local_ownership.contains(forbidden),
+            "compiler must not re-own semantic handle-field traversal `{forbidden}`"
+        );
+    }
     for forbidden in ["fn is_copy_type_name", "fn is_cross_isolate_transferable"] {
         assert!(
             !compiler_local_flow.contains(forbidden),
             "compiler must not re-own semantic value property `{forbidden}`"
         );
     }
-    let compiler_local_ownership =
-        read(&root.join("crates/rsscript-compiler/src/checks/local/ownership.rs"));
     assert!(compiler_local_ownership.contains("rsscript_semantics::retained_closure_argument"));
     assert!(compiler_local_flow.contains("rsscript_semantics::retained_closure_argument"));
     for forbidden in [

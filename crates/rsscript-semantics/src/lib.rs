@@ -40,6 +40,7 @@ mod signatures;
 mod source_bodies;
 mod source_rules;
 mod symbols;
+mod take_handle_fields;
 mod task_groups;
 mod try_checks;
 mod type_aliases;
@@ -234,6 +235,7 @@ pub use symbols::{
     Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
     document_symbols, symbol_index,
 };
+pub use take_handle_fields::take_handle_fields;
 pub use task_groups::task_group_async_let_diagnostics;
 pub use type_aliases::cyclic_type_alias_diagnostics;
 pub use types::{
