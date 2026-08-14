@@ -54,7 +54,8 @@ pub enum PackageFileKindV1 {
 /// compiler-private implementation detail. Consumers can therefore compare
 /// evidence produced by different compiler integrations without depending on
 /// the compiler crate that happened to emit it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackageAnalysisProducerV1 {
     pub name: String,
     pub version: String,
@@ -81,7 +82,8 @@ impl PackageAnalysisProducerV1 {
 /// Provider- and review-neutral semantic facts for one immutable package
 /// snapshot. Host selection, risk classification, native implementation
 /// details, and deployment evidence deliberately live outside this artifact.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackageAnalysisV1 {
     #[serde(rename = "$schema")]
     pub schema: String,
@@ -107,7 +109,8 @@ pub struct PackageAnalysisV1 {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackageAnalysisSummaryV1 {
     pub interface_files: usize,
     pub source_files: usize,
@@ -126,7 +129,8 @@ pub struct PackageAnalysisSummaryV1 {
     pub errors: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackageAnalysisExportV1 {
     pub name: String,
     pub kind: String,
@@ -145,7 +149,8 @@ pub struct PackageAnalysisExportV1 {
 /// Source-level public function parameter contract captured in neutral package
 /// analysis. `effect` is explicit even for ordinary `read` parameters so a
 /// semantic diff never has to infer ownership behavior from omitted syntax.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackageAnalysisParameterV1 {
     pub name: String,
     pub effect: String,
@@ -153,7 +158,8 @@ pub struct PackageAnalysisParameterV1 {
     pub retained: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackageAnalysisExternalImportV1 {
     pub function: String,
     pub symbol: String,
@@ -164,7 +170,8 @@ pub struct PackageAnalysisExternalImportV1 {
 
 /// One resolved call edge in the package-owned call graph. This is neutral
 /// semantic evidence, not a review classification or deployment decision.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackageAnalysisCallEdgeV1 {
     pub caller: String,
     pub callee: String,
@@ -173,7 +180,8 @@ pub struct PackageAnalysisCallEdgeV1 {
 /// A lexical `with` resource lifetime. Scope exit cleanup is language
 /// semantics, so normal completion, error unwinding and cancellation share the
 /// same cleanup fact without exposing a deployment policy.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackageAnalysisResourceLifetimeV1 {
     pub function: String,
     pub binding: String,
@@ -185,7 +193,8 @@ pub struct PackageAnalysisResourceLifetimeV1 {
 /// An explicit ownership transfer of a lexically managed resource. Only a
 /// `take` applied to a binding introduced by `with` is recorded, so ordinary
 /// value moves cannot be mistaken for a resource hand-off.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackageAnalysisResourceTransferV1 {
     pub function: String,
     pub binding: String,
@@ -193,7 +202,8 @@ pub struct PackageAnalysisResourceTransferV1 {
 }
 
 /// Structured concurrency owned by one lexical task group.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackageAnalysisTaskGroupV1 {
     pub function: String,
     pub spawned_tasks: u32,
@@ -202,7 +212,8 @@ pub struct PackageAnalysisTaskGroupV1 {
     pub cleanup_on_cancellation: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackageAnalysisAwaitSiteV1 {
     pub function: String,
     pub callee: Option<String>,
@@ -210,7 +221,8 @@ pub struct PackageAnalysisAwaitSiteV1 {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackageAnalysisFileV1 {
     pub path: String,
     pub kind: PackageFileKindV1,
@@ -257,6 +269,7 @@ pub struct AnalysisEnvelopeV1 {
     schema: AnalysisSchemaV1,
     payload: Value,
     source: Option<SourceAnalysisV1>,
+    package: Option<PackageAnalysisV1>,
 }
 
 impl AnalysisEnvelopeV1 {
@@ -277,15 +290,34 @@ impl AnalysisEnvelopeV1 {
             schema: AnalysisSchemaV1::Source,
             payload,
             source: Some(source),
+            package: None,
         }
+    }
+
+    /// Construct the typed, provider-neutral evidence emitted by an immutable
+    /// package snapshot.
+    pub fn package(package: PackageAnalysisV1) -> Result<Self, ArtifactBundleError> {
+        if package.schema != PACKAGE_ANALYSIS_SCHEMA {
+            return Err(ArtifactBundleError::UnsupportedAnalysisSchema(
+                package.schema,
+            ));
+        }
+        let payload = serde_json::to_value(&package)
+            .map_err(|error| ArtifactBundleError::Analysis(error.to_string()))?;
+        Ok(Self {
+            schema: AnalysisSchemaV1::Package,
+            payload,
+            source: None,
+            package: Some(package),
+        })
     }
 
     /// Decode analysis evidence read from a persisted Bundle or produced by a
     /// legacy package-analysis adapter.
     ///
-    /// Package analysis remains JSON-shaped during its migration window, but
-    /// source analysis is decoded through [`SourceAnalysisV1`] so malformed or
-    /// silently extended source evidence cannot enter a verified bundle.
+    /// Both supported analysis schemas are decoded through their versioned
+    /// models so malformed or silently extended evidence cannot enter a
+    /// verified bundle.
     pub fn from_json(payload: Value) -> Result<Self, ArtifactBundleError> {
         let schema = payload
             .get("$schema")
@@ -297,11 +329,9 @@ impl AnalysisEnvelopeV1 {
             let source = SourceAnalysisV1::from_json(payload)?;
             return Ok(Self::source(source));
         }
-        Ok(Self {
-            schema,
-            payload,
-            source: None,
-        })
+        let package = serde_json::from_value(payload)
+            .map_err(|error| ArtifactBundleError::Analysis(error.to_string()))?;
+        Self::package(package)
     }
 
     pub const fn schema(&self) -> AnalysisSchemaV1 {
@@ -321,6 +351,12 @@ impl AnalysisEnvelopeV1 {
     /// migration schema and intentionally does not pretend to be this type.
     pub fn source_analysis(&self) -> Option<&SourceAnalysisV1> {
         self.source.as_ref()
+    }
+
+    /// Typed package evidence when this envelope carries
+    /// `rsscript.package_analysis.v1`.
+    pub fn package_analysis(&self) -> Option<&PackageAnalysisV1> {
+        self.package.as_ref()
     }
 }
 
@@ -567,6 +603,11 @@ impl ArtifactBundle {
     /// in-memory source/interface snapshot.
     pub fn source_analysis(&self) -> Option<&SourceAnalysisV1> {
         self.analysis.source_analysis()
+    }
+    /// Typed package evidence, if this Bundle was built from an immutable
+    /// package snapshot.
+    pub fn package_analysis(&self) -> Option<&PackageAnalysisV1> {
+        self.analysis.package_analysis()
     }
     pub fn provenance(&self) -> &BuildProvenanceV1 {
         &self.manifest.provenance
@@ -818,6 +859,62 @@ mod tests {
         .unwrap()
     }
 
+    fn package_bundle() -> ArtifactBundle {
+        let mut artifact = BytecodeArtifact::new(
+            "0.1.0",
+            "0.1.0",
+            "sha256:catalog",
+            2,
+            "sha256:source",
+            vec![],
+            vec![1, 2, 3],
+        )
+        .unwrap();
+        artifact
+            .bind_snapshot_digest(
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )
+            .unwrap();
+        let module_digest = artifact.header.executable_hash.clone();
+        let analysis = PackageAnalysisV1 {
+            schema: PACKAGE_ANALYSIS_SCHEMA.to_string(),
+            producer: PackageAnalysisProducerV1::new("rsscript", "0.1.0", "test", "sha256:rules"),
+            language_version: "0.1.0".to_string(),
+            interface_catalog_digest: "sha256:catalog".to_string(),
+            snapshot_digest:
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .to_string(),
+            module_digest: Some(module_digest),
+            package: PackageIdentityV1 {
+                name: "demo".to_string(),
+                version: "0.1.0".to_string(),
+                edition: "2024".to_string(),
+            },
+            files: vec![PackageAnalysisFileV1 {
+                path: "src/main.rss".to_string(),
+                kind: PackageFileKindV1::Source,
+            }],
+            summary: PackageAnalysisSummaryV1 {
+                source_files: 1,
+                ..PackageAnalysisSummaryV1::default()
+            },
+            exports: vec![],
+            external_imports: vec![],
+            call_edges: vec![],
+            recursive_functions: vec![],
+            resource_lifetimes: vec![],
+            resource_transfers: vec![],
+            task_groups: vec![],
+            await_sites: vec![],
+            diagnostics: vec![],
+        };
+        ArtifactBundle::new(
+            artifact.to_bytes().unwrap(),
+            AnalysisEnvelopeV1::package(analysis).unwrap(),
+        )
+        .unwrap()
+    }
+
     #[test]
     fn bundle_round_trip_binds_artifact_analysis_and_provenance() {
         let original = bundle();
@@ -894,6 +991,37 @@ mod tests {
             envelope.payload()["sources"],
             serde_json::json!(["src/main.rss", "src/main.rss"])
         );
+    }
+
+    #[test]
+    fn package_analysis_round_trips_as_typed_evidence() {
+        let original = package_bundle();
+        let decoded = ArtifactBundle::from_bytes(&original.to_bytes().unwrap()).unwrap();
+        let analysis = decoded
+            .package_analysis()
+            .expect("package Bundle exposes typed evidence");
+        assert_eq!(analysis.package.name, "demo");
+        assert_eq!(analysis.files[0].kind, PackageFileKindV1::Source);
+        assert_eq!(analysis.summary.source_files, 1);
+        assert_eq!(
+            decoded.analysis_envelope().schema(),
+            AnalysisSchemaV1::Package
+        );
+    }
+
+    #[test]
+    fn package_analysis_rejects_unknown_fields_at_the_artifact_boundary() {
+        let original = package_bundle();
+        let mut payload = serde_json::to_value(
+            original
+                .package_analysis()
+                .expect("package Bundle has typed evidence"),
+        )
+        .unwrap();
+        payload["unreviewed_extension"] = serde_json::json!(true);
+        let error = AnalysisEnvelopeV1::from_json(payload)
+            .expect_err("typed package analysis must reject unversioned fields");
+        assert!(matches!(error, ArtifactBundleError::Analysis(_)));
     }
 
     #[test]

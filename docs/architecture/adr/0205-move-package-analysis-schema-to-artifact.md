@@ -15,8 +15,8 @@ compiler supplies build-specific producer provenance at emission time; the
 Artifact crate does not infer compiler version or source revision from its own
 crate metadata.
 
-This is behavior-preserving for package-analysis JSON and intentionally does
-not make review/risk policy or package filesystem traversal part of the
-Artifact contract. Typed decoding of legacy package-analysis payloads remains a
-separate compatibility migration because the existing diagnostic wire type is
-serialize-only.
+Artifact Bundles now decode this schema through its typed model and reject
+unknown fields rather than retaining it as unchecked `serde_json::Value`.
+This is behavior-preserving for valid package-analysis JSON and intentionally
+does not make review/risk policy or package filesystem traversal part of the
+Artifact contract.

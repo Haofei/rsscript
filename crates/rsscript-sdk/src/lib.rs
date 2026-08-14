@@ -380,13 +380,7 @@ pub mod project {
                 let artifact = compile_ir_to_bytecode(&compiled, snapshot.digest())
                     .map_err(bytecode_compile_error)?;
                 analysis.module_digest = Some(artifact.header.executable_hash.clone());
-                let analysis =
-                    serde_json::to_value(&analysis).map_err(|error| CompileError::Package {
-                        code: CompileErrorCode::PackageAnalysis,
-                        message: error.to_string(),
-                    })?;
-                let analysis =
-                    AnalysisEnvelopeV1::from_json(analysis).map_err(CompileError::from)?;
+                let analysis = AnalysisEnvelopeV1::package(analysis).map_err(CompileError::from)?;
                 BuiltArtifact::from_bytecode(artifact, analysis)
             }
 
@@ -684,6 +678,13 @@ impl BuiltArtifact {
     /// schema and return `None` here.
     pub fn source_analysis(&self) -> Option<&SourceAnalysisV1> {
         self.bundle.source_analysis()
+    }
+
+    /// Typed package evidence for immutable package compatibility builds.
+    /// Direct source/interface builds instead carry `source_analysis.v1`.
+    #[cfg(feature = "compatibility")]
+    pub fn package_analysis(&self) -> Option<&PackageAnalysis> {
+        self.bundle.package_analysis()
     }
 
     pub fn snapshot_digest(&self) -> &str {

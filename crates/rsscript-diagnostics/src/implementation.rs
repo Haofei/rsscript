@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub use rsscript_source_model::Span;
 
@@ -183,7 +183,7 @@ pub const SELFHOST_CHECKER_TARGET_CODES: &[&str] = &[
     code::PACKAGE_INTERFACE_MISMATCH,
 ];
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
     Error,
@@ -207,7 +207,7 @@ impl Severity {
 /// `span` (starting at `span.line`:`span.column`) with `replacement`. A zero-length
 /// span is a pure insertion at that position. This is what makes a fix
 /// machine-applicable by `rss fix` — without an edit a fix is advisory only.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FixEdit {
     pub span: Span,
     pub replacement: String,
@@ -236,7 +236,7 @@ impl FixEdit {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Fix {
     pub kind: String,
     pub title: String,
@@ -246,7 +246,7 @@ pub struct Fix {
     pub edit: Option<FixEdit>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Diagnostic {
     pub code: String,
     pub severity: Severity,

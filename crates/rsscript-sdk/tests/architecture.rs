@@ -1224,6 +1224,14 @@ fn package_analysis_schema_is_an_artifact_contract_not_compiler_implementation()
         "compiler compatibility must re-export the Artifact-owned analysis type"
     );
     assert!(
+        artifact.contains("package: Option<PackageAnalysisV1>"),
+        "Bundle analysis must retain typed package evidence after decoding"
+    );
+    assert!(
+        artifact.contains("Self::package(package)"),
+        "package analysis JSON must be decoded through the Artifact-owned type"
+    );
+    assert!(
         !package_types.contains("pub struct PackageAnalysis {"),
         "compiler must not define a second package-analysis wire model"
     );
