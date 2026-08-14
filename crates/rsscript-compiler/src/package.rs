@@ -78,7 +78,6 @@ pub use metadata::{package_lowering_input, package_metadata, package_metadata_ve
 pub(crate) use native::package_native_plugin_build_dependencies;
 use native::{manifest_native_enabled, manifest_native_unsafe_boundary};
 pub use review::review_package_dir;
-pub use rsscript_artifact_store::ArtifactStore;
 use source_set::{LoadedPackage, Manifest, ManifestNativeRust, PackageSource};
 pub use types::*;
 
@@ -519,7 +518,8 @@ fn canonical_checked_root(path: &Path, operation: &str) -> Result<PathBuf, Strin
 
 /// Atomically replace a regular package artifact without following symlinks in
 /// its parent path or at the destination.
-pub use rsscript_artifact_store::write_package_artifact_atomic;
+#[cfg(test)]
+use rsscript_artifact_store::write_package_artifact_atomic;
 
 pub(super) fn package_path_metadata(path: &Path, operation: &str) -> Result<fs::Metadata, String> {
     let metadata = fs::symlink_metadata(path)

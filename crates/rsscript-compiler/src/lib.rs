@@ -105,19 +105,18 @@ pub use lint::lint_source;
 pub use lower_names::lowered_symbol_name;
 #[cfg(feature = "package")]
 pub use package::{
-    ArtifactStore, ExecutablePackageSnapshot, PackageAnalysis, PackageAnalysisAwaitSite,
-    PackageAnalysisExport, PackageAnalysisExternalImport, PackageAnalysisFile,
-    PackageAnalysisProducer, PackageAnalysisSummary, PackageCheck, PackageCheckLock,
-    PackageDependencyKind, PackageDiff, PackageGraphCheck, PackageIdentity, PackageInterfaceChange,
-    PackageInterfaceChangeKind, PackageLock, PackageLockDiff, PackageLockFieldChange,
-    PackageLockMetadata, PackageLockPackage, PackageLockPackageChange, PackageLoweringInput,
-    PackageManifestChange, PackageMetadataMismatch, PackageMetadataReport,
-    PackageNativeRustAuthorDeclaration, PackageNativeRustCheck, PackageNativeRustReview,
-    PackageNativeRustSemanticReview, PackageNativeRustSourceScan, PackageReview,
-    PackageReviewExport, PackageReviewFile, PackageReviewFileKind, PackageReviewMetadata,
-    PackageReviewSummary, PackageRisk, PackageSourceFile, PackageTree, PackageTreeNode,
-    PackageTreeSummary, PreparedPackage, WorkspaceSnapshot, analyze_package_dir, check_package_dir,
-    diff_package_dirs, diff_package_locks, format_package_analysis_json,
+    ExecutablePackageSnapshot, PackageAnalysis, PackageAnalysisAwaitSite, PackageAnalysisExport,
+    PackageAnalysisExternalImport, PackageAnalysisFile, PackageAnalysisProducer,
+    PackageAnalysisSummary, PackageCheck, PackageCheckLock, PackageDependencyKind, PackageDiff,
+    PackageGraphCheck, PackageIdentity, PackageInterfaceChange, PackageInterfaceChangeKind,
+    PackageLock, PackageLockDiff, PackageLockFieldChange, PackageLockMetadata, PackageLockPackage,
+    PackageLockPackageChange, PackageLoweringInput, PackageManifestChange, PackageMetadataMismatch,
+    PackageMetadataReport, PackageNativeRustAuthorDeclaration, PackageNativeRustCheck,
+    PackageNativeRustReview, PackageNativeRustSemanticReview, PackageNativeRustSourceScan,
+    PackageReview, PackageReviewExport, PackageReviewFile, PackageReviewFileKind,
+    PackageReviewMetadata, PackageReviewSummary, PackageRisk, PackageSourceFile, PackageTree,
+    PackageTreeNode, PackageTreeSummary, PreparedPackage, WorkspaceSnapshot, analyze_package_dir,
+    check_package_dir, diff_package_dirs, diff_package_locks, format_package_analysis_json,
     format_package_check_human, format_package_check_json, format_package_diff_human,
     format_package_diff_json, format_package_lock_diff_human, format_package_lock_diff_json,
     format_package_lock_json, format_package_lock_toml, format_package_metadata_human,
@@ -126,7 +125,7 @@ pub use package::{
     load_workspace_snapshot, load_workspace_snapshot_with_operation, lock_package_dir,
     package_lowering_input, package_metadata, package_metadata_verify, package_sources,
     package_sources_with_dependency_interfaces, package_tree, prepare_executable_package,
-    prepare_package_for_execution, review_package_dir, write_package_artifact_atomic,
+    prepare_package_for_execution, review_package_dir,
 };
 #[cfg(feature = "package")]
 pub use review::{

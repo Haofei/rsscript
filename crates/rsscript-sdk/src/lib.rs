@@ -32,6 +32,8 @@ pub use rsscript_compiler::{
     vscode_tmlanguage_json,
 };
 
+#[cfg(feature = "compatibility")]
+pub use rsscript_artifact_store::{ArtifactStore, write_package_artifact_atomic};
 #[cfg(feature = "execution")]
 #[cfg(not(feature = "compatibility"))]
 #[allow(unused_imports)]
@@ -49,20 +51,19 @@ pub use rsscript_bytecode::{
 use rsscript_compiler::*;
 #[cfg(feature = "compatibility")]
 pub use rsscript_compiler::{
-    ArtifactStore, CompiledIr, ExecutablePackageSnapshot, GeneratedRustPackage,
-    LowerCoverageReport, LoweredRust, NativeRustDependency, PackageAnalysis,
-    PackageAnalysisAwaitSite, PackageAnalysisExport, PackageAnalysisExternalImport,
-    PackageAnalysisFile, PackageAnalysisProducer, PackageAnalysisSummary, PackageCheck,
-    PackageCheckLock, PackageDependencyKind, PackageDiff, PackageGraphCheck, PackageIdentity,
-    PackageInterfaceChange, PackageInterfaceChangeKind, PackageLock, PackageLockDiff,
-    PackageLockFieldChange, PackageLockMetadata, PackageLockPackage, PackageLockPackageChange,
-    PackageLoweringInput, PackageManifestChange, PackageMetadataMismatch, PackageMetadataReport,
-    PackageNativeRustAuthorDeclaration, PackageNativeRustCheck, PackageNativeRustReview,
-    PackageNativeRustSemanticReview, PackageNativeRustSourceScan, PackageReview,
-    PackageReviewExport, PackageReviewFile, PackageReviewFileKind, PackageReviewMetadata,
-    PackageReviewSummary, PackageRisk, PackageSourceFile, PackageTree, PackageTreeNode,
-    PackageTreeSummary, PreparedPackage, RemappedRustcDiagnostic, ReviewFix, ReviewMap,
-    ReviewMapCategorySummary, ReviewMapClassification, ReviewMapFile, ReviewMapFileRisk,
+    CompiledIr, ExecutablePackageSnapshot, GeneratedRustPackage, LowerCoverageReport, LoweredRust,
+    NativeRustDependency, PackageAnalysis, PackageAnalysisAwaitSite, PackageAnalysisExport,
+    PackageAnalysisExternalImport, PackageAnalysisFile, PackageAnalysisProducer,
+    PackageAnalysisSummary, PackageCheck, PackageCheckLock, PackageDependencyKind, PackageDiff,
+    PackageGraphCheck, PackageIdentity, PackageInterfaceChange, PackageInterfaceChangeKind,
+    PackageLock, PackageLockDiff, PackageLockFieldChange, PackageLockMetadata, PackageLockPackage,
+    PackageLockPackageChange, PackageLoweringInput, PackageManifestChange, PackageMetadataMismatch,
+    PackageMetadataReport, PackageNativeRustAuthorDeclaration, PackageNativeRustCheck,
+    PackageNativeRustReview, PackageNativeRustSemanticReview, PackageNativeRustSourceScan,
+    PackageReview, PackageReviewExport, PackageReviewFile, PackageReviewFileKind,
+    PackageReviewMetadata, PackageReviewSummary, PackageRisk, PackageSourceFile, PackageTree,
+    PackageTreeNode, PackageTreeSummary, PreparedPackage, RemappedRustcDiagnostic, ReviewFix,
+    ReviewMap, ReviewMapCategorySummary, ReviewMapClassification, ReviewMapFile, ReviewMapFileRisk,
     ReviewMapRegion, ReviewMapSummary, ReviewRisk, SymbolInventoryEntry, WorkspaceSnapshot,
     analyze_package_dir, check_package_dir, compile_ir_to_bytecode, compile_package_input_to_ir,
     compile_source_to_ir, compile_validated_to_bytecode, compile_validated_to_ir,
@@ -83,7 +84,7 @@ pub use rsscript_compiler::{
     parse_runtime_diagnostics, parse_source_map_json, prepare_executable_package,
     prepare_package_for_execution, remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines,
     review_map_sources, review_package_dir, review_sources, symbol_inventory,
-    write_generated_rust_package, write_package_artifact_atomic,
+    write_generated_rust_package,
 };
 #[cfg(feature = "native-jit")]
 pub use rsscript_vm::NativeStats;

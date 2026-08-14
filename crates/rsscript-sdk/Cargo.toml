@@ -16,6 +16,7 @@ default = []
 compatibility = [
     "aot-rust",
     "legacy-exec-ir",
+    "dep:rsscript-artifact-store",
     "dep:rsscript-codegen-vm",
     "dep:rsscript-lowering",
     "dep:rsscript-mir",
@@ -43,6 +44,7 @@ native-jit = ["compatibility", "rsscript-vm/native-jit"]
 [dependencies]
 rsscript-abi-model = { path = "../rsscript-abi-model", optional = true }
 rsscript-artifact = { path = "../rsscript-artifact", optional = true }
+rsscript-artifact-store = { path = "../rsscript-artifact-store", optional = true }
 rsscript_compiler = { package = "rsscript-compiler", path = "../rsscript-compiler", default-features = false, features = ["language-service"] }
 rsscript-operation = { path = "../rsscript-operation" }
 rsscript-bytecode = { path = "../rsscript-bytecode", optional = true }

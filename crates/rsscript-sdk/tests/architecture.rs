@@ -1140,25 +1140,37 @@ fn artifact_persistence_is_an_execution_only_adapter() {
             .expect("compiler manifest should parse");
     let store = compiler_manifest["dependencies"]["rsscript-artifact-store"]
         .as_table()
-        .expect("compiler must declare the persistence adapter as a dependency");
+        .expect("compiler package compatibility must declare the persistence adapter");
     assert_eq!(
         store.get("optional").and_then(toml::Value::as_bool),
-        Some(true)
+        Some(true),
+        "compiler persistence remains confined to its explicit package feature"
     );
-    let package = compiler_manifest["features"]["package"]
+    let package_feature = compiler_manifest["features"]["package"]
         .as_array()
         .expect("compiler package feature should be declared");
     assert!(
-        package
+        package_feature
             .iter()
             .filter_map(toml::Value::as_str)
             .any(|entry| entry == "dep:rsscript-artifact-store"),
-        "compiler may use persistence only through its explicit package feature"
+        "compiler package compatibility must opt in explicitly to persistence"
     );
 
     let package = read(&root.join("crates/rsscript-compiler/src/package.rs"));
-    assert!(package.contains("pub use rsscript_artifact_store::ArtifactStore"));
-    assert!(package.contains("pub use rsscript_artifact_store::write_package_artifact_atomic"));
+    assert!(
+        package
+            .contains("#[cfg(test)]\nuse rsscript_artifact_store::write_package_artifact_atomic")
+    );
+    assert!(
+        !package.contains("pub use rsscript_artifact_store"),
+        "compiler package compatibility code must not make persistence a compiler API"
+    );
+    let compiler = read(&root.join("crates/rsscript-compiler/src/lib.rs"));
+    assert!(!compiler.contains("ArtifactStore,"));
+    assert!(!compiler.contains("write_package_artifact_atomic,"));
+    let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
+    assert!(sdk.contains("pub use rsscript_artifact_store::{ArtifactStore"));
     assert!(
         !root
             .join("crates/rsscript-compiler/src/package/artifact_store.rs")

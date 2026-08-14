@@ -55,10 +55,10 @@ bytecode = ["lowering", "dep:rsscript-bytecode", "dep:rsscript-codegen-vm"]
 # lowering closure.
 package = [
     "bytecode",
+    "dep:rsscript-artifact-store",
     "dep:fs2",
     "dep:hex",
     "dep:libc",
-    "dep:rsscript-artifact-store",
     "dep:rustix",
     "dep:sha2",
     "dep:tempfile",
