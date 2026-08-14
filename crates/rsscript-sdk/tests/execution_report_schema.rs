@@ -47,7 +47,8 @@ fn execution_report_schema_accepts_golden_reports_and_live_output() {
         .expect("compile live report fixture");
     let package = rsscript_sdk::ArtifactVerifier
         .verify(package)
-        .expect("verify live report fixture");
+        .expect("verify live report fixture")
+        .admit_trusted_input();
     let report = rsscript_sdk::Runtime::default()
         .link(&package)
         .expect("link live report fixture")

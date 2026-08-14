@@ -15,7 +15,10 @@ use rsscript_runner_protocol::{
     write_response,
 };
 use rsscript_sdk::{
-    artifact::{ARTIFACT_BUNDLE_MAGIC, ArtifactBundle, ArtifactVerifier},
+    artifact::{
+        ARTIFACT_BUNDLE_MAGIC, AdmissionError, ArtifactAdmission, ArtifactAdmissionPolicy,
+        ArtifactBundle, ArtifactVerifier, VerifiedArtifact,
+    },
     compile::Compiler,
     operation::MonotonicDeadline,
     project::ProjectCompiler,
@@ -72,7 +75,8 @@ pub(crate) fn run_trusted_in_process(path: &str, program_args: &[&str], json: bo
             return ExitCode::from(1);
         }
     };
-    let linked = match Runtime::new(ProviderRegistry::default()).link(&verified) {
+    let admitted = verified.admit_trusted_input();
+    let linked = match Runtime::new(ProviderRegistry::default()).link(&admitted) {
         Ok(linked) => linked,
         Err(error) => {
             eprintln!("link failed: {error}");
@@ -347,8 +351,18 @@ fn execute_request(request: RunnerRequestV1, bundle: Vec<u8>) -> RunnerResponseV
             );
         }
     };
+    let admitted = match verified.admit(&RunnerProfileAdmission(profile)) {
+        Ok(admitted) => admitted,
+        Err(error) => {
+            return RunnerResponseV1::rejected(
+                profile,
+                RunnerTerminationV1::HostFailure,
+                error.to_string(),
+            );
+        }
+    };
     let runtime = Runtime::new(profiled_registry(profile));
-    let linked = match runtime.link(&verified) {
+    let linked = match runtime.link(&admitted) {
         Ok(linked) => linked,
         Err(error) => {
             return RunnerResponseV1::rejected(
@@ -375,6 +389,21 @@ fn execute_request(request: RunnerRequestV1, bundle: Vec<u8>) -> RunnerResponseV
             RunnerTerminationV1::HostFailure,
             format!("cannot serialize execution report: {error}"),
         ),
+    }
+}
+
+/// The isolated runner only admits Artifacts under its fixed, host-selected
+/// profile. This is evidence of the runner boundary, not a language-level
+/// permission decision.
+struct RunnerProfileAdmission(RunnerProfileV1);
+
+impl ArtifactAdmissionPolicy for RunnerProfileAdmission {
+    fn admit(&self, _artifact: &VerifiedArtifact) -> Result<ArtifactAdmission, AdmissionError> {
+        let identity = self.0.identity();
+        ArtifactAdmission::new(
+            format!("{}.v{}", identity.id, identity.version),
+            Some(identity.descriptor_digest),
+        )
     }
 }
 

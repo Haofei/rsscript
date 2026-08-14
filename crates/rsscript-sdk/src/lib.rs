@@ -431,10 +431,11 @@ pub mod operation {
 /// Reviewed Artifact construction and verification entry points.
 pub mod artifact {
     pub use super::{
-        ARTIFACT_BUNDLE_MAGIC, ARTIFACT_BUNDLE_SCHEMA, AnalysisEnvelopeV1, AnalysisSchemaV1,
+        ARTIFACT_BUNDLE_MAGIC, ARTIFACT_BUNDLE_SCHEMA, AdmissionError, AdmittedArtifact,
+        AnalysisEnvelopeV1, AnalysisSchemaV1, ArtifactAdmission, ArtifactAdmissionPolicy,
         ArtifactBundle, ArtifactBundleError, ArtifactVerifier, BuildProvenanceV1, BuiltArtifact,
         InterfaceRequirementV1, PACKAGE_ANALYSIS_SCHEMA, SOURCE_ANALYSIS_SCHEMA, SourceAnalysisV1,
-        VerifiedArtifact, VerifyError,
+        TrustedInputAdmission, VerifiedArtifact, VerifyError,
     };
     pub use rsscript_bytecode::{
         BYTECODE_CONTAINER_FORMAT_VERSION, BYTECODE_ISA_VERSION, BYTECODE_MAGIC, BYTECODE_SCHEMA,
@@ -837,6 +838,152 @@ impl VerifiedArtifact {
     pub fn bytecode_artifact(&self) -> &BytecodeArtifact {
         self.executable.bytecode_artifact()
     }
+
+    /// Apply the host-owned origin/admission decision before provider linking.
+    ///
+    /// Verification proves artifact structure and integrity. Admission is a
+    /// separate host decision, for example a detached-signature, provenance,
+    /// or runner-profile check; it does not create a language policy system.
+    pub fn admit<P: ArtifactAdmissionPolicy>(
+        self,
+        policy: &P,
+    ) -> Result<AdmittedArtifact, AdmissionError> {
+        let admission = policy.admit(&self)?;
+        Ok(AdmittedArtifact {
+            artifact: self,
+            admission,
+        })
+    }
+
+    /// Explicitly mark bytes as trusted by this embedding host.
+    ///
+    /// Hosts handling external inputs should implement
+    /// [`ArtifactAdmissionPolicy`] instead; an isolated runner may model its
+    /// fixed profile as that policy.
+    pub fn admit_trusted_input(self) -> AdmittedArtifact {
+        AdmittedArtifact {
+            artifact: self,
+            admission: ArtifactAdmission::trusted_input(),
+        }
+    }
+}
+
+/// Evidence returned by one host-owned artifact admission decision.
+#[cfg(feature = "execution")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactAdmission {
+    policy_id: String,
+    evidence_digest: Option<String>,
+}
+
+#[cfg(feature = "execution")]
+impl ArtifactAdmission {
+    /// Construct non-secret admission evidence for an accepted artifact.
+    pub fn new(
+        policy_id: impl Into<String>,
+        evidence_digest: Option<impl Into<String>>,
+    ) -> Result<Self, AdmissionError> {
+        let policy_id = policy_id.into();
+        if policy_id.trim().is_empty() {
+            return Err(AdmissionError::InvalidPolicyId);
+        }
+        Ok(Self {
+            policy_id,
+            evidence_digest: evidence_digest.map(Into::into),
+        })
+    }
+
+    fn trusted_input() -> Self {
+        Self {
+            policy_id: "trusted_input.v1".to_string(),
+            evidence_digest: None,
+        }
+    }
+
+    pub fn policy_id(&self) -> &str {
+        &self.policy_id
+    }
+
+    pub fn evidence_digest(&self) -> Option<&str> {
+        self.evidence_digest.as_deref()
+    }
+}
+
+/// Host extension point for artifact origin/provenance verification.
+#[cfg(feature = "execution")]
+pub trait ArtifactAdmissionPolicy {
+    fn admit(&self, artifact: &VerifiedArtifact) -> Result<ArtifactAdmission, AdmissionError>;
+}
+
+/// Explicit policy for a host that already trusts its artifact input channel.
+#[cfg(feature = "execution")]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TrustedInputAdmission;
+
+#[cfg(feature = "execution")]
+impl ArtifactAdmissionPolicy for TrustedInputAdmission {
+    fn admit(&self, _artifact: &VerifiedArtifact) -> Result<ArtifactAdmission, AdmissionError> {
+        Ok(ArtifactAdmission::trusted_input())
+    }
+}
+
+/// Host-side failure while admitting a structurally verified Artifact.
+#[cfg(feature = "execution")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdmissionError {
+    InvalidPolicyId,
+    Rejected { message: String },
+}
+
+#[cfg(feature = "execution")]
+impl AdmissionError {
+    pub fn rejected(message: impl Into<String>) -> Self {
+        Self::Rejected {
+            message: message.into(),
+        }
+    }
+}
+
+#[cfg(feature = "execution")]
+impl fmt::Display for AdmissionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidPolicyId => formatter.write_str("artifact admission policy ID is empty"),
+            Self::Rejected { message } => {
+                write!(formatter, "artifact admission rejected: {message}")
+            }
+        }
+    }
+}
+
+#[cfg(feature = "execution")]
+impl Error for AdmissionError {}
+
+/// Structurally verified Artifact accepted by one explicit host policy.
+#[cfg(feature = "execution")]
+#[derive(Debug)]
+pub struct AdmittedArtifact {
+    artifact: VerifiedArtifact,
+    admission: ArtifactAdmission,
+}
+
+#[cfg(feature = "execution")]
+impl AdmittedArtifact {
+    pub fn bundle(&self) -> &ArtifactBundle {
+        self.artifact.bundle()
+    }
+
+    pub fn module_digest(&self) -> &str {
+        self.artifact.module_digest()
+    }
+
+    pub fn external_imports(&self) -> &[ExternalImport] {
+        self.artifact.external_imports()
+    }
+
+    pub fn admission(&self) -> &ArtifactAdmission {
+        &self.admission
+    }
 }
 
 #[cfg(feature = "execution")]
@@ -1014,7 +1161,7 @@ impl Runtime {
     /// stable SDK cannot bypass Provider preflight.
     pub fn link<'artifact>(
         &self,
-        artifact: &'artifact VerifiedArtifact,
+        artifact: &'artifact AdmittedArtifact,
     ) -> Result<LinkedArtifact<'artifact>, LinkError> {
         for import in artifact.external_imports() {
             if let Err(error) = self.providers.inner.resolve(import) {
@@ -1030,7 +1177,7 @@ impl Runtime {
 
 #[cfg(feature = "execution")]
 pub struct LinkedArtifact<'artifact> {
-    artifact: &'artifact VerifiedArtifact,
+    artifact: &'artifact AdmittedArtifact,
     bindings: Vec<(String, ExternalFunction)>,
 }
 
@@ -1046,6 +1193,7 @@ impl LinkedArtifact<'_> {
         let started = Instant::now();
         let limits: VmLimits = request.limits.into();
         let output = match self
+            .artifact
             .artifact
             .executable
             .execute_main_with_args_and_external_bindings_and_limits(
@@ -1712,8 +1860,52 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
 
-    fn verified(built: BuiltArtifact) -> VerifiedArtifact {
-        ArtifactVerifier.verify(built).expect("verify artifact")
+    fn admitted(built: BuiltArtifact) -> AdmittedArtifact {
+        ArtifactVerifier
+            .verify(built)
+            .expect("verify artifact")
+            .admit_trusted_input()
+    }
+
+    struct RejectAdmission;
+
+    impl ArtifactAdmissionPolicy for RejectAdmission {
+        fn admit(&self, _artifact: &VerifiedArtifact) -> Result<ArtifactAdmission, AdmissionError> {
+            Err(AdmissionError::rejected(
+                "test admission policy rejected artifact",
+            ))
+        }
+    }
+
+    #[test]
+    fn verification_and_host_admission_are_distinct_phases() {
+        let built = Compiler
+            .compile("admission.rss", "fn main() -> Unit { return Unit }")
+            .expect("compile");
+        let verified = ArtifactVerifier.verify(built).expect("verify");
+        let rejection = verified
+            .admit(&RejectAdmission)
+            .expect_err("host admission policy rejects artifact");
+        assert_eq!(
+            rejection.to_string(),
+            "artifact admission rejected: test admission policy rejected artifact"
+        );
+
+        let built = Compiler
+            .compile("admission.rss", "fn main() -> Unit { return Unit }")
+            .expect("compile");
+        let admitted = ArtifactVerifier
+            .verify(built)
+            .expect("verify")
+            .admit(&TrustedInputAdmission)
+            .expect("admit");
+        assert_eq!(admitted.admission().policy_id(), "trusted_input.v1");
+        assert_eq!(admitted.admission().evidence_digest(), None);
+        let report = Runtime::default()
+            .link(&admitted)
+            .expect("link admitted artifact")
+            .execute(ExecutionRequest::default());
+        assert_eq!(report.termination_reason(), TerminationReason::Completed);
     }
 
     #[cfg(all(feature = "project", feature = "compatibility"))]
@@ -1770,7 +1962,7 @@ mod tests {
             analysis["interface_catalog_digest"],
             artifact.header.interface_catalog_digest
         );
-        let first = verified(first);
+        let first = admitted(first);
         let runtime = Runtime::default();
         let output = runtime
             .link(&first)
@@ -1918,7 +2110,8 @@ mod tests {
         let bundle_bytes = package.bundle_bytes().expect("bundle");
         let loaded = ArtifactVerifier
             .verify_bytes(&bundle_bytes)
-            .expect("load verified");
+            .expect("load verified")
+            .admit_trusted_input();
         let runtime = Runtime::default();
         let report = runtime
             .link(&loaded)
@@ -1966,7 +2159,7 @@ fn main() -> Result<Unit, String> {
     return Ok(Unit)
 }
 "#;
-        let package = verified(Compiler.compile("tasks.rss", source).expect("compile"));
+        let package = admitted(Compiler.compile("tasks.rss", source).expect("compile"));
         let report = Runtime::default()
             .link(&package)
             .expect("link")
@@ -1991,7 +2184,7 @@ fn main() -> Result<Int, String> {
     return Ok(value)
 }
 "#;
-        let package = verified(Compiler.compile("result-try.rss", source).expect("compile"));
+        let package = admitted(Compiler.compile("result-try.rss", source).expect("compile"));
         let report = Runtime::default()
             .link(&package)
             .expect("link")
@@ -2003,7 +2196,7 @@ fn main() -> Result<Int, String> {
 
     #[test]
     fn cancelled_execution_reports_request_to_observation_latency() {
-        let package = verified(
+        let package = admitted(
             Compiler
                 .compile(
                     "cancel.rss",
@@ -2197,7 +2390,7 @@ fn main() -> Result<Int, String> {
             )
             .expect("provider descriptor and implementation should match");
 
-        let package = verified(package);
+        let package = admitted(package);
         let runtime = Runtime::new(providers);
         let error = match runtime.link(&package) {
             Ok(_) => panic!("import signature must fail before execution"),
@@ -2265,7 +2458,7 @@ fn main() -> Result<Int, String> {
             .expect("register provider");
         let limits = RunLimits::default().with_provider_call_budget(1);
 
-        let package = verified(package);
+        let package = admitted(package);
         let runtime = Runtime::new(providers);
         let report = runtime.link(&package).expect("link providers").execute(
             ExecutionRequest::default()
@@ -2336,7 +2529,7 @@ fn main() -> Result<Int, String> {
                 &[("test.rssi", "module host.test\npub fn fail() -> Unit\n")],
             )
             .expect("compile package");
-        let package = verified(package);
+        let package = admitted(package);
         let signature = FunctionSignature {
             parameters: vec![],
             result: "Unit".into(),
@@ -2462,7 +2655,7 @@ fn main() -> Result<Int, String> {
             )
             .expect("register provider");
 
-        let package = verified(package);
+        let package = admitted(package);
         let runtime = Runtime::new(providers);
         let report = runtime
             .link(&package)

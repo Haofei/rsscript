@@ -12,11 +12,11 @@ const SOURCE: &str = include_str!("../script/main.rss");
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let input = FrontendInputSnapshot::single("main.rss", SOURCE);
     let artifact = Compiler.compile_snapshot(&input)?;
-    let verified = ArtifactVerifier.verify(artifact)?;
+    let admitted = ArtifactVerifier.verify(artifact)?.admit_trusted_input();
 
     // The program imports no external symbols, so the empty registry is a
     // complete link. A missing Provider would fail here, before execution.
-    let report = Runtime::default().link(&verified)?.execute(
+    let report = Runtime::default().link(&admitted)?.execute(
         ExecutionRequest::default()
             .limits(RunLimits::bounded())
             .trace(TracePolicy::MetadataOnly),

@@ -67,15 +67,16 @@ fn canonical_compilation_and_diagnostics_are_migration_baselines() {
 #[test]
 fn verified_execution_outcomes_are_migration_baselines() {
     let compiler = Compiler;
-    let verified = ArtifactVerifier
+    let admitted = ArtifactVerifier
         .verify(
             compiler
                 .compile("migration-baseline.rss", BASELINE_SOURCE)
                 .expect("baseline source compiles"),
         )
-        .expect("baseline Artifact verifies");
+        .expect("baseline Artifact verifies")
+        .admit_trusted_input();
     let report = Runtime::default()
-        .link(&verified)
+        .link(&admitted)
         .expect("baseline Artifact links")
         .execute(ExecutionRequest::default());
     assert_eq!(report.termination_reason(), TerminationReason::Completed);
@@ -89,7 +90,8 @@ fn verified_execution_outcomes_are_migration_baselines() {
                 .compile("migration-loop.rss", LOOP_SOURCE)
                 .expect("loop source compiles"),
         )
-        .expect("loop Artifact verifies");
+        .expect("loop Artifact verifies")
+        .admit_trusted_input();
     let runtime = Runtime::default();
     let linked = runtime.link(&loop_artifact).expect("loop Artifact links");
     let budget_report = linked
@@ -126,11 +128,12 @@ fn checked_in_v1_bundle_remains_read_only_verifiable_and_executable() {
         "../../rsscript-bytecode/fixtures/v1/reference.report.json"
     ))
     .expect("checked-in v1 expected report is JSON");
-    let verified = ArtifactVerifier
+    let admitted = ArtifactVerifier
         .verify_bytes(&bundle)
-        .expect("checked-in v1 bundle remains verifiable");
+        .expect("checked-in v1 bundle remains verifiable")
+        .admit_trusted_input();
     let report = Runtime::default()
-        .link(&verified)
+        .link(&admitted)
         .expect("checked-in v1 bundle links without Providers")
         .execute(ExecutionRequest::default());
 

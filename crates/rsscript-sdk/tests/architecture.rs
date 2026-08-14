@@ -2991,6 +2991,7 @@ fn embedding_facade_exposes_only_product_level_objects() {
         "pub struct Compiler",
         "pub struct BuiltArtifact",
         "pub struct VerifiedArtifact",
+        "pub struct AdmittedArtifact",
         "pub struct LinkedArtifact",
         "pub struct ArtifactBundle",
         "pub struct ArtifactVerifier",
@@ -3017,6 +3018,24 @@ fn embedding_facade_exposes_only_product_level_objects() {
             "stable embedding façade must not expose `{forbidden}`"
         );
     }
+}
+
+#[test]
+fn runtime_link_requires_explicit_host_artifact_admission() {
+    let root = workspace_root();
+    let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
+    assert!(
+        sdk.contains("artifact: &'artifact AdmittedArtifact"),
+        "Runtime::link must only accept host-admitted Artifacts"
+    );
+    assert!(
+        sdk.contains("pub trait ArtifactAdmissionPolicy"),
+        "hosts must be able to define non-trusted artifact admission"
+    );
+    assert!(
+        sdk.contains("pub fn admit_trusted_input(self) -> AdmittedArtifact"),
+        "trusted input admission must remain explicit in the API name"
+    );
 }
 
 #[test]

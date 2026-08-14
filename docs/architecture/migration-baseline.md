@@ -1401,6 +1401,12 @@ mechanical acceptance condition holds.
   `ExecutionOutcome` rather than independently mutable return/failure fields,
   while its checked-in v1 JSON projection remains stable; the remaining
   phase-type and report-path audit stays open.
+  - [x] **A04.1a — Require host Artifact admission before linking.** A
+    `VerifiedArtifact` now becomes an `AdmittedArtifact` only through an
+    explicit host-owned `ArtifactAdmissionPolicy`; `Runtime::link` accepts the
+    admitted phase exclusively. The explicitly named trusted-input shortcut is
+    available for host-controlled channels, while the isolated runner records
+    its fixed profile identity as admission evidence.
   - [ ] **A04.1 — Audit all public phase types.** Replace optional phase fields
     and cross-phase enums with built/verified/linked/report-specific types.
   - [ ] **A04.2 — Audit every execution convenience API.** Script and Provider

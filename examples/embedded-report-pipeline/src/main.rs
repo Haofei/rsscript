@@ -122,7 +122,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             && unchanged.external_contracts.changed.is_empty(),
         "an Artifact compared with itself must have no semantic evidence changes"
     );
-    let verified = ArtifactVerifier.verify(package)?;
+    let admitted = ArtifactVerifier.verify(package)?.admit_trusted_input();
 
     let memory_files = Arc::new(Mutex::new(BTreeMap::from([(
         "input.csv".to_string(),
@@ -140,7 +140,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }),
     ));
-    let memory_execution = memory_runtime.link(&verified)?.execute(
+    let memory_execution = memory_runtime.link(&admitted)?.execute(
         ExecutionRequest::default()
             .limits(RunLimits::bounded().allow_blocking_provider_calls(true))
             .trace(TracePolicy::MetadataOnly),
@@ -164,7 +164,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         disk_provider.functions(),
         rsscript_provider_log::stderr_functions(),
     ));
-    let production_report = production_runtime.link(&verified)?.execute(
+    let production_report = production_runtime.link(&admitted)?.execute(
         ExecutionRequest::default()
             .limits(RunLimits::bounded().allow_blocking_provider_calls(true)),
     );
@@ -174,14 +174,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let disk_report = fs::read_to_string(demo_dir.join("report.txt"))?;
     fs::remove_dir_all(&demo_dir)?;
 
-    assert_eq!(verified.bundle().to_bytes()?, bundle_before_providers);
+    assert_eq!(admitted.bundle().to_bytes()?, bundle_before_providers);
     println!("artifact sha256: {artifact_hash}");
     println!("interface descriptor sha256: {descriptor_hash}");
     println!(
         "semantic diff schema: {} (self diff: empty)",
         unchanged.schema
     );
-    println!("imports: {}", verified.external_imports().len());
+    println!("imports: {}", admitted.external_imports().len());
     println!("memory provider report:\n{memory_report}");
     println!("filesystem provider report:\n{disk_report}");
     Ok(())

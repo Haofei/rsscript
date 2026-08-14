@@ -29,14 +29,19 @@ snapshot path during migration.
   exposes the operation-aware multi-source/interface analysis query used by
   the shared workspace diagnostics path; it remains frontend-only and has no
   runtime or Provider dependency.
-- Artifact lifecycle: `BuiltArtifact`, `VerifiedArtifact`, `ArtifactBundle`,
+- Artifact lifecycle: `BuiltArtifact`, `VerifiedArtifact`,
+  `AdmittedArtifact`, `ArtifactAdmissionPolicy`, `ArtifactBundle`,
   `ArtifactVerifier`, typed `SourceAnalysisV1`,
   `AnalysisEnvelopeV1`/`AnalysisSchemaV1`, provenance,
   interface requirements, the versioned source and package analysis schema
   identifiers, and neutral semantic diff data,
   including structural external-call, public function ownership, call-graph,
   recursion, lexical resource-lifetime and explicit resource-transfer, and
-  structured task-group contracts.
+  structured task-group contracts. Verification proves format and semantic
+  integrity; a host must then explicitly admit the verified Artifact before
+  Provider linking. `TrustedInputAdmission` is an intentionally named shortcut
+  for a host-controlled input channel, while runners and provenance-aware
+  hosts implement their own admission policy.
 - Provider lifecycle: `ProviderRegistry`, provider descriptors, structured
   signatures, `WireInterpreterFn`/`AsyncWireInterpreterFn`/`WireValue` for the
   canonical scalar plus descriptor-scoped aggregate Provider path (`List<T>`,
