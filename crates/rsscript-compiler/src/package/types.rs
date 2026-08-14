@@ -6,6 +6,17 @@ use crate::diagnostic::{Diagnostic, Span};
 use crate::review::{ReviewFinding, ReviewMap};
 
 pub use rsscript_artifact::{
+    PACKAGE_ANALYSIS_SCHEMA, PackageAnalysisAwaitSiteV1 as PackageAnalysisAwaitSite,
+    PackageAnalysisCallEdgeV1 as PackageAnalysisCallEdge,
+    PackageAnalysisExportV1 as PackageAnalysisExport,
+    PackageAnalysisExternalImportV1 as PackageAnalysisExternalImport,
+    PackageAnalysisFileV1 as PackageAnalysisFile,
+    PackageAnalysisParameterV1 as PackageAnalysisParameter,
+    PackageAnalysisProducerV1 as PackageAnalysisProducer,
+    PackageAnalysisResourceLifetimeV1 as PackageAnalysisResourceLifetime,
+    PackageAnalysisResourceTransferV1 as PackageAnalysisResourceTransfer,
+    PackageAnalysisSummaryV1 as PackageAnalysisSummary,
+    PackageAnalysisTaskGroupV1 as PackageAnalysisTaskGroup, PackageAnalysisV1 as PackageAnalysis,
     PackageFileKindV1 as PackageReviewFileKind, PackageIdentityV1 as PackageIdentity,
 };
 
@@ -23,168 +34,9 @@ pub struct NativeRustDependency {
     pub bindings: BTreeMap<String, String>,
 }
 
-/// Schema id for the platform-neutral package analysis artifact.
-pub const PACKAGE_ANALYSIS_SCHEMA: &str = "rsscript.package_analysis.v1";
 /// Schema id for optional review output derived from package analysis and
 /// implementation metadata.
 pub const PACKAGE_REVIEW_SCHEMA: &str = "rsscript.package_review.v1";
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PackageAnalysisProducer {
-    pub name: String,
-    pub version: String,
-    pub source_revision: String,
-    pub ruleset_digest: String,
-}
-
-impl PackageAnalysisProducer {
-    pub fn current() -> Self {
-        Self {
-            name: "rsscript".to_string(),
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            source_revision: env!("RSSCRIPT_SOURCE_REVISION").to_string(),
-            ruleset_digest: env!("RSSCRIPT_COMPILED_CACHE_FINGERPRINT").to_string(),
-        }
-    }
-}
-
-/// Provider- and review-neutral semantic facts for one immutable package
-/// snapshot. Host selection, risk classification, native implementation details,
-/// and deployment evidence deliberately live outside this artifact.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PackageAnalysis {
-    #[serde(rename = "$schema")]
-    pub schema: String,
-    pub producer: PackageAnalysisProducer,
-    pub language_version: String,
-    pub interface_catalog_digest: String,
-    /// Digest of the immutable source/interface snapshot analyzed here.
-    pub snapshot_digest: String,
-    /// Executable payload digest when analysis was emitted by a build.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub module_digest: Option<String>,
-    pub package: PackageIdentity,
-    pub files: Vec<PackageAnalysisFile>,
-    pub summary: PackageAnalysisSummary,
-    pub exports: Vec<PackageAnalysisExport>,
-    pub external_imports: Vec<PackageAnalysisExternalImport>,
-    pub call_edges: Vec<PackageAnalysisCallEdge>,
-    pub recursive_functions: Vec<String>,
-    pub resource_lifetimes: Vec<PackageAnalysisResourceLifetime>,
-    pub resource_transfers: Vec<PackageAnalysisResourceTransfer>,
-    pub task_groups: Vec<PackageAnalysisTaskGroup>,
-    pub await_sites: Vec<PackageAnalysisAwaitSite>,
-    pub diagnostics: Vec<Diagnostic>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub struct PackageAnalysisSummary {
-    pub interface_files: usize,
-    pub source_files: usize,
-    pub public_types: usize,
-    pub public_sum_types: usize,
-    pub public_type_aliases: usize,
-    pub public_consts: usize,
-    pub public_functions: usize,
-    pub mutating_apis: usize,
-    pub retaining_apis: usize,
-    pub resource_apis: usize,
-    pub fresh_returning_apis: usize,
-    pub async_apis: usize,
-    pub await_sites: usize,
-    pub diagnostics: usize,
-    pub errors: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PackageAnalysisExport {
-    pub name: String,
-    pub kind: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub function_kind: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub parameters: Vec<PackageAnalysisParameter>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub return_type: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub retained_params: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub semantic_facts: Vec<String>,
-}
-
-/// Source-level public function parameter contract captured in neutral package
-/// analysis. `effect` is explicit even for ordinary `read` parameters so a
-/// semantic diff never has to infer ownership behavior from omitted syntax.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PackageAnalysisParameter {
-    pub name: String,
-    pub effect: String,
-    pub ty: String,
-    pub retained: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PackageAnalysisExternalImport {
-    pub function: String,
-    pub symbol: String,
-    pub call_chain: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub span: Option<Span>,
-}
-
-/// One resolved call edge in the package-owned call graph. This is neutral
-/// semantic evidence, not a review classification or deployment decision.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-pub struct PackageAnalysisCallEdge {
-    pub caller: String,
-    pub callee: String,
-}
-
-/// A lexical `with` resource lifetime. Scope exit cleanup is language
-/// semantics, so normal completion, error unwinding and cancellation share the
-/// same cleanup fact without exposing a deployment policy.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-pub struct PackageAnalysisResourceLifetime {
-    pub function: String,
-    pub binding: String,
-    pub acquisition: String,
-    pub cleanup: String,
-    pub cleanup_on_cancellation: bool,
-}
-
-/// An explicit ownership transfer of a lexically managed resource. Only a
-/// `take` applied to a binding introduced by `with` is recorded, so ordinary
-/// value moves cannot be mistaken for a resource hand-off.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-pub struct PackageAnalysisResourceTransfer {
-    pub function: String,
-    pub binding: String,
-    pub operation: String,
-}
-
-/// Structured concurrency owned by one lexical task group.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-pub struct PackageAnalysisTaskGroup {
-    pub function: String,
-    pub spawned_tasks: u32,
-    pub select_arms: u32,
-    pub drains_on_exit: bool,
-    pub cleanup_on_cancellation: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PackageAnalysisAwaitSite {
-    pub function: String,
-    pub callee: Option<String>,
-    pub live_across_await: Vec<String>,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PackageAnalysisFile {
-    pub path: String,
-    pub kind: PackageReviewFileKind,
-}
 
 /// The tool + version that produced an artifact, so consumers can reason about
 /// schema compatibility instead of guessing.

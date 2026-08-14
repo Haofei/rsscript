@@ -1729,6 +1729,7 @@ version = "0.1.0"
 dependencies = [
  "rsscript-abi-model",
  "rsscript-bytecode",
+ "rsscript-diagnostics",
  "serde",
  "serde_json",
  "sha2",

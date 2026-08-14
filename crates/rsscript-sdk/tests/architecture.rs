@@ -1199,6 +1199,37 @@ fn semantic_diff_is_an_artifact_contract_not_sdk_implementation() {
 }
 
 #[test]
+fn package_analysis_schema_is_an_artifact_contract_not_compiler_implementation() {
+    let root = workspace_root();
+    let artifact = read(&root.join("crates/rsscript-artifact/src/lib.rs"));
+    let package_types = read(&root.join("crates/rsscript-compiler/src/package/types.rs"));
+
+    for contract_type in [
+        "PackageAnalysisV1",
+        "PackageAnalysisProducerV1",
+        "PackageAnalysisSummaryV1",
+        "PackageAnalysisExportV1",
+        "PackageAnalysisExternalImportV1",
+        "PackageAnalysisCallEdgeV1",
+        "PackageAnalysisResourceLifetimeV1",
+        "PackageAnalysisTaskGroupV1",
+    ] {
+        assert!(
+            artifact.contains(contract_type),
+            "Artifact must own the neutral package-analysis type `{contract_type}`"
+        );
+    }
+    assert!(
+        package_types.contains("PackageAnalysisV1 as PackageAnalysis"),
+        "compiler compatibility must re-export the Artifact-owned analysis type"
+    );
+    assert!(
+        !package_types.contains("pub struct PackageAnalysis {"),
+        "compiler must not define a second package-analysis wire model"
+    );
+}
+
+#[test]
 fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
     let root = workspace_root();
     let package_types = read(&root.join("crates/rsscript-compiler/src/package/types.rs"));

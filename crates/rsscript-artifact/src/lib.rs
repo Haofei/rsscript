@@ -10,6 +10,7 @@ use std::fmt;
 
 use rsscript_abi_model::ExternalImport;
 use rsscript_bytecode::BytecodeArtifact;
+use rsscript_diagnostics::{Diagnostic, Span};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -45,6 +46,174 @@ pub enum PackageFileKindV1 {
     Interface,
     Source,
     Test,
+}
+
+/// Identifies the toolchain rules that emitted package-analysis evidence.
+///
+/// The producer is part of the persisted analysis contract rather than a
+/// compiler-private implementation detail. Consumers can therefore compare
+/// evidence produced by different compiler integrations without depending on
+/// the compiler crate that happened to emit it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageAnalysisProducerV1 {
+    pub name: String,
+    pub version: String,
+    pub source_revision: String,
+    pub ruleset_digest: String,
+}
+
+impl PackageAnalysisProducerV1 {
+    pub fn new(
+        name: impl Into<String>,
+        version: impl Into<String>,
+        source_revision: impl Into<String>,
+        ruleset_digest: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            version: version.into(),
+            source_revision: source_revision.into(),
+            ruleset_digest: ruleset_digest.into(),
+        }
+    }
+}
+
+/// Provider- and review-neutral semantic facts for one immutable package
+/// snapshot. Host selection, risk classification, native implementation
+/// details, and deployment evidence deliberately live outside this artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageAnalysisV1 {
+    #[serde(rename = "$schema")]
+    pub schema: String,
+    pub producer: PackageAnalysisProducerV1,
+    pub language_version: String,
+    pub interface_catalog_digest: String,
+    /// Digest of the immutable source/interface snapshot analyzed here.
+    pub snapshot_digest: String,
+    /// Executable payload digest when analysis was emitted by a build.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub module_digest: Option<String>,
+    pub package: PackageIdentityV1,
+    pub files: Vec<PackageAnalysisFileV1>,
+    pub summary: PackageAnalysisSummaryV1,
+    pub exports: Vec<PackageAnalysisExportV1>,
+    pub external_imports: Vec<PackageAnalysisExternalImportV1>,
+    pub call_edges: Vec<PackageAnalysisCallEdgeV1>,
+    pub recursive_functions: Vec<String>,
+    pub resource_lifetimes: Vec<PackageAnalysisResourceLifetimeV1>,
+    pub resource_transfers: Vec<PackageAnalysisResourceTransferV1>,
+    pub task_groups: Vec<PackageAnalysisTaskGroupV1>,
+    pub await_sites: Vec<PackageAnalysisAwaitSiteV1>,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct PackageAnalysisSummaryV1 {
+    pub interface_files: usize,
+    pub source_files: usize,
+    pub public_types: usize,
+    pub public_sum_types: usize,
+    pub public_type_aliases: usize,
+    pub public_consts: usize,
+    pub public_functions: usize,
+    pub mutating_apis: usize,
+    pub retaining_apis: usize,
+    pub resource_apis: usize,
+    pub fresh_returning_apis: usize,
+    pub async_apis: usize,
+    pub await_sites: usize,
+    pub diagnostics: usize,
+    pub errors: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageAnalysisExportV1 {
+    pub name: String,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub function_kind: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub parameters: Vec<PackageAnalysisParameterV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub return_type: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub retained_params: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub semantic_facts: Vec<String>,
+}
+
+/// Source-level public function parameter contract captured in neutral package
+/// analysis. `effect` is explicit even for ordinary `read` parameters so a
+/// semantic diff never has to infer ownership behavior from omitted syntax.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageAnalysisParameterV1 {
+    pub name: String,
+    pub effect: String,
+    pub ty: String,
+    pub retained: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageAnalysisExternalImportV1 {
+    pub function: String,
+    pub symbol: String,
+    pub call_chain: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub span: Option<Span>,
+}
+
+/// One resolved call edge in the package-owned call graph. This is neutral
+/// semantic evidence, not a review classification or deployment decision.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct PackageAnalysisCallEdgeV1 {
+    pub caller: String,
+    pub callee: String,
+}
+
+/// A lexical `with` resource lifetime. Scope exit cleanup is language
+/// semantics, so normal completion, error unwinding and cancellation share the
+/// same cleanup fact without exposing a deployment policy.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct PackageAnalysisResourceLifetimeV1 {
+    pub function: String,
+    pub binding: String,
+    pub acquisition: String,
+    pub cleanup: String,
+    pub cleanup_on_cancellation: bool,
+}
+
+/// An explicit ownership transfer of a lexically managed resource. Only a
+/// `take` applied to a binding introduced by `with` is recorded, so ordinary
+/// value moves cannot be mistaken for a resource hand-off.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct PackageAnalysisResourceTransferV1 {
+    pub function: String,
+    pub binding: String,
+    pub operation: String,
+}
+
+/// Structured concurrency owned by one lexical task group.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct PackageAnalysisTaskGroupV1 {
+    pub function: String,
+    pub spawned_tasks: u32,
+    pub select_arms: u32,
+    pub drains_on_exit: bool,
+    pub cleanup_on_cancellation: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageAnalysisAwaitSiteV1 {
+    pub function: String,
+    pub callee: Option<String>,
+    pub live_across_await: Vec<String>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageAnalysisFileV1 {
+    pub path: String,
+    pub kind: PackageFileKindV1,
 }
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 const MAX_ANALYSIS_BYTES: usize = 16 * 1024 * 1024;

@@ -157,7 +157,12 @@ pub(super) fn analyze_package_dir_captured(package_dir: &Path) -> Result<Package
     let summary = package_analysis_summary(sources, await_sites.len(), &diagnostics);
     Ok(PackageAnalysis {
         schema: PACKAGE_ANALYSIS_SCHEMA.to_string(),
-        producer: PackageAnalysisProducer::current(),
+        producer: PackageAnalysisProducer::new(
+            "rsscript",
+            env!("CARGO_PKG_VERSION"),
+            env!("RSSCRIPT_SOURCE_REVISION"),
+            env!("RSSCRIPT_COMPILED_CACHE_FINGERPRINT"),
+        ),
         language_version: rsscript_abi_model::LANGUAGE_SEMANTICS_VERSION.to_string(),
         interface_catalog_digest: crate::interfaces::interface_catalog_digest(),
         snapshot_digest: String::new(),
