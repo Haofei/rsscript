@@ -1,12 +1,13 @@
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use rsscript_operation::{OperationAbort, OperationContext};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 const MAX_WORKSPACE_FILES: usize = 20_000;
@@ -31,6 +32,135 @@ pub struct WorkspaceSourceFile {
     pub logical_path: String,
     pub contents: String,
     pub kind: WorkspaceFileKind,
+}
+
+/// The supported, typed project-manifest projection used during workspace
+/// capture.
+///
+/// RSScript currently captures only local path dependencies. Registry, git,
+/// and other dependency forms remain outside the project loader's input
+/// contract: they may be interpreted by a future resolver, but cannot
+/// silently cause the loader to read additional host paths today.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkspaceManifestV1 {
+    path_dependencies: Vec<WorkspacePathDependencyV1>,
+}
+
+impl WorkspaceManifestV1 {
+    /// Parse the loader-owned manifest projection from one `rsspkg.toml`
+    /// document. The returned dependencies are sorted canonically so capture
+    /// order is independent of TOML table ordering.
+    pub fn parse(source: &str) -> Result<Self, toml::de::Error> {
+        let manifest: RawWorkspaceManifest = toml::from_str(source)?;
+        let mut path_dependencies = Vec::new();
+        collect_path_dependencies(
+            &mut path_dependencies,
+            WorkspaceDependencySection::Dependencies,
+            manifest.dependencies,
+        );
+        collect_path_dependencies(
+            &mut path_dependencies,
+            WorkspaceDependencySection::DevDependencies,
+            manifest.dev_dependencies,
+        );
+        path_dependencies.sort_by(|left, right| {
+            (left.section, left.name.as_str(), left.path.as_str()).cmp(&(
+                right.section,
+                right.name.as_str(),
+                right.path.as_str(),
+            ))
+        });
+        Ok(Self { path_dependencies })
+    }
+
+    /// Explicit local dependency paths that participate in one captured
+    /// workspace. This intentionally excludes non-path dependency forms.
+    pub fn path_dependencies(&self) -> &[WorkspacePathDependencyV1] {
+        &self.path_dependencies
+    }
+}
+
+/// One explicit local dependency declared by a project manifest.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct WorkspacePathDependencyV1 {
+    name: String,
+    section: WorkspaceDependencySection,
+    path: String,
+}
+
+impl WorkspacePathDependencyV1 {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn section(&self) -> WorkspaceDependencySection {
+        self.section
+    }
+
+    /// The manifest-relative path exactly as declared. The OS-facing loader
+    /// resolves it against the owning manifest directory.
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+}
+
+/// The only manifest dependency sections considered during local workspace
+/// capture. The distinction remains visible for tools without making either
+/// section part of compiler semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum WorkspaceDependencySection {
+    Dependencies,
+    DevDependencies,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawWorkspaceManifest {
+    #[serde(default)]
+    dependencies: BTreeMap<String, RawDependency>,
+    #[serde(default, rename = "dev-dependencies")]
+    dev_dependencies: BTreeMap<String, RawDependency>,
+}
+
+/// A manifest dependency is either a conventional version requirement or a
+/// table. Table fields other than `path` are deliberately ignored by this
+/// local capture projection; they cannot create additional filesystem input.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RawDependency {
+    Version(String),
+    Table(RawDependencyTable),
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawDependencyTable {
+    #[serde(default)]
+    path: Option<String>,
+}
+
+fn collect_path_dependencies(
+    output: &mut Vec<WorkspacePathDependencyV1>,
+    section: WorkspaceDependencySection,
+    dependencies: BTreeMap<String, RawDependency>,
+) {
+    for (name, dependency) in dependencies {
+        let dependency = match dependency {
+            RawDependency::Version(version) => {
+                // Version-only declarations are intentionally outside this
+                // local-path capture projection.
+                let _ = version;
+                continue;
+            }
+            RawDependency::Table(dependency) => dependency,
+        };
+        let Some(path) = dependency.path else {
+            continue;
+        };
+        output.push(WorkspacePathDependencyV1 {
+            name,
+            section,
+            path,
+        });
+    }
 }
 
 /// Immutable, filesystem-captured input for one workspace operation.
@@ -463,29 +593,17 @@ fn dependency_paths(
             ));
         }
     };
-    let manifest: toml::Value = toml::from_str(&source).map_err(|error| {
+    let manifest = WorkspaceManifestV1::parse(&source).map_err(|error| {
         WorkspaceLoadError::at(
             WorkspaceLoadErrorCode::ParseManifest,
             &manifest_path,
             format!("cannot parse manifest: {error}"),
         )
     })?;
-    let mut paths = Vec::new();
-    for section in ["dependencies", "dev-dependencies"] {
+    let mut paths = Vec::with_capacity(manifest.path_dependencies().len());
+    for dependency in manifest.path_dependencies() {
         check_operation(operation)?;
-        let Some(dependencies) = manifest.get(section).and_then(toml::Value::as_table) else {
-            continue;
-        };
-        for dependency in dependencies.values() {
-            check_operation(operation)?;
-            if let Some(path) = dependency
-                .as_table()
-                .and_then(|entry| entry.get("path"))
-                .and_then(toml::Value::as_str)
-            {
-                paths.push(package_dir.join(path));
-            }
-        }
+        paths.push(package_dir.join(dependency.path()));
     }
     paths.sort();
     Ok(paths)
@@ -508,6 +626,54 @@ mod tests {
     use super::*;
     use rsscript_operation::{CancellationToken, MonotonicDeadline};
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn typed_manifest_exposes_only_explicit_sorted_path_dependencies() {
+        let manifest = WorkspaceManifestV1::parse(
+            r#"
+                [dependencies]
+                registry = "1.2.3"
+                zeta = { path = "../zeta", version = "0.1" }
+                alpha = { path = "../alpha" }
+                remote = { git = "https://example.invalid/remote" }
+
+                [dev-dependencies]
+                test = { path = "../test" }
+            "#,
+        )
+        .expect("typed manifest projection must parse supported dependency forms");
+
+        let dependencies = manifest.path_dependencies();
+        assert_eq!(dependencies.len(), 3);
+        assert_eq!(dependencies[0].name(), "alpha");
+        assert_eq!(
+            dependencies[0].section(),
+            WorkspaceDependencySection::Dependencies
+        );
+        assert_eq!(dependencies[0].path(), "../alpha");
+        assert_eq!(dependencies[1].name(), "zeta");
+        assert_eq!(
+            dependencies[1].section(),
+            WorkspaceDependencySection::Dependencies
+        );
+        assert_eq!(dependencies[2].name(), "test");
+        assert_eq!(
+            dependencies[2].section(),
+            WorkspaceDependencySection::DevDependencies
+        );
+    }
+
+    #[test]
+    fn typed_manifest_rejects_dependency_values_outside_supported_toml_shapes() {
+        let error = WorkspaceManifestV1::parse(
+            r#"
+                [dependencies]
+                invalid = 42
+            "#,
+        )
+        .expect_err("invalid dependency shapes must not be silently interpreted");
+        assert!(error.to_string().contains("untagged enum"));
+    }
 
     #[test]
     fn missing_root_has_a_stable_structured_error() {

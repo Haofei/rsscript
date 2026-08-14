@@ -607,6 +607,10 @@ mechanical acceptance condition holds.
     isolated under `project::legacy::PackageCompatibility` and requires the
     explicit SDK `compatibility` feature. Compiler package
     callers that also require native/review compatibility remain to be migrated.
+    Manifest dependency discovery now parses the loader-owned
+    `WorkspaceManifestV1` projection and admits only explicit local path
+    dependencies into capture; version, git, and registry declarations cannot
+    silently expand filesystem input.
   - [ ] **S05.2 — Move Artifact persistence to an adapter.** Relocate locks,
     atomic writes, temporary files, compression, and artifact-store policy out
     of compiler. The confined lock/read/write implementation now lives in the
