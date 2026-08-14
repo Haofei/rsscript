@@ -36,22 +36,32 @@ tempfile = { version = "3", optional = true }
 
 [features]
 # Frontend-only by default so `rss check`, formatting, and language tooling do
-# not compile the VM/runtime/provider closure. Hosts opt into execution.
+# not compile lowering, package capture, or host/provider closures.
 default = []
-execution = [
+lowering = [
+    "dep:rsscript-lowering",
+    "dep:rsscript-mir",
+    "dep:rsscript-provider-api",
+    "dep:sha2",
+]
+# Package capture, review, native metadata, and persistence remain a
+# compatibility/project concern. Keep them out of the normal in-memory
+# lowering closure.
+package = [
+    "lowering",
     "dep:fs2",
     "dep:hex",
     "dep:libc",
     "dep:rsscript-artifact-store",
-    "dep:rsscript-lowering",
-    "dep:rsscript-mir",
-    "dep:rsscript-provider-api",
     "dep:rustix",
     "dep:sha2",
     "dep:tempfile",
     "dep:toml",
     "dep:uuid",
 ]
+# Historical execution consumers need both lowering and package compatibility
+# APIs. Reviewed SDK execution selects only `lowering`.
+execution = ["package"]
 # Rust source emission is an Experimental AOT backend. Keep it out of the
 # ordinary execution closure; callers must explicitly select it.
 aot-rust = ["execution"]

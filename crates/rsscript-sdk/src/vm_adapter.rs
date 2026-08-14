@@ -3,11 +3,15 @@
 //! This is the only compiler module allowed to depend on both validated
 //! frontend state and `rsscript-vm`. The VM consumes only owned executable IR.
 
+#[cfg(any(feature = "project", feature = "compatibility"))]
 use std::path::Path;
 
 use rsscript_compiler::{
-    CompiledIr, PackageLoweringInput, ValidatedProgram, compile_package_input_to_ir,
-    compile_source_to_ir, compile_validated_to_ir, prepare_package_for_execution,
+    CompiledIr, ValidatedProgram, compile_source_to_ir, compile_validated_to_ir,
+};
+#[cfg(any(feature = "project", feature = "compatibility"))]
+use rsscript_compiler::{
+    PackageLoweringInput, compile_package_input_to_ir, prepare_package_for_execution,
 };
 
 use rsscript_bytecode::BytecodeArtifact;
@@ -18,12 +22,14 @@ use rsscript_vm::{EvalError, EvalOutput, ExternalFunction};
 #[allow(unused_imports)]
 pub use rsscript_vm::{RegVmExecutable, VmLimits};
 
+#[cfg(any(feature = "project", feature = "compatibility"))]
 pub fn reg_vm_compile_package(package_dir: &Path) -> Result<RegVmExecutable, EvalError> {
     let prepared = prepare_package_for_execution(package_dir).map_err(EvalError::Runtime)?;
     let input = prepared.into_lowering_input().map_err(EvalError::Runtime)?;
     reg_vm_compile_package_input(&input)
 }
 
+#[cfg(any(feature = "project", feature = "compatibility"))]
 pub fn reg_vm_compile_package_input(
     input: &PackageLoweringInput,
 ) -> Result<RegVmExecutable, EvalError> {
@@ -255,6 +261,7 @@ pub fn reg_vm_eval_source_main_with_args_streaming_stdout(
     )
 }
 
+#[cfg(any(feature = "project", feature = "compatibility"))]
 pub fn reg_vm_eval_package_main_with_args_and_external_bindings_streaming_stdout(
     package_dir: &Path,
     args: impl IntoIterator<Item = impl Into<String>>,
@@ -264,6 +271,7 @@ pub fn reg_vm_eval_package_main_with_args_and_external_bindings_streaming_stdout
         .eval_main_with_args_and_external_bindings_streaming_stdout(args, external_bindings)
 }
 
+#[cfg(any(feature = "project", feature = "compatibility"))]
 pub fn reg_vm_eval_package_main_with_args(
     package_dir: &Path,
     args: impl IntoIterator<Item = impl Into<String>>,
@@ -275,6 +283,7 @@ pub fn reg_vm_eval_package_main_with_args(
     )
 }
 
+#[cfg(any(feature = "project", feature = "compatibility"))]
 pub fn reg_vm_eval_package_main_with_args_and_external_bindings(
     package_dir: &Path,
     args: impl IntoIterator<Item = impl Into<String>>,
@@ -284,6 +293,7 @@ pub fn reg_vm_eval_package_main_with_args_and_external_bindings(
         .eval_main_with_args_and_external_bindings(args, external_bindings)
 }
 
+#[cfg(any(feature = "project", feature = "compatibility"))]
 pub fn reg_vm_eval_package_main_with_args_and_external_bindings_and_limits(
     package_dir: &Path,
     args: impl IntoIterator<Item = impl Into<String>>,

@@ -6,7 +6,7 @@ pub const COMPILED_CACHE_FINGERPRINT: &str = env!("RSSCRIPT_COMPILED_CACHE_FINGE
 
 mod analyzer;
 mod checks;
-#[cfg(feature = "execution")]
+#[cfg(feature = "lowering")]
 mod compiler_output;
 mod core_index;
 mod diagnostic {
@@ -25,11 +25,11 @@ mod lexer {
 mod lint;
 #[cfg(feature = "execution")]
 mod lower_names;
-#[cfg(feature = "execution")]
+#[cfg(feature = "package")]
 mod package;
-#[cfg(feature = "execution")]
+#[cfg(feature = "package")]
 mod review;
-#[cfg(feature = "execution")]
+#[cfg(any(feature = "package", feature = "aot-rust"))]
 mod runtime_abi;
 #[cfg(feature = "aot-rust")]
 mod rust_lower;
@@ -38,7 +38,7 @@ mod selfhost_parity;
 mod semantic;
 mod symbols;
 pub mod syntax;
-#[cfg(all(test, feature = "execution"))]
+#[cfg(all(test, feature = "package"))]
 mod test_interfaces;
 #[allow(dead_code)]
 mod text_util {
@@ -79,10 +79,10 @@ pub use analyzer::{
     validate_sources_with_interfaces, validate_sources_with_interfaces_with_operation,
     validate_sources_with_interfaces_without_core,
 };
-#[cfg(feature = "execution")]
-pub use compiler_output::{
-    CompiledIr, compile_package_input_to_ir, compile_source_to_ir, compile_validated_to_ir,
-};
+#[cfg(all(feature = "lowering", feature = "package"))]
+pub use compiler_output::compile_package_input_to_ir;
+#[cfg(feature = "lowering")]
+pub use compiler_output::{CompiledIr, compile_source_to_ir, compile_validated_to_ir};
 pub use core_index::core_package_index_json;
 pub use diagnostic::{
     Diagnostic, DiagnosticExplanation, Fix, FixEdit, Severity, Span, explain_diagnostic_code,
@@ -99,7 +99,7 @@ pub use generate::{
 pub use lint::lint_source;
 #[cfg(feature = "execution")]
 pub use lower_names::lowered_symbol_name;
-#[cfg(feature = "execution")]
+#[cfg(feature = "package")]
 pub use package::{
     ArtifactStore, ExecutablePackageSnapshot, PackageAnalysis, PackageAnalysisAwaitSite,
     PackageAnalysisExport, PackageAnalysisExternalImport, PackageAnalysisFile,
@@ -124,7 +124,7 @@ pub use package::{
     package_sources_with_dependency_interfaces, package_tree, prepare_executable_package,
     prepare_package_for_execution, review_package_dir, write_package_artifact_atomic,
 };
-#[cfg(feature = "execution")]
+#[cfg(feature = "package")]
 pub use review::{
     ReviewFinding, ReviewFix, ReviewMap, ReviewMapCategorySummary, ReviewMapClassification,
     ReviewMapFile, ReviewMapFileRisk, ReviewMapRegion, ReviewMapSummary, ReviewRisk,

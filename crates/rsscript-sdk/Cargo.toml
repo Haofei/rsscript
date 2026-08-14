@@ -17,7 +17,7 @@ compatibility = ["aot-rust", "legacy-exec-ir"]
 execution = [
     "dep:rsscript-abi-model",
     "dep:rsscript-artifact",
-    "rsscript_compiler/execution",
+    "rsscript_compiler/lowering",
     "dep:rsscript-bytecode",
     "dep:rsscript-codegen-vm",
     "dep:rsscript-interface-catalog",
@@ -29,7 +29,7 @@ execution = [
 # Filesystem/package capture is a CLI and project-loader convenience boundary,
 # not part of the reviewed in-memory Compiler API. Hosts that want this helper
 # opt in explicitly; ordinary `execution` accepts only immutable snapshots.
-project = ["execution"]
+project = ["execution", "rsscript_compiler/package"]
 aot-rust = ["execution", "rsscript_compiler/aot-rust"]
 # Transitional source-shaped executable IR remains available only to the
 # migration corpus and legacy API surface. Reviewed execution consumes MIR

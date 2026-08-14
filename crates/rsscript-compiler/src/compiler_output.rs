@@ -88,7 +88,7 @@ pub fn compile_validated_to_ir(validated: &ValidatedProgram) -> CompiledIr {
     }
 }
 
-#[cfg(feature = "execution")]
+#[cfg(feature = "package")]
 pub fn compile_package_input_to_ir(
     input: &crate::PackageLoweringInput,
 ) -> Result<CompiledIr, Vec<Diagnostic>> {

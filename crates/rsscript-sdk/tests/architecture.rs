@@ -1159,15 +1159,15 @@ fn artifact_persistence_is_an_execution_only_adapter() {
         store.get("optional").and_then(toml::Value::as_bool),
         Some(true)
     );
-    let execution = compiler_manifest["features"]["execution"]
+    let package = compiler_manifest["features"]["package"]
         .as_array()
-        .expect("compiler execution feature should be declared");
+        .expect("compiler package feature should be declared");
     assert!(
-        execution
+        package
             .iter()
             .filter_map(toml::Value::as_str)
             .any(|entry| entry == "dep:rsscript-artifact-store"),
-        "compiler may use persistence only through its explicit execution feature"
+        "compiler may use persistence only through its explicit package feature"
     );
 
     let package = read(&root.join("crates/rsscript-compiler/src/package.rs"));
@@ -3262,12 +3262,38 @@ fn compiler_default_dependency_closure_is_host_neutral() {
         "compiler must not depend on the VM"
     );
 
-    let execution = manifest["features"]["execution"]
+    let package = manifest["features"]["package"]
         .as_array()
-        .expect("compiler execution feature should be declared")
+        .expect("compiler package feature should be declared")
         .iter()
         .filter_map(toml::Value::as_str)
         .collect::<BTreeSet<_>>();
+    let lowering = manifest["features"]["lowering"]
+        .as_array()
+        .expect("compiler lowering feature should be declared")
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .collect::<BTreeSet<_>>();
+    let execution = manifest["features"]["execution"]
+        .as_array()
+        .expect("compiler execution compatibility feature should be declared")
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .collect::<BTreeSet<_>>();
+    assert!(execution.contains("package"));
+    assert!(package.contains("lowering"));
+    for dependency in [
+        "rsscript-lowering",
+        "rsscript-mir",
+        "rsscript-provider-api",
+        "sha2",
+    ] {
+        let feature = format!("dep:{dependency}");
+        assert!(
+            lowering.contains(feature.as_str()),
+            "lowering feature must explicitly select `{dependency}`"
+        );
+    }
     for dependency in [
         "fs2",
         "hex",
@@ -3289,10 +3315,28 @@ fn compiler_default_dependency_closure_is_host_neutral() {
         );
         let feature = format!("dep:{dependency}");
         assert!(
-            execution.contains(feature.as_str()),
-            "execution feature must explicitly select package dependency `{dependency}`"
+            package.contains(feature.as_str()),
+            "package feature must explicitly select package dependency `{dependency}`"
         );
     }
+    let sdk_execution = facade["features"]["execution"]
+        .as_array()
+        .expect("SDK execution feature should be declared")
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .collect::<BTreeSet<_>>();
+    assert!(sdk_execution.contains("rsscript_compiler/lowering"));
+    assert!(
+        !sdk_execution.contains("rsscript_compiler/package"),
+        "reviewed in-memory SDK execution must not select compiler package capture"
+    );
+    let sdk_project = facade["features"]["project"]
+        .as_array()
+        .expect("SDK project feature should be declared")
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .collect::<BTreeSet<_>>();
+    assert!(sdk_project.contains("rsscript_compiler/package"));
     for removed in [
         "base64",
         "chrono",

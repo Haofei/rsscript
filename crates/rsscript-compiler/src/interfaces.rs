@@ -2,7 +2,7 @@
 
 pub(crate) use rsscript_interface_catalog::{CORE_INTERFACES, STANDARD_PACKAGE_INTERFACES};
 
-#[cfg(feature = "execution")]
+#[cfg(feature = "lowering")]
 pub(crate) fn interface_catalog_digest() -> String {
     use sha2::{Digest, Sha256};
 
@@ -19,15 +19,15 @@ pub(crate) fn interface_catalog_digest() -> String {
     format!("sha256:{:x}", digest.finalize())
 }
 
-#[cfg(feature = "execution")]
+#[cfg(feature = "package")]
 pub(crate) use rsscript_interface_catalog::builtin_interfaces;
 
 #[cfg(not(test))]
 pub(crate) use rsscript_interface_catalog::default_interfaces;
-#[cfg(all(not(test), feature = "execution"))]
+#[cfg(all(not(test), feature = "package"))]
 pub(crate) use rsscript_interface_catalog::standard_package_interfaces;
 
-#[cfg(all(test, feature = "execution"))]
+#[cfg(all(test, feature = "package"))]
 pub(crate) fn default_interfaces() -> impl Iterator<Item = (&'static str, &'static str)> {
     rsscript_interface_catalog::CORE_INTERFACES
         .iter()
@@ -36,7 +36,7 @@ pub(crate) fn default_interfaces() -> impl Iterator<Item = (&'static str, &'stat
         .copied()
 }
 
-#[cfg(all(test, feature = "execution"))]
+#[cfg(all(test, feature = "package"))]
 pub(crate) fn standard_package_interfaces() -> impl Iterator<Item = (&'static str, &'static str)> {
     rsscript_interface_catalog::STANDARD_PACKAGE_INTERFACES
         .iter()
@@ -48,5 +48,5 @@ pub(crate) fn standard_package_interfaces() -> impl Iterator<Item = (&'static st
 // fixtures. Keep its catalog identical to the production neutral catalog so a
 // plain `cargo test` remains a valid Core gate instead of referencing a module
 // compiled only under the optional execution feature.
-#[cfg(all(test, not(feature = "execution")))]
+#[cfg(all(test, not(feature = "package")))]
 pub(crate) use rsscript_interface_catalog::default_interfaces;

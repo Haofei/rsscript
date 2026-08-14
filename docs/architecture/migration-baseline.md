@@ -593,11 +593,12 @@ mechanical acceptance condition holds.
     item remains open.
   - [ ] **S05.5 — Enforce a frontend-only compiler dependency closure.** Cargo
     metadata and `cargo tree` tests reject OS, persistence, Provider, VM, review,
-    JIT, and AOT dependencies. Package-capture and persistence dependencies are
-    now optional and selected only by compiler `execution`; unused direct
-    package/host dependencies were removed. The frontend still has an
-    execution-feature compatibility path and build-script catalog inputs, so
-    the complete dependency-closure acceptance condition remains open.
+    JIT, and AOT dependencies. Compiler lowering is now a dedicated feature;
+    filesystem/package/persistence dependencies are optional behind the separate
+    `package` feature, while reviewed SDK `execution` selects lowering but not
+    package capture. The frontend still has a compatibility `execution` feature
+    and build-script catalog inputs, so the complete dependency-closure
+    acceptance condition remains open.
 
 ### 2. Typed CFG MIR
 
