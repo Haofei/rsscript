@@ -19,17 +19,17 @@ order, then the result type, and children are interned before their container.
 The VM adapter and a `WireInterpreterFn` Provider derive the same table from
 the descriptor that Provider linking has already validated.
 
-This admits canonical `List<T>` and `Option<T>` values on synchronous linked
-Provider calls. Lists carry the descriptor-scoped element type identity;
-options carry the enclosing option type identity plus stable `Some`/`None`
-variant ordinals. The adapter validates every identity before converting to or
-from the legacy VM representation.
+This admits canonical `List<T>`, tuples, `Option<T>`, and `Result<T, E>` values
+on synchronous linked Provider calls. Lists carry the descriptor-scoped element
+type identity; options and results carry their enclosing type identity plus
+stable variant ordinals. The adapter validates every identity before converting
+to or from the legacy VM representation.
 
 This is deliberately not an Artifact-wide type table. Named records, arbitrary
-variants, tuples, results, resources, maps, JSON, chars, and asynchronous wire
-calls remain fail-closed until their complete Artifact layout and lifecycle
-contracts are available. A type ID from one function descriptor is never valid
-for another descriptor.
+variants, resources, maps, JSON, chars, and asynchronous wire calls remain
+fail-closed until their complete Artifact layout and lifecycle contracts are
+available. A type ID from one function descriptor is never valid for another
+descriptor.
 
 ## Compatibility and migration
 

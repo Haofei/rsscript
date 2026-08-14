@@ -1258,12 +1258,12 @@ mechanical acceptance condition holds.
     The reference VM now admits descriptor-linked synchronous scalar
     `WireValue` Providers (`Unit`, booleans, integer, float, string, bytes)
     without routing their callable through `NativeInterpreterFn`. A
-    descriptor-scoped, deterministic type table now also bridges `List<T>` and
-    `Option<T>`: both the VM adapter and Provider derive numeric identities from
-    the exact linked signature, and mismatched element/type/variant identities
-    fail closed. Named records, arbitrary variants, tuples, results, maps,
-    JSON, chars, resources, and asynchronous wire calls still require the
-    Artifact-wide type-table/lifecycle adapter.
+    descriptor-scoped, deterministic type table now also bridges `List<T>`,
+    tuples, `Option<T>`, and `Result<T, E>`: both the VM adapter and Provider
+    derive numeric identities from the exact linked signature, and mismatched
+    element/type/variant identities fail closed. Named records, arbitrary
+    variants, maps, JSON, chars, resources, and asynchronous wire calls still
+    require the Artifact-wide type-table/lifecycle adapter.
     - [x] **P06.2a — Bridge generation-safe resource handles.** Provider
       runtime handles now convert to/from the canonical numeric wire handle
       with a descriptor-supplied resource type; no legacy type-name string is

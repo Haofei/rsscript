@@ -123,6 +123,20 @@ fn native_to_wire(
                 values,
             })
         }
+        (NativeValue::List(values), WireType::Tuple { elements }) => {
+            if values.len() != elements.len() {
+                return Err(ProviderError::invalid_argument(
+                    "provider tuple argument length does not match its linked signature",
+                ));
+            }
+            Ok(WireValue::Tuple {
+                values: values
+                    .into_iter()
+                    .zip(elements)
+                    .map(|(value, element)| native_to_wire(value, element, types))
+                    .collect::<Result<Vec<_>, _>>()?,
+            })
+        }
         (NativeValue::Variant { name, fields }, option @ WireType::Option { value: element })
             if name == "Some" && fields.len() == 1 =>
         {
@@ -142,6 +156,30 @@ fn native_to_wire(
                 type_id: type_id(types, option)?,
                 variant_id: WireCallTypeTable::option_none_variant(),
                 payload: None,
+            })
+        }
+        (NativeValue::Variant { name, fields }, result @ WireType::Result { ok, .. })
+            if name == "Ok" && fields.len() == 1 =>
+        {
+            let value = fields.get("value").ok_or_else(|| {
+                ProviderError::invalid_argument("provider result value must have a `value` field")
+            })?;
+            Ok(WireValue::Variant {
+                type_id: type_id(types, result)?,
+                variant_id: WireCallTypeTable::result_ok_variant(),
+                payload: Some(Box::new(native_to_wire(value.clone(), ok, types)?)),
+            })
+        }
+        (NativeValue::Variant { name, fields }, result @ WireType::Result { error, .. })
+            if name == "Err" && fields.len() == 1 =>
+        {
+            let value = fields.get("value").ok_or_else(|| {
+                ProviderError::invalid_argument("provider result value must have a `value` field")
+            })?;
+            Ok(WireValue::Variant {
+                type_id: type_id(types, result)?,
+                variant_id: WireCallTypeTable::result_err_variant(),
+                payload: Some(Box::new(native_to_wire(value.clone(), error, types)?)),
             })
         }
         (
@@ -190,6 +228,19 @@ fn wire_to_native(
             .map(|value| wire_to_native(value, element, types))
             .collect::<Result<Vec<_>, _>>()
             .map(NativeValue::List),
+        (WireValue::Tuple { values }, WireType::Tuple { elements }) => {
+            if values.len() != elements.len() {
+                return Err(ProviderError::invalid_argument(
+                    "provider wire tuple result length does not match its linked signature",
+                ));
+            }
+            values
+                .into_iter()
+                .zip(elements)
+                .map(|(value, element)| wire_to_native(value, element, types))
+                .collect::<Result<Vec<_>, _>>()
+                .map(NativeValue::List)
+        }
         (
             WireValue::Variant {
                 type_id: actual_type,
@@ -221,6 +272,42 @@ fn wire_to_native(
             Ok(NativeValue::Variant {
                 name: "None".to_string(),
                 fields: BTreeMap::new(),
+            })
+        }
+        (
+            WireValue::Variant {
+                type_id: actual_type,
+                variant_id,
+                payload: Some(payload),
+            },
+            result @ WireType::Result { ok, .. },
+        ) if actual_type == type_id(types, result)?
+            && variant_id == WireCallTypeTable::result_ok_variant() =>
+        {
+            Ok(NativeValue::Variant {
+                name: "Ok".to_string(),
+                fields: BTreeMap::from([(
+                    "value".to_string(),
+                    wire_to_native(*payload, ok, types)?,
+                )]),
+            })
+        }
+        (
+            WireValue::Variant {
+                type_id: actual_type,
+                variant_id,
+                payload: Some(payload),
+            },
+            result @ WireType::Result { error, .. },
+        ) if actual_type == type_id(types, result)?
+            && variant_id == WireCallTypeTable::result_err_variant() =>
+        {
+            Ok(NativeValue::Variant {
+                name: "Err".to_string(),
+                fields: BTreeMap::from([(
+                    "value".to_string(),
+                    wire_to_native(*payload, error, types)?,
+                )]),
             })
         }
         (
@@ -1048,6 +1135,64 @@ mod provider_contract_tests {
         };
         let wire = native_to_wire(none.clone(), &option, &types).unwrap();
         assert_eq!(wire_to_native(wire, &option, &types).unwrap(), none);
+    }
+
+    #[test]
+    fn descriptor_type_table_adapts_tuple_and_result_values() {
+        let tuple = WireType::Tuple {
+            elements: vec![
+                WireType::String,
+                WireType::Int {
+                    bits: 64,
+                    signed: true,
+                },
+            ],
+        };
+        let tuple_signature = FunctionSignature {
+            parameters: vec![],
+            result: tuple.clone(),
+            asynchronous: false,
+        };
+        let tuple_types = WireCallTypeTable::for_signature(&tuple_signature).unwrap();
+        let tuple_value = NativeValue::List(vec![
+            NativeValue::String("left".to_string()),
+            NativeValue::Int(2),
+        ]);
+        let wire = native_to_wire(tuple_value.clone(), &tuple, &tuple_types).unwrap();
+        assert_eq!(
+            wire_to_native(wire, &tuple, &tuple_types).unwrap(),
+            tuple_value
+        );
+
+        let result = WireType::Result {
+            ok: Box::new(WireType::String),
+            error: Box::new(WireType::Int {
+                bits: 64,
+                signed: true,
+            }),
+        };
+        let result_signature = FunctionSignature {
+            parameters: vec![],
+            result: result.clone(),
+            asynchronous: false,
+        };
+        let result_types = WireCallTypeTable::for_signature(&result_signature).unwrap();
+        for value in [
+            NativeValue::Variant {
+                name: "Ok".to_string(),
+                fields: BTreeMap::from([(
+                    "value".to_string(),
+                    NativeValue::String("done".to_string()),
+                )]),
+            },
+            NativeValue::Variant {
+                name: "Err".to_string(),
+                fields: BTreeMap::from([("value".to_string(), NativeValue::Int(7))]),
+            },
+        ] {
+            let wire = native_to_wire(value.clone(), &result, &result_types).unwrap();
+            assert_eq!(wire_to_native(wire, &result, &result_types).unwrap(), value);
+        }
     }
 
     #[test]

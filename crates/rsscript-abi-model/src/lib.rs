@@ -131,6 +131,18 @@ impl WireCallTypeTable {
         WireVariantId::new(1)
     }
 
+    /// The stable `Ok(value)` variant identity for a `Result<T, E>` in this
+    /// table. The enclosing result type identity remains mandatory.
+    pub const fn result_ok_variant() -> WireVariantId {
+        WireVariantId::new(0)
+    }
+
+    /// The stable `Err(value)` variant identity for a `Result<T, E>` in this
+    /// table. The enclosing result type identity remains mandatory.
+    pub const fn result_err_variant() -> WireVariantId {
+        WireVariantId::new(1)
+    }
+
     fn insert(&mut self, ty: &WireType) -> Result<(), WireTypeTableOverflow> {
         match ty {
             WireType::List { element }
@@ -673,6 +685,14 @@ mod tests {
         );
         assert_eq!(
             WireCallTypeTable::option_none_variant(),
+            WireVariantId::new(1)
+        );
+        assert_eq!(
+            WireCallTypeTable::result_ok_variant(),
+            WireVariantId::new(0)
+        );
+        assert_eq!(
+            WireCallTypeTable::result_err_variant(),
             WireVariantId::new(1)
         );
     }
