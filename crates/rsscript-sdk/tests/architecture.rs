@@ -1058,17 +1058,28 @@ fn language_engine_does_not_read_the_operating_system() {
         );
     }
     assert!(
-        language_service.contains("parse_source"),
-        "language-service dependency discovery must consume parsed syntax"
-    );
-    assert!(
         language_service.contains("CompilationSession"),
         "language-service dependency queries must consume the shared frontend session"
     );
-    for query in ["symbol_index_from_program", "document_symbols_from_program"] {
+    for query in [
+        "symbol_index_from_program",
+        "document_symbols_from_program",
+        "module_header",
+        "interface_module_header",
+    ] {
         assert!(
             language_service.contains(query),
             "language-service editor query must consume parsed syntax through {query}"
+        );
+    }
+    for forbidden in [
+        "parse_source",
+        "fn document_dependencies",
+        "fn interface_modules",
+    ] {
+        assert!(
+            !language_service.contains(forbidden),
+            "language-service must delegate parsed module facts to CompilationSession, not `{forbidden}`"
         );
     }
     assert!(

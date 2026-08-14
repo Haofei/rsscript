@@ -26,7 +26,6 @@ pub use rsscript_semantics::{
     SymbolKind, SymbolLookup, document_symbols, document_symbols_from_program, symbol_index,
     symbol_index_from_program,
 };
-use rsscript_syntax::{ast::Item, parse_source};
 pub use rsscript_syntax::{format_source, lint_source};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,10 +142,7 @@ impl LanguageService {
         if let Some(document) = &previous
             && document.kind == DocumentKind::Interface
         {
-            changed_modules.extend(interface_modules(&path, &document.text));
-        }
-        if kind == DocumentKind::Interface {
-            changed_modules.extend(interface_modules(&path, &text));
+            changed_modules.extend(self.declared_modules(path.as_str(), DocumentKind::Interface));
         }
         self.documents.insert(
             path.clone(),
@@ -157,10 +153,25 @@ impl LanguageService {
             },
         );
         if !path.is_empty() {
+            if let Some(document) = &previous
+                && document.kind != kind
+            {
+                match document.kind {
+                    DocumentKind::Source => {
+                        self.frontend.remove_file(&path);
+                    }
+                    DocumentKind::Interface => {
+                        self.frontend.remove_interface(&path);
+                    }
+                }
+            }
             let _ = match kind {
                 DocumentKind::Source => self.frontend.set_file(path.clone(), text.as_ref()),
                 DocumentKind::Interface => self.frontend.set_interface(path.clone(), text.as_ref()),
             };
+        }
+        if kind == DocumentKind::Interface {
+            changed_modules.extend(self.declared_modules(path.as_str(), DocumentKind::Interface));
         }
         self.invalidate_document_queries(&path);
         if previous
@@ -173,6 +184,12 @@ impl LanguageService {
     }
 
     pub fn remove_file(&mut self, path: &str) -> bool {
+        let removed_interface = self
+            .documents
+            .get(path)
+            .is_some_and(|document| document.kind == DocumentKind::Interface);
+        let removed_modules =
+            removed_interface.then(|| self.declared_modules(path, DocumentKind::Interface));
         let removed = self.documents.remove(path);
         if let Some(document) = &removed {
             match document.kind {
@@ -185,10 +202,7 @@ impl LanguageService {
             }
         }
         self.invalidate_document_queries(path);
-        if let Some(document) = &removed
-            && document.kind == DocumentKind::Interface
-        {
-            let modules = interface_modules(path, &document.text);
+        if let Some(modules) = removed_modules {
             self.invalidate_interface_dependents(&modules, path);
         }
         removed.is_some()
@@ -207,19 +221,25 @@ impl LanguageService {
 
     fn invalidate_interface_dependents(&mut self, modules: &BTreeSet<String>, changed_path: &str) {
         let mut affected_modules = modules.clone();
+        let interface_paths = self
+            .documents
+            .iter()
+            .filter(|(_, document)| document.kind == DocumentKind::Interface)
+            .map(|(path, _)| path.clone())
+            .collect::<Vec<_>>();
         loop {
             let mut changed = false;
-            for (path, document) in &self.documents {
-                if path == changed_path || document.kind != DocumentKind::Interface {
+            for path in &interface_paths {
+                if path == changed_path {
                     continue;
                 }
-                let dependencies = document_dependencies(path, &document.text);
+                let dependencies = self.imported_modules(path, DocumentKind::Interface);
                 if dependencies.iter().any(|dependency| {
                     affected_modules
                         .iter()
                         .any(|module| dependency_matches_module(dependency, module))
                 }) {
-                    for module in interface_modules(path, &document.text) {
+                    for module in self.declared_modules(path, DocumentKind::Interface) {
                         changed |= affected_modules.insert(module);
                     }
                 }
@@ -228,22 +248,25 @@ impl LanguageService {
                 break;
             }
         }
-        let dependents = self
+        let document_paths = self
             .documents
             .iter()
-            .filter(|(path, _)| path.as_str() != changed_path)
-            .filter(|(path, document)| {
-                let dependencies = document_dependencies(path, &document.text);
-                affected_modules.is_empty()
-                    || dependencies.iter().any(|dependency| {
-                        affected_modules
-                            .iter()
-                            .any(|module| dependency_matches_module(dependency, module))
-                    })
-            })
-            .map(|(path, _)| path.clone())
+            .map(|(path, document)| (path.clone(), document.kind))
             .collect::<Vec<_>>();
-        for dependent in dependents {
+        for (dependent, kind) in document_paths {
+            if dependent == changed_path {
+                continue;
+            }
+            let dependencies = self.imported_modules(&dependent, kind);
+            if !affected_modules.is_empty()
+                && !dependencies.iter().any(|dependency| {
+                    affected_modules
+                        .iter()
+                        .any(|module| dependency_matches_module(dependency, module))
+                })
+            {
+                continue;
+            }
             let removed = retain_other_paths(&mut self.diagnostic_cache, &dependent);
             self.invalidations = self.invalidations.saturating_add(removed);
         }
@@ -285,7 +308,7 @@ impl LanguageService {
         self.cache_misses += 1;
         self.record_miss(QueryKind::Diagnostics);
         let dependencies = self.dependencies(path);
-        let visible_paths = visible_interface_paths(&self.documents, path, &dependencies);
+        let visible_paths = self.visible_interface_paths(path, &dependencies);
         let interfaces = self
             .documents
             .iter()
@@ -413,16 +436,88 @@ impl LanguageService {
             self.record_hit(QueryKind::Dependencies);
             return value;
         }
-        let header = match document.kind {
-            DocumentKind::Source => self.frontend.module_header(path),
-            DocumentKind::Interface => self.frontend.interface_module_header(path),
-        };
-        let value: Arc<[String]> = header
-            .map(|header| header.imports().to_vec().into())
-            .unwrap_or_else(|| Arc::from([]));
+        let value: Arc<[String]> = self
+            .imported_modules(path, document.kind)
+            .into_iter()
+            .collect::<Vec<_>>()
+            .into();
         self.dependency_cache.insert(key, Arc::clone(&value));
         self.record_miss(QueryKind::Dependencies);
         value
+    }
+
+    /// Return declared modules from the shared frontend query. Interface files
+    /// without a module declaration retain the historical filename fallback,
+    /// but no language-service query reparses raw document text.
+    fn declared_modules(&mut self, path: &str, kind: DocumentKind) -> BTreeSet<String> {
+        let header = match kind {
+            DocumentKind::Source => self.frontend.module_header(path),
+            DocumentKind::Interface => self.frontend.interface_module_header(path),
+        };
+        let declared = header
+            .map(|header| header.modules().iter().cloned().collect::<BTreeSet<_>>())
+            .unwrap_or_default();
+        if !declared.is_empty() || kind == DocumentKind::Source {
+            return declared;
+        }
+        let fallback = path
+            .rsplit('/')
+            .next()
+            .unwrap_or(path)
+            .trim_end_matches(".rssi")
+            .trim_end_matches(".rss");
+        (!fallback.is_empty())
+            .then(|| fallback.to_string())
+            .into_iter()
+            .collect()
+    }
+
+    fn imported_modules(&mut self, path: &str, kind: DocumentKind) -> BTreeSet<String> {
+        let header = match kind {
+            DocumentKind::Source => self.frontend.module_header(path),
+            DocumentKind::Interface => self.frontend.interface_module_header(path),
+        };
+        header
+            .map(|header| header.imports().iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    fn visible_interface_paths(
+        &mut self,
+        current_path: &str,
+        root_dependencies: &[String],
+    ) -> BTreeSet<String> {
+        let mut dependencies = root_dependencies.iter().cloned().collect::<BTreeSet<_>>();
+        let interface_paths = self
+            .documents
+            .iter()
+            .filter(|(_, document)| document.kind == DocumentKind::Interface)
+            .map(|(path, _)| path.clone())
+            .collect::<Vec<_>>();
+        let mut visible = BTreeSet::new();
+        loop {
+            let mut changed = false;
+            for path in &interface_paths {
+                if path == current_path {
+                    continue;
+                }
+                let selected = self
+                    .declared_modules(path, DocumentKind::Interface)
+                    .iter()
+                    .any(|module| {
+                        dependencies
+                            .iter()
+                            .any(|dependency| dependency_matches_module(dependency, module))
+                    });
+                if selected && visible.insert(path.clone()) {
+                    dependencies.extend(self.imported_modules(path, DocumentKind::Interface));
+                    changed = true;
+                }
+            }
+            if !changed {
+                return visible;
+            }
+        }
     }
 
     fn record_hit(&mut self, query: QueryKind) {
@@ -465,87 +560,11 @@ fn retain_other_paths<V>(cache: &mut BTreeMap<(String, u64), V>, path: &str) -> 
     u64::try_from(before.saturating_sub(cache.len())).unwrap_or(u64::MAX)
 }
 
-fn interface_modules(path: &str, text: &str) -> BTreeSet<String> {
-    let declared = parse_source(path, text)
-        .items
-        .into_iter()
-        .filter_map(|item| match item {
-            Item::Module(module) => (!module.path.is_empty()).then(|| module.path.join(".")),
-            Item::Use(_)
-            | Item::Type(_)
-            | Item::SumType(_)
-            | Item::TypeAlias(_)
-            | Item::Const(_)
-            | Item::Function(_) => None,
-        })
-        .collect::<BTreeSet<_>>();
-    if !declared.is_empty() {
-        return declared;
-    }
-    let fallback = path
-        .rsplit('/')
-        .next()
-        .unwrap_or(path)
-        .trim_end_matches(".rssi")
-        .trim_end_matches(".rss");
-    (!fallback.is_empty())
-        .then(|| fallback.to_string())
-        .into_iter()
-        .collect()
-}
-
-fn document_dependencies(path: &str, text: &str) -> BTreeSet<String> {
-    parse_source(path, text)
-        .items
-        .into_iter()
-        .filter_map(|item| match item {
-            Item::Use(import) => (!import.path.is_empty()).then(|| import.path.join(".")),
-            Item::Module(_)
-            | Item::Type(_)
-            | Item::SumType(_)
-            | Item::TypeAlias(_)
-            | Item::Const(_)
-            | Item::Function(_) => None,
-        })
-        .collect()
-}
-
 fn dependency_matches_module(dependency: &str, module: &str) -> bool {
     dependency == module
         || dependency
             .strip_prefix(module)
             .is_some_and(|suffix| suffix.starts_with('.') || suffix.starts_with('{'))
-}
-
-fn visible_interface_paths(
-    documents: &BTreeMap<String, Document>,
-    current_path: &str,
-    root_dependencies: &[String],
-) -> BTreeSet<String> {
-    let mut dependencies = root_dependencies.iter().cloned().collect::<BTreeSet<_>>();
-    let mut visible = BTreeSet::new();
-    loop {
-        let mut changed = false;
-        for (path, document) in documents {
-            if path == current_path || document.kind != DocumentKind::Interface {
-                continue;
-            }
-            let selected = interface_modules(path, &document.text)
-                .iter()
-                .any(|module| {
-                    dependencies
-                        .iter()
-                        .any(|dependency| dependency_matches_module(dependency, module))
-                });
-            if selected && visible.insert(path.clone()) {
-                dependencies.extend(document_dependencies(path, &document.text));
-                changed = true;
-            }
-        }
-        if !changed {
-            return visible;
-        }
-    }
 }
 
 #[cfg(test)]
@@ -747,24 +766,35 @@ mod tests {
 
     #[test]
     fn dependency_graph_comes_from_parsed_items_not_text_lines() {
-        let source = r#"
+        let mut service = LanguageService::default();
+        service.set_file(
+            "main.rss",
+            1,
+            DocumentKind::Source,
+            r#"
             // use ignored.*
             const note = "use also_ignored.*"
             use host.api as host
             fn main() -> Unit {}
-        "#;
+        "#,
+        );
         assert_eq!(
-            document_dependencies("main.rss", source),
+            service.imported_modules("main.rss", DocumentKind::Source),
             BTreeSet::from(["host.api".to_string()])
         );
 
-        let interface = r#"
+        service.set_file(
+            "host.rssi",
+            1,
+            DocumentKind::Interface,
+            r#"
             // module ignored
             module host.api
             pub fn value() -> Unit
-        "#;
+        "#,
+        );
         assert_eq!(
-            interface_modules("host.rssi", interface),
+            service.declared_modules("host.rssi", DocumentKind::Interface),
             BTreeSet::from(["host.api".to_string()])
         );
     }
