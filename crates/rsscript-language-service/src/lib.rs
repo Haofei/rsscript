@@ -33,7 +33,6 @@ pub enum DocumentKind {
 struct Document {
     revision: u64,
     kind: DocumentKind,
-    text: Arc<str>,
 }
 
 #[derive(Debug, Clone)]
@@ -191,14 +190,8 @@ impl LanguageService {
         }
         let previous = self.documents.get(&path).cloned();
         let text = text.into();
-        self.documents.insert(
-            path.clone(),
-            Document {
-                revision,
-                kind,
-                text: Arc::clone(&text),
-            },
-        );
+        self.documents
+            .insert(path.clone(), Document { revision, kind });
         if !path.is_empty() {
             if let Some(document) = &previous
                 && document.kind != kind
@@ -246,12 +239,8 @@ impl LanguageService {
     }
 
     pub fn snapshot(&self, path: &str) -> Option<DocumentSnapshot> {
-        self.documents.get(path).map(|document| DocumentSnapshot {
-            path: path.to_string(),
-            revision: document.revision,
-            kind: document.kind,
-            text: Arc::clone(&document.text),
-        })
+        let document = self.documents.get(path)?;
+        self.session_document_snapshot(path, document)
     }
 
     pub fn diagnostics(&mut self, path: &str) -> Vec<Diagnostic> {
@@ -353,13 +342,14 @@ impl LanguageService {
 
     pub fn format(&mut self, path: &str) -> Option<String> {
         let document = self.documents.get(path)?.clone();
+        let snapshot = self.session_document_snapshot(path, &document)?;
         let key = (path.to_string(), document.revision);
         if let Some(cached) = self.format_cache.get(&key) {
             let value = cached.to_string();
             self.record_hit(QueryKind::Format);
             return Some(value);
         }
-        let value: Arc<str> = format_source(path, &document.text).into();
+        let value: Arc<str> = format_source(path, &snapshot.text).into();
         self.format_cache.insert(key, Arc::clone(&value));
         self.record_miss(QueryKind::Format);
         Some(value.to_string())
@@ -367,6 +357,7 @@ impl LanguageService {
 
     pub fn symbols(&mut self, path: &str) -> Option<SymbolIndex> {
         let document = self.documents.get(path)?.clone();
+        let snapshot = self.session_document_snapshot(path, &document)?;
         let key = (path.to_string(), document.revision);
         if let Some(cached) = self.symbol_cache.get(&key) {
             let value = cached.as_ref().clone();
@@ -377,7 +368,7 @@ impl LanguageService {
             DocumentKind::Source => self.frontend.parse_file(path),
             DocumentKind::Interface => self.frontend.parse_interface(path),
         }?;
-        let value = Arc::new(symbol_index_from_program(&document.text, &program));
+        let value = Arc::new(symbol_index_from_program(&snapshot.text, &program));
         self.symbol_cache.insert(key, Arc::clone(&value));
         self.record_miss(QueryKind::Symbols);
         Some(value.as_ref().clone())
@@ -414,6 +405,9 @@ impl LanguageService {
         let Some(document) = self.documents.get(path).cloned() else {
             return Ok(Vec::new());
         };
+        let Some(snapshot) = self.session_document_snapshot(path, &document) else {
+            return Ok(Vec::new());
+        };
         let key = (path.to_string(), document.revision);
         if let Some(cached) = self.lint_cache.get(&key) {
             let value = cached.to_vec();
@@ -421,7 +415,7 @@ impl LanguageService {
             operation.check()?;
             return Ok(value);
         }
-        let value: Arc<[Diagnostic]> = lint_source(path, &document.text).into();
+        let value: Arc<[Diagnostic]> = lint_source(path, &snapshot.text).into();
         self.lint_cache.insert(key, Arc::clone(&value));
         self.record_miss(QueryKind::Lint);
         operation.check()?;
@@ -476,6 +470,23 @@ impl LanguageService {
             cache_misses: self.cache_misses,
             invalidations: self.invalidations,
         }
+    }
+
+    fn session_document_snapshot(
+        &self,
+        path: &str,
+        document: &Document,
+    ) -> Option<DocumentSnapshot> {
+        let file = match document.kind {
+            DocumentKind::Source => self.frontend.source_file_snapshot(path),
+            DocumentKind::Interface => self.frontend.interface_file_snapshot(path),
+        }?;
+        Some(DocumentSnapshot {
+            path: path.to_string(),
+            revision: document.revision,
+            kind: document.kind,
+            text: file.text_arc(),
+        })
     }
 }
 

@@ -522,8 +522,11 @@ mechanical acceptance condition holds.
     declaration/signature `SemanticTypeFacts` owned by that HIR now also have a
     revision-invalidated workspace query with cancellation/deadline handling.
     Complete workspace diagnostics also use a session-owned, immutable
-    source/interface snapshot cache with revision invalidation; resolve/type
-    and dependency-precise semantic-diagnostic invalidation remain open.
+    source/interface snapshot cache with revision invalidation. The language
+    service now obtains document bytes from those session snapshots, retaining
+    only LSP revision/kind metadata rather than a second source-text cache;
+    resolve/type and dependency-precise semantic-diagnostic invalidation remain
+    open.
   - [ ] **S03.4 — Thread cancellation and deadlines through every query.** Add
     cancellation, deadline, and diagnostic-budget tests for cold and cached
     paths. Session parse and local HIR queries now check the shared operation
@@ -550,7 +553,8 @@ mechanical acceptance condition holds.
     reconstructing a second analyzer call sequence. `LanguageService` no
     longer depends on the compiler: its composition root injects the temporary
     compiler diagnostic adapter while the service owns the immutable session
-    snapshot and cache. Replacing it with a semantic-owned analyzer no longer
+    snapshot and cache, including document text. Replacing it with a
+    semantic-owned analyzer no longer
     requires changing the language-service crate. Cargo metadata tests reject
     a language-service edge to compiler, VM, SDK, package persistence, or
     concrete Providers.

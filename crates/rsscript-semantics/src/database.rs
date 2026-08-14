@@ -73,6 +73,14 @@ impl SourceFileSnapshot {
     pub fn text(&self) -> &str {
         &self.text
     }
+
+    /// Share the immutable source bytes retained by a session snapshot.
+    ///
+    /// Editor adapters may retain this handle for one response, but must not
+    /// maintain a second mutable document-text store alongside the session.
+    pub fn text_arc(&self) -> Arc<str> {
+        Arc::clone(&self.text)
+    }
 }
 
 /// Immutable source bytes used by one frontend operation.
@@ -578,6 +586,24 @@ impl CompilationSession {
 
     pub fn interface_snapshot(&self) -> SourceSnapshot {
         self.interfaces.snapshot()
+    }
+
+    /// Return one immutable source-file revision owned by this session.
+    pub fn source_file_snapshot(&self, path: &str) -> Option<SourceFileSnapshot> {
+        self.source_snapshot()
+            .files()
+            .iter()
+            .find(|file| file.path() == path)
+            .cloned()
+    }
+
+    /// Return one immutable interface-file revision owned by this session.
+    pub fn interface_file_snapshot(&self, path: &str) -> Option<SourceFileSnapshot> {
+        self.interface_snapshot()
+            .files()
+            .iter()
+            .find(|file| file.path() == path)
+            .cloned()
     }
 
     /// Capture both session-owned input roles for one workspace semantic query.
