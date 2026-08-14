@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use rsscript_abi_model::{WireRecordFieldLayout, WireRecordLayout, WireType};
 use rsscript_syntax::ast::{DataEffect as SyntaxEffect, Item, Program, TypeKind, TypeRef};
 use rsscript_syntax::parse_source;
@@ -183,9 +185,35 @@ impl InterfaceDescriptorV1 {
                 signature,
             });
         }
-        functions.sort_by(|left, right| left.symbol.cmp(&right.symbol));
         resources.sort_by(|left, right| left.name.cmp(&right.name));
         records.sort_by(|left, right| left.name.cmp(&right.name));
+        let local_types = resources
+            .iter()
+            .map(|resource| local_type_name(&resource.name))
+            .chain(records.iter().map(|record| local_type_name(&record.name)))
+            .collect::<BTreeSet<_>>();
+        for record in &mut records {
+            for field in &mut record.fields {
+                field.ty =
+                    qualify_local_interface_type(field.ty.clone(), module.as_deref(), &local_types);
+            }
+        }
+        for function in &mut functions {
+            for parameter in &mut function.signature.parameters {
+                parameter.ty = qualify_local_interface_type(
+                    parameter.ty.clone(),
+                    module.as_deref(),
+                    &local_types,
+                );
+            }
+            function.signature.result = qualify_local_interface_type(
+                function.signature.result.clone(),
+                module.as_deref(),
+                &local_types,
+            );
+            function.signature_hash = function.signature.hash();
+        }
+        functions.sort_by(|left, right| left.symbol.cmp(&right.symbol));
         if let Some(pair) = functions
             .windows(2)
             .find(|pair| pair[0].symbol == pair[1].symbol)
@@ -256,6 +284,59 @@ fn canonical_resource_name(module: Option<&str>, name: &str) -> String {
     format!("{module}.{local}")
 }
 
+fn local_type_name(canonical_name: &str) -> String {
+    canonical_name
+        .rsplit_once('.')
+        .map_or_else(|| canonical_name.to_string(), |(_, name)| name.to_string())
+}
+
+fn qualify_local_interface_type(
+    ty: WireType,
+    module: Option<&str>,
+    local_types: &BTreeSet<String>,
+) -> WireType {
+    match ty {
+        WireType::List { element } => WireType::List {
+            element: Box::new(qualify_local_interface_type(*element, module, local_types)),
+        },
+        WireType::Option { value } => WireType::Option {
+            value: Box::new(qualify_local_interface_type(*value, module, local_types)),
+        },
+        WireType::Result { ok, error } => WireType::Result {
+            ok: Box::new(qualify_local_interface_type(*ok, module, local_types)),
+            error: Box::new(qualify_local_interface_type(*error, module, local_types)),
+        },
+        WireType::Tuple { elements } => WireType::Tuple {
+            elements: elements
+                .into_iter()
+                .map(|element| qualify_local_interface_type(element, module, local_types))
+                .collect(),
+        },
+        WireType::Named {
+            package,
+            name,
+            arguments,
+        } => WireType::Named {
+            package: package.or_else(|| {
+                local_types
+                    .contains(&name)
+                    .then(|| module.map(str::to_string))
+                    .flatten()
+            }),
+            name,
+            arguments: arguments
+                .into_iter()
+                .map(|argument| qualify_local_interface_type(argument, module, local_types))
+                .collect(),
+        },
+        WireType::Qualified { qualifier, value } => WireType::Qualified {
+            qualifier,
+            value: Box::new(qualify_local_interface_type(*value, module, local_types)),
+        },
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,6 +401,11 @@ pub fn get(url: read String) -> HttpResponse
             vec!["host.http.HttpResponse", "host.http.Z"],
         );
         let response = &descriptor.records[0];
+        assert_eq!(
+            descriptor.functions[0].signature.result,
+            WireType::from("host.http.HttpResponse"),
+            "function signatures and record layouts must share one canonical type identity",
+        );
         assert_eq!(
             response
                 .fields
