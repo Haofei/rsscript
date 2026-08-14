@@ -255,6 +255,14 @@ fn main() -> Int {
                 rsscript_mir::MirInstruction::Binary { .. },
             ]
         ));
+        let debug = mir
+            .function_debug(mir.functions()[0].id())
+            .expect("direct lowering records function debug metadata");
+        let source = debug
+            .source()
+            .expect("checked-HIR lowering records a source location");
+        assert_eq!(source.file(), "direct-hir-mir.rss");
+        assert!(source.length() > 0);
         mir.verify().expect("direct HIR MIR verifies");
     }
 

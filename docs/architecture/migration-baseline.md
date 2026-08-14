@@ -667,9 +667,13 @@ mechanical acceptance condition holds.
       bridge; builtin and resource identities remain follow-up work.
   - [ ] **M01.3 — Add stable display/debug/source-map side tables.** Human names
     remain available without becoming executable identity.
-    - [x] **M01.3a — Add initial debug names.** Function/place debug names are
-      present without becoming executable identity. Constants and source spans
-      remain follow-up work.
+  - [x] **M01.3a — Add initial debug names.** Function/place debug names are
+    present without becoming executable identity. Constants and source spans
+    remain follow-up work.
+  - [x] **M01.3b — Preserve function source locations as side-table data.**
+    Direct checked-HIR lowering records the originating function-body location
+    in `MirFunctionDebug`; executable operations remain typed-ID-only, and the
+    legacy compatibility bridge simply leaves unavailable locations absent.
 - [ ] **M02 — Define an owned CFG MIR.** Functions contain basic blocks,
   instructions, and terminators; MIR does not depend on syntax and contains no
   unresolved or `Unknown` execution node.

@@ -19,8 +19,8 @@ use rsscript_exec_ir::{
 use rsscript_mir::{
     BasicBlock, BlockId, FunctionId, MirBinaryOp, MirCallArgument, MirCallTarget,
     MirExternalImport, MirFunction, MirFunctionDebug, MirFunctionSignature, MirInstruction,
-    MirLiteral, MirModule, MirParameterMode, MirTerminator, PlaceId, ResourceTypeId, TaskGroupId,
-    TaskId, TypeId, ValueId, VerifiedMir,
+    MirLiteral, MirModule, MirParameterMode, MirSourceLocation, MirTerminator, PlaceId,
+    ResourceTypeId, TaskGroupId, TaskId, TypeId, ValueId, VerifiedMir,
 };
 use rsscript_semantics::hir as checked;
 
@@ -472,7 +472,16 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                 self.next_value,
                 blocks,
             ),
-            debug: MirFunctionDebug::new(self.function_name.to_owned(), self.place_names),
+            debug: MirFunctionDebug::with_source(
+                self.function_name.to_owned(),
+                self.place_names,
+                MirSourceLocation::new(
+                    self.body.span.file.clone(),
+                    self.body.span.line,
+                    self.body.span.column,
+                    self.body.span.length,
+                ),
+            ),
         })
     }
 

@@ -373,6 +373,48 @@ impl BasicBlock {
 pub struct MirFunctionDebug {
     name: String,
     places: Vec<String>,
+    source: Option<MirSourceLocation>,
+}
+
+/// Source-only location retained beside executable MIR identities.
+///
+/// This is deliberately debug metadata rather than an instruction operand:
+/// backends identify functions, blocks, values, and types through their typed
+/// IDs. The location lets diagnostics and future source maps retain a stable
+/// origin without reintroducing syntax or compiler dependencies into MIR.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MirSourceLocation {
+    file: String,
+    line: usize,
+    column: usize,
+    length: usize,
+}
+
+impl MirSourceLocation {
+    pub fn new(file: impl Into<String>, line: usize, column: usize, length: usize) -> Self {
+        Self {
+            file: file.into(),
+            line,
+            column,
+            length,
+        }
+    }
+
+    pub fn file(&self) -> &str {
+        &self.file
+    }
+
+    pub fn line(&self) -> usize {
+        self.line
+    }
+
+    pub fn column(&self) -> usize {
+        self.column
+    }
+
+    pub fn length(&self) -> usize {
+        self.length
+    }
 }
 
 /// Resolved function ABI for backend consumption. Type identity is local to the
@@ -435,6 +477,20 @@ impl MirFunctionDebug {
         Self {
             name: name.into(),
             places,
+            source: None,
+        }
+    }
+
+    /// Attach optional source-map evidence without changing executable MIR.
+    pub fn with_source(
+        name: impl Into<String>,
+        places: Vec<String>,
+        source: MirSourceLocation,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            places,
+            source: Some(source),
         }
     }
 
@@ -444,6 +500,10 @@ impl MirFunctionDebug {
 
     pub fn places(&self) -> &[String] {
         &self.places
+    }
+
+    pub fn source(&self) -> Option<&MirSourceLocation> {
+        self.source.as_ref()
     }
 }
 
