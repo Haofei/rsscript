@@ -7,3 +7,4 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 toml = "0.8"
+sha2 = "0.10"

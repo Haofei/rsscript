@@ -6,6 +6,8 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use sha2::{Digest, Sha256};
+
 const MAX_WORKSPACE_FILES: usize = 20_000;
 const MAX_WORKSPACE_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
 
@@ -32,6 +34,7 @@ pub struct WorkspaceSourceFile {
 pub struct WorkspaceSnapshot {
     root: PathBuf,
     files: Vec<WorkspaceSourceFile>,
+    content_digest: String,
 }
 
 impl WorkspaceSnapshot {
@@ -45,6 +48,13 @@ impl WorkspaceSnapshot {
 
     pub fn into_files(self) -> Vec<WorkspaceSourceFile> {
         self.files
+    }
+
+    /// Stable identity for the captured source/interface content. Absolute
+    /// filesystem paths are deliberately excluded, so equivalent captures on
+    /// different hosts have the same input identity.
+    pub fn content_digest(&self) -> &str {
+        &self.content_digest
     }
 }
 
@@ -214,8 +224,52 @@ impl WorkspaceLoader {
             pending_dependencies.extend(dependency_paths(&dependency)?);
         }
         files.sort_by(|left, right| left.path.cmp(&right.path));
-        Ok(WorkspaceSnapshot { root, files })
+        let content_digest = snapshot_content_digest(&files);
+        Ok(WorkspaceSnapshot {
+            root,
+            files,
+            content_digest,
+        })
     }
+}
+
+fn snapshot_content_digest(files: &[WorkspaceSourceFile]) -> String {
+    let mut canonical_files = files.iter().collect::<Vec<_>>();
+    canonical_files.sort_by(|left, right| {
+        (
+            file_kind_tag(left.kind),
+            left.relative_path.as_str(),
+            left.contents.as_str(),
+        )
+            .cmp(&(
+                file_kind_tag(right.kind),
+                right.relative_path.as_str(),
+                right.contents.as_str(),
+            ))
+    });
+    let mut hasher = Sha256::new();
+    hasher.update(b"rsscript.workspace_snapshot.v1\0");
+    hasher.update((canonical_files.len() as u64).to_be_bytes());
+    for file in canonical_files {
+        let kind = [file_kind_tag(file.kind)];
+        hasher.update(kind);
+        hash_snapshot_field(&mut hasher, file.relative_path.as_bytes());
+        hash_snapshot_field(&mut hasher, file.contents.as_bytes());
+    }
+    format!("sha256:{:x}", hasher.finalize())
+}
+
+fn file_kind_tag(kind: WorkspaceFileKind) -> u8 {
+    match kind {
+        WorkspaceFileKind::Interface => 1,
+        WorkspaceFileKind::Source => 2,
+        WorkspaceFileKind::Test => 3,
+    }
+}
+
+fn hash_snapshot_field(hasher: &mut Sha256, bytes: &[u8]) {
+    hasher.update((bytes.len() as u64).to_be_bytes());
+    hasher.update(bytes);
 }
 
 fn scan_source_tree(
@@ -385,6 +439,50 @@ mod tests {
         assert_eq!(
             loader.load_from(root, Path::new(".")).unwrap(),
             snapshot.files()
+        );
+        assert!(snapshot.content_digest().starts_with("sha256:"));
+    }
+
+    #[test]
+    fn snapshot_digest_is_independent_of_absolute_paths_and_file_enumeration_order() {
+        let first = vec![
+            WorkspaceSourceFile {
+                path: "/one/src/main.rss".to_string(),
+                relative_path: "src/main.rss".to_string(),
+                contents: "fn main() -> Unit {}".to_string(),
+                kind: WorkspaceFileKind::Source,
+            },
+            WorkspaceSourceFile {
+                path: "/one/interfaces/host.rssi".to_string(),
+                relative_path: "interfaces/host.rssi".to_string(),
+                contents: "module host".to_string(),
+                kind: WorkspaceFileKind::Interface,
+            },
+        ];
+        let second = vec![
+            WorkspaceSourceFile {
+                path: "/two/interfaces/host.rssi".to_string(),
+                relative_path: "interfaces/host.rssi".to_string(),
+                contents: "module host".to_string(),
+                kind: WorkspaceFileKind::Interface,
+            },
+            WorkspaceSourceFile {
+                path: "/two/src/main.rss".to_string(),
+                relative_path: "src/main.rss".to_string(),
+                contents: "fn main() -> Unit {}".to_string(),
+                kind: WorkspaceFileKind::Source,
+            },
+        ];
+        assert_eq!(
+            snapshot_content_digest(&first),
+            snapshot_content_digest(&second)
+        );
+
+        let mut changed = second;
+        changed[1].contents.push_str("\n// changed");
+        assert_ne!(
+            snapshot_content_digest(&first),
+            snapshot_content_digest(&changed)
         );
     }
 }

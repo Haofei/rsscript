@@ -213,10 +213,14 @@ fn load_package_documents_at_generation(
     package_dir: &Path,
     semantic_generation: u64,
 ) -> HashMap<Url, WorkspaceDocument> {
-    let Ok(sources) = WorkspaceLoader::default().load(package_dir) else {
+    // Capture one immutable input before constructing editor documents. The
+    // loader owns filesystem access; later language-service queries consume
+    // only these captured bytes.
+    let Ok(snapshot) = WorkspaceLoader::default().snapshot(package_dir) else {
         return HashMap::new();
     };
-    sources
+    snapshot
+        .into_files()
         .into_iter()
         .filter_map(|source| {
             Url::from_file_path(PathBuf::from(&source.path))

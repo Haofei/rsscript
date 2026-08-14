@@ -1028,12 +1028,16 @@ fn language_engine_does_not_read_the_operating_system() {
     ))
     .unwrap();
     let loader_dependencies = dependency_packages(&loader_manifest);
-    assert_eq!(loader_dependencies, BTreeSet::from(["toml".to_string()]));
+    assert_eq!(
+        loader_dependencies,
+        BTreeSet::from(["sha2".to_string(), "toml".to_string()])
+    );
     let workspace_loader = read(&root.join("crates/rsscript-workspace-loader/src/lib.rs"));
     for boundary in [
         "pub struct WorkspaceSnapshot",
         "pub fn snapshot_from",
         "pub fn load_from",
+        "pub fn content_digest",
     ] {
         assert!(
             workspace_loader.contains(boundary),
