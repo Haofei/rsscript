@@ -317,6 +317,7 @@ pub struct CompilationSession {
     hir_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<Hir>>,
     workspace_hir_cache: Option<Arc<Hir>>,
     workspace_type_cache: Option<Arc<SemanticTypeFacts>>,
+    workspace_analysis_cache: Option<Arc<AnalysisResult>>,
     module_header_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<ModuleHeader>>,
     workspace_module_graph_cache: Option<Arc<WorkspaceModuleGraph>>,
     workspace_diagnostic_cache: Option<Arc<[Diagnostic]>>,
@@ -328,6 +329,8 @@ pub struct CompilationSession {
     workspace_hir_cache_misses: u64,
     workspace_type_cache_hits: u64,
     workspace_type_cache_misses: u64,
+    workspace_analysis_cache_hits: u64,
+    workspace_analysis_cache_misses: u64,
     module_header_cache_hits: u64,
     module_header_cache_misses: u64,
     workspace_module_graph_cache_hits: u64,
@@ -346,6 +349,8 @@ pub struct CompilationSessionStats {
     pub workspace_hir_cache_misses: u64,
     pub workspace_type_cache_hits: u64,
     pub workspace_type_cache_misses: u64,
+    pub workspace_analysis_cache_hits: u64,
+    pub workspace_analysis_cache_misses: u64,
     pub module_header_cache_hits: u64,
     pub module_header_cache_misses: u64,
     pub workspace_module_graph_cache_hits: u64,
@@ -527,6 +532,7 @@ impl CompilationSession {
             self.invalidate_hir_cache(SessionFileRole::Source, update.file_id);
             self.workspace_hir_cache = None;
             self.workspace_type_cache = None;
+            self.workspace_analysis_cache = None;
             self.invalidate_module_header_cache(SessionFileRole::Source, update.file_id);
             self.workspace_module_graph_cache = None;
             self.workspace_diagnostic_cache = None;
@@ -541,6 +547,7 @@ impl CompilationSession {
             self.invalidate_hir_cache(SessionFileRole::Source, update.file_id);
             self.workspace_hir_cache = None;
             self.workspace_type_cache = None;
+            self.workspace_analysis_cache = None;
             self.invalidate_module_header_cache(SessionFileRole::Source, update.file_id);
             self.workspace_module_graph_cache = None;
             self.workspace_diagnostic_cache = None;
@@ -559,6 +566,7 @@ impl CompilationSession {
             self.invalidate_hir_cache(SessionFileRole::Interface, update.file_id);
             self.workspace_hir_cache = None;
             self.workspace_type_cache = None;
+            self.workspace_analysis_cache = None;
             self.invalidate_module_header_cache(SessionFileRole::Interface, update.file_id);
             self.workspace_module_graph_cache = None;
             self.workspace_diagnostic_cache = None;
@@ -573,6 +581,7 @@ impl CompilationSession {
             self.invalidate_hir_cache(SessionFileRole::Interface, update.file_id);
             self.workspace_hir_cache = None;
             self.workspace_type_cache = None;
+            self.workspace_analysis_cache = None;
             self.invalidate_module_header_cache(SessionFileRole::Interface, update.file_id);
             self.workspace_module_graph_cache = None;
             self.workspace_diagnostic_cache = None;
@@ -613,6 +622,82 @@ impl CompilationSession {
     /// whose query result the session caches.
     pub fn frontend_input_snapshot(&self) -> FrontendInputSnapshot {
         FrontendInputSnapshot::from_snapshots(self.source_snapshot(), self.interface_snapshot())
+    }
+
+    /// Run the complete source/interface semantic analysis for the current
+    /// immutable session revision set. This is the single cached query for
+    /// resolve, type, checked-HIR, and source diagnostics; callers cannot
+    /// accidentally assemble an equivalent analysis from independently read
+    /// files or a second analyzer instance.
+    pub fn workspace_analysis(&mut self) -> Arc<AnalysisResult> {
+        self.workspace_analysis_inner(None)
+            .expect("an unchecked workspace analysis query cannot abort")
+    }
+
+    fn workspace_analysis_inner(
+        &mut self,
+        operation: Option<&OperationContext>,
+    ) -> Result<Arc<AnalysisResult>, OperationAbort> {
+        if let Some(operation) = operation {
+            operation.check()?;
+        }
+        if let Some(analysis) = &self.workspace_analysis_cache {
+            self.workspace_analysis_cache_hits =
+                self.workspace_analysis_cache_hits.saturating_add(1);
+            if let Some(operation) = operation {
+                operation.check()?;
+            }
+            return Ok(Arc::clone(analysis));
+        }
+
+        let input = self.frontend_input_snapshot();
+        let sources = input
+            .sources()
+            .files()
+            .iter()
+            .map(|file| (file.path(), file.text()))
+            .collect::<Vec<_>>();
+        let interfaces = input
+            .interfaces()
+            .files()
+            .iter()
+            .map(|file| (file.path(), file.text()))
+            .collect::<Vec<_>>();
+        let analysis = Arc::new(match operation {
+            Some(operation) => crate::analyze_sources_with_interfaces_result_with_operation(
+                &sources,
+                &interfaces,
+                operation,
+            ),
+            None => crate::analyze_sources_with_interfaces_result(&sources, &interfaces),
+        });
+        if let Some(operation) = operation {
+            operation.check()?;
+        }
+        self.workspace_analysis_cache_misses =
+            self.workspace_analysis_cache_misses.saturating_add(1);
+        self.workspace_analysis_cache = Some(Arc::clone(&analysis));
+        Ok(analysis)
+    }
+
+    /// Operation-aware complete semantic analysis. Both cold and cached paths
+    /// check the shared cancellation/deadline boundary before returning facts.
+    pub fn workspace_analysis_with_operation(
+        &mut self,
+        operation: &OperationContext,
+    ) -> Result<Arc<AnalysisResult>, OperationAbort> {
+        self.workspace_analysis_inner(Some(operation))
+    }
+
+    /// Convert the cached workspace analysis into the phase-gated valid
+    /// program. Invalid source stays an ordinary diagnostic result; only
+    /// cancellation and deadline expiry abort the query itself.
+    pub fn workspace_validated_with_operation(
+        &mut self,
+        operation: &OperationContext,
+    ) -> Result<Result<ValidatedProgram, Vec<Diagnostic>>, OperationAbort> {
+        let analysis = self.workspace_analysis_with_operation(operation)?;
+        Ok((*analysis).clone().into_validated())
     }
 
     /// Diagnose the current immutable workspace through the semantic-owned
@@ -1015,6 +1100,8 @@ impl CompilationSession {
             workspace_hir_cache_misses: self.workspace_hir_cache_misses,
             workspace_type_cache_hits: self.workspace_type_cache_hits,
             workspace_type_cache_misses: self.workspace_type_cache_misses,
+            workspace_analysis_cache_hits: self.workspace_analysis_cache_hits,
+            workspace_analysis_cache_misses: self.workspace_analysis_cache_misses,
             module_header_cache_hits: self.module_header_cache_hits,
             module_header_cache_misses: self.module_header_cache_misses,
             workspace_module_graph_cache_hits: self.workspace_module_graph_cache_hits,
@@ -1147,7 +1234,7 @@ fn module_header_from_program(program: &Program) -> ModuleHeader {
 /// This type owns the immutable relationship between source bytes, parsed
 /// programs, checked HIR, and structural type facts. Runtime, Provider, package,
 /// and review layers cannot construct or alter those facts.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SemanticDatabase {
     sources: SourceSnapshot,
     interfaces: SourceSnapshot,
@@ -1227,7 +1314,7 @@ impl SemanticDatabase {
 }
 
 /// Complete semantic output, including diagnostics for invalid programs.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AnalysisResult {
     database: SemanticDatabase,
     diagnostics: Vec<Diagnostic>,
@@ -1284,7 +1371,7 @@ impl AnalysisResult {
 }
 
 /// A semantic database whose frontend diagnostics contain no errors.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ValidatedProgram {
     database: SemanticDatabase,
     diagnostics: Vec<Diagnostic>,
@@ -1402,6 +1489,8 @@ mod tests {
                 workspace_hir_cache_misses: 0,
                 workspace_type_cache_hits: 0,
                 workspace_type_cache_misses: 0,
+                workspace_analysis_cache_hits: 0,
+                workspace_analysis_cache_misses: 0,
                 module_header_cache_hits: 0,
                 module_header_cache_misses: 0,
                 workspace_module_graph_cache_hits: 0,
@@ -1460,6 +1549,54 @@ mod tests {
             "the unchanged query must be served from the session cache"
         );
         assert_eq!(session.stats().workspace_diagnostic_cache_misses, 2);
+    }
+
+    #[test]
+    fn compilation_session_caches_complete_workspace_analysis_and_validation() {
+        let mut session = CompilationSession::default();
+        session
+            .set_file("main.rss", "fn main() -> Int { return Host.value() }")
+            .unwrap();
+        session
+            .set_interface("host.rssi", "module Host\npub fn value() -> Int\n")
+            .unwrap();
+        let operation = OperationContext::default();
+
+        let first = session
+            .workspace_analysis_with_operation(&operation)
+            .unwrap();
+        let second = session
+            .workspace_analysis_with_operation(&operation)
+            .unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(
+            session
+                .workspace_validated_with_operation(&operation)
+                .unwrap()
+                .is_ok()
+        );
+        assert_eq!(session.stats().workspace_analysis_cache_misses, 1);
+        assert_eq!(session.stats().workspace_analysis_cache_hits, 2);
+
+        session
+            .set_file("main.rss", "fn main() -> Int { return Host.next() }")
+            .unwrap();
+        let replacement = session
+            .workspace_analysis_with_operation(&operation)
+            .unwrap();
+        assert!(!Arc::ptr_eq(&first, &replacement));
+        assert_eq!(session.stats().workspace_analysis_cache_misses, 2);
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let cancelled = OperationContext {
+            cancellation: Some(cancellation),
+            ..OperationContext::default()
+        };
+        assert!(matches!(
+            session.workspace_analysis_with_operation(&cancelled),
+            Err(OperationAbort::Cancelled)
+        ));
     }
 
     #[test]
@@ -1780,6 +1917,8 @@ mod tests {
                 workspace_hir_cache_misses: 0,
                 workspace_type_cache_hits: 0,
                 workspace_type_cache_misses: 0,
+                workspace_analysis_cache_hits: 0,
+                workspace_analysis_cache_misses: 0,
                 module_header_cache_hits: 1,
                 module_header_cache_misses: 1,
                 workspace_module_graph_cache_hits: 0,

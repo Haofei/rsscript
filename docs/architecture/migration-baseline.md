@@ -528,7 +528,11 @@ mechanical acceptance condition holds.
     `CompilationSession::semantic_workspace_diagnostics_with_operation` query
     now lives in `rsscript-semantics`, so the language service is only a client
     of the session query and cannot select or define a competing callback
-    protocol. The complete analyzer and check
+    protocol. `CompilationSession::workspace_analysis_with_operation` now
+    caches the complete source/interface `AnalysisResult` and exposes its
+    phase-gated validated projection, so resolve/type/HIR facts share the same
+    revision, cancellation, and deadline boundary rather than requiring a
+    second analyzer cache. The complete analyzer and check
     implementation now live in `rsscript-semantics`; `rsscript-compiler` only
     re-exports the frontend entry points for package/AOT compatibility callers.
     Resolve/type and dependency-precise semantic-diagnostic invalidation remain
@@ -547,7 +551,8 @@ mechanical acceptance condition holds.
     propagate the same operation through their HIR
     dependency; language-service document
     diagnostics now apply the same rule across dependency closure, lint, and
-    cached-result paths; resolve/type queries remain to be migrated.
+    cached-result paths; resolve/type dependency precision remains to be
+    migrated.
   - [ ] **S03.5 — Migrate CLI/package/test callers.** All frontend consumers use
     the session API; direct analyzer construction becomes private. The normal
     CLI `check`, `fix`, and `fmt` commands now consume semantics, syntax, and
