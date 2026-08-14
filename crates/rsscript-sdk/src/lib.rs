@@ -116,7 +116,7 @@ pub use rsscript_artifact::{
     ExternalCallFactV1, ExternalContractFactV1, FactSetDiffV1, FunctionParameterFactV1,
     InterfaceRequirementV1, PACKAGE_ANALYSIS_SCHEMA, ResourceLifetimeFactV1,
     ResourceTransferFactV1, SEMANTIC_DIFF_SCHEMA, SOURCE_ANALYSIS_SCHEMA, SemanticDiffV1,
-    TaskGroupFactV1,
+    SourceAnalysisV1, TaskGroupFactV1,
 };
 #[cfg(feature = "execution")]
 use sha2::{Digest, Sha256};
@@ -332,6 +332,7 @@ pub mod project {
                     code: CompileErrorCode::PackageAnalysis,
                     message: error.to_string(),
                 })?;
+            let analysis = AnalysisEnvelopeV1::from_json(analysis).map_err(CompileError::from)?;
             BuiltArtifact::from_bytecode(artifact, analysis)
         }
 
@@ -418,8 +419,8 @@ pub mod artifact {
     pub use super::{
         ARTIFACT_BUNDLE_MAGIC, ARTIFACT_BUNDLE_SCHEMA, AnalysisEnvelopeV1, AnalysisSchemaV1,
         ArtifactBundle, ArtifactBundleError, ArtifactVerifier, BuildProvenanceV1, BuiltArtifact,
-        InterfaceRequirementV1, PACKAGE_ANALYSIS_SCHEMA, SOURCE_ANALYSIS_SCHEMA, VerifiedArtifact,
-        VerifyError,
+        InterfaceRequirementV1, PACKAGE_ANALYSIS_SCHEMA, SOURCE_ANALYSIS_SCHEMA, SourceAnalysisV1,
+        VerifiedArtifact, VerifyError,
     };
     pub use rsscript_bytecode::{
         BYTECODE_CONTAINER_FORMAT_VERSION, BYTECODE_ISA_VERSION, BYTECODE_MAGIC, BYTECODE_SCHEMA,
@@ -633,7 +634,7 @@ pub struct BuiltArtifact {
 impl BuiltArtifact {
     fn from_bytecode(
         artifact: BytecodeArtifact,
-        analysis: serde_json::Value,
+        analysis: AnalysisEnvelopeV1,
     ) -> Result<Self, CompileError> {
         let bytes = artifact
             .to_bytes()
@@ -676,13 +677,12 @@ impl BuiltArtifact {
 }
 
 #[cfg(feature = "execution")]
-fn source_set_analysis(sources: &[(&str, &str)], snapshot_digest: &str) -> serde_json::Value {
-    serde_json::json!({
-        "$schema": "rsscript.source_analysis.v1",
-        "language_version": rsscript_abi_model::LANGUAGE_SEMANTICS_VERSION,
-        "snapshot_digest": snapshot_digest,
-        "sources": sources.iter().map(|(path, _)| *path).collect::<Vec<_>>(),
-    })
+fn source_set_analysis(sources: &[(&str, &str)], snapshot_digest: &str) -> AnalysisEnvelopeV1 {
+    AnalysisEnvelopeV1::source(SourceAnalysisV1::new(
+        rsscript_abi_model::LANGUAGE_SEMANTICS_VERSION,
+        snapshot_digest,
+        sources.iter().map(|(path, _)| *path),
+    ))
 }
 
 fn snapshot_pairs(snapshot: &SourceSnapshot) -> Vec<(&str, &str)> {

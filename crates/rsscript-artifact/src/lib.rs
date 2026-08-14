@@ -71,13 +71,42 @@ pub struct AnalysisEnvelopeV1 {
 }
 
 impl AnalysisEnvelopeV1 {
-    pub fn new(payload: Value) -> Result<Self, ArtifactBundleError> {
+    /// Construct the typed analysis evidence emitted by an in-memory source
+    /// compilation.
+    ///
+    /// `source_analysis.v1` is intentionally not accepted as an arbitrary JSON
+    /// object at the producer boundary. This keeps the compiler, SDK, and
+    /// bundle writer aligned on one versioned evidence shape.
+    pub fn source(source: SourceAnalysisV1) -> Self {
+        let payload = serde_json::json!({
+            "$schema": SOURCE_ANALYSIS_SCHEMA,
+            "language_version": source.language_version,
+            "snapshot_digest": source.snapshot_digest,
+            "sources": source.sources,
+        });
+        Self {
+            schema: AnalysisSchemaV1::Source,
+            payload,
+        }
+    }
+
+    /// Decode analysis evidence read from a persisted Bundle or produced by a
+    /// legacy package-analysis adapter.
+    ///
+    /// Package analysis remains JSON-shaped during its migration window, but
+    /// source analysis is decoded through [`SourceAnalysisV1`] so malformed or
+    /// silently extended source evidence cannot enter a verified bundle.
+    pub fn from_json(payload: Value) -> Result<Self, ArtifactBundleError> {
         let schema = payload
             .get("$schema")
             .and_then(Value::as_str)
             .ok_or(ArtifactBundleError::MissingAnalysisSchema)?;
         let schema = AnalysisSchemaV1::parse(schema)
             .ok_or_else(|| ArtifactBundleError::UnsupportedAnalysisSchema(schema.to_string()))?;
+        if schema == AnalysisSchemaV1::Source {
+            let source = SourceAnalysisV1::from_json(payload)?;
+            return Ok(Self::source(source));
+        }
         Ok(Self { schema, payload })
     }
 
@@ -91,6 +120,52 @@ impl AnalysisEnvelopeV1 {
 
     pub fn into_payload(self) -> Value {
         self.payload
+    }
+}
+
+/// The complete, versioned evidence emitted by a direct source build.
+///
+/// This type deliberately excludes the `$schema` discriminator: the
+/// [`AnalysisEnvelopeV1`] owns that wire-level choice, so producers cannot
+/// accidentally label a source analysis with a different schema.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceAnalysisV1 {
+    pub language_version: String,
+    pub snapshot_digest: String,
+    pub sources: Vec<String>,
+}
+
+impl SourceAnalysisV1 {
+    pub fn new(
+        language_version: impl Into<String>,
+        snapshot_digest: impl Into<String>,
+        sources: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        let mut sources = sources.into_iter().map(Into::into).collect::<Vec<_>>();
+        sources.sort_unstable();
+        sources.dedup();
+        Self {
+            language_version: language_version.into(),
+            snapshot_digest: snapshot_digest.into(),
+            sources,
+        }
+    }
+
+    fn from_json(payload: Value) -> Result<Self, ArtifactBundleError> {
+        let mut object = payload.as_object().cloned().ok_or_else(|| {
+            ArtifactBundleError::Analysis("source analysis must be a JSON object".to_string())
+        })?;
+        let schema = object
+            .remove("$schema")
+            .and_then(|value| value.as_str().map(ToOwned::to_owned));
+        if schema.as_deref() != Some(SOURCE_ANALYSIS_SCHEMA) {
+            return Err(ArtifactBundleError::UnsupportedAnalysisSchema(
+                schema.unwrap_or_default(),
+            ));
+        }
+        serde_json::from_value(Value::Object(object))
+            .map_err(|error| ArtifactBundleError::Analysis(error.to_string()))
     }
 }
 
@@ -147,10 +222,14 @@ pub struct ArtifactBundle {
 }
 
 impl ArtifactBundle {
-    pub fn new(artifact: Vec<u8>, analysis: Value) -> Result<Self, ArtifactBundleError> {
+    /// Construct a Bundle from independently produced executable bytes and
+    /// versioned analysis evidence.
+    pub fn new(
+        artifact: Vec<u8>,
+        analysis: AnalysisEnvelopeV1,
+    ) -> Result<Self, ArtifactBundleError> {
         let envelope = BytecodeArtifact::from_bytes(&artifact)
             .map_err(|error| ArtifactBundleError::Artifact(error.to_string()))?;
-        let analysis = AnalysisEnvelopeV1::new(analysis)?;
         let analysis_bytes = canonical_json(analysis.payload())?;
         let manifest = BundleManifestV1 {
             schema: ARTIFACT_BUNDLE_SCHEMA.to_string(),
@@ -198,7 +277,7 @@ impl ArtifactBundle {
         }
         let analysis: Value = serde_json::from_slice(&analysis_bytes)
             .map_err(|error| ArtifactBundleError::Analysis(error.to_string()))?;
-        let analysis = AnalysisEnvelopeV1::new(analysis)?;
+        let analysis = AnalysisEnvelopeV1::from_json(analysis)?;
         validate_v1_json_encoding(
             analysis.payload(),
             &analysis_bytes,
@@ -525,7 +604,11 @@ mod tests {
             .unwrap();
         ArtifactBundle::new(
             artifact.to_bytes().unwrap(),
-            serde_json::json!({"$schema": SOURCE_ANALYSIS_SCHEMA}),
+            AnalysisEnvelopeV1::source(SourceAnalysisV1::new(
+                "0.1.0",
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                ["src/main.rss"],
+            )),
         )
         .unwrap()
     }
@@ -575,6 +658,19 @@ mod tests {
     }
 
     #[test]
+    fn source_analysis_rejects_unknown_fields_at_the_artifact_boundary() {
+        let error = AnalysisEnvelopeV1::from_json(serde_json::json!({
+            "$schema": SOURCE_ANALYSIS_SCHEMA,
+            "language_version": "0.1.0",
+            "snapshot_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "sources": ["src/main.rss"],
+            "unreviewed_extension": true,
+        }))
+        .expect_err("typed source analysis must reject unversioned fields");
+        assert!(matches!(error, ArtifactBundleError::Analysis(_)));
+    }
+
+    #[test]
     fn canonical_json_sorts_nested_object_keys_independently_of_insertion_order() {
         let left = serde_json::json!({
             "$schema": SOURCE_ANALYSIS_SCHEMA,
@@ -594,7 +690,10 @@ mod tests {
     fn bundle_rejects_equivalent_but_noncanonical_analysis_json() {
         let bundle = bundle();
         let manifest = canonical_json(&bundle.manifest).unwrap();
-        let noncanonical = format!(r#"{{"z":1,"$schema":"{}"}}"#, SOURCE_ANALYSIS_SCHEMA);
+        let noncanonical = format!(
+            r#"{{"sources":["src/main.rss"],"snapshot_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","language_version":"0.1.0","$schema":"{}"}}"#,
+            SOURCE_ANALYSIS_SCHEMA
+        );
         let mut bytes = ARTIFACT_BUNDLE_MAGIC.to_vec();
         put_length(&mut bytes, manifest.len()).unwrap();
         put_length(&mut bytes, bundle.artifact.len()).unwrap();

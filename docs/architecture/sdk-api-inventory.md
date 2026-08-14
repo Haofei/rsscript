@@ -30,7 +30,8 @@ snapshot path during migration.
   the shared workspace diagnostics path; it remains frontend-only and has no
   runtime or Provider dependency.
 - Artifact lifecycle: `BuiltArtifact`, `VerifiedArtifact`, `ArtifactBundle`,
-  `ArtifactVerifier`, `AnalysisEnvelopeV1`/`AnalysisSchemaV1`, provenance,
+  `ArtifactVerifier`, typed `SourceAnalysisV1`,
+  `AnalysisEnvelopeV1`/`AnalysisSchemaV1`, provenance,
   interface requirements, the versioned source and package analysis schema
   identifiers, and neutral semantic diff data,
   including structural external-call, public function ownership, call-graph,

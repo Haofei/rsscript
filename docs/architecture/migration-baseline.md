@@ -1331,7 +1331,10 @@ mechanical acceptance condition holds.
 - [x] **A06 — Ship Artifact Bundle, `rss verify`, and neutral `rss diff`.** Both
   single-file and package builds produce analysis/provenance-bound bundles. The
   persisted Bundle schema and integrity checks are owned by
-  `rsscript-artifact`; SDK only composes it into phase APIs.
+  `rsscript-artifact`; SDK only composes it into phase APIs. Direct
+  `source_analysis.v1` evidence is constructed and decoded through the
+  Artifact-owned `SourceAnalysisV1` model; package analysis remains an
+  explicitly bounded compatibility adapter pending its own typed schema.
 - [x] **A07 — Complete semantic diff evidence.** Add read/mut/take, retention and
   escape, resource acquire/transfer/cleanup, structured-task fan-out and
   cancellation, call graph/recursion, Provider requirements, and diagnostic
