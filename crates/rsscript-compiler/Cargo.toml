@@ -57,7 +57,6 @@ bytecode = ["lowering", "dep:rsscript-bytecode", "dep:rsscript-codegen-vm"]
 # lowering closure.
 package = [
     "bytecode",
-    "rsscript-lowering/legacy-exec-ir",
     "dep:rsscript-artifact-store",
     "dep:rsscript-artifact",
     "dep:fs2",
@@ -69,9 +68,14 @@ package = [
     "dep:toml",
     "dep:uuid",
 ]
+# The source-shaped executable representation is narrower than package
+# inspection/capture. Only legacy VM and AOT adapters need it; review and
+# package-analysis commands must remain able to inspect a project without
+# compiling the old IR closure.
+legacy-exec-ir = ["package", "rsscript-lowering/legacy-exec-ir"]
 # Historical execution consumers need both lowering and package compatibility
 # APIs. Reviewed SDK execution selects only `lowering`.
-execution = ["package"]
+execution = ["legacy-exec-ir"]
 # Rust source emission is an Experimental AOT backend. Keep it out of the
 # ordinary execution closure; callers must explicitly select it.
 aot-rust = ["execution"]

@@ -42,7 +42,11 @@ aot-rust = ["execution", "rsscript_compiler/aot-rust"]
 # Transitional source-shaped executable IR remains available only to the
 # migration corpus and legacy API surface. Reviewed execution consumes MIR
 # bytecode through the verifier and does not select this feature.
-legacy-exec-ir = ["execution", "rsscript-vm/legacy-exec-ir"]
+legacy-exec-ir = [
+    "execution",
+    "rsscript_compiler/legacy-exec-ir",
+    "rsscript-vm/legacy-exec-ir",
+]
 native-jit = ["compatibility", "rsscript-vm/native-jit"]
 
 [dependencies]

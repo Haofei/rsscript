@@ -1066,7 +1066,10 @@ mechanical acceptance condition holds.
   - [x] **V02.4 — Switch reviewed builds to the compiler bytecode boundary.**
     SDK source, interface, and package builds delegate checked HIR → MIR →
     `codegen-vm` Artifact emission to the compiler's VM-free `bytecode`
-    feature, then package the resulting provider-neutral Artifact. The SDK no
+    feature, then package the resulting provider-neutral Artifact. Package
+    inspection no longer selects the source-shaped executable IR at all; only
+    the explicit compiler `legacy-exec-ir` compatibility feature enables that
+    closure for legacy VM/AOT adapters. The SDK no
     longer owns a normal VM compile adapter or selects MIR/codegen crates
     directly. The legacy executable-IR fallback remains confined to the
     opt-in compatibility adapter for capabilities that MIR intentionally

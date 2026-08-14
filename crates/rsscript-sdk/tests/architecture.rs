@@ -1371,6 +1371,10 @@ fn rust_aot_lowering_is_explicitly_feature_gated() {
         .collect::<BTreeSet<_>>();
     assert!(cli_package_inspect.contains("execution"));
     assert!(cli_package_inspect.contains("rsscript-compiler/package"));
+    assert!(
+        !cli_package_inspect.contains("rsscript-compiler/legacy-exec-ir"),
+        "package inspection must not opt into the legacy executable IR"
+    );
     let cli_aot = cli["features"]["aot-rust"]
         .as_array()
         .expect("CLI aot-rust feature should be declared")
@@ -2854,13 +2858,12 @@ fn complete_frontend_checker_is_owned_by_semantics() {
     let compiler = root.join("crates/rsscript-compiler/src");
     let semantics = root.join("crates/rsscript-semantics/src");
 
-    for obsolete in [compiler.join("analyzer.rs")] {
-        assert!(
-            !obsolete.exists(),
-            "compiler must not retain frontend-checker implementation at {}",
-            obsolete.display()
-        );
-    }
+    let obsolete = compiler.join("analyzer.rs");
+    assert!(
+        !obsolete.exists(),
+        "compiler must not retain frontend-checker implementation at {}",
+        obsolete.display()
+    );
     assert!(
         rust_files_below(&compiler.join("checks")).is_empty(),
         "compiler must not retain frontend-checker source below checks/"
@@ -3460,12 +3463,20 @@ fn default_compiler_lowering_excludes_the_legacy_executable_ir_crate() {
         "compiler must not inherit the lowering compatibility default"
     );
     assert!(
-        compiler["features"]["package"]
+        !compiler["features"]["package"]
             .as_array()
             .is_some_and(|items| items
                 .iter()
                 .any(|item| item.as_str() == Some("rsscript-lowering/legacy-exec-ir"))),
-        "only compiler package compatibility may enable executable-IR lowering"
+        "package inspection must not enable source-shaped executable IR"
+    );
+    assert!(
+        compiler["features"]["legacy-exec-ir"]
+            .as_array()
+            .is_some_and(|items| items
+                .iter()
+                .any(|item| item.as_str() == Some("rsscript-lowering/legacy-exec-ir"))),
+        "only the explicit compiler legacy feature may enable executable-IR lowering"
     );
 }
 
@@ -3606,7 +3617,15 @@ fn compiler_default_dependency_closure_is_host_neutral() {
         .iter()
         .filter_map(toml::Value::as_str)
         .collect::<BTreeSet<_>>();
-    assert!(execution.contains("package"));
+    assert!(execution.contains("legacy-exec-ir"));
+    let legacy_exec = manifest["features"]["legacy-exec-ir"]
+        .as_array()
+        .expect("compiler legacy executable-IR feature should be declared")
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .collect::<BTreeSet<_>>();
+    assert!(legacy_exec.contains("package"));
+    assert!(legacy_exec.contains("rsscript-lowering/legacy-exec-ir"));
     let selfhost = manifest["features"]["selfhost-parity"]
         .as_array()
         .expect("compiler self-host feature should be declared")
