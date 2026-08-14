@@ -270,10 +270,16 @@ fn render_rust_type(
         WireType::Int { .. } => "i64".into(),
         WireType::Float { .. } => "f64".into(),
         WireType::String => "String".into(),
+        WireType::Char => "char".into(),
         WireType::Bytes => "Vec<u8>".into(),
         WireType::List { element } => {
             format!("Vec<{}>", render_rust_type(element, resources, records))
         }
+        WireType::Map { key, value } => format!(
+            "Vec<({}, {})>",
+            render_rust_type(key, resources, records),
+            render_rust_type(value, resources, records)
+        ),
         WireType::Option { value } => {
             format!("Option<{}>", render_rust_type(value, resources, records))
         }
@@ -420,8 +426,14 @@ fn wire_type_source(ty: &WireType) -> String {
         WireType::Int { .. } => "Int".into(),
         WireType::Float { .. } => "Float".into(),
         WireType::String => "String".into(),
+        WireType::Char => "Char".into(),
         WireType::Bytes => "Bytes".into(),
         WireType::List { element } => format!("List<{}>", wire_type_source(element)),
+        WireType::Map { key, value } => format!(
+            "Map<{}, {}>",
+            wire_type_source(key),
+            wire_type_source(value)
+        ),
         WireType::Option { value } => format!("Option<{}>", wire_type_source(value)),
         WireType::Result { ok, error } => format!(
             "Result<{}, {}>",
@@ -482,10 +494,16 @@ fn render_wire_type(ty: &WireType) -> String {
             format!("rsscript_abi_model::WireType::Float {{ bits: {bits} }}")
         }
         WireType::String => "rsscript_abi_model::WireType::String".into(),
+        WireType::Char => "rsscript_abi_model::WireType::Char".into(),
         WireType::Bytes => "rsscript_abi_model::WireType::Bytes".into(),
         WireType::List { element } => format!(
             "rsscript_abi_model::WireType::List {{ element: Box::new({}) }}",
             render_wire_type(element)
+        ),
+        WireType::Map { key, value } => format!(
+            "rsscript_abi_model::WireType::Map {{ key: Box::new({}), value: Box::new({}) }}",
+            render_wire_type(key),
+            render_wire_type(value)
         ),
         WireType::Option { value } => format!(
             "rsscript_abi_model::WireType::Option {{ value: Box::new({}) }}",
@@ -661,6 +679,29 @@ mod tests {
         assert!(generated.contains("ty: \"String\".into()"));
         assert!(generated.contains("result: \"Option<Int>\".into()"));
         assert!(!generated.contains("ty: \"rsscript_abi_model::WireType"));
+    }
+
+    #[test]
+    fn generated_provider_contract_maps_char_and_map_without_dynamic_values() {
+        let descriptor = InterfaceDescriptorV1::from_interface_source(
+            "test.rssi",
+            "module host.test\npub fn transform(entries: read Map<String, Char>) -> Char\n",
+        )
+        .unwrap();
+        let generated = ProviderInterface::from_descriptor(descriptor)
+            .unwrap()
+            .render_rust(&RustProviderOptions {
+                provider_id: "rsscript.test",
+                blocking: GeneratedBlocking::NonBlocking,
+                cancellation: GeneratedCancellation::NotApplicable,
+                thread_safe: true,
+                reentrant: true,
+                cleanup: GeneratedCleanup::None,
+            });
+        assert!(generated.contains("entries: Vec<(String, char)>"));
+        assert!(generated.contains("-> Result<char"));
+        assert!(generated.contains("ty: \"Map<String, Char>\".into()"));
+        assert!(generated.contains("result: \"Char\".into()"));
     }
 
     #[test]

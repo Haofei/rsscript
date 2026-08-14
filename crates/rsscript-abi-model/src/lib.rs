@@ -191,6 +191,10 @@ impl WireCallTypeTable {
             WireType::List { element }
             | WireType::Option { value: element }
             | WireType::Qualified { value: element, .. } => self.insert(element)?,
+            WireType::Map { key, value } => {
+                self.insert(key)?;
+                self.insert(value)?;
+            }
             WireType::Result { ok, error } => {
                 self.insert(ok)?;
                 self.insert(error)?;
@@ -210,6 +214,7 @@ impl WireCallTypeTable {
             | WireType::Int { .. }
             | WireType::Float { .. }
             | WireType::String
+            | WireType::Char
             | WireType::Bytes
             | WireType::Resource { .. }
             | WireType::Handle { .. } => {}
@@ -257,12 +262,20 @@ pub enum WireValue {
     String {
         value: String,
     },
+    Char {
+        value: char,
+    },
     Bytes {
         value: Vec<u8>,
     },
     List {
         element_type: WireTypeId,
         values: Vec<WireValue>,
+    },
+    Map {
+        key_type: WireTypeId,
+        value_type: WireTypeId,
+        entries: Vec<(WireValue, WireValue)>,
     },
     Tuple {
         values: Vec<WireValue>,
@@ -294,8 +307,15 @@ impl WireValue {
                 Self::Bool { .. } => total = total.saturating_add(1),
                 Self::Int { .. } | Self::Float { .. } => total = total.saturating_add(8),
                 Self::String { value } => total = total.saturating_add(value.len()),
+                Self::Char { value } => total = total.saturating_add(value.len_utf8()),
                 Self::Bytes { value } => total = total.saturating_add(value.len()),
                 Self::List { values, .. } | Self::Tuple { values } => pending.extend(values),
+                Self::Map { entries, .. } => {
+                    for (key, value) in entries {
+                        pending.push(key);
+                        pending.push(value);
+                    }
+                }
                 Self::Record { fields, .. } => pending.extend(fields),
                 Self::Variant { payload, .. } => pending.extend(payload.as_deref()),
                 Self::Resource { .. } => {
@@ -322,9 +342,14 @@ pub enum WireType {
         bits: u16,
     },
     String,
+    Char,
     Bytes,
     List {
         element: Box<WireType>,
+    },
+    Map {
+        key: Box<WireType>,
+        value: Box<WireType>,
     },
     Option {
         value: Box<WireType>,
@@ -387,6 +412,7 @@ impl WireType {
             }
             "Float" => return Self::Float { bits: 64 },
             "String" => return Self::String,
+            "Char" => return Self::Char,
             "Bytes" => return Self::Bytes,
             _ => {}
         }
@@ -408,6 +434,10 @@ impl WireType {
         match (root, arguments.as_slice()) {
             ("List", [element]) => Self::List {
                 element: Box::new(element.clone()),
+            },
+            ("Map", [key, value]) => Self::Map {
+                key: Box::new(key.clone()),
+                value: Box::new(value.clone()),
             },
             ("Option", [value]) => Self::Option {
                 value: Box::new(value.clone()),
@@ -654,6 +684,15 @@ mod tests {
                 }),
             }
         );
+        assert_eq!(
+            WireType::parse("Map<String, List<Char>>"),
+            WireType::Map {
+                key: Box::new(WireType::String),
+                value: Box::new(WireType::List {
+                    element: Box::new(WireType::Char),
+                }),
+            }
+        );
     }
 
     #[test]
@@ -738,6 +777,23 @@ mod tests {
             WireCallTypeTable::result_err_variant(),
             WireVariantId::new(1)
         );
+    }
+
+    #[test]
+    fn call_type_table_interns_map_key_and_value_before_the_map() {
+        let map = WireType::Map {
+            key: Box::new(WireType::String),
+            value: Box::new(WireType::Char),
+        };
+        let table = WireCallTypeTable::for_signature(&FunctionSignature {
+            parameters: Vec::new(),
+            result: map.clone(),
+            asynchronous: false,
+        })
+        .expect("map signature builds a wire type table");
+        assert_eq!(table.type_id(&WireType::String), Some(WireTypeId::new(0)));
+        assert_eq!(table.type_id(&WireType::Char), Some(WireTypeId::new(1)));
+        assert_eq!(table.type_id(&map), Some(WireTypeId::new(2)));
     }
 
     #[test]

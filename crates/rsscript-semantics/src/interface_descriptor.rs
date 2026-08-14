@@ -299,6 +299,10 @@ fn qualify_local_interface_type(
         WireType::List { element } => WireType::List {
             element: Box::new(qualify_local_interface_type(*element, module, local_types)),
         },
+        WireType::Map { key, value } => WireType::Map {
+            key: Box::new(qualify_local_interface_type(*key, module, local_types)),
+            value: Box::new(qualify_local_interface_type(*value, module, local_types)),
+        },
         WireType::Option { value } => WireType::Option {
             value: Box::new(qualify_local_interface_type(*value, module, local_types)),
         },

@@ -3068,9 +3068,14 @@ fn checked_type_to_wire(
                 },
                 ("Float", []) => WireType::Float { bits: 64 },
                 ("String", []) => WireType::String,
+                ("Char", []) => WireType::Char,
                 ("Bytes", []) => WireType::Bytes,
                 ("List", [element]) => WireType::List {
                     element: Box::new(element.clone()),
+                },
+                ("Map", [key, value]) => WireType::Map {
+                    key: Box::new(key.clone()),
+                    value: Box::new(value.clone()),
                 },
                 ("Option", [value]) => WireType::Option {
                     value: Box::new(value.clone()),
@@ -3139,8 +3144,10 @@ fn resource_type_name_from_wire(wire: &WireType) -> Option<String> {
         | WireType::Int { .. }
         | WireType::Float { .. }
         | WireType::String
+        | WireType::Char
         | WireType::Bytes
         | WireType::List { .. }
+        | WireType::Map { .. }
         | WireType::Option { .. }
         | WireType::Result { .. }
         | WireType::Tuple { .. } => None,

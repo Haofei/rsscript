@@ -1387,8 +1387,8 @@ mechanical acceptance condition holds.
     The reference VM now admits descriptor-linked synchronous scalar
     `WireValue` Providers (`Unit`, booleans, integer, float, string, bytes)
     without routing their callable through `NativeInterpreterFn`. A
-    descriptor-scoped, deterministic type table now also bridges `List<T>`,
-    tuples, `Option<T>`, and `Result<T, E>`: both the VM adapter and Provider
+    descriptor-scoped, deterministic type table now also bridges `Char`,
+    `List<T>`, `Map<K, V>`, tuples, `Option<T>`, and `Result<T, E>`: both the VM adapter and Provider
     derive numeric identities from the exact linked signature, and mismatched
     element/type/variant identities fail closed. Provider descriptors now carry
     canonical named-record layouts, including declaration-order field names and

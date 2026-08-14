@@ -124,8 +124,14 @@ fn legacy_signature_type(ty: &rsscript_abi_model::WireType) -> String {
         WireType::Int { .. } => "Int".to_owned(),
         WireType::Float { .. } => "Float".to_owned(),
         WireType::String => "String".to_owned(),
+        WireType::Char => "Char".to_owned(),
         WireType::Bytes => "Bytes".to_owned(),
         WireType::List { element } => format!("List<{}>", legacy_signature_type(element)),
+        WireType::Map { key, value } => format!(
+            "Map<{}, {}>",
+            legacy_signature_type(key),
+            legacy_signature_type(value)
+        ),
         WireType::Option { value } => format!("Option<{}>", legacy_signature_type(value)),
         WireType::Result { ok, error } => format!(
             "Result<{}, {}>",

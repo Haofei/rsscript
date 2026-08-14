@@ -121,10 +121,10 @@ fn check_payload_budget(
 
 /// Convert the subset with an unambiguous legacy VM representation to the
 /// canonical Provider wire model. The type table is derived from the linked
-/// function signature, so list and option identities are shared with the
-/// Provider without fabricating an Artifact-wide record layout. Named records,
-/// resources, maps, JSON and chars remain fail-closed until that wider table is
-/// available.
+/// function signature, so aggregate identities are shared with the Provider
+/// without fabricating an Artifact-wide record layout. Named records use the
+/// descriptor-supplied layouts; JSON and resources remain fail-closed until
+/// their Artifact-wide lifecycle/extension adapters are available.
 fn native_to_wire(
     value: NativeValue,
     expected: &WireType,
@@ -136,6 +136,7 @@ fn native_to_wire(
         (NativeValue::Int(value), WireType::Int { .. }) => Ok(WireValue::Int { value }),
         (NativeValue::Float(value), WireType::Float { .. }) => Ok(WireValue::Float { value }),
         (NativeValue::String(value), WireType::String) => Ok(WireValue::String { value }),
+        (NativeValue::Char(value), WireType::Char) => Ok(WireValue::Char { value }),
         (NativeValue::Bytes(value), WireType::Bytes) => Ok(WireValue::Bytes { value }),
         (NativeValue::List(values), WireType::List { element }) => {
             let element_type = type_id(types, element)?;
@@ -146,6 +147,24 @@ fn native_to_wire(
             Ok(WireValue::List {
                 element_type,
                 values,
+            })
+        }
+        (NativeValue::Map(entries), WireType::Map { key, value }) => {
+            let key_type = type_id(types, key)?;
+            let value_type = type_id(types, value)?;
+            let entries = entries
+                .into_iter()
+                .map(|(entry_key, entry_value)| {
+                    Ok((
+                        native_to_wire(entry_key, key, types)?,
+                        native_to_wire(entry_value, value, types)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, ProviderError>>()?;
+            Ok(WireValue::Map {
+                key_type,
+                value_type,
+                entries,
             })
         }
         (NativeValue::List(values), WireType::Tuple { elements }) => {
@@ -251,6 +270,7 @@ fn native_to_wire(
             | WireType::Int { .. }
             | WireType::Float { .. }
             | WireType::String
+            | WireType::Char
             | WireType::Bytes,
         ) => Err(ProviderError::invalid_argument(
             "provider wire argument does not match its linked scalar signature",
@@ -272,6 +292,7 @@ fn wire_to_native(
         (WireValue::Int { value }, WireType::Int { .. }) => Ok(NativeValue::Int(value)),
         (WireValue::Float { value }, WireType::Float { .. }) => Ok(NativeValue::Float(value)),
         (WireValue::String { value }, WireType::String) => Ok(NativeValue::String(value)),
+        (WireValue::Char { value }, WireType::Char) => Ok(NativeValue::Char(value)),
         (WireValue::Bytes { value }, WireType::Bytes) => Ok(NativeValue::Bytes(value)),
         (
             WireValue::List {
@@ -284,6 +305,23 @@ fn wire_to_native(
             .map(|value| wire_to_native(value, element, types))
             .collect::<Result<Vec<_>, _>>()
             .map(NativeValue::List),
+        (
+            WireValue::Map {
+                key_type,
+                value_type,
+                entries,
+            },
+            WireType::Map { key, value },
+        ) if key_type == type_id(types, key)? && value_type == type_id(types, value)? => entries
+            .into_iter()
+            .map(|(entry_key, entry_value)| {
+                Ok((
+                    wire_to_native(entry_key, key, types)?,
+                    wire_to_native(entry_value, value, types)?,
+                ))
+            })
+            .collect::<Result<Vec<_>, ProviderError>>()
+            .map(NativeValue::Map),
         (WireValue::Tuple { values }, WireType::Tuple { elements }) => {
             if values.len() != elements.len() {
                 return Err(ProviderError::invalid_argument(
@@ -409,6 +447,7 @@ fn wire_to_native(
             | WireType::Int { .. }
             | WireType::Float { .. }
             | WireType::String
+            | WireType::Char
             | WireType::Bytes,
         ) => Err(ProviderError::invalid_argument(
             "provider wire result does not match its linked scalar signature",
@@ -1341,6 +1380,57 @@ mod provider_contract_tests {
         assert_eq!(
             wire_to_native(wire, &list, &types).unwrap(),
             NativeValue::List(vec![NativeValue::Int(1), NativeValue::Int(2)])
+        );
+    }
+
+    #[test]
+    fn descriptor_type_table_adapts_char_and_map_values() {
+        let map = WireType::Map {
+            key: Box::new(WireType::String),
+            value: Box::new(WireType::Char),
+        };
+        let signature = FunctionSignature {
+            parameters: vec![rsscript_abi_model::ParameterSignature {
+                name: "entries".into(),
+                effect: rsscript_abi_model::DataEffect::Read,
+                ty: map.clone(),
+                retained: false,
+            }],
+            result: WireType::Char,
+            asynchronous: false,
+        };
+        let types = WireCallTypeTable::for_signature(&signature).unwrap();
+        let value = NativeValue::Map(vec![
+            (NativeValue::String("left".into()), NativeValue::Char('a')),
+            (NativeValue::String("right".into()), NativeValue::Char('z')),
+        ]);
+        let wire = native_to_wire(value.clone(), &map, &types)
+            .expect("descriptor-derived map identities bridge the legacy adapter");
+        assert_eq!(
+            wire,
+            WireValue::Map {
+                key_type: types.type_id(&WireType::String).unwrap(),
+                value_type: types.type_id(&WireType::Char).unwrap(),
+                entries: vec![
+                    (
+                        WireValue::String {
+                            value: "left".into()
+                        },
+                        WireValue::Char { value: 'a' },
+                    ),
+                    (
+                        WireValue::String {
+                            value: "right".into()
+                        },
+                        WireValue::Char { value: 'z' },
+                    ),
+                ],
+            }
+        );
+        assert_eq!(
+            wire_to_native(wire, &map, &types).unwrap(),
+            value,
+            "map adapter preserves declaration-order entries and Char values"
         );
     }
 
