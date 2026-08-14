@@ -144,7 +144,6 @@ impl SourceAnalysisV1 {
     ) -> Self {
         let mut sources = sources.into_iter().map(Into::into).collect::<Vec<_>>();
         sources.sort_unstable();
-        sources.dedup();
         Self {
             language_version: language_version.into(),
             snapshot_digest: snapshot_digest.into(),
@@ -668,6 +667,20 @@ mod tests {
         }))
         .expect_err("typed source analysis must reject unversioned fields");
         assert!(matches!(error, ArtifactBundleError::Analysis(_)));
+    }
+
+    #[test]
+    fn source_analysis_preserves_the_complete_compiler_input_listing() {
+        let source = SourceAnalysisV1::new(
+            "0.1.0",
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ["src/main.rss", "src/main.rss"],
+        );
+        let envelope = AnalysisEnvelopeV1::source(source);
+        assert_eq!(
+            envelope.payload()["sources"],
+            serde_json::json!(["src/main.rss", "src/main.rss"])
+        );
     }
 
     #[test]

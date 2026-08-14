@@ -19,6 +19,11 @@ uses that typed constructor before a Bundle is created. Bundle readers decode a
 source-analysis section through the same type and reject unknown or malformed
 fields before accepting its canonical encoding.
 
+The source list preserves the complete compiler input listing rather than
+silently deduplicating it. Input normalization and duplicate-path rejection are
+loader/compiler responsibilities; evidence must not rewrite the input it
+describes.
+
 Package analysis remains a JSON-shaped migration adapter behind the known
 `Package` schema. This ADR does not claim that package analysis is fully typed,
 does not change the Bundle v1 container, and does not add policy or authority
