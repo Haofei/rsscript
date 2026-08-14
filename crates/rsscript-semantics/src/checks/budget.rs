@@ -1,4 +1,4 @@
-//! Transitional compiler aliases for the semantic-owned frontend budget.
+//! Frontend budget aliases used by the migrated semantic checker.
 //!
 //! Frontend completion and diagnostic-budget behavior now belongs to
 //! `rsscript-semantics`; compiler checks retain these aliases only while their

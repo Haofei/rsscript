@@ -1,3 +1,4 @@
+#[allow(unused_imports)]
 pub(crate) use rsscript_semantics::hir::*;
 
 #[cfg(test)]

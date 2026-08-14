@@ -1697,7 +1697,6 @@ dependencies = [
 name = "rss-lsp"
 version = "0.1.0"
 dependencies = [
- "rsscript-compiler",
  "rsscript-language-service",
  "rsscript-operation",
  "rsscript-workspace-loader",
@@ -1850,7 +1849,6 @@ version = "0.1.0"
 name = "rsscript-language-service"
 version = "0.1.0"
 dependencies = [
- "rsscript-compiler",
  "rsscript-diagnostics",
  "rsscript-operation",
  "rsscript-semantics",
@@ -2058,6 +2056,7 @@ dependencies = [
  "rsscript-operation",
  "rsscript-source-model",
  "rsscript-syntax",
+ "rsscript-text",
  "rsscript-work-budget",
  "serde",
  "serde_json",

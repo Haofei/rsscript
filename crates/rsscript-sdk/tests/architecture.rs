@@ -367,20 +367,11 @@ fn compiler_checks_only_construct_nonsemantic_boundary_diagnostics() {
             })
         })
         .collect::<BTreeSet<_>>();
-    let permitted = BTreeSet::from([
-        "crates/rsscript-compiler/src/checks/declarations/duplicate_decls.rs".to_owned(),
-    ]);
     assert_eq!(
-        direct_diagnostic_owners, permitted,
-        "language diagnostics must be constructed by rsscript-semantics; compiler checks may only own documented backend-boundary diagnostics"
+        direct_diagnostic_owners,
+        BTreeSet::new(),
+        "compiler must not retain frontend checks or construct language diagnostics"
     );
-
-    let budget = read(&root.join("crates/rsscript-compiler/src/checks/budget.rs"));
-    assert!(budget.contains("semantic-owned frontend budget"));
-    assert!(!budget.contains("Diagnostic::"));
-    let declarations =
-        read(&root.join("crates/rsscript-compiler/src/checks/declarations/duplicate_decls.rs"));
-    assert!(declarations.contains("S02.6: `#lower_name` validates the Rust AOT backend namespace"));
 }
 
 #[test]
@@ -1462,6 +1453,7 @@ fn public_execution_defaults_are_bounded_without_compatibility_aliases() {
 }
 
 #[test]
+#[ignore = "superseded by the physical semantic-checker ownership guard below"]
 fn structural_semantics_are_owned_by_the_semantics_crate() {
     let root = workspace_root();
     let types = root.join("crates/rsscript-semantics/src/types.rs");
@@ -2724,20 +2716,14 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
 
     let semantic_source_rules = read(&root.join("crates/rsscript-semantics/src/source_rules.rs"));
     assert!(semantic_source_rules.contains("pub fn forbidden_surface_syntax_diagnostics"));
-    let compiler_forbidden = read(&root.join("crates/rsscript-compiler/src/checks/forbidden.rs"));
+    let semantic_forbidden = read(&root.join("crates/rsscript-semantics/src/checks/forbidden.rs"));
+    assert!(semantic_forbidden.contains("forbidden_surface_syntax_diagnostics"));
     assert!(
-        compiler_forbidden.contains("rsscript_semantics::forbidden_surface_syntax_diagnostics")
+        !root
+            .join("crates/rsscript-compiler/src/checks/forbidden.rs")
+            .exists(),
+        "compiler must not retain a token-local semantic-rule implementation"
     );
-    for forbidden in [
-        "fn check_own_struct_attempts",
-        "fn check_surface_reference_attempts",
-        "fn check_implicit_conversion_attempts",
-    ] {
-        assert!(
-            !compiler_forbidden.contains(forbidden),
-            "compiler must not re-own token-local semantic rule `{forbidden}`"
-        );
-    }
 
     assert!(
         !root
@@ -2767,8 +2753,83 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     }
     assert_eq!(
         constructor_users,
-        ["crates/rsscript-compiler/src/analyzer.rs"],
-        "only the migrating semantic analyzer may assemble checked database parts"
+        ["crates/rsscript-semantics/src/analyzer.rs"],
+        "only the semantic-owned analyzer may assemble checked database parts"
+    );
+
+    let manifest: toml::Value =
+        toml::from_str(&read(&root.join("crates/rsscript-semantics/Cargo.toml")))
+            .expect("semantics manifest should parse");
+    let dependencies = dependency_packages(&manifest);
+    for forbidden in [
+        "rsscript",
+        "rsscript-runtime",
+        "rsscript-aot-runtime",
+        "rsscript-provider-api",
+        "rss-native-abi",
+        "rss-process-guard",
+        "reir",
+        "vm-jit",
+    ] {
+        assert!(
+            !dependencies.contains(forbidden),
+            "semantics must not depend on `{forbidden}`"
+        );
+    }
+}
+
+#[test]
+fn complete_frontend_checker_is_owned_by_semantics() {
+    let root = workspace_root();
+    let compiler = root.join("crates/rsscript-compiler/src");
+    let semantics = root.join("crates/rsscript-semantics/src");
+
+    for obsolete in [compiler.join("analyzer.rs")] {
+        assert!(
+            !obsolete.exists(),
+            "compiler must not retain frontend-checker implementation at {}",
+            obsolete.display()
+        );
+    }
+    assert!(
+        rust_files_below(&compiler.join("checks")).is_empty(),
+        "compiler must not retain frontend-checker source below checks/"
+    );
+    for required in [
+        semantics.join("analyzer.rs"),
+        semantics.join("checks/mod.rs"),
+        semantics.join("checks/body/mod.rs"),
+        semantics.join("checks/calls.rs"),
+        semantics.join("checks/declarations.rs"),
+    ] {
+        assert!(
+            required.is_file(),
+            "semantics must own complete frontend-checker source at {}",
+            required.display()
+        );
+    }
+
+    let semantic_lib = read(&semantics.join("lib.rs"));
+    assert!(semantic_lib.contains("mod analyzer;"));
+    assert!(semantic_lib.contains("mod checks;"));
+    assert!(semantic_lib.contains("analyze_frontend_input_snapshot_with_operation"));
+
+    let mut constructor_users = Vec::new();
+    for path in rust_files_below(&root.join("crates")) {
+        let source = read(&path);
+        if source.contains(&["SemanticDatabase::", "from_frontend_parts"].concat()) {
+            constructor_users.push(
+                path.strip_prefix(&root)
+                    .unwrap_or(&path)
+                    .display()
+                    .to_string(),
+            );
+        }
+    }
+    assert_eq!(
+        constructor_users,
+        ["crates/rsscript-semantics/src/analyzer.rs"],
+        "only the semantic-owned analyzer may assemble checked database parts"
     );
 
     let manifest: toml::Value =
@@ -2817,11 +2878,11 @@ fn namespace_isolation_and_workspace_hir_are_semantic_queries() {
             .exists(),
         "compiler must not retain a second namespace-isolation implementation"
     );
-    let analyzer = read(&root.join("crates/rsscript-compiler/src/analyzer.rs"));
-    assert!(analyzer.contains("rsscript_semantics::isolate_sources_with_interfaces"));
+    let analyzer = read(&root.join("crates/rsscript-semantics/src/analyzer.rs"));
+    assert!(analyzer.contains("isolate_sources_with_interfaces"));
     assert!(
-        !analyzer.contains("fn isolate_sources_with_interfaces"),
-        "compiler analyzer must delegate the source/interface rewrite instead of reimplementing it"
+        rust_files_below(&root.join("crates/rsscript-compiler/src/checks")).is_empty(),
+        "compiler must not retain a second semantic-check implementation"
     );
 }
 

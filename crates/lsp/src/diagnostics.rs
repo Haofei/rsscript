@@ -12,15 +12,14 @@ use crate::documents::*;
 use crate::text::*;
 use crate::workspace::*;
 
-/// Transitional composition-root adapter for the full compiler diagnostic
-/// pipeline. `rsscript-language-service` owns the revisioned workspace and
-/// cache; the LSP is the only application that selects this compiler-backed
-/// implementation until the remaining queries move into semantics.
-pub(crate) fn compiler_workspace_diagnostics(
+/// Semantic-owned full workspace diagnostic query. `rsscript-language-service`
+/// owns the revisioned workspace and cache; the LSP only supplies documents and
+/// protocol adaptation.
+pub(crate) fn semantic_workspace_diagnostics(
     input: &FrontendInputSnapshot,
     operation: &OperationContext,
 ) -> Result<Vec<RsDiagnostic>, rsscript_operation::OperationAbort> {
-    rsscript_compiler::analyze_frontend_input_snapshot_with_operation(input, operation)
+    rsscript_language_service::analyze_frontend_input_snapshot_with_operation(input, operation)
 }
 
 #[cfg(test)]
@@ -43,7 +42,7 @@ pub(crate) fn diagnostics_for_uri_cancellable(
         return None;
     }
     let Some(package_root) = package_root_for_uri(uri) else {
-        let mut service = LanguageService::new(compiler_workspace_diagnostics);
+        let mut service = LanguageService::new(semantic_workspace_diagnostics);
         service.set_file(
             uri.path(),
             document.revision,
@@ -94,7 +93,7 @@ pub(crate) fn lsp_diagnostics_from_diagnostics(
 
 #[cfg(test)]
 pub(crate) fn single_file_diagnostics(path: &str, text: &str) -> Vec<RsDiagnostic> {
-    let mut service = LanguageService::new(compiler_workspace_diagnostics);
+    let mut service = LanguageService::new(semantic_workspace_diagnostics);
     service.set_file(path, 1, document_kind_for_path(path), Arc::from(text));
     service.workspace_diagnostics()
 }
@@ -103,7 +102,7 @@ pub(crate) fn package_frontend_diagnostics_cancellable(
     documents: &[WorkspaceDocument],
     cancelled: &mut impl FnMut() -> bool,
 ) -> Option<Vec<RsDiagnostic>> {
-    let mut service = LanguageService::new(compiler_workspace_diagnostics);
+    let mut service = LanguageService::new(semantic_workspace_diagnostics);
     for document in documents {
         if cancelled() {
             return None;

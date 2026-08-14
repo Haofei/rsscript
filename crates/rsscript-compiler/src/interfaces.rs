@@ -1,5 +1,6 @@
 //! Compatibility façade over the platform-neutral interface catalog.
 
+#[allow(unused_imports)]
 pub(crate) use rsscript_interface_catalog::{CORE_INTERFACES, STANDARD_PACKAGE_INTERFACES};
 
 #[cfg(feature = "lowering")]
@@ -23,6 +24,7 @@ pub(crate) fn interface_catalog_digest() -> String {
 pub(crate) use rsscript_interface_catalog::builtin_interfaces;
 
 #[cfg(not(test))]
+#[allow(unused_imports)]
 pub(crate) use rsscript_interface_catalog::default_interfaces;
 #[cfg(all(not(test), feature = "package"))]
 pub(crate) use rsscript_interface_catalog::standard_package_interfaces;
@@ -49,4 +51,5 @@ pub(crate) fn standard_package_interfaces() -> impl Iterator<Item = (&'static st
 // plain `cargo test` remains a valid Core gate instead of referencing a module
 // compiled only under the optional execution feature.
 #[cfg(all(test, not(feature = "package")))]
+#[allow(unused_imports)]
 pub(crate) use rsscript_interface_catalog::default_interfaces;

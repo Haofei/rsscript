@@ -4,8 +4,11 @@
 /// output caches whenever the implementation inputs change.
 pub const COMPILED_CACHE_FINGERPRINT: &str = env!("RSSCRIPT_COMPILED_CACHE_FINGERPRINT");
 
-mod analyzer;
-mod checks;
+mod analyzer {
+    //! Transitional compiler-local path for callers that have not yet moved to
+    //! the semantic-owned frontend query API.
+    pub(crate) use rsscript_semantics::*;
+}
 #[cfg(feature = "lowering")]
 mod compiler_output;
 mod core_index;
@@ -42,6 +45,7 @@ pub mod syntax;
 mod test_interfaces;
 #[allow(dead_code)]
 mod text_util {
+    #[allow(unused_imports)]
     pub(crate) use rsscript_text::*;
 }
 #[cfg(all(test, feature = "execution", feature = "selfhost-parity"))]
@@ -66,19 +70,6 @@ mod vm_adapter {
 #[cfg(all(test, feature = "execution", feature = "selfhost-parity"))]
 use rsscript_vm::RegVmExecutable;
 
-pub use analyzer::{
-    analyze_frontend_input_snapshot_with_operation, analyze_source, analyze_source_result,
-    analyze_source_result_with_operation, analyze_source_with_core, analyze_source_with_interfaces,
-    analyze_source_with_interfaces_result, analyze_source_with_interfaces_result_with_operation,
-    analyze_source_with_interfaces_without_core, analyze_source_without_core,
-    analyze_sources_with_interfaces, analyze_sources_with_interfaces_result,
-    analyze_sources_with_interfaces_result_with_operation,
-    analyze_sources_with_interfaces_without_core,
-    analyze_sources_with_interfaces_without_core_result, analyze_syntax_source, core_interfaces,
-    standard_package_interfaces, validate_source, validate_source_with_operation,
-    validate_sources_with_interfaces, validate_sources_with_interfaces_with_operation,
-    validate_sources_with_interfaces_without_core,
-};
 #[cfg(all(feature = "lowering", feature = "package"))]
 pub use compiler_output::compile_package_input_to_ir;
 #[cfg(feature = "bytecode")]
@@ -103,6 +94,19 @@ pub use generate::{
 pub use lint::lint_source;
 #[cfg(feature = "execution")]
 pub use lower_names::lowered_symbol_name;
+pub use rsscript_semantics::{
+    analyze_frontend_input_snapshot_with_operation, analyze_source, analyze_source_result,
+    analyze_source_result_with_operation, analyze_source_with_core, analyze_source_with_interfaces,
+    analyze_source_with_interfaces_result, analyze_source_with_interfaces_result_with_operation,
+    analyze_source_with_interfaces_without_core, analyze_source_without_core,
+    analyze_sources_with_interfaces, analyze_sources_with_interfaces_result,
+    analyze_sources_with_interfaces_result_with_operation,
+    analyze_sources_with_interfaces_without_core,
+    analyze_sources_with_interfaces_without_core_result, analyze_syntax_source, core_interfaces,
+    standard_package_interfaces, validate_source, validate_source_with_operation,
+    validate_sources_with_interfaces, validate_sources_with_interfaces_with_operation,
+    validate_sources_with_interfaces_without_core,
+};
 
 /// Explicit migration-only APIs for package persistence, review presentation,
 /// and Rust AOT emission.

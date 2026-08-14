@@ -24,7 +24,6 @@ use crate::syntax::ast::{
 };
 
 mod assign;
-mod derives;
 mod diagnostics;
 mod exhaustiveness;
 mod resource_types;
@@ -760,7 +759,7 @@ mod entrypoint_tests {
         );
     }
 
-    fn assert_incomplete_cause(diagnostics: &[crate::Diagnostic], expected: &str) {
+    fn assert_incomplete_cause(diagnostics: &[crate::diagnostic::Diagnostic], expected: &str) {
         let incomplete = diagnostics
             .iter()
             .find(|diagnostic| diagnostic.code == code::ANALYSIS_INCOMPLETE)

@@ -18,7 +18,8 @@ pub use rsscript_diagnostics::{
 };
 pub use rsscript_semantics::{
     CompilationSession, Definition, FrontendInputSnapshot, Reference, RssDocumentSymbol,
-    SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup, WorkspaceDiagnosticQuery, document_symbols,
+    SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup, WorkspaceDiagnosticQuery,
+    analyze_frontend_input_snapshot_with_operation, document_symbols,
     document_symbols_from_program, symbol_index, symbol_index_from_program,
 };
 pub use rsscript_syntax::{format_source, lint_source};
@@ -491,7 +492,7 @@ fn retain_other_paths<V>(cache: &mut BTreeMap<(String, u64), V>, path: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rsscript_compiler::analyze_frontend_input_snapshot_with_operation;
+    use rsscript_semantics::analyze_frontend_input_snapshot_with_operation;
     use std::time::Duration;
 
     fn compiler_analyzer(

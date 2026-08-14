@@ -3,6 +3,8 @@
 //! This crate deliberately has no runtime, provider, deployment-policy, or
 //! review dependencies.
 
+extern crate self as rsscript_semantics;
+
 use std::collections::BTreeSet;
 
 pub use rsscript_abi_model::{
@@ -10,14 +12,19 @@ pub use rsscript_abi_model::{
     ParameterSignature, SignatureHash,
 };
 
+mod analyzer;
 mod assignment;
 mod await_placement;
 mod call_arguments;
 mod call_binding;
 mod callbacks;
+mod checks;
 mod closure_escape;
 mod control_flow;
 mod database;
+mod diagnostic {
+    pub(crate) use rsscript_diagnostics::*;
+}
 mod declarations;
 mod derive_fields;
 mod derives;
@@ -32,6 +39,14 @@ pub mod hir;
 mod hir_uses;
 mod identities;
 mod interface_descriptor;
+mod interfaces {
+    pub(crate) use rsscript_interface_catalog::{
+        CORE_INTERFACES, STANDARD_PACKAGE_INTERFACES, default_interfaces,
+    };
+}
+mod lexer {
+    pub(crate) use rsscript_syntax::lexer::*;
+}
 mod literals;
 mod local_binding_facts;
 mod local_flow_builder;
@@ -53,14 +68,41 @@ mod signatures;
 mod source_bodies;
 mod source_rules;
 mod symbols;
+mod syntax {
+    pub(crate) use crate::{demangle_diagnostics, isolate_module_namespaces};
+    pub(crate) use rsscript_syntax::*;
+}
 mod take_handle_fields;
 mod task_groups;
 mod try_checks;
 mod type_aliases;
 mod type_compatibility;
 mod types;
+mod text_util {
+    pub(crate) use rsscript_text::*;
+}
 mod value_properties;
 mod weak_fields;
+mod semantic {
+    #[allow(unused_imports)]
+    pub(crate) use crate::{
+        AnalysisResult, FrontendCompletion, FrontendInputSnapshot, FrontendStopReason,
+        ResolvedType, SemanticDatabase, SourceFileSnapshot, SourceSnapshot, ValidatedProgram,
+    };
+}
+pub use analyzer::{
+    analyze_frontend_input_snapshot_with_operation, analyze_source, analyze_source_result,
+    analyze_source_result_with_operation, analyze_source_with_core, analyze_source_with_interfaces,
+    analyze_source_with_interfaces_result, analyze_source_with_interfaces_result_with_operation,
+    analyze_source_with_interfaces_without_core, analyze_source_without_core,
+    analyze_sources_with_interfaces, analyze_sources_with_interfaces_result,
+    analyze_sources_with_interfaces_result_with_operation,
+    analyze_sources_with_interfaces_without_core,
+    analyze_sources_with_interfaces_without_core_result, analyze_syntax_source, core_interfaces,
+    standard_package_interfaces, validate_source, validate_source_with_operation,
+    validate_sources_with_interfaces, validate_sources_with_interfaces_with_operation,
+    validate_sources_with_interfaces_without_core,
+};
 pub use assignment::{
     deferred_index_assignment_diagnostic, invalid_assignment_diagnostic,
     local_assignment_type_mismatch_diagnostic, place_assignment_type_mismatch_diagnostic,

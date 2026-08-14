@@ -1,4 +1,4 @@
-//! Compiler adapter for syntax and operator semantic queries.
+//! Semantic adapter for syntax and operator queries.
 
 use crate::analyzer::Analyzer;
 

@@ -527,9 +527,10 @@ mechanical acceptance condition holds.
     source/interface snapshot cache with revision invalidation. Their explicit
     `WorkspaceDiagnosticQuery` contract now lives in `rsscript-semantics`, so
     the language service is only a client of the session query and cannot
-    define a competing callback protocol. The remaining compiler compatibility
-    analysis implementation is injected through that semantic contract;
-    resolve/type and dependency-precise semantic-diagnostic invalidation remain
+    define a competing callback protocol. The complete analyzer and check
+    implementation now live in `rsscript-semantics`; `rsscript-compiler` only
+    re-exports the frontend entry points for package/AOT compatibility callers.
+    Resolve/type and dependency-precise semantic-diagnostic invalidation remain
     open.
   - [ ] **S03.4 — Thread cancellation and deadlines through every query.** Add
     cancellation, deadline, and diagnostic-budget tests for cold and cached
@@ -552,7 +553,7 @@ mechanical acceptance condition holds.
   must not depend on the compiler compatibility façade, package persistence,
   VM, SDK, or Providers; revision invalidation and request cancellation require
   focused tests.
-  - [ ] **S04.1 — Replace the compiler façade dependency with syntax/semantic
+  - [x] **S04.1 — Replace the compiler façade dependency with syntax/semantic
     query dependencies.** Editor symbols and formatting now come directly from
     `rsscript-semantics` and `rsscript-syntax`; syntax lint now also bypasses
     compiler. Module/import dependency discovery and local editor symbols now
@@ -560,13 +561,11 @@ mechanical acceptance condition holds.
     of reparsing or line-oriented text extraction, including interface
     visibility and invalidation traversal. The LSP now delegates both single-file and package
     overlay diagnostics to the language service workspace query instead of
-    reconstructing a second analyzer call sequence. `LanguageService` no
-    longer depends on the compiler: its composition root injects the temporary
-    compiler diagnostic implementation through the semantic-owned
-    `WorkspaceDiagnosticQuery` contract while the service owns the immutable
-    session snapshot and cache, including document text. Replacing it with a
-    semantic-owned analyzer no longer requires changing the language-service
-    crate. Cargo metadata tests reject
+    reconstructing a second analyzer call sequence. `LanguageService` and the
+    LSP no longer depend on the compiler: both use the semantic-owned complete
+    analyzer through the shared `WorkspaceDiagnosticQuery` contract while the
+    service owns the immutable session snapshot and cache, including document
+    text. Cargo metadata tests reject
     a language-service edge to compiler, VM, SDK, package persistence, or
     concrete Providers.
   - [x] **S04.2 — Add document revision and invalidation tests.** The language

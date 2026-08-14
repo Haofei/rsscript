@@ -11,7 +11,6 @@ path = "src/main.rs"
 
 [dependencies]
 rsscript-language-service = { path = "../rsscript-language-service" }
-rsscript-compiler = { path = "../rsscript-compiler", default-features = false, features = ["language-service"] }
 rsscript-operation = { path = "../rsscript-operation" }
 rsscript-workspace-loader = { path = "../rsscript-workspace-loader" }
 serde_json = "1"

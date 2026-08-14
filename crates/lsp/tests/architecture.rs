@@ -16,8 +16,11 @@ fn lsp_depends_on_the_language_service_boundary() {
     let manifest = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
         .expect("LSP manifest should be readable");
     assert!(manifest.contains("rsscript-language-service"));
-    assert!(manifest.contains("rsscript-compiler"));
     assert!(manifest.contains("rsscript-workspace-loader"));
+    assert!(
+        !manifest.contains("rsscript-compiler"),
+        "LSP must not depend on the compiler compatibility facade"
+    );
     assert!(
         !manifest.lines().any(|line| line.starts_with("rsscript =")),
         "the LSP must not depend directly on the product façade"
@@ -38,16 +41,16 @@ fn lsp_depends_on_the_language_service_boundary() {
 }
 
 #[test]
-fn lsp_composes_the_transitional_compiler_diagnostic_adapter() {
+fn lsp_composes_the_semantic_diagnostic_query() {
     let diagnostics = read("diagnostics.rs");
     assert!(diagnostics.contains("workspace_diagnostics"));
-    assert!(diagnostics.contains("fn compiler_workspace_diagnostics"));
+    assert!(diagnostics.contains("fn semantic_workspace_diagnostics"));
     assert_eq!(
         diagnostics
-            .matches("rsscript_compiler::analyze_frontend_input_snapshot_with_operation")
+            .matches("rsscript_language_service::analyze_frontend_input_snapshot_with_operation")
             .count(),
         1,
-        "the LSP may use the compiler only through its single session-snapshot adapter"
+        "the LSP must use the semantic query through its single session-snapshot adapter"
     );
     for forbidden in [
         "analyze_source_with_interfaces_result_with_operation",
