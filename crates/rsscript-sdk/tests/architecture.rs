@@ -259,7 +259,7 @@ fn selfhost_parity_is_an_explicit_research_feature_not_a_release_gate() {
     let release_workflow = read(&root.join(".github/workflows/release.yml"));
 
     assert!(
-        compiler_manifest.contains("selfhost-parity = []"),
+        compiler_manifest.contains("selfhost-parity = [\"dep:rsscript-vm\"]"),
         "the Research harness must require an explicit compiler feature"
     );
     assert!(
@@ -2923,11 +2923,18 @@ fn lsp_dependency_closure_selects_frontend_only() {
         Some(true),
         "compiler bytecode emission must remain outside the language-service closure"
     );
+    assert_eq!(
+        compiler_manifest["dependencies"]["rsscript-vm"]["optional"].as_bool(),
+        Some(true),
+        "the legacy VM is permitted only through the research-only selfhost feature"
+    );
     assert!(
-        compiler_manifest["dependencies"]
-            .get("rsscript-vm")
-            .is_none(),
-        "compiler must not depend on execution crate `rsscript-vm`"
+        compiler_manifest["features"]["selfhost-parity"]
+            .as_array()
+            .is_some_and(|features| features
+                .iter()
+                .any(|feature| feature.as_str() == Some("dep:rsscript-vm"))),
+        "the optional VM must be selected only by selfhost-parity"
     );
 }
 
@@ -3322,9 +3329,13 @@ fn compiler_default_dependency_closure_is_host_neutral() {
         "compiler must not own child-process execution"
     );
     assert!(manifest["dependencies"].get("vm-jit").is_none());
-    assert!(
-        manifest["dependencies"].get("rsscript-vm").is_none(),
-        "compiler must not depend on the VM"
+    let selfhost_vm = manifest["dependencies"]["rsscript-vm"]
+        .as_table()
+        .expect("self-host parity VM dependency must be declared explicitly");
+    assert_eq!(
+        selfhost_vm.get("optional").and_then(toml::Value::as_bool),
+        Some(true),
+        "the compiler must not select the VM outside the research-only selfhost feature"
     );
 
     let package = manifest["features"]["package"]
@@ -3346,6 +3357,13 @@ fn compiler_default_dependency_closure_is_host_neutral() {
         .filter_map(toml::Value::as_str)
         .collect::<BTreeSet<_>>();
     assert!(execution.contains("package"));
+    let selfhost = manifest["features"]["selfhost-parity"]
+        .as_array()
+        .expect("compiler self-host feature should be declared")
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .collect::<BTreeSet<_>>();
+    assert!(selfhost.contains("dep:rsscript-vm"));
     assert!(package.contains("bytecode"));
     let bytecode = manifest["features"]["bytecode"]
         .as_array()
@@ -3448,6 +3466,21 @@ fn compiler_default_dependency_closure_is_host_neutral() {
             "unused compiler package dependency `{removed}` must not widen the frontend closure"
         );
     }
+}
+
+#[test]
+fn compiler_manifest_does_not_retain_research_or_fuzz_dev_dependencies() {
+    let root = workspace_root();
+    let compiler_manifest: toml::Value =
+        toml::from_str(&read(&root.join("crates/rsscript-compiler/Cargo.toml")))
+            .expect("compiler manifest");
+    let dev_dependencies = compiler_manifest
+        .get("dev-dependencies")
+        .and_then(toml::Value::as_table);
+    assert!(
+        dev_dependencies.is_none_or(|dependencies| dependencies.is_empty()),
+        "compiler tests must not pull REIR, review adapters, fuzz frameworks, or legacy VM paths into the Core manifest"
+    );
 }
 
 #[test]

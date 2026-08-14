@@ -619,7 +619,9 @@ mechanical acceptance condition holds.
     `package` feature, while reviewed SDK `execution` selects lowering but not
     package capture. The frontend still has a compatibility `execution` feature
     and build-script catalog inputs, so the complete dependency-closure
-    acceptance condition remains open.
+    acceptance condition remains open. Unused REIR/review/fuzz/schema dev
+    dependencies have been removed; the legacy VM is now an optional dependency
+    selected only by the explicit `selfhost-parity` research feature.
 
 ### 2. Typed CFG MIR
 
