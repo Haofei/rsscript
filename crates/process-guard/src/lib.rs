@@ -256,7 +256,40 @@ pub fn spawn_guarded_child_strict(
     limits: ProcessLimits,
 ) -> io::Result<GuardedChild> {
     platform_limit_support().require_fully_enforced(limits)?;
+    configure_strict_platform(command)?;
     spawn_guarded_child(command, limits)
+}
+
+/// Add strict-only process controls before the ordinary resource-limit setup.
+///
+/// Linux `no_new_privs` is deliberately attached in the child's `pre_exec`
+/// sequence. A successful parent-side spawn therefore means the runner starts
+/// with the kernel restriction already set; failure aborts `Command::spawn`.
+/// Other platforms retain the existing strict resource/process-tree checks but
+/// do not claim an equivalent privilege-transition control.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn configure_strict_platform(command: &mut Command) -> io::Result<()> {
+    use std::os::unix::process::CommandExt;
+
+    // SAFETY: the closure invokes only `prctl` with integer arguments and
+    // obtains no locks or heap-backed state after fork. Any kernel failure is
+    // returned to `Command::spawn`, so a strict caller never receives a child
+    // that silently missed this control.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn configure_strict_platform(_command: &mut Command) -> io::Result<()> {
+    Ok(())
 }
 
 fn spawn_guarded_with(
@@ -784,5 +817,30 @@ mod tests {
         assert!(result.is_ok());
         #[cfg(target_os = "macos")]
         assert!(result.is_err());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn strict_child_starts_with_no_new_privileges() {
+        use std::io::Read;
+        use std::process::Stdio;
+
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "grep '^NoNewPrivs:' /proc/self/status"])
+            .stdout(Stdio::piped());
+        let mut child =
+            spawn_guarded_child_strict(&mut command, ProcessLimits::generated_program())
+                .expect("strict guarded child should spawn");
+        let mut stdout = String::new();
+        child
+            .child_mut()
+            .stdout
+            .take()
+            .expect("stdout must be piped")
+            .read_to_string(&mut stdout)
+            .expect("read child status");
+        assert!(child.wait().expect("child should exit").success());
+        assert_eq!(stdout.trim(), "NoNewPrivs:\t1");
     }
 }

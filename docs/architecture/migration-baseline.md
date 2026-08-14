@@ -1385,7 +1385,9 @@ mechanical acceptance condition holds.
       library paths, credentials, roots, and authority injection fields.
   - [ ] **A09.2 — Add Linux isolation adapters.** Implement optional namespace,
     syscall, filesystem, network, and cgroup controls with capability detection
-    and fail-closed profile requirements.
+    and fail-closed profile requirements. The strict Linux/Android child path
+    now installs kernel `no_new_privs` before runner code begins; namespace,
+    syscall-filter, filesystem, network, and cgroup adapters remain open.
   - [ ] **A09.3 — Complete parent-side containment.** Cover process-tree kill,
     deadline, stdout/stderr/report limits, abnormal exits, and child disconnects.
     The child protocol now fail-closes contradictory response states: only a
