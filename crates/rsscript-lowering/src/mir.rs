@@ -930,7 +930,7 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                 ..
             } => self.lower_take(value),
             checked::HirExpr::Effect { .. } => self.unsupported("mutable checked HIR effect"),
-            checked::HirExpr::Manage { .. } => self.unsupported("checked HIR managed value"),
+            checked::HirExpr::Manage { value, .. } => self.lower_manage(value),
             checked::HirExpr::Spawn { .. } => self.unsupported("checked HIR spawn"),
             checked::HirExpr::Await { value, .. } => self.lower_await(value),
             checked::HirExpr::Try { value, .. } => {
@@ -1381,6 +1381,20 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         let place = self.lookup_place(name)?;
         let destination = self.value();
         self.emit(MirInstruction::TakePlace { destination, place });
+        Ok(destination)
+    }
+
+    /// `manage local` consumes the local graph and creates a stable managed
+    /// identity. Keep both operations visible instead of treating `manage` as
+    /// a transparent read, otherwise a later local use could bypass the
+    /// ownership transition represented by semantic HIR.
+    fn lower_manage(&mut self, value: &checked::HirExpr) -> Result<ValueId, MirLoweringError> {
+        let source = self.lower_take(value)?;
+        let destination = self.value();
+        self.emit(MirInstruction::Manage {
+            destination,
+            source,
+        });
         Ok(destination)
     }
 

@@ -860,8 +860,10 @@ mechanical acceptance condition holds.
     - [x] **M03.2a — Establish acquire/release verifier primitives.** Typed MIR
       models canonical resource acquire/release, rejects invalid resource IDs
       and unbalanced normal-return lifetimes, and makes unsupported VM codegen
-      fail closed. Source lowering, manage/transfer, and non-normal cleanup
-      edges remain follow-up work.
+      fail closed. Direct checked-HIR `manage local` lowers as an explicit
+      `TakePlace` followed by `Manage`, preserving the local-to-managed
+      ownership transition through verified bytecode. Resource transfer and
+      non-normal cleanup edges remain follow-up work.
     - [x] **M03.2b — Lower managed linear resource scopes.** The transitional
       lowerer turns an explicitly managed, normally-falling-through `with`
       scope into `AcquireResource`/`ReleaseResource` around its binding and
@@ -926,7 +928,7 @@ mechanical acceptance condition holds.
       indexing, assignments, structured `if`/`else`, conditional loops with
       `break`/`continue`, return, and resolved internal read/`mut`/`take`
       calls, resolved receiver calls with checked receiver effects, standalone
-      `take local`, plus lexical resource scopes) now lower from semantic HIR without
+      `take local`, explicit `manage local`, plus lexical resource scopes) now lower from semantic HIR without
       constructing `ExecutableIr`; the default compiler/lowering Cargo closure
       no longer depends on that compatibility crate. Compiler output prefers
       the direct route and uses the explicit compatibility bridge only when a capability is not yet

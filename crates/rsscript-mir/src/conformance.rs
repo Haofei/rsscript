@@ -429,6 +429,16 @@ impl<'a> Interpreter<'a> {
                                 .ok_or(MirExecutionError::UninitializedPlace(place.index()))?,
                         );
                     }
+                    // The conformance interpreter has value semantics and no
+                    // mutable-cell representation. `Manage` still remains an
+                    // explicit operation in the tested MIR; after the source
+                    // ownership transition it preserves the resulting graph.
+                    MirInstruction::Manage {
+                        destination,
+                        source,
+                    } => {
+                        values[destination.index()] = Some(value_at(&values, *source)?);
+                    }
                     MirInstruction::Retain { place } => {
                         let _ = place_value(&places, place.index())?;
                     }

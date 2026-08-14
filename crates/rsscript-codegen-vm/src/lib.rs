@@ -437,6 +437,16 @@ fn lower_instruction(
                 ("src", json!(place_reg(*place))),
             ],
         )),
+        MirInstruction::Manage {
+            destination,
+            source,
+        } => code.push(instr(
+            "Manage",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("src", json!(value_reg(function, *source))),
+            ],
+        )),
         // Retention is a verified ownership fact. It does not copy or destroy
         // a VM value by itself, so the v1 register payload has no runtime
         // instruction to emit; keeping it in MIR still prevents backends from

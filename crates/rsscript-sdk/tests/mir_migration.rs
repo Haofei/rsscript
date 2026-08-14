@@ -905,6 +905,49 @@ fn main() -> String {
 }
 
 #[test]
+fn direct_checked_hir_manage_preserves_the_owned_transition() {
+    let source = r#"
+fn main() -> String {
+    local value = "rss"
+    let managed = manage value
+    return managed
+}
+"#;
+    let compiled =
+        compile_source_to_ir("direct-hir-manage.rss", source).expect("managed value compiles");
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("managed value lowers directly from checked HIR");
+    let instructions = mir.functions()[0]
+        .blocks()
+        .iter()
+        .flat_map(|block| block.instructions())
+        .collect::<Vec<_>>();
+    assert!(
+        instructions
+            .iter()
+            .any(|instruction| matches!(instruction, MirInstruction::TakePlace { .. }))
+    );
+    assert!(
+        instructions
+            .iter()
+            .any(|instruction| matches!(instruction, MirInstruction::Manage { .. }))
+    );
+    let legacy = reg_vm_eval_source_main("direct-hir-manage.rss", source)
+        .expect("managed value legacy bytecode executes");
+    let output = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("managed value emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("managed value bytecode executes");
+    assert_eq!(output.value, legacy.value);
+    assert_eq!(output.usage, legacy.usage);
+}
+
+#[test]
 fn direct_checked_hir_builtin_literals_reach_verified_bytecode() {
     let source = r#"
 fn main() -> Int {

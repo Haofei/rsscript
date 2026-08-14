@@ -188,6 +188,13 @@ pub enum MirInstruction {
         destination: ValueId,
         place: PlaceId,
     },
+    /// Move an owned value into managed storage. This is distinct from an
+    /// ordinary move: the VM preserves the managed-cell identity so later
+    /// mutable aliases observe the same graph.
+    Manage {
+        destination: ValueId,
+        source: ValueId,
+    },
     /// A checked escape/retention boundary. The place stays live, but a
     /// backend can no longer erase the fact that its value may outlive a call.
     Retain {
@@ -1087,6 +1094,7 @@ fn instruction_definitions(instruction: &MirInstruction) -> Vec<ValueId> {
         | MirInstruction::ReadPlace { destination, .. }
         | MirInstruction::BorrowRead { destination, .. }
         | MirInstruction::TakePlace { destination, .. }
+        | MirInstruction::Manage { destination, .. }
         | MirInstruction::Binary { destination, .. }
         | MirInstruction::Call { destination, .. }
         | MirInstruction::Await { destination, .. }
@@ -1131,6 +1139,7 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         MirInstruction::GetField { base, .. } => vec![*base],
         MirInstruction::ListLen { list, .. } => vec![*list],
         MirInstruction::AcquireResource { source, .. } => vec![*source],
+        MirInstruction::Manage { source, .. } => vec![*source],
         MirInstruction::Binary { left, right, .. } => vec![*left, *right],
         MirInstruction::Call { arguments, .. } => arguments
             .iter()
@@ -1275,6 +1284,7 @@ fn transfer_move_state(
             moved_places.insert(*place);
             Ok(())
         }
+        MirInstruction::Manage { .. } => Ok(()),
         MirInstruction::Retain { place } => check_live(*place, moved_places),
         MirInstruction::Drop { place } => {
             check_live(*place, moved_places)?;
@@ -1433,6 +1443,14 @@ fn verify_instruction(
             check_live_place(*place, moved_places)?;
             moved_places.insert(*place);
             define(*destination, defined)
+        }
+        MirInstruction::Manage {
+            destination,
+            source,
+        } => {
+            define(*destination, defined)?;
+            used.push(*source);
+            Ok(())
         }
         MirInstruction::Retain { place } => check_live_place(*place, moved_places),
         MirInstruction::Drop { place } => {
