@@ -84,6 +84,15 @@ wire_id!(WireResourceTypeId);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WireCallTypeTable {
     types: Vec<WireType>,
+    records: Vec<WireRecordLayout>,
+}
+
+/// Canonical positional layout for one named record in a linked interface
+/// scope. The record type itself is present in the enclosing type table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WireRecordLayout {
+    pub ty: WireType,
+    pub fields: Vec<WireType>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,12 +111,37 @@ impl WireCallTypeTable {
     /// types are visited in declaration order, followed by the result type;
     /// children are assigned before their containing type.
     pub fn for_signature(signature: &FunctionSignature) -> Result<Self, WireTypeTableOverflow> {
-        let mut table = Self { types: Vec::new() };
+        let mut table = Self {
+            types: Vec::new(),
+            records: Vec::new(),
+        };
         for parameter in &signature.parameters {
             table.insert(&parameter.ty)?;
         }
         table.insert(&signature.result)?;
         Ok(table)
+    }
+
+    /// Extend one call table with canonical layouts supplied by the linked
+    /// interface descriptor. Layout order is canonicalized by record type so
+    /// provider and VM callers derive identical numeric identities.
+    pub fn with_record_layouts(
+        mut self,
+        mut records: Vec<WireRecordLayout>,
+    ) -> Result<Self, WireTypeTableOverflow> {
+        records.sort_by(|left, right| left.ty.cmp(&right.ty));
+        for record in &records {
+            self.insert(&record.ty)?;
+            for field in &record.fields {
+                self.insert(field)?;
+            }
+        }
+        self.records = records;
+        Ok(self)
+    }
+
+    pub fn record_layout(&self, ty: &WireType) -> Option<&WireRecordLayout> {
+        self.records.iter().find(|record| &record.ty == ty)
     }
 
     /// Return the identity for a type present in this signature's table.
