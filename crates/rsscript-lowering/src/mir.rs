@@ -1,9 +1,9 @@
-//! Transitional lowering from owned executable IR to typed CFG MIR.
+//! Lower checked semantic HIR to typed CFG MIR.
 //!
-//! This bridge deliberately supports only the pure control-flow subset. It
-//! gives the new backend boundary an executable-independent, verified model
-//! without pretending that resources, structured async, or external calls have
-//! already migrated. Unsupported nodes fail closed and stay on the legacy path.
+//! The default path consumes checked HIR directly. The historical
+//! executable-IR bridge is available only behind `legacy-exec-ir`; it remains
+//! for differential migration coverage and fails closed for constructs that
+//! have not yet reached parity.
 
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
@@ -12,6 +12,7 @@ use std::fmt;
 use rsscript_abi_model::{
     DataEffect, ExternalSymbol, FunctionSignature, ParameterSignature, WireType,
 };
+#[cfg(feature = "legacy-exec-ir")]
 use rsscript_exec_ir::{
     BinaryOp, Callee, ExecutableExpr, ExecutableFunction, ExecutableIr, ExecutableStmt, ParamEffect,
 };
@@ -59,6 +60,7 @@ impl From<rsscript_mir::MirValidationError> for MirLoweringError {
 /// CFG MIR. This is intentionally a transitional entry point; the final path
 /// will consume checked HIR directly once all semantic facts are owned by the
 /// semantics query boundary.
+#[cfg(feature = "legacy-exec-ir")]
 pub fn lower_executable_ir_to_mir(
     executable: &ExecutableIr,
 ) -> Result<MirModule, MirLoweringError> {
@@ -299,6 +301,7 @@ struct TypeTable {
 }
 
 impl TypeTable {
+    #[cfg(feature = "legacy-exec-ir")]
     fn function_signature(
         &mut self,
         signature: &rsscript_exec_ir::ExecutableSignature,
@@ -1921,6 +1924,7 @@ struct LoopTargets {
     cleanup_depth: usize,
 }
 
+#[cfg(feature = "legacy-exec-ir")]
 struct FunctionLowerer<'source, 'types> {
     id: FunctionId,
     source: &'source ExecutableFunction,
@@ -1938,6 +1942,7 @@ struct FunctionLowerer<'source, 'types> {
     resource_scopes: Vec<PlaceId>,
 }
 
+#[cfg(feature = "legacy-exec-ir")]
 impl<'source, 'types> FunctionLowerer<'source, 'types> {
     fn new(
         id: FunctionId,
@@ -2561,6 +2566,7 @@ impl<'source, 'types> FunctionLowerer<'source, 'types> {
     }
 }
 
+#[cfg(feature = "legacy-exec-ir")]
 fn expression_type_name(expression: &ExecutableExpr) -> Option<&str> {
     match expression {
         ExecutableExpr::Ident { type_name, .. }
@@ -2680,6 +2686,7 @@ fn option_variant_tag(name: &str) -> Option<bool> {
     }
 }
 
+#[cfg(feature = "legacy-exec-ir")]
 fn binary_op(op: BinaryOp) -> MirBinaryOp {
     match op {
         BinaryOp::Add => MirBinaryOp::Add,
@@ -2703,7 +2710,7 @@ fn binary_op(op: BinaryOp) -> MirBinaryOp {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "legacy-exec-ir"))]
 mod tests {
     use rsscript_exec_ir::{
         ExecutableBlock, ExecutableFieldAccess, ExecutableFunction, ExecutableMapLiteralEntry,

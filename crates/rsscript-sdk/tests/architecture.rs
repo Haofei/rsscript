@@ -3224,6 +3224,50 @@ fn legacy_executable_ir_lowering_is_an_explicit_vm_compatibility_feature() {
 }
 
 #[test]
+fn default_compiler_lowering_excludes_the_legacy_executable_ir_crate() {
+    let root = workspace_root();
+    let lowering: toml::Value =
+        toml::from_str(&read(&root.join("crates/rsscript-lowering/Cargo.toml")))
+            .expect("lowering manifest should parse");
+    assert_eq!(
+        lowering["dependencies"]["rsscript-exec-ir"]["optional"].as_bool(),
+        Some(true),
+        "source-shaped executable IR must be optional in the lowering crate"
+    );
+    assert!(
+        lowering["features"]["default"]
+            .as_array()
+            .is_some_and(Vec::is_empty),
+        "direct checked-HIR MIR lowering must be the lowering crate default"
+    );
+    assert!(
+        lowering["features"]["legacy-exec-ir"]
+            .as_array()
+            .is_some_and(|items| items
+                .iter()
+                .any(|item| item.as_str() == Some("dep:rsscript-exec-ir"))),
+        "only the explicit lowering compatibility feature may enable executable IR"
+    );
+
+    let compiler: toml::Value =
+        toml::from_str(&read(&root.join("crates/rsscript-compiler/Cargo.toml")))
+            .expect("compiler manifest should parse");
+    assert_eq!(
+        compiler["dependencies"]["rsscript-lowering"]["default-features"].as_bool(),
+        Some(false),
+        "compiler must not inherit the lowering compatibility default"
+    );
+    assert!(
+        compiler["features"]["package"]
+            .as_array()
+            .is_some_and(|items| items
+                .iter()
+                .any(|item| item.as_str() == Some("rsscript-lowering/legacy-exec-ir"))),
+        "only compiler package compatibility may enable executable-IR lowering"
+    );
+}
+
+#[test]
 fn checked_hir_mir_is_the_default_compiler_and_sdk_path() {
     let root = workspace_root();
     let compiler_output = read(&root.join("crates/rsscript-compiler/src/compiler_output.rs"));

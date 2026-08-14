@@ -17,7 +17,7 @@ rsscript-bytecode = { path = "../rsscript-bytecode", optional = true }
 rsscript-codegen-vm = { path = "../rsscript-codegen-vm", optional = true }
 rsscript-diagnostics = { path = "../rsscript-diagnostics" }
 rsscript-interface-catalog = { path = "../rsscript-interface-catalog" }
-rsscript-lowering = { path = "../rsscript-lowering", optional = true }
+rsscript-lowering = { path = "../rsscript-lowering", default-features = false, optional = true }
 rsscript-mir = { path = "../rsscript-mir", optional = true }
 rsscript-operation = { path = "../rsscript-operation" }
 rsscript-provider-api = { path = "../rsscript-provider-api", optional = true }
@@ -56,6 +56,7 @@ bytecode = ["lowering", "dep:rsscript-bytecode", "dep:rsscript-codegen-vm"]
 # lowering closure.
 package = [
     "bytecode",
+    "rsscript-lowering/legacy-exec-ir",
     "dep:rsscript-artifact-store",
     "dep:fs2",
     "dep:hex",
