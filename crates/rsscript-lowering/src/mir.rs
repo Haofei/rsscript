@@ -651,11 +651,11 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                 resolution,
                 ..
             } => self.lower_direct_call(receiver.as_ref(), args, resolution),
-            checked::HirExpr::Effect { effect, value, .. }
-                if matches!(effect, checked::ParamEffect::Read) =>
-            {
-                self.lower_expression(value)
-            }
+            checked::HirExpr::Effect {
+                effect: checked::ParamEffect::Read,
+                value,
+                ..
+            } => self.lower_expression(value),
             checked::HirExpr::Effect {
                 effect: checked::ParamEffect::Take,
                 value,

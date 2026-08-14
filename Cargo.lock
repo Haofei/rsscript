@@ -1723,6 +1723,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsscript-artifact"
+version = "0.1.0"
+dependencies = [
+ "rsscript-abi-model",
+ "rsscript-bytecode",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "rsscript-build-support"
 version = "0.1.0"
 dependencies = [
@@ -2016,6 +2027,7 @@ dependencies = [
  "proptest",
  "reir",
  "rsscript-abi-model",
+ "rsscript-artifact",
  "rsscript-build-support",
  "rsscript-bytecode",
  "rsscript-codegen-vm",

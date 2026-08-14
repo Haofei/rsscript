@@ -69,7 +69,8 @@ baselines during internal refactoring.
 | Owned executable IR | `rsscript-exec-ir` | Transitional; replace source-shaped nodes with typed CFG MIR |
 | HIR projection | `rsscript-lowering` | Evolve into HIR-to-MIR lowering |
 | VM bytecode emission | `rsscript-vm` | Move to a codegen boundary after MIR exists |
-| Artifact envelope/verifier | `rsscript-bytecode` | Keep; evolve through a versioned typed wire model |
+| Artifact Bundle schema/integrity | `rsscript-artifact` | Keep independent of SDK; evolve through versioned typed sections |
+| Bytecode envelope/verifier | `rsscript-bytecode` | Keep; evolve through a versioned typed wire model |
 | Interpreter, limits, scheduler | `rsscript-vm` | Keep only verified execution responsibilities |
 | Dynamic Provider ABI/linking | `rsscript-provider-api` | Keep; tighten wire values and resource handles later |
 | Stable embedding path | `rsscript-sdk` | Shrink to explicit phase APIs before public compatibility promises |
@@ -1198,7 +1199,9 @@ mechanical acceptance condition holds.
   an explicitly named trusted-host constructor; per-run limits live on the
   execution request.
 - [x] **A06 — Ship Artifact Bundle, `rss verify`, and neutral `rss diff`.** Both
-  single-file and package builds produce analysis/provenance-bound bundles.
+  single-file and package builds produce analysis/provenance-bound bundles. The
+  persisted Bundle schema and integrity checks are owned by
+  `rsscript-artifact`; SDK only composes it into phase APIs.
 - [x] **A07 — Complete semantic diff evidence.** Add read/mut/take, retention and
   escape, resource acquire/transfer/cleanup, structured-task fan-out and
   cancellation, call graph/recursion, Provider requirements, and diagnostic

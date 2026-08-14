@@ -6,6 +6,7 @@ schema = 1
 
 core = [
   "rsscript-abi-model",
+  "rsscript-artifact",
   "rsscript-build-support",
   "rsscript-bytecode",
   "rsscript-codegen-vm",

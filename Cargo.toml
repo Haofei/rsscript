@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/rsscript-abi-model",
+    "crates/rsscript-artifact",
     "crates/rsscript-bytecode",
     "crates/rsscript-codegen-vm",
     "crates/rsscript-diagnostics",
@@ -59,6 +60,7 @@ exclude = [
 # cannot widen root dependency resolution or release metadata.
 default-members = [
     "crates/rsscript-abi-model",
+    "crates/rsscript-artifact",
     "crates/rsscript-bytecode",
     "crates/rsscript-codegen-vm",
     "crates/rsscript-diagnostics",

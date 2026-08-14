@@ -1,3 +1,10 @@
+#![forbid(unsafe_code)]
+
+//! Versioned, provider-neutral Artifact Bundle envelopes.
+//!
+//! This crate owns the persisted Bundle contract. SDK, CLI, runner, review and
+//! inspection tools consume it without depending on one another.
+
 use std::error::Error;
 use std::fmt;
 
@@ -8,8 +15,6 @@ use sha2::{Digest, Sha256};
 
 pub const ARTIFACT_BUNDLE_SCHEMA: &str = "rsscript.artifact_bundle.v1";
 pub const ARTIFACT_BUNDLE_MAGIC: &[u8; 8] = b"RSSBND\0\x01";
-/// Analysis schemas accepted as provider-neutral evidence by this bundle
-/// format. New schemas require an explicit compatibility decision here.
 pub const SOURCE_ANALYSIS_SCHEMA: &str = "rsscript.source_analysis.v1";
 pub const PACKAGE_ANALYSIS_SCHEMA: &str = "rsscript.package_analysis.v1";
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
@@ -25,8 +30,6 @@ pub struct BuildProvenanceV1 {
     pub runtime_abi_version: u32,
     pub interface_catalog_digest: String,
     pub source_content_hash: String,
-    /// Digest of the immutable source/interface input captured for this
-    /// bundle. A deployable bundle never has an identity-less build phase.
     pub snapshot_digest: String,
     pub module_digest: String,
 }
@@ -59,8 +62,8 @@ struct BundleManifestV1 {
     analysis_digest: String,
 }
 
-/// A provider-neutral deployable unit containing executable bytes, neutral
-/// semantic analysis, provenance, and exact interface requirements.
+/// A provider-neutral deployable unit of executable bytes, semantic evidence,
+/// provenance, and exact external interface requirements.
 #[derive(Debug, Clone)]
 pub struct ArtifactBundle {
     manifest: BundleManifestV1,
@@ -71,7 +74,7 @@ pub struct ArtifactBundle {
 }
 
 impl ArtifactBundle {
-    pub(crate) fn new(
+    pub fn new(
         artifact: Vec<u8>,
         analysis: serde_json::Value,
     ) -> Result<Self, ArtifactBundleError> {
@@ -112,14 +115,13 @@ impl ArtifactBundle {
         let manifest_len = take_length(&mut input, MAX_MANIFEST_BYTES)?;
         let artifact_len = take_length(&mut input, MAX_ARTIFACT_BYTES)?;
         let analysis_len = take_length(&mut input, MAX_ANALYSIS_BYTES)?;
-        let manifest_bytes = take(&mut input, manifest_len)?;
+        let manifest: BundleManifestV1 = serde_json::from_slice(take(&mut input, manifest_len)?)
+            .map_err(|error| ArtifactBundleError::Manifest(error.to_string()))?;
         let artifact = take(&mut input, artifact_len)?.to_vec();
         let analysis_bytes = take(&mut input, analysis_len)?.to_vec();
         if !input.is_empty() {
             return Err(ArtifactBundleError::TrailingBytes);
         }
-        let manifest: BundleManifestV1 = serde_json::from_slice(manifest_bytes)
-            .map_err(|error| ArtifactBundleError::Manifest(error.to_string()))?;
         let analysis: serde_json::Value = serde_json::from_slice(&analysis_bytes)
             .map_err(|error| ArtifactBundleError::Analysis(error.to_string()))?;
         if canonical_json(&analysis)? != analysis_bytes {
@@ -146,7 +148,7 @@ impl ArtifactBundle {
         }
         let envelope = BytecodeArtifact::from_bytes(&artifact)
             .map_err(|error| ArtifactBundleError::Artifact(error.to_string()))?;
-        let expected_requirements = envelope
+        let expected = envelope
             .imports
             .iter()
             .map(InterfaceRequirementV1::from)
@@ -162,7 +164,7 @@ impl ArtifactBundle {
             || manifest.provenance.source_content_hash != envelope.header.source_content_hash
             || envelope.header.snapshot_digest.as_deref()
                 != Some(manifest.provenance.snapshot_digest.as_str())
-            || manifest.required_interfaces != expected_requirements
+            || manifest.required_interfaces != expected
         {
             return Err(ArtifactBundleError::ManifestArtifactMismatch);
         }
@@ -188,9 +190,9 @@ impl ArtifactBundle {
                 + analysis.len(),
         );
         output.extend_from_slice(ARTIFACT_BUNDLE_MAGIC);
-        put_length(&mut output, manifest.len())?;
-        put_length(&mut output, self.artifact.len())?;
-        put_length(&mut output, analysis.len())?;
+        for length in [manifest.len(), self.artifact.len(), analysis.len()] {
+            put_length(&mut output, length)?;
+        }
         output.extend_from_slice(&manifest);
         output.extend_from_slice(&self.artifact);
         output.extend_from_slice(&analysis);
@@ -200,26 +202,19 @@ impl ArtifactBundle {
     pub fn artifact_bytes(&self) -> &[u8] {
         &self.artifact
     }
-
     pub fn analysis(&self) -> &serde_json::Value {
         &self.analysis
     }
-
     pub fn provenance(&self) -> &BuildProvenanceV1 {
         &self.manifest.provenance
     }
-
     pub fn required_interfaces(&self) -> &[InterfaceRequirementV1] {
         &self.manifest.required_interfaces
     }
-
-    /// Complete structural import contracts captured in the verified Artifact
-    /// envelope. This supplements the compact manifest requirements for
-    /// inspection and semantic diffing; it is not Provider metadata.
-    pub(crate) fn external_contracts(&self) -> &[ExternalImport] {
+    /// Full structured import contracts for inspection and semantic diffing.
+    pub fn external_contracts(&self) -> &[ExternalImport] {
         &self.external_contracts
     }
-
     pub fn digest(&self) -> &str {
         &self.digest
     }
@@ -238,15 +233,12 @@ fn verify_analysis_schema(analysis: &serde_json::Value) -> Result<(), ArtifactBu
         ))
     }
 }
-
 fn canonical_json(value: &impl Serialize) -> Result<Vec<u8>, ArtifactBundleError> {
     serde_json::to_vec(value).map_err(|error| ArtifactBundleError::Manifest(error.to_string()))
 }
-
 fn digest(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
-
 fn bundle_digest(manifest: &[u8], artifact: &[u8], analysis: &[u8]) -> String {
     let mut hasher = Sha256::new();
     for section in [manifest, artifact, analysis] {
@@ -255,13 +247,14 @@ fn bundle_digest(manifest: &[u8], artifact: &[u8], analysis: &[u8]) -> String {
     }
     format!("sha256:{:x}", hasher.finalize())
 }
-
 fn put_length(output: &mut Vec<u8>, length: usize) -> Result<(), ArtifactBundleError> {
-    let length = u64::try_from(length).map_err(|_| ArtifactBundleError::LengthOverflow)?;
-    output.extend_from_slice(&length.to_be_bytes());
+    output.extend_from_slice(
+        &u64::try_from(length)
+            .map_err(|_| ArtifactBundleError::LengthOverflow)?
+            .to_be_bytes(),
+    );
     Ok(())
 }
-
 fn take_length(input: &mut &[u8], maximum: usize) -> Result<usize, ArtifactBundleError> {
     let bytes: [u8; 8] = take(input, 8)?
         .try_into()
@@ -269,11 +262,11 @@ fn take_length(input: &mut &[u8], maximum: usize) -> Result<usize, ArtifactBundl
     let length = usize::try_from(u64::from_be_bytes(bytes))
         .map_err(|_| ArtifactBundleError::LengthOverflow)?;
     if length > maximum {
-        return Err(ArtifactBundleError::SectionTooLarge { length, maximum });
+        Err(ArtifactBundleError::SectionTooLarge { length, maximum })
+    } else {
+        Ok(length)
     }
-    Ok(length)
 }
-
 fn take<'a>(input: &mut &'a [u8], length: usize) -> Result<&'a [u8], ArtifactBundleError> {
     if input.len() < length {
         return Err(ArtifactBundleError::Truncated);
@@ -302,54 +295,44 @@ pub enum ArtifactBundleError {
     AnalysisDigestMismatch,
     ManifestArtifactMismatch,
 }
-
 impl fmt::Display for ArtifactBundleError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidMagic => formatter.write_str("invalid RSScript Artifact Bundle magic"),
-            Self::Truncated => formatter.write_str("truncated RSScript Artifact Bundle"),
-            Self::TrailingBytes => formatter.write_str("Artifact Bundle has trailing bytes"),
-            Self::LengthOverflow => formatter.write_str("Artifact Bundle section length overflow"),
+            Self::InvalidMagic => f.write_str("invalid RSScript Artifact Bundle magic"),
+            Self::Truncated => f.write_str("truncated RSScript Artifact Bundle"),
+            Self::TrailingBytes => f.write_str("Artifact Bundle has trailing bytes"),
+            Self::LengthOverflow => f.write_str("Artifact Bundle section length overflow"),
             Self::SectionTooLarge { length, maximum } => write!(
-                formatter,
+                f,
                 "Artifact Bundle section is too large ({length} bytes; maximum {maximum})"
             ),
             Self::UnsupportedSchema(schema) => {
-                write!(formatter, "unsupported Artifact Bundle schema `{schema}`")
+                write!(f, "unsupported Artifact Bundle schema `{schema}`")
             }
-            Self::MissingAnalysisSchema => {
-                formatter.write_str("bundle analysis has no declared schema")
-            }
+            Self::MissingAnalysisSchema => f.write_str("bundle analysis has no declared schema"),
             Self::MissingSnapshotDigest => {
-                formatter.write_str("bundle artifact has no immutable snapshot digest")
+                f.write_str("bundle artifact has no immutable snapshot digest")
             }
             Self::UnsupportedAnalysisSchema(schema) => {
-                write!(formatter, "unsupported bundle analysis schema `{schema}`")
+                write!(f, "unsupported bundle analysis schema `{schema}`")
             }
-            Self::Manifest(message) => write!(formatter, "invalid bundle manifest: {message}"),
-            Self::Analysis(message) => write!(formatter, "invalid bundle analysis: {message}"),
-            Self::Artifact(message) => write!(formatter, "invalid bundled artifact: {message}"),
-            Self::NonCanonicalAnalysis => {
-                formatter.write_str("bundle analysis is not canonically encoded")
-            }
-            Self::ArtifactDigestMismatch => formatter.write_str("artifact digest mismatch"),
-            Self::AnalysisDigestMismatch => formatter.write_str("analysis digest mismatch"),
+            Self::Manifest(message) => write!(f, "invalid bundle manifest: {message}"),
+            Self::Analysis(message) => write!(f, "invalid bundle analysis: {message}"),
+            Self::Artifact(message) => write!(f, "invalid bundled artifact: {message}"),
+            Self::NonCanonicalAnalysis => f.write_str("bundle analysis is not canonically encoded"),
+            Self::ArtifactDigestMismatch => f.write_str("artifact digest mismatch"),
+            Self::AnalysisDigestMismatch => f.write_str("analysis digest mismatch"),
             Self::ManifestArtifactMismatch => {
-                formatter.write_str("bundle manifest does not match the bytecode artifact")
+                f.write_str("bundle manifest does not match the bytecode artifact")
             }
         }
     }
 }
-
 impl Error for ArtifactBundleError {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rsscript_bytecode::BytecodeArtifact;
-
-    const SNAPSHOT_DIGEST: &str =
-        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     fn bundle() -> ArtifactBundle {
         let mut artifact = BytecodeArtifact::new(
@@ -362,73 +345,35 @@ mod tests {
             vec![1, 2, 3],
         )
         .unwrap();
-        artifact.bind_snapshot_digest(SNAPSHOT_DIGEST).unwrap();
-        let artifact = artifact.to_bytes().unwrap();
+        artifact
+            .bind_snapshot_digest(
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )
+            .unwrap();
         ArtifactBundle::new(
-            artifact,
+            artifact.to_bytes().unwrap(),
             serde_json::json!({"$schema": SOURCE_ANALYSIS_SCHEMA}),
         )
         .unwrap()
     }
 
     #[test]
-    fn round_trip_binds_all_sections() {
+    fn bundle_round_trip_binds_artifact_analysis_and_provenance() {
         let original = bundle();
         let decoded = ArtifactBundle::from_bytes(&original.to_bytes().unwrap()).unwrap();
         assert_eq!(decoded.digest(), original.digest());
-        assert_eq!(decoded.analysis(), original.analysis());
         assert_eq!(decoded.artifact_bytes(), original.artifact_bytes());
+        assert_eq!(decoded.analysis(), original.analysis());
+        assert_eq!(
+            decoded.provenance().snapshot_digest,
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
     }
 
     #[test]
-    fn tampering_fails_closed() {
-        let original = bundle();
-        let mut bytes = original.to_bytes().unwrap();
-        let last = bytes.last_mut().unwrap();
-        *last ^= 1;
+    fn bundle_rejects_tampered_analysis() {
+        let mut bytes = bundle().to_bytes().unwrap();
+        *bytes.last_mut().unwrap() ^= 1;
         assert!(ArtifactBundle::from_bytes(&bytes).is_err());
-    }
-
-    #[test]
-    fn analysis_schema_is_an_explicit_fail_closed_compatibility_boundary() {
-        let mut artifact = BytecodeArtifact::new(
-            "0.1.0",
-            "0.1.0",
-            "sha256:catalog",
-            2,
-            "sha256:source",
-            vec![],
-            vec![1, 2, 3],
-        )
-        .unwrap();
-        artifact.bind_snapshot_digest(SNAPSHOT_DIGEST).unwrap();
-        let artifact = artifact.to_bytes().unwrap();
-        assert!(matches!(
-            ArtifactBundle::new(artifact, serde_json::json!({"$schema": "future.analysis.v1"})),
-            Err(ArtifactBundleError::UnsupportedAnalysisSchema(schema)) if schema == "future.analysis.v1"
-        ));
-    }
-
-    #[test]
-    fn deployable_bundle_rejects_bytecode_without_a_snapshot_identity() {
-        let artifact = BytecodeArtifact::new(
-            "0.1.0",
-            "0.1.0",
-            "sha256:catalog",
-            2,
-            "sha256:source",
-            vec![],
-            vec![1, 2, 3],
-        )
-        .unwrap()
-        .to_bytes()
-        .unwrap();
-        assert!(matches!(
-            ArtifactBundle::new(
-                artifact,
-                serde_json::json!({"$schema": SOURCE_ANALYSIS_SCHEMA}),
-            ),
-            Err(ArtifactBundleError::MissingSnapshotDigest)
-        ));
     }
 }

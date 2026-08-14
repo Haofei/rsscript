@@ -2637,9 +2637,7 @@ fn lsp_dependency_closure_selects_frontend_only() {
 fn embedding_facade_exposes_only_product_level_objects() {
     let root = workspace_root();
     let mut source = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
-    source.push_str(&read(
-        &root.join("crates/rsscript-sdk/src/artifact_bundle.rs"),
-    ));
+    source.push_str(&read(&root.join("crates/rsscript-artifact/src/lib.rs")));
     for object in [
         "pub struct Compiler",
         "pub struct BuiltArtifact",

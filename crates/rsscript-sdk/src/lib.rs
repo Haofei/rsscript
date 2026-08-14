@@ -102,14 +102,12 @@ pub use rsscript_vm::{
     compile_executable_ir,
 };
 #[cfg(feature = "execution")]
-mod artifact_bundle;
-#[cfg(feature = "execution")]
 mod semantic_diff;
 #[cfg(feature = "execution")]
 #[allow(dead_code)]
 mod vm_adapter;
 #[cfg(feature = "execution")]
-pub use artifact_bundle::{
+pub use rsscript_artifact::{
     ARTIFACT_BUNDLE_MAGIC, ARTIFACT_BUNDLE_SCHEMA, ArtifactBundle, ArtifactBundleError,
     BuildProvenanceV1, InterfaceRequirementV1, PACKAGE_ANALYSIS_SCHEMA, SOURCE_ANALYSIS_SCHEMA,
 };

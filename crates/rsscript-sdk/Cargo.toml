@@ -16,6 +16,7 @@ default = []
 compatibility = ["execution"]
 execution = [
     "dep:rsscript-abi-model",
+    "dep:rsscript-artifact",
     "rsscript_compiler/execution",
     "dep:rsscript-bytecode",
     "dep:rsscript-codegen-vm",
@@ -30,6 +31,7 @@ native-jit = ["compatibility", "rsscript-vm/native-jit"]
 
 [dependencies]
 rsscript-abi-model = { path = "../rsscript-abi-model", optional = true }
+rsscript-artifact = { path = "../rsscript-artifact", optional = true }
 rsscript_compiler = { package = "rsscript-compiler", path = "../rsscript-compiler", default-features = false, features = ["language-service"] }
 rsscript-operation = { path = "../rsscript-operation" }
 rsscript-bytecode = { path = "../rsscript-bytecode", optional = true }
