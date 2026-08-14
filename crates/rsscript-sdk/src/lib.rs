@@ -248,7 +248,15 @@ pub struct Compiler;
 
 impl Compiler {
     pub fn check(&self, file: &str, source: &str) -> Vec<Diagnostic> {
-        analyze_source(file, source)
+        self.check_snapshot(&FrontendInputSnapshot::single(file, source))
+    }
+
+    /// Check one immutable source/interface snapshot without reading a path or
+    /// selecting a Provider.
+    pub fn check_snapshot(&self, snapshot: &FrontendInputSnapshot) -> Vec<Diagnostic> {
+        let sources = snapshot_pairs(snapshot.sources());
+        let interfaces = snapshot_pairs(snapshot.interfaces());
+        analyze_sources_with_interfaces(&sources, &interfaces)
     }
 
     pub fn check_with_operation(
@@ -500,7 +508,6 @@ fn source_set_analysis(sources: &[(&str, &str)], snapshot_digest: &str) -> serde
     })
 }
 
-#[cfg(feature = "execution")]
 fn snapshot_pairs(snapshot: &SourceSnapshot) -> Vec<(&str, &str)> {
     snapshot
         .files()
@@ -1582,6 +1589,26 @@ fn main() -> Result<Unit, String> {
         assert_eq!(
             ordinary.bytecode_artifact().header.executable_hash,
             operation_aware.bytecode_artifact().header.executable_hash
+        );
+    }
+
+    #[test]
+    fn frontend_snapshot_is_the_shared_check_and_compile_input() {
+        let input = FrontendInputSnapshot::from_sources(
+            [(
+                "main.rss",
+                "module app\nuse host.*\nfn main() -> Int { return value() }\n",
+            )],
+            [("host.rssi", "module host\npub fn value() -> Int\n")],
+        );
+        let compiler = Compiler;
+        assert!(compiler.check_snapshot(&input).is_empty());
+        let artifact = compiler
+            .compile_snapshot(&input)
+            .expect("the checked snapshot should compile");
+        assert_eq!(
+            artifact.analysis()["snapshot_digest"],
+            artifact.snapshot_digest()
         );
     }
 

@@ -15,7 +15,8 @@ The transitional root exports are available only through the explicit
 not part of the default or `execution` SDK surface.
 
 - Compilation and diagnostics: `Compiler`, `CompileError`, immutable
-  `FrontendInputSnapshot`, checked source, and language-service query types.
+  `FrontendInputSnapshot`, snapshot-based check/build entry points, checked
+  source, and language-service query types.
 - Artifact lifecycle: `BuiltArtifact`, `VerifiedArtifact`, `ArtifactBundle`,
   `ArtifactVerifier`, provenance, interface requirements, the versioned source
   and package analysis schema identifiers, and neutral semantic diff data,
