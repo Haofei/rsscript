@@ -732,6 +732,43 @@ mod tests {
     }
 
     #[test]
+    fn record_layouts_are_canonicalized_before_assigning_type_ids() {
+        let signature = FunctionSignature {
+            parameters: Vec::new(),
+            result: WireType::Unit,
+            asynchronous: false,
+        };
+        let table = WireCallTypeTable::for_signature(&signature)
+            .unwrap()
+            .with_record_layouts(vec![
+                WireRecordLayout {
+                    ty: WireType::from("host.Z"),
+                    fields: vec![WireType::String],
+                },
+                WireRecordLayout {
+                    ty: WireType::from("host.A"),
+                    fields: vec![WireType::Int {
+                        bits: 64,
+                        signed: true,
+                    }],
+                },
+            ])
+            .unwrap();
+        assert_eq!(
+            table
+                .record_layout(&WireType::from("host.A"))
+                .unwrap()
+                .fields
+                .len(),
+            1
+        );
+        assert_eq!(
+            table.type_id(&WireType::from("host.A")),
+            Some(WireTypeId::new(1))
+        );
+    }
+
+    #[test]
     fn wire_payload_accounting_handles_deeply_nested_values_iteratively() {
         let mut value = WireValue::Bytes {
             value: vec![1, 2, 3],
