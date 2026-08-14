@@ -339,7 +339,7 @@ pub mod project {
     pub mod legacy {
         use super::*;
 
-        pub use rsscript_compiler::WorkspaceSnapshot;
+        pub use rsscript_compiler::compatibility::WorkspaceSnapshot;
 
         pub struct PackageCompatibility;
 
@@ -2193,7 +2193,7 @@ mod tests {
             .link(&first)
             .expect("link captured source")
             .execute(ExecutionRequest::default());
-        assert_eq!(output.value, "1");
+        assert_eq!(output.value(), Some("1"));
     }
 
     #[cfg(feature = "project")]

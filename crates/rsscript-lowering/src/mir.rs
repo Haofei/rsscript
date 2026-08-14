@@ -234,10 +234,11 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<VerifiedMir, MirLo
     Ok(MirModule::new(types.into_types(), lowered, debug, imports)?.into_verified()?)
 }
 
-/// External async imports need a synthetic task function only when they appear
-/// in `async let`. A direct `await Host.call()` already suspends the current
-/// task through `CallExternal`, so emitting an unused wrapper would widen the
-/// Artifact and debug surface for no semantic benefit.
+/// External async imports need a synthetic task function only when they must
+/// become a child task for `async let` or `select`. A direct
+/// `await Host.call()` already suspends the current task through
+/// `CallExternal`, so emitting an unused wrapper would widen the Artifact and
+/// debug surface for no semantic benefit.
 fn checked_async_external_binding_symbols(
     hir: &checked::Hir,
 ) -> Result<std::collections::BTreeSet<String>, MirLoweringError> {
@@ -300,6 +301,7 @@ fn collect_async_external_bindings_from_statement(
         }
         checked::HirStmt::Select { arms, .. } => {
             for arm in arms {
+                collect_async_external_spawn_operation(&arm.operation, symbols)?;
                 collect_async_external_bindings_from_block(&arm.body, symbols)?;
             }
         }
@@ -310,6 +312,27 @@ fn collect_async_external_bindings_from_statement(
         | checked::HirStmt::Continue(_)
         | checked::HirStmt::Expr(_)
         | checked::HirStmt::Unknown(_) => {}
+    }
+    Ok(())
+}
+
+/// Record the external task wrapper required by one select arm. The semantic
+/// checker has already established that a select operation is an async call;
+/// this collector only determines whether that call needs an internal task
+/// wrapper so the explicit MIR `Spawn` instruction can target it.
+fn collect_async_external_spawn_operation(
+    operation: &checked::HirExpr,
+    symbols: &mut std::collections::BTreeSet<String>,
+) -> Result<(), MirLoweringError> {
+    let (operation, _) = peel_checked_select_operation(operation);
+    let checked::HirExpr::Call { resolution, .. } = operation else {
+        return Ok(());
+    };
+    let checked::CallResolution::Resolved { signature, .. } = resolution else {
+        return Ok(());
+    };
+    if signature.is_external && signature.is_async {
+        symbols.insert(checked_external_symbol(signature)?.as_str().to_owned());
     }
     Ok(())
 }
@@ -405,10 +428,11 @@ struct CallTargets {
     variants: BTreeMap<String, VariantLayout>,
 }
 
-/// Synthetic async functions let `async let value = Host.call()` retain the
-/// structured task model without adding a second Provider-specific spawn
-/// instruction to MIR. The wrapper contains only a resolved external call and
-/// is generated from the same checked signature as the import table.
+/// Synthetic async functions let `async let value = Host.call()` and
+/// `select { value = await Host.call() => ... }` retain the structured task
+/// model without adding a second Provider-specific spawn instruction to MIR.
+/// The wrapper contains only a resolved external call and is generated from
+/// the same checked signature as the import table.
 struct AsyncExternalWrapper {
     id: FunctionId,
     symbol: ExternalSymbol,

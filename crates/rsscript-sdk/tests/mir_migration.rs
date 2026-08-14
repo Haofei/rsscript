@@ -1476,6 +1476,128 @@ async fn main() -> Int {
 }
 
 #[test]
+fn direct_checked_hir_external_select_matches_legacy_vm() {
+    let source = r#"
+async fn main() -> Int {
+    select {
+        value = await Host.first() => { return value }
+        value = await Host.second() => { return value }
+    }
+    return 0
+}
+"#;
+    let interface = "pub async fn Host.first() -> Int\npub async fn Host.second() -> Int\n";
+    let validated = analyze_source_with_interfaces_result(
+        "direct-hir-external-select.rss",
+        source,
+        &[("host-select.rssi", interface)],
+    )
+    .into_validated()
+    .expect("external select fixture should validate");
+    let compiled = compile_validated_to_ir(&validated);
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("external select lowers directly from checked HIR");
+    for expected in [
+        "__rss_async_external_Host_first",
+        "__rss_async_external_Host_second",
+    ] {
+        assert!(
+            mir.functions()
+                .iter()
+                .filter_map(|function| mir.function_debug(function.id()))
+                .any(|debug| debug.name() == expected),
+            "select arms need an explicit task wrapper for {expected}"
+        );
+    }
+
+    fn bindings() -> Vec<(String, ExternalFunction)> {
+        let first = ExternalSymbol::new("Host.first").expect("valid first symbol");
+        let second = ExternalSymbol::new("Host.second").expect("valid second symbol");
+        let signature = FunctionSignature {
+            parameters: Vec::new(),
+            result: "Int".into(),
+            asynchronous: true,
+        };
+        let descriptor = ProviderDescriptor {
+            provider_id: "test.direct-external-select".into(),
+            provider_version: "1.0.0".into(),
+            supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+            functions: vec![
+                ProviderFunctionDescriptor {
+                    symbol: first.clone(),
+                    signature: signature.clone(),
+                    entry: "first".into(),
+                    call_mode: ProviderCallMode::Async,
+                    blocking: BlockingBehavior::NonBlocking,
+                    cancellation: CancellationBehavior::Cooperative,
+                    thread_safe: true,
+                    reentrant: true,
+                    resource_cleanup: ResourceCleanupContract::None,
+                    error_mapping: ProviderErrorMapping::StructuredV1,
+                },
+                ProviderFunctionDescriptor {
+                    symbol: second.clone(),
+                    signature: signature.clone(),
+                    entry: "second".into(),
+                    call_mode: ProviderCallMode::Async,
+                    blocking: BlockingBehavior::NonBlocking,
+                    cancellation: CancellationBehavior::Cooperative,
+                    thread_safe: true,
+                    reentrant: true,
+                    resource_cleanup: ResourceCleanupContract::None,
+                    error_mapping: ProviderErrorMapping::StructuredV1,
+                },
+            ],
+        };
+        let mut registry = ExternalFunctionRegistry::new();
+        registry
+            .register_provider(
+                &descriptor,
+                BTreeMap::from([
+                    (
+                        first,
+                        ProviderFunction {
+                            signature: signature.clone(),
+                            callable: AsyncInterpreterFn::new(|_, _| async {
+                                Ok(NativeValue::Int(7))
+                            }),
+                        },
+                    ),
+                    (
+                        second,
+                        ProviderFunction {
+                            signature,
+                            callable: AsyncInterpreterFn::new(|_, _| async {
+                                Ok(NativeValue::Int(9))
+                            }),
+                        },
+                    ),
+                ]),
+            )
+            .expect("async Provider registration should succeed");
+        registry.into_bindings().collect()
+    }
+
+    let legacy = reg_vm_compile_validated(&validated)
+        .expect("legacy external select fixture compiles")
+        .eval_main_with_args_and_external_bindings(std::iter::empty::<String>(), bindings())
+        .expect("legacy external select fixture executes");
+    let direct = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("direct external select MIR emits verified bytecode")
+    .eval_main_with_args_and_external_bindings(std::iter::empty::<String>(), bindings())
+    .expect("direct external select MIR executes");
+
+    assert_eq!(legacy.value, direct.value);
+    assert_eq!(legacy.usage, direct.usage);
+    assert_matching_provider_trace(&legacy.provider_call_traces, &direct.provider_call_traces);
+}
+
+#[test]
 fn direct_checked_hir_awaited_provider_cancellation_matches_legacy_vm() {
     let source = "async fn main() -> Int { return await Host.wait() }";
     let interface = "pub async fn Host.wait() -> Int\n";

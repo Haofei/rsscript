@@ -903,15 +903,17 @@ mechanical acceptance condition holds.
       resumes the parent only after every still-live child completes and reaps
       each child exactly once; awaited children are safe to omit from the drain.
       Cancellation delivery remains follow-up work.
-    - [x] **M03.3d — Lower first-ready internal selects.** A checked `select`
-      over direct async internal calls now emits verifier-visible `Spawn`
-      operations followed by one `Select { tasks, winner, value }`. The
-      instruction consumes every child task; the bytecode VM transfers the
-      winning result and cancels/reaps losers before explicit CFG arm dispatch.
-      MIR validation rejects duplicate or non-live selected tasks, and the
-      migration suite compares the direct verified-bytecode execution with the
-      legacy VM. External-Provider select arms and cancellation syntax remain
-      fail-closed follow-up work.
+    - [x] **M03.3d — Lower first-ready selects.** A checked `select` over
+      direct async internal or external Provider calls now emits
+      verifier-visible `Spawn` operations followed by one
+      `Select { tasks, winner, value }`. External calls use a synthetic,
+      typed task wrapper containing only the resolved `CallExternal`, so
+      provider-specific spawn semantics never enter MIR. The instruction
+      consumes every child task; the bytecode VM transfers the winning result
+      and cancels/reaps losers before explicit CFG arm dispatch. MIR validation
+      rejects duplicate or non-live selected tasks, and the migration suite
+      compares the direct verified-bytecode execution with the legacy VM.
+      Cancellation syntax remains fail-closed follow-up work.
   - [ ] **M03.4 — Add resolved builtin and external-call instructions.** Include
     signature/effect/retention identity and no unresolved callee text.
     - [x] **M03.4a — Execute resolved external calls through MIR bytecode.** A
@@ -949,10 +951,10 @@ mechanical acceptance condition holds.
       through synthetic, typed internal wrappers containing only the checked
       `CallExternal`; this preserves normal task-group lifecycle without a
       Provider-specific MIR spawn operation. First-ready selects over direct
-      internal async calls also lower without the compatibility IR: typed task
-      handles feed `Select`, then an explicit winner-index CFG ladder binds and
-      runs exactly one arm. Cancellation syntax and external-Provider select
-      arms remain follow-up direct-lowering work.
+      internal and external async calls also lower without the compatibility
+      IR: typed task handles feed `Select`, then an explicit winner-index CFG
+      ladder binds and runs exactly one arm. Cancellation syntax remains
+      follow-up direct-lowering work.
   - [x] **M04.2 — Verify MIR ownership, resources, and task scopes.** The
     construction verifier runs ownership-mode, move/drop, resource-lifetime,
     resource-cleanup-over-CFG, and structured-task-close passes. Targeted
@@ -1042,6 +1044,10 @@ mechanical acceptance condition holds.
       function arms now execute through both paths; the fixture asserts equal
       selected value and deterministic execution usage after the direct MIR
       path verifies, emits `SelectWait`, and dispatches the winning arm.
+    - [x] **M05.3h — Compare first-ready external Provider select.** Two
+      resolved async Provider arms now execute through both paths; direct MIR
+      emits typed external-call task wrappers before `SelectWait`, and the
+      fixture compares selected value, usage, and provider call traces.
   - [ ] **M05.4 — Gate replacement on corpus parity.** New lowering cannot become
     default until all supported Core fixtures agree.
 - [ ] **M06 — Delete the source-shaped executable IR.** Remove nested
@@ -1088,10 +1094,9 @@ mechanical acceptance condition holds.
       external calls use the existing verifier-checked `CallExternal`, whose VM
       dispatch parks and resumes the current task around the Provider future;
       direct async bindings for both free and resolved receiver calls now reach
-      the same path. First-ready internal select arms emit the existing
+      the same path. First-ready internal and external Provider select arms emit the existing
       verifier-checked `SelectWait` instruction, including loser cancellation
-      before CFG arm dispatch. Cancellation syntax and external-Provider select
-      arms remain follow-up work.
+      before CFG arm dispatch. Cancellation syntax remains follow-up work.
     - [x] **V02.3c — Emit explicit retain/drop ownership boundaries.** Retain
       remains a verifier-visible semantic fact with no implicit VM copy, while
       drop clears its proven-dead register before frame teardown. Codegen tests

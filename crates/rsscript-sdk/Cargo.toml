@@ -16,6 +16,7 @@ default = []
 compatibility = [
     "aot-rust",
     "legacy-exec-ir",
+    "rsscript_compiler/legacy-exec-ir",
     "dep:rsscript-artifact-store",
     "dep:rsscript-codegen-vm",
     "dep:rsscript-lowering",
