@@ -86,22 +86,6 @@ fn metadata_normal_dependencies(metadata: &serde_json::Value, package: &str) -> 
         .collect()
 }
 
-fn metadata_workspace_dependencies(
-    metadata: &serde_json::Value,
-    package: &str,
-) -> BTreeSet<String> {
-    let workspace_packages = metadata["packages"]
-        .as_array()
-        .expect("metadata packages")
-        .iter()
-        .filter_map(|candidate| candidate["name"].as_str().map(str::to_string))
-        .collect::<BTreeSet<_>>();
-    metadata_direct_dependencies(metadata, package)
-        .intersection(&workspace_packages)
-        .cloned()
-        .collect()
-}
-
 fn metadata_default_members(metadata: &serde_json::Value) -> BTreeSet<String> {
     let packages = metadata["packages"]
         .as_array()
@@ -177,11 +161,10 @@ fn cargo_metadata_enforces_composition_dependency_direction() {
         );
     }
 
-    let language_service = metadata_workspace_dependencies(&metadata, "rsscript-language-service");
+    let language_service = metadata_normal_dependencies(&metadata, "rsscript-language-service");
     assert_eq!(
         language_service,
         BTreeSet::from([
-            "rsscript-compiler".to_string(),
             "rsscript-diagnostics".to_string(),
             "rsscript-operation".to_string(),
             "rsscript-semantics".to_string(),
@@ -2846,8 +2829,8 @@ fn lsp_dependency_closure_selects_frontend_only() {
     assert!(
         language_service["dependencies"]
             .get("rsscript_compiler")
-            .is_some(),
-        "language service must consume the frontend-only compiler API"
+            .is_none(),
+        "language service must not select the transitional compiler adapter"
     );
 
     let compiler_manifest: toml::Value =
@@ -2870,12 +2853,12 @@ fn lsp_dependency_closure_selects_frontend_only() {
         Some(true),
         "compiler bytecode emission must remain outside the language-service closure"
     );
-    for forbidden in ["rsscript-vm"] {
-        assert!(
-            compiler_manifest["dependencies"].get(forbidden).is_none(),
-            "compiler must not depend on execution crate `{forbidden}`"
-        );
-    }
+    assert!(
+        compiler_manifest["dependencies"]
+            .get("rsscript-vm")
+            .is_none(),
+        "compiler must not depend on execution crate `rsscript-vm`"
+    );
 }
 
 #[test]

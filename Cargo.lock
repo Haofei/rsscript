@@ -1697,7 +1697,9 @@ dependencies = [
 name = "rss-lsp"
 version = "0.1.0"
 dependencies = [
+ "rsscript-compiler",
  "rsscript-language-service",
+ "rsscript-operation",
  "rsscript-workspace-loader",
  "serde_json",
  "tokio",

@@ -547,11 +547,13 @@ mechanical acceptance condition holds.
     of reparsing or line-oriented text extraction, including interface
     visibility and invalidation traversal. The LSP now delegates both single-file and package
     overlay diagnostics to the language service workspace query instead of
-    reconstructing a second analyzer call sequence. Diagnostics remain on the
-    compiler transition path *inside* the language-service query until the
-    semantic query API replaces it. Cargo metadata
-    tests must eventually reject a language-service edge to
-    compiler, VM, SDK, package persistence, or concrete Providers.
+    reconstructing a second analyzer call sequence. `LanguageService` no
+    longer depends on the compiler: its composition root injects the temporary
+    compiler diagnostic adapter while the service owns the immutable session
+    snapshot and cache. Replacing it with a semantic-owned analyzer no longer
+    requires changing the language-service crate. Cargo metadata tests reject
+    a language-service edge to compiler, VM, SDK, package persistence, or
+    concrete Providers.
   - [x] **S04.2 — Add document revision and invalidation tests.** The language
     service suite verifies revision replacement and deletion, direct and
     transitive interface invalidation, unrelated-interface cache retention,

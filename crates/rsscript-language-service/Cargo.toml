@@ -6,8 +6,10 @@ description = "Query-cached incremental editor language service for RSScript"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-rsscript_compiler = { package = "rsscript-compiler", path = "../rsscript-compiler", default-features = false, features = ["language-service"] }
 rsscript-operation = { path = "../rsscript-operation" }
 rsscript-semantics = { path = "../rsscript-semantics" }
 rsscript-syntax = { path = "../rsscript-syntax" }
 rsscript-diagnostics = { path = "../rsscript-diagnostics" }
+
+[dev-dependencies]
+rsscript_compiler = { package = "rsscript-compiler", path = "../rsscript-compiler", default-features = false, features = ["language-service"] }

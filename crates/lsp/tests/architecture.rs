@@ -16,6 +16,7 @@ fn lsp_depends_on_the_language_service_boundary() {
     let manifest = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
         .expect("LSP manifest should be readable");
     assert!(manifest.contains("rsscript-language-service"));
+    assert!(manifest.contains("rsscript-compiler"));
     assert!(manifest.contains("rsscript-workspace-loader"));
     assert!(
         !manifest.lines().any(|line| line.starts_with("rsscript =")),
@@ -37,20 +38,28 @@ fn lsp_depends_on_the_language_service_boundary() {
 }
 
 #[test]
-fn lsp_diagnostics_delegate_workspace_analysis_to_language_service() {
+fn lsp_composes_the_transitional_compiler_diagnostic_adapter() {
     let diagnostics = read("diagnostics.rs");
     assert!(diagnostics.contains("workspace_diagnostics"));
-    for forbidden in [
-        "analyze_source_with_core",
-        "analyze_source_with_interfaces",
-        "analyze_sources_with_interfaces",
-        "lint_source(",
-    ] {
-        assert!(
-            !diagnostics.contains(forbidden),
-            "LSP diagnostics must not own compiler analysis call `{forbidden}`"
-        );
-    }
+    assert!(diagnostics.contains("fn compiler_workspace_diagnostics"));
+    assert_eq!(
+        diagnostics
+            .matches("rsscript_compiler::analyze_source_with_interfaces_result_with_operation")
+            .count(),
+        1,
+        "the LSP may use the compiler only in its explicit transitional adapter"
+    );
+    assert_eq!(
+        diagnostics
+            .matches("rsscript_compiler::analyze_sources_with_interfaces_result_with_operation")
+            .count(),
+        1,
+        "the LSP may use the compiler only in its explicit transitional adapter"
+    );
+    assert!(
+        !diagnostics.contains("lint_source("),
+        "LSP diagnostics must leave local linting to language service"
+    );
 }
 
 #[test]

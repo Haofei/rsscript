@@ -83,7 +83,9 @@ impl DocumentStore {
     pub(crate) fn new() -> Self {
         Self {
             documents: HashMap::new(),
-            language_service: LanguageService::default(),
+            language_service: LanguageService::new(
+                crate::diagnostics::compiler_workspace_diagnostics,
+            ),
             next_revision: 1,
             generations: HashMap::new(),
         }

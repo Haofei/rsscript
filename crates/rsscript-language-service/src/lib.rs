@@ -14,18 +14,13 @@ use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationContext}
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-pub use rsscript_compiler::{
-    analyze_source_result_with_operation, analyze_source_with_core, analyze_source_with_interfaces,
-    analyze_source_with_interfaces_result_with_operation, analyze_sources_with_interfaces,
-    analyze_sources_with_interfaces_result_with_operation,
-};
 pub use rsscript_diagnostics::{
     Diagnostic, DiagnosticExplanation, Severity, Span, explain_diagnostic_code,
 };
 pub use rsscript_semantics::{
-    CompilationSession, Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo,
-    SymbolKind, SymbolLookup, document_symbols, document_symbols_from_program, symbol_index,
-    symbol_index_from_program,
+    CompilationSession, Definition, FrontendInputSnapshot, Reference, RssDocumentSymbol,
+    SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup, document_symbols,
+    document_symbols_from_program, symbol_index, symbol_index_from_program,
 };
 pub use rsscript_syntax::{format_source, lint_source};
 
@@ -50,10 +45,10 @@ pub struct DocumentSnapshot {
     pub text: Arc<str>,
 }
 
-#[derive(Default)]
 pub struct LanguageService {
     documents: BTreeMap<String, Document>,
     frontend: CompilationSession,
+    analyzer: Arc<dyn WorkspaceDiagnosticAnalyzer>,
     diagnostic_cache: BTreeMap<(String, u64), Arc<[Diagnostic]>>,
     lint_cache: BTreeMap<(String, u64), Arc<[Diagnostic]>>,
     format_cache: BTreeMap<(String, u64), Arc<str>>,
@@ -63,6 +58,38 @@ pub struct LanguageService {
     cache_hits: u64,
     cache_misses: u64,
     invalidations: u64,
+}
+
+/// Semantic diagnostic implementation supplied by a composition root.
+///
+/// `LanguageService` owns revisioned inputs, module facts, cache lifetime, and
+/// request cancellation. It deliberately does not choose a compiler analyzer:
+/// that temporary integration belongs to the LSP/CLI composition root until
+/// the remaining full diagnostic queries live in `rsscript-semantics`.
+pub trait WorkspaceDiagnosticAnalyzer: Send + Sync {
+    fn analyze(
+        &self,
+        input: &FrontendInputSnapshot,
+        operation: &OperationContext,
+    ) -> Result<Vec<Diagnostic>, rsscript_operation::OperationAbort>;
+}
+
+impl<F> WorkspaceDiagnosticAnalyzer for F
+where
+    F: Fn(
+            &FrontendInputSnapshot,
+            &OperationContext,
+        ) -> Result<Vec<Diagnostic>, rsscript_operation::OperationAbort>
+        + Send
+        + Sync,
+{
+    fn analyze(
+        &self,
+        input: &FrontendInputSnapshot,
+        operation: &OperationContext,
+    ) -> Result<Vec<Diagnostic>, rsscript_operation::OperationAbort> {
+        self(input, operation)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -130,6 +157,26 @@ impl From<rsscript_operation::OperationAbort> for LanguageServiceError {
 }
 
 impl LanguageService {
+    /// Create a language service over one explicit semantic diagnostic
+    /// integration. Editor clients retain only document overlays and LSP
+    /// protocol adaptation; all multi-file inputs remain session-owned.
+    pub fn new(analyzer: impl WorkspaceDiagnosticAnalyzer + 'static) -> Self {
+        Self {
+            documents: BTreeMap::new(),
+            frontend: CompilationSession::default(),
+            analyzer: Arc::new(analyzer),
+            diagnostic_cache: BTreeMap::new(),
+            lint_cache: BTreeMap::new(),
+            format_cache: BTreeMap::new(),
+            symbol_cache: BTreeMap::new(),
+            document_symbol_cache: BTreeMap::new(),
+            query_stats: BTreeMap::new(),
+            cache_hits: 0,
+            cache_misses: 0,
+            invalidations: 0,
+        }
+    }
+
     pub fn set_file(
         &mut self,
         path: impl Into<String>,
@@ -271,60 +318,7 @@ impl LanguageService {
             deadline: request.deadline,
             ..OperationContext::default()
         };
-        let before = self.frontend.stats();
-        let semantic_diagnostics = self
-            .frontend
-            .workspace_diagnostics_with_operation(&operation, |input, operation| {
-                let interfaces = input
-                    .interfaces()
-                    .files()
-                    .iter()
-                    .map(|file| (file.path(), file.text()))
-                    .collect::<Vec<_>>();
-                let sources = input
-                    .sources()
-                    .files()
-                    .iter()
-                    .map(|file| (file.path(), file.text()))
-                    .collect::<Vec<_>>();
-                let mut diagnostics = Vec::new();
-                for (path, text) in &interfaces {
-                    operation.check()?;
-                    let visible_interfaces = interfaces
-                        .iter()
-                        .copied()
-                        .filter(|(candidate, _)| candidate != path)
-                        .collect::<Vec<_>>();
-                    diagnostics.extend(
-                        analyze_source_with_interfaces_result_with_operation(
-                            path,
-                            text,
-                            &visible_interfaces,
-                            operation,
-                        )
-                        .into_diagnostics(),
-                    );
-                }
-                operation.check()?;
-                diagnostics.extend(
-                    analyze_sources_with_interfaces_result_with_operation(
-                        &sources,
-                        &interfaces,
-                        operation,
-                    )
-                    .into_diagnostics(),
-                );
-                Ok(diagnostics)
-            })
-            .map_err(LanguageServiceError::from)?;
-        let after = self.frontend.stats();
-        if after.workspace_diagnostic_cache_hits > before.workspace_diagnostic_cache_hits {
-            self.cache_hits += 1;
-            self.record_hit(QueryKind::Diagnostics);
-        } else {
-            self.cache_misses += 1;
-            self.record_miss(QueryKind::Diagnostics);
-        }
+        let semantic_diagnostics = self.semantic_workspace_diagnostics(&operation, true)?;
         let mut diagnostics = semantic_diagnostics.to_vec();
         for path in self.documents.keys().cloned().collect::<Vec<_>>() {
             check_request(request)?;
@@ -366,46 +360,12 @@ impl LanguageService {
         }
         self.cache_misses += 1;
         self.record_miss(QueryKind::Diagnostics);
-        let dependencies = self
-            .dependencies_with_operation(path, &operation)
-            .map_err(LanguageServiceError::from)?;
-        let visible_paths = self
-            .visible_interface_paths_with_operation(path, &dependencies, &operation)
-            .map_err(LanguageServiceError::from)?;
-        let interfaces = self
-            .documents
+        let mut diagnostics = self
+            .semantic_workspace_diagnostics(&operation, false)?
             .iter()
-            .filter(|(_, candidate)| candidate.kind == DocumentKind::Interface)
-            .filter(|(interface_path, _)| visible_paths.contains(interface_path.as_str()))
-            .map(|(path, candidate)| (path.as_str(), candidate.text.as_ref()))
+            .filter(|diagnostic| diagnostic.span.file == path)
+            .cloned()
             .collect::<Vec<_>>();
-        let mut diagnostics = match document.kind {
-            DocumentKind::Source if interfaces.is_empty() => {
-                analyze_source_result_with_operation(path, &document.text, &operation)
-                    .into_diagnostics()
-            }
-            DocumentKind::Source => analyze_source_with_interfaces_result_with_operation(
-                path,
-                &document.text,
-                &interfaces,
-                &operation,
-            )
-            .into_diagnostics(),
-            DocumentKind::Interface => {
-                let visible = interfaces
-                    .iter()
-                    .copied()
-                    .filter(|(candidate, _)| *candidate != path)
-                    .collect::<Vec<_>>();
-                analyze_source_with_interfaces_result_with_operation(
-                    path,
-                    &document.text,
-                    &visible,
-                    &operation,
-                )
-                .into_diagnostics()
-            }
-        };
         diagnostics.extend(
             self.lint_with_operation(path, &operation)
                 .map_err(LanguageServiceError::from)?,
@@ -414,6 +374,35 @@ impl LanguageService {
         self.diagnostic_cache
             .insert(cache_key, Arc::from(diagnostics.clone()));
         diagnostics.truncate(request.max_diagnostics);
+        Ok(diagnostics)
+    }
+
+    /// Query semantic diagnostics once for the immutable session input. Both
+    /// whole-workspace and single-document requests consume this same result;
+    /// document queries only filter by span and add their local lint facts.
+    fn semantic_workspace_diagnostics(
+        &mut self,
+        operation: &OperationContext,
+        record_query_stats: bool,
+    ) -> Result<Arc<[Diagnostic]>, LanguageServiceError> {
+        let before = self.frontend.stats();
+        let analyzer = Arc::clone(&self.analyzer);
+        let diagnostics = self
+            .frontend
+            .workspace_diagnostics_with_operation(operation, move |input, operation| {
+                analyzer.analyze(input, operation)
+            })
+            .map_err(LanguageServiceError::from)?;
+        let after = self.frontend.stats();
+        if record_query_stats {
+            if after.workspace_diagnostic_cache_hits > before.workspace_diagnostic_cache_hits {
+                self.cache_hits += 1;
+                self.record_hit(QueryKind::Diagnostics);
+            } else {
+                self.cache_misses += 1;
+                self.record_miss(QueryKind::Diagnostics);
+            }
+        }
         Ok(diagnostics)
     }
 
@@ -494,6 +483,7 @@ impl LanguageService {
         Ok(value.to_vec())
     }
 
+    #[cfg(test)]
     fn dependencies_with_operation(
         &mut self,
         path: &str,
@@ -534,21 +524,6 @@ impl LanguageService {
         }
         .map(|node| node.modules().iter().cloned().collect::<BTreeSet<_>>())
         .unwrap_or_default()
-    }
-
-    fn visible_interface_paths_with_operation(
-        &mut self,
-        current_path: &str,
-        root_dependencies: &[String],
-        operation: &OperationContext,
-    ) -> Result<BTreeSet<String>, rsscript_operation::OperationAbort> {
-        let graph = self
-            .frontend
-            .workspace_module_graph_with_operation(operation)?;
-        let visible =
-            graph.visible_interface_paths(current_path, root_dependencies.iter().cloned());
-        operation.check()?;
-        Ok(visible)
     }
 
     fn record_hit(&mut self, query: QueryKind) {
@@ -608,11 +583,61 @@ fn retain_other_paths<V>(cache: &mut BTreeMap<(String, u64), V>, path: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rsscript_compiler::{
+        analyze_source_with_interfaces_result_with_operation,
+        analyze_sources_with_interfaces_result_with_operation,
+    };
     use std::time::Duration;
+
+    fn compiler_analyzer(
+        input: &FrontendInputSnapshot,
+        operation: &OperationContext,
+    ) -> Result<Vec<Diagnostic>, rsscript_operation::OperationAbort> {
+        let interfaces = input
+            .interfaces()
+            .files()
+            .iter()
+            .map(|file| (file.path(), file.text()))
+            .collect::<Vec<_>>();
+        let sources = input
+            .sources()
+            .files()
+            .iter()
+            .map(|file| (file.path(), file.text()))
+            .collect::<Vec<_>>();
+        let mut diagnostics = Vec::new();
+        for (path, text) in &interfaces {
+            operation.check()?;
+            let visible_interfaces = interfaces
+                .iter()
+                .copied()
+                .filter(|(candidate, _)| candidate != path)
+                .collect::<Vec<_>>();
+            diagnostics.extend(
+                analyze_source_with_interfaces_result_with_operation(
+                    path,
+                    text,
+                    &visible_interfaces,
+                    operation,
+                )
+                .into_diagnostics(),
+            );
+        }
+        operation.check()?;
+        diagnostics.extend(
+            analyze_sources_with_interfaces_result_with_operation(&sources, &interfaces, operation)
+                .into_diagnostics(),
+        );
+        Ok(diagnostics)
+    }
+
+    fn service() -> LanguageService {
+        LanguageService::new(compiler_analyzer)
+    }
 
     #[test]
     fn revisions_replace_snapshots_and_removal_is_explicit() {
-        let mut service = LanguageService::default();
+        let mut service = service();
         service.set_file(
             "main.rss",
             1,
@@ -639,7 +664,7 @@ mod tests {
 
     #[test]
     fn service_reuses_diagnostics_formatting_and_symbols() {
-        let mut service = LanguageService::default();
+        let mut service = service();
         service.set_file(
             "main.rss",
             1,
@@ -662,7 +687,7 @@ mod tests {
 
     #[test]
     fn diagnostics_cache_is_revisioned_and_interfaces_invalidate_dependents() {
-        let mut service = LanguageService::default();
+        let mut service = service();
         service.set_file(
             "host.rssi",
             1,
@@ -692,7 +717,7 @@ mod tests {
 
     #[test]
     fn workspace_diagnostics_own_the_multi_document_analysis_query() {
-        let mut service = LanguageService::default();
+        let mut service = service();
         service.set_file(
             "host.rssi",
             1,
@@ -733,7 +758,7 @@ mod tests {
 
     #[test]
     fn unrelated_interface_edit_preserves_semantic_query_cache() {
-        let mut service = LanguageService::default();
+        let mut service = service();
         service.set_file(
             "host.rssi",
             1,
@@ -766,7 +791,7 @@ mod tests {
 
     #[test]
     fn interface_edit_invalidates_semantics_but_reuses_local_queries() {
-        let mut service = LanguageService::default();
+        let mut service = service();
         service.set_file(
             "host.rssi",
             1,
@@ -813,7 +838,7 @@ mod tests {
 
     #[test]
     fn transitive_interface_dependency_invalidates_importing_source() {
-        let mut service = LanguageService::default();
+        let mut service = service();
         service.set_file(
             "base.rssi",
             1,
@@ -845,7 +870,7 @@ mod tests {
 
     #[test]
     fn dependency_graph_comes_from_parsed_items_not_text_lines() {
-        let mut service = LanguageService::default();
+        let mut service = service();
         service.set_file(
             "main.rss",
             1,
@@ -883,7 +908,7 @@ mod tests {
 
     #[test]
     fn dependencies_consume_the_compilation_session_workspace_graph_query() {
-        let mut service = LanguageService::default();
+        let mut service = service();
         service.set_file(
             "main.rss",
             1,
@@ -915,7 +940,7 @@ mod tests {
 
     #[test]
     fn editor_symbols_reuse_the_session_parse_cache() {
-        let mut service = LanguageService::default();
+        let mut service = service();
         service.set_file(
             "main.rss",
             1,
@@ -932,7 +957,7 @@ mod tests {
 
     #[test]
     fn cancelled_and_expired_requests_do_not_enter_analysis() {
-        let mut service = LanguageService::default();
+        let mut service = service();
         service.set_file(
             "main.rss",
             1,
@@ -969,7 +994,7 @@ mod tests {
 
     #[test]
     fn response_budget_does_not_truncate_the_revision_cache() {
-        let mut service = LanguageService::default();
+        let mut service = service();
         service.set_file(
             "main.rss",
             1,
@@ -1002,7 +1027,7 @@ mod tests {
 
     #[test]
     fn cached_document_diagnostics_obey_cancellation_and_deadline() {
-        let mut service = LanguageService::default();
+        let mut service = service();
         service.set_file(
             "main.rss",
             1,
