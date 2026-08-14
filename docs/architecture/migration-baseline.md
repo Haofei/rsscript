@@ -1252,7 +1252,9 @@ mechanical acceptance condition holds.
     and fail-closed profile requirements.
   - [ ] **A09.3 — Complete parent-side containment.** Cover process-tree kill,
     deadline, stdout/stderr/report limits, abnormal exits, and child disconnects.
-    The parent now treats either bounded pipe overflow as an immediate reason to
+    The child protocol now fail-closes contradictory response states: only a
+    completed runner response may carry a report, and every rejection requires
+    an error without a report. The parent now treats either bounded pipe overflow as an immediate reason to
     terminate the guarded process tree, reap the root, and join both readers;
     a successful child exit with an incomplete response frame is now reported as
     a reaped runner/protocol failure rather than a script report, with focused

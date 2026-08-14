@@ -164,9 +164,7 @@ pub fn write_response(
     mut output: impl Write,
     response: &RunnerResponseV1,
 ) -> Result<(), ProtocolError> {
-    if response.schema != RUNNER_RESPONSE_SCHEMA {
-        return Err(ProtocolError::Schema(response.schema.clone()));
-    }
+    validate_response(response)?;
     let bytes = serde_json::to_vec(response).map_err(ProtocolError::Json)?;
     if bytes.len() > MAX_RESPONSE_BYTES {
         return Err(ProtocolError::Limit("runner response"));
@@ -196,9 +194,7 @@ pub fn read_response(mut input: impl Read) -> Result<RunnerResponseV1, ProtocolE
         return Err(ProtocolError::TrailingBytes);
     }
     let response: RunnerResponseV1 = serde_json::from_slice(&bytes).map_err(ProtocolError::Json)?;
-    if response.schema != RUNNER_RESPONSE_SCHEMA {
-        return Err(ProtocolError::Schema(response.schema));
-    }
+    validate_response(&response)?;
     Ok(response)
 }
 
@@ -227,6 +223,27 @@ fn validate_request(request: &RunnerRequestV1) -> Result<(), ProtocolError> {
         return Err(ProtocolError::Limit("runner limits"));
     }
     Ok(())
+}
+
+/// Validate the response state machine independently of JSON Schema. The
+/// child process is an untrusted protocol peer: callers must not treat a frame
+/// as a completed execution merely because it decoded successfully.
+fn validate_response(response: &RunnerResponseV1) -> Result<(), ProtocolError> {
+    if response.schema != RUNNER_RESPONSE_SCHEMA {
+        return Err(ProtocolError::Schema(response.schema.clone()));
+    }
+    match response.runner_termination {
+        RunnerTerminationV1::Completed if response.report.is_some() && response.error.is_none() => {
+            Ok(())
+        }
+        RunnerTerminationV1::Completed => Err(ProtocolError::Invalid(
+            "completed runner response requires a report and no error",
+        )),
+        _ if response.report.is_none() && response.error.is_some() => Ok(()),
+        _ => Err(ProtocolError::Invalid(
+            "rejected runner response requires an error and no report",
+        )),
+    }
 }
 
 fn validate_args(args: &[String]) -> Result<(), ProtocolError> {
@@ -350,6 +367,31 @@ mod tests {
                 "protocol must not inject {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn response_state_machine_rejects_report_error_ambiguity() {
+        let completed_without_report = RunnerResponseV1 {
+            schema: RUNNER_RESPONSE_SCHEMA.to_string(),
+            runner_termination: RunnerTerminationV1::Completed,
+            report: None,
+            error: None,
+        };
+        assert!(matches!(
+            write_response(Vec::new(), &completed_without_report),
+            Err(ProtocolError::Invalid(_))
+        ));
+
+        let rejected_with_report = RunnerResponseV1 {
+            schema: RUNNER_RESPONSE_SCHEMA.to_string(),
+            runner_termination: RunnerTerminationV1::LinkRejected,
+            report: Some(serde_json::json!({"forged": true})),
+            error: Some("link failed".to_string()),
+        };
+        assert!(matches!(
+            write_response(Vec::new(), &rejected_with_report),
+            Err(ProtocolError::Invalid(_))
+        ));
     }
 
     #[test]
