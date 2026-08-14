@@ -896,6 +896,9 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         let destination = self.value();
         match signature.name.as_str() {
             "Ok" | "Err" => {
+                if receiver.is_some() {
+                    return self.unsupported("Result constructor receiver call");
+                }
                 if args.len() != 1 {
                     return self.unsupported("Result constructor with non-unary arity");
                 }
@@ -907,6 +910,9 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                 });
             }
             "Some" => {
+                if receiver.is_some() {
+                    return self.unsupported("Option Some receiver call");
+                }
                 if args.len() != 1 {
                     return self.unsupported("Option Some constructor with non-unary arity");
                 }
@@ -917,6 +923,9 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                 });
             }
             "None" => {
+                if receiver.is_some() {
+                    return self.unsupported("Option None receiver call");
+                }
                 if !args.is_empty() {
                     return self.unsupported("Option None constructor with non-zero arity");
                 }
@@ -932,15 +941,19 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                 let Some(builtin) = rsscript_mir::builtin_id(namespace, &signature.name) else {
                     return self.unsupported("unsupported checked HIR builtin call");
                 };
-                if receiver.is_some() {
-                    return self.unsupported("checked HIR receiver builtin call");
-                }
                 let mut ordered = args.iter().collect::<Vec<_>>();
                 ordered.sort_by_key(|argument| argument.evaluation_index);
-                let arguments = ordered
-                    .into_iter()
-                    .map(|argument| self.lower_direct_call_argument(&argument.value))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let mut arguments =
+                    Vec::with_capacity(ordered.len() + usize::from(receiver.is_some()));
+                if let Some(receiver) = receiver {
+                    arguments.push(self.lower_direct_receiver_argument(receiver)?);
+                }
+                arguments.extend(
+                    ordered
+                        .into_iter()
+                        .map(|argument| self.lower_direct_call_argument(&argument.value))
+                        .collect::<Result<Vec<_>, _>>()?,
+                );
                 self.emit(MirInstruction::Call {
                     destination,
                     target: MirCallTarget::Builtin(builtin),
@@ -1099,6 +1112,36 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             checked::ParamEffect::Mut => MirCallArgument::BorrowMut(place),
             checked::ParamEffect::Take => MirCallArgument::Take(place),
         })
+    }
+
+    /// Receiver calls are semantically bound as parameter zero. Preserve their
+    /// declared effect just like an explicitly named argument, while allowing
+    /// a read-qualified rvalue receiver to remain an ordinary owned value.
+    fn lower_direct_receiver_argument(
+        &mut self,
+        receiver: &checked::HirCallReceiver,
+    ) -> Result<MirCallArgument, MirLoweringError> {
+        let value = receiver.value.as_ref();
+        match receiver.effect {
+            checked::ParamEffect::Read => {
+                if let checked::HirExpr::Ident { name, .. } = value {
+                    return self.lookup_place(name).map(MirCallArgument::BorrowRead);
+                }
+                self.lower_expression(value).map(MirCallArgument::Value)
+            }
+            checked::ParamEffect::Mut | checked::ParamEffect::Take => {
+                let checked::HirExpr::Ident { name, .. } = value else {
+                    return self
+                        .unsupported("checked HIR mutable/take receiver on non-local value");
+                };
+                let place = self.lookup_place(name)?;
+                Ok(match receiver.effect {
+                    checked::ParamEffect::Mut => MirCallArgument::BorrowMut(place),
+                    checked::ParamEffect::Take => MirCallArgument::Take(place),
+                    checked::ParamEffect::Read => unreachable!("matched above"),
+                })
+            }
+        }
     }
 
     fn lower_async_binding(

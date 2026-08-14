@@ -471,7 +471,7 @@ fn direct_checked_hir_builtin_uses_catalog_identity_and_verified_bytecode() {
     let source = r#"
 fn main() -> String {
     let input = "report"
-    return String.to_uppercase(value: read input)
+    return input.to_uppercase()
 }
 "#;
     let compiled =
