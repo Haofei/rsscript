@@ -25,6 +25,7 @@ pub use rsscript_semantics::{
     Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
     document_symbols, symbol_index,
 };
+use rsscript_syntax::{ast::Item, parse_source};
 pub use rsscript_syntax::{format_source, lint_source};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -433,26 +434,19 @@ fn retain_other_paths<V>(cache: &mut BTreeMap<(String, u64), V>, path: &str) -> 
     u64::try_from(before.saturating_sub(cache.len())).unwrap_or(u64::MAX)
 }
 
-fn declaration_target(line: &str, keyword: &str) -> Option<String> {
-    let line = line.trim();
-    let remainder = line.strip_prefix(keyword)?.trim_start();
-    if remainder.is_empty() {
-        return None;
-    }
-    let target = remainder
-        .chars()
-        .take_while(|character| {
-            character.is_ascii_alphanumeric()
-                || matches!(character, '_' | '.' | '*' | '{' | '}' | ',')
-        })
-        .collect::<String>();
-    (!target.is_empty()).then_some(target)
-}
-
 fn interface_modules(path: &str, text: &str) -> BTreeSet<String> {
-    let declared = text
-        .lines()
-        .filter_map(|line| declaration_target(line, "module"))
+    let declared = parse_source(path, text)
+        .items
+        .into_iter()
+        .filter_map(|item| match item {
+            Item::Module(module) => (!module.path.is_empty()).then(|| module.path.join(".")),
+            Item::Use(_)
+            | Item::Type(_)
+            | Item::SumType(_)
+            | Item::TypeAlias(_)
+            | Item::Const(_)
+            | Item::Function(_) => None,
+        })
         .collect::<BTreeSet<_>>();
     if !declared.is_empty() {
         return declared;
@@ -469,9 +463,19 @@ fn interface_modules(path: &str, text: &str) -> BTreeSet<String> {
         .collect()
 }
 
-fn document_dependencies(_path: &str, text: &str) -> BTreeSet<String> {
-    text.lines()
-        .filter_map(|line| declaration_target(line, "use"))
+fn document_dependencies(path: &str, text: &str) -> BTreeSet<String> {
+    parse_source(path, text)
+        .items
+        .into_iter()
+        .filter_map(|item| match item {
+            Item::Use(import) => (!import.path.is_empty()).then(|| import.path.join(".")),
+            Item::Module(_)
+            | Item::Type(_)
+            | Item::SumType(_)
+            | Item::TypeAlias(_)
+            | Item::Const(_)
+            | Item::Function(_) => None,
+        })
         .collect()
 }
 
@@ -708,6 +712,30 @@ mod tests {
         );
         service.diagnostics("main.rss");
         assert_eq!(service.query_stats(QueryKind::Diagnostics).misses, 2);
+    }
+
+    #[test]
+    fn dependency_graph_comes_from_parsed_items_not_text_lines() {
+        let source = r#"
+            // use ignored.*
+            const note = "use also_ignored.*"
+            use host.api as host
+            fn main() -> Unit {}
+        "#;
+        assert_eq!(
+            document_dependencies("main.rss", source),
+            BTreeSet::from(["host.api".to_string()])
+        );
+
+        let interface = r#"
+            // module ignored
+            module host.api
+            pub fn value() -> Unit
+        "#;
+        assert_eq!(
+            interface_modules("host.rssi", interface),
+            BTreeSet::from(["host.api".to_string()])
+        );
     }
 
     #[test]

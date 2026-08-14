@@ -1046,6 +1046,14 @@ fn language_engine_does_not_read_the_operating_system() {
             "language service must retain query boundary `{boundary}`"
         );
     }
+    assert!(
+        language_service.contains("parse_source"),
+        "language-service dependency discovery must consume parsed syntax"
+    );
+    assert!(
+        !language_service.contains("fn declaration_target"),
+        "language-service must not derive module graph edges from text lines"
+    );
 }
 
 #[test]
