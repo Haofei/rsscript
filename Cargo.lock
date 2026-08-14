@@ -2131,6 +2131,7 @@ name = "rsscript-xtask"
 version = "0.1.0"
 dependencies = [
  "jsonschema",
+ "rsscript-provider-api",
  "rsscript-sdk",
  "serde",
  "serde_json",

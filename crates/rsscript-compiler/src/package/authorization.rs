@@ -694,9 +694,12 @@ fn snapshot_native_build_inputs(
         return Ok((Vec::new(), None));
     }
 
+    // The cache layout is versioned because earlier layouts did not verify a
+    // reused entry before returning it.  Do not let a partially populated
+    // legacy cache become an authorized native build input.
     let cache_root = std::env::var_os("RSS_NATIVE_SNAPSHOT_CACHE_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("rss-native-snapshots-v1"));
+        .unwrap_or_else(|| std::env::temp_dir().join("rss-native-snapshots-v2"));
     let staging_root = cache_root.join("staging");
     let entries_root = cache_root.join("entries");
     let locks_root = cache_root.join("locks");
@@ -734,7 +737,7 @@ fn snapshot_native_build_inputs(
     let native_abi_path = directory.path().join("native-abi");
     snapshot_tree(&native_abi_source, &native_abi_path)?;
     let digest = snapshot_tree_digest(directory.path())?;
-    let published = entries_root.join(digest);
+    let published = entries_root.join(&digest);
     let lock = OpenOptions::new()
         .create(true)
         .read(true)
@@ -759,6 +762,13 @@ fn snapshot_native_build_inputs(
         ));
     }
     if published.exists() {
+        let published_digest = snapshot_tree_digest(&published)?;
+        if published_digest != digest {
+            return Err(format!(
+                "authorized native snapshot cache entry failed integrity verification: {}",
+                published.display()
+            ));
+        }
         drop(directory);
     } else {
         let staging = directory.keep();

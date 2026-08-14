@@ -6,15 +6,18 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use rsscript_sdk::provider::{
+use rsscript_provider_api::CancellationToken;
+use rsscript_provider_api::{
     BlockingBehavior, CancellationBehavior, DataEffect, ExternalSymbol, FunctionSignature,
-    NativeInterpreterFn, ParameterSignature, ProviderCallMode, ProviderDescriptor,
+    NativeInterpreterFn, ParameterSignature, ProviderCallMode, ProviderDescriptor, ProviderError,
     ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor, RUNTIME_ABI_VERSION,
     ResourceCleanupContract,
 };
 use rsscript_sdk::{
-    ArtifactVerifier, CancellationToken, Compiler, ExecutionRequest, ProviderRegistry, RunLimits,
-    Runtime,
+    artifact::ArtifactVerifier,
+    compile::Compiler,
+    provider_api::ProviderRegistry,
+    runtime::{ExecutionRequest, RunLimits, Runtime},
 };
 use serde::{Deserialize, Serialize};
 
@@ -351,9 +354,7 @@ fn metrics_provider_runtime() -> Result<Runtime, Box<dyn Error>> {
                 signature,
                 callable: NativeInterpreterFn::new(|mut values| {
                     values.pop().filter(|_| values.is_empty()).ok_or_else(|| {
-                        rsscript_sdk::provider::ProviderError::invalid_argument(
-                            "metrics echo expects one argument",
-                        )
+                        ProviderError::invalid_argument("metrics echo expects one argument")
                     })
                 }),
             },
