@@ -27,6 +27,25 @@ pub const ARTIFACT_BUNDLE_SCHEMA: &str = "rsscript.artifact_bundle.v1";
 pub const ARTIFACT_BUNDLE_MAGIC: &[u8; 8] = b"RSSBND\0\x01";
 pub const SOURCE_ANALYSIS_SCHEMA: &str = "rsscript.source_analysis.v1";
 pub const PACKAGE_ANALYSIS_SCHEMA: &str = "rsscript.package_analysis.v1";
+
+/// Provider- and review-neutral identity of the immutable package that
+/// produced an Artifact Bundle or package-analysis evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PackageIdentityV1 {
+    pub name: String,
+    pub version: String,
+    pub edition: String,
+}
+
+/// Logical source role recorded in package analysis. This is source evidence,
+/// not a review classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackageFileKindV1 {
+    Interface,
+    Source,
+    Test,
+}
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 const MAX_ANALYSIS_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES: usize = 64 * 1024 * 1024;

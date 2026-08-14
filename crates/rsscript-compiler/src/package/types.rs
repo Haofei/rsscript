@@ -5,6 +5,10 @@ use serde::{Deserialize, Serialize};
 use crate::diagnostic::{Diagnostic, Span};
 use crate::review::{ReviewFinding, ReviewMap};
 
+pub use rsscript_artifact::{
+    PackageFileKindV1 as PackageReviewFileKind, PackageIdentityV1 as PackageIdentity,
+};
+
 /// Native package dependency metadata captured during package preparation.
 ///
 /// The package boundary owns this input because it is part of the immutable
@@ -527,13 +531,6 @@ pub enum PackageInterfaceChangeKind {
     Modified,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PackageIdentity {
-    pub name: String,
-    pub version: String,
-    pub edition: String,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PackageRisk {
@@ -644,14 +641,6 @@ pub struct PackageProviderImplementation {
     pub version: Option<String>,
     pub interface_features: Vec<String>,
     pub interface_effective_hash: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PackageReviewFileKind {
-    Interface,
-    Source,
-    Test,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

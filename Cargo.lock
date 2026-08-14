@@ -1804,6 +1804,7 @@ dependencies = [
  "hex",
  "libc",
  "rsscript-abi-model",
+ "rsscript-artifact",
  "rsscript-artifact-store",
  "rsscript-build-support",
  "rsscript-bytecode",
