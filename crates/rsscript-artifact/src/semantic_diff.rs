@@ -554,27 +554,7 @@ fn append_counts<T: Serialize>(output: &mut String, title: &str, diff: &FactSetD
 
 #[cfg(test)]
 mod tests {
-    use crate::Compiler;
-
     use super::*;
-
-    #[test]
-    fn diff_reports_facts_without_policy_conclusions() {
-        let compiler = Compiler;
-        let old = compiler
-            .compile("old.rss", "pub fn value() -> Int { return 1 }")
-            .expect("old artifact");
-        let new = compiler
-            .compile("new.rss", "pub fn value() -> Int { return 2 }")
-            .expect("new artifact");
-        let diff = SemanticDiffV1::between(old.bundle(), new.bundle());
-        let json = serde_json::to_string(&diff).expect("semantic diff JSON");
-        assert_eq!(diff.schema, SEMANTIC_DIFF_SCHEMA);
-        assert_ne!(diff.old.module_digest, diff.new.module_digest);
-        assert!(!json.contains("risk"));
-        assert!(!json.contains("allow"));
-        assert!(!json.contains("deny"));
-    }
 
     #[test]
     fn diagnostic_facts_ignore_coordinates_and_remain_policy_neutral() {

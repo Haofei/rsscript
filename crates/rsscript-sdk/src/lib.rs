@@ -104,21 +104,17 @@ pub use rsscript_vm::{
     ResolvedProviderFunction, ResourceCleanupContract, ResourceHandle, SignatureHash, VmLimits,
     compile_executable_ir,
 };
-#[cfg(feature = "execution")]
-mod semantic_diff;
 #[cfg(feature = "compatibility")]
 #[allow(dead_code)]
 mod vm_adapter;
 #[cfg(feature = "execution")]
 pub use rsscript_artifact::{
     ARTIFACT_BUNDLE_MAGIC, ARTIFACT_BUNDLE_SCHEMA, ArtifactBundle, ArtifactBundleError,
-    BuildProvenanceV1, InterfaceRequirementV1, PACKAGE_ANALYSIS_SCHEMA, SOURCE_ANALYSIS_SCHEMA,
-};
-#[cfg(feature = "execution")]
-pub use semantic_diff::{
-    AwaitFactV1, CallEdgeFactV1, ChangedFactV1, CountChangeV1, ExportFactV1, ExternalCallFactV1,
-    ExternalContractFactV1, FactSetDiffV1, FunctionParameterFactV1, ResourceLifetimeFactV1,
-    ResourceTransferFactV1, SEMANTIC_DIFF_SCHEMA, SemanticDiffV1, TaskGroupFactV1,
+    ArtifactIdentityV1, AwaitFactV1, BuildProvenanceV1, CallEdgeFactV1, ChangedFactV1,
+    CountChangeV1, DiagnosticFactV1, ExportFactV1, ExternalCallFactV1, ExternalContractFactV1,
+    FactSetDiffV1, FunctionParameterFactV1, InterfaceRequirementV1, PACKAGE_ANALYSIS_SCHEMA,
+    ResourceLifetimeFactV1, ResourceTransferFactV1, SEMANTIC_DIFF_SCHEMA, SOURCE_ANALYSIS_SCHEMA,
+    SemanticDiffV1, TaskGroupFactV1,
 };
 #[cfg(feature = "execution")]
 use sha2::{Digest, Sha256};

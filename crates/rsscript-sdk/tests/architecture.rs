@@ -1168,6 +1168,24 @@ fn artifact_persistence_is_an_execution_only_adapter() {
 }
 
 #[test]
+fn semantic_diff_is_an_artifact_contract_not_sdk_implementation() {
+    let root = workspace_root();
+    let artifact = read(&root.join("crates/rsscript-artifact/src/lib.rs"));
+    let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
+    assert!(artifact.contains("mod semantic_diff;"));
+    assert!(artifact.contains("SemanticDiffV1"));
+    assert!(artifact.contains("SEMANTIC_DIFF_SCHEMA"));
+    assert!(
+        !root
+            .join("crates/rsscript-sdk/src/semantic_diff.rs")
+            .exists(),
+        "SDK must compose the semantic-diff contract rather than own it"
+    );
+    assert!(sdk.contains("pub use rsscript_artifact"));
+    assert!(sdk.contains("SemanticDiffV1"));
+}
+
+#[test]
 fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
     let root = workspace_root();
     let package_types = read(&root.join("crates/rsscript-compiler/src/package/types.rs"));

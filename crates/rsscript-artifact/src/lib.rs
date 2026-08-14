@@ -14,6 +14,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+mod semantic_diff;
+
+pub use semantic_diff::{
+    ArtifactIdentityV1, AwaitFactV1, CallEdgeFactV1, ChangedFactV1, CountChangeV1,
+    DiagnosticFactV1, ExportFactV1, ExternalCallFactV1, ExternalContractFactV1, FactSetDiffV1,
+    FunctionParameterFactV1, ResourceLifetimeFactV1, ResourceTransferFactV1, SEMANTIC_DIFF_SCHEMA,
+    SemanticDiffV1, TaskGroupFactV1,
+};
+
 pub const ARTIFACT_BUNDLE_SCHEMA: &str = "rsscript.artifact_bundle.v1";
 pub const ARTIFACT_BUNDLE_MAGIC: &[u8; 8] = b"RSSBND\0\x01";
 pub const SOURCE_ANALYSIS_SCHEMA: &str = "rsscript.source_analysis.v1";

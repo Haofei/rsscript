@@ -1295,6 +1295,9 @@ mechanical acceptance condition holds.
       `rsscript.semantic_diff.v2` adds coordinate-free diagnostic fact sets;
       v1 remains available as the prior schema, while v2 is validated in the
       SDK and CLI workflow tests and contains no policy verdict fields.
+  - [x] **A07.5 — Place semantic-diff ownership at the Artifact boundary.**
+    `rsscript-artifact` owns the v2 schema, fact types, and bundle-to-bundle
+    construction; SDK retains only explicit reviewed re-exports.
 - [x] **A08 — Run scripts out of process by default.** `rss run` uses the
   versioned child protocol; trusted in-process execution is explicit.
 - [ ] **A09 — Harden the reference Linux runner profile.** Add allowlisted
