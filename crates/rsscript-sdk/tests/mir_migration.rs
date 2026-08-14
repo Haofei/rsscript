@@ -161,6 +161,18 @@ fn main() -> Int {
 "#,
     },
     MigrationCase {
+        name: "manage_moves_local",
+        capability: "explicit local-to-managed ownership transitions",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn main() -> String {
+    local value = "rss"
+    let managed = manage value
+    return managed
+}
+"#,
+    },
+    MigrationCase {
         name: "list_literal",
         capability: "owned list literals",
         stage: MigrationStage::DualPath,
