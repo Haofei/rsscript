@@ -588,7 +588,10 @@ mechanical acceptance condition holds.
     the pure compiler; legacy snapshot/build APIs remain only for package
     analysis/native compatibility. A dependency-interface fixture proves the
     default route includes dependency-qualified `.rssi` inputs exactly once.
-    Compiler package
+    The reviewed `project` feature no longer selects the compiler `package`
+    dependency closure: the remaining package-analysis/native snapshot API is
+    isolated under `project::legacy::PackageCompatibility` and requires the
+    explicit SDK `compatibility` feature. Compiler package
     callers that also require native/review compatibility remain to be migrated.
   - [ ] **S05.2 — Move Artifact persistence to an adapter.** Relocate locks,
     atomic writes, temporary files, compression, and artifact-store policy out

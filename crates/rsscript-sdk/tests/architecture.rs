@@ -3135,9 +3135,6 @@ fn mir_codegen_is_a_vm_independent_verified_bytecode_boundary() {
         "pub fn build_captured",
         "pub fn build_captured_with_operation",
         "WorkspaceLoader::default()",
-        "load_workspace_snapshot",
-        "pub fn snapshot",
-        "pub fn build",
         "pub fn compile_package",
     ] {
         assert!(
@@ -3145,6 +3142,12 @@ fn mir_codegen_is_a_vm_independent_verified_bytecode_boundary() {
             "project convenience adapter must own `{required}`"
         );
     }
+    assert!(
+        project.contains("pub mod legacy")
+            && project.contains("pub struct PackageCompatibility")
+            && project.contains("load_workspace_snapshot"),
+        "legacy package capture must remain isolated behind the compatibility module"
+    );
 }
 
 #[test]
@@ -3444,7 +3447,10 @@ fn compiler_default_dependency_closure_is_host_neutral() {
         .iter()
         .filter_map(toml::Value::as_str)
         .collect::<BTreeSet<_>>();
-    assert!(sdk_project.contains("rsscript_compiler/package"));
+    assert!(
+        !sdk_project.contains("rsscript_compiler/package"),
+        "reviewed project capture must remain a loader-to-in-memory-compiler path"
+    );
     assert!(
         sdk_project.contains("dep:rsscript-workspace-loader"),
         "project capture must select the dedicated OS workspace loader rather than widening normal execution"

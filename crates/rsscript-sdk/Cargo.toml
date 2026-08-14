@@ -35,7 +35,6 @@ execution = [
 # opt in explicitly; ordinary `execution` accepts only immutable snapshots.
 project = [
     "execution",
-    "rsscript_compiler/package",
     "dep:rsscript-workspace-loader",
 ]
 aot-rust = ["execution", "rsscript_compiler/aot-rust"]

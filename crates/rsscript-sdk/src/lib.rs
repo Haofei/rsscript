@@ -181,8 +181,6 @@ pub mod project {
         WorkspaceSnapshot as CapturedWorkspaceSnapshot,
     };
 
-    pub use rsscript_compiler::WorkspaceSnapshot;
-
     /// Immutable frontend input captured by the OS-facing workspace loader.
     ///
     /// This is deliberately distinct from the legacy compiler
@@ -288,54 +286,6 @@ pub mod project {
             })
         }
 
-        /// Capture all package and dependency inputs exactly once.
-        pub fn snapshot(&self, path: &Path) -> Result<WorkspaceSnapshot, CompileError> {
-            load_workspace_snapshot(path).map_err(|message| CompileError::Package {
-                code: CompileErrorCode::PackageSnapshot,
-                message,
-            })
-        }
-
-        /// Capture one package snapshot while honoring the caller's operation
-        /// boundary during filesystem traversal.
-        pub fn snapshot_with_operation(
-            &self,
-            path: &Path,
-            operation: &OperationContext,
-        ) -> Result<WorkspaceSnapshot, CompileError> {
-            operation.check().map_err(CompileError::from)?;
-            load_workspace_snapshot_with_operation(path, operation).map_err(|message| {
-                match operation.check() {
-                    Ok(()) => CompileError::Package {
-                        code: CompileErrorCode::PackageSnapshot,
-                        message,
-                    },
-                    Err(abort) => CompileError::from(abort),
-                }
-            })
-        }
-
-        /// Build analysis and executable bytes from one immutable package
-        /// snapshot. The underlying [`Compiler`] remains unaware of paths.
-        pub fn build(&self, snapshot: &WorkspaceSnapshot) -> Result<BuiltArtifact, CompileError> {
-            let mut analysis = snapshot.analysis().clone();
-            if analysis.summary.errors != 0 {
-                return Err(CompileError::Diagnostics(analysis.diagnostics.clone()));
-            }
-            let compiled = compile_package_input_to_ir(snapshot.lowering_input())
-                .map_err(CompileError::Diagnostics)?;
-            let artifact = compile_ir_to_bytecode(&compiled, snapshot.digest())
-                .map_err(bytecode_compile_error)?;
-            analysis.module_digest = Some(artifact.header.executable_hash.clone());
-            let analysis =
-                serde_json::to_value(&analysis).map_err(|error| CompileError::Package {
-                    code: CompileErrorCode::PackageAnalysis,
-                    message: error.to_string(),
-                })?;
-            let analysis = AnalysisEnvelopeV1::from_json(analysis).map_err(CompileError::from)?;
-            BuiltArtifact::from_bytecode(artifact, analysis)
-        }
-
         /// Build exactly the source/interface snapshot captured by
         /// [`Self::capture_frontend_from`]. This is the project-level route
         /// that does not reread paths or reconstruct compiler inputs.
@@ -361,17 +311,6 @@ pub mod project {
             Ok(built)
         }
 
-        pub fn build_with_operation(
-            &self,
-            snapshot: &WorkspaceSnapshot,
-            operation: &OperationContext,
-        ) -> Result<BuiltArtifact, CompileError> {
-            operation.check().map_err(CompileError::from)?;
-            let package = self.build(snapshot)?;
-            operation.check().map_err(CompileError::from)?;
-            Ok(package)
-        }
-
         pub fn compile_package(&self, path: &Path) -> Result<BuiltArtifact, CompileError> {
             let captured = self.capture_frontend_from(path, Path::new("."))?;
             self.build_captured(&captured)
@@ -385,6 +324,81 @@ pub mod project {
             let captured =
                 self.capture_frontend_from_with_operation(path, Path::new("."), operation)?;
             self.build_captured_with_operation(&captured, operation)
+        }
+    }
+
+    /// Legacy package-analysis and native-compatibility operations.
+    ///
+    /// This module deliberately remains opt-in because its snapshot contains
+    /// package review and native authorization state. New callers must use
+    /// [`ProjectCompiler::capture_frontend_from`] followed by
+    /// [`ProjectCompiler::build_captured`], which keeps the compiler on its
+    /// immutable in-memory input boundary.
+    #[cfg(feature = "compatibility")]
+    pub mod legacy {
+        use super::*;
+
+        pub use rsscript_compiler::WorkspaceSnapshot;
+
+        pub struct PackageCompatibility;
+
+        impl PackageCompatibility {
+            /// Capture all package and dependency inputs exactly once.
+            pub fn snapshot(path: &Path) -> Result<WorkspaceSnapshot, CompileError> {
+                load_workspace_snapshot(path).map_err(|message| CompileError::Package {
+                    code: CompileErrorCode::PackageSnapshot,
+                    message,
+                })
+            }
+
+            /// Capture a package while honoring a caller operation boundary.
+            pub fn snapshot_with_operation(
+                path: &Path,
+                operation: &OperationContext,
+            ) -> Result<WorkspaceSnapshot, CompileError> {
+                operation.check().map_err(CompileError::from)?;
+                load_workspace_snapshot_with_operation(path, operation).map_err(|message| {
+                    match operation.check() {
+                        Ok(()) => CompileError::Package {
+                            code: CompileErrorCode::PackageSnapshot,
+                            message,
+                        },
+                        Err(abort) => CompileError::from(abort),
+                    }
+                })
+            }
+
+            /// Build compatibility package evidence from one immutable legacy
+            /// snapshot. This path is not part of the reviewed project API.
+            pub fn build(snapshot: &WorkspaceSnapshot) -> Result<BuiltArtifact, CompileError> {
+                let mut analysis = snapshot.analysis().clone();
+                if analysis.summary.errors != 0 {
+                    return Err(CompileError::Diagnostics(analysis.diagnostics.clone()));
+                }
+                let compiled = compile_package_input_to_ir(snapshot.lowering_input())
+                    .map_err(CompileError::Diagnostics)?;
+                let artifact = compile_ir_to_bytecode(&compiled, snapshot.digest())
+                    .map_err(bytecode_compile_error)?;
+                analysis.module_digest = Some(artifact.header.executable_hash.clone());
+                let analysis =
+                    serde_json::to_value(&analysis).map_err(|error| CompileError::Package {
+                        code: CompileErrorCode::PackageAnalysis,
+                        message: error.to_string(),
+                    })?;
+                let analysis =
+                    AnalysisEnvelopeV1::from_json(analysis).map_err(CompileError::from)?;
+                BuiltArtifact::from_bytecode(artifact, analysis)
+            }
+
+            pub fn build_with_operation(
+                snapshot: &WorkspaceSnapshot,
+                operation: &OperationContext,
+            ) -> Result<BuiltArtifact, CompileError> {
+                operation.check().map_err(CompileError::from)?;
+                let package = Self::build(snapshot)?;
+                operation.check().map_err(CompileError::from)?;
+                Ok(package)
+            }
         }
     }
 
@@ -1583,7 +1597,7 @@ mod tests {
         ArtifactVerifier.verify(built).expect("verify artifact")
     }
 
-    #[cfg(feature = "project")]
+    #[cfg(all(feature = "project", feature = "compatibility"))]
     #[test]
     fn package_build_uses_one_immutable_snapshot_and_binds_its_digest() {
         let directory = tempfile::tempdir().expect("workspace");
@@ -1596,22 +1610,24 @@ mod tests {
         let source_path = directory.path().join("src/main.rss");
         std::fs::write(&source_path, "fn main() -> Int { return 1 }").expect("source");
 
-        let compiler = project::ProjectCompiler::new();
         let cancellation = CancellationToken::new();
         cancellation.cancel();
         let cancelled = OperationContext {
             cancellation: Some(cancellation),
             ..OperationContext::default()
         };
-        let error = compiler
-            .snapshot_with_operation(directory.path(), &cancelled)
-            .expect_err("cancelled snapshot");
+        let error = project::legacy::PackageCompatibility::snapshot_with_operation(
+            directory.path(),
+            &cancelled,
+        )
+        .expect_err("cancelled snapshot");
         assert_eq!(error.code(), CompileErrorCode::Cancelled);
-        let snapshot = compiler.snapshot(directory.path()).expect("snapshot");
+        let snapshot =
+            project::legacy::PackageCompatibility::snapshot(directory.path()).expect("snapshot");
         std::fs::write(&source_path, "fn main() -> Int { return 2 }").expect("mutate checkout");
 
-        let first = compiler.build(&snapshot).expect("first build");
-        let second = compiler.build(&snapshot).expect("repeat build");
+        let first = project::legacy::PackageCompatibility::build(&snapshot).expect("first build");
+        let second = project::legacy::PackageCompatibility::build(&snapshot).expect("repeat build");
         assert_eq!(first.artifact_bytes(), second.artifact_bytes());
         assert_eq!(first.snapshot_digest(), snapshot.digest());
         let analysis = first.analysis();
