@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 
-use rsscript_abi_model::{WireRecordFieldLayout, WireRecordLayout, WireType};
+use rsscript_abi_model::{
+    WireRecordFieldLayout, WireRecordLayout, WireType, WireVariantCaseLayout, WireVariantLayout,
+};
 use rsscript_syntax::ast::{DataEffect as SyntaxEffect, Item, Program, TypeKind, TypeRef};
 use rsscript_syntax::parse_source;
 use serde::Serialize;
@@ -87,6 +89,33 @@ impl InterfaceDescriptorV1 {
                     .map(|field| WireRecordFieldLayout {
                         name: field.name.clone(),
                         ty: field.ty.clone(),
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+
+    /// Convert descriptor-owned public sums into positional Provider wire
+    /// layouts. Case ordinals are preserved exactly as declared, so callers
+    /// can use `WireVariantId` without trusting a Provider-supplied name.
+    pub fn wire_variant_layouts(&self) -> Vec<WireVariantLayout> {
+        self.sums
+            .iter()
+            .map(|sum| WireVariantLayout {
+                ty: WireType::from(sum.name.clone()),
+                variants: sum
+                    .variants
+                    .iter()
+                    .map(|variant| WireVariantCaseLayout {
+                        name: variant.name.clone(),
+                        fields: variant
+                            .fields
+                            .iter()
+                            .map(|field| WireRecordFieldLayout {
+                                name: field.name.clone(),
+                                ty: field.ty.clone(),
+                            })
+                            .collect(),
                     })
                     .collect(),
             })
@@ -524,5 +553,9 @@ pub fn get(url: read String) -> HttpResponse
         assert_eq!(sum.variants[1].name, "Failed");
         assert_eq!(sum.variants[1].fields[0].name, "message");
         assert_eq!(sum.variants[1].fields[0].ty, WireType::String);
+        let layout = descriptor.wire_variant_layouts().pop().unwrap();
+        assert_eq!(layout.ty, WireType::from("host.status.Status"));
+        assert_eq!(layout.variants[1].name, "Failed");
+        assert_eq!(layout.variants[1].fields[0].ty, WireType::String);
     }
 }

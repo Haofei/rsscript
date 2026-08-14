@@ -85,6 +85,7 @@ wire_id!(WireResourceTypeId);
 pub struct WireCallTypeTable {
     types: Vec<WireType>,
     records: Vec<WireRecordLayout>,
+    variants: Vec<WireVariantLayout>,
 }
 
 /// Canonical positional layout for one named record in a linked interface
@@ -102,6 +103,23 @@ pub struct WireRecordLayout {
 pub struct WireRecordFieldLayout {
     pub name: String,
     pub ty: WireType,
+}
+
+/// Canonical layout for one named sum type in a linked interface scope.
+/// Cases retain declaration order, which is the numeric `WireVariantId` used
+/// by [`WireValue::Variant`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireVariantLayout {
+    pub ty: WireType,
+    pub variants: Vec<WireVariantCaseLayout>,
+}
+
+/// One sum case. Multiple payload fields are transported as a positional tuple
+/// at the wire boundary; a zero-field case has no payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireVariantCaseLayout {
+    pub name: String,
+    pub fields: Vec<WireRecordFieldLayout>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,6 +141,7 @@ impl WireCallTypeTable {
         let mut table = Self {
             types: Vec::new(),
             records: Vec::new(),
+            variants: Vec::new(),
         };
         for parameter in &signature.parameters {
             table.insert(&parameter.ty)?;
@@ -151,6 +170,34 @@ impl WireCallTypeTable {
 
     pub fn record_layout(&self, ty: &WireType) -> Option<&WireRecordLayout> {
         self.records.iter().find(|record| &record.ty == ty)
+    }
+
+    /// Extend the table with descriptor-owned public sum layouts. Like record
+    /// layouts, canonical type identity is table-owned and never inferred from
+    /// a Provider-returned variant name.
+    pub fn with_variant_layouts(
+        mut self,
+        mut variants: Vec<WireVariantLayout>,
+    ) -> Result<Self, WireTypeTableOverflow> {
+        variants.sort_by(|left, right| left.ty.cmp(&right.ty));
+        for layout in &variants {
+            self.insert(&layout.ty)?;
+            for variant in &layout.variants {
+                for field in &variant.fields {
+                    self.insert(&field.ty)?;
+                }
+            }
+        }
+        self.variants = variants;
+        Ok(self)
+    }
+
+    pub fn variant_layout(&self, ty: &WireType) -> Option<&WireVariantLayout> {
+        self.variants.iter().find(|layout| &layout.ty == ty)
+    }
+
+    pub fn variant_case(&self, ty: &WireType, id: WireVariantId) -> Option<&WireVariantCaseLayout> {
+        self.variant_layout(ty)?.variants.get(id.get() as usize)
     }
 
     /// Return the identity for a type present in this signature's table.
