@@ -375,10 +375,15 @@ fn render_sum_wrapper(
         } else {
             output.push_str(&format!("    {variant_name} {{\n"));
             for field in &variant.fields {
+                let ty = if sum_type_matches(&field.ty, &sum.name) {
+                    format!("Box<{type_name}>")
+                } else {
+                    render_rust_type(&field.ty, resources, records, sums)
+                };
                 output.push_str(&format!(
                     "        {}: {},\n",
                     rust_identifier(&field.name),
-                    render_rust_type(&field.ty, resources, records, sums),
+                    ty,
                 ));
             }
             output.push_str("    },\n");
@@ -804,6 +809,26 @@ mod tests {
         assert!(generated.contains("Failed {"));
         assert!(generated.contains("message: String"));
         assert!(generated.contains("fn current(&self) -> Result<HostStatusStatus"));
+    }
+
+    #[test]
+    fn generated_recursive_sum_boxes_its_self_reference() {
+        let descriptor = InterfaceDescriptorV1::from_interface_source(
+            "tree.rssi",
+            "module host.tree\n\npub sum Tree { Leaf(value: Int), Branch(next: Tree) }\npub fn root() -> Tree\n",
+        )
+        .unwrap();
+        let generated = ProviderInterface::from_descriptor(descriptor)
+            .unwrap()
+            .render_rust(&RustProviderOptions {
+                provider_id: "rsscript.tree",
+                blocking: GeneratedBlocking::NonBlocking,
+                cancellation: GeneratedCancellation::NotApplicable,
+                thread_safe: true,
+                reentrant: true,
+                cleanup: GeneratedCleanup::None,
+            });
+        assert!(generated.contains("next: Box<HostTreeTree>"));
     }
 
     #[test]
