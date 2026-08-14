@@ -16,7 +16,10 @@ not part of the default or `execution` SDK surface.
 
 - Compilation and diagnostics: `Compiler`, `CompileError`, immutable
   `FrontendInputSnapshot`, snapshot-based check/build entry points, checked
-  source, and language-service query types.
+  source, and language-service query types. The frontend language module also
+  exposes the operation-aware multi-source/interface analysis query used by
+  the shared workspace diagnostics path; it remains frontend-only and has no
+  runtime or Provider dependency.
 - Artifact lifecycle: `BuiltArtifact`, `VerifiedArtifact`, `ArtifactBundle`,
   `ArtifactVerifier`, provenance, interface requirements, the versioned source
   and package analysis schema identifiers, and neutral semantic diff data,

@@ -20,6 +20,10 @@ single-source and slice-based helpers build this snapshot and remain
 compatibility conveniences. This does not yet migrate package graph capture,
 manifest parsing, or Artifact persistence out of the compiler package boundary.
 
+The frontend-only language façade also exposes the matching operation-aware
+multi-source/interface analysis query. It is used by the shared workspace
+diagnostic path and does not expose runtime, Provider, or package authority.
+
 ## Compatibility and migration
 
 Existing `compile` and `compile_with_interfaces` calls continue to work with
