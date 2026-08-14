@@ -527,9 +527,10 @@ mechanical acceptance condition holds.
   - [ ] **S04.1 — Replace the compiler façade dependency with syntax/semantic
     query dependencies.** Editor symbols and formatting now come directly from
     `rsscript-semantics` and `rsscript-syntax`; syntax lint now also bypasses
-    compiler. Module and import dependency discovery now consumes parsed syntax
-    instead of line-oriented text extraction. Diagnostics and workspace semantic
-    queries remain on the compiler transition path. Cargo metadata
+    compiler. Module and import dependency discovery now consumes the shared
+    CompilationSession header query instead of line-oriented text extraction.
+    Diagnostics and workspace semantic queries remain on the compiler transition
+    path. Cargo metadata
     tests must eventually reject a language-service edge to
     compiler, VM, SDK, package persistence, or concrete Providers.
   - [x] **S04.2 — Add document revision and invalidation tests.** The language

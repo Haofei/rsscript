@@ -1051,6 +1051,10 @@ fn language_engine_does_not_read_the_operating_system() {
         "language-service dependency discovery must consume parsed syntax"
     );
     assert!(
+        language_service.contains("CompilationSession"),
+        "language-service dependency queries must consume the shared frontend session"
+    );
+    assert!(
         !language_service.contains("fn declaration_target"),
         "language-service must not derive module graph edges from text lines"
     );

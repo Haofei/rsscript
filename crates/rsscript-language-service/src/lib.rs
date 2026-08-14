@@ -22,8 +22,8 @@ pub use rsscript_diagnostics::{
     Diagnostic, DiagnosticExplanation, Severity, Span, explain_diagnostic_code,
 };
 pub use rsscript_semantics::{
-    Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
-    document_symbols, symbol_index,
+    CompilationSession, Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo,
+    SymbolKind, SymbolLookup, document_symbols, symbol_index,
 };
 use rsscript_syntax::{ast::Item, parse_source};
 pub use rsscript_syntax::{format_source, lint_source};
@@ -52,6 +52,7 @@ pub struct DocumentSnapshot {
 #[derive(Default)]
 pub struct LanguageService {
     documents: BTreeMap<String, Document>,
+    frontend: CompilationSession,
     diagnostic_cache: BTreeMap<(String, u64), Arc<[Diagnostic]>>,
     lint_cache: BTreeMap<(String, u64), Arc<[Diagnostic]>>,
     format_cache: BTreeMap<(String, u64), Arc<str>>,
@@ -151,9 +152,15 @@ impl LanguageService {
             Document {
                 revision,
                 kind,
-                text,
+                text: Arc::clone(&text),
             },
         );
+        if !path.is_empty() {
+            let _ = match kind {
+                DocumentKind::Source => self.frontend.set_file(path.clone(), text.as_ref()),
+                DocumentKind::Interface => self.frontend.set_interface(path.clone(), text.as_ref()),
+            };
+        }
         self.invalidate_document_queries(&path);
         if previous
             .as_ref()
@@ -166,6 +173,16 @@ impl LanguageService {
 
     pub fn remove_file(&mut self, path: &str) -> bool {
         let removed = self.documents.remove(path);
+        if let Some(document) = &removed {
+            match document.kind {
+                DocumentKind::Source => {
+                    self.frontend.remove_file(path);
+                }
+                DocumentKind::Interface => {
+                    self.frontend.remove_interface(path);
+                }
+            }
+        }
         self.invalidate_document_queries(path);
         if let Some(document) = &removed
             && document.kind == DocumentKind::Interface
@@ -385,10 +402,13 @@ impl LanguageService {
             self.record_hit(QueryKind::Dependencies);
             return value;
         }
-        let value: Arc<[String]> = document_dependencies(path, &document.text)
-            .into_iter()
-            .collect::<Vec<_>>()
-            .into();
+        let header = match document.kind {
+            DocumentKind::Source => self.frontend.module_header(path),
+            DocumentKind::Interface => self.frontend.interface_module_header(path),
+        };
+        let value: Arc<[String]> = header
+            .map(|header| header.imports().to_vec().into())
+            .unwrap_or_else(|| Arc::from([]));
         self.dependency_cache.insert(key, Arc::clone(&value));
         self.record_miss(QueryKind::Dependencies);
         value
@@ -736,6 +756,24 @@ mod tests {
             interface_modules("host.rssi", interface),
             BTreeSet::from(["host.api".to_string()])
         );
+    }
+
+    #[test]
+    fn dependencies_consume_the_compilation_session_header_query() {
+        let mut service = LanguageService::default();
+        service.set_file(
+            "main.rss",
+            1,
+            DocumentKind::Source,
+            "module app\nuse host.api as host\nfn main() -> Unit {}\n",
+        );
+
+        assert_eq!(service.dependencies("main.rss").as_ref(), ["host.api"]);
+        service.invalidate_document_queries("main.rss");
+        assert_eq!(service.dependencies("main.rss").as_ref(), ["host.api"]);
+        let stats = service.frontend.stats();
+        assert_eq!(stats.module_header_cache_misses, 1);
+        assert_eq!(stats.module_header_cache_hits, 1);
     }
 
     #[test]
