@@ -686,6 +686,13 @@ mechanical acceptance condition holds.
       MIR-only codegen emit/execute the existing verifier-checked `GetField`
       bytecode operation; typed layouts, mutation, variants, and pattern
       projection remain fail-closed.
+    - [x] **M02.3h — Lower resolved record construction.** Checked struct/class
+      constructors now lower to `MakeStruct { destination, ty, fields }`, with
+      a canonical named `TypeId`, source-order argument evaluation, and
+      declaration-order layout fields. MIR rejects malformed record layouts and
+      the direct migration corpus compares construction plus field projection
+      across the legacy VM, MIR interpreter, and verified MIR bytecode VM.
+      Resources, variants, mutation, and pattern projection remain fail-closed.
 - [x] **M02.4 — Add MIR structural validation.** Reject dangling blocks,
     invalid IDs, unterminated blocks, undefined values, and malformed CFG edges.
     - [x] **M02.4a — Verify the initial structural subset.** The verifier

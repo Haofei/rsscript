@@ -711,9 +711,20 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         if matches!(resolution, checked::CallResolution::EnumVariant) {
             return self.lower_enum_variant_call(callee, args);
         }
-        let checked::CallResolution::Resolved { signature, .. } = resolution else {
+        let checked::CallResolution::Resolved { signature, kind } = resolution else {
             return self.unsupported("unresolved checked HIR call");
         };
+        if matches!(
+            kind,
+            checked::ResolvedCalleeKind::Constructor {
+                type_kind: checked::HirTypeKind::Struct | checked::HirTypeKind::Class,
+            }
+        ) {
+            return self.lower_record_constructor(signature, args);
+        }
+        if matches!(kind, checked::ResolvedCalleeKind::Constructor { .. }) {
+            return self.unsupported("non-record checked HIR constructor");
+        }
         if signature.is_builtin {
             return self.lower_builtin_call(signature, args);
         }
@@ -774,6 +785,63 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         for place in retained_places {
             self.emit(MirInstruction::Retain { place });
         }
+        Ok(destination)
+    }
+
+    /// Materialize a resolved struct/class constructor directly from checked
+    /// signature facts. Arguments still evaluate in source order, while the
+    /// resulting layout fields use declaration/parameter order.
+    fn lower_record_constructor(
+        &mut self,
+        signature: &checked::FunctionSig,
+        args: &[checked::HirCallArg],
+    ) -> Result<ValueId, MirLoweringError> {
+        let wire_type = signature
+            .return_ty
+            .as_ref()
+            .map(|ty| WireType::parse(&ty.to_string()))
+            .ok_or_else(|| MirLoweringError::Unsupported {
+                function: self.function_name.to_owned(),
+                construct: "record constructor without result type",
+            })?;
+        if !matches!(wire_type, WireType::Named { .. }) {
+            return self.unsupported("record constructor with non-named result type");
+        }
+        let mut values = vec![None; signature.params.len()];
+        let mut ordered = args.iter().collect::<Vec<_>>();
+        ordered.sort_by_key(|argument| argument.evaluation_index);
+        for argument in ordered {
+            let index = argument
+                .parameter_index
+                .ok_or_else(|| MirLoweringError::Unsupported {
+                    function: self.function_name.to_owned(),
+                    construct: "record constructor with unresolved argument binding",
+                })?;
+            let Some(parameter) = signature.params.get(index) else {
+                return self.unsupported("record constructor argument outside signature");
+            };
+            if values[index].is_some() {
+                return self.unsupported("record constructor duplicate argument binding");
+            }
+            values[index] = Some((
+                parameter.name.clone(),
+                self.lower_expression(&argument.value)?,
+            ));
+        }
+        let fields = values
+            .into_iter()
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| MirLoweringError::Unsupported {
+                function: self.function_name.to_owned(),
+                construct: "record constructor missing checked field binding",
+            })?;
+        let destination = self.value();
+        let ty = self.types.intern(wire_type);
+        self.emit(MirInstruction::MakeStruct {
+            destination,
+            ty,
+            fields,
+        });
         Ok(destination)
     }
 

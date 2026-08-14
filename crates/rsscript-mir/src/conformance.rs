@@ -46,6 +46,10 @@ pub enum MirValue {
     List(Vec<MirValue>),
     Map(Vec<(MirValue, MirValue)>),
     JsonObject(Vec<(String, MirValue)>),
+    Record {
+        name: String,
+        fields: Vec<(String, MirValue)>,
+    },
     ResultOk(Box<MirValue>),
     ResultErr(Box<MirValue>),
 }
@@ -83,6 +87,14 @@ impl MirValue {
                     .collect::<Vec<_>>();
                 rendered.sort();
                 format!("{{{}}}", rendered.join(","))
+            }
+            Self::Record { name, fields } => {
+                let fields = fields
+                    .iter()
+                    .map(|(field, value)| format!("{field}: {}", value.render()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{name}({fields})")
             }
             Self::ResultOk(value) => format!("Ok({})", value.render()),
             Self::ResultErr(value) => format!("Err({})", value.render()),
@@ -231,6 +243,25 @@ impl<'a> Interpreter<'a> {
                                 .collect::<Result<Vec<_>, MirExecutionError>>()?,
                         ));
                     }
+                    MirInstruction::MakeStruct {
+                        destination,
+                        ty,
+                        fields,
+                    } => {
+                        let name = match self.module.ty(*ty) {
+                            Some(rsscript_abi_model::WireType::Named { name, .. }) => name.clone(),
+                            _ => return Err(MirExecutionError::InvalidOperation("record type")),
+                        };
+                        values[destination.index()] = Some(MirValue::Record {
+                            name,
+                            fields: fields
+                                .iter()
+                                .map(|(field, value)| {
+                                    Ok((field.clone(), value_at(&values, *value)?))
+                                })
+                                .collect::<Result<Vec<_>, MirExecutionError>>()?,
+                        });
+                    }
                     MirInstruction::MakeResult {
                         destination,
                         ok,
@@ -287,12 +318,14 @@ impl<'a> Interpreter<'a> {
                         field,
                     } => {
                         let value = match value_at(&values, *base)? {
-                            MirValue::JsonObject(fields) => fields
-                                .into_iter()
-                                .find_map(|(name, value)| (name == *field).then_some(value))
-                                .ok_or(MirExecutionError::InvalidOperation(
-                                    "missing object field",
-                                ))?,
+                            MirValue::JsonObject(fields) | MirValue::Record { fields, .. } => {
+                                fields
+                                    .into_iter()
+                                    .find_map(|(name, value)| (name == *field).then_some(value))
+                                    .ok_or(MirExecutionError::InvalidOperation(
+                                        "missing object field",
+                                    ))?
+                            }
                             _ => return Err(MirExecutionError::InvalidOperation("field base")),
                         };
                         values[destination.index()] = Some(value);

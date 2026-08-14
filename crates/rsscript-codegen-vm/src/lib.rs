@@ -283,6 +283,41 @@ fn lower_instruction(
                 ),
             ],
         )),
+        MirInstruction::MakeStruct {
+            destination,
+            ty,
+            fields,
+        } => {
+            let name = match mir.ty(*ty) {
+                Some(rsscript_abi_model::WireType::Named { name, .. }) => name,
+                _ => return Err(CodegenError::InvalidMir("record type is not named".into())),
+            };
+            code.push(instr(
+                "MakeStruct",
+                [
+                    ("dst", json!(value_reg(function, *destination))),
+                    (
+                        "layout",
+                        json!({
+                            "name": name,
+                            "field_names": fields.iter().map(|(field, _)| field).collect::<Vec<_>>(),
+                        }),
+                    ),
+                    (
+                        "fields",
+                        json!(
+                            fields
+                                .iter()
+                                .map(|(field, value)| [
+                                    serde_json::Value::String(field.clone()),
+                                    json!(value_reg(function, *value)),
+                                ])
+                                .collect::<Vec<_>>()
+                        ),
+                    ),
+                ],
+            ));
+        }
         MirInstruction::MakeResult {
             destination,
             ok,

@@ -104,6 +104,14 @@ pub enum MirInstruction {
         destination: ValueId,
         fields: Vec<(String, ValueId)>,
     },
+    /// Construct a resolved struct/class value. The layout type is a canonical
+    /// module-local `TypeId`; field labels are aggregate layout data in
+    /// declaration order, never a source-level constructor target.
+    MakeStruct {
+        destination: ValueId,
+        ty: TypeId,
+        fields: Vec<(String, ValueId)>,
+    },
     /// Build a canonical `Result` variant without routing a language builtin
     /// name through a backend. `ok = true` is `Ok(value)` and `ok = false` is
     /// `Err(value)`.
@@ -526,6 +534,7 @@ impl MirModule {
                 &self.external_imports,
             )?;
             verify_resource_types(function, &self.types)?;
+            verify_record_types(function, &self.types)?;
             verify_resource_lifetimes(function)?;
             verify_task_lifetimes(function)?;
         }
@@ -557,6 +566,43 @@ fn verify_resource_types(
                         });
                     }
                 }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn verify_record_types(
+    function: &MirFunction,
+    types: &[WireType],
+) -> Result<(), MirValidationError> {
+    for block in function.blocks() {
+        for instruction in block.instructions() {
+            match instruction {
+                MirInstruction::MakeStruct { ty, fields, .. } => {
+                    if !matches!(types.get(ty.index()), Some(WireType::Named { .. })) {
+                        return Err(MirValidationError::InvalidRecordType {
+                            function: function.id,
+                            ty: *ty,
+                        });
+                    }
+                    let mut names = BTreeSet::new();
+                    for (field, _) in fields {
+                        if field.is_empty() || !names.insert(field) {
+                            return Err(MirValidationError::InvalidAggregateField {
+                                function: function.id,
+                                field: field.clone(),
+                            });
+                        }
+                    }
+                }
+                MirInstruction::GetField { field, .. } if field.is_empty() => {
+                    return Err(MirValidationError::InvalidAggregateField {
+                        function: function.id,
+                        field: field.clone(),
+                    });
+                }
+                _ => {}
             }
         }
     }
@@ -839,6 +885,7 @@ fn instruction_definition(instruction: &MirInstruction) -> Option<ValueId> {
         | MirInstruction::MakeList { destination, .. }
         | MirInstruction::MakeMap { destination, .. }
         | MirInstruction::MakeObject { destination, .. }
+        | MirInstruction::MakeStruct { destination, .. }
         | MirInstruction::MakeResult { destination, .. }
         | MirInstruction::ListGet { destination, .. }
         | MirInstruction::GetField { destination, .. }
@@ -873,6 +920,9 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
             .flat_map(|(key, value)| [*key, *value])
             .collect(),
         MirInstruction::MakeObject { fields, .. } => {
+            fields.iter().map(|(_, value)| *value).collect()
+        }
+        MirInstruction::MakeStruct { fields, .. } => {
             fields.iter().map(|(_, value)| *value).collect()
         }
         MirInstruction::MakeResult { value, .. } => vec![*value],
@@ -1049,6 +1099,7 @@ fn transfer_move_state(
         | MirInstruction::MakeList { .. }
         | MirInstruction::MakeMap { .. }
         | MirInstruction::MakeObject { .. }
+        | MirInstruction::MakeStruct { .. }
         | MirInstruction::MakeResult { .. }
         | MirInstruction::ListGet { .. }
         | MirInstruction::GetField { .. }
@@ -1116,6 +1167,7 @@ fn verify_instruction(
         | MirInstruction::ListGet { destination, .. }
         | MirInstruction::GetField { destination, .. }
         | MirInstruction::ListLen { destination, .. } => define(*destination, defined),
+        MirInstruction::MakeStruct { destination, .. } => define(*destination, defined),
         MirInstruction::ReadPlace { destination, place } => {
             check_live_place(*place, moved_places)?;
             define(*destination, defined)
@@ -1387,6 +1439,14 @@ pub enum MirValidationError {
     InvalidType {
         function: FunctionId,
         ty: TypeId,
+    },
+    InvalidRecordType {
+        function: FunctionId,
+        ty: TypeId,
+    },
+    InvalidAggregateField {
+        function: FunctionId,
+        field: String,
     },
     InvalidResourceType {
         function: FunctionId,
@@ -2315,5 +2375,34 @@ mod tests {
             Vec::new(),
         )
         .expect("write reinitializes a place on every path after the join");
+    }
+
+    #[test]
+    fn rejects_record_construction_without_a_named_layout_type() {
+        let function = MirFunction::new(
+            FunctionId::new(0),
+            signature(),
+            0,
+            2,
+            vec![BasicBlock::new(
+                BlockId::new(0),
+                vec![
+                    MirInstruction::LoadLiteral {
+                        destination: ValueId::new(0),
+                        value: MirLiteral::Unit,
+                    },
+                    MirInstruction::MakeStruct {
+                        destination: ValueId::new(1),
+                        ty: TypeId::new(0),
+                        fields: vec![("value".into(), ValueId::new(0))],
+                    },
+                ],
+                MirTerminator::Return(Some(ValueId::new(1))),
+            )],
+        );
+        assert!(matches!(
+            MirModule::new(vec![WireType::Unit], vec![function], debug(), Vec::new()),
+            Err(MirValidationError::InvalidRecordType { .. })
+        ));
     }
 }

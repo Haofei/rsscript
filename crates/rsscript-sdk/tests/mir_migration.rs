@@ -161,6 +161,19 @@ fn main() -> JsonValue {
 "#,
     },
     MigrationCase {
+        name: "record_constructor_and_field",
+        capability: "resolved record construction and field access",
+        stage: MigrationStage::DualPath,
+        source: r#"
+struct Box { count: Int }
+
+fn main() -> Int {
+    let item = Box(count: 42)
+    return item.count
+}
+"#,
+    },
+    MigrationCase {
         name: "list_index",
         capability: "resolved list indexing",
         stage: MigrationStage::DualPath,
