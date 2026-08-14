@@ -493,6 +493,26 @@ fn lower_instruction(
                 ("src", json!(task_reg(function, *task))),
             ],
         )),
+        MirInstruction::Select {
+            tasks,
+            winner,
+            value,
+        } => code.push(instr(
+            "SelectWait",
+            [
+                (
+                    "handles",
+                    json!(
+                        tasks
+                            .iter()
+                            .map(|task| task_reg(function, *task))
+                            .collect::<Vec<_>>()
+                    ),
+                ),
+                ("winner", json!(value_reg(function, *winner))),
+                ("value", json!(value_reg(function, *value))),
+            ],
+        )),
         MirInstruction::TryResult {
             destination,
             source,
@@ -1123,6 +1143,94 @@ mod tests {
         BytecodeVerifier::default()
             .verify(&artifact.to_bytes().expect("encode task bytecode"))
             .expect("verify task bytecode");
+    }
+
+    #[test]
+    fn select_mir_emits_verifiable_first_ready_bytecode() {
+        let int = WireType::Int {
+            bits: 64,
+            signed: true,
+        };
+        let worker = |id, value| {
+            MirFunction::new(
+                FunctionId::new(id),
+                MirFunctionSignature::new(vec![], TypeId::new(0), true),
+                0,
+                1,
+                vec![BasicBlock::new(
+                    BlockId::new(0),
+                    vec![MirInstruction::LoadLiteral {
+                        destination: ValueId::new(0),
+                        value: MirLiteral::Int(value),
+                    }],
+                    MirTerminator::Return(Some(ValueId::new(0))),
+                )],
+            )
+        };
+        let module = MirModule::new(
+            vec![int],
+            vec![
+                MirFunction::new(
+                    FunctionId::new(0),
+                    MirFunctionSignature::new(vec![], TypeId::new(0), false),
+                    0,
+                    2,
+                    vec![BasicBlock::new(
+                        BlockId::new(0),
+                        vec![
+                            MirInstruction::Spawn {
+                                task: TaskId::new(0),
+                                group: TaskGroupId::new(0),
+                                target: FunctionId::new(1),
+                                arguments: vec![],
+                            },
+                            MirInstruction::Spawn {
+                                task: TaskId::new(1),
+                                group: TaskGroupId::new(0),
+                                target: FunctionId::new(2),
+                                arguments: vec![],
+                            },
+                            MirInstruction::Select {
+                                tasks: vec![TaskId::new(0), TaskId::new(1)],
+                                winner: ValueId::new(0),
+                                value: ValueId::new(1),
+                            },
+                        ],
+                        MirTerminator::Return(Some(ValueId::new(1))),
+                    )],
+                ),
+                worker(1, 7),
+                worker(2, 9),
+            ],
+            vec![
+                MirFunctionDebug::new("main", vec![]),
+                MirFunctionDebug::new("first", vec![]),
+                MirFunctionDebug::new("second", vec![]),
+            ],
+            vec![],
+        )
+        .expect("select MIR verifies");
+        let module = module.into_verified().expect("select MIR must verify");
+        let artifact = emit_artifact(
+            &module,
+            &format!("sha256:{}", "a".repeat(64)),
+            &format!("sha256:{}", "b".repeat(64)),
+            "0.1.0",
+        )
+        .expect("emit select bytecode");
+        let payload: serde_json::Value =
+            rsscript_bytecode::decode_executable_payload(&artifact.payload)
+                .expect("decode select payload");
+        assert!(
+            payload["functions"][0]["code"]
+                .as_array()
+                .expect("select code")
+                .iter()
+                .any(|instruction| instruction.get("SelectWait").is_some())
+        );
+        BytecodeVerifier::default()
+            .verify(&artifact.to_bytes().expect("encode select bytecode"))
+            .expect("verify select bytecode");
     }
 
     #[test]

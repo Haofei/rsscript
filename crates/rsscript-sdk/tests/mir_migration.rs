@@ -1374,6 +1374,53 @@ async fn main() -> Int {
 }
 
 #[test]
+fn direct_checked_hir_select_matches_legacy_vm() {
+    let source = r#"
+async fn first() -> Int { return 7 }
+async fn second() -> Int { return 9 }
+
+async fn main() -> Int {
+    select {
+        value = await first() => { return value }
+        value = await second() => { return value }
+    }
+    return 0
+}
+"#;
+    let validated = analyze_source_with_interfaces_result("direct-hir-select.rss", source, &[])
+        .into_validated()
+        .expect("select fixture should validate");
+    let compiled = compile_validated_to_ir(&validated);
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("select lowers directly from checked HIR");
+    assert!(mir.functions().iter().any(|function| {
+        function.blocks().iter().any(|block| {
+            block
+                .instructions()
+                .iter()
+                .any(|instruction| matches!(instruction, MirInstruction::Select { .. }))
+        })
+    }));
+
+    let legacy = reg_vm_compile_validated(&validated)
+        .expect("legacy select fixture compiles")
+        .eval_main_with_args(std::iter::empty::<String>())
+        .expect("legacy select fixture executes");
+    let direct = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("direct select MIR emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("direct select MIR executes");
+
+    assert_eq!(legacy.value, direct.value);
+    assert_eq!(legacy.usage, direct.usage);
+}
+
+#[test]
 fn direct_checked_hir_awaited_provider_cancellation_matches_legacy_vm() {
     let source = "async fn main() -> Int { return await Host.wait() }";
     let interface = "pub async fn Host.wait() -> Int\n";

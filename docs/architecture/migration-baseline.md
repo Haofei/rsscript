@@ -877,19 +877,29 @@ mechanical acceptance condition holds.
     - [x] **M03.3a — Establish typed task lifecycle primitives.** MIR now owns
       task and task-group IDs, verifies internal async spawn signatures and
       lexical close on normal returns, and rejects unsupported backend execution
-      until scheduling and source lowering are ready. Select and non-normal
-      cleanup remain follow-up work.
+      until scheduling and source lowering are ready. Non-normal cleanup
+      remains follow-up work.
     - [x] **M03.3b — Lower direct async bindings and awaits.** A checked direct
       internal async binding lowers to `Spawn`, and awaiting its local task
       lowers to `Await`; the lifecycle verifier rejects any unclosed child.
       Awaited external Provider calls lower through resolved external `Call`,
       whose VM dispatch owns future suspension/resumption; async bindings to
-      external calls, join/cancel syntax, and select remain fail-closed.
+      external calls and select remain fail-closed; join/cancel syntax remains
+      follow-up work.
     - [x] **M03.3c — Execute lexical task-group drain.** `Join` lowers to the
       v1 `JoinTasks` instruction over its resolved child handles. The scheduler
       resumes the parent only after every still-live child completes and reaps
       each child exactly once; awaited children are safe to omit from the drain.
-      Cancellation delivery and select remain follow-up work.
+      Cancellation delivery remains follow-up work.
+    - [x] **M03.3d — Lower first-ready internal selects.** A checked `select`
+      over direct async internal calls now emits verifier-visible `Spawn`
+      operations followed by one `Select { tasks, winner, value }`. The
+      instruction consumes every child task; the bytecode VM transfers the
+      winning result and cancels/reaps losers before explicit CFG arm dispatch.
+      MIR validation rejects duplicate or non-live selected tasks, and the
+      migration suite compares the direct verified-bytecode execution with the
+      legacy VM. External-Provider select arms and cancellation syntax remain
+      fail-closed follow-up work.
   - [ ] **M03.4 — Add resolved builtin and external-call instructions.** Include
     signature/effect/retention identity and no unresolved callee text.
     - [x] **M03.4a — Execute resolved external calls through MIR bytecode.** A
@@ -926,8 +936,11 @@ mechanical acceptance condition holds.
       path. `async let` bindings to resolved async external calls now lower
       through synthetic, typed internal wrappers containing only the checked
       `CallExternal`; this preserves normal task-group lifecycle without a
-      Provider-specific MIR spawn operation. Cancellation syntax remains
-      follow-up direct-lowering work.
+      Provider-specific MIR spawn operation. First-ready selects over direct
+      internal async calls also lower without the compatibility IR: typed task
+      handles feed `Select`, then an explicit winner-index CFG ladder binds and
+      runs exactly one arm. Cancellation syntax and external-Provider select
+      arms remain follow-up direct-lowering work.
   - [x] **M04.2 — Verify MIR ownership, resources, and task scopes.** The
     construction verifier runs ownership-mode, move/drop, resource-lifetime,
     resource-cleanup-over-CFG, and structured-task-close passes. Targeted
@@ -1013,6 +1026,10 @@ mechanical acceptance condition holds.
       `Spawn` argument rather than falling back to the source-shaped executable
       IR. A direct-MIR bytecode fixture compares the legacy and new paths for
       the same receiver result and deterministic execution usage.
+    - [x] **M05.3g — Compare first-ready internal select.** Two direct async
+      function arms now execute through both paths; the fixture asserts equal
+      selected value and deterministic execution usage after the direct MIR
+      path verifies, emits `SelectWait`, and dispatches the winning arm.
   - [ ] **M05.4 — Gate replacement on corpus parity.** New lowering cannot become
     default until all supported Core fixtures agree.
 - [ ] **M06 — Delete the source-shaped executable IR.** Remove nested
@@ -1059,7 +1076,10 @@ mechanical acceptance condition holds.
       external calls use the existing verifier-checked `CallExternal`, whose VM
       dispatch parks and resumes the current task around the Provider future;
       direct async bindings for both free and resolved receiver calls now reach
-      the same path. Cancellation and select remain follow-up work.
+      the same path. First-ready internal select arms emit the existing
+      verifier-checked `SelectWait` instruction, including loser cancellation
+      before CFG arm dispatch. Cancellation syntax and external-Provider select
+      arms remain follow-up work.
     - [x] **V02.3c — Emit explicit retain/drop ownership boundaries.** Retain
       remains a verifier-visible semantic fact with no implicit VM copy, while
       drop clears its proven-dead register before frame teardown. Codegen tests

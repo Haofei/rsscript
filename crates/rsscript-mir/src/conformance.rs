@@ -449,6 +449,7 @@ impl<'a> Interpreter<'a> {
                     }
                     MirInstruction::Spawn { .. }
                     | MirInstruction::Await { .. }
+                    | MirInstruction::Select { .. }
                     | MirInstruction::Cancel { .. }
                     | MirInstruction::Join { .. } => {
                         return Err(MirExecutionError::UnsupportedStructuredConcurrency);

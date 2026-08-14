@@ -374,6 +374,28 @@ fn checked_external_signature(signature: &checked::FunctionSig) -> FunctionSigna
     }
 }
 
+/// Select operations are syntactically an `await` boundary and may be wrapped
+/// in `?` or a data-effect annotation. MIR spawns the underlying resolved call
+/// and reapplies `?` to the winning result after `Select` has closed all arm
+/// tasks, matching the legacy scheduler ordering without retaining source
+/// syntax in the backend representation.
+fn peel_checked_select_operation(operation: &checked::HirExpr) -> (&checked::HirExpr, bool) {
+    let mut current = operation;
+    let mut has_try = false;
+    loop {
+        match current {
+            checked::HirExpr::Try { value, .. } => {
+                has_try = true;
+                current = value;
+            }
+            checked::HirExpr::Await { value, .. } | checked::HirExpr::Effect { value, .. } => {
+                current = value;
+            }
+            other => return (other, has_try),
+        }
+    }
+}
+
 #[derive(Clone)]
 struct CallTargets {
     functions: BTreeMap<String, FunctionId>,
@@ -751,7 +773,7 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                 body,
             ),
             checked::HirStmt::Match { value, arms, .. } => self.lower_match(value, arms),
-            checked::HirStmt::Select { .. } => self.unsupported("checked HIR select"),
+            checked::HirStmt::Select { arms, .. } => self.lower_select(arms),
             checked::HirStmt::Break(_) => {
                 let Some(targets) = self.loops.last() else {
                     return self.unsupported("checked HIR break outside loop");
@@ -1442,12 +1464,28 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         name: &str,
         value: Option<&checked::HirExpr>,
     ) -> Result<(), MirLoweringError> {
-        let Some(checked::HirExpr::Call {
+        if self.tasks.contains_key(name) {
+            return self.unsupported("duplicate async checked HIR binding");
+        }
+        let Some(value) = value else {
+            return self.unsupported("async checked HIR binding without direct call");
+        };
+        let task = self.lower_spawn_call(value)?;
+        self.tasks.insert(name.to_owned(), task);
+        Ok(())
+    }
+
+    /// Lower one resolved async call into an owned child task. Both `async let`
+    /// and `select` use this exact path so they share target resolution,
+    /// Provider-wrapper construction, argument ownership checks, and the
+    /// lexical task group.
+    fn lower_spawn_call(&mut self, value: &checked::HirExpr) -> Result<TaskId, MirLoweringError> {
+        let checked::HirExpr::Call {
             receiver,
             args,
             resolution,
             ..
-        }) = value
+        } = value
         else {
             return self.unsupported("async checked HIR binding without direct call");
         };
@@ -1499,16 +1537,13 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                 .collect::<Result<Vec<_>, _>>()?,
         );
         let task = self.task();
-        if self.tasks.insert(name.to_owned(), task).is_some() {
-            return self.unsupported("duplicate async checked HIR binding");
-        }
         self.emit(MirInstruction::Spawn {
             task,
             group: TaskGroupId::new(0),
             target,
             arguments,
         });
-        Ok(())
+        Ok(task)
     }
 
     fn lower_await(&mut self, value: &checked::HirExpr) -> Result<ValueId, MirLoweringError> {
@@ -1541,6 +1576,80 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         let destination = self.value();
         self.emit(MirInstruction::Await { destination, task });
         Ok(destination)
+    }
+
+    /// Lower `select` as explicit task creation, one verifier-visible first
+    /// ready wait, and ordinary CFG dispatch into the selected arm. The select
+    /// instruction consumes every arm task: the VM transfers the winner value
+    /// and cancels/reaps all losers before the branch ladder executes.
+    fn lower_select(&mut self, arms: &[checked::HirSelectArm]) -> Result<(), MirLoweringError> {
+        if arms.is_empty() {
+            return Ok(());
+        }
+
+        let mut tasks = Vec::with_capacity(arms.len());
+        let mut arm_has_try = Vec::with_capacity(arms.len());
+        for arm in arms {
+            let (operation, has_try) = peel_checked_select_operation(&arm.operation);
+            tasks.push(self.lower_spawn_call(operation)?);
+            arm_has_try.push(has_try);
+        }
+
+        let winner = self.value();
+        let value = self.value();
+        self.emit(MirInstruction::Select {
+            tasks,
+            winner,
+            value,
+        });
+
+        let join = self.new_block();
+        for (index, arm) in arms.iter().enumerate() {
+            let arm_block = self.new_block();
+            let next = self.new_block();
+            let arm_index = self.literal(MirLiteral::Int(index as i64))?;
+            let matches_arm = self.value();
+            self.emit(MirInstruction::Binary {
+                destination: matches_arm,
+                op: MirBinaryOp::Equal,
+                left: winner,
+                right: arm_index,
+            });
+            self.terminate(MirTerminator::Branch {
+                condition: matches_arm,
+                then_target: arm_block,
+                else_target: next,
+            });
+
+            self.current = arm_block;
+            let bound = if arm_has_try[index] {
+                let destination = self.value();
+                self.emit(MirInstruction::TryResult {
+                    destination,
+                    source: value,
+                    cleanup: self.resource_cleanup_places(),
+                });
+                destination
+            } else {
+                value
+            };
+            if arm.binding != "_" {
+                let binding = self.place(&arm.binding);
+                self.emit(MirInstruction::WritePlace {
+                    place: binding,
+                    value: bound,
+                });
+            }
+            self.lower_checked_block(&arm.body)?;
+            if self.current_block().terminator.is_none() {
+                self.terminate(MirTerminator::Jump(join));
+            }
+
+            self.current = next;
+        }
+        self.terminate(MirTerminator::Unreachable);
+        self.current = join;
+        Ok(())
     }
 
     fn lower_if(
@@ -3502,6 +3611,46 @@ mod tests {
             [MirInstruction::Spawn { .. }, MirInstruction::Await { .. }]
         ));
         mir.verify().expect("verify structured task lifetime");
+    }
+
+    #[test]
+    fn lowers_checked_select_to_task_wait_and_cfg_dispatch() {
+        let source = r#"
+async fn first() -> Int { return 1 }
+async fn second() -> Int { return 2 }
+
+fn main() -> Int {
+    select {
+        value = await first() => { return value }
+        value = await second() => { return value }
+    }
+    return 0
+}
+"#;
+        let validated = rsscript_semantics::validate_source("select.rss", source)
+            .expect("select fixture should validate");
+        let mir = lower_checked_hir_to_mir(validated.database().hir())
+            .expect("checked select should lower without executable IR");
+        let main = mir
+            .functions()
+            .iter()
+            .find(|function| {
+                mir.function_debug(function.id())
+                    .is_some_and(|debug| debug.name() == "main")
+            })
+            .expect("main function");
+        assert!(main.blocks().iter().any(|block| {
+            matches!(
+                block.instructions(),
+                [
+                    MirInstruction::Spawn { .. },
+                    MirInstruction::Spawn { .. },
+                    MirInstruction::Select { .. },
+                    ..
+                ]
+            )
+        }));
+        mir.verify().expect("select task lifetimes should verify");
     }
 
     #[test]

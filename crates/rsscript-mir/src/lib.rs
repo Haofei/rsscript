@@ -223,6 +223,15 @@ pub enum MirInstruction {
         destination: ValueId,
         task: TaskId,
     },
+    /// Wait for the first completed child from `tasks`. The instruction
+    /// consumes every listed task: the winner's value is written to `value`
+    /// and the runtime cancels/reaps the losing children before control reaches
+    /// the arm dispatch CFG. `winner` is the zero-based index in `tasks`.
+    Select {
+        tasks: Vec<TaskId>,
+        winner: ValueId,
+        value: ValueId,
+    },
     /// Unwrap an `Ok`/`Some` value, or short-circuit the current function with
     /// its `Err`/`None` after releasing the listed lexical resources. The
     /// cleanup edge is data in MIR rather than a backend-specific inference.
@@ -872,6 +881,20 @@ fn verify_task_lifetimes(function: &MirFunction) -> Result<(), MirValidationErro
                         task: *task,
                     });
                 }
+                // A first-ready selection transfers the winning result to
+                // ordinary values and cancels/reaps every losing child before
+                // arm dispatch. It therefore closes all selected task
+                // lifetimes at this explicit boundary.
+                MirInstruction::Select { tasks, .. } => {
+                    for task in tasks {
+                        if live.remove(task).is_none() {
+                            return Err(MirValidationError::TaskNotLive {
+                                function: function.id,
+                                task: *task,
+                            });
+                        }
+                    }
+                }
                 MirInstruction::Join { group } => live.retain(|_, owner| owner != group),
                 _ => {}
             }
@@ -997,7 +1020,7 @@ fn verify_value_dominance(function: &MirFunction) -> Result<(), MirValidationErr
             };
             let mut exit = entry;
             for instruction in &block.instructions {
-                if let Some(destination) = instruction_definition(instruction) {
+                for destination in instruction_definitions(instruction) {
                     exit.insert(destination);
                 }
             }
@@ -1029,7 +1052,7 @@ fn verify_value_dominance(function: &MirFunction) -> Result<(), MirValidationErr
                     });
                 }
             }
-            if let Some(destination) = instruction_definition(instruction) {
+            for destination in instruction_definitions(instruction) {
                 defined.insert(destination);
             }
         }
@@ -1046,7 +1069,7 @@ fn verify_value_dominance(function: &MirFunction) -> Result<(), MirValidationErr
     Ok(())
 }
 
-fn instruction_definition(instruction: &MirInstruction) -> Option<ValueId> {
+fn instruction_definitions(instruction: &MirInstruction) -> Vec<ValueId> {
     match instruction {
         MirInstruction::LoadLiteral { destination, .. }
         | MirInstruction::MakeList { destination, .. }
@@ -1067,7 +1090,8 @@ fn instruction_definition(instruction: &MirInstruction) -> Option<ValueId> {
         | MirInstruction::Binary { destination, .. }
         | MirInstruction::Call { destination, .. }
         | MirInstruction::Await { destination, .. }
-        | MirInstruction::TryResult { destination, .. } => Some(*destination),
+        | MirInstruction::TryResult { destination, .. } => vec![*destination],
+        MirInstruction::Select { winner, value, .. } => vec![*winner, *value],
         MirInstruction::WritePlace { .. }
         | MirInstruction::Retain { .. }
         | MirInstruction::Drop { .. }
@@ -1076,7 +1100,7 @@ fn instruction_definition(instruction: &MirInstruction) -> Option<ValueId> {
         | MirInstruction::Spawn { .. }
         | MirInstruction::Cancel { .. }
         | MirInstruction::Join { .. }
-        | MirInstruction::Discard { .. } => None,
+        | MirInstruction::Discard { .. } => Vec::new(),
     }
 }
 
@@ -1134,6 +1158,7 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         | MirInstruction::Drop { .. }
         | MirInstruction::ReleaseResource { .. }
         | MirInstruction::Await { .. }
+        | MirInstruction::Select { .. }
         | MirInstruction::Cancel { .. }
         | MirInstruction::Join { .. } => Vec::new(),
         MirInstruction::TryResult { source, .. } => vec![*source],
@@ -1314,6 +1339,7 @@ fn transfer_move_state(
         | MirInstruction::ListLen { .. }
         | MirInstruction::Binary { .. }
         | MirInstruction::Await { .. }
+        | MirInstruction::Select { .. }
         | MirInstruction::Cancel { .. }
         | MirInstruction::Join { .. }
         | MirInstruction::Discard { .. } => Ok(()),
@@ -1583,6 +1609,10 @@ fn verify_instruction(
             Ok(())
         }
         MirInstruction::Await { destination, .. } => define(*destination, defined),
+        MirInstruction::Select { winner, value, .. } => {
+            define(*winner, defined)?;
+            define(*value, defined)
+        }
         MirInstruction::Cancel { .. } | MirInstruction::Join { .. } => Ok(()),
         MirInstruction::Discard { value } => {
             used.push(*value);
@@ -2063,6 +2093,68 @@ mod tests {
             vec![],
         );
         assert!(matches!(leaked, Err(MirValidationError::TaskLeak { .. })));
+    }
+
+    #[test]
+    fn select_consumes_each_live_task_exactly_once() {
+        let int = WireType::Int {
+            bits: 64,
+            signed: true,
+        };
+        let invalid = MirModule::new(
+            vec![int],
+            vec![
+                MirFunction::new(
+                    FunctionId::new(0),
+                    MirFunctionSignature::new(vec![], TypeId::new(0), false),
+                    0,
+                    2,
+                    vec![BasicBlock::new(
+                        BlockId::new(0),
+                        vec![
+                            MirInstruction::Spawn {
+                                task: TaskId::new(0),
+                                group: TaskGroupId::new(0),
+                                target: FunctionId::new(1),
+                                arguments: vec![],
+                            },
+                            MirInstruction::Select {
+                                tasks: vec![TaskId::new(0), TaskId::new(0)],
+                                winner: ValueId::new(0),
+                                value: ValueId::new(1),
+                            },
+                        ],
+                        MirTerminator::Return(Some(ValueId::new(1))),
+                    )],
+                ),
+                MirFunction::new(
+                    FunctionId::new(1),
+                    MirFunctionSignature::new(vec![], TypeId::new(0), true),
+                    0,
+                    1,
+                    vec![BasicBlock::new(
+                        BlockId::new(0),
+                        vec![MirInstruction::LoadLiteral {
+                            destination: ValueId::new(0),
+                            value: MirLiteral::Int(1),
+                        }],
+                        MirTerminator::Return(Some(ValueId::new(0))),
+                    )],
+                ),
+            ],
+            vec![
+                MirFunctionDebug::new("main", vec![]),
+                MirFunctionDebug::new("worker", vec![]),
+            ],
+            vec![],
+        );
+        assert!(matches!(
+            invalid,
+            Err(MirValidationError::TaskNotLive {
+                task,
+                ..
+            }) if task == TaskId::new(0)
+        ));
     }
 
     #[test]
