@@ -246,7 +246,7 @@ fn render_rust_type(ty: &WireType, resources: &[InterfaceDescriptorResourceV1]) 
         WireType::Qualified { value, .. } => render_rust_type(value, resources),
         WireType::Named { name, .. } | WireType::Resource { name } | WireType::Handle { name } => {
             resource_wrapper_for(name, resources)
-                .unwrap_or_else(|| "rsscript_provider_api::NativeValue".into())
+                .unwrap_or_else(|| "rsscript_abi_model::WireValue".into())
         }
     }
 }
