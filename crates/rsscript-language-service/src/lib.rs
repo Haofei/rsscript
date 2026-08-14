@@ -59,7 +59,6 @@ pub struct LanguageService {
     format_cache: BTreeMap<(String, u64), Arc<str>>,
     symbol_cache: BTreeMap<(String, u64), Arc<SymbolIndex>>,
     document_symbol_cache: BTreeMap<(String, u64), Arc<[RssDocumentSymbol]>>,
-    dependency_cache: BTreeMap<(String, u64), Arc<[String]>>,
     query_stats: BTreeMap<QueryKind, QueryStats>,
     cache_hits: u64,
     cache_misses: u64,
@@ -225,7 +224,6 @@ impl LanguageService {
         removed += retain_other_paths(&mut self.format_cache, path);
         removed += retain_other_paths(&mut self.symbol_cache, path);
         removed += retain_other_paths(&mut self.document_symbol_cache, path);
-        removed += retain_other_paths(&mut self.dependency_cache, path);
         self.invalidations = self.invalidations.saturating_add(removed);
     }
 
@@ -524,56 +522,44 @@ impl LanguageService {
         let Some(document) = self.documents.get(path).cloned() else {
             return Arc::from([]);
         };
-        let key = (path.to_string(), document.revision);
-        if let Some(cached) = self.dependency_cache.get(&key) {
-            let value = Arc::clone(cached);
-            self.record_hit(QueryKind::Dependencies);
-            return value;
+        let before = self.frontend.stats();
+        let graph = self.frontend.workspace_module_graph();
+        let after = self.frontend.stats();
+        let imports = match document.kind {
+            DocumentKind::Source => graph.source(path),
+            DocumentKind::Interface => graph.interface(path),
         }
-        let value: Arc<[String]> = self
-            .imported_modules(path, document.kind)
-            .into_iter()
-            .collect::<Vec<_>>()
-            .into();
-        self.dependency_cache.insert(key, Arc::clone(&value));
-        self.record_miss(QueryKind::Dependencies);
-        value
+        .map(|node| node.imports().to_vec().into())
+        .unwrap_or_else(|| Arc::from([]));
+        if after.workspace_module_graph_cache_hits > before.workspace_module_graph_cache_hits {
+            self.record_hit(QueryKind::Dependencies);
+        } else {
+            self.record_miss(QueryKind::Dependencies);
+        }
+        imports
     }
 
-    /// Return declared modules from the shared frontend query. Interface files
-    /// without a module declaration retain the historical filename fallback,
-    /// but no language-service query reparses raw document text.
+    /// Return declared modules from the shared workspace graph. Interface-file
+    /// fallback is owned by the session, so editor clients cannot drift from
+    /// other frontend users.
     fn declared_modules(&mut self, path: &str, kind: DocumentKind) -> BTreeSet<String> {
-        let header = match kind {
-            DocumentKind::Source => self.frontend.module_header(path),
-            DocumentKind::Interface => self.frontend.interface_module_header(path),
-        };
-        let declared = header
-            .map(|header| header.modules().iter().cloned().collect::<BTreeSet<_>>())
-            .unwrap_or_default();
-        if !declared.is_empty() || kind == DocumentKind::Source {
-            return declared;
+        let graph = self.frontend.workspace_module_graph();
+        match kind {
+            DocumentKind::Source => graph.source(path),
+            DocumentKind::Interface => graph.interface(path),
         }
-        let fallback = path
-            .rsplit('/')
-            .next()
-            .unwrap_or(path)
-            .trim_end_matches(".rssi")
-            .trim_end_matches(".rss");
-        (!fallback.is_empty())
-            .then(|| fallback.to_string())
-            .into_iter()
-            .collect()
+        .map(|node| node.modules().iter().cloned().collect::<BTreeSet<_>>())
+        .unwrap_or_default()
     }
 
     fn imported_modules(&mut self, path: &str, kind: DocumentKind) -> BTreeSet<String> {
-        let header = match kind {
-            DocumentKind::Source => self.frontend.module_header(path),
-            DocumentKind::Interface => self.frontend.interface_module_header(path),
-        };
-        header
-            .map(|header| header.imports().iter().cloned().collect())
-            .unwrap_or_default()
+        let graph = self.frontend.workspace_module_graph();
+        match kind {
+            DocumentKind::Source => graph.source(path),
+            DocumentKind::Interface => graph.interface(path),
+        }
+        .map(|node| node.imports().iter().cloned().collect())
+        .unwrap_or_default()
     }
 
     fn visible_interface_paths(
@@ -949,7 +935,7 @@ mod tests {
     }
 
     #[test]
-    fn dependencies_consume_the_compilation_session_header_query() {
+    fn dependencies_consume_the_compilation_session_workspace_graph_query() {
         let mut service = LanguageService::default();
         service.set_file(
             "main.rss",
@@ -963,7 +949,9 @@ mod tests {
         assert_eq!(service.dependencies("main.rss").as_ref(), ["host.api"]);
         let stats = service.frontend.stats();
         assert_eq!(stats.module_header_cache_misses, 1);
-        assert_eq!(stats.module_header_cache_hits, 1);
+        assert_eq!(stats.module_header_cache_hits, 0);
+        assert_eq!(stats.workspace_module_graph_cache_misses, 1);
+        assert_eq!(stats.workspace_module_graph_cache_hits, 1);
     }
 
     #[test]

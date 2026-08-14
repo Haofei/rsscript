@@ -308,6 +308,7 @@ pub struct CompilationSession {
     parse_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<Program>>,
     hir_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<Hir>>,
     module_header_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<ModuleHeader>>,
+    workspace_module_graph_cache: Option<Arc<WorkspaceModuleGraph>>,
     workspace_diagnostic_cache: Option<Arc<[Diagnostic]>>,
     parse_cache_hits: u64,
     parse_cache_misses: u64,
@@ -315,6 +316,8 @@ pub struct CompilationSession {
     hir_cache_misses: u64,
     module_header_cache_hits: u64,
     module_header_cache_misses: u64,
+    workspace_module_graph_cache_hits: u64,
+    workspace_module_graph_cache_misses: u64,
     workspace_diagnostic_cache_hits: u64,
     workspace_diagnostic_cache_misses: u64,
 }
@@ -327,6 +330,8 @@ pub struct CompilationSessionStats {
     pub hir_cache_misses: u64,
     pub module_header_cache_hits: u64,
     pub module_header_cache_misses: u64,
+    pub workspace_module_graph_cache_hits: u64,
+    pub workspace_module_graph_cache_misses: u64,
     pub workspace_diagnostic_cache_hits: u64,
     pub workspace_diagnostic_cache_misses: u64,
 }
@@ -339,6 +344,63 @@ pub struct CompilationSessionStats {
 pub struct ModuleHeader {
     modules: Arc<[String]>,
     imports: Arc<[String]>,
+}
+
+/// One source or interface file in the session-owned workspace module graph.
+///
+/// The graph contains only syntax facts: declared module paths and imports.
+/// It deliberately does not decide which interface imports are semantically
+/// valid; that remains a resolve/type query. Keeping this query in the
+/// session prevents editor clients from maintaining a second textual import
+/// parser or a stale dependency cache.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceModuleNode {
+    path: Arc<str>,
+    is_interface: bool,
+    modules: Arc<[String]>,
+    imports: Arc<[String]>,
+}
+
+impl WorkspaceModuleNode {
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    pub fn is_interface(&self) -> bool {
+        self.is_interface
+    }
+
+    pub fn modules(&self) -> &[String] {
+        &self.modules
+    }
+
+    pub fn imports(&self) -> &[String] {
+        &self.imports
+    }
+}
+
+/// Cached parsed module facts for every file in one immutable session input.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkspaceModuleGraph {
+    nodes: Arc<[WorkspaceModuleNode]>,
+}
+
+impl WorkspaceModuleGraph {
+    pub fn nodes(&self) -> &[WorkspaceModuleNode] {
+        &self.nodes
+    }
+
+    pub fn source(&self, path: &str) -> Option<&WorkspaceModuleNode> {
+        self.nodes
+            .iter()
+            .find(|node| !node.is_interface && node.path.as_ref() == path)
+    }
+
+    pub fn interface(&self, path: &str) -> Option<&WorkspaceModuleNode> {
+        self.nodes
+            .iter()
+            .find(|node| node.is_interface && node.path.as_ref() == path)
+    }
 }
 
 impl ModuleHeader {
@@ -368,6 +430,7 @@ impl CompilationSession {
             self.invalidate_parse_cache(SessionFileRole::Source, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Source, update.file_id);
             self.invalidate_module_header_cache(SessionFileRole::Source, update.file_id);
+            self.workspace_module_graph_cache = None;
             self.workspace_diagnostic_cache = None;
         }
         Ok(update)
@@ -379,6 +442,7 @@ impl CompilationSession {
             self.invalidate_parse_cache(SessionFileRole::Source, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Source, update.file_id);
             self.invalidate_module_header_cache(SessionFileRole::Source, update.file_id);
+            self.workspace_module_graph_cache = None;
             self.workspace_diagnostic_cache = None;
         }
         update
@@ -394,6 +458,7 @@ impl CompilationSession {
             self.invalidate_parse_cache(SessionFileRole::Interface, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Interface, update.file_id);
             self.invalidate_module_header_cache(SessionFileRole::Interface, update.file_id);
+            self.workspace_module_graph_cache = None;
             self.workspace_diagnostic_cache = None;
         }
         Ok(update)
@@ -405,6 +470,7 @@ impl CompilationSession {
             self.invalidate_parse_cache(SessionFileRole::Interface, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Interface, update.file_id);
             self.invalidate_module_header_cache(SessionFileRole::Interface, update.file_id);
+            self.workspace_module_graph_cache = None;
             self.workspace_diagnostic_cache = None;
         }
         update
@@ -457,6 +523,71 @@ impl CompilationSession {
         operation.check()?;
         self.workspace_diagnostic_cache = Some(Arc::clone(&diagnostics));
         Ok(diagnostics)
+    }
+
+    /// Return the parsed workspace module graph for the current immutable
+    /// source/interface revision set. Interface files without an explicit
+    /// `module` declaration keep the historical filename fallback, so all
+    /// session clients resolve the same graph.
+    pub fn workspace_module_graph(&mut self) -> Arc<WorkspaceModuleGraph> {
+        if let Some(graph) = &self.workspace_module_graph_cache {
+            self.workspace_module_graph_cache_hits =
+                self.workspace_module_graph_cache_hits.saturating_add(1);
+            return Arc::clone(graph);
+        }
+
+        let mut nodes = Vec::new();
+        let sources = self.source_snapshot();
+        for file in sources.files() {
+            let header = self
+                .module_header_snapshot_file(SessionFileRole::Source, file)
+                .expect("session source snapshot file must remain parseable");
+            nodes.push(WorkspaceModuleNode {
+                path: Arc::clone(&file.path),
+                is_interface: false,
+                modules: Arc::clone(&header.modules),
+                imports: Arc::clone(&header.imports),
+            });
+        }
+        let interfaces = self.interface_snapshot();
+        for file in interfaces.files() {
+            let header = self
+                .module_header_snapshot_file(SessionFileRole::Interface, file)
+                .expect("session interface snapshot file must remain parseable");
+            let modules = if header.modules.is_empty() {
+                interface_filename_module(file.path())
+                    .into_iter()
+                    .collect::<Vec<_>>()
+                    .into()
+            } else {
+                Arc::clone(&header.modules)
+            };
+            nodes.push(WorkspaceModuleNode {
+                path: Arc::clone(&file.path),
+                is_interface: true,
+                modules,
+                imports: Arc::clone(&header.imports),
+            });
+        }
+        let graph = Arc::new(WorkspaceModuleGraph {
+            nodes: nodes.into(),
+        });
+        self.workspace_module_graph_cache_misses =
+            self.workspace_module_graph_cache_misses.saturating_add(1);
+        self.workspace_module_graph_cache = Some(Arc::clone(&graph));
+        graph
+    }
+
+    /// Operation-aware module graph query. Cached syntax facts still obey a
+    /// caller's cancellation and deadline boundary before being returned.
+    pub fn workspace_module_graph_with_operation(
+        &mut self,
+        operation: &OperationContext,
+    ) -> Result<Arc<WorkspaceModuleGraph>, OperationAbort> {
+        operation.check()?;
+        let graph = self.workspace_module_graph();
+        operation.check()?;
+        Ok(graph)
     }
 
     /// Parse one source revision exactly once. Replacing or removing a file
@@ -596,6 +727,8 @@ impl CompilationSession {
             hir_cache_misses: self.hir_cache_misses,
             module_header_cache_hits: self.module_header_cache_hits,
             module_header_cache_misses: self.module_header_cache_misses,
+            workspace_module_graph_cache_hits: self.workspace_module_graph_cache_hits,
+            workspace_module_graph_cache_misses: self.workspace_module_graph_cache_misses,
             workspace_diagnostic_cache_hits: self.workspace_diagnostic_cache_hits,
             workspace_diagnostic_cache_misses: self.workspace_diagnostic_cache_misses,
         }
@@ -667,6 +800,16 @@ impl CompilationSession {
         self.module_header_cache
             .retain(|(cached_role, cached_id, _), _| *cached_role != role || *cached_id != file_id);
     }
+}
+
+fn interface_filename_module(path: &str) -> Option<String> {
+    let fallback = path
+        .rsplit('/')
+        .next()
+        .unwrap_or(path)
+        .trim_end_matches(".rssi")
+        .trim_end_matches(".rss");
+    (!fallback.is_empty()).then(|| fallback.to_string())
 }
 
 fn module_header_from_program(program: &Program) -> ModuleHeader {
@@ -960,6 +1103,8 @@ mod tests {
                 hir_cache_misses: 0,
                 module_header_cache_hits: 0,
                 module_header_cache_misses: 0,
+                workspace_module_graph_cache_hits: 0,
+                workspace_module_graph_cache_misses: 0,
                 workspace_diagnostic_cache_hits: 0,
                 workspace_diagnostic_cache_misses: 0,
             }
@@ -1031,6 +1176,63 @@ mod tests {
             "the unchanged query must be served from the session cache"
         );
         assert_eq!(session.stats().workspace_diagnostic_cache_misses, 2);
+    }
+
+    #[test]
+    fn compilation_session_owns_and_invalidates_the_workspace_module_graph() {
+        let mut session = CompilationSession::default();
+        session
+            .set_file(
+                "main.rss",
+                "module app\nuse host.api\nfn main() -> Unit {}\n",
+            )
+            .unwrap();
+        session
+            .set_interface("host.rssi", "module host.api\npub fn emit() -> Unit\n")
+            .unwrap();
+        session
+            .set_interface("fallback.rssi", "pub fn fallback() -> Unit\n")
+            .unwrap();
+
+        let first = session.workspace_module_graph();
+        assert_eq!(first.source("main.rss").unwrap().imports(), ["host.api"]);
+        assert_eq!(
+            first.interface("host.rssi").unwrap().modules(),
+            ["host.api"]
+        );
+        assert_eq!(
+            first.interface("fallback.rssi").unwrap().modules(),
+            ["fallback"]
+        );
+        let second = session.workspace_module_graph();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(session.stats().workspace_module_graph_cache_misses, 1);
+        assert_eq!(session.stats().workspace_module_graph_cache_hits, 1);
+
+        session
+            .set_interface(
+                "host.rssi",
+                "module host.api\nuse host.base\npub fn emit() -> Unit\n",
+            )
+            .unwrap();
+        let replacement = session.workspace_module_graph();
+        assert!(!Arc::ptr_eq(&first, &replacement));
+        assert_eq!(
+            replacement.interface("host.rssi").unwrap().imports(),
+            ["host.base"]
+        );
+        assert_eq!(session.stats().workspace_module_graph_cache_misses, 2);
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        assert_eq!(
+            session.workspace_module_graph_with_operation(&OperationContext {
+                cancellation: Some(cancellation),
+                ..OperationContext::default()
+            }),
+            Err(OperationAbort::Cancelled)
+        );
+        assert_eq!(session.stats().workspace_module_graph_cache_hits, 1);
     }
 
     #[test]
@@ -1201,6 +1403,8 @@ mod tests {
                 hir_cache_misses: 0,
                 module_header_cache_hits: 1,
                 module_header_cache_misses: 1,
+                workspace_module_graph_cache_hits: 0,
+                workspace_module_graph_cache_misses: 0,
                 workspace_diagnostic_cache_hits: 0,
                 workspace_diagnostic_cache_misses: 0,
             }
