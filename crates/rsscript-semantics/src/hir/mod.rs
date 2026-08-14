@@ -245,6 +245,10 @@ pub enum HirStmt {
     },
     With {
         resource: HirExpr,
+        /// Structural semantic fact for the scoped resource. New backends use
+        /// this instead of reconstructing resource identity from the resource
+        /// expression's compatibility display type.
+        resource_type: Option<ResolvedType>,
         binding: String,
         body: HirBlock,
         span: Span,

@@ -788,10 +788,11 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             } => self.lower_loop(condition.as_ref(), body),
             checked::HirStmt::With {
                 resource,
+                resource_type,
                 binding,
                 body,
                 ..
-            } => self.lower_with(resource, binding, body),
+            } => self.lower_with(resource, resource_type.as_ref(), binding, body),
             checked::HirStmt::For {
                 binding,
                 iterable,
@@ -2209,30 +2210,20 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
     fn lower_with(
         &mut self,
         resource: &checked::HirExpr,
+        resource_type: Option<&rsscript_semantics::ResolvedType>,
         binding: &str,
         body: &checked::HirBlock,
     ) -> Result<(), MirLoweringError> {
-        let (source_expression, resource_type) = match resource {
-            checked::HirExpr::Manage { value, ty, .. } => {
-                let Some(ty) = ty.as_ref() else {
-                    return self
-                        .unsupported("checked HIR managed resource without structural type");
-                };
-                let wire = checked_type_to_wire(ty, self.function_name)?;
-                let Some(resource_type) = self.intern_resource_wire_type(wire) else {
-                    return self.unsupported("checked HIR managed value is not a resource type");
-                };
-                (value.as_ref(), resource_type)
-            }
-            // Retain the rendered compatibility projection only for forms that
-            // predate structural expression type facts. Valid source resource
-            // scopes normally enter through `manage` above.
-            other => {
-                let Some(type_name) = checked_hir_expression_type_name(other) else {
-                    return self.unsupported("checked HIR resource scope without canonical type");
-                };
-                (other, self.intern_resource_type(type_name))
-            }
+        let Some(resource_type) = resource_type else {
+            return self.unsupported("checked HIR resource scope without structural type");
+        };
+        let wire = checked_type_to_wire(resource_type, self.function_name)?;
+        let Some(resource_type) = self.intern_resource_wire_type(wire) else {
+            return self.unsupported("checked HIR resource scope is not a resource type");
+        };
+        let source_expression = match resource {
+            checked::HirExpr::Manage { value, .. } => value.as_ref(),
+            other => other,
         };
         let source = self.lower_expression(source_expression)?;
         let place = self.place(binding);
@@ -2249,21 +2240,6 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         let released = self.resource_scopes.pop();
         debug_assert_eq!(released, Some(place));
         Ok(())
-    }
-
-    fn intern_resource_type(&mut self, type_name: &str) -> ResourceTypeId {
-        let wire = match WireType::parse(type_name) {
-            WireType::Resource { name } => WireType::Resource { name },
-            WireType::Qualified { value, .. }
-                if matches!(value.as_ref(), WireType::Resource { .. }) =>
-            {
-                *value
-            }
-            _ => WireType::Resource {
-                name: type_name.to_owned(),
-            },
-        };
-        ResourceTypeId::new(self.types.intern(wire).index() as u32)
     }
 
     fn intern_resource_wire_type(&mut self, wire: WireType) -> Option<ResourceTypeId> {
@@ -3053,30 +3029,6 @@ fn expression_type_name(expression: &ExecutableExpr) -> Option<&str> {
         | ExecutableExpr::Index { .. }
         | ExecutableExpr::Closure { .. }
         | ExecutableExpr::Unknown => None,
-    }
-}
-
-fn checked_hir_expression_type_name(expression: &checked::HirExpr) -> Option<&str> {
-    match expression {
-        checked::HirExpr::Ident { type_name, .. }
-        | checked::HirExpr::ObjectLiteral { type_name, .. }
-        | checked::HirExpr::MapLiteral { type_name, .. }
-        | checked::HirExpr::ArrayLiteral { type_name, .. }
-        | checked::HirExpr::Call { type_name, .. }
-        | checked::HirExpr::Effect { type_name, .. }
-        | checked::HirExpr::Manage { type_name, .. }
-        | checked::HirExpr::Spawn { type_name, .. }
-        | checked::HirExpr::Await { type_name, .. }
-        | checked::HirExpr::Try { type_name, .. }
-        | checked::HirExpr::Match { type_name, .. } => type_name.as_deref(),
-        checked::HirExpr::Number { .. }
-        | checked::HirExpr::String { .. }
-        | checked::HirExpr::Char { .. }
-        | checked::HirExpr::Binary { .. }
-        | checked::HirExpr::Field { .. }
-        | checked::HirExpr::Index { .. }
-        | checked::HirExpr::Closure { .. }
-        | checked::HirExpr::Unknown(_) => None,
     }
 }
 

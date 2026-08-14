@@ -446,6 +446,7 @@ pub(super) fn lower_hir_stmt(
             }
             HirStmt::With {
                 resource: lower_hir_expr(hir, function_name, &stmt.resource, value_types),
+                resource_type,
                 binding: stmt.binding.clone(),
                 body: lower_hir_block(hir, function_name, &stmt.body, &mut body_types),
                 span: stmt.span.clone(),

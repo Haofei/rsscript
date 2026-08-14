@@ -3298,8 +3298,13 @@ fn mir_codegen_is_a_vm_independent_verified_bytecode_boundary() {
     );
     let checked_with = function_source(&lowering, "fn lower_with(");
     assert!(
-        checked_with.contains("checked_type_to_wire(ty"),
-        "direct MIR resource lowering must consume the managed structural type"
+        checked_with.contains("checked_type_to_wire(resource_type"),
+        "direct MIR resource lowering must consume the scoped structural type"
+    );
+    assert!(
+        !checked_with.contains("checked_hir_expression_type_name")
+            && !checked_with.contains("intern_resource_type"),
+        "direct MIR resource lowering must not reconstruct resource identity from display strings"
     );
     let manifest: toml::Value =
         toml::from_str(&read(&root.join("crates/rsscript-codegen-vm/Cargo.toml"))).unwrap();

@@ -313,6 +313,7 @@ fn local_flow_states_scope_with_resource_bindings() {
                         type_name: Some("File".to_string()),
                         span: span(1),
                     },
+                    resource_type: None,
                     binding: "file".to_string(),
                     body: HirBlock {
                         statements: vec![HirStmt::Expr(HirExpr::Ident {
@@ -392,6 +393,7 @@ fn local_analysis_indexes_resource_escape_facts_by_with_span() {
                     type_name: Some("File".to_string()),
                     span: span(1),
                 },
+                resource_type: None,
                 binding: "file".to_string(),
                 body: HirBlock {
                     statements: vec![
