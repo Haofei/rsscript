@@ -10,8 +10,8 @@ use std::time::Duration;
 
 pub use rsscript_abi_model::{
     DataEffect, ExternalImport, ExternalSymbol, FunctionSignature, InvalidExternalSymbol,
-    ParameterSignature, RUNTIME_ABI_VERSION, SignatureHash, WireResourceHandle, WireResourceTypeId,
-    WireValue,
+    ParameterSignature, RUNTIME_ABI_VERSION, SignatureHash, WireCallTypeTable, WireResourceHandle,
+    WireResourceTypeId, WireType, WireTypeId, WireTypeTableOverflow, WireValue, WireVariantId,
 };
 pub use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationId};
 use serde::{Deserialize, Serialize};

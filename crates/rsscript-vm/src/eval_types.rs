@@ -9,7 +9,8 @@ use std::task::{Context, Poll};
 use std::time::Instant;
 
 pub use rsscript_abi_model::{
-    ExternalImport, ExternalSymbol, FunctionSignature, SignatureHash, WireType, WireValue,
+    ExternalImport, ExternalSymbol, FunctionSignature, SignatureHash, WireCallTypeTable, WireType,
+    WireValue,
 };
 pub use rsscript_provider_api::{
     AsyncInterpreterFn, AsyncProviderCallContext, BlockingBehavior, CancellationBehavior,
@@ -93,14 +94,16 @@ fn check_payload_budget(
     Ok(())
 }
 
-/// Convert the scalar subset that has an unambiguous legacy VM representation
-/// to the canonical Provider wire model. Records, variants, resources, lists,
-/// maps, JSON and chars deliberately fail closed until the linked Artifact type
-/// table is available: fabricating numeric identities or field order here would
-/// make `WireValue` less trustworthy than the legacy adapter it replaces.
-fn native_scalar_to_wire(
+/// Convert the subset with an unambiguous legacy VM representation to the
+/// canonical Provider wire model. The type table is derived from the linked
+/// function signature, so list and option identities are shared with the
+/// Provider without fabricating an Artifact-wide record layout. Named records,
+/// resources, maps, JSON and chars remain fail-closed until that wider table is
+/// available.
+fn native_to_wire(
     value: NativeValue,
     expected: &WireType,
+    types: &WireCallTypeTable,
 ) -> Result<WireValue, ProviderError> {
     match (value, expected) {
         (NativeValue::Unit, WireType::Unit) => Ok(WireValue::Unit),
@@ -109,6 +112,44 @@ fn native_scalar_to_wire(
         (NativeValue::Float(value), WireType::Float { .. }) => Ok(WireValue::Float { value }),
         (NativeValue::String(value), WireType::String) => Ok(WireValue::String { value }),
         (NativeValue::Bytes(value), WireType::Bytes) => Ok(WireValue::Bytes { value }),
+        (NativeValue::List(values), WireType::List { element }) => {
+            let element_type = type_id(types, element)?;
+            let values = values
+                .into_iter()
+                .map(|value| native_to_wire(value, element, types))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(WireValue::List {
+                element_type,
+                values,
+            })
+        }
+        (NativeValue::Variant { name, fields }, option @ WireType::Option { value: element })
+            if name == "Some" && fields.len() == 1 =>
+        {
+            let value = fields.get("value").ok_or_else(|| {
+                ProviderError::invalid_argument("provider option value must have a `value` field")
+            })?;
+            Ok(WireValue::Variant {
+                type_id: type_id(types, option)?,
+                variant_id: WireCallTypeTable::option_some_variant(),
+                payload: Some(Box::new(native_to_wire(value.clone(), element, types)?)),
+            })
+        }
+        (NativeValue::Variant { name, fields }, option @ WireType::Option { .. })
+            if name == "None" && fields.is_empty() =>
+        {
+            Ok(WireValue::Variant {
+                type_id: type_id(types, option)?,
+                variant_id: WireCallTypeTable::option_none_variant(),
+                payload: None,
+            })
+        }
+        (
+            value,
+            WireType::Qualified {
+                value: expected, ..
+            },
+        ) => native_to_wire(value, expected, types),
         (
             _,
             WireType::Unit
@@ -121,14 +162,15 @@ fn native_scalar_to_wire(
             "provider wire argument does not match its linked scalar signature",
         )),
         _ => Err(ProviderError::unavailable(
-            "structured provider wire values require a linked Artifact type-table adapter",
+            "provider wire value requires an Artifact type-table adapter",
         )),
     }
 }
 
-fn wire_scalar_to_native(
+fn wire_to_native(
     value: WireValue,
     expected: &WireType,
+    types: &WireCallTypeTable,
 ) -> Result<NativeValue, ProviderError> {
     match (value, expected) {
         (WireValue::Unit, WireType::Unit) => Ok(NativeValue::Unit),
@@ -137,6 +179,56 @@ fn wire_scalar_to_native(
         (WireValue::Float { value }, WireType::Float { .. }) => Ok(NativeValue::Float(value)),
         (WireValue::String { value }, WireType::String) => Ok(NativeValue::String(value)),
         (WireValue::Bytes { value }, WireType::Bytes) => Ok(NativeValue::Bytes(value)),
+        (
+            WireValue::List {
+                element_type,
+                values,
+            },
+            WireType::List { element },
+        ) if element_type == type_id(types, element)? => values
+            .into_iter()
+            .map(|value| wire_to_native(value, element, types))
+            .collect::<Result<Vec<_>, _>>()
+            .map(NativeValue::List),
+        (
+            WireValue::Variant {
+                type_id: actual_type,
+                variant_id,
+                payload: Some(payload),
+            },
+            option @ WireType::Option { value: element },
+        ) if actual_type == type_id(types, option)?
+            && variant_id == WireCallTypeTable::option_some_variant() =>
+        {
+            Ok(NativeValue::Variant {
+                name: "Some".to_string(),
+                fields: BTreeMap::from([(
+                    "value".to_string(),
+                    wire_to_native(*payload, element, types)?,
+                )]),
+            })
+        }
+        (
+            WireValue::Variant {
+                type_id: actual_type,
+                variant_id,
+                payload: None,
+            },
+            option @ WireType::Option { .. },
+        ) if actual_type == type_id(types, option)?
+            && variant_id == WireCallTypeTable::option_none_variant() =>
+        {
+            Ok(NativeValue::Variant {
+                name: "None".to_string(),
+                fields: BTreeMap::new(),
+            })
+        }
+        (
+            value,
+            WireType::Qualified {
+                value: expected, ..
+            },
+        ) => wire_to_native(value, expected, types),
         (
             _,
             WireType::Unit
@@ -149,9 +241,18 @@ fn wire_scalar_to_native(
             "provider wire result does not match its linked scalar signature",
         )),
         _ => Err(ProviderError::unavailable(
-            "structured provider wire values require a linked Artifact type-table adapter",
+            "provider wire value requires an Artifact type-table adapter",
         )),
     }
+}
+
+fn type_id(
+    types: &WireCallTypeTable,
+    expected: &WireType,
+) -> Result<rsscript_abi_model::WireTypeId, ProviderError> {
+    types.type_id(expected).ok_or_else(|| {
+        ProviderError::internal("linked provider signature is missing a wire type identity")
+    })
 }
 
 /// A shared permit held for the full lifetime of a non-reentrant Provider
@@ -306,13 +407,18 @@ impl ExternalFunction {
                             "provider wire argument count does not match its linked signature",
                         ));
                     }
+                    let types = WireCallTypeTable::for_signature(&signature).map_err(|error| {
+                        ProviderError::internal(format!(
+                            "linked provider signature cannot form a wire type table: {error}"
+                        ))
+                    })?;
                     let wire_args = args
                         .into_iter()
                         .zip(&signature.parameters)
-                        .map(|(value, parameter)| native_scalar_to_wire(value, &parameter.ty))
+                        .map(|(value, parameter)| native_to_wire(value, &parameter.ty, &types))
                         .collect::<Result<Vec<_>, _>>()?;
                     let result = callable.call_with_context(context, wire_args)?;
-                    wire_scalar_to_native(result, &signature.result)
+                    wire_to_native(result, &signature.result, &types)
                 }
                 ProviderCallable::Async(_) => Err(ProviderError::unavailable(
                     "async provider function requires the VM async dispatcher",
@@ -879,17 +985,93 @@ mod provider_contract_tests {
     }
 
     #[test]
-    fn scalar_wire_adapter_rejects_structured_signatures_before_provider_code() {
-        let error = native_scalar_to_wire(
-            NativeValue::List(vec![NativeValue::Int(1)]),
-            &WireType::List {
-                element: Box::new(WireType::Int {
-                    bits: 64,
-                    signed: true,
-                }),
-            },
+    fn descriptor_type_table_adapts_list_values() {
+        let list = WireType::List {
+            element: Box::new(WireType::Int {
+                bits: 64,
+                signed: true,
+            }),
+        };
+        let signature = FunctionSignature {
+            parameters: vec![],
+            result: list.clone(),
+            asynchronous: false,
+        };
+        let types = WireCallTypeTable::for_signature(&signature).unwrap();
+        let wire = native_to_wire(
+            NativeValue::List(vec![NativeValue::Int(1), NativeValue::Int(2)]),
+            &list,
+            &types,
         )
-        .expect_err("structured wire dispatch requires the linked type-table adapter");
+        .expect("list has a descriptor-derived element identity");
+        assert_eq!(
+            wire,
+            WireValue::List {
+                element_type: types
+                    .type_id(match &list {
+                        WireType::List { element } => element,
+                        _ => unreachable!(),
+                    })
+                    .unwrap(),
+                values: vec![WireValue::Int { value: 1 }, WireValue::Int { value: 2 }],
+            }
+        );
+        assert_eq!(
+            wire_to_native(wire, &list, &types).unwrap(),
+            NativeValue::List(vec![NativeValue::Int(1), NativeValue::Int(2)])
+        );
+    }
+
+    #[test]
+    fn descriptor_type_table_adapts_option_values() {
+        let option = WireType::Option {
+            value: Box::new(WireType::String),
+        };
+        let signature = FunctionSignature {
+            parameters: vec![],
+            result: option.clone(),
+            asynchronous: false,
+        };
+        let types = WireCallTypeTable::for_signature(&signature).unwrap();
+        let some = NativeValue::Variant {
+            name: "Some".to_string(),
+            fields: BTreeMap::from([(
+                "value".to_string(),
+                NativeValue::String("value".to_string()),
+            )]),
+        };
+        let wire = native_to_wire(some.clone(), &option, &types).unwrap();
+        assert_eq!(wire_to_native(wire, &option, &types).unwrap(), some);
+        let none = NativeValue::Variant {
+            name: "None".to_string(),
+            fields: BTreeMap::new(),
+        };
+        let wire = native_to_wire(none.clone(), &option, &types).unwrap();
+        assert_eq!(wire_to_native(wire, &option, &types).unwrap(), none);
+    }
+
+    #[test]
+    fn descriptor_type_table_rejects_named_values_without_an_artifact_layout() {
+        let named = WireType::Named {
+            package: Some("host.example".to_string()),
+            name: "Record".to_string(),
+            arguments: vec![],
+        };
+        let signature = FunctionSignature {
+            parameters: vec![],
+            result: named.clone(),
+            asynchronous: false,
+        };
+        let types = WireCallTypeTable::for_signature(&signature).unwrap();
+        let error = native_to_wire(
+            NativeValue::Struct {
+                name: "Record".to_string(),
+                fields: BTreeMap::new(),
+            },
+            &named,
+            &types,
+        )
+        .expect_err("named records still require an Artifact type-table adapter");
         assert_eq!(error.code, ProviderErrorCode::Unavailable);
     }
 

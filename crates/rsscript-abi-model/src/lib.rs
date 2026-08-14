@@ -46,7 +46,7 @@ pub enum BinaryOp {
 
 macro_rules! wire_id {
     ($name:ident) => {
-        /// Opaque, module-local identity used by a typed ABI value table.
+        /// Opaque, scope-local identity used by a typed ABI value table.
         /// Human-readable names remain in the surrounding descriptor/type
         /// table; dynamic values never carry them as executable identity.
         #[derive(
@@ -71,6 +71,101 @@ wire_id!(WireTypeId);
 wire_id!(WireFieldId);
 wire_id!(WireVariantId);
 wire_id!(WireResourceTypeId);
+
+/// Numeric identities derived from one linked function signature.
+///
+/// `WireValue` deliberately transports numeric type and variant identities
+/// rather than names.  A full Artifact type table will eventually own those
+/// identities for an entire module.  During the compatibility transition,
+/// synchronous Provider calls can safely use this smaller table: both the VM
+/// adapter and the Provider derive it from the exact same validated function
+/// signature.  It is therefore never valid to reuse an ID from one function
+/// signature for another.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WireCallTypeTable {
+    types: Vec<WireType>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WireTypeTableOverflow;
+
+impl fmt::Display for WireTypeTableOverflow {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("wire call type table exceeds u32 identities")
+    }
+}
+
+impl std::error::Error for WireTypeTableOverflow {}
+
+impl WireCallTypeTable {
+    /// Build the deterministic type table for a function call. Parameter
+    /// types are visited in declaration order, followed by the result type;
+    /// children are assigned before their containing type.
+    pub fn for_signature(signature: &FunctionSignature) -> Result<Self, WireTypeTableOverflow> {
+        let mut table = Self { types: Vec::new() };
+        for parameter in &signature.parameters {
+            table.insert(&parameter.ty)?;
+        }
+        table.insert(&signature.result)?;
+        Ok(table)
+    }
+
+    /// Return the identity for a type present in this signature's table.
+    pub fn type_id(&self, ty: &WireType) -> Option<WireTypeId> {
+        self.types
+            .iter()
+            .position(|candidate| candidate == ty)
+            .and_then(|index| u32::try_from(index).ok())
+            .map(WireTypeId::new)
+    }
+
+    /// The stable `Some(value)` variant identity for an `Option<T>` in this
+    /// table.  The enclosing option type identity is still carried by the
+    /// value, so this ordinal cannot be used without it.
+    pub const fn option_some_variant() -> WireVariantId {
+        WireVariantId::new(0)
+    }
+
+    /// The stable `None` variant identity for an `Option<T>` in this table.
+    pub const fn option_none_variant() -> WireVariantId {
+        WireVariantId::new(1)
+    }
+
+    fn insert(&mut self, ty: &WireType) -> Result<(), WireTypeTableOverflow> {
+        match ty {
+            WireType::List { element }
+            | WireType::Option { value: element }
+            | WireType::Qualified { value: element, .. } => self.insert(element)?,
+            WireType::Result { ok, error } => {
+                self.insert(ok)?;
+                self.insert(error)?;
+            }
+            WireType::Tuple { elements } => {
+                for element in elements {
+                    self.insert(element)?;
+                }
+            }
+            WireType::Named { arguments, .. } => {
+                for argument in arguments {
+                    self.insert(argument)?;
+                }
+            }
+            WireType::Unit
+            | WireType::Bool
+            | WireType::Int { .. }
+            | WireType::Float { .. }
+            | WireType::String
+            | WireType::Bytes
+            | WireType::Resource { .. }
+            | WireType::Handle { .. } => {}
+        }
+        if !self.types.contains(ty) {
+            u32::try_from(self.types.len()).map_err(|_| WireTypeTableOverflow)?;
+            self.types.push(ty.clone());
+        }
+        Ok(())
+    }
+}
 
 /// A generation-safe resource reference in the canonical Provider wire model.
 ///
@@ -537,6 +632,48 @@ mod tests {
         assert_eq!(
             value.estimated_payload_bytes(),
             std::mem::size_of::<WireResourceHandle>()
+        );
+    }
+
+    #[test]
+    fn call_type_table_is_deterministic_and_assigns_children_first() {
+        let signature = FunctionSignature {
+            parameters: vec![ParameterSignature {
+                name: "input".to_string(),
+                effect: DataEffect::Read,
+                ty: WireType::Option {
+                    value: Box::new(WireType::String),
+                },
+                retained: false,
+            }],
+            result: WireType::List {
+                element: Box::new(WireType::String),
+            },
+            asynchronous: false,
+        };
+        let first = WireCallTypeTable::for_signature(&signature).unwrap();
+        let second = WireCallTypeTable::for_signature(&signature).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.type_id(&WireType::String), Some(WireTypeId::new(0)));
+        assert_eq!(
+            first.type_id(&WireType::Option {
+                value: Box::new(WireType::String),
+            }),
+            Some(WireTypeId::new(1))
+        );
+        assert_eq!(
+            first.type_id(&WireType::List {
+                element: Box::new(WireType::String),
+            }),
+            Some(WireTypeId::new(2))
+        );
+        assert_eq!(
+            WireCallTypeTable::option_some_variant(),
+            WireVariantId::new(0)
+        );
+        assert_eq!(
+            WireCallTypeTable::option_none_variant(),
+            WireVariantId::new(1)
         );
     }
 
