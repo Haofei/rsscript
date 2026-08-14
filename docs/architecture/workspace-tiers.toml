@@ -13,7 +13,6 @@ core = [
   "rsscript-codegen-vm",
   "rsscript-compiler",
   "rsscript-diagnostics",
-  "rsscript-exec-ir",
   "rsscript-interface-catalog",
   "rsscript-language-service",
   "rsscript-lowering",
@@ -57,6 +56,10 @@ integrations = [
 ]
 
 experimental = [
+  # Transitional source-shaped IR retained only for explicit MIR differential
+  # compatibility. It remains a workspace member until M06 deletion, but is
+  # deliberately outside the default Core build/test closure.
+  "rsscript-exec-ir",
 ]
 
 research = [

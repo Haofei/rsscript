@@ -928,6 +928,8 @@ mechanical acceptance condition holds.
 - [ ] **M06 — Delete the source-shaped executable IR.** Remove nested
   `If`/`For`/`Match`/`With` backend nodes, string type/callee identities, and
   `ExecutableStmt::Unknown`/`ExecutableExpr::Unknown` only after M05 passes.
+  Until that gate is met, `rsscript-exec-ir` is an explicit experimental
+  compatibility member rather than a root default/Core package.
 
 ### 3. Code generation, verifier, and VM boundary
 
