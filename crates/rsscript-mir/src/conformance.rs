@@ -281,6 +281,22 @@ impl<'a> Interpreter<'a> {
                         };
                         values[destination.index()] = Some(value);
                     }
+                    MirInstruction::GetField {
+                        destination,
+                        base,
+                        field,
+                    } => {
+                        let value = match value_at(&values, *base)? {
+                            MirValue::JsonObject(fields) => fields
+                                .into_iter()
+                                .find_map(|(name, value)| (name == *field).then_some(value))
+                                .ok_or(MirExecutionError::InvalidOperation(
+                                    "missing object field",
+                                ))?,
+                            _ => return Err(MirExecutionError::InvalidOperation("field base")),
+                        };
+                        values[destination.index()] = Some(value);
+                    }
                     MirInstruction::ListLen { destination, list } => {
                         let length = match value_at(&values, *list)? {
                             MirValue::List(items) => items.len() as i64,

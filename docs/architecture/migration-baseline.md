@@ -680,6 +680,12 @@ mechanical acceptance condition holds.
       operations; a direct-HIR dual-path fixture compares the legacy VM, MIR
       reference interpreter, and verified MIR bytecode VM. Async and non-list
       iteration remain fail-closed pending stable protocol semantics.
+    - [x] **M02.3g — Lower resolved aggregate field reads.** Checked HIR field
+      access now lowers to `GetField { destination, base, field }`, using only
+      owned value IDs and aggregate data. The MIR conformance interpreter and
+      MIR-only codegen emit/execute the existing verifier-checked `GetField`
+      bytecode operation; typed layouts, mutation, variants, and pattern
+      projection remain fail-closed.
 - [x] **M02.4 — Add MIR structural validation.** Reject dangling blocks,
     invalid IDs, unterminated blocks, undefined values, and malformed CFG edges.
     - [x] **M02.4a — Verify the initial structural subset.** The verifier

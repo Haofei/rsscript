@@ -119,6 +119,14 @@ pub enum MirInstruction {
         list: ValueId,
         index: ValueId,
     },
+    /// Read a checked field from an already-resolved aggregate value. The
+    /// field spelling is data for the runtime object representation; it is not
+    /// a source-level callee or type identity.
+    GetField {
+        destination: ValueId,
+        base: ValueId,
+        field: String,
+    },
     /// Read the length of a resolved list value. This keeps lowered list
     /// iteration free of source-level iterator identity.
     ListLen {
@@ -833,6 +841,7 @@ fn instruction_definition(instruction: &MirInstruction) -> Option<ValueId> {
         | MirInstruction::MakeObject { destination, .. }
         | MirInstruction::MakeResult { destination, .. }
         | MirInstruction::ListGet { destination, .. }
+        | MirInstruction::GetField { destination, .. }
         | MirInstruction::ListLen { destination, .. }
         | MirInstruction::ReadPlace { destination, .. }
         | MirInstruction::BorrowRead { destination, .. }
@@ -868,6 +877,7 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         }
         MirInstruction::MakeResult { value, .. } => vec![*value],
         MirInstruction::ListGet { list, index, .. } => vec![*list, *index],
+        MirInstruction::GetField { base, .. } => vec![*base],
         MirInstruction::ListLen { list, .. } => vec![*list],
         MirInstruction::AcquireResource { source, .. } => vec![*source],
         MirInstruction::Binary { left, right, .. } => vec![*left, *right],
@@ -1041,6 +1051,7 @@ fn transfer_move_state(
         | MirInstruction::MakeObject { .. }
         | MirInstruction::MakeResult { .. }
         | MirInstruction::ListGet { .. }
+        | MirInstruction::GetField { .. }
         | MirInstruction::ListLen { .. }
         | MirInstruction::Binary { .. }
         | MirInstruction::Await { .. }
@@ -1103,6 +1114,7 @@ fn verify_instruction(
         | MirInstruction::MakeObject { destination, .. }
         | MirInstruction::MakeResult { destination, .. }
         | MirInstruction::ListGet { destination, .. }
+        | MirInstruction::GetField { destination, .. }
         | MirInstruction::ListLen { destination, .. } => define(*destination, defined),
         MirInstruction::ReadPlace { destination, place } => {
             check_live_place(*place, moved_places)?;

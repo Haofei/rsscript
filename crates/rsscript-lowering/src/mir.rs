@@ -677,7 +677,16 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                 Ok(destination)
             }
             checked::HirExpr::Closure { .. } => self.unsupported("checked HIR closure"),
-            checked::HirExpr::Field { .. } => self.unsupported("checked HIR field access"),
+            checked::HirExpr::Field { base, name, .. } => {
+                let base = self.lower_expression(base)?;
+                let destination = self.value();
+                self.emit(MirInstruction::GetField {
+                    destination,
+                    base,
+                    field: name.clone(),
+                });
+                Ok(destination)
+            }
             checked::HirExpr::Match { value, arms, .. } => self.lower_match_expression(value, arms),
             checked::HirExpr::Unknown(_) => self.unsupported("unknown checked HIR expression"),
         }
@@ -1810,7 +1819,16 @@ impl<'source, 'types> FunctionLowerer<'source, 'types> {
                 self.emit(MirInstruction::MakeList { destination, items });
                 Ok(destination)
             }
-            ExecutableExpr::Field { .. } => self.unsupported("field access"),
+            ExecutableExpr::Field { base, name, .. } => {
+                let base = self.lower_expression(base)?;
+                let destination = self.value();
+                self.emit(MirInstruction::GetField {
+                    destination,
+                    base,
+                    field: name.clone(),
+                });
+                Ok(destination)
+            }
             ExecutableExpr::Index { base, index } => {
                 if !expression_type_name(base).is_some_and(is_list_type) {
                     return self.unsupported("non-list index access");
@@ -2199,7 +2217,7 @@ fn binary_op(op: BinaryOp) -> MirBinaryOp {
 #[cfg(test)]
 mod tests {
     use rsscript_exec_ir::{
-        ExecutableBlock, ExecutableFunction, ExecutableMapLiteralEntry,
+        ExecutableBlock, ExecutableFieldAccess, ExecutableFunction, ExecutableMapLiteralEntry,
         ExecutableObjectLiteralField, ExecutableProgram, ExecutableSignature,
     };
 
@@ -2411,6 +2429,44 @@ mod tests {
             ] if fields == &[("count".into(), ValueId::new(0))]
         ));
         mir.verify().expect("verify object construction");
+    }
+
+    #[test]
+    fn lowers_aggregate_field_reads_to_typed_mir() {
+        let executable = module(ExecutableFunction {
+            name: "main".into(),
+            is_async: false,
+            signature: signature(),
+            body: ExecutableBlock {
+                statements: vec![ExecutableStmt::Return {
+                    value: Some(ExecutableExpr::Field {
+                        base: Box::new(ExecutableExpr::ObjectLiteral {
+                            fields: vec![ExecutableObjectLiteralField {
+                                name: "count".into(),
+                                value: ExecutableExpr::Number { value: "3".into() },
+                            }],
+                            type_name: Some("JsonValue".into()),
+                        }),
+                        name: "count".into(),
+                        access: ExecutableFieldAccess {
+                            base_type: Some("JsonValue".into()),
+                            type_name: Some("Int".into()),
+                        },
+                    }),
+                }],
+            },
+        });
+
+        let mir = lower_executable_ir_to_mir(&executable).expect("lower aggregate field");
+        assert!(matches!(
+            mir.functions()[0].blocks()[0].instructions(),
+            [
+                MirInstruction::LoadLiteral { .. },
+                MirInstruction::MakeObject { .. },
+                MirInstruction::GetField { field, .. },
+            ] if field == "count"
+        ));
+        mir.verify().expect("verify aggregate field read");
     }
 
     #[test]

@@ -310,6 +310,18 @@ fn lower_instruction(
                 ("index", json!(value_reg(function, *index))),
             ],
         )),
+        MirInstruction::GetField {
+            destination,
+            base,
+            field,
+        } => code.push(instr(
+            "GetField",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("base", json!(value_reg(function, *base))),
+                ("name", json!(field)),
+            ],
+        )),
         MirInstruction::ListLen { destination, list } => code.push(instr(
             "ListLen",
             [
@@ -704,6 +716,61 @@ mod tests {
         BytecodeVerifier::default()
             .verify(&artifact.to_bytes().unwrap())
             .unwrap();
+    }
+
+    #[test]
+    fn aggregate_field_read_emits_verifiable_get_field_bytecode() {
+        let module = MirModule::new(
+            vec![WireType::Int {
+                bits: 64,
+                signed: true,
+            }],
+            vec![MirFunction::new(
+                FunctionId::new(0),
+                MirFunctionSignature::new(vec![], TypeId::new(0), false),
+                0,
+                3,
+                vec![BasicBlock::new(
+                    BlockId::new(0),
+                    vec![
+                        MirInstruction::LoadLiteral {
+                            destination: ValueId::new(0),
+                            value: MirLiteral::Int(42),
+                        },
+                        MirInstruction::MakeObject {
+                            destination: ValueId::new(1),
+                            fields: vec![("count".into(), ValueId::new(0))],
+                        },
+                        MirInstruction::GetField {
+                            destination: ValueId::new(2),
+                            base: ValueId::new(1),
+                            field: "count".into(),
+                        },
+                    ],
+                    MirTerminator::Return(Some(ValueId::new(2))),
+                )],
+            )],
+            vec![MirFunctionDebug::new("main", vec![])],
+            vec![],
+        )
+        .expect("field MIR verifies");
+        let artifact = emit_artifact(
+            &module,
+            &format!("sha256:{}", "a".repeat(64)),
+            &format!("sha256:{}", "b".repeat(64)),
+            "0.1.0",
+        )
+        .expect("emit field bytecode");
+        let payload: serde_json::Value =
+            rsscript_bytecode::decode_executable_payload(&artifact.payload)
+                .expect("decode field payload");
+        assert_eq!(
+            payload["functions"][0]["code"][2]["GetField"],
+            serde_json::json!({"dst": 2, "base": 1, "name": "count"})
+        );
+        BytecodeVerifier::default()
+            .verify(&artifact.to_bytes().expect("encode field bytecode"))
+            .expect("verify field bytecode");
     }
 
     #[test]
