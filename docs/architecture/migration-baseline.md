@@ -848,6 +848,11 @@ mechanical acceptance condition holds.
     missing release on a reachable return, and an undrained task group.
   - [ ] **M04.3 — Enforce backend input boundaries.** Architecture tests reject
     syntax/HIR imports in VM, codegen, AOT, and JIT backend code.
+    - [x] **M04.3a — Guard bytecode backend input boundaries.** Architecture
+      tests now recursively inspect VM, MIR codegen, and JIT-lab sources plus
+      Cargo metadata, rejecting frontend imports or dependencies. Rust AOT
+      remains an explicit experimental migration item until it consumes MIR or
+      verified bytecode rather than checked frontend representations.
 - [ ] **M05 — Run old/new lowering differentially.** The same corpus must
   produce equivalent diagnostics, external imports, termination reasons,
   values, cleanup behavior, and deterministic usage reports.

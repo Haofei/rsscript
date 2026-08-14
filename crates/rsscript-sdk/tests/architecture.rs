@@ -3916,6 +3916,71 @@ fn executable_backends_consume_validated_frontend_results() {
 }
 
 #[test]
+fn bytecode_backends_cannot_reintroduce_frontend_dependencies() {
+    let root = workspace_root();
+    let backends = [
+        ("VM", root.join("crates/rsscript-vm/src/reg_vm")),
+        ("MIR codegen", root.join("crates/rsscript-codegen-vm/src")),
+        ("JIT lab", root.join("experiments/vm-jit/src")),
+    ];
+    let forbidden_source = [
+        "rsscript_compiler",
+        "rsscript_syntax",
+        "rsscript_semantics",
+        "rsscript_lowering",
+        "crate::hir",
+        "crate::syntax",
+        "crate::semantic",
+        "typed_hir()",
+    ];
+    for (name, directory) in backends {
+        let mut sources = Vec::new();
+        collect_rust_sources(&directory, &mut sources);
+        for source in sources {
+            let contents = read(&source);
+            for forbidden in forbidden_source {
+                assert!(
+                    !contents.contains(forbidden),
+                    "{name} backend `{}` must consume MIR/verified bytecode, not frontend `{forbidden}`",
+                    source.strip_prefix(&root).unwrap_or(&source).display(),
+                );
+            }
+        }
+    }
+
+    let metadata = cargo_metadata(&root);
+    for package in ["rsscript-vm", "rsscript-codegen-vm"] {
+        let dependencies = metadata_direct_dependencies(&metadata, package);
+        for forbidden in [
+            "rsscript-compiler",
+            "rsscript-syntax",
+            "rsscript-semantics",
+            "rsscript-lowering",
+        ] {
+            assert!(
+                !dependencies.contains(forbidden),
+                "{package} must not depend on frontend package `{forbidden}`"
+            );
+        }
+    }
+    let jit_manifest: toml::Value =
+        toml::from_str(&read(&root.join("experiments/vm-jit/Cargo.toml")))
+            .expect("JIT lab manifest should parse");
+    let jit_dependencies = dependency_packages(&jit_manifest);
+    for forbidden in [
+        "rsscript-compiler",
+        "rsscript-syntax",
+        "rsscript-semantics",
+        "rsscript-lowering",
+    ] {
+        assert!(
+            !jit_dependencies.contains(forbidden),
+            "vm-jit must not depend on frontend package `{forbidden}`"
+        );
+    }
+}
+
+#[test]
 fn typed_mir_has_a_frontend_free_dependency_boundary() {
     let root = workspace_root();
     let manifest: toml::Value = toml::from_str(&read(&root.join("crates/rsscript-mir/Cargo.toml")))
