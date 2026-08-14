@@ -35,4 +35,5 @@ remains an explicit compatibility fallback for unsupported pattern forms.
 Existing value-definition, dominance, CFG, and field-validation rules check
 the emitted operations. A dual-path migration case compares a user-defined
 payload binding across the legacy VM, test-only MIR interpreter, and verified
-MIR bytecode VM. No host capability or authorization semantics change.
+MIR bytecode VM for both statement and expression arms. No host capability or
+authorization semantics change.
