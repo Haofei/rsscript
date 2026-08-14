@@ -19,10 +19,10 @@ resource places to clean up if the runtime short-circuits. The VM bytecode
 codegen maps these typed operations to the existing verified `MakeVariant` and
 `TryResult` instructions.
 
-This does not add general sum-variant lowering, change Result language
-semantics, or claim that the scalar MIR conformance interpreter implements
-Result execution. The VM remains the reference executor for this migration
-slice.
+This does not add general sum-variant lowering or change Result language
+semantics. The scalar MIR conformance interpreter now covers the closed
+Result subset as a migration oracle; the VM remains the reference executor for
+runtime resource and scheduler behavior.
 
 ## Compatibility and migration
 
@@ -42,5 +42,6 @@ the existing VM resource model.
 ## Evidence
 
 The SDK execution-feature tests run a task group returning `Ok` values and a
-verified bytecode program that short-circuits an `Err`. MIR, lowerer, codegen,
-and SDK lint/test closures are checked with warnings denied.
+verified bytecode program that short-circuits an `Err`; the MIR conformance
+test executes the same short-circuit shape. MIR, lowerer, codegen, and SDK
+lint/test closures are checked with warnings denied.

@@ -46,6 +46,8 @@ pub enum MirValue {
     List(Vec<MirValue>),
     Map(Vec<(MirValue, MirValue)>),
     JsonObject(Vec<(String, MirValue)>),
+    ResultOk(Box<MirValue>),
+    ResultErr(Box<MirValue>),
 }
 
 impl MirValue {
@@ -82,6 +84,8 @@ impl MirValue {
                 rendered.sort();
                 format!("{{{}}}", rendered.join(","))
             }
+            Self::ResultOk(value) => format!("Ok({})", value.render()),
+            Self::ResultErr(value) => format!("Err({})", value.render()),
         }
     }
 }
@@ -227,11 +231,39 @@ impl<'a> Interpreter<'a> {
                                 .collect::<Result<Vec<_>, MirExecutionError>>()?,
                         ));
                     }
-                    MirInstruction::MakeResult { .. } | MirInstruction::TryResult { .. } => {
-                        return Err(MirExecutionError::InvalidOperation(
-                            "Result operations are outside the scalar MIR oracle",
-                        ));
+                    MirInstruction::MakeResult {
+                        destination,
+                        ok,
+                        value,
+                    } => {
+                        let value = value_at(&values, *value)?;
+                        values[destination.index()] = Some(if *ok {
+                            MirValue::ResultOk(Box::new(value))
+                        } else {
+                            MirValue::ResultErr(Box::new(value))
+                        });
                     }
+                    MirInstruction::TryResult {
+                        destination,
+                        source,
+                        cleanup,
+                    } => match value_at(&values, *source)? {
+                        MirValue::ResultOk(value) => {
+                            values[destination.index()] = Some(*value);
+                        }
+                        failure @ MirValue::ResultErr(_) => {
+                            for place in cleanup {
+                                let _ = places[place.index()]
+                                    .take()
+                                    .ok_or(MirExecutionError::UninitializedPlace(place.index()))?;
+                            }
+                            return Ok(FrameOutcome {
+                                value: failure,
+                                places,
+                            });
+                        }
+                        _ => return Err(MirExecutionError::InvalidOperation("Result try source")),
+                    },
                     MirInstruction::ListGet {
                         destination,
                         list,
@@ -455,5 +487,93 @@ fn binary(op: MirBinaryOp, left: MirValue, right: MirValue) -> Result<MirValue, 
         (Op::LogicalAnd, Value::Bool(left), Value::Bool(right)) => Ok(Value::Bool(left && right)),
         (Op::LogicalOr, Value::Bool(left), Value::Bool(right)) => Ok(Value::Bool(left || right)),
         _ => Err(MirExecutionError::InvalidOperation("binary operand types")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        BasicBlock, BlockId, MirFunction, MirFunctionDebug, MirFunctionSignature, TypeId, WireType,
+    };
+
+    #[test]
+    fn result_try_returns_the_failure_from_the_current_frame() {
+        let types = vec![
+            WireType::Unit,
+            WireType::Int {
+                bits: 64,
+                signed: true,
+            },
+            WireType::String,
+            WireType::Result {
+                ok: Box::new(WireType::Int {
+                    bits: 64,
+                    signed: true,
+                }),
+                error: Box::new(WireType::String),
+            },
+        ];
+        let result = TypeId::new(3);
+        let fail = MirFunction::new(
+            FunctionId::new(0),
+            MirFunctionSignature::new(vec![], result, false),
+            0,
+            2,
+            vec![BasicBlock::new(
+                BlockId::new(0),
+                vec![
+                    MirInstruction::LoadLiteral {
+                        destination: ValueId::new(0),
+                        value: MirLiteral::String("boom".into()),
+                    },
+                    MirInstruction::MakeResult {
+                        destination: ValueId::new(1),
+                        ok: false,
+                        value: ValueId::new(0),
+                    },
+                ],
+                MirTerminator::Return(Some(ValueId::new(1))),
+            )],
+        );
+        let main = MirFunction::new(
+            FunctionId::new(1),
+            MirFunctionSignature::new(vec![], result, false),
+            0,
+            2,
+            vec![BasicBlock::new(
+                BlockId::new(0),
+                vec![
+                    MirInstruction::Call {
+                        destination: ValueId::new(0),
+                        target: MirCallTarget::Function(FunctionId::new(0)),
+                        arguments: vec![],
+                    },
+                    MirInstruction::TryResult {
+                        destination: ValueId::new(1),
+                        source: ValueId::new(0),
+                        cleanup: vec![],
+                    },
+                ],
+                MirTerminator::Return(Some(ValueId::new(1))),
+            )],
+        );
+        let module = MirModule::new(
+            types,
+            vec![fail, main],
+            vec![
+                MirFunctionDebug::new("fail", vec![]),
+                MirFunctionDebug::new("main", vec![]),
+            ],
+            vec![],
+        )
+        .expect("Result MIR should verify");
+
+        assert_eq!(
+            execute_named(&module, "main", vec![])
+                .expect("execute")
+                .render(),
+            "Err(boom)"
+        );
     }
 }
