@@ -84,6 +84,12 @@ wire_id!(WireResourceTypeId);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WireCallTypeTable {
     types: Vec<WireType>,
+    // Resource identities deliberately occupy a table distinct from general
+    // value types. A `WireResourceTypeId` must never be mistaken for a
+    // `WireTypeId`, even when both happen to have the same numeric value.
+    // This table is scoped to one linked function signature just like
+    // `types`; the Artifact-wide table is a later boundary.
+    resources: Vec<WireType>,
     records: Vec<WireRecordLayout>,
     variants: Vec<WireVariantLayout>,
 }
@@ -140,6 +146,7 @@ impl WireCallTypeTable {
     pub fn for_signature(signature: &FunctionSignature) -> Result<Self, WireTypeTableOverflow> {
         let mut table = Self {
             types: Vec::new(),
+            resources: Vec::new(),
             records: Vec::new(),
             variants: Vec::new(),
         };
@@ -209,6 +216,22 @@ impl WireCallTypeTable {
             .map(WireTypeId::new)
     }
 
+    /// Return the generation-safe resource-type identity for a resource in
+    /// this linked call scope. Qualifiers describe ownership semantics rather
+    /// than a distinct resource kind, so they resolve to the wrapped resource
+    /// identity.
+    pub fn resource_type_id(&self, ty: &WireType) -> Option<WireResourceTypeId> {
+        let ty = match ty {
+            WireType::Qualified { value, .. } => value.as_ref(),
+            other => other,
+        };
+        self.resources
+            .iter()
+            .position(|candidate| candidate == ty)
+            .and_then(|index| u32::try_from(index).ok())
+            .map(WireResourceTypeId::new)
+    }
+
     /// The stable `Some(value)` variant identity for an `Option<T>` in this
     /// table.  The enclosing option type identity is still carried by the
     /// value, so this ordinal cannot be used without it.
@@ -269,6 +292,21 @@ impl WireCallTypeTable {
         if !self.types.contains(ty) {
             u32::try_from(self.types.len()).map_err(|_| WireTypeTableOverflow)?;
             self.types.push(ty.clone());
+        }
+        let resource = match ty {
+            WireType::Resource { .. } => Some(ty),
+            WireType::Qualified { value, .. }
+                if matches!(value.as_ref(), WireType::Resource { .. }) =>
+            {
+                Some(value.as_ref())
+            }
+            _ => None,
+        };
+        if let Some(resource) = resource
+            && !self.resources.contains(resource)
+        {
+            u32::try_from(self.resources.len()).map_err(|_| WireTypeTableOverflow)?;
+            self.resources.push(resource.clone());
         }
         Ok(())
     }
@@ -823,6 +861,49 @@ mod tests {
         assert_eq!(
             WireCallTypeTable::result_err_variant(),
             WireVariantId::new(1)
+        );
+    }
+
+    #[test]
+    fn call_type_table_assigns_resource_identities_independently_from_values() {
+        let file = WireType::Resource {
+            name: "host.fs.File".into(),
+        };
+        let socket = WireType::Resource {
+            name: "host.net.Socket".into(),
+        };
+        let signature = FunctionSignature {
+            parameters: vec![ParameterSignature {
+                name: "file".into(),
+                effect: DataEffect::Read,
+                ty: WireType::Qualified {
+                    qualifier: WireQualifier::Owned,
+                    value: Box::new(file.clone()),
+                },
+                retained: false,
+            }],
+            result: socket.clone(),
+            asynchronous: false,
+        };
+
+        let first = WireCallTypeTable::for_signature(&signature).unwrap();
+        let second = WireCallTypeTable::for_signature(&signature).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(
+            first.resource_type_id(&file),
+            Some(WireResourceTypeId::new(0))
+        );
+        assert_eq!(
+            first.resource_type_id(&socket),
+            Some(WireResourceTypeId::new(1))
+        );
+        assert_eq!(
+            first.resource_type_id(&WireType::Qualified {
+                qualifier: WireQualifier::Owned,
+                value: Box::new(file),
+            }),
+            Some(WireResourceTypeId::new(0)),
+            "resource qualifiers must not create a second runtime handle kind"
         );
     }
 

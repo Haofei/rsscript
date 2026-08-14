@@ -1399,14 +1399,23 @@ mechanical acceptance condition holds.
     names or types. Descriptor-owned named sum layouts likewise bridge
     positional `WireValue::Variant` values: declaration-order case IDs and
     fields are checked before either direction reaches the legacy VM adapter.
-    JSON and resources still require the Artifact-wide type-table/lifecycle
-    adapter. The same descriptor-scoped scalar, aggregate, record, and named
-    sum subset now also works through `AsyncWireInterpreterFn`; resource async
-    values remain fail-closed until the Artifact lifecycle adapter is present.
-    - [x] **P06.2a — Bridge generation-safe resource handles.** Provider
+    JSON still requires an explicitly declared extension codec. Resources now
+    use a deterministic resource-type table scoped to the exact linked
+    signature: the compatibility adapter converts a legacy VM resource only
+    when its declared resource name matches, then preserves numeric type,
+    slot, and generation in `WireValue::Resource`; forged or cross-type
+    handles fail closed. The same descriptor-scoped scalar, aggregate, record,
+    and named sum subset now also works through `AsyncWireInterpreterFn`,
+    including typed resource-handle round trips. Async resource registration,
+    cleanup, and cancellation remain separate run-owned lifecycle conformance
+    work; a raw handle conversion never grants lifecycle ownership.
+  - [x] **P06.2a — Bridge generation-safe resource handles.** Provider
       runtime handles now convert to/from the canonical numeric wire handle
-      with a descriptor-supplied resource type; no legacy type-name string is
-      used at that boundary. Aggregate `NativeValue` adapters remain open.
+      with a descriptor-supplied resource type. Linked sync wire calls prove
+      the numeric type, slot, and generation survive the legacy VM adapter;
+      a legacy type-name is checked only at that compatibility edge and is
+      never carried in the canonical wire value. Aggregate `NativeValue`
+      adapters remain open.
     - [x] **P06.2b — Generate canonical resource-wire adapters.** Generated
       Provider resource wrappers now encode/decode `WireValue::Resource` using
       explicit numeric resource identities; legacy `NativeValue` methods are

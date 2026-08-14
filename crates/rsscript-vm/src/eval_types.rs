@@ -121,10 +121,10 @@ fn check_payload_budget(
 
 /// Convert the subset with an unambiguous legacy VM representation to the
 /// canonical Provider wire model. The type table is derived from the linked
-/// function signature, so aggregate identities are shared with the Provider
-/// without fabricating an Artifact-wide record layout. Named records use the
-/// descriptor-supplied layouts; JSON and resources remain fail-closed until
-/// their Artifact-wide lifecycle/extension adapters are available.
+/// function signature, so aggregate and resource identities are shared with
+/// the Provider without fabricating an Artifact-wide table. Named records and
+/// variants use descriptor-supplied layouts. JSON remains a named extension
+/// codec rather than an implicit dynamic escape hatch.
 fn native_to_wire(
     value: NativeValue,
     expected: &WireType,
@@ -138,6 +138,19 @@ fn native_to_wire(
         (NativeValue::String(value), WireType::String) => Ok(WireValue::String { value }),
         (NativeValue::Char(value), WireType::Char) => Ok(WireValue::Char { value }),
         (NativeValue::Bytes(value), WireType::Bytes) => Ok(WireValue::Bytes { value }),
+        (NativeValue::Native { type_name, id }, resource @ WireType::Resource { name })
+            if type_name == *name =>
+        {
+            let resource_type = resource_type_id(types, resource)?;
+            Ok(WireValue::Resource {
+                handle: ResourceHandle::from_native_id(id).to_wire(resource_type),
+            })
+        }
+        (NativeValue::Native { .. }, WireType::Resource { .. }) => {
+            Err(ProviderError::invalid_argument(
+                "provider resource argument does not match its linked resource type",
+            ))
+        }
         (NativeValue::List(values), WireType::List { element }) => {
             let element_type = type_id(types, element)?;
             let values = values
@@ -341,6 +354,18 @@ fn wire_to_native(
         (WireValue::String { value }, WireType::String) => Ok(NativeValue::String(value)),
         (WireValue::Char { value }, WireType::Char) => Ok(NativeValue::Char(value)),
         (WireValue::Bytes { value }, WireType::Bytes) => Ok(NativeValue::Bytes(value)),
+        (WireValue::Resource { handle }, resource @ WireType::Resource { name }) => {
+            let expected = resource_type_id(types, resource)?;
+            if handle.resource_type != expected {
+                return Err(ProviderError::invalid_argument(
+                    "provider resource result does not match its linked resource type",
+                ));
+            }
+            Ok(NativeValue::Native {
+                type_name: name.clone(),
+                id: ResourceHandle::from_wire(handle).to_native_id(),
+            })
+        }
         (
             WireValue::List {
                 element_type,
@@ -562,6 +587,15 @@ fn type_id(
 ) -> Result<rsscript_abi_model::WireTypeId, ProviderError> {
     types.type_id(expected).ok_or_else(|| {
         ProviderError::internal("linked provider signature is missing a wire type identity")
+    })
+}
+
+fn resource_type_id(
+    types: &WireCallTypeTable,
+    expected: &WireType,
+) -> Result<rsscript_abi_model::WireResourceTypeId, ProviderError> {
+    types.resource_type_id(expected).ok_or_else(|| {
+        ProviderError::internal("linked provider signature is missing a resource type identity")
     })
 }
 
@@ -1383,6 +1417,88 @@ mod provider_contract_tests {
     }
 
     #[test]
+    fn linked_wire_provider_preserves_resource_handle_identity() {
+        let symbol = ExternalSymbol::new("host.test.file_round_trip").unwrap();
+        let file = WireType::Resource {
+            name: "host.fs.File".into(),
+        };
+        let signature = FunctionSignature {
+            parameters: vec![rsscript_abi_model::ParameterSignature {
+                name: "file".into(),
+                effect: rsscript_abi_model::DataEffect::Read,
+                ty: file.clone(),
+                retained: false,
+            }],
+            result: file.clone(),
+            asynchronous: false,
+        };
+        let resource_type = WireCallTypeTable::for_signature(&signature)
+            .unwrap()
+            .resource_type_id(&file)
+            .unwrap();
+        let descriptor = ProviderDescriptor {
+            provider_id: "test.provider".into(),
+            provider_version: "1.0.0".into(),
+            supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+            record_layouts: Vec::new(),
+            variant_layouts: Vec::new(),
+            functions: vec![ProviderFunctionDescriptor {
+                symbol: symbol.clone(),
+                signature: signature.clone(),
+                entry: "file_round_trip".into(),
+                call_mode: ProviderCallMode::Sync,
+                blocking: BlockingBehavior::NonBlocking,
+                cancellation: CancellationBehavior::Cooperative,
+                thread_safe: true,
+                reentrant: true,
+                resource_cleanup: ResourceCleanupContract::None,
+                error_mapping: ProviderErrorMapping::StructuredV1,
+            }],
+        };
+        let mut registry = ExternalFunctionRegistry::new();
+        registry
+            .register_provider(
+                &descriptor,
+                BTreeMap::from([(
+                    symbol,
+                    ProviderFunction {
+                        signature,
+                        callable: WireInterpreterFn::new(move |args| {
+                            assert_eq!(
+                                args,
+                                vec![WireValue::Resource {
+                                    handle: rsscript_abi_model::WireResourceHandle {
+                                        resource_type,
+                                        slot: 8,
+                                        generation: 3,
+                                    },
+                                }]
+                            );
+                            Ok(args.into_iter().next().expect("one file argument"))
+                        }),
+                    },
+                )]),
+            )
+            .unwrap();
+        let function = registry.into_bindings().next().unwrap().1;
+        let native = NativeValue::Native {
+            type_name: "host.fs.File".into(),
+            id: ResourceHandle {
+                slot: 8,
+                generation: 3,
+            }
+            .to_native_id(),
+        };
+        assert_eq!(
+            function
+                .call_with_context(&mut ProviderCallContext::default(), vec![native.clone()])
+                .unwrap(),
+            native,
+            "the linked wire callable must receive and return the same typed resource handle"
+        );
+    }
+
+    #[test]
     fn linked_wire_provider_decodes_record_results_from_descriptor_layout() {
         let symbol = ExternalSymbol::new("host.test.record").unwrap();
         let record = WireType::from("host.test.Result");
@@ -1595,6 +1711,74 @@ mod provider_contract_tests {
             value,
             "map adapter preserves declaration-order entries and Char values"
         );
+    }
+
+    #[test]
+    fn descriptor_type_table_adapts_generation_safe_resource_values() {
+        let file = WireType::Resource {
+            name: "host.fs.File".into(),
+        };
+        let signature = FunctionSignature {
+            parameters: vec![rsscript_abi_model::ParameterSignature {
+                name: "file".into(),
+                effect: rsscript_abi_model::DataEffect::Read,
+                ty: file.clone(),
+                retained: false,
+            }],
+            result: file.clone(),
+            asynchronous: false,
+        };
+        let types = WireCallTypeTable::for_signature(&signature).unwrap();
+        let native = NativeValue::Native {
+            type_name: "host.fs.File".into(),
+            id: ResourceHandle {
+                slot: 41,
+                generation: 7,
+            }
+            .to_native_id(),
+        };
+        let wire = native_to_wire(native.clone(), &file, &types)
+            .expect("linked resource type derives a generation-safe wire handle");
+        assert_eq!(
+            wire,
+            WireValue::Resource {
+                handle: rsscript_abi_model::WireResourceHandle {
+                    resource_type: types.resource_type_id(&file).unwrap(),
+                    slot: 41,
+                    generation: 7,
+                },
+            }
+        );
+        assert_eq!(
+            wire_to_native(wire, &file, &types).unwrap(),
+            native,
+            "the legacy adapter may retain a dynamic representation internally, but the wire boundary must preserve typed slot and generation"
+        );
+
+        let wrong_type = native_to_wire(
+            NativeValue::Native {
+                type_name: "host.net.Socket".into(),
+                id: 0,
+            },
+            &file,
+            &types,
+        )
+        .expect_err("resource names cannot forge a linked handle type");
+        assert_eq!(wrong_type.code, ProviderErrorCode::InvalidArgument);
+
+        let wrong_wire = wire_to_native(
+            WireValue::Resource {
+                handle: rsscript_abi_model::WireResourceHandle {
+                    resource_type: rsscript_abi_model::WireResourceTypeId::new(99),
+                    slot: 41,
+                    generation: 7,
+                },
+            },
+            &file,
+            &types,
+        )
+        .expect_err("foreign resource type identities cannot cross a linked boundary");
+        assert_eq!(wrong_wire.code, ProviderErrorCode::InvalidArgument);
     }
 
     #[test]
@@ -2010,6 +2194,83 @@ mod provider_contract_tests {
             poll_once(&mut future),
             Poll::Ready(Ok(NativeValue::Int(42)))
         );
+    }
+
+    #[test]
+    fn async_wire_dispatcher_preserves_resource_handle_identity() {
+        let symbol = ExternalSymbol::new("host.test.async_file_round_trip").unwrap();
+        let file = WireType::Resource {
+            name: "host.fs.File".into(),
+        };
+        let signature = FunctionSignature {
+            parameters: vec![rsscript_abi_model::ParameterSignature {
+                name: "file".into(),
+                effect: rsscript_abi_model::DataEffect::Read,
+                ty: file.clone(),
+                retained: false,
+            }],
+            result: file.clone(),
+            asynchronous: true,
+        };
+        let resource_type = WireCallTypeTable::for_signature(&signature)
+            .unwrap()
+            .resource_type_id(&file)
+            .unwrap();
+        let descriptor = ProviderDescriptor {
+            provider_id: "test.provider".into(),
+            provider_version: "1.0.0".into(),
+            supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+            record_layouts: Vec::new(),
+            variant_layouts: Vec::new(),
+            functions: vec![ProviderFunctionDescriptor {
+                symbol: symbol.clone(),
+                signature: signature.clone(),
+                entry: "async_file_round_trip".into(),
+                call_mode: ProviderCallMode::Async,
+                blocking: BlockingBehavior::NonBlocking,
+                cancellation: CancellationBehavior::Cooperative,
+                thread_safe: true,
+                reentrant: true,
+                resource_cleanup: ResourceCleanupContract::None,
+                error_mapping: ProviderErrorMapping::StructuredV1,
+            }],
+        };
+        let mut registry = ExternalFunctionRegistry::new();
+        registry
+            .register_provider(
+                &descriptor,
+                BTreeMap::from([(
+                    symbol,
+                    ProviderFunction {
+                        signature,
+                        callable: AsyncWireInterpreterFn::new(move |_, args| async move {
+                            assert_eq!(
+                                args,
+                                vec![WireValue::Resource {
+                                    handle: rsscript_abi_model::WireResourceHandle {
+                                        resource_type,
+                                        slot: 8,
+                                        generation: 3,
+                                    },
+                                }]
+                            );
+                            Ok(args.into_iter().next().expect("one file argument"))
+                        }),
+                    },
+                )]),
+            )
+            .unwrap();
+        let function = registry.into_bindings().next().unwrap().1;
+        let native = NativeValue::Native {
+            type_name: "host.fs.File".into(),
+            id: ResourceHandle {
+                slot: 8,
+                generation: 3,
+            }
+            .to_native_id(),
+        };
+        let mut future = function.start_async(async_context(None, None), vec![native.clone()]);
+        assert_eq!(poll_once(&mut future), Poll::Ready(Ok(native)));
     }
 
     #[test]
