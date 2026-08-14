@@ -6,7 +6,8 @@ use rsscript_diagnostics::{
     format_diagnostics_json_with_source,
 };
 use rsscript_semantics::{
-    CompilationSession, analyze_source_with_interfaces_without_core, analyze_source_without_core,
+    CompilationSession, analyze_source_with_interfaces,
+    analyze_source_with_interfaces_without_core, analyze_source_without_core,
     standard_package_interfaces,
 };
 use rsscript_syntax::lint_source;
@@ -239,6 +240,16 @@ fn analyze_source_with_session(
     source: &str,
     interfaces: &[(&str, &str)],
 ) -> Vec<rsscript_diagnostics::Diagnostic> {
+    // Session files have stable path identities. Preserve the legacy analyzer's
+    // duplicate-interface diagnostics rather than silently replacing one input
+    // buffer when a caller supplied the same logical interface path twice.
+    let unique_paths = interfaces
+        .iter()
+        .map(|(interface_path, _)| *interface_path)
+        .collect::<std::collections::BTreeSet<_>>();
+    if unique_paths.len() != interfaces.len() {
+        return analyze_source_with_interfaces(path, source, interfaces);
+    }
     let mut session = CompilationSession::default();
     session
         .set_file(path, source)
@@ -299,6 +310,19 @@ mod tests {
         assert!(
             diagnostics.is_empty(),
             "session-owned analysis should retain explicit interface visibility: {diagnostics:#?}"
+        );
+    }
+
+    #[test]
+    fn duplicate_interface_paths_preserve_the_legacy_analysis_behavior() {
+        let source = "fn main() -> Int { return Host.value() }";
+        let interfaces = [
+            ("host.rssi", "module Host\npub fn value() -> Int\n"),
+            ("host.rssi", "module Host\npub fn value() -> String\n"),
+        ];
+        assert_eq!(
+            super::analyze_source_with_session("main.rss", source, &interfaces),
+            rsscript_semantics::analyze_source_with_interfaces("main.rss", source, &interfaces)
         );
     }
 }
