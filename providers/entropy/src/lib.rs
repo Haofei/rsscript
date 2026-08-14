@@ -1,18 +1,19 @@
 #![forbid(unsafe_code)]
 use rand::RngCore;
 use rsscript_abi_model::ExternalSymbol;
-use rsscript_provider_api::{NativeInterpreterFn, NativeValue, ProviderError, ProviderFunction};
+use rsscript_provider_api::{ProviderError, ProviderFunction, WireInterpreterFn, WireValue};
 use std::collections::BTreeMap;
 include!(concat!(env!("OUT_DIR"), "/provider_contract.rs"));
 
-pub fn functions() -> BTreeMap<ExternalSymbol, ProviderFunction<NativeInterpreterFn>> {
+/// Canonical wire implementation; entropy has only scalar boundary values.
+pub fn functions() -> BTreeMap<ExternalSymbol, ProviderFunction<WireInterpreterFn>> {
     let function = descriptor().functions.into_iter().next().unwrap();
     BTreeMap::from([(
         function.symbol,
         ProviderFunction {
             signature: function.signature,
-            callable: NativeInterpreterFn::new(|mut args| {
-                let NativeValue::Int(length) = args.remove(0) else {
+            callable: WireInterpreterFn::new(|mut args| {
+                let WireValue::Int { value: length } = args.remove(0) else {
                     return Err(ProviderError::invalid_argument("length must be Int"));
                 };
                 let length = usize::try_from(length)
@@ -24,7 +25,7 @@ pub fn functions() -> BTreeMap<ExternalSymbol, ProviderFunction<NativeInterprete
                 }
                 let mut bytes = vec![0; length];
                 rand::thread_rng().fill_bytes(&mut bytes);
-                Ok(NativeValue::Bytes(bytes))
+                Ok(WireValue::Bytes { value: bytes })
             }),
         },
     )])
@@ -35,7 +36,7 @@ mod tests {
     #[test]
     fn conforms_to_provider_contract() {
         let report =
-            rsscript_provider_conformance::assert_provider_conforms(descriptor(), functions());
+            rsscript_provider_conformance::assert_wire_provider_conforms(descriptor(), functions());
         assert_eq!(report.provider_id, "rsscript.entropy");
     }
 }
