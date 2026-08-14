@@ -1036,9 +1036,6 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         if signature.is_builtin {
             return self.lower_builtin_call(signature, receiver, args);
         }
-        if receiver.is_some() {
-            return self.unsupported("checked HIR receiver call");
-        }
         let target = if signature.is_external {
             let symbol = checked_external_symbol(signature)?;
             self.targets
@@ -1072,8 +1069,21 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         };
         let mut ordered = args.iter().collect::<Vec<_>>();
         ordered.sort_by_key(|argument| argument.evaluation_index);
-        let mut arguments = Vec::with_capacity(ordered.len());
+        let mut arguments = Vec::with_capacity(ordered.len() + usize::from(receiver.is_some()));
         let mut retained_places = Vec::new();
+        if let Some(receiver) = receiver {
+            let lowered = self.lower_direct_receiver_argument(receiver)?;
+            if signature
+                .params
+                .first()
+                .is_some_and(|parameter| signature.retained_params.contains(&parameter.name))
+                && let MirCallArgument::BorrowRead(place) | MirCallArgument::BorrowMut(place) =
+                    lowered
+            {
+                retained_places.push(place);
+            }
+            arguments.push(lowered);
+        }
         for argument in ordered {
             let lowered = self.lower_direct_call_argument(&argument.value)?;
             if argument

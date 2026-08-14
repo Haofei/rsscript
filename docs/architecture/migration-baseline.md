@@ -902,7 +902,8 @@ mechanical acceptance condition holds.
       functions (checked local bindings, scalar/aggregate expressions, list
       indexing, assignments, structured `if`/`else`, conditional loops with
       `break`/`continue`, return, and resolved internal read/`mut`/`take`
-      calls, standalone `take local`, plus lexical resource scopes) now lower from semantic HIR without
+      calls, resolved receiver calls with checked receiver effects, standalone
+      `take local`, plus lexical resource scopes) now lower from semantic HIR without
       constructing `ExecutableIr`; the default compiler/lowering Cargo closure
       no longer depends on that compatibility crate. Compiler output prefers
       the direct route and uses the explicit compatibility bridge only when a capability is not yet

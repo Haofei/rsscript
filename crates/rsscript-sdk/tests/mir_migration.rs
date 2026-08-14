@@ -112,6 +112,23 @@ fn main() -> Int {
 "#,
     },
     MigrationCase {
+        name: "resolved_receiver_call",
+        capability: "resolved receiver calls with checked receiver effects",
+        stage: MigrationStage::DualPath,
+        source: r#"
+struct Point { value: Int }
+
+fn Point.label(self: Point) -> String {
+    return "point"
+}
+
+fn main() -> String {
+    let point = Point(value: 1)
+    return point.label()
+}
+"#,
+    },
+    MigrationCase {
         name: "mutable_borrow_writeback",
         capability: "mutable call borrows",
         stage: MigrationStage::DualPath,
