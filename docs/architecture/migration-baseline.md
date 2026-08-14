@@ -653,7 +653,7 @@ mechanical acceptance condition holds.
       direct MIR lowering. Reviewed SDK `execution` no longer selects that
       encoder; only the explicit `legacy-exec-ir` compatibility feature may do
       so.
-  - [ ] **M02.3 — Lower aggregate and pattern operations.** Cover records,
+  - [x] **M02.3 — Lower aggregate and pattern operations.** Cover records,
     variants, collections, field/index operations, and match dispatch without
     source AST nodes in MIR.
     - [x] **M02.3a — Lower owned list construction.** Source array literals
