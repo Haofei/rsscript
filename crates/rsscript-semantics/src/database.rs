@@ -836,29 +836,60 @@ impl CompilationSession {
     /// Full type checking remains a transitional compiler query, but consumers
     /// can no longer build a competing workspace HIR from ad-hoc file reads.
     pub fn workspace_hir(&mut self) -> Arc<Hir> {
+        self.workspace_hir_inner(None)
+            .expect("an unchecked workspace HIR query cannot abort")
+    }
+
+    fn workspace_hir_inner(
+        &mut self,
+        operation: Option<&OperationContext>,
+    ) -> Result<Arc<Hir>, OperationAbort> {
+        if let Some(operation) = operation {
+            operation.check()?;
+        }
         if let Some(hir) = &self.workspace_hir_cache {
             self.workspace_hir_cache_hits = self.workspace_hir_cache_hits.saturating_add(1);
-            return Arc::clone(hir);
+            if let Some(operation) = operation {
+                operation.check()?;
+            }
+            return Ok(Arc::clone(hir));
         }
 
         let source_files = self.source_snapshot().files().to_vec();
-        let mut sources = merge_programs(source_files.iter().filter_map(|file| {
-            self.parse_snapshot_file(SessionFileRole::Source, file)
-                .map(|program| (*program).clone())
-        }));
+        let mut source_programs = Vec::with_capacity(source_files.len());
+        for file in &source_files {
+            if let Some(operation) = operation {
+                operation.check()?;
+            }
+            if let Some(program) = self.parse_snapshot_file(SessionFileRole::Source, file) {
+                source_programs.push((*program).clone());
+            }
+        }
+        let mut sources = merge_programs(source_programs);
         let interface_files = self.interface_snapshot().files().to_vec();
-        let mut interfaces = interface_files
-            .iter()
-            .filter_map(|file| {
-                self.parse_snapshot_file(SessionFileRole::Interface, file)
-                    .map(|program| (*program).clone())
-            })
-            .collect::<Vec<_>>();
+        let mut interfaces = Vec::with_capacity(interface_files.len());
+        for file in &interface_files {
+            if let Some(operation) = operation {
+                operation.check()?;
+            }
+            if let Some(program) = self.parse_snapshot_file(SessionFileRole::Interface, file) {
+                interfaces.push((*program).clone());
+            }
+        }
+        if let Some(operation) = operation {
+            operation.check()?;
+        }
         crate::isolate_sources_with_interfaces(&mut sources, &mut interfaces);
+        if let Some(operation) = operation {
+            operation.check()?;
+        }
         let hir = Arc::new(Hir::from_syntax_with_interfaces(&sources, &interfaces));
+        if let Some(operation) = operation {
+            operation.check()?;
+        }
         self.workspace_hir_cache_misses = self.workspace_hir_cache_misses.saturating_add(1);
         self.workspace_hir_cache = Some(Arc::clone(&hir));
-        hir
+        Ok(hir)
     }
 
     /// Operation-aware workspace-HIR query. Cached HIR cannot escape a
@@ -867,10 +898,7 @@ impl CompilationSession {
         &mut self,
         operation: &OperationContext,
     ) -> Result<Arc<Hir>, OperationAbort> {
-        operation.check()?;
-        let hir = self.workspace_hir();
-        operation.check()?;
-        Ok(hir)
+        self.workspace_hir_inner(Some(operation))
     }
 
     /// Return structural type facts for the current namespace-isolated
