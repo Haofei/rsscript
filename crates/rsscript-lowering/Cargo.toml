@@ -14,6 +14,7 @@ rsscript-exec-ir = { path = "../rsscript-exec-ir", optional = true }
 rsscript-mir = { path = "../rsscript-mir" }
 rsscript-semantics = { path = "../rsscript-semantics" }
 rsscript-syntax = { path = "../rsscript-syntax" }
+rsscript-text = { path = "../rsscript-text" }
 
 [features]
 # The source-shaped executable bridge is a migration compatibility boundary.

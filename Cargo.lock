@@ -1869,6 +1869,7 @@ dependencies = [
  "rsscript-mir",
  "rsscript-semantics",
  "rsscript-syntax",
+ "rsscript-text",
 ]
 
 [[package]]

@@ -58,7 +58,7 @@ fn char_literal_scalar_diagnostic_with_fix(
     span: &rsscript_diagnostics::Span,
     fix: &str,
 ) -> Option<Diagnostic> {
-    let count = value.chars().count();
+    let count = rsscript_text::char_literal_scalar_count(value);
     if count == 1 {
         return None;
     }

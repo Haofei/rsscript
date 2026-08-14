@@ -23,6 +23,7 @@ use rsscript_mir::{
     ResourceTypeId, TaskGroupId, TaskId, TypeId, ValueId, VerifiedMir,
 };
 use rsscript_semantics::hir as checked;
+use rsscript_text::{decode_char_token, decode_string_token};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MirLoweringError {
@@ -830,14 +831,10 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                 self.literal(value)
             }
             checked::HirExpr::String { value, .. } => {
-                self.literal(MirLiteral::String(value.clone()))
+                self.literal(MirLiteral::String(decode_string_token(value)))
             }
             checked::HirExpr::Char { value, .. } => {
-                let mut chars = value.chars();
-                match (chars.next(), chars.next()) {
-                    (Some(value), None) => self.literal(MirLiteral::Char(value)),
-                    _ => self.unsupported("invalid checked HIR char literal"),
-                }
+                self.literal(MirLiteral::Char(decode_char_token(value)))
             }
             checked::HirExpr::Binary {
                 op:
@@ -3057,16 +3054,11 @@ fn match_literal(
                 function: function_name.to_owned(),
                 construct: "non-numeric checked HIR match literal",
             }),
-        rsscript_syntax::ast::MatchLiteral::String(value) => Ok(MirLiteral::String(value.clone())),
+        rsscript_syntax::ast::MatchLiteral::String(value) => {
+            Ok(MirLiteral::String(decode_string_token(value)))
+        }
         rsscript_syntax::ast::MatchLiteral::Char(value) => {
-            let mut chars = value.chars();
-            match (chars.next(), chars.next()) {
-                (Some(value), None) => Ok(MirLiteral::Char(value)),
-                _ => Err(MirLoweringError::Unsupported {
-                    function: function_name.to_owned(),
-                    construct: "invalid checked HIR match char literal",
-                }),
-            }
+            Ok(MirLiteral::Char(decode_char_token(value)))
         }
         rsscript_syntax::ast::MatchLiteral::Bool(value) => Ok(MirLiteral::Bool(*value)),
     }
