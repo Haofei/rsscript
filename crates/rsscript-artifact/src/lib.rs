@@ -106,7 +106,8 @@ impl ArtifactBundle {
             artifact_digest: digest(&artifact),
             analysis_digest: digest(&analysis_bytes),
         };
-        Self::from_sections(manifest, artifact, analysis, analysis_bytes)
+        let manifest_bytes = canonical_json(&manifest)?;
+        Self::from_sections(manifest, manifest_bytes, artifact, analysis, analysis_bytes)
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ArtifactBundleError> {
@@ -116,12 +117,10 @@ impl ArtifactBundle {
         let manifest_len = take_length(&mut input, MAX_MANIFEST_BYTES)?;
         let artifact_len = take_length(&mut input, MAX_ARTIFACT_BYTES)?;
         let analysis_len = take_length(&mut input, MAX_ANALYSIS_BYTES)?;
-        let manifest_bytes = take(&mut input, manifest_len)?;
-        let manifest: BundleManifestV1 = serde_json::from_slice(manifest_bytes)
+        let manifest_bytes = take(&mut input, manifest_len)?.to_vec();
+        let manifest: BundleManifestV1 = serde_json::from_slice(&manifest_bytes)
             .map_err(|error| ArtifactBundleError::Manifest(error.to_string()))?;
-        if canonical_json(&manifest)? != manifest_bytes {
-            return Err(ArtifactBundleError::NonCanonicalManifest);
-        }
+        validate_v1_json_encoding(&manifest, &manifest_bytes, ArtifactBundleSection::Manifest)?;
         let artifact = take(&mut input, artifact_len)?.to_vec();
         let analysis_bytes = take(&mut input, analysis_len)?.to_vec();
         if !input.is_empty() {
@@ -129,14 +128,13 @@ impl ArtifactBundle {
         }
         let analysis: serde_json::Value = serde_json::from_slice(&analysis_bytes)
             .map_err(|error| ArtifactBundleError::Analysis(error.to_string()))?;
-        if canonical_json(&analysis)? != analysis_bytes {
-            return Err(ArtifactBundleError::NonCanonicalAnalysis);
-        }
-        Self::from_sections(manifest, artifact, analysis, analysis_bytes)
+        validate_v1_json_encoding(&analysis, &analysis_bytes, ArtifactBundleSection::Analysis)?;
+        Self::from_sections(manifest, manifest_bytes, artifact, analysis, analysis_bytes)
     }
 
     fn from_sections(
         manifest: BundleManifestV1,
+        manifest_bytes: Vec<u8>,
         artifact: Vec<u8>,
         analysis: serde_json::Value,
         analysis_bytes: Vec<u8>,
@@ -173,7 +171,6 @@ impl ArtifactBundle {
         {
             return Err(ArtifactBundleError::ManifestArtifactMismatch);
         }
-        let manifest_bytes = canonical_json(&manifest)?;
         let digest = bundle_digest(&manifest_bytes, &artifact, &analysis_bytes);
         Ok(Self {
             manifest,
@@ -251,6 +248,40 @@ fn canonical_json(value: &impl Serialize) -> Result<Vec<u8>, ArtifactBundleError
     let mut output = Vec::new();
     write_canonical_json(&mut output, &value)?;
     Ok(output)
+}
+
+/// Bundle v1 originally used `serde_json::to_vec` directly. That encoding is
+/// compact and deterministic for one producer, but its object ordering is not
+/// a portable canonical contract. Readers accept that historical form so
+/// already-produced v1 Bundles remain deployable; writers always use
+/// [`canonical_json`] and therefore never create another legacy representation.
+///
+/// This is deliberately narrower than accepting arbitrary JSON whitespace:
+/// decoded values must re-encode byte-for-byte with the historical compact
+/// serializer. Section hashes and the manifest's section digests still bind the
+/// exact accepted bytes.
+fn validate_v1_json_encoding(
+    value: &impl Serialize,
+    bytes: &[u8],
+    section: ArtifactBundleSection,
+) -> Result<(), ArtifactBundleError> {
+    if canonical_json(value)? == bytes || legacy_compact_json(value)? == bytes {
+        return Ok(());
+    }
+    Err(match section {
+        ArtifactBundleSection::Manifest => ArtifactBundleError::NonCanonicalManifest,
+        ArtifactBundleSection::Analysis => ArtifactBundleError::NonCanonicalAnalysis,
+    })
+}
+
+fn legacy_compact_json(value: &impl Serialize) -> Result<Vec<u8>, ArtifactBundleError> {
+    serde_json::to_vec(value).map_err(|error| ArtifactBundleError::Manifest(error.to_string()))
+}
+
+#[derive(Clone, Copy)]
+enum ArtifactBundleSection {
+    Manifest,
+    Analysis,
 }
 
 fn write_canonical_json(output: &mut Vec<u8>, value: &Value) -> Result<(), ArtifactBundleError> {
@@ -532,5 +563,25 @@ mod tests {
             ArtifactBundle::from_bytes(&bytes),
             Err(ArtifactBundleError::NonCanonicalManifest)
         ));
+    }
+
+    #[test]
+    fn reader_accepts_the_historical_compact_v1_manifest_and_normalizes_on_write() {
+        let bundle = bundle();
+        let legacy_manifest = legacy_compact_json(&bundle.manifest).unwrap();
+        let canonical_manifest = canonical_json(&bundle.manifest).unwrap();
+        assert_ne!(legacy_manifest, canonical_manifest);
+        let analysis = canonical_json(&bundle.analysis).unwrap();
+
+        let mut bytes = ARTIFACT_BUNDLE_MAGIC.to_vec();
+        put_length(&mut bytes, legacy_manifest.len()).unwrap();
+        put_length(&mut bytes, bundle.artifact.len()).unwrap();
+        put_length(&mut bytes, analysis.len()).unwrap();
+        bytes.extend_from_slice(&legacy_manifest);
+        bytes.extend_from_slice(&bundle.artifact);
+        bytes.extend_from_slice(&analysis);
+
+        let decoded = ArtifactBundle::from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.to_bytes().unwrap(), bundle.to_bytes().unwrap());
     }
 }
