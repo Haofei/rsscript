@@ -1029,6 +1029,17 @@ fn language_engine_does_not_read_the_operating_system() {
     .unwrap();
     let loader_dependencies = dependency_packages(&loader_manifest);
     assert_eq!(loader_dependencies, BTreeSet::from(["toml".to_string()]));
+    let workspace_loader = read(&root.join("crates/rsscript-workspace-loader/src/lib.rs"));
+    for boundary in [
+        "pub struct WorkspaceSnapshot",
+        "pub fn snapshot_from",
+        "pub fn load_from",
+    ] {
+        assert!(
+            workspace_loader.contains(boundary),
+            "workspace loader must retain explicit input boundary {boundary}"
+        );
+    }
 
     let description = language_manifest["package"]["description"]
         .as_str()

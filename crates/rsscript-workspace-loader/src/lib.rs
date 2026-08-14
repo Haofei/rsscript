@@ -24,6 +24,30 @@ pub struct WorkspaceSourceFile {
     pub kind: WorkspaceFileKind,
 }
 
+/// Immutable, filesystem-captured input for one workspace operation.
+///
+/// The loader owns OS access; compiler and language layers can consume the
+/// resulting source bytes without consulting paths or the process environment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceSnapshot {
+    root: PathBuf,
+    files: Vec<WorkspaceSourceFile>,
+}
+
+impl WorkspaceSnapshot {
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn files(&self) -> &[WorkspaceSourceFile] {
+        &self.files
+    }
+
+    pub fn into_files(self) -> Vec<WorkspaceSourceFile> {
+        self.files
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkspaceLoadErrorCode {
     ResolveRoot,
@@ -102,7 +126,26 @@ impl Default for WorkspaceLoader {
 }
 
 impl WorkspaceLoader {
-    pub fn load(&self, package_dir: &Path) -> Result<Vec<WorkspaceSourceFile>, WorkspaceLoadError> {
+    /// Capture a workspace relative to an explicit caller-provided base path.
+    ///
+    /// This is the preferred embedding API because it does not read the
+    /// process current directory.
+    pub fn snapshot_from(
+        &self,
+        base: &Path,
+        package_dir: &Path,
+    ) -> Result<WorkspaceSnapshot, WorkspaceLoadError> {
+        let root = if package_dir.is_absolute() {
+            package_dir.to_path_buf()
+        } else {
+            base.join(package_dir)
+        };
+        self.snapshot_at(root)
+    }
+
+    /// Compatibility capture API using the process current directory for
+    /// relative paths. New embedding code should use snapshot_from.
+    pub fn snapshot(&self, package_dir: &Path) -> Result<WorkspaceSnapshot, WorkspaceLoadError> {
         let root = if package_dir.is_absolute() {
             package_dir.to_path_buf()
         } else {
@@ -115,6 +158,27 @@ impl WorkspaceLoader {
                 })?
                 .join(package_dir)
         };
+        self.snapshot_at(root)
+    }
+
+    /// Compatibility API returning the captured file list.
+    pub fn load(&self, package_dir: &Path) -> Result<Vec<WorkspaceSourceFile>, WorkspaceLoadError> {
+        self.snapshot(package_dir)
+            .map(WorkspaceSnapshot::into_files)
+    }
+
+    /// Capture files relative to an explicit base and return the compatibility
+    /// file-list view.
+    pub fn load_from(
+        &self,
+        base: &Path,
+        package_dir: &Path,
+    ) -> Result<Vec<WorkspaceSourceFile>, WorkspaceLoadError> {
+        self.snapshot_from(base, package_dir)
+            .map(WorkspaceSnapshot::into_files)
+    }
+
+    fn snapshot_at(&self, root: PathBuf) -> Result<WorkspaceSnapshot, WorkspaceLoadError> {
         if !root.is_dir() {
             return Err(WorkspaceLoadError::at(
                 WorkspaceLoadErrorCode::RootNotDirectory,
@@ -150,7 +214,7 @@ impl WorkspaceLoader {
             pending_dependencies.extend(dependency_paths(&dependency)?);
         }
         files.sort_by(|left, right| left.path.cmp(&right.path));
-        Ok(files)
+        Ok(WorkspaceSnapshot { root, files })
     }
 }
 
@@ -310,5 +374,17 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.code, WorkspaceLoadErrorCode::RootNotDirectory);
         assert!(error.path.is_some());
+    }
+
+    #[test]
+    fn explicit_base_capture_does_not_require_process_current_directory() {
+        let loader = WorkspaceLoader::default();
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let snapshot = loader.snapshot_from(root, Path::new(".")).unwrap();
+        assert_eq!(snapshot.root(), root);
+        assert_eq!(
+            loader.load_from(root, Path::new(".")).unwrap(),
+            snapshot.files()
+        );
     }
 }
