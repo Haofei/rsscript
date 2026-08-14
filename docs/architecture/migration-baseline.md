@@ -874,8 +874,11 @@ mechanical acceptance condition holds.
     - [x] **M03.2b — Lower managed linear resource scopes.** The transitional
       lowerer turns an explicitly managed, normally-falling-through `with`
       scope into `AcquireResource`/`ReleaseResource` around its binding and
-      interns a canonical resource type. Unmanaged scopes and non-normal exits
-      remain fail-closed until cleanup-edge lowering is implemented.
+      interns a canonical resource type. Direct checked-HIR lowering now takes
+      the managed expression's structural semantic type and derives the same
+      resource identity without parsing its compatibility display string.
+      Unmanaged scopes and non-normal exits remain fail-closed until cleanup-edge
+      lowering is implemented.
     - [x] **M03.2c — Emit normal non-local cleanup edges.** The lowerer keeps a
       lexical resource cleanup stack and emits release operations before
       `return`, `break`, and `continue`; managed early-return and loop-break

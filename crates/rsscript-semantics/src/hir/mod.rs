@@ -405,6 +405,9 @@ pub enum HirExpr {
     Manage {
         value: Box<HirExpr>,
         events: Vec<HirEffectEvent>,
+        /// Structural semantic result type for new backend lowering.
+        ty: Option<ResolvedType>,
+        /// Rendered compatibility projection for older diagnostic/adaptor code.
         type_name: Option<String>,
         span: Span,
     },

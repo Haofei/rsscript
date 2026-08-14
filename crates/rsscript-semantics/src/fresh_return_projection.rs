@@ -173,6 +173,7 @@ mod tests {
             value: Box::new(HirExpr::Manage {
                 value: Box::new(handle_field()),
                 events: Vec::new(),
+                ty: None,
                 type_name: None,
                 span: span(6),
             }),

@@ -708,12 +708,16 @@ pub(super) fn lower_hir_expr(
             type_name: infer_hir_expr_type(hir, expr, value_types).map(|ty| ty.to_string()),
             span: span.clone(),
         },
-        Expr::Manage { value, span } => HirExpr::Manage {
-            value: Box::new(lower_hir_expr(hir, function_name, value, value_types)),
-            events: effect_events_for_expr(function_name, expr),
-            type_name: infer_hir_expr_type(hir, expr, value_types).map(|ty| ty.to_string()),
-            span: span.clone(),
-        },
+        Expr::Manage { value, span } => {
+            let ty = infer_hir_expr_type(hir, expr, value_types);
+            HirExpr::Manage {
+                value: Box::new(lower_hir_expr(hir, function_name, value, value_types)),
+                events: effect_events_for_expr(function_name, expr),
+                type_name: ty.as_ref().map(ToString::to_string),
+                ty,
+                span: span.clone(),
+            }
+        }
         Expr::Spawn { value, span } => HirExpr::Spawn {
             value: Box::new(lower_hir_expr(hir, function_name, value, value_types)),
             type_name: infer_hir_expr_type(hir, expr, value_types).map(|ty| ty.to_string()),

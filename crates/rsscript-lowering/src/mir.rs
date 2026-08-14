@@ -2177,18 +2177,30 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         binding: &str,
         body: &checked::HirBlock,
     ) -> Result<(), MirLoweringError> {
-        let (source_expression, type_name) = match resource {
-            checked::HirExpr::Manage {
-                value, type_name, ..
-            } => (value.as_ref(), type_name.as_deref()),
-            other => (other, checked_hir_expression_type_name(other)),
-        };
-        let Some(type_name) = type_name else {
-            return self.unsupported("checked HIR resource scope without canonical type");
+        let (source_expression, resource_type) = match resource {
+            checked::HirExpr::Manage { value, ty, .. } => {
+                let Some(ty) = ty.as_ref() else {
+                    return self
+                        .unsupported("checked HIR managed resource without structural type");
+                };
+                let wire = checked_type_to_wire(ty, self.function_name)?;
+                let Some(resource_type) = self.intern_resource_wire_type(wire) else {
+                    return self.unsupported("checked HIR managed value is not a resource type");
+                };
+                (value.as_ref(), resource_type)
+            }
+            // Retain the rendered compatibility projection only for forms that
+            // predate structural expression type facts. Valid source resource
+            // scopes normally enter through `manage` above.
+            other => {
+                let Some(type_name) = checked_hir_expression_type_name(other) else {
+                    return self.unsupported("checked HIR resource scope without canonical type");
+                };
+                (other, self.intern_resource_type(type_name))
+            }
         };
         let source = self.lower_expression(source_expression)?;
         let place = self.place(binding);
-        let resource_type = self.intern_resource_type(type_name);
         self.emit(MirInstruction::AcquireResource {
             place,
             resource_type,
@@ -2217,6 +2229,13 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             },
         };
         ResourceTypeId::new(self.types.intern(wire).index() as u32)
+    }
+
+    fn intern_resource_wire_type(&mut self, wire: WireType) -> Option<ResourceTypeId> {
+        let name = resource_type_name_from_wire(&wire)?;
+        Some(ResourceTypeId::new(
+            self.types.intern(WireType::Resource { name }).index() as u32,
+        ))
     }
 
     fn lower_checked_block(&mut self, block: &checked::HirBlock) -> Result<(), MirLoweringError> {
@@ -3111,6 +3130,34 @@ fn checked_type_to_wire(
     })
 }
 
+/// Resource declarations are represented as semantic named types until an
+/// Artifact-wide type-layout table exists. The direct lowering boundary turns
+/// only those resolved names into the MIR resource identity; arbitrary
+/// aggregates remain invalid resource inputs rather than acquiring a synthetic
+/// string identity.
+fn resource_type_name_from_wire(wire: &WireType) -> Option<String> {
+    match wire {
+        WireType::Resource { name } | WireType::Handle { name } => Some(name.clone()),
+        WireType::Named { package, name, .. } => Some(
+            package
+                .as_ref()
+                .map(|package| format!("{package}.{name}"))
+                .unwrap_or_else(|| name.clone()),
+        ),
+        WireType::Qualified { value, .. } => resource_type_name_from_wire(value),
+        WireType::Unit
+        | WireType::Bool
+        | WireType::Int { .. }
+        | WireType::Float { .. }
+        | WireType::String
+        | WireType::Bytes
+        | WireType::List { .. }
+        | WireType::Option { .. }
+        | WireType::Result { .. }
+        | WireType::Tuple { .. } => None,
+    }
+}
+
 fn checked_binary_op(op: rsscript_syntax::ast::BinaryOp) -> MirBinaryOp {
     match op {
         rsscript_syntax::ast::BinaryOp::Add => MirBinaryOp::Add,
@@ -3226,6 +3273,28 @@ mod checked_type_tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn resource_identity_comes_from_a_resolved_named_type_not_rendered_text() {
+        assert_eq!(
+            resource_type_name_from_wire(&WireType::Named {
+                package: Some("host.fs".into()),
+                name: "File".into(),
+                arguments: Vec::new(),
+            }),
+            Some("host.fs.File".into())
+        );
+        assert_eq!(
+            resource_type_name_from_wire(&WireType::Qualified {
+                qualifier: WireQualifier::Owned,
+                value: Box::new(WireType::Resource {
+                    name: "host.fs.File".into(),
+                }),
+            }),
+            Some("host.fs.File".into())
+        );
+        assert_eq!(resource_type_name_from_wire(&WireType::String), None);
     }
 }
 
