@@ -324,6 +324,19 @@ pub mod project {
             Ok(built)
         }
 
+        /// Operation-aware counterpart of [`Self::build_captured`]. The
+        /// loader capture remains immutable; cancellation and deadline checks
+        /// apply to the pure compiler work without reopening filesystem input.
+        pub fn build_captured_with_operation(
+            &self,
+            snapshot: &CapturedProjectSnapshot,
+            operation: &OperationContext,
+        ) -> Result<BuiltArtifact, CompileError> {
+            let built = Compiler.compile_snapshot_with_operation(snapshot.frontend(), operation)?;
+            debug_assert_eq!(built.snapshot_digest(), snapshot.frontend_digest());
+            Ok(built)
+        }
+
         pub fn build_with_operation(
             &self,
             snapshot: &WorkspaceSnapshot,
@@ -1637,6 +1650,18 @@ mod tests {
             .expect("pure compiler accepts the loader-captured input");
         assert!(!built.artifact_bytes().is_empty());
         assert_eq!(built.snapshot_digest(), captured.frontend_digest());
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let cancelled = project
+            .build_captured_with_operation(
+                &captured,
+                &OperationContext {
+                    cancellation: Some(cancellation),
+                    ..OperationContext::default()
+                },
+            )
+            .expect_err("cancelled captured build");
+        assert_eq!(cancelled.code(), CompileErrorCode::Cancelled);
     }
 
     #[test]

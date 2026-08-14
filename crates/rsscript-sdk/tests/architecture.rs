@@ -3120,6 +3120,7 @@ fn mir_codegen_is_a_vm_independent_verified_bytecode_boundary() {
         "pub fn capture_frontend_from",
         "pub fn frontend_digest",
         "pub fn build_captured",
+        "pub fn build_captured_with_operation",
         "WorkspaceLoader::default()",
         "load_workspace_snapshot",
         "pub fn snapshot",

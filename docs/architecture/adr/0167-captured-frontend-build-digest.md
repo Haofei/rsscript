@@ -17,6 +17,8 @@ same immutable source/interface snapshot passed to `Compiler`. `ProjectCompiler:
 builds that captured input directly without rereading a path, and its Artifact
 snapshot digest is the frontend digest. The existing workspace content digest
 remains available for package-level identity and may include test files.
+Its operation-aware counterpart preserves the same capture while forwarding
+cancellation and deadline checks into the pure compiler.
 
 ## Non-goals
 
@@ -40,5 +42,6 @@ semantics change.
 
 The SDK project-loader test captures a package through the loader, builds the
 captured frontend input, and requires its Artifact digest to equal the
-frontend digest. Architecture tests require the explicit API to remain in the
-project adapter rather than the pure compiler façade.
+frontend digest; it also proves a pre-cancelled build fails before work begins.
+Architecture tests require the explicit API to remain in the project adapter
+rather than the pure compiler façade.
