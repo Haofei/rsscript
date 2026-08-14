@@ -1340,7 +1340,9 @@ mechanical acceptance condition holds.
   - [x] **P05.1a — Generate scalar and aggregate method signatures.** Generated
       Provider traits now map unit, bool, numeric, string, bytes, lists,
       options, results, tuples, and qualifiers to Rust types. Named records,
-    variants, and resources remain adapter-layer values until P05.3.
+    resources remain adapter-layer values until P05.3. Public interface sums
+    now derive canonical typed Rust enums from descriptor-owned case layouts;
+    wire encode/decode for arbitrary user sum values remains part of P06.2.
   - [x] **P05.1b — Generate named record Rust types.** Bindgen now emits a
     public, canonical PascalCase Rust struct for every descriptor record and
     uses that type in generated trait parameters/results. Record field names

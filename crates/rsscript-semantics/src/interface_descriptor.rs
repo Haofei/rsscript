@@ -38,6 +38,23 @@ pub struct InterfaceDescriptorRecordV1 {
     pub fields: Vec<InterfaceDescriptorRecordFieldV1>,
 }
 
+/// One declaration-order case of a public interface sum type. Variant names
+/// are descriptor data, not dynamic Provider string identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InterfaceDescriptorVariantV1 {
+    pub name: String,
+    pub fields: Vec<InterfaceDescriptorRecordFieldV1>,
+}
+
+/// Public tagged union exposed by an interface. The canonical name identifies
+/// the enclosing sum; each case keeps its declaration-order field layout so
+/// bindgen can generate a typed Rust enum without reparsing `.rssi` text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InterfaceDescriptorSumV1 {
+    pub name: String,
+    pub variants: Vec<InterfaceDescriptorVariantV1>,
+}
+
 /// Canonical semantic description of bodyless `.rssi` function contracts.
 /// Provider bindgen consumes this descriptor rather than reparsing source.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -47,6 +64,7 @@ pub struct InterfaceDescriptorV1 {
     pub functions: Vec<InterfaceDescriptorFunctionV1>,
     pub resources: Vec<InterfaceDescriptorResourceV1>,
     pub records: Vec<InterfaceDescriptorRecordV1>,
+    pub sums: Vec<InterfaceDescriptorSumV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,6 +117,7 @@ impl InterfaceDescriptorV1 {
         let mut functions = Vec::new();
         let mut resources = Vec::new();
         let mut records = Vec::new();
+        let mut sums = Vec::new();
         for item in program.items {
             if let Item::Type(resource) = &item {
                 if resource.kind == TypeKind::Resource && resource.is_public {
@@ -122,6 +141,29 @@ impl InterfaceDescriptorV1 {
                             .map(|field| InterfaceDescriptorRecordFieldV1 {
                                 name: field.name.clone(),
                                 ty: type_name(&field.ty).into(),
+                            })
+                            .collect(),
+                    });
+                }
+                continue;
+            }
+            if let Item::SumType(sum) = &item {
+                if sum.is_public {
+                    sums.push(InterfaceDescriptorSumV1 {
+                        name: canonical_resource_name(module.as_deref(), &sum.name),
+                        variants: sum
+                            .variants
+                            .iter()
+                            .map(|variant| InterfaceDescriptorVariantV1 {
+                                name: variant.name.clone(),
+                                fields: variant
+                                    .fields
+                                    .iter()
+                                    .map(|field| InterfaceDescriptorRecordFieldV1 {
+                                        name: field.name.clone(),
+                                        ty: type_name(&field.ty).into(),
+                                    })
+                                    .collect(),
                             })
                             .collect(),
                     });
@@ -187,15 +229,28 @@ impl InterfaceDescriptorV1 {
         }
         resources.sort_by(|left, right| left.name.cmp(&right.name));
         records.sort_by(|left, right| left.name.cmp(&right.name));
+        sums.sort_by(|left, right| left.name.cmp(&right.name));
         let local_types = resources
             .iter()
             .map(|resource| local_type_name(&resource.name))
             .chain(records.iter().map(|record| local_type_name(&record.name)))
+            .chain(sums.iter().map(|sum| local_type_name(&sum.name)))
             .collect::<BTreeSet<_>>();
         for record in &mut records {
             for field in &mut record.fields {
                 field.ty =
                     qualify_local_interface_type(field.ty.clone(), module.as_deref(), &local_types);
+            }
+        }
+        for sum in &mut sums {
+            for variant in &mut sum.variants {
+                for field in &mut variant.fields {
+                    field.ty = qualify_local_interface_type(
+                        field.ty.clone(),
+                        module.as_deref(),
+                        &local_types,
+                    );
+                }
             }
         }
         for function in &mut functions {
@@ -227,6 +282,7 @@ impl InterfaceDescriptorV1 {
             functions,
             resources,
             records,
+            sums,
         })
     }
 
@@ -451,5 +507,22 @@ pub fn get(url: read String) -> HttpResponse
                 ],
             }
         );
+    }
+
+    #[test]
+    fn descriptor_preserves_public_sum_case_layouts() {
+        let descriptor = InterfaceDescriptorV1::from_interface_source(
+            "status.rssi",
+            "module host.status\n\npub sum Status { Ready, Failed(message: String) }\npub fn current() -> Status\n",
+        )
+        .expect("public interface sum is descriptor-visible");
+        assert_eq!(descriptor.sums.len(), 1);
+        let sum = &descriptor.sums[0];
+        assert_eq!(sum.name, "host.status.Status");
+        assert_eq!(sum.variants[0].name, "Ready");
+        assert!(sum.variants[0].fields.is_empty());
+        assert_eq!(sum.variants[1].name, "Failed");
+        assert_eq!(sum.variants[1].fields[0].name, "message");
+        assert_eq!(sum.variants[1].fields[0].ty, WireType::String);
     }
 }

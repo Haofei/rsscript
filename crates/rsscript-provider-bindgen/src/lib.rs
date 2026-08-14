@@ -4,7 +4,8 @@ use rsscript_abi_model::{
     ExternalSymbol, FunctionSignature, WireQualifier, WireRecordLayout, WireType,
 };
 use rsscript_semantics::{
-    InterfaceDescriptorError, InterfaceDescriptorResourceV1, InterfaceDescriptorV1,
+    InterfaceDescriptorError, InterfaceDescriptorResourceV1, InterfaceDescriptorSumV1,
+    InterfaceDescriptorV1,
 };
 use std::error::Error;
 use std::fmt;
@@ -22,6 +23,7 @@ pub struct ProviderInterface {
     pub functions: Vec<InterfaceFunction>,
     pub resources: Vec<InterfaceDescriptorResourceV1>,
     pub record_layouts: Vec<WireRecordLayout>,
+    pub sums: Vec<InterfaceDescriptorSumV1>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,6 +96,7 @@ impl ProviderInterface {
                 .collect(),
             resources: descriptor.resources,
             record_layouts,
+            sums: descriptor.sums,
         })
     }
 
@@ -105,6 +108,15 @@ impl ProviderInterface {
         for record in &self.record_layouts {
             render_record_wrapper(&mut output, record, &self.resources, &self.record_layouts);
         }
+        for sum in &self.sums {
+            render_sum_wrapper(
+                &mut output,
+                sum,
+                &self.resources,
+                &self.record_layouts,
+                &self.sums,
+            );
+        }
         output.push_str("pub trait GeneratedProviderContract {\n");
         for function in &self.functions {
             let parameters = function
@@ -115,7 +127,12 @@ impl ProviderInterface {
                     format!(
                         "{}: {}",
                         rust_identifier(&parameter.name),
-                        render_rust_type(&parameter.ty, &self.resources, &self.record_layouts)
+                        render_rust_type(
+                            &parameter.ty,
+                            &self.resources,
+                            &self.record_layouts,
+                            &self.sums,
+                        )
                     )
                 })
                 .collect::<Vec<_>>()
@@ -134,6 +151,7 @@ impl ProviderInterface {
                     &function.signature.result,
                     &self.resources,
                     &self.record_layouts,
+                    &self.sums,
                 ),
             ));
         }
@@ -224,7 +242,7 @@ fn render_record_wrapper(
         let ty = if field.ty == record.ty {
             format!("Box<{type_name}>")
         } else {
-            render_rust_type(&field.ty, resources, records)
+            render_rust_type(&field.ty, resources, records, &[])
         };
         output.push_str(&format!(
             "    pub {}: {},\n",
@@ -263,6 +281,7 @@ fn render_rust_type(
     ty: &WireType,
     resources: &[InterfaceDescriptorResourceV1],
     records: &[WireRecordLayout],
+    sums: &[InterfaceDescriptorSumV1],
 ) -> String {
     match ty {
         WireType::Unit => "()".into(),
@@ -273,33 +292,40 @@ fn render_rust_type(
         WireType::Char => "char".into(),
         WireType::Bytes => "Vec<u8>".into(),
         WireType::List { element } => {
-            format!("Vec<{}>", render_rust_type(element, resources, records))
+            format!(
+                "Vec<{}>",
+                render_rust_type(element, resources, records, sums)
+            )
         }
         WireType::Map { key, value } => format!(
             "Vec<({}, {})>",
-            render_rust_type(key, resources, records),
-            render_rust_type(value, resources, records)
+            render_rust_type(key, resources, records, sums),
+            render_rust_type(value, resources, records, sums)
         ),
         WireType::Option { value } => {
-            format!("Option<{}>", render_rust_type(value, resources, records))
+            format!(
+                "Option<{}>",
+                render_rust_type(value, resources, records, sums)
+            )
         }
         WireType::Result { ok, error } => format!(
             "Result<{}, {}>",
-            render_rust_type(ok, resources, records),
-            render_rust_type(error, resources, records)
+            render_rust_type(ok, resources, records, sums),
+            render_rust_type(error, resources, records, sums)
         ),
         WireType::Tuple { elements } => format!(
             "({})",
             elements
                 .iter()
-                .map(|element| render_rust_type(element, resources, records))
+                .map(|element| render_rust_type(element, resources, records, sums))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-        WireType::Qualified { value, .. } => render_rust_type(value, resources, records),
+        WireType::Qualified { value, .. } => render_rust_type(value, resources, records, sums),
         WireType::Named {
             name, arguments, ..
         } if arguments.is_empty() => record_wrapper_for(ty, records)
+            .or_else(|| sum_wrapper_for(ty, sums))
             .or_else(|| resource_wrapper_for(name, resources))
             .unwrap_or_else(|| "rsscript_abi_model::WireValue".into()),
         WireType::Named { name, .. } | WireType::Resource { name } | WireType::Handle { name } => {
@@ -307,6 +333,58 @@ fn render_rust_type(
                 .unwrap_or_else(|| "rsscript_abi_model::WireValue".into())
         }
     }
+}
+
+fn sum_wrapper_for(ty: &WireType, sums: &[InterfaceDescriptorSumV1]) -> Option<String> {
+    sums.iter()
+        .find(|sum| sum_type_matches(ty, &sum.name))
+        .map(|sum| sum_wrapper_name(&sum.name))
+}
+
+fn sum_type_matches(ty: &WireType, canonical: &str) -> bool {
+    let WireType::Named { package, name, .. } = ty else {
+        return false;
+    };
+    package.as_ref().map_or_else(
+        || canonical == name,
+        |package| canonical == format!("{package}.{name}"),
+    )
+}
+
+fn sum_wrapper_name(name: &str) -> String {
+    record_wrapper_name(&WireType::from(name)).expect("sum names are named wire types")
+}
+
+fn render_sum_wrapper(
+    output: &mut String,
+    sum: &InterfaceDescriptorSumV1,
+    resources: &[InterfaceDescriptorResourceV1],
+    records: &[WireRecordLayout],
+    sums: &[InterfaceDescriptorSumV1],
+) {
+    let type_name = sum_wrapper_name(&sum.name);
+    output.push_str(&format!(
+        "/// Generated typed representation for the `{}` interface sum.\n#[derive(Debug, Clone, PartialEq)]\npub enum {type_name} {{\n",
+        sum.name,
+    ));
+    for variant in &sum.variants {
+        let variant_name = record_wrapper_name(&WireType::from(variant.name.clone()))
+            .expect("variant names are valid generated identifiers");
+        if variant.fields.is_empty() {
+            output.push_str(&format!("    {variant_name},\n"));
+        } else {
+            output.push_str(&format!("    {variant_name} {{\n"));
+            for field in &variant.fields {
+                output.push_str(&format!(
+                    "        {}: {},\n",
+                    rust_identifier(&field.name),
+                    render_rust_type(&field.ty, resources, records, sums),
+                ));
+            }
+            output.push_str("    },\n");
+        }
+    }
+    output.push_str("}\n\n");
 }
 
 fn record_wrapper_for(ty: &WireType, records: &[WireRecordLayout]) -> Option<String> {
@@ -702,6 +780,30 @@ mod tests {
         assert!(generated.contains("-> Result<char"));
         assert!(generated.contains("ty: \"Map<String, Char>\".into()"));
         assert!(generated.contains("result: \"Char\".into()"));
+    }
+
+    #[test]
+    fn generated_provider_contract_maps_public_sums_to_rust_enums() {
+        let descriptor = InterfaceDescriptorV1::from_interface_source(
+            "status.rssi",
+            "module host.status\n\npub sum Status { Ready, Failed(message: String) }\npub fn current() -> Status\n",
+        )
+        .unwrap();
+        let generated = ProviderInterface::from_descriptor(descriptor)
+            .unwrap()
+            .render_rust(&RustProviderOptions {
+                provider_id: "rsscript.status",
+                blocking: GeneratedBlocking::NonBlocking,
+                cancellation: GeneratedCancellation::NotApplicable,
+                thread_safe: true,
+                reentrant: true,
+                cleanup: GeneratedCleanup::None,
+            });
+        assert!(generated.contains("pub enum HostStatusStatus"));
+        assert!(generated.contains("Ready,"));
+        assert!(generated.contains("Failed {"));
+        assert!(generated.contains("message: String"));
+        assert!(generated.contains("fn current(&self) -> Result<HostStatusStatus"));
     }
 
     #[test]

@@ -291,7 +291,7 @@ pub use identities::DefinitionId;
 pub use interface_descriptor::{
     INTERFACE_DESCRIPTOR_SCHEMA, InterfaceDescriptorError, InterfaceDescriptorFunctionV1,
     InterfaceDescriptorRecordFieldV1, InterfaceDescriptorRecordV1, InterfaceDescriptorResourceV1,
-    InterfaceDescriptorV1,
+    InterfaceDescriptorSumV1, InterfaceDescriptorV1, InterfaceDescriptorVariantV1,
 };
 pub use protocol_bounds::{
     protocol_bound_diagnostics, protocol_declaration_diagnostics,
