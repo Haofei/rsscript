@@ -1,4 +1,4 @@
-use rsscript_abi_model::WireType;
+use rsscript_abi_model::{WireRecordLayout, WireType};
 use rsscript_syntax::ast::{DataEffect as SyntaxEffect, Item, Program, TypeKind, TypeRef};
 use rsscript_syntax::parse_source;
 use serde::Serialize;
@@ -56,6 +56,16 @@ pub enum InterfaceDescriptorError {
 }
 
 impl InterfaceDescriptorV1 {
+    pub fn wire_record_layouts(&self) -> Vec<WireRecordLayout> {
+        self.records
+            .iter()
+            .map(|record| WireRecordLayout {
+                ty: WireType::from(record.name.clone()),
+                fields: record.fields.iter().map(|field| field.ty.clone()).collect(),
+            })
+            .collect()
+    }
+
     pub fn from_interface_source(
         path: &str,
         source: &str,
@@ -324,6 +334,19 @@ pub fn get(url: read String) -> HttpResponse
                 },
                 &WireType::String,
             ],
+        );
+        assert_eq!(
+            descriptor.wire_record_layouts()[0],
+            WireRecordLayout {
+                ty: WireType::from("host.http.HttpResponse"),
+                fields: vec![
+                    WireType::Int {
+                        bits: 64,
+                        signed: true,
+                    },
+                    WireType::String,
+                ],
+            }
         );
     }
 }
