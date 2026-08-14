@@ -1,3 +1,9 @@
 module host.process
 
+pub struct ProcessOutput {
+    status: Int
+    stdout: String
+    stderr: String
+}
+
 pub fn run(program: read String, args: read List<String>) -> ProcessOutput
