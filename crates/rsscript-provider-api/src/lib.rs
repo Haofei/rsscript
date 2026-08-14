@@ -990,6 +990,7 @@ impl<T> ProviderRegistry<T> {
                 runtime_abi: self.runtime_abi,
             });
         }
+        validate_record_layouts(descriptor)?;
 
         let mut declared = BTreeSet::new();
         for function in &descriptor.functions {
@@ -1069,6 +1070,28 @@ impl<T> ProviderRegistry<T> {
     }
 }
 
+fn validate_record_layouts(descriptor: &ProviderDescriptor) -> Result<(), ProviderLoadError> {
+    let mut records = BTreeSet::new();
+    for record in &descriptor.record_layouts {
+        if !matches!(record.ty, WireType::Named { .. }) {
+            return Err(ProviderLoadError::InvalidRecordLayout(record.ty.clone()));
+        }
+        if !records.insert(record.ty.clone()) {
+            return Err(ProviderLoadError::DuplicateRecordLayout(record.ty.clone()));
+        }
+        let mut fields = BTreeSet::new();
+        for field in &record.fields {
+            if field.name.trim().is_empty() || !fields.insert(field.name.clone()) {
+                return Err(ProviderLoadError::InvalidRecordField {
+                    record: record.ty.clone(),
+                    field: field.name.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderLoadError {
     InvalidProviderIdentity,
@@ -1081,6 +1104,12 @@ pub enum ProviderLoadError {
     MissingImplementation(ExternalSymbol),
     UndeclaredImplementation(ExternalSymbol),
     DescriptorSignatureMismatch(ExternalSymbol),
+    InvalidRecordLayout(WireType),
+    DuplicateRecordLayout(WireType),
+    InvalidRecordField {
+        record: WireType,
+        field: String,
+    },
     UnresolvedImport(ExternalSymbol),
     ImportAbiMismatch {
         symbol: ExternalSymbol,
@@ -1101,6 +1130,9 @@ pub enum ProviderLoadErrorCode {
     MissingImplementation,
     UndeclaredImplementation,
     DescriptorSignatureMismatch,
+    InvalidRecordLayout,
+    DuplicateRecordLayout,
+    InvalidRecordField,
     UnresolvedImport,
     ImportAbiMismatch,
     ImportSignatureMismatch,
@@ -1119,6 +1151,9 @@ impl ProviderLoadError {
             Self::DescriptorSignatureMismatch(_) => {
                 ProviderLoadErrorCode::DescriptorSignatureMismatch
             }
+            Self::InvalidRecordLayout(_) => ProviderLoadErrorCode::InvalidRecordLayout,
+            Self::DuplicateRecordLayout(_) => ProviderLoadErrorCode::DuplicateRecordLayout,
+            Self::InvalidRecordField { .. } => ProviderLoadErrorCode::InvalidRecordField,
             Self::UnresolvedImport(_) => ProviderLoadErrorCode::UnresolvedImport,
             Self::ImportAbiMismatch { .. } => ProviderLoadErrorCode::ImportAbiMismatch,
             Self::ImportSignatureMismatch(_) => ProviderLoadErrorCode::ImportSignatureMismatch,
@@ -1225,6 +1260,38 @@ mod tests {
             ProviderErrorCode::ResourceExhausted.as_str(),
             "resource_exhausted"
         );
+    }
+
+    #[test]
+    fn malformed_record_layouts_fail_before_provider_registration() {
+        let symbol = ExternalSymbol::new("host.test.identity").unwrap();
+        let declared = signature(DataEffect::Read);
+        let mut descriptor = descriptor(&symbol, declared.clone());
+        let record = WireRecordLayout {
+            ty: WireType::from("host.test.Response"),
+            fields: vec![WireRecordFieldLayout {
+                name: "value".into(),
+                ty: WireType::Int {
+                    bits: 64,
+                    signed: true,
+                },
+            }],
+        };
+        descriptor.record_layouts = vec![record.clone(), record];
+        let error = ProviderRegistry::new(1)
+            .register_provider(
+                &descriptor,
+                BTreeMap::from([(
+                    symbol,
+                    ProviderFunction {
+                        signature: declared,
+                        callable: 7,
+                    },
+                )]),
+            )
+            .expect_err("duplicate record layouts must fail before a provider is registered");
+        assert!(matches!(error, ProviderLoadError::DuplicateRecordLayout(_)));
+        assert_eq!(error.code(), ProviderLoadErrorCode::DuplicateRecordLayout);
     }
 
     #[test]
