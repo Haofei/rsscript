@@ -1264,6 +1264,29 @@ fn rust_aot_lowering_is_explicitly_feature_gated() {
 }
 
 #[test]
+fn compilation_session_owns_workspace_type_facts() {
+    let root = workspace_root();
+    let database = read(&root.join("crates/rsscript-semantics/src/database.rs"));
+    for required in [
+        "workspace_type_cache: Option<Arc<SemanticTypeFacts>>",
+        "pub fn workspace_type_facts(&mut self) -> Arc<SemanticTypeFacts>",
+        "pub fn workspace_type_facts_with_operation(",
+        "self.workspace_type_cache = None;",
+    ] {
+        assert!(
+            database.contains(required),
+            "CompilationSession must own workspace type-fact caching through `{required}`"
+        );
+    }
+
+    let language_service = read(&root.join("crates/rsscript-language-service/src/lib.rs"));
+    assert!(
+        !language_service.contains("SemanticTypeFacts::from_programs"),
+        "language-service must not rebuild a competing type-fact model"
+    );
+}
+
+#[test]
 fn linked_provider_contracts_reach_the_invocation_path() {
     let root = workspace_root();
     let provider_api = read(&root.join("crates/rsscript-provider-api/src/lib.rs"));

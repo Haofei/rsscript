@@ -308,6 +308,7 @@ pub struct CompilationSession {
     parse_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<Program>>,
     hir_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<Hir>>,
     workspace_hir_cache: Option<Arc<Hir>>,
+    workspace_type_cache: Option<Arc<SemanticTypeFacts>>,
     module_header_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<ModuleHeader>>,
     workspace_module_graph_cache: Option<Arc<WorkspaceModuleGraph>>,
     workspace_diagnostic_cache: Option<Arc<[Diagnostic]>>,
@@ -317,6 +318,8 @@ pub struct CompilationSession {
     hir_cache_misses: u64,
     workspace_hir_cache_hits: u64,
     workspace_hir_cache_misses: u64,
+    workspace_type_cache_hits: u64,
+    workspace_type_cache_misses: u64,
     module_header_cache_hits: u64,
     module_header_cache_misses: u64,
     workspace_module_graph_cache_hits: u64,
@@ -333,6 +336,8 @@ pub struct CompilationSessionStats {
     pub hir_cache_misses: u64,
     pub workspace_hir_cache_hits: u64,
     pub workspace_hir_cache_misses: u64,
+    pub workspace_type_cache_hits: u64,
+    pub workspace_type_cache_misses: u64,
     pub module_header_cache_hits: u64,
     pub module_header_cache_misses: u64,
     pub workspace_module_graph_cache_hits: u64,
@@ -513,6 +518,7 @@ impl CompilationSession {
             self.invalidate_parse_cache(SessionFileRole::Source, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Source, update.file_id);
             self.workspace_hir_cache = None;
+            self.workspace_type_cache = None;
             self.invalidate_module_header_cache(SessionFileRole::Source, update.file_id);
             self.workspace_module_graph_cache = None;
             self.workspace_diagnostic_cache = None;
@@ -526,6 +532,7 @@ impl CompilationSession {
             self.invalidate_parse_cache(SessionFileRole::Source, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Source, update.file_id);
             self.workspace_hir_cache = None;
+            self.workspace_type_cache = None;
             self.invalidate_module_header_cache(SessionFileRole::Source, update.file_id);
             self.workspace_module_graph_cache = None;
             self.workspace_diagnostic_cache = None;
@@ -543,6 +550,7 @@ impl CompilationSession {
             self.invalidate_parse_cache(SessionFileRole::Interface, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Interface, update.file_id);
             self.workspace_hir_cache = None;
+            self.workspace_type_cache = None;
             self.invalidate_module_header_cache(SessionFileRole::Interface, update.file_id);
             self.workspace_module_graph_cache = None;
             self.workspace_diagnostic_cache = None;
@@ -556,6 +564,7 @@ impl CompilationSession {
             self.invalidate_parse_cache(SessionFileRole::Interface, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Interface, update.file_id);
             self.workspace_hir_cache = None;
+            self.workspace_type_cache = None;
             self.invalidate_module_header_cache(SessionFileRole::Interface, update.file_id);
             self.workspace_module_graph_cache = None;
             self.workspace_diagnostic_cache = None;
@@ -838,6 +847,37 @@ impl CompilationSession {
         Ok(hir)
     }
 
+    /// Return structural type facts for the current namespace-isolated
+    /// workspace HIR. The facts share the HIR's immutable type arena, so the
+    /// session never reparses or re-interns types for a second consumer.
+    ///
+    /// Full resolve/type diagnostics are still migrating into semantics. This
+    /// query is the stable cache boundary for already-resolved declaration and
+    /// signature facts, not a replacement for those remaining checks.
+    pub fn workspace_type_facts(&mut self) -> Arc<SemanticTypeFacts> {
+        if let Some(types) = &self.workspace_type_cache {
+            self.workspace_type_cache_hits = self.workspace_type_cache_hits.saturating_add(1);
+            return Arc::clone(types);
+        }
+
+        let types = self.workspace_hir().semantic_types_arc();
+        self.workspace_type_cache_misses = self.workspace_type_cache_misses.saturating_add(1);
+        self.workspace_type_cache = Some(Arc::clone(&types));
+        types
+    }
+
+    /// Operation-aware type-fact query. Cached facts must not escape a
+    /// cancellation or deadline boundary after they have been obtained.
+    pub fn workspace_type_facts_with_operation(
+        &mut self,
+        operation: &OperationContext,
+    ) -> Result<Arc<SemanticTypeFacts>, OperationAbort> {
+        operation.check()?;
+        let types = self.workspace_type_facts();
+        operation.check()?;
+        Ok(types)
+    }
+
     /// Return parsed module and import paths for one source revision.
     pub fn module_header(&mut self, path: &str) -> Option<Arc<ModuleHeader>> {
         let snapshot = self.source_snapshot();
@@ -860,6 +900,8 @@ impl CompilationSession {
             hir_cache_misses: self.hir_cache_misses,
             workspace_hir_cache_hits: self.workspace_hir_cache_hits,
             workspace_hir_cache_misses: self.workspace_hir_cache_misses,
+            workspace_type_cache_hits: self.workspace_type_cache_hits,
+            workspace_type_cache_misses: self.workspace_type_cache_misses,
             module_header_cache_hits: self.module_header_cache_hits,
             module_header_cache_misses: self.module_header_cache_misses,
             workspace_module_graph_cache_hits: self.workspace_module_graph_cache_hits,
@@ -1245,6 +1287,8 @@ mod tests {
                 hir_cache_misses: 0,
                 workspace_hir_cache_hits: 0,
                 workspace_hir_cache_misses: 0,
+                workspace_type_cache_hits: 0,
+                workspace_type_cache_misses: 0,
                 module_header_cache_hits: 0,
                 module_header_cache_misses: 0,
                 workspace_module_graph_cache_hits: 0,
@@ -1582,6 +1626,46 @@ mod tests {
     }
 
     #[test]
+    fn compilation_session_caches_workspace_type_facts_with_hir_revisions() {
+        let mut session = CompilationSession::default();
+        session
+            .set_file(
+                "main.rss",
+                "fn main(value: read Int) -> Int { return value }\n",
+            )
+            .unwrap();
+        session
+            .set_interface("host.rssi", "module host\npub fn value() -> Int\n")
+            .unwrap();
+
+        let first = session.workspace_type_facts();
+        assert!(first.functions().any(|(name, _)| name == "main"));
+        let second = session.workspace_type_facts();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(session.stats().workspace_type_cache_misses, 1);
+        assert_eq!(session.stats().workspace_type_cache_hits, 1);
+
+        session
+            .set_interface("host.rssi", "module host\npub fn next() -> Int\n")
+            .unwrap();
+        let replacement = session.workspace_type_facts();
+        assert!(!Arc::ptr_eq(&first, &replacement));
+        assert_eq!(session.stats().workspace_type_cache_misses, 2);
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let cancelled = OperationContext {
+            cancellation: Some(cancellation),
+            ..OperationContext::default()
+        };
+        assert!(matches!(
+            session.workspace_type_facts_with_operation(&cancelled),
+            Err(OperationAbort::Cancelled)
+        ));
+        assert_eq!(session.stats().workspace_type_cache_hits, 1);
+    }
+
+    #[test]
     fn compilation_session_caches_parsed_module_headers() {
         let mut session = CompilationSession::default();
         session
@@ -1604,6 +1688,8 @@ mod tests {
                 hir_cache_misses: 0,
                 workspace_hir_cache_hits: 0,
                 workspace_hir_cache_misses: 0,
+                workspace_type_cache_hits: 0,
+                workspace_type_cache_misses: 0,
                 module_header_cache_hits: 1,
                 module_header_cache_misses: 1,
                 workspace_module_graph_cache_hits: 0,
