@@ -1796,18 +1796,11 @@ dependencies = [
 name = "rsscript-compiler"
 version = "0.1.0"
 dependencies = [
- "base64",
- "chrono",
- "flate2",
  "fs2",
  "hex",
- "hmac",
  "jsonschema",
  "libc",
- "percent-encoding",
  "proptest",
- "rand 0.8.7",
- "regex",
  "reir",
  "rsscript-abi-model",
  "rsscript-artifact-store",
@@ -1825,16 +1818,12 @@ dependencies = [
  "rsscript-vm",
  "rsscript-work-budget",
  "rustix",
- "semver",
  "serde",
  "serde_json",
- "serde_yaml_ng",
  "sha1",
  "sha2",
- "sha3",
  "tempfile",
  "toml",
- "toml_edit",
  "uuid",
 ]
 

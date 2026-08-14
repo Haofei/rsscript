@@ -25,31 +25,33 @@ rsscript-text = { path = "../rsscript-text" }
 rsscript-work-budget = { path = "../rsscript-work-budget" }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-sha2 = "0.10"
-sha3 = "0.10"
-regex = "1"
-semver = "1"
-toml = "0.8"
-toml_edit = "0.22"
-serde_yaml_ng = "0.10"
-base64 = "0.22"
-chrono = { version = "0.4", default-features = false, features = ["alloc"] }
-flate2 = "1"
-fs2 = "0.4"
-rustix = { version = "1.1", features = ["fs"] }
-libc = "0.2"
-hex = "0.4"
-hmac = "0.12"
-percent-encoding = "2"
-rand = "0.8"
-uuid = { version = "1", features = ["v4"] }
-tempfile = "3"
+sha2 = { version = "0.10", optional = true }
+toml = { version = "0.8", optional = true }
+fs2 = { version = "0.4", optional = true }
+rustix = { version = "1.1", features = ["fs"], optional = true }
+libc = { version = "0.2", optional = true }
+hex = { version = "0.4", optional = true }
+uuid = { version = "1", features = ["v4"], optional = true }
+tempfile = { version = "3", optional = true }
 
 [features]
 # Frontend-only by default so `rss check`, formatting, and language tooling do
 # not compile the VM/runtime/provider closure. Hosts opt into execution.
 default = []
-execution = ["dep:rsscript-artifact-store", "dep:rsscript-lowering", "dep:rsscript-mir", "dep:rsscript-provider-api"]
+execution = [
+    "dep:fs2",
+    "dep:hex",
+    "dep:libc",
+    "dep:rsscript-artifact-store",
+    "dep:rsscript-lowering",
+    "dep:rsscript-mir",
+    "dep:rsscript-provider-api",
+    "dep:rustix",
+    "dep:sha2",
+    "dep:tempfile",
+    "dep:toml",
+    "dep:uuid",
+]
 language-service = []
 # The RSS-written frontend is a research parity harness.  Keep it out of Core
 # test builds; the dedicated self-host workflow opts in explicitly.

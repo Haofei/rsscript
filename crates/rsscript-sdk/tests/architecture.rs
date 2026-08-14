@@ -3019,6 +3019,56 @@ fn compiler_default_dependency_closure_is_host_neutral() {
         manifest["dependencies"].get("rsscript-vm").is_none(),
         "compiler must not depend on the VM"
     );
+
+    let execution = manifest["features"]["execution"]
+        .as_array()
+        .expect("compiler execution feature should be declared")
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .collect::<BTreeSet<_>>();
+    for dependency in [
+        "fs2",
+        "hex",
+        "libc",
+        "rsscript-artifact-store",
+        "rustix",
+        "sha2",
+        "tempfile",
+        "toml",
+        "uuid",
+    ] {
+        let specification = manifest["dependencies"][dependency]
+            .as_table()
+            .unwrap_or_else(|| panic!("compiler must declare `{dependency}`"));
+        assert_eq!(
+            specification.get("optional").and_then(toml::Value::as_bool),
+            Some(true),
+            "compiler default closure must not select package dependency `{dependency}`"
+        );
+        let feature = format!("dep:{dependency}");
+        assert!(
+            execution.contains(feature.as_str()),
+            "execution feature must explicitly select package dependency `{dependency}`"
+        );
+    }
+    for removed in [
+        "base64",
+        "chrono",
+        "flate2",
+        "hmac",
+        "percent-encoding",
+        "rand",
+        "regex",
+        "semver",
+        "serde_yaml_ng",
+        "sha3",
+        "toml_edit",
+    ] {
+        assert!(
+            manifest["dependencies"].get(removed).is_none(),
+            "unused compiler package dependency `{removed}` must not widen the frontend closure"
+        );
+    }
 }
 
 #[test]
