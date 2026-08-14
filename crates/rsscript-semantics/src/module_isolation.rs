@@ -14,11 +14,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::text_util::{type_arg_names, type_root_name};
+use crate::{type_arg_names, type_root_name};
+use rsscript_diagnostics::Diagnostic;
+use rsscript_syntax::{desugar_function_values, hoist_async_awaits};
 
-use super::ast::{
+use rsscript_syntax::ast::{
     Block, Callee, ConstDecl, Expr, FunctionDecl, Item, MatchArm, MatchFieldPattern, MatchPattern,
-    Program, ProtocolImpl, Stmt, SumTypeDecl, TypeAliasDecl, TypeDecl, TypeRef,
+    Program, ProtocolImpl, Stmt, SumTypeDecl, TypeAliasDecl, TypeDecl, TypeRef, merge_programs,
 };
 
 /// The separator between a module prefix and a symbol name. Two underscores keep
@@ -47,11 +49,11 @@ pub fn isolate_module_namespaces(program: &mut Program) {
     // synthesized calls are then mangled by isolation like any other reference.
     // This runs for every program (module-less ones included), unlike the module
     // rewriting below.
-    super::desugar_function_values(program);
+    desugar_function_values(program);
     // Hoist `await` out of expression positions into statement-boundary `let`
     // bindings, so a nested `await f(await g())` lowers like the linear awaits the
     // backends already support. Runs for every program (module-less included).
-    super::hoist_async_awaits(program);
+    hoist_async_awaits(program);
     let file_module = collect_file_modules(program);
     if file_module.is_empty() {
         // No `module` declarations anywhere: pure root namespace, nothing to do.
@@ -59,6 +61,101 @@ pub fn isolate_module_namespaces(program: &mut Program) {
     }
     let resolver = Resolver::build(program, &file_module);
     resolver.rewrite(program);
+}
+
+/// Isolate one source program and its interface programs as a single module
+/// graph, then restore their distinct semantic roles.
+///
+/// Namespace resolution must observe imports crossing the source/interface
+/// boundary, but HIR construction must still know which declarations are host
+/// contracts. Keeping this operation beside namespace isolation gives every
+/// frontend client one canonical rewrite before workspace HIR construction.
+pub fn isolate_sources_with_interfaces(sources: &mut Program, interfaces: &mut [Program]) {
+    let source_files = program_files(sources);
+    let interface_files = interfaces.iter().map(program_files).collect::<Vec<_>>();
+    let mut combined =
+        merge_programs(std::iter::once(sources.clone()).chain(interfaces.iter().cloned()));
+    isolate_module_namespaces(&mut combined);
+    *sources = program_for_files(&combined, &source_files);
+    for (interface, files) in interfaces.iter_mut().zip(interface_files) {
+        *interface = program_for_files(&combined, &files);
+    }
+}
+
+fn program_files(program: &Program) -> HashSet<String> {
+    let mut files = program
+        .items
+        .iter()
+        .map(|item| match item {
+            Item::Module(value) => &value.span.file,
+            Item::Use(value) => &value.span.file,
+            Item::Type(value) => &value.span.file,
+            Item::SumType(value) => &value.span.file,
+            Item::TypeAlias(value) => &value.span.file,
+            Item::Const(value) => &value.span.file,
+            Item::Function(value) => &value.span.file,
+        })
+        .cloned()
+        .collect::<HashSet<_>>();
+    files.extend(
+        program
+            .unknown_top_level_spans
+            .iter()
+            .chain(&program.malformed_declaration_spans)
+            .map(|span| span.file.clone()),
+    );
+    files.extend(program.protocols.iter().map(|decl| decl.span.file.clone()));
+    files.extend(
+        program
+            .protocol_impls
+            .iter()
+            .map(|implementation| implementation.span.file.clone()),
+    );
+    files
+}
+
+fn program_for_files(program: &Program, files: &HashSet<String>) -> Program {
+    let contains = |file: &str| files.contains(file);
+    Program {
+        unknown_top_level_spans: program
+            .unknown_top_level_spans
+            .iter()
+            .filter(|span| contains(&span.file))
+            .cloned()
+            .collect(),
+        malformed_declaration_spans: program
+            .malformed_declaration_spans
+            .iter()
+            .filter(|span| contains(&span.file))
+            .cloned()
+            .collect(),
+        protocols: program
+            .protocols
+            .iter()
+            .filter(|decl| contains(&decl.span.file))
+            .cloned()
+            .collect(),
+        protocol_impls: program
+            .protocol_impls
+            .iter()
+            .filter(|implementation| contains(&implementation.span.file))
+            .cloned()
+            .collect(),
+        items: program
+            .items
+            .iter()
+            .filter(|item| match item {
+                Item::Module(value) => contains(&value.span.file),
+                Item::Use(value) => contains(&value.span.file),
+                Item::Type(value) => contains(&value.span.file),
+                Item::SumType(value) => contains(&value.span.file),
+                Item::TypeAlias(value) => contains(&value.span.file),
+                Item::Const(value) => contains(&value.span.file),
+                Item::Function(value) => contains(&value.span.file),
+            })
+            .cloned()
+            .collect(),
+    }
 }
 
 /// Map each source file to its module prefix (from the file's first `module`
@@ -953,7 +1050,7 @@ impl Resolver {
 /// (`helpers.count`) inside a diagnostic set, so messages name the source symbol
 /// rather than the lowered Rust name. A no-op for programs without `module`
 /// declarations (the reconstructed map is empty).
-pub fn demangle_diagnostics(program: &Program, diagnostics: &mut [crate::diagnostic::Diagnostic]) {
+pub fn demangle_diagnostics(program: &Program, diagnostics: &mut [Diagnostic]) {
     let file_module = collect_file_modules(program);
     if file_module.is_empty() {
         return;
@@ -1069,8 +1166,8 @@ fn item_file(item: &Item) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::syntax::ast::merge_programs;
-    use crate::syntax::parse_source;
+    use rsscript_syntax::ast::merge_programs;
+    use rsscript_syntax::parse_source;
 
     fn function_names(program: &Program) -> Vec<String> {
         program

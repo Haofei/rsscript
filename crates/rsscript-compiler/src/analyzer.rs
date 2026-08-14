@@ -15,11 +15,11 @@ use crate::hir::{
 use crate::interfaces::CORE_INTERFACES;
 use crate::lexer::{Token, lex_with_budget};
 use crate::semantic::{AnalysisResult, SemanticDatabase, SourceSnapshot, ValidatedProgram};
+use crate::syntax::ast::merge_programs;
 use crate::syntax::ast::{
     AssignStmt, Block, Callee, DataEffect, Expr, FunctionDecl, Item, MatchPattern, Stmt, TypeKind,
     TypeRef,
 };
-use crate::syntax::ast::{Program, merge_programs};
 
 mod assign;
 mod derives;
@@ -158,7 +158,10 @@ fn prepare_analysis(input: AnalysisInput<'_>, budget: Rc<FrontendBudget>) -> Pre
             crate::syntax::parse_source_tokens(file, &tokens, budget.clone())
         })
         .collect::<Vec<_>>();
-    isolate_sources_with_interfaces(&mut syntax_program, &mut supplied_interface_programs);
+    rsscript_semantics::isolate_sources_with_interfaces(
+        &mut syntax_program,
+        &mut supplied_interface_programs,
+    );
     let hir = match input.flavor {
         AnalysisFlavor::FullWithStandardPackages => Hir::from_syntax_with_prepared_interfaces(
             &syntax_program,
@@ -218,97 +221,6 @@ fn prepare_analysis(input: AnalysisInput<'_>, budget: Rc<FrontendBudget>) -> Pre
         hir,
         type_aliases,
         budget,
-    }
-}
-
-/// Module isolation must see source and supplied interfaces as one symbol
-/// graph, then restore their semantic roles. Otherwise `use host.fs.*` resolves
-/// only as a bare function and the stable external symbol loses `host.fs`.
-fn isolate_sources_with_interfaces(sources: &mut Program, interfaces: &mut [Program]) {
-    let source_files = program_files(sources);
-    let interface_files = interfaces.iter().map(program_files).collect::<Vec<_>>();
-    let mut combined =
-        merge_programs(std::iter::once(sources.clone()).chain(interfaces.iter().cloned()));
-    crate::syntax::isolate_module_namespaces(&mut combined);
-    *sources = program_for_files(&combined, &source_files);
-    for (interface, files) in interfaces.iter_mut().zip(interface_files) {
-        *interface = program_for_files(&combined, &files);
-    }
-}
-
-fn program_files(program: &Program) -> HashSet<String> {
-    let mut files = program
-        .items
-        .iter()
-        .map(|item| match item {
-            Item::Module(value) => &value.span.file,
-            Item::Use(value) => &value.span.file,
-            Item::Type(value) => &value.span.file,
-            Item::SumType(value) => &value.span.file,
-            Item::TypeAlias(value) => &value.span.file,
-            Item::Const(value) => &value.span.file,
-            Item::Function(value) => &value.span.file,
-        })
-        .cloned()
-        .collect::<HashSet<_>>();
-    files.extend(
-        program
-            .unknown_top_level_spans
-            .iter()
-            .chain(&program.malformed_declaration_spans)
-            .map(|span| span.file.clone()),
-    );
-    files.extend(program.protocols.iter().map(|decl| decl.span.file.clone()));
-    files.extend(
-        program
-            .protocol_impls
-            .iter()
-            .map(|implementation| implementation.span.file.clone()),
-    );
-    files
-}
-
-fn program_for_files(program: &Program, files: &HashSet<String>) -> Program {
-    let contains = |file: &str| files.contains(file);
-    Program {
-        unknown_top_level_spans: program
-            .unknown_top_level_spans
-            .iter()
-            .filter(|span| contains(&span.file))
-            .cloned()
-            .collect(),
-        malformed_declaration_spans: program
-            .malformed_declaration_spans
-            .iter()
-            .filter(|span| contains(&span.file))
-            .cloned()
-            .collect(),
-        protocols: program
-            .protocols
-            .iter()
-            .filter(|decl| contains(&decl.span.file))
-            .cloned()
-            .collect(),
-        protocol_impls: program
-            .protocol_impls
-            .iter()
-            .filter(|implementation| contains(&implementation.span.file))
-            .cloned()
-            .collect(),
-        items: program
-            .items
-            .iter()
-            .filter(|item| match item {
-                Item::Module(value) => contains(&value.span.file),
-                Item::Use(value) => contains(&value.span.file),
-                Item::Type(value) => contains(&value.span.file),
-                Item::SumType(value) => contains(&value.span.file),
-                Item::TypeAlias(value) => contains(&value.span.file),
-                Item::Const(value) => contains(&value.span.file),
-                Item::Function(value) => contains(&value.span.file),
-            })
-            .cloned()
-            .collect(),
     }
 }
 

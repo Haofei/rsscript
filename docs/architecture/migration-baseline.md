@@ -516,19 +516,21 @@ mechanical acceptance condition holds.
     and deterministic source iteration. Module-header/import facts now share
     that cache. `WorkspaceModuleGraph` now owns parsed import closure and
     transitive interface-dependent-path facts, so editor clients no longer
-    retain a second dependency graph. Complete workspace diagnostics also use a
-    session-owned, immutable source/interface snapshot cache with revision
-    invalidation; resolve/type, interface-aware workspace HIR, and
-    dependency-precise semantic-diagnostic invalidation remain open.
+    retain a second dependency graph. Namespace isolation, including
+    source/interface graph partitioning, is semantic-owned and the session now
+    caches an interface-aware workspace HIR after that canonical rewrite.
+    Complete workspace diagnostics also use a session-owned, immutable
+    source/interface snapshot cache with revision invalidation; resolve/type
+    and dependency-precise semantic-diagnostic invalidation remain open.
   - [ ] **S03.4 — Thread cancellation and deadlines through every query.** Add
     cancellation, deadline, and diagnostic-budget tests for cold and cached
     paths. Session parse and local HIR queries now check the shared operation
     context before and after cache access for source and interface inputs. The
     session-owned workspace diagnostic query now applies the same checks before
     cache access, during transitional analysis, and before caching the result.
-    Workspace-module graph queries and language-service document diagnostics
-    now apply the same rule across dependency closure, lint, and cached-result
-    paths; resolve/type and workspace-HIR queries remain to be migrated.
+    Workspace-module graph, workspace-HIR, and language-service document
+    diagnostics now apply the same rule across dependency closure, lint, and
+    cached-result paths; resolve/type queries remain to be migrated.
   - [ ] **S03.5 — Migrate CLI/package/test callers.** All frontend consumers use
     the session API; direct analyzer construction becomes private.
 - [ ] **S04 — Make language service consume semantic queries directly.** It

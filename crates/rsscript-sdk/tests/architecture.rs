@@ -1318,6 +1318,8 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "TypeId",
         "TypeQualifiers",
         "ValidatedProgram",
+        "isolate_module_namespaces",
+        "isolate_sources_with_interfaces",
         "cyclic_type_alias_diagnostics",
         "declaration_item_surface_diagnostics",
         "declaration_surface_diagnostics",
@@ -2604,6 +2606,39 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
             "semantics must not depend on `{forbidden}`"
         );
     }
+}
+
+#[test]
+fn namespace_isolation_and_workspace_hir_are_semantic_queries() {
+    let root = workspace_root();
+    let semantics = read(&root.join("crates/rsscript-semantics/src/database.rs"));
+    for query in [
+        "pub fn workspace_hir(",
+        "pub fn workspace_hir_with_operation(",
+    ] {
+        assert!(
+            semantics.contains(query),
+            "CompilationSession must own the `{query}` workspace semantic query"
+        );
+    }
+    assert!(semantics.contains("workspace_hir_cache"));
+    assert!(semantics.contains("crate::isolate_sources_with_interfaces"));
+
+    let isolation = read(&root.join("crates/rsscript-semantics/src/module_isolation.rs"));
+    assert!(isolation.contains("pub fn isolate_module_namespaces"));
+    assert!(isolation.contains("pub fn isolate_sources_with_interfaces"));
+    assert!(
+        !root
+            .join("crates/rsscript-compiler/src/syntax/module_isolation.rs")
+            .exists(),
+        "compiler must not retain a second namespace-isolation implementation"
+    );
+    let analyzer = read(&root.join("crates/rsscript-compiler/src/analyzer.rs"));
+    assert!(analyzer.contains("rsscript_semantics::isolate_sources_with_interfaces"));
+    assert!(
+        !analyzer.contains("fn isolate_sources_with_interfaces"),
+        "compiler analyzer must delegate the source/interface rewrite instead of reimplementing it"
+    );
 }
 
 #[test]

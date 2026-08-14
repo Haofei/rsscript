@@ -38,6 +38,7 @@ mod local_flow_facts;
 mod local_flow_graph;
 mod local_flow_solver;
 mod local_flow_state;
+mod module_isolation;
 mod moved_use_flow;
 mod operators;
 mod ownership;
@@ -147,6 +148,9 @@ pub use local_flow_solver::{
     merge_local_if_state, merge_local_loop_state, transfer_local_flow_step,
 };
 pub use local_flow_state::{LocalFlowState, initial_local_flow_state, path_root};
+pub use module_isolation::{
+    demangle_diagnostics, isolate_module_namespaces, isolate_sources_with_interfaces,
+};
 pub use moved_use_flow::moved_uses_from_flow;
 pub use operators::{
     builtin_operator_diagnostics, operator_overload_attempt_diagnostic,

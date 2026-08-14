@@ -7,7 +7,7 @@ use rsscript_diagnostics::Diagnostic;
 use rsscript_operation::{OperationAbort, OperationContext};
 use rsscript_source_model::{FileId, SourceRevision};
 use rsscript_syntax::{
-    ast::{Item, Program},
+    ast::{Item, Program, merge_programs},
     parse_source,
 };
 
@@ -307,6 +307,7 @@ pub struct CompilationSession {
     interfaces: SessionSourceStore,
     parse_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<Program>>,
     hir_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<Hir>>,
+    workspace_hir_cache: Option<Arc<Hir>>,
     module_header_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<ModuleHeader>>,
     workspace_module_graph_cache: Option<Arc<WorkspaceModuleGraph>>,
     workspace_diagnostic_cache: Option<Arc<[Diagnostic]>>,
@@ -314,6 +315,8 @@ pub struct CompilationSession {
     parse_cache_misses: u64,
     hir_cache_hits: u64,
     hir_cache_misses: u64,
+    workspace_hir_cache_hits: u64,
+    workspace_hir_cache_misses: u64,
     module_header_cache_hits: u64,
     module_header_cache_misses: u64,
     workspace_module_graph_cache_hits: u64,
@@ -328,6 +331,8 @@ pub struct CompilationSessionStats {
     pub parse_cache_misses: u64,
     pub hir_cache_hits: u64,
     pub hir_cache_misses: u64,
+    pub workspace_hir_cache_hits: u64,
+    pub workspace_hir_cache_misses: u64,
     pub module_header_cache_hits: u64,
     pub module_header_cache_misses: u64,
     pub workspace_module_graph_cache_hits: u64,
@@ -507,6 +512,7 @@ impl CompilationSession {
         if update.changed {
             self.invalidate_parse_cache(SessionFileRole::Source, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Source, update.file_id);
+            self.workspace_hir_cache = None;
             self.invalidate_module_header_cache(SessionFileRole::Source, update.file_id);
             self.workspace_module_graph_cache = None;
             self.workspace_diagnostic_cache = None;
@@ -519,6 +525,7 @@ impl CompilationSession {
         if let Some(update) = update {
             self.invalidate_parse_cache(SessionFileRole::Source, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Source, update.file_id);
+            self.workspace_hir_cache = None;
             self.invalidate_module_header_cache(SessionFileRole::Source, update.file_id);
             self.workspace_module_graph_cache = None;
             self.workspace_diagnostic_cache = None;
@@ -535,6 +542,7 @@ impl CompilationSession {
         if update.changed {
             self.invalidate_parse_cache(SessionFileRole::Interface, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Interface, update.file_id);
+            self.workspace_hir_cache = None;
             self.invalidate_module_header_cache(SessionFileRole::Interface, update.file_id);
             self.workspace_module_graph_cache = None;
             self.workspace_diagnostic_cache = None;
@@ -547,6 +555,7 @@ impl CompilationSession {
         if let Some(update) = update {
             self.invalidate_parse_cache(SessionFileRole::Interface, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Interface, update.file_id);
+            self.workspace_hir_cache = None;
             self.invalidate_module_header_cache(SessionFileRole::Interface, update.file_id);
             self.workspace_module_graph_cache = None;
             self.workspace_diagnostic_cache = None;
@@ -783,6 +792,52 @@ impl CompilationSession {
         Ok(hir)
     }
 
+    /// Build and cache the interface-aware, namespace-isolated HIR for the
+    /// current immutable source/interface revisions.
+    ///
+    /// This is the session's workspace HIR query: it reuses cached parse trees,
+    /// applies the same source/interface namespace rewrite as compiler analysis,
+    /// and keeps host interfaces separate from executable source declarations.
+    /// Full type checking remains a transitional compiler query, but consumers
+    /// can no longer build a competing workspace HIR from ad-hoc file reads.
+    pub fn workspace_hir(&mut self) -> Arc<Hir> {
+        if let Some(hir) = &self.workspace_hir_cache {
+            self.workspace_hir_cache_hits = self.workspace_hir_cache_hits.saturating_add(1);
+            return Arc::clone(hir);
+        }
+
+        let source_files = self.source_snapshot().files().to_vec();
+        let mut sources = merge_programs(source_files.iter().filter_map(|file| {
+            self.parse_snapshot_file(SessionFileRole::Source, file)
+                .map(|program| (*program).clone())
+        }));
+        let interface_files = self.interface_snapshot().files().to_vec();
+        let mut interfaces = interface_files
+            .iter()
+            .filter_map(|file| {
+                self.parse_snapshot_file(SessionFileRole::Interface, file)
+                    .map(|program| (*program).clone())
+            })
+            .collect::<Vec<_>>();
+        crate::isolate_sources_with_interfaces(&mut sources, &mut interfaces);
+        let hir = Arc::new(Hir::from_syntax_with_interfaces(&sources, &interfaces));
+        self.workspace_hir_cache_misses = self.workspace_hir_cache_misses.saturating_add(1);
+        self.workspace_hir_cache = Some(Arc::clone(&hir));
+        hir
+    }
+
+    /// Operation-aware workspace-HIR query. Cached HIR cannot escape a
+    /// cancelled or expired request boundary.
+    pub fn workspace_hir_with_operation(
+        &mut self,
+        operation: &OperationContext,
+    ) -> Result<Arc<Hir>, OperationAbort> {
+        operation.check()?;
+        let hir = self.workspace_hir();
+        operation.check()?;
+        Ok(hir)
+    }
+
     /// Return parsed module and import paths for one source revision.
     pub fn module_header(&mut self, path: &str) -> Option<Arc<ModuleHeader>> {
         let snapshot = self.source_snapshot();
@@ -803,6 +858,8 @@ impl CompilationSession {
             parse_cache_misses: self.parse_cache_misses,
             hir_cache_hits: self.hir_cache_hits,
             hir_cache_misses: self.hir_cache_misses,
+            workspace_hir_cache_hits: self.workspace_hir_cache_hits,
+            workspace_hir_cache_misses: self.workspace_hir_cache_misses,
             module_header_cache_hits: self.module_header_cache_hits,
             module_header_cache_misses: self.module_header_cache_misses,
             workspace_module_graph_cache_hits: self.workspace_module_graph_cache_hits,
@@ -1186,6 +1243,8 @@ mod tests {
                 parse_cache_misses: 1,
                 hir_cache_hits: 0,
                 hir_cache_misses: 0,
+                workspace_hir_cache_hits: 0,
+                workspace_hir_cache_misses: 0,
                 module_header_cache_hits: 0,
                 module_header_cache_misses: 0,
                 workspace_module_graph_cache_hits: 0,
@@ -1483,6 +1542,46 @@ mod tests {
     }
 
     #[test]
+    fn compilation_session_caches_namespace_isolated_workspace_hir() {
+        let mut session = CompilationSession::default();
+        session
+            .set_file(
+                "main.rss",
+                "module app\nfn helper() -> Int { return 1 }\nfn main() -> Int { return helper() }\n",
+            )
+            .unwrap();
+        session
+            .set_interface("host.rssi", "module host\npub fn value() -> Int\n")
+            .unwrap();
+
+        let first = session.workspace_hir();
+        assert!(first.function_body("app__helper").is_some());
+        assert!(first.function_body("main").is_some());
+        let second = session.workspace_hir();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(session.stats().workspace_hir_cache_misses, 1);
+        assert_eq!(session.stats().workspace_hir_cache_hits, 1);
+
+        session
+            .set_interface("host.rssi", "module host\npub fn next() -> Int\n")
+            .unwrap();
+        let replacement = session.workspace_hir();
+        assert!(!Arc::ptr_eq(&first, &replacement));
+        assert_eq!(session.stats().workspace_hir_cache_misses, 2);
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let cancelled = OperationContext {
+            cancellation: Some(cancellation),
+            ..OperationContext::default()
+        };
+        assert!(matches!(
+            session.workspace_hir_with_operation(&cancelled),
+            Err(OperationAbort::Cancelled)
+        ));
+    }
+
+    #[test]
     fn compilation_session_caches_parsed_module_headers() {
         let mut session = CompilationSession::default();
         session
@@ -1503,6 +1602,8 @@ mod tests {
                 parse_cache_misses: 1,
                 hir_cache_hits: 0,
                 hir_cache_misses: 0,
+                workspace_hir_cache_hits: 0,
+                workspace_hir_cache_misses: 0,
                 module_header_cache_hits: 1,
                 module_header_cache_misses: 1,
                 workspace_module_graph_cache_hits: 0,
