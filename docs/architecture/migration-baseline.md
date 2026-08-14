@@ -668,7 +668,7 @@ mechanical acceptance condition holds.
   - [ ] **M01.3 — Add stable display/debug/source-map side tables.** Human names
     remain available without becoming executable identity.
   - [x] **M01.3a — Add initial debug names.** Function/place debug names are
-    present without becoming executable identity. Constants and source spans
+    present without becoming executable identity. Constant-level locations
     remain follow-up work.
   - [x] **M01.3b — Preserve function source locations as side-table data.**
     Direct checked-HIR lowering records the originating function-body location
