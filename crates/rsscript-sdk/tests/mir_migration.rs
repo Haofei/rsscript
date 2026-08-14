@@ -1319,6 +1319,61 @@ async fn main() -> Unit {
 }
 
 #[test]
+fn direct_checked_hir_async_receiver_binding_matches_legacy_vm() {
+    let source = r#"
+struct Worker { value: Int }
+
+async fn Worker.produce(self: Worker) -> Int {
+    return self.value + 1
+}
+
+async fn main() -> Int {
+    let worker = Worker(value: 41)
+    task_group {
+        async let result = worker.produce()
+        let value = await result
+        return value
+    }
+}
+"#;
+    let validated =
+        analyze_source_with_interfaces_result("direct-hir-async-receiver-binding.rss", source, &[])
+            .into_validated()
+            .expect("async receiver binding fixture should validate");
+    let compiled = compile_validated_to_ir(&validated);
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("async receiver binding lowers directly from checked HIR");
+    assert!(mir.functions().iter().any(|function| {
+        function.blocks().iter().any(|block| {
+            block.instructions().iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    MirInstruction::Spawn { arguments, .. } if arguments.len() == 1
+                )
+            })
+        })
+    }));
+
+    let legacy = reg_vm_compile_validated(&validated)
+        .expect("legacy async receiver fixture compiles")
+        .eval_main_with_args(std::iter::empty::<String>())
+        .expect("legacy async receiver fixture executes");
+    let direct = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("direct async receiver MIR emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("direct async receiver MIR executes");
+
+    assert_eq!(legacy.value, "42");
+    assert_eq!(legacy.value, direct.value);
+    assert_eq!(legacy.usage, direct.usage);
+}
+
+#[test]
 fn direct_checked_hir_awaited_provider_cancellation_matches_legacy_vm() {
     let source = "async fn main() -> Int { return await Host.wait() }";
     let interface = "pub async fn Host.wait() -> Int\n";

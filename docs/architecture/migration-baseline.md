@@ -995,6 +995,11 @@ mechanical acceptance condition holds.
       resolved external import. The legacy and direct-MIR bytecode paths execute
       the same task-group fixture with identical result, usage, and stable
       Provider trace fields.
+    - [x] **M05.3f — Compare resolved async receiver task bindings.** `async let
+      value = receiver.method()` now lowers the checked receiver as the first
+      `Spawn` argument rather than falling back to the source-shaped executable
+      IR. A direct-MIR bytecode fixture compares the legacy and new paths for
+      the same receiver result and deterministic execution usage.
   - [ ] **M05.4 — Gate replacement on corpus parity.** New lowering cannot become
     default until all supported Core fixtures agree.
 - [ ] **M06 — Delete the source-shaped executable IR.** Remove nested
@@ -1040,7 +1045,8 @@ mechanical acceptance condition holds.
       executes spawned, awaited, and drained children in the VM. Awaited async
       external calls use the existing verifier-checked `CallExternal`, whose VM
       dispatch parks and resumes the current task around the Provider future;
-      async bindings, cancellation, and select remain follow-up work.
+      direct async bindings for both free and resolved receiver calls now reach
+      the same path. Cancellation and select remain follow-up work.
     - [x] **V02.3c — Emit explicit retain/drop ownership boundaries.** Retain
       remains a verifier-visible semantic fact with no implicit VM copy, while
       drop clears its proven-dead register before frame teardown. Codegen tests

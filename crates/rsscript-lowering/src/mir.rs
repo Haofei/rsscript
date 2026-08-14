@@ -1451,9 +1451,6 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         else {
             return self.unsupported("async checked HIR binding without direct call");
         };
-        if receiver.is_some() {
-            return self.unsupported("async checked HIR receiver call");
-        }
         let checked::CallResolution::Resolved { signature, .. } = resolution else {
             return self.unsupported("unresolved async checked HIR call");
         };
@@ -1491,10 +1488,16 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         };
         let mut ordered = args.iter().collect::<Vec<_>>();
         ordered.sort_by_key(|argument| argument.evaluation_index);
-        let arguments = ordered
-            .into_iter()
-            .map(|argument| self.lower_direct_call_argument(&argument.value))
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut arguments = Vec::with_capacity(ordered.len() + usize::from(receiver.is_some()));
+        if let Some(receiver) = receiver {
+            arguments.push(self.lower_direct_receiver_argument(receiver)?);
+        }
+        arguments.extend(
+            ordered
+                .into_iter()
+                .map(|argument| self.lower_direct_call_argument(&argument.value))
+                .collect::<Result<Vec<_>, _>>()?,
+        );
         let task = self.task();
         if self.tasks.insert(name.to_owned(), task).is_some() {
             return self.unsupported("duplicate async checked HIR binding");
