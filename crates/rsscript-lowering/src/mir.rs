@@ -925,8 +925,14 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                 });
                 Ok(destination)
             }
-            checked::HirExpr::Index { base, index, .. }
-                if checked_hir_expression_type_name(base).is_some_and(is_list_type) =>
+            checked::HirExpr::Index {
+                base,
+                index,
+                base_type,
+                ..
+            } if base_type
+                .as_ref()
+                .is_some_and(|ty| ty.root_name() == Some("List")) =>
             {
                 let list = self.lower_expression(base)?;
                 let index = self.lower_expression(index)?;
@@ -3074,6 +3080,7 @@ fn checked_hir_expression_type_name(expression: &checked::HirExpr) -> Option<&st
     }
 }
 
+#[cfg(feature = "legacy-exec-ir")]
 fn is_list_type(type_name: &str) -> bool {
     type_name == "List" || type_name.starts_with("List<")
 }

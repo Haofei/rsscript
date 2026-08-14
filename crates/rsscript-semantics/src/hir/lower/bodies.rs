@@ -689,11 +689,15 @@ pub(super) fn lower_hir_expr(
                 span: span.clone(),
             }
         }
-        Expr::Index { base, index, span } => HirExpr::Index {
-            base: Box::new(lower_hir_expr(hir, function_name, base, value_types)),
-            index: Box::new(lower_hir_expr(hir, function_name, index, value_types)),
-            span: span.clone(),
-        },
+        Expr::Index { base, index, span } => {
+            let base_type = infer_hir_expr_type(hir, base, value_types);
+            HirExpr::Index {
+                base: Box::new(lower_hir_expr(hir, function_name, base, value_types)),
+                index: Box::new(lower_hir_expr(hir, function_name, index, value_types)),
+                base_type,
+                span: span.clone(),
+            }
+        }
         Expr::Call { callee, args, span } => {
             lower_hir_call_expr(hir, function_name, expr, callee, args, span, value_types)
         }

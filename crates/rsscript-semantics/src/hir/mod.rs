@@ -384,6 +384,10 @@ pub enum HirExpr {
     Index {
         base: Box<HirExpr>,
         index: Box<HirExpr>,
+        /// Structural semantic type of the indexed base expression. Backend
+        /// lowering consumes this fact instead of reconstructing collection
+        /// identity from a rendered type string.
+        base_type: Option<ResolvedType>,
         span: Span,
     },
     Call {

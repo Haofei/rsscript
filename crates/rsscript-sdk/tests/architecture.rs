@@ -3286,6 +3286,16 @@ fn mir_codegen_is_a_vm_independent_verified_bytecode_boundary() {
         !checked_for.contains("starts_with(\"List<\")"),
         "direct MIR loop lowering must not reconstruct type facts from rendered text"
     );
+    let checked_index = function_source(&lowering, "fn lower_expression(");
+    assert!(
+        checked_index.contains("base_type")
+            && checked_index.contains("ty.root_name() == Some(\"List\")"),
+        "direct MIR indexing must inspect the structural base type"
+    );
+    assert!(
+        !checked_index.contains("checked_hir_expression_type_name(base).is_some_and(is_list_type)"),
+        "direct MIR indexing must not reconstruct collection identity from a rendered type"
+    );
     let checked_with = function_source(&lowering, "fn lower_with(");
     assert!(
         checked_with.contains("checked_type_to_wire(ty"),
