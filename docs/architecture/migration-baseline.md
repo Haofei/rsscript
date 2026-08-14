@@ -560,8 +560,13 @@ mechanical acceptance condition holds.
     longer includes the compiler compatibility facade. The default core-aware
     single-file `check` path now also captures its source and explicit
     interfaces in `CompilationSession` before reading the cached complete
-    analysis query. Package compatibility, `--no-core` compatibility checks,
-    and the remaining test/AOT callers are still explicit migration work.
+    analysis query. The reviewed SDK snapshot check APIs use that same cached
+    analysis query, while `Compiler::compile_snapshot` and its operation-aware
+    form use the session-owned validated query for normal non-empty logical
+    paths; only the historical empty-path in-memory compatibility case retains
+    direct analysis. Package compatibility,
+    `--no-core` compatibility checks, and the remaining test/AOT callers are
+    still explicit migration work.
 - [ ] **S04 — Make language service consume semantic queries directly.** It
   must not depend on the compiler compatibility façade, package persistence,
   VM, SDK, or Providers; revision invalidation and request cancellation require

@@ -700,6 +700,13 @@ impl CompilationSession {
         Ok((*analysis).clone().into_validated())
     }
 
+    /// Convert the current cached workspace analysis into its checked phase
+    /// without introducing an unchecked analyzer entry point for callers that
+    /// do not need cancellation or a deadline.
+    pub fn workspace_validated(&mut self) -> Result<ValidatedProgram, Vec<Diagnostic>> {
+        (*self.workspace_analysis()).clone().into_validated()
+    }
+
     /// Diagnose the current immutable workspace through the semantic-owned
     /// frontend implementation, caching by the session's source/interface
     /// revisions. No caller can inject a competing diagnostic pipeline.

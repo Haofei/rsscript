@@ -118,6 +118,8 @@ pub use rsscript_artifact::{
     SourceAnalysisV1, TaskGroupFactV1,
 };
 #[cfg(feature = "execution")]
+use rsscript_semantics::CompilationSession;
+#[cfg(feature = "execution")]
 use sha2::{Digest, Sha256};
 #[cfg(feature = "execution")]
 use std::collections::BTreeMap;
@@ -496,9 +498,17 @@ impl Compiler {
     /// Check one immutable source/interface snapshot without reading a path or
     /// selecting a Provider.
     pub fn check_snapshot(&self, snapshot: &FrontendInputSnapshot) -> Vec<Diagnostic> {
-        let sources = snapshot_pairs(snapshot.sources());
-        let interfaces = snapshot_pairs(snapshot.interfaces());
-        analyze_sources_with_interfaces(&sources, &interfaces)
+        #[cfg(feature = "execution")]
+        {
+            analyze_snapshot_with_session(snapshot, None)
+                .expect("an unchecked SDK snapshot check cannot abort")
+        }
+        #[cfg(not(feature = "execution"))]
+        {
+            let sources = snapshot_pairs(snapshot.sources());
+            let interfaces = snapshot_pairs(snapshot.interfaces());
+            analyze_sources_with_interfaces(&sources, &interfaces)
+        }
     }
 
     pub fn check_with_operation(
@@ -518,14 +528,24 @@ impl Compiler {
         snapshot: &FrontendInputSnapshot,
         operation: &OperationContext,
     ) -> Result<Vec<Diagnostic>, CompileError> {
-        operation.check().map_err(CompileError::from)?;
-        let sources = snapshot_pairs(snapshot.sources());
-        let interfaces = snapshot_pairs(snapshot.interfaces());
-        let diagnostics =
-            analyze_sources_with_interfaces_result_with_operation(&sources, &interfaces, operation)
-                .into_diagnostics();
-        operation.check().map_err(CompileError::from)?;
-        Ok(diagnostics)
+        #[cfg(feature = "execution")]
+        {
+            analyze_snapshot_with_session(snapshot, Some(operation))
+        }
+        #[cfg(not(feature = "execution"))]
+        {
+            operation.check().map_err(CompileError::from)?;
+            let sources = snapshot_pairs(snapshot.sources());
+            let interfaces = snapshot_pairs(snapshot.interfaces());
+            let diagnostics = analyze_sources_with_interfaces_result_with_operation(
+                &sources,
+                &interfaces,
+                operation,
+            )
+            .into_diagnostics();
+            operation.check().map_err(CompileError::from)?;
+            Ok(diagnostics)
+        }
     }
 
     #[cfg(feature = "execution")]
@@ -545,8 +565,7 @@ impl Compiler {
     ) -> Result<BuiltArtifact, CompileError> {
         let sources = snapshot_pairs(snapshot.sources());
         let interfaces = snapshot_pairs(snapshot.interfaces());
-        let validated = validate_sources_with_interfaces(&sources, &interfaces)
-            .map_err(CompileError::Diagnostics)?;
+        let validated = validate_snapshot_with_session(snapshot, None)?;
         let snapshot_digest = in_memory_snapshot_digest(&sources, &interfaces);
         let artifact = compile_validated_to_bytecode(&validated, &snapshot_digest)
             .map_err(bytecode_compile_error)?;
@@ -577,12 +596,7 @@ impl Compiler {
     ) -> Result<BuiltArtifact, CompileError> {
         let sources = snapshot_pairs(snapshot.sources());
         let interfaces = snapshot_pairs(snapshot.interfaces());
-        let validated =
-            validate_sources_with_interfaces_with_operation(&sources, &interfaces, operation)
-                .map_err(|diagnostics| match operation.check() {
-                    Ok(()) => CompileError::Diagnostics(diagnostics),
-                    Err(abort) => CompileError::from(abort),
-                })?;
+        let validated = validate_snapshot_with_session(snapshot, Some(operation))?;
         operation.check().map_err(CompileError::from)?;
         let snapshot_digest = in_memory_snapshot_digest(&sources, &interfaces);
         let artifact = compile_validated_to_bytecode(&validated, &snapshot_digest)
@@ -626,6 +640,109 @@ impl Compiler {
             operation,
         )
     }
+}
+
+/// Adopt the semantic-owned session query for ordinary immutable snapshots.
+/// Empty logical paths were historically accepted by the direct in-memory
+/// compatibility API but cannot be stable session identities, so preserve that
+/// narrow behavior until the public snapshot model rejects them explicitly.
+#[cfg(feature = "execution")]
+fn validate_snapshot_with_session(
+    snapshot: &FrontendInputSnapshot,
+    operation: Option<&OperationContext>,
+) -> Result<ValidatedProgram, CompileError> {
+    let has_empty_path = snapshot
+        .sources()
+        .files()
+        .iter()
+        .chain(snapshot.interfaces().files())
+        .any(|file| file.path().is_empty());
+    if has_empty_path {
+        let sources = snapshot_pairs(snapshot.sources());
+        let interfaces = snapshot_pairs(snapshot.interfaces());
+        return match operation {
+            Some(operation) => {
+                validate_sources_with_interfaces_with_operation(&sources, &interfaces, operation)
+                    .map_err(|diagnostics| match operation.check() {
+                        Ok(()) => CompileError::Diagnostics(diagnostics),
+                        Err(abort) => CompileError::from(abort),
+                    })
+            }
+            None => validate_sources_with_interfaces(&sources, &interfaces)
+                .map_err(CompileError::Diagnostics),
+        };
+    }
+
+    let mut session = session_for_snapshot(snapshot);
+    match operation {
+        Some(operation) => session
+            .workspace_validated_with_operation(operation)
+            .map_err(CompileError::from)?
+            .map_err(CompileError::Diagnostics),
+        None => session
+            .workspace_validated()
+            .map_err(CompileError::Diagnostics),
+    }
+}
+
+/// Analyze a snapshot through the same session-owned workspace query used by
+/// compilation. The compatibility fallback mirrors
+/// [`validate_snapshot_with_session`]: an empty logical path cannot be a
+/// stable session identity yet.
+#[cfg(feature = "execution")]
+fn analyze_snapshot_with_session(
+    snapshot: &FrontendInputSnapshot,
+    operation: Option<&OperationContext>,
+) -> Result<Vec<Diagnostic>, CompileError> {
+    let has_empty_path = snapshot
+        .sources()
+        .files()
+        .iter()
+        .chain(snapshot.interfaces().files())
+        .any(|file| file.path().is_empty());
+    if has_empty_path {
+        let sources = snapshot_pairs(snapshot.sources());
+        let interfaces = snapshot_pairs(snapshot.interfaces());
+        return match operation {
+            Some(operation) => {
+                operation.check().map_err(CompileError::from)?;
+                let diagnostics = analyze_sources_with_interfaces_result_with_operation(
+                    &sources,
+                    &interfaces,
+                    operation,
+                )
+                .into_diagnostics();
+                operation.check().map_err(CompileError::from)?;
+                Ok(diagnostics)
+            }
+            None => Ok(analyze_sources_with_interfaces(&sources, &interfaces)),
+        };
+    }
+
+    let mut session = session_for_snapshot(snapshot);
+    match operation {
+        Some(operation) => session
+            .workspace_analysis_with_operation(operation)
+            .map_err(CompileError::from)
+            .map(|analysis| (*analysis).clone().into_diagnostics()),
+        None => Ok((*session.workspace_analysis()).clone().into_diagnostics()),
+    }
+}
+
+#[cfg(feature = "execution")]
+fn session_for_snapshot(snapshot: &FrontendInputSnapshot) -> CompilationSession {
+    let mut session = CompilationSession::default();
+    for file in snapshot.sources().files() {
+        session
+            .set_file(file.path(), file.text())
+            .expect("non-empty immutable snapshot source path must be session-valid");
+    }
+    for file in snapshot.interfaces().files() {
+        session
+            .set_interface(file.path(), file.text())
+            .expect("non-empty immutable snapshot interface path must be session-valid");
+    }
+    session
 }
 
 #[cfg(feature = "execution")]
