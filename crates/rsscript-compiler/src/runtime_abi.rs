@@ -1,5 +1,7 @@
 pub(crate) struct RuntimeIntrinsic {
+    #[cfg(feature = "aot-rust")]
     pub(crate) rust_target: &'static str,
+    #[cfg(any(feature = "aot-rust", test))]
     pub(crate) managed_handle_args: &'static [&'static str],
     namespace: &'static str,
     name: &'static str,
@@ -10,10 +12,14 @@ const fn runtime_intrinsic(
     name: &'static str,
     rust_target: &'static str,
 ) -> RuntimeIntrinsic {
+    #[cfg(not(feature = "aot-rust"))]
+    let _ = rust_target;
     RuntimeIntrinsic {
         namespace,
         name,
+        #[cfg(feature = "aot-rust")]
         rust_target,
+        #[cfg(any(feature = "aot-rust", test))]
         managed_handle_args: &[],
     }
 }
@@ -27,6 +33,7 @@ pub(crate) fn lookup_runtime_intrinsic(
         .find(|intrinsic| intrinsic.namespace == namespace && intrinsic.name == name)
 }
 
+#[cfg(feature = "aot-rust")]
 pub(crate) fn runtime_intrinsic_signatures() -> Vec<String> {
     RUNTIME_INTRINSICS
         .iter()
@@ -34,6 +41,7 @@ pub(crate) fn runtime_intrinsic_signatures() -> Vec<String> {
         .collect()
 }
 
+#[cfg(feature = "aot-rust")]
 pub(crate) fn runtime_intrinsic_supported_signatures() -> Vec<String> {
     let runtime_functions = runtime_public_function_names();
     RUNTIME_INTRINSICS
@@ -47,6 +55,7 @@ pub(crate) fn runtime_intrinsic_supported_signatures() -> Vec<String> {
         .collect()
 }
 
+#[cfg(feature = "aot-rust")]
 fn runtime_public_function_names() -> std::collections::HashSet<String> {
     let runtime_src =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../experiments/aot-runtime/src");
@@ -62,6 +71,7 @@ fn runtime_public_function_names() -> std::collections::HashSet<String> {
     functions
 }
 
+#[cfg(feature = "aot-rust")]
 fn collect_runtime_public_functions(
     source: &str,
     functions: &mut std::collections::HashSet<String>,
@@ -93,6 +103,7 @@ fn collect_runtime_public_functions(
     }
 }
 
+#[cfg(feature = "aot-rust")]
 fn skip_ascii_whitespace(bytes: &[u8], mut index: usize) -> usize {
     while index < bytes.len() && bytes[index].is_ascii_whitespace() {
         index += 1;
@@ -105,7 +116,9 @@ include!(concat!(env!("OUT_DIR"), "/rss-runtime-intrinsics.rs"));
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
+    #[cfg(feature = "aot-rust")]
     use std::fs;
+    #[cfg(feature = "aot-rust")]
     use std::path::Path;
 
     use crate::interfaces::default_interfaces;
@@ -178,6 +191,7 @@ mod tests {
         public_functions
     }
 
+    #[cfg(feature = "aot-rust")]
     #[test]
     fn runtime_intrinsic_rust_targets_exist() {
         let runtime_functions = runtime_public_functions();
@@ -196,6 +210,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "aot-rust")]
     fn runtime_public_functions() -> HashSet<String> {
         let runtime_src =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../experiments/aot-runtime/src");
@@ -211,6 +226,7 @@ mod tests {
         functions
     }
 
+    #[cfg(feature = "aot-rust")]
     fn collect_public_functions(source: &str, functions: &mut HashSet<String>) {
         let bytes = source.as_bytes();
         let mut index = 0;
@@ -239,6 +255,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "aot-rust")]
     fn skip_ascii_whitespace(bytes: &[u8], mut index: usize) -> usize {
         while index < bytes.len() && bytes[index].is_ascii_whitespace() {
             index += 1;

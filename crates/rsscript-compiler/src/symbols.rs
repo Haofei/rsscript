@@ -28,10 +28,10 @@ pub fn symbol_inventory(file: &str, source: &str) -> Vec<SymbolInventoryEntry> {
         .and_then(|stem| stem.to_str())
         .unwrap_or(file)
         .to_string();
-    let overrides = crate::rust_lower::collect_lower_name_overrides(
+    let overrides = crate::lower_names::collect_lower_name_overrides(
         &rsscript_syntax::parse_source_raw(file, source),
     );
-    let previous = crate::rust_lower::set_lower_name_overrides(overrides);
+    let previous = crate::lower_names::set_lower_name_overrides(overrides);
     let index = symbol_index(file, source);
     let entries = index
         .definitions()
@@ -47,10 +47,10 @@ pub fn symbol_inventory(file: &str, source: &str) -> Vec<SymbolInventoryEntry> {
             qualname: definition.name.clone(),
             kind: definition.kind,
             span: definition.span.clone(),
-            lowered_name: crate::rust_lower::lowered_symbol_name(&definition.name),
+            lowered_name: crate::lower_names::lowered_symbol_name(&definition.name),
         })
         .collect();
-    crate::rust_lower::set_lower_name_overrides(previous);
+    crate::lower_names::set_lower_name_overrides(previous);
     entries
 }
 

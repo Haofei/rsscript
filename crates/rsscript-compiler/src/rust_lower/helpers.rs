@@ -1,6 +1,9 @@
 mod executable_declarations;
 mod semantic_projection;
 
+pub(super) use crate::lower_names::{
+    lower_name_override, rust_function_ident, rust_ident, rust_qualified_function_ident,
+};
 pub(super) use crate::text_util::{
     decode_char_token, decode_string_token, type_arg_names, type_root_name,
 };
@@ -991,65 +994,6 @@ pub(super) fn lower_source_span(span: &Span) -> String {
         "rsscript_runtime::SourceSpan::new({:?}, {}, {}, {})",
         span.file, span.line, span.column, span.length
     )
-}
-
-thread_local! {
-    /// Per-lowering-run map from a function's source qualified name (e.g.
-    /// `helpers.count`) to its pinned backend name from `#lower_name("...")`.
-    /// Populated before a lowering run (and before building the symbol inventory)
-    /// and consulted by the canonical name-lowering helpers so the emitted Rust
-    /// symbol and the reported `lowered_name` always agree.
-    static LOWER_NAME_OVERRIDES: std::cell::RefCell<std::collections::HashMap<String, String>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
-}
-
-/// Install the pinned-name overrides for the current thread; pass an empty map to
-/// disable. Returns the previous map so callers can restore it.
-pub(crate) fn set_lower_name_overrides(
-    overrides: std::collections::HashMap<String, String>,
-) -> std::collections::HashMap<String, String> {
-    LOWER_NAME_OVERRIDES.with(|cell| cell.replace(overrides))
-}
-
-fn lower_name_override(source_name: &str) -> Option<String> {
-    LOWER_NAME_OVERRIDES.with(|cell| cell.borrow().get(source_name).cloned())
-}
-
-pub(super) fn rust_function_ident(name: &str) -> String {
-    if let Some(pinned) = lower_name_override(name) {
-        return pinned;
-    }
-    let joined = name.split('.').collect::<Vec<_>>().join("_");
-    rust_ident(&joined)
-}
-
-pub(super) fn rust_qualified_function_ident(namespace: &str, name: &str) -> String {
-    let source_name = format!("{namespace}.{}", type_root_name(name));
-    if let Some(pinned) = lower_name_override(&source_name) {
-        return pinned;
-    }
-    namespace
-        .split('.')
-        .chain(std::iter::once(type_root_name(name)))
-        .map(rust_path_segment)
-        .collect::<Vec<_>>()
-        .join("_")
-}
-
-pub(super) fn rust_path_segment(segment: &str) -> String {
-    if let Some((head, tail)) = segment.split_once("::<") {
-        format!("{}::<{}", rust_ident(head), tail)
-    } else {
-        rust_ident(segment)
-    }
-}
-
-pub(super) fn rust_ident(name: &str) -> String {
-    if crate::text_util::is_rust_keyword(name) {
-        format!("r#{name}")
-    } else {
-        name.to_string()
-    }
 }
 
 pub(super) fn rust_value_ident(name: &str) -> String {

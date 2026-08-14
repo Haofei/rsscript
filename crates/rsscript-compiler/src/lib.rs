@@ -24,12 +24,14 @@ mod lexer {
 }
 mod lint;
 #[cfg(feature = "execution")]
+mod lower_names;
+#[cfg(feature = "execution")]
 mod package;
 #[cfg(feature = "execution")]
 mod review;
 #[cfg(feature = "execution")]
 mod runtime_abi;
-#[cfg(feature = "execution")]
+#[cfg(feature = "aot-rust")]
 mod rust_lower;
 #[cfg(all(test, feature = "execution", feature = "selfhost-parity"))]
 mod selfhost_parity;
@@ -96,6 +98,8 @@ pub use generate::{
 };
 pub use lint::lint_source;
 #[cfg(feature = "execution")]
+pub use lower_names::lowered_symbol_name;
+#[cfg(feature = "execution")]
 pub use package::{
     ArtifactStore, ExecutablePackageSnapshot, PackageAnalysis, PackageAnalysisAwaitSite,
     PackageAnalysisExport, PackageAnalysisExternalImport, PackageAnalysisFile,
@@ -129,9 +133,7 @@ pub use review::{
 };
 #[cfg(feature = "execution")]
 pub use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationId};
-#[cfg(feature = "execution")]
-pub use rust_lower::lowered_symbol_name;
-#[cfg(feature = "execution")]
+#[cfg(feature = "aot-rust")]
 pub use rust_lower::{
     GeneratedRustPackage, LowerCoverageReport, LoweredRust, NativeRustDependency,
     RemappedRustcDiagnostic, RustSourceMapEntry, lower_coverage_report, lower_program_to_rust,

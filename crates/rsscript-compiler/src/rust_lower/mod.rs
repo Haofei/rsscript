@@ -70,7 +70,6 @@ mod source_map;
 mod types;
 
 pub use crate::package::NativeRustDependency;
-pub(crate) use helpers::set_lower_name_overrides;
 pub use runtime_diagnostics::parse_runtime_diagnostics;
 pub use rustc_remap::{remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines};
 pub use source_map::parse_source_map_json;
@@ -80,33 +79,6 @@ use helpers::{
     cargo_package_name, rust_package_main, toml_string, validate_executable_declarations,
 };
 use lowerer::RustLowerer;
-
-/// The Rust symbol name a source-qualified RSScript name lowers to (dotted
-/// member names are flattened and Rust keywords are raw-escaped) — e.g.
-/// `helpers.count` → `helpers_count`, `async` → `r#async`. Exposed so port
-/// tooling can map an RSScript symbol to its backend identity without guessing.
-pub fn lowered_symbol_name(qualified_name: &str) -> String {
-    helpers::rust_function_ident(qualified_name)
-}
-
-/// Collect the `#lower_name("...")` pins a program's functions declare, keyed by
-/// source qualified name. Both the lowerer and the symbol inventory install
-/// these so the emitted Rust symbol and the reported `lowered_name` agree.
-pub(crate) fn collect_lower_name_overrides(
-    program: &Program,
-) -> std::collections::HashMap<String, String> {
-    program
-        .items
-        .iter()
-        .filter_map(|item| match item {
-            crate::syntax::ast::Item::Function(function) => function
-                .lower_name
-                .as_ref()
-                .map(|pinned| (function.name.clone(), pinned.clone())),
-            _ => None,
-        })
-        .collect()
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct LowerCoverageReport {

@@ -1203,6 +1203,67 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
 }
 
 #[test]
+fn rust_aot_lowering_is_explicitly_feature_gated() {
+    let root = workspace_root();
+    let manifest: toml::Value =
+        toml::from_str(&read(&root.join("crates/rsscript-compiler/Cargo.toml")))
+            .expect("compiler manifest should parse");
+    let execution = manifest["features"]["execution"]
+        .as_array()
+        .expect("compiler execution feature should be declared")
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .collect::<BTreeSet<_>>();
+    assert!(
+        !execution.contains("aot-rust"),
+        "ordinary execution must not select the experimental Rust/AOT lowerer"
+    );
+    let aot = manifest["features"]["aot-rust"]
+        .as_array()
+        .expect("compiler aot-rust feature should be declared")
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        aot,
+        BTreeSet::from(["execution"]),
+        "Rust/AOT lowering must be an explicit extension of execution"
+    );
+
+    let compiler = read(&root.join("crates/rsscript-compiler/src/lib.rs"));
+    assert!(compiler.contains("#[cfg(feature = \"aot-rust\")]\nmod rust_lower;"));
+    assert!(compiler.contains("#[cfg(feature = \"execution\")]\nmod lower_names;"));
+
+    let symbols = read(&root.join("crates/rsscript-compiler/src/symbols.rs"));
+    assert!(symbols.contains("crate::lower_names::lowered_symbol_name"));
+    assert!(
+        !symbols.contains("crate::rust_lower::"),
+        "execution metadata must not require compiling the Rust/AOT lowerer"
+    );
+
+    let sdk: toml::Value = toml::from_str(&read(&root.join("crates/rsscript-sdk/Cargo.toml")))
+        .expect("SDK manifest should parse");
+    let sdk_execution = sdk["features"]["execution"]
+        .as_array()
+        .expect("SDK execution feature should be declared")
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .collect::<BTreeSet<_>>();
+    assert!(
+        !sdk_execution.contains("rsscript_compiler/aot-rust"),
+        "reviewed SDK execution must not select AOT by default"
+    );
+    let sdk_aot = sdk["features"]["aot-rust"]
+        .as_array()
+        .expect("SDK aot-rust feature should be declared")
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .collect::<BTreeSet<_>>();
+    assert!(sdk_aot.contains("execution"));
+    assert!(sdk_aot.contains("rsscript_compiler/aot-rust"));
+}
+
+#[test]
 fn linked_provider_contracts_reach_the_invocation_path() {
     let root = workspace_root();
     let provider_api = read(&root.join("crates/rsscript-provider-api/src/lib.rs"));

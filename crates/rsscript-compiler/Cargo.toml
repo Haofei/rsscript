@@ -52,6 +52,9 @@ execution = [
     "dep:toml",
     "dep:uuid",
 ]
+# Rust source emission is an Experimental AOT backend. Keep it out of the
+# ordinary execution closure; callers must explicitly select it.
+aot-rust = ["execution"]
 language-service = []
 # The RSS-written frontend is a research parity harness.  Keep it out of Core
 # test builds; the dedicated self-host workflow opts in explicitly.

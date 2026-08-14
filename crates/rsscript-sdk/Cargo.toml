@@ -13,7 +13,7 @@ default = []
 # callers that have not yet moved to the reviewed façade modules. New embeds
 # must use `compile`, `artifact`, `provider_api`, `runtime`, `report`, and
 # `operation` instead.
-compatibility = ["execution"]
+compatibility = ["aot-rust"]
 execution = [
     "dep:rsscript-abi-model",
     "dep:rsscript-artifact",
@@ -27,6 +27,7 @@ execution = [
     "dep:rsscript-vm",
     "rsscript-vm/legacy-exec-ir",
 ]
+aot-rust = ["execution", "rsscript_compiler/aot-rust"]
 native-jit = ["compatibility", "rsscript-vm/native-jit"]
 
 [dependencies]
