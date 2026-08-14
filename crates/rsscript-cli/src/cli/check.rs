@@ -13,7 +13,7 @@ use rsscript_syntax::lint_source;
 
 use super::{is_package_directory, print_usage, read_interface_sources, required_flag_value};
 #[cfg(feature = "execution")]
-use rsscript_compiler::compatibility::analyze_package_dir;
+use rsscript_sdk::{compile::CompileError, project::ProjectCompiler};
 
 /// Parse `--explain <CODE>` (optionally with `--json`), in any order.
 fn parse_explain_args(args: &[String]) -> Option<(&str, bool)> {
@@ -82,7 +82,7 @@ pub(crate) fn parse_check_args(args: &[String]) -> Result<CheckOptions<'_>, Stri
 fn package_check_option_error(options: &CheckOptions<'_>) -> Option<String> {
     if options.lint {
         return Some(
-            "`rss check --lint` is only valid for single-file checks; package checks include package diagnostics."
+            "`rss check --lint` is only valid for single-file checks; package checks compile one immutable project snapshot."
                 .to_string(),
         );
     }
@@ -93,7 +93,7 @@ fn package_check_option_error(options: &CheckOptions<'_>) -> Option<String> {
     }
     if !options.interfaces.is_empty() {
         return Some(
-            "`rss check --interface` is only valid for single-file checks; package checks read interfaces from rsspkg.toml.".to_string(),
+            "`rss check --interface` is only valid for single-file checks; package checks capture declared interfaces from the project manifest.".to_string(),
         );
     }
     None
@@ -101,29 +101,34 @@ fn package_check_option_error(options: &CheckOptions<'_>) -> Option<String> {
 
 #[cfg(feature = "execution")]
 fn run_package_check(json: bool, path: &str) -> ExitCode {
-    let analysis = match analyze_package_dir(std::path::Path::new(path)) {
-        Ok(analysis) => analysis,
+    match ProjectCompiler::new().compile_package(std::path::Path::new(path)) {
+        Ok(build) => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&build.analysis_envelope().payload())
+                        .expect("versioned source analysis serializes")
+                );
+            } else {
+                println!("{path}: ok");
+            }
+            ExitCode::SUCCESS
+        }
+        Err(CompileError::Diagnostics(diagnostics)) => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&diagnostics).expect("compiler diagnostics serialize")
+                );
+            } else {
+                print!("{}", format_diagnostics_human(&diagnostics));
+            }
+            ExitCode::from(1)
+        }
         Err(error) => {
             eprintln!("{error}");
-            return ExitCode::from(2);
+            ExitCode::from(2)
         }
-    };
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string(&analysis).expect("package analysis JSON serialization")
-        );
-    } else if !analysis.diagnostics.is_empty() {
-        print!("{}", format_diagnostics_human(&analysis.diagnostics));
-    }
-    if analysis
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.severity.is_error())
-    {
-        ExitCode::from(1)
-    } else {
-        ExitCode::SUCCESS
     }
 }
 pub(crate) fn run_check(args: &[String]) -> ExitCode {

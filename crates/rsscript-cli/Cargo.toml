@@ -20,12 +20,15 @@ default = []
 execution = [
     "dep:rsscript-compiler",
     "dep:rsscript-sdk",
-    "rsscript-compiler/package",
     "rsscript-sdk/project",
     "dep:rss-process-guard",
     "dep:rsscript-runner-protocol",
 ]
-aot-rust = ["execution", "rsscript-compiler/aot-rust"]
+# Legacy package review/inspection is an explicit compatibility boundary. The
+# normal artifact build, check, and runner path uses the SDK project loader and
+# does not compile the compiler's filesystem/review closure.
+package-inspect = ["execution", "rsscript-compiler/package"]
+aot-rust = ["package-inspect", "rsscript-compiler/aot-rust"]
 host-tools = ["execution"]
 native-jit = ["rsscript-sdk/native-jit", "aot-rust"]
 grammar-tools = ["dep:rsscript-compiler"]

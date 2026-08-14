@@ -663,7 +663,11 @@ mechanical acceptance condition holds.
     and build-script catalog inputs, so the complete dependency-closure
     acceptance condition remains open. Unused REIR/review/fuzz/schema dev
     dependencies have been removed; the legacy VM is now an optional dependency
-    selected only by the explicit `selfhost-parity` research feature.
+    selected only by the explicit `selfhost-parity` research feature. Normal
+    CLI `execution` no longer selects the compiler `package` closure: build,
+    run, diff, and package check capture the immutable project snapshot through
+    the SDK loader path. The remaining legacy directory review/inspection path
+    is an explicit `package-inspect` feature, and AOT extends that feature.
 
 ### 2. Typed CFG MIR
 

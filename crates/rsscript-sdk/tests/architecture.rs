@@ -1359,13 +1359,25 @@ fn rust_aot_lowering_is_explicitly_feature_gated() {
         !cli_execution.contains("rsscript-compiler/aot-rust"),
         "ordinary CLI execution must not select the experimental Rust/AOT lowerer"
     );
+    assert!(
+        !cli_execution.contains("rsscript-compiler/package"),
+        "ordinary CLI execution must not select compiler package/review compatibility"
+    );
+    let cli_package_inspect = cli["features"]["package-inspect"]
+        .as_array()
+        .expect("CLI package-inspect feature should be declared")
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .collect::<BTreeSet<_>>();
+    assert!(cli_package_inspect.contains("execution"));
+    assert!(cli_package_inspect.contains("rsscript-compiler/package"));
     let cli_aot = cli["features"]["aot-rust"]
         .as_array()
         .expect("CLI aot-rust feature should be declared")
         .iter()
         .filter_map(toml::Value::as_str)
         .collect::<BTreeSet<_>>();
-    assert!(cli_aot.contains("execution"));
+    assert!(cli_aot.contains("package-inspect"));
     assert!(cli_aot.contains("rsscript-compiler/aot-rust"));
 
     let run_command = read(&root.join("crates/rsscript-cli/src/cli/run_cmd.rs"));
