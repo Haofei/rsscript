@@ -557,7 +557,10 @@ mechanical acceptance condition holds.
     the session API; direct analyzer construction becomes private. The normal
     CLI `check`, `fix`, and `fmt` commands now consume semantics, syntax, and
     diagnostics directly, so the default `rsscript-cli` dependency closure no
-    longer includes the compiler compatibility facade. Package compatibility
+    longer includes the compiler compatibility facade. The default core-aware
+    single-file `check` path now also captures its source and explicit
+    interfaces in `CompilationSession` before reading the cached complete
+    analysis query. Package compatibility, `--no-core` compatibility checks,
     and the remaining test/AOT callers are still explicit migration work.
 - [ ] **S04 — Make language service consume semantic queries directly.** It
   must not depend on the compiler compatibility façade, package persistence,

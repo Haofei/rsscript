@@ -6,8 +6,8 @@ use rsscript_diagnostics::{
     format_diagnostics_json_with_source,
 };
 use rsscript_semantics::{
-    analyze_source_with_interfaces, analyze_source_with_interfaces_without_core,
-    analyze_source_without_core, standard_package_interfaces,
+    CompilationSession, analyze_source_with_interfaces_without_core, analyze_source_without_core,
+    standard_package_interfaces,
 };
 use rsscript_syntax::lint_source;
 
@@ -200,7 +200,7 @@ pub(crate) fn run_check(args: &[String]) -> ExitCode {
     let mut diagnostics = if options.use_core {
         let mut combined = standard_package_interfaces().to_vec();
         combined.extend(interface_refs);
-        analyze_source_with_interfaces(path, &source, &combined)
+        analyze_source_with_session(path, &source, &combined)
     } else if interface_refs.is_empty() {
         analyze_source_without_core(path, &source)
     } else {
@@ -228,6 +228,27 @@ pub(crate) fn run_check(args: &[String]) -> ExitCode {
     } else {
         ExitCode::SUCCESS
     }
+}
+
+/// Route the normal single-file check through the semantic-owned session
+/// query. CLI file I/O stays at this composition boundary, while parse,
+/// resolve, type, HIR, and diagnostic facts share one immutable input snapshot
+/// below it.
+fn analyze_source_with_session(
+    path: &str,
+    source: &str,
+    interfaces: &[(&str, &str)],
+) -> Vec<rsscript_diagnostics::Diagnostic> {
+    let mut session = CompilationSession::default();
+    session
+        .set_file(path, source)
+        .expect("CLI source path must be a valid session path");
+    for (interface_path, interface_source) in interfaces {
+        session
+            .set_interface(*interface_path, *interface_source)
+            .expect("CLI interface path must be a valid session path");
+    }
+    session.workspace_analysis().diagnostics().to_vec()
 }
 
 #[cfg(test)]
@@ -266,5 +287,18 @@ mod tests {
             super::package_check_option_error(&options).expect("package check should reject lint");
 
         assert!(error.contains("--lint"));
+    }
+
+    #[test]
+    fn default_core_check_uses_the_session_owned_workspace_analysis() {
+        let diagnostics = super::analyze_source_with_session(
+            "main.rss",
+            "fn main() -> Int { return Host.value() }",
+            &[("host.rssi", "module Host\npub fn value() -> Int\n")],
+        );
+        assert!(
+            diagnostics.is_empty(),
+            "session-owned analysis should retain explicit interface visibility: {diagnostics:#?}"
+        );
     }
 }
