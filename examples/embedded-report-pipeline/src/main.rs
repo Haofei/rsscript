@@ -11,7 +11,7 @@ use rsscript_compiler::provider_api::{
 use rsscript_compiler::{
     analysis::SemanticDiffV1,
     artifact::ArtifactVerifier,
-    compile::Compiler,
+    compile::{Compiler, FrontendInputSnapshot},
     provider_api::ProviderRegistry,
     runtime::{ExecutionRequest, RunLimits, Runtime, TracePolicy},
 };
@@ -90,10 +90,11 @@ fn registry(fs_functions: ProviderFunctions, log_functions: ProviderFunctions) -
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let compiler = Compiler;
-    let package = compiler.compile_with_interfaces(
-        &[("main.rss", SOURCE)],
-        &[("fs.rssi", FS_INTERFACE), ("log.rssi", LOG_INTERFACE)],
-    )?;
+    let input = FrontendInputSnapshot::from_sources(
+        [("main.rss", SOURCE)],
+        [("fs.rssi", FS_INTERFACE), ("log.rssi", LOG_INTERFACE)],
+    );
+    let package = compiler.compile_snapshot(&input)?;
     let bundle_before_providers = package.bundle_bytes()?;
     let artifact_hash = format!("{:x}", Sha256::digest(&bundle_before_providers));
     let fs_descriptor = InterfaceDescriptorV1::from_interface_source("fs.rssi", FS_INTERFACE)

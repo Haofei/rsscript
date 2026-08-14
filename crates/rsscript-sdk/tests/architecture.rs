@@ -2773,8 +2773,8 @@ fn mir_codegen_is_a_vm_independent_verified_bytecode_boundary() {
 
     let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
     for signature in [
-        "pub fn compile(&self, file: &str, source: &str)",
-        "pub fn compile_with_interfaces(",
+        "pub fn compile_snapshot(",
+        "pub fn compile_snapshot_with_operation(",
         "pub fn build(&self, snapshot: &WorkspaceSnapshot)",
     ] {
         let build = function_source(&sdk, signature);
@@ -2785,6 +2785,16 @@ fn mir_codegen_is_a_vm_independent_verified_bytecode_boundary() {
         assert!(
             !build.contains("reg_vm_compile"),
             "reviewed SDK build `{signature}` must not call a legacy VM compile helper"
+        );
+    }
+    for signature in [
+        "pub fn compile(&self, file: &str, source: &str)",
+        "pub fn compile_with_interfaces(",
+    ] {
+        let wrapper = function_source(&sdk, signature);
+        assert!(
+            wrapper.contains("compile_snapshot"),
+            "compatibility SDK compile helper `{signature}` must delegate to the immutable input snapshot"
         );
     }
 }

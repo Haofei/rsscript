@@ -11,12 +11,13 @@ use rsscript_compiler::*;
 pub use rsscript_compiler::{
     AnalysisResult, CommitBehavior, Completion, CompletionKind, ContinuationOptions, Continuations,
     Definition, Diagnostic, DiagnosticExplanation, Effect, ExpectedType, Fix, FixEdit,
-    FrontendCompletion, FrontendStopReason, GenerateContext, LiteralClass, PrefixStatus, Reference,
-    RssDocumentSymbol, SemanticDatabase, Severity, SourceFileSnapshot, SourceSnapshot, Span,
-    SymbolCompleteness, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup, TextRange, TypeRef,
-    VSCODE_GRAMMAR_PATH, ValidatedProgram, analyze_source, analyze_source_result,
-    analyze_source_result_with_operation, analyze_source_with_core, analyze_source_with_interfaces,
-    analyze_source_with_interfaces_result, analyze_source_with_interfaces_result_with_operation,
+    FrontendCompletion, FrontendInputSnapshot, FrontendStopReason, GenerateContext, LiteralClass,
+    PrefixStatus, Reference, RssDocumentSymbol, SemanticDatabase, Severity, SourceFileSnapshot,
+    SourceSnapshot, Span, SymbolCompleteness, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
+    TextRange, TypeRef, VSCODE_GRAMMAR_PATH, ValidatedProgram, analyze_source,
+    analyze_source_result, analyze_source_result_with_operation, analyze_source_with_core,
+    analyze_source_with_interfaces, analyze_source_with_interfaces_result,
+    analyze_source_with_interfaces_result_with_operation,
     analyze_source_with_interfaces_without_core, analyze_source_without_core,
     analyze_sources_with_interfaces, analyze_sources_with_interfaces_result,
     analyze_sources_with_interfaces_without_core,
@@ -167,6 +168,7 @@ pub mod language {
 /// Reviewed compilation entry points and diagnostics.
 pub mod compile {
     pub use super::{CompileError, CompileErrorCode, Compiler};
+    pub use rsscript_compiler::FrontendInputSnapshot;
     #[cfg(feature = "execution")]
     pub use rsscript_compiler::WorkspaceSnapshot;
     pub use rsscript_compiler::{Diagnostic, Severity};
@@ -264,11 +266,28 @@ impl Compiler {
 
     #[cfg(feature = "execution")]
     pub fn compile(&self, file: &str, source: &str) -> Result<BuiltArtifact, CompileError> {
-        let snapshot_digest = in_memory_snapshot_digest(&[(file, source)], &[]);
-        let compiled = compile_source_to_ir(file, source).map_err(CompileError::Diagnostics)?;
+        self.compile_snapshot(&FrontendInputSnapshot::single(file, source))
+    }
+
+    /// Compile one immutable, provider-neutral frontend snapshot.
+    ///
+    /// This is the preferred embedding boundary. Filesystem/package loaders
+    /// capture their inputs before constructing the snapshot; this method never
+    /// reads a path or ambient process state.
+    #[cfg(feature = "execution")]
+    pub fn compile_snapshot(
+        &self,
+        snapshot: &FrontendInputSnapshot,
+    ) -> Result<BuiltArtifact, CompileError> {
+        let sources = snapshot_pairs(snapshot.sources());
+        let interfaces = snapshot_pairs(snapshot.interfaces());
+        let validated = validate_sources_with_interfaces(&sources, &interfaces)
+            .map_err(CompileError::Diagnostics)?;
+        let snapshot_digest = in_memory_snapshot_digest(&sources, &interfaces);
+        let compiled = compile_validated_to_ir(&validated);
         let artifact = vm_adapter::emit_compiled_artifact(&compiled, &snapshot_digest)
             .map_err(CompileError::from)?;
-        BuiltArtifact::from_bytecode(artifact, source_analysis(file, &snapshot_digest))
+        BuiltArtifact::from_bytecode(artifact, source_set_analysis(&sources, &snapshot_digest))
     }
 
     #[cfg(feature = "execution")]
@@ -278,21 +297,36 @@ impl Compiler {
         source: &str,
         operation: &OperationContext,
     ) -> Result<BuiltArtifact, CompileError> {
+        self.compile_snapshot_with_operation(
+            &FrontendInputSnapshot::single(file, source),
+            operation,
+        )
+    }
+
+    #[cfg(feature = "execution")]
+    pub fn compile_snapshot_with_operation(
+        &self,
+        snapshot: &FrontendInputSnapshot,
+        operation: &OperationContext,
+    ) -> Result<BuiltArtifact, CompileError> {
+        let sources = snapshot_pairs(snapshot.sources());
+        let interfaces = snapshot_pairs(snapshot.interfaces());
         let validated =
-            validate_source_with_operation(file, source, operation).map_err(|diagnostics| {
-                match operation.check() {
+            validate_sources_with_interfaces_with_operation(&sources, &interfaces, operation)
+                .map_err(|diagnostics| match operation.check() {
                     Ok(()) => CompileError::Diagnostics(diagnostics),
                     Err(abort) => CompileError::from(abort),
-                }
-            })?;
+                })?;
         operation.check().map_err(CompileError::from)?;
-        let snapshot_digest = in_memory_snapshot_digest(&[(file, source)], &[]);
+        let snapshot_digest = in_memory_snapshot_digest(&sources, &interfaces);
         let compiled = compile_validated_to_ir(&validated);
         let artifact = vm_adapter::emit_compiled_artifact(&compiled, &snapshot_digest)
             .map_err(CompileError::from)?;
         operation.check().map_err(CompileError::from)?;
-        let built =
-            BuiltArtifact::from_bytecode(artifact, source_analysis(file, &snapshot_digest))?;
+        let built = BuiltArtifact::from_bytecode(
+            artifact,
+            source_set_analysis(&sources, &snapshot_digest),
+        )?;
         operation.check().map_err(CompileError::from)?;
         Ok(built)
     }
@@ -306,13 +340,10 @@ impl Compiler {
         sources: &[(&str, &str)],
         interfaces: &[(&str, &str)],
     ) -> Result<BuiltArtifact, CompileError> {
-        let validated = validate_sources_with_interfaces(sources, interfaces)
-            .map_err(CompileError::Diagnostics)?;
-        let snapshot_digest = in_memory_snapshot_digest(sources, interfaces);
-        let compiled = compile_validated_to_ir(&validated);
-        let artifact = vm_adapter::emit_compiled_artifact(&compiled, &snapshot_digest)
-            .map_err(CompileError::from)?;
-        BuiltArtifact::from_bytecode(artifact, source_set_analysis(sources, &snapshot_digest))
+        self.compile_snapshot(&FrontendInputSnapshot::from_sources(
+            sources.iter().copied(),
+            interfaces.iter().copied(),
+        ))
     }
 
     #[cfg(feature = "execution")]
@@ -322,22 +353,13 @@ impl Compiler {
         interfaces: &[(&str, &str)],
         operation: &OperationContext,
     ) -> Result<BuiltArtifact, CompileError> {
-        let validated =
-            validate_sources_with_interfaces_with_operation(sources, interfaces, operation)
-                .map_err(|diagnostics| match operation.check() {
-                    Ok(()) => CompileError::Diagnostics(diagnostics),
-                    Err(abort) => CompileError::from(abort),
-                })?;
-        operation.check().map_err(CompileError::from)?;
-        let snapshot_digest = in_memory_snapshot_digest(sources, interfaces);
-        let compiled = compile_validated_to_ir(&validated);
-        let artifact = vm_adapter::emit_compiled_artifact(&compiled, &snapshot_digest)
-            .map_err(CompileError::from)?;
-        operation.check().map_err(CompileError::from)?;
-        let built =
-            BuiltArtifact::from_bytecode(artifact, source_set_analysis(sources, &snapshot_digest))?;
-        operation.check().map_err(CompileError::from)?;
-        Ok(built)
+        self.compile_snapshot_with_operation(
+            &FrontendInputSnapshot::from_sources(
+                sources.iter().copied(),
+                interfaces.iter().copied(),
+            ),
+            operation,
+        )
     }
 
     #[cfg(feature = "execution")]
@@ -468,10 +490,6 @@ impl BuiltArtifact {
 }
 
 #[cfg(feature = "execution")]
-fn source_analysis(file: &str, snapshot_digest: &str) -> serde_json::Value {
-    source_set_analysis(&[(file, "")], snapshot_digest)
-}
-
 #[cfg(feature = "execution")]
 fn source_set_analysis(sources: &[(&str, &str)], snapshot_digest: &str) -> serde_json::Value {
     serde_json::json!({
@@ -480,6 +498,15 @@ fn source_set_analysis(sources: &[(&str, &str)], snapshot_digest: &str) -> serde
         "snapshot_digest": snapshot_digest,
         "sources": sources.iter().map(|(path, _)| *path).collect::<Vec<_>>(),
     })
+}
+
+#[cfg(feature = "execution")]
+fn snapshot_pairs(snapshot: &SourceSnapshot) -> Vec<(&str, &str)> {
+    snapshot
+        .files()
+        .iter()
+        .map(|file| (file.path(), file.text()))
+        .collect()
 }
 
 #[cfg(feature = "execution")]
@@ -1561,17 +1588,18 @@ fn main() -> Result<Unit, String> {
     #[test]
     fn module_interface_keeps_stable_external_symbol_and_preflights_signature() {
         let compiler = Compiler;
+        let input = FrontendInputSnapshot::from_sources(
+            [(
+                "main.rss",
+                "module app\nuse host.log.*\nfn main() -> Unit { emit(message: read \"ok\"); return Unit }",
+            )],
+            [(
+                "log.rssi",
+                "module host.log\npub fn emit(message: read String) -> Unit\n",
+            )],
+        );
         let package = compiler
-            .compile_with_interfaces(
-                &[(
-                    "main.rss",
-                    "module app\nuse host.log.*\nfn main() -> Unit { emit(message: read \"ok\"); return Unit }",
-                )],
-                &[(
-                    "log.rssi",
-                    "module host.log\npub fn emit(message: read String) -> Unit\n",
-                )],
-            )
+            .compile_snapshot(&input)
             .expect("compile external call");
         assert_eq!(package.external_imports().len(), 1);
         assert_eq!(package.external_imports()[0].symbol, "host.log.emit");

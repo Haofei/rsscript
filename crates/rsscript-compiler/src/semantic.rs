@@ -3,8 +3,8 @@
 #[allow(unused_imports)]
 pub(crate) use rsscript_semantics::ResolvedType;
 pub use rsscript_semantics::{
-    AnalysisResult, FrontendCompletion, FrontendStopReason, SemanticDatabase, SourceFileSnapshot,
-    SourceSnapshot, ValidatedProgram,
+    AnalysisResult, FrontendCompletion, FrontendInputSnapshot, FrontendStopReason,
+    SemanticDatabase, SourceFileSnapshot, SourceSnapshot, ValidatedProgram,
 };
 
 #[cfg(test)]

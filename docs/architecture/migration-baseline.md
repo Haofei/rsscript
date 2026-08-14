@@ -545,7 +545,10 @@ mechanical acceptance condition holds.
 - [ ] **S05 — Finish compiler purity.** Compiler input is an explicit immutable
   `SourceSet`/`WorkspaceSnapshot`; package traversal, filesystem locking,
   temporary files, compression, Artifact persistence, review/risk, and Rust AOT
-  lowering live outside the compiler dependency closure.
+  lowering live outside the compiler dependency closure. The reviewed SDK now
+  exposes `FrontendInputSnapshot` and `Compiler::compile_snapshot`, keeping
+  in-memory source/interface capture separate from package-path convenience
+  APIs; package traversal and persistence remain to be moved.
   - [ ] **S05.1 — Move workspace capture to `rsscript-workspace-loader`.** Move
     directory traversal, manifest/dependency discovery, path normalization, and
     snapshot capture from compiler. The loader now exposes immutable

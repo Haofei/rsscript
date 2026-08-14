@@ -2,7 +2,7 @@
 
 use rsscript_compiler::{
     artifact::ArtifactVerifier,
-    compile::Compiler,
+    compile::{Compiler, FrontendInputSnapshot},
     report::TerminationReason,
     runtime::{ExecutionRequest, RunLimits, Runtime, TracePolicy},
 };
@@ -10,7 +10,8 @@ use rsscript_compiler::{
 const SOURCE: &str = include_str!("../script/main.rss");
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let artifact = Compiler.compile("main.rss", SOURCE)?;
+    let input = FrontendInputSnapshot::single("main.rss", SOURCE);
+    let artifact = Compiler.compile_snapshot(&input)?;
     let verified = ArtifactVerifier.verify(artifact)?;
 
     // The program imports no external symbols, so the empty registry is a

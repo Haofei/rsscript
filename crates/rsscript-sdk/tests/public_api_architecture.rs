@@ -156,6 +156,10 @@ fn public_api_inventory_covers_the_current_migration_surface() {
             "stable façade module `{module}` is missing"
         );
     }
+    assert!(
+        source.contains("pub use rsscript_compiler::FrontendInputSnapshot"),
+        "the reviewed compile façade must expose the immutable frontend input boundary"
+    );
 
     for forbidden in [
         "pub use rsscript_vm::JitPlan",

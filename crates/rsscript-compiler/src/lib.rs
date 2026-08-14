@@ -141,8 +141,8 @@ pub use rust_lower::{
     remap_rustc_diagnostic_json_lines, write_generated_rust_package,
 };
 pub use semantic::{
-    AnalysisResult, FrontendCompletion, FrontendStopReason, SemanticDatabase, SourceFileSnapshot,
-    SourceSnapshot, ValidatedProgram,
+    AnalysisResult, FrontendCompletion, FrontendInputSnapshot, FrontendStopReason,
+    SemanticDatabase, SourceFileSnapshot, SourceSnapshot, ValidatedProgram,
 };
 pub use symbols::{
     Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,

@@ -124,6 +124,53 @@ impl SourceSnapshot {
     }
 }
 
+/// Immutable source and interface inputs for one frontend operation.
+///
+/// The compiler consumes this value without reading paths, the current
+/// directory, or any host service. Workspace/package loaders may construct it
+/// after capture, while embedders can construct it directly from in-memory
+/// buffers. Source and interface files remain separate because interfaces
+/// contribute external semantic contracts but are not executable source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrontendInputSnapshot {
+    sources: SourceSnapshot,
+    interfaces: SourceSnapshot,
+}
+
+impl FrontendInputSnapshot {
+    pub fn single(path: &str, source: &str) -> Self {
+        Self {
+            sources: SourceSnapshot::single(path, source),
+            interfaces: SourceSnapshot::from_sources(std::iter::empty()),
+        }
+    }
+
+    pub fn from_sources<'a>(
+        sources: impl IntoIterator<Item = (&'a str, &'a str)>,
+        interfaces: impl IntoIterator<Item = (&'a str, &'a str)>,
+    ) -> Self {
+        Self {
+            sources: SourceSnapshot::from_sources(sources),
+            interfaces: SourceSnapshot::from_sources(interfaces),
+        }
+    }
+
+    pub fn from_snapshots(sources: SourceSnapshot, interfaces: SourceSnapshot) -> Self {
+        Self {
+            sources,
+            interfaces,
+        }
+    }
+
+    pub fn sources(&self) -> &SourceSnapshot {
+        &self.sources
+    }
+
+    pub fn interfaces(&self) -> &SourceSnapshot {
+        &self.interfaces
+    }
+}
+
 /// The outcome of adding or replacing one session-owned source file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SourceUpdate {
@@ -777,6 +824,18 @@ mod tests {
             snapshot.files()[0].text(),
             "fn main() -> Unit { return Unit }\n"
         );
+    }
+
+    #[test]
+    fn frontend_input_snapshot_keeps_source_and_interface_roles_separate() {
+        let input = FrontendInputSnapshot::from_sources(
+            [("main.rss", "fn main() -> Unit { return Unit }")],
+            [("host.rssi", "module host\npub fn value() -> Int")],
+        );
+        assert_eq!(input.sources().files()[0].path(), "main.rss");
+        assert_eq!(input.interfaces().files()[0].path(), "host.rssi");
+        assert_eq!(input.sources().files()[0].file_id(), FileId::new(0));
+        assert_eq!(input.interfaces().files()[0].file_id(), FileId::new(0));
     }
 
     #[test]
