@@ -206,6 +206,13 @@ pub mod project {
             self.workspace.content_digest()
         }
 
+        /// Digest of exactly the source and interface files passed to the
+        /// in-memory compiler. Unlike [`Self::content_digest`], this excludes
+        /// test-only files retained by the project snapshot.
+        pub fn frontend_digest(&self) -> String {
+            frontend_snapshot_digest(&self.frontend)
+        }
+
         pub fn files(&self) -> &[rsscript_workspace_loader::WorkspaceSourceFile] {
             self.workspace.files()
         }
@@ -303,6 +310,18 @@ pub mod project {
                     message: error.to_string(),
                 })?;
             BuiltArtifact::from_bytecode(artifact, analysis)
+        }
+
+        /// Build exactly the source/interface snapshot captured by
+        /// [`Self::capture_frontend_from`]. This is the project-level route
+        /// that does not reread paths or reconstruct compiler inputs.
+        pub fn build_captured(
+            &self,
+            snapshot: &CapturedProjectSnapshot,
+        ) -> Result<BuiltArtifact, CompileError> {
+            let built = Compiler.compile_snapshot(snapshot.frontend())?;
+            debug_assert_eq!(built.snapshot_digest(), snapshot.frontend_digest());
+            Ok(built)
         }
 
         pub fn build_with_operation(
@@ -620,6 +639,13 @@ fn snapshot_pairs(snapshot: &SourceSnapshot) -> Vec<(&str, &str)> {
         .collect::<Vec<_>>();
     pairs.sort_unstable();
     pairs
+}
+
+#[cfg(feature = "project")]
+fn frontend_snapshot_digest(snapshot: &FrontendInputSnapshot) -> String {
+    let sources = snapshot_pairs(snapshot.sources());
+    let interfaces = snapshot_pairs(snapshot.interfaces());
+    in_memory_snapshot_digest(&sources, &interfaces)
 }
 
 #[cfg(feature = "execution")]
@@ -1606,10 +1632,11 @@ mod tests {
                 .iter()
                 .any(|file| file.path() == "root/interfaces/host.rssi")
         );
-        let built = Compiler
-            .compile_snapshot(captured.frontend())
+        let built = project
+            .build_captured(&captured)
             .expect("pure compiler accepts the loader-captured input");
         assert!(!built.artifact_bytes().is_empty());
+        assert_eq!(built.snapshot_digest(), captured.frontend_digest());
     }
 
     #[test]

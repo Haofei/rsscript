@@ -581,7 +581,9 @@ mechanical acceptance condition holds.
     collide across same-named dependency files. The SDK project adapter now
     exposes explicit-base loader capture as a separate immutable
     `FrontendInputSnapshot` path, and a focused test proves that snapshot feeds
-    the pure in-memory compiler without absolute paths. Compiler package
+    the pure in-memory compiler without absolute paths. Its frontend digest now
+    binds exactly the source/interface input used by `build_captured`, separate
+    from the broader package digest that can include tests. Compiler package
     callers that also require native/review compatibility remain to be migrated.
   - [ ] **S05.2 — Move Artifact persistence to an adapter.** Relocate locks,
     atomic writes, temporary files, compression, and artifact-store policy out

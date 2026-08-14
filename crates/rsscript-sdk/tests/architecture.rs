@@ -3118,6 +3118,8 @@ fn mir_codegen_is_a_vm_independent_verified_bytecode_boundary() {
         "pub struct ProjectCompiler",
         "pub struct CapturedProjectSnapshot",
         "pub fn capture_frontend_from",
+        "pub fn frontend_digest",
+        "pub fn build_captured",
         "WorkspaceLoader::default()",
         "load_workspace_snapshot",
         "pub fn snapshot",
