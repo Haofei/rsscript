@@ -525,9 +525,10 @@ mechanical acceptance condition holds.
     revision-invalidated workspace query with cancellation/deadline handling.
     Complete workspace diagnostics also use a session-owned, immutable
     source/interface snapshot cache with revision invalidation. Their explicit
-    `WorkspaceDiagnosticQuery` contract now lives in `rsscript-semantics`, so
-    the language service is only a client of the session query and cannot
-    define a competing callback protocol. The complete analyzer and check
+    `CompilationSession::semantic_workspace_diagnostics_with_operation` query
+    now lives in `rsscript-semantics`, so the language service is only a client
+    of the session query and cannot select or define a competing callback
+    protocol. The complete analyzer and check
     implementation now live in `rsscript-semantics`; `rsscript-compiler` only
     re-exports the frontend entry points for package/AOT compatibility callers.
     Resolve/type and dependency-precise semantic-diagnostic invalidation remain

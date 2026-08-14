@@ -2891,14 +2891,14 @@ fn namespace_isolation_and_workspace_hir_are_semantic_queries() {
 fn workspace_diagnostic_query_contract_is_semantic_owned() {
     let root = workspace_root();
     let semantics = read(&root.join("crates/rsscript-semantics/src/database.rs"));
-    assert!(semantics.contains("pub trait WorkspaceDiagnosticQuery"));
-    assert!(semantics.contains("query: &dyn WorkspaceDiagnosticQuery"));
+    assert!(semantics.contains("pub fn semantic_workspace_diagnostics_with_operation"));
+    assert!(semantics.contains("analyze_frontend_input_snapshot_with_operation"));
 
     let language_service = read(&root.join("crates/rsscript-language-service/src/lib.rs"));
-    assert!(language_service.contains("Arc<dyn WorkspaceDiagnosticQuery>"));
+    assert!(language_service.contains("semantic_workspace_diagnostics_with_operation"));
     assert!(
-        !language_service.contains("trait WorkspaceDiagnosticAnalyzer"),
-        "language-service must consume the semantic query contract rather than declare a competing one"
+        !language_service.contains("WorkspaceDiagnosticQuery"),
+        "language-service must not select or inject a competing semantic query"
     );
 }
 

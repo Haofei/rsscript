@@ -18,8 +18,7 @@ pub use rsscript_diagnostics::{
 };
 pub use rsscript_semantics::{
     CompilationSession, Definition, FrontendInputSnapshot, Reference, RssDocumentSymbol,
-    SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup, WorkspaceDiagnosticQuery,
-    analyze_frontend_input_snapshot_with_operation, document_symbols,
+    SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup, document_symbols,
     document_symbols_from_program, symbol_index, symbol_index_from_program,
 };
 pub use rsscript_syntax::{format_source, lint_source};
@@ -47,7 +46,6 @@ pub struct DocumentSnapshot {
 pub struct LanguageService {
     documents: BTreeMap<String, Document>,
     frontend: CompilationSession,
-    analyzer: Arc<dyn WorkspaceDiagnosticQuery>,
     lint_cache: BTreeMap<(String, u64), Arc<[Diagnostic]>>,
     format_cache: BTreeMap<(String, u64), Arc<str>>,
     symbol_cache: BTreeMap<(String, u64), Arc<SymbolIndex>>,
@@ -56,6 +54,12 @@ pub struct LanguageService {
     cache_hits: u64,
     cache_misses: u64,
     invalidations: u64,
+}
+
+impl Default for LanguageService {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -123,14 +127,13 @@ impl From<rsscript_operation::OperationAbort> for LanguageServiceError {
 }
 
 impl LanguageService {
-    /// Create a language service over one explicit semantic diagnostic
-    /// integration. Editor clients retain only document overlays and LSP
-    /// protocol adaptation; all multi-file inputs remain session-owned.
-    pub fn new(analyzer: impl WorkspaceDiagnosticQuery + 'static) -> Self {
+    /// Create a language service over the semantic-owned workspace query.
+    /// Editor clients retain only document overlays and LSP protocol
+    /// adaptation; all multi-file inputs and diagnostics remain session-owned.
+    pub fn new() -> Self {
         Self {
             documents: BTreeMap::new(),
             frontend: CompilationSession::default(),
-            analyzer: Arc::new(analyzer),
             lint_cache: BTreeMap::new(),
             format_cache: BTreeMap::new(),
             symbol_cache: BTreeMap::new(),
@@ -291,7 +294,7 @@ impl LanguageService {
         let before = self.frontend.stats();
         let diagnostics = self
             .frontend
-            .workspace_diagnostics_with_operation(operation, self.analyzer.as_ref())
+            .semantic_workspace_diagnostics_with_operation(operation)
             .map_err(LanguageServiceError::from)?;
         let after = self.frontend.stats();
         if record_query_stats {
@@ -492,18 +495,10 @@ fn retain_other_paths<V>(cache: &mut BTreeMap<(String, u64), V>, path: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rsscript_semantics::analyze_frontend_input_snapshot_with_operation;
     use std::time::Duration;
 
-    fn compiler_analyzer(
-        input: &FrontendInputSnapshot,
-        operation: &OperationContext,
-    ) -> Result<Vec<Diagnostic>, rsscript_operation::OperationAbort> {
-        analyze_frontend_input_snapshot_with_operation(input, operation)
-    }
-
     fn service() -> LanguageService {
-        LanguageService::new(compiler_analyzer)
+        LanguageService::new()
     }
 
     #[test]

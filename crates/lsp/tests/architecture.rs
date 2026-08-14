@@ -44,13 +44,10 @@ fn lsp_depends_on_the_language_service_boundary() {
 fn lsp_composes_the_semantic_diagnostic_query() {
     let diagnostics = read("diagnostics.rs");
     assert!(diagnostics.contains("workspace_diagnostics"));
-    assert!(diagnostics.contains("fn semantic_workspace_diagnostics"));
-    assert_eq!(
-        diagnostics
-            .matches("rsscript_language_service::analyze_frontend_input_snapshot_with_operation")
-            .count(),
-        1,
-        "the LSP must use the semantic query through its single session-snapshot adapter"
+    assert!(diagnostics.contains("LanguageService::new()"));
+    assert!(
+        !diagnostics.contains("analyze_frontend_input_snapshot_with_operation"),
+        "the LSP must not select a semantic implementation directly"
     );
     for forbidden in [
         "analyze_source_with_interfaces_result_with_operation",
@@ -60,7 +57,7 @@ fn lsp_composes_the_semantic_diagnostic_query() {
     ] {
         assert!(
             !diagnostics.contains(forbidden),
-            "the LSP diagnostic adapter must forward its immutable session snapshot, not reconstruct `{forbidden}`"
+            "the LSP must not reconstruct semantic input `{forbidden}`"
         );
     }
     assert!(

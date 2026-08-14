@@ -434,12 +434,10 @@ pub fn analyze_sources_with_interfaces_result_with_operation(
 /// Analyze the complete immutable source/interface input captured by a
 /// [`FrontendInputSnapshot`].
 ///
-/// This is the sole transitional compiler adapter for session-owned workspace
-/// diagnostics. The language service and LSP must pass the snapshot through
-/// unchanged rather than each rebuilding source/interface vectors and
-/// independently deciding interface visibility. Once full diagnostic
-/// orchestration moves into `rsscript-semantics`, this adapter can be replaced
-/// at one composition boundary without changing editor request handling.
+/// The language service and LSP pass an immutable snapshot through unchanged
+/// rather than rebuilding source/interface vectors and independently deciding
+/// interface visibility. [`CompilationSession`] owns the cached query that
+/// invokes this semantic implementation.
 pub fn analyze_frontend_input_snapshot_with_operation(
     input: &FrontendInputSnapshot,
     operation: &OperationContext,

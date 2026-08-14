@@ -676,6 +676,19 @@ impl CompilationSession {
         Ok(diagnostics)
     }
 
+    /// Diagnose the current immutable workspace through the semantic-owned
+    /// frontend implementation. Editor and CLI clients use this entry point;
+    /// they cannot choose or inject a second diagnostic pipeline.
+    pub fn semantic_workspace_diagnostics_with_operation(
+        &mut self,
+        operation: &OperationContext,
+    ) -> Result<Arc<[Diagnostic]>, OperationAbort> {
+        self.workspace_diagnostics_with_operation(
+            operation,
+            &crate::analyze_frontend_input_snapshot_with_operation,
+        )
+    }
+
     /// Return the parsed workspace module graph for the current immutable
     /// source/interface revision set. Interface files without an explicit
     /// `module` declaration keep the historical filename fallback, so all
