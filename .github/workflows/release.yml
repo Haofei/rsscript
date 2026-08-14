@@ -68,18 +68,6 @@ jobs:
           RSSCRIPT_FULL_BACKEND_PARITY=1 cargo test --locked -p rsscript-sdk --test runtime -- --test-threads=1
           RSSCRIPT_FULL_BACKEND_PARITY=1 cargo test --locked -p rsscript-sdk --test differential -- --test-threads=1
 
-      - name: Validate release self-host corpus
-        run: |
-          RSS_SELFHOST_TIER=2 cargo test --locked -p rsscript-compiler --release --lib \
-            selfhost_parity::lexer_parity_corpus \
-            -- --ignored --exact --nocapture --test-threads=1
-          RSS_SELFHOST_PARSE_TIER=1 cargo test --locked -p rsscript-compiler --release --lib \
-            selfhost_parity::parser_parity_corpus \
-            -- --ignored --exact --nocapture --test-threads=1
-          cargo test --locked -p rsscript-compiler --release --lib \
-            selfhost_parity::checker_parity_corpus \
-            -- --ignored --exact --nocapture --test-threads=1
-
   release-build:
     needs: [release-validation]
     name: Build ${{ matrix.target }}

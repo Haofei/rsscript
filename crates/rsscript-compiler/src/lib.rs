@@ -16,7 +16,7 @@ mod editor_grammar;
 mod formatter;
 mod generate;
 mod hir;
-#[cfg(all(test, feature = "execution"))]
+#[cfg(all(test, feature = "execution", feature = "selfhost-parity"))]
 mod interface_metadata;
 mod interfaces;
 mod lexer {
@@ -31,7 +31,7 @@ mod review;
 mod runtime_abi;
 #[cfg(feature = "execution")]
 mod rust_lower;
-#[cfg(all(test, feature = "execution"))]
+#[cfg(all(test, feature = "execution", feature = "selfhost-parity"))]
 mod selfhost_parity;
 mod semantic;
 mod symbols;
@@ -42,7 +42,7 @@ mod test_interfaces;
 mod text_util {
     pub(crate) use rsscript_text::*;
 }
-#[cfg(all(test, feature = "execution"))]
+#[cfg(all(test, feature = "execution", feature = "selfhost-parity"))]
 mod vm_adapter {
     use rsscript_vm::{EvalError, RegVmExecutable};
 
@@ -61,7 +61,7 @@ mod vm_adapter {
     }
 }
 
-#[cfg(all(test, feature = "execution"))]
+#[cfg(all(test, feature = "execution", feature = "selfhost-parity"))]
 use rsscript_vm::RegVmExecutable;
 
 pub use analyzer::{

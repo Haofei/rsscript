@@ -50,6 +50,9 @@ tempfile = "3"
 default = []
 execution = ["dep:rsscript-lowering", "dep:rsscript-mir", "dep:rsscript-provider-api"]
 language-service = []
+# The RSS-written frontend is a research parity harness.  Keep it out of Core
+# test builds; the dedicated self-host workflow opts in explicitly.
+selfhost-parity = []
 # Native (Cranelift) baseline JIT for the integer/control core. Off by default so
 # normal builds/tests don't pull in the codegen dependency; enable for the Rust
 # differential/benchmark harnesses and force-JIT CI.

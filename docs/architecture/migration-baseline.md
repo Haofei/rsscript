@@ -112,6 +112,8 @@ mechanical acceptance condition holds.
   excludes them, and CI invokes their maintenance gate explicitly. Self-host and
   native package source remain migration/test fixtures, so the milestone stays
   open until those assets have an explicit external maintenance boundary.
+  Self-host parity is now additionally feature-gated and only enabled by its
+  dedicated workflow; it no longer participates in default Core test builds.
   The generated-program differential has also moved from the SDK test target to
   the `rss-testgen` experiment, so default Core tests no longer compile its
   experiment dependency.
