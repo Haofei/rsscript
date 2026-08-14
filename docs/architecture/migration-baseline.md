@@ -904,13 +904,15 @@ mechanical acceptance condition holds.
       list and index value IDs to a verifier-checked v1 list read. The
       dual-path corpus proves typed list-local indexing executes identically;
       other indexing shapes remain fail-closed.
-  - [x] **V02.4 — Switch SDK build to codegen-vm.** Reviewed SDK source,
-    interface, and package builds now emit their supported MIR capability
-    directly through `codegen-vm` into a provider-neutral Artifact, without
-    constructing a VM executable. The legacy executable-IR fallback remains
-    confined to the opt-in compatibility adapter for capabilities that MIR
-    intentionally rejects; architecture tests reject VM compile-helper calls
-    from the reviewed build methods.
+  - [x] **V02.4 — Switch reviewed builds to the compiler bytecode boundary.**
+    SDK source, interface, and package builds delegate checked HIR → MIR →
+    `codegen-vm` Artifact emission to the compiler's VM-free `bytecode`
+    feature, then package the resulting provider-neutral Artifact. The SDK no
+    longer owns a normal VM compile adapter or selects MIR/codegen crates
+    directly. The legacy executable-IR fallback remains confined to the
+    opt-in compatibility adapter for capabilities that MIR intentionally
+    rejects; architecture tests reject VM compile-helper calls from reviewed
+    build methods.
 - [ ] **V03 — Make the verifier construct the only executable program type.**
   Untrusted bytes decode and verify to a private-field `VerifiedModule`; public
   APIs cannot construct or mutate it and VM constructors accept nothing else.

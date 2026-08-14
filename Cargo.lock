@@ -1805,6 +1805,8 @@ dependencies = [
  "rsscript-abi-model",
  "rsscript-artifact-store",
  "rsscript-build-support",
+ "rsscript-bytecode",
+ "rsscript-codegen-vm",
  "rsscript-diagnostics",
  "rsscript-interface-catalog",
  "rsscript-lowering",

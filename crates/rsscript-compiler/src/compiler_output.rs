@@ -1,3 +1,6 @@
+use std::error::Error;
+use std::fmt;
+
 use sha2::{Digest, Sha256};
 
 use crate::{Diagnostic, ValidatedProgram, validate_source};
@@ -15,6 +18,29 @@ pub struct CompiledIr {
     source_hash: String,
     interface_catalog_digest: String,
 }
+
+/// Failure while lowering checked compiler output into the provider-neutral
+/// reference-bytecode Artifact. The compiler owns this boundary; the VM only
+/// receives the Artifact after a separate verifier pass.
+#[cfg(feature = "bytecode")]
+#[derive(Debug)]
+pub enum BytecodeCompileError {
+    Mir(rsscript_lowering::MirLoweringError),
+    Emit(rsscript_codegen_vm::CodegenError),
+}
+
+#[cfg(feature = "bytecode")]
+impl fmt::Display for BytecodeCompileError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Mir(error) => write!(formatter, "cannot lower checked HIR to MIR: {error}"),
+            Self::Emit(error) => write!(formatter, "cannot emit MIR bytecode: {error}"),
+        }
+    }
+}
+
+#[cfg(feature = "bytecode")]
+impl Error for BytecodeCompileError {}
 
 impl CompiledIr {
     /// Lowers the checked executable representation into the frontend-free
@@ -86,6 +112,47 @@ pub fn compile_validated_to_ir(validated: &ValidatedProgram) -> CompiledIr {
         source_hash: source_hash(validated),
         interface_catalog_digest: crate::interfaces::interface_catalog_digest(),
     }
+}
+
+/// Compile a validated program directly into a provider-neutral bytecode
+/// Artifact. This is intentionally independent of the VM interpreter: callers
+/// must still pass the resulting bytes through `BytecodeVerifier` before
+/// execution.
+#[cfg(feature = "bytecode")]
+pub fn compile_validated_to_bytecode(
+    validated: &ValidatedProgram,
+    snapshot_digest: &str,
+) -> Result<rsscript_bytecode::BytecodeArtifact, BytecodeCompileError> {
+    let compiled = compile_validated_to_ir(validated);
+    compile_ir_to_bytecode(&compiled, snapshot_digest)
+}
+
+/// Emit bytecode from already-owned compiler output without constructing a VM
+/// executable. Kept public for project/package adapters that have already
+/// captured an immutable snapshot.
+#[cfg(feature = "bytecode")]
+pub fn compile_ir_to_bytecode(
+    compiled: &CompiledIr,
+    snapshot_digest: &str,
+) -> Result<rsscript_bytecode::BytecodeArtifact, BytecodeCompileError> {
+    let mir = compiled
+        .checked_hir_mir()
+        .map_err(BytecodeCompileError::Mir)?;
+    let mut artifact = rsscript_codegen_vm::emit_artifact(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+        env!("CARGO_PKG_VERSION"),
+    )
+    .map_err(BytecodeCompileError::Emit)?;
+    artifact
+        .bind_snapshot_digest(snapshot_digest)
+        .map_err(|error| {
+            BytecodeCompileError::Emit(rsscript_codegen_vm::CodegenError::Bytecode(
+                error.to_string(),
+            ))
+        })?;
+    Ok(artifact)
 }
 
 #[cfg(feature = "package")]

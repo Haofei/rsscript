@@ -81,6 +81,10 @@ pub use analyzer::{
 };
 #[cfg(all(feature = "lowering", feature = "package"))]
 pub use compiler_output::compile_package_input_to_ir;
+#[cfg(feature = "bytecode")]
+pub use compiler_output::{
+    BytecodeCompileError, compile_ir_to_bytecode, compile_validated_to_bytecode,
+};
 #[cfg(feature = "lowering")]
 pub use compiler_output::{CompiledIr, compile_source_to_ir, compile_validated_to_ir};
 pub use core_index::core_package_index_json;

@@ -2865,7 +2865,12 @@ fn lsp_dependency_closure_selects_frontend_only() {
             "LSP-excluded dependency `{dependency}` must remain optional"
         );
     }
-    for forbidden in ["rsscript-bytecode", "rsscript-vm"] {
+    assert_eq!(
+        compiler_manifest["dependencies"]["rsscript-bytecode"]["optional"].as_bool(),
+        Some(true),
+        "compiler bytecode emission must remain outside the language-service closure"
+    );
+    for forbidden in ["rsscript-vm"] {
         assert!(
             compiler_manifest["dependencies"].get(forbidden).is_none(),
             "compiler must not depend on execution crate `{forbidden}`"
@@ -3018,12 +3023,12 @@ fn mir_codegen_is_a_vm_independent_verified_bytecode_boundary() {
     ] {
         let build = function_source(&sdk, signature);
         assert!(
-            build.contains("vm_adapter::emit_compiled_artifact"),
-            "reviewed SDK build `{signature}` must emit an Artifact without a VM compile helper"
+            build.contains("compile_validated_to_bytecode"),
+            "reviewed SDK build `{signature}` must emit an Artifact through the compiler bytecode boundary"
         );
         assert!(
-            !build.contains("reg_vm_compile"),
-            "reviewed SDK build `{signature}` must not call a legacy VM compile helper"
+            !build.contains("vm_adapter") && !build.contains("reg_vm_compile"),
+            "reviewed SDK build `{signature}` must not call an SDK/VM compile helper"
         );
     }
     for signature in [
@@ -3281,7 +3286,21 @@ fn compiler_default_dependency_closure_is_host_neutral() {
         .filter_map(toml::Value::as_str)
         .collect::<BTreeSet<_>>();
     assert!(execution.contains("package"));
-    assert!(package.contains("lowering"));
+    assert!(package.contains("bytecode"));
+    let bytecode = manifest["features"]["bytecode"]
+        .as_array()
+        .expect("compiler bytecode feature should be declared")
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .collect::<BTreeSet<_>>();
+    assert!(bytecode.contains("lowering"));
+    for dependency in ["rsscript-bytecode", "rsscript-codegen-vm"] {
+        let feature = format!("dep:{dependency}");
+        assert!(
+            bytecode.contains(feature.as_str()),
+            "bytecode feature must explicitly select `{dependency}`"
+        );
+    }
     for dependency in [
         "rsscript-lowering",
         "rsscript-mir",
@@ -3325,7 +3344,17 @@ fn compiler_default_dependency_closure_is_host_neutral() {
         .iter()
         .filter_map(toml::Value::as_str)
         .collect::<BTreeSet<_>>();
-    assert!(sdk_execution.contains("rsscript_compiler/lowering"));
+    assert!(sdk_execution.contains("rsscript_compiler/bytecode"));
+    for removed in [
+        "dep:rsscript-codegen-vm",
+        "dep:rsscript-lowering",
+        "dep:rsscript-mir",
+    ] {
+        assert!(
+            !sdk_execution.contains(removed),
+            "reviewed SDK execution must use compiler bytecode rather than `{removed}`"
+        );
+    }
     assert!(
         !sdk_execution.contains("rsscript_compiler/package"),
         "reviewed in-memory SDK execution must not select compiler package capture"

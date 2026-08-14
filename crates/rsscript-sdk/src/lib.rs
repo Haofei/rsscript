@@ -64,8 +64,9 @@ pub use rsscript_compiler::{
     PackageTreeSummary, PreparedPackage, RemappedRustcDiagnostic, ReviewFix, ReviewMap,
     ReviewMapCategorySummary, ReviewMapClassification, ReviewMapFile, ReviewMapFileRisk,
     ReviewMapRegion, ReviewMapSummary, ReviewRisk, SymbolInventoryEntry, WorkspaceSnapshot,
-    analyze_package_dir, check_package_dir, compile_package_input_to_ir, compile_source_to_ir,
-    compile_validated_to_ir, diff_package_dirs, diff_package_locks, format_package_analysis_json,
+    analyze_package_dir, check_package_dir, compile_ir_to_bytecode, compile_package_input_to_ir,
+    compile_source_to_ir, compile_validated_to_bytecode, compile_validated_to_ir,
+    diff_package_dirs, diff_package_locks, format_package_analysis_json,
     format_package_check_human, format_package_check_json, format_package_diff_human,
     format_package_diff_json, format_package_lock_diff_human, format_package_lock_diff_json,
     format_package_lock_json, format_package_lock_toml, format_package_metadata_human,
@@ -105,7 +106,7 @@ pub use rsscript_vm::{
 };
 #[cfg(feature = "execution")]
 mod semantic_diff;
-#[cfg(feature = "execution")]
+#[cfg(feature = "compatibility")]
 #[allow(dead_code)]
 mod vm_adapter;
 #[cfg(feature = "execution")]
@@ -129,10 +130,6 @@ use std::fmt;
 use std::path::Path;
 #[cfg(feature = "execution")]
 use std::time::{Duration, Instant};
-#[cfg(feature = "execution")]
-#[cfg(not(feature = "compatibility"))]
-#[allow(unused_imports)]
-use vm_adapter::*;
 #[cfg(feature = "compatibility")]
 pub use vm_adapter::{
     reg_vm_compile_mir, reg_vm_compile_package, reg_vm_compile_package_input,
@@ -228,8 +225,8 @@ pub mod project {
             }
             let compiled = compile_package_input_to_ir(snapshot.lowering_input())
                 .map_err(CompileError::Diagnostics)?;
-            let artifact = vm_adapter::emit_compiled_artifact(&compiled, snapshot.digest())
-                .map_err(CompileError::from)?;
+            let artifact = compile_ir_to_bytecode(&compiled, snapshot.digest())
+                .map_err(bytecode_compile_error)?;
             analysis.module_digest = Some(artifact.header.executable_hash.clone());
             let analysis =
                 serde_json::to_value(&analysis).map_err(|error| CompileError::Package {
@@ -398,9 +395,8 @@ impl Compiler {
         let validated = validate_sources_with_interfaces(&sources, &interfaces)
             .map_err(CompileError::Diagnostics)?;
         let snapshot_digest = in_memory_snapshot_digest(&sources, &interfaces);
-        let compiled = compile_validated_to_ir(&validated);
-        let artifact = vm_adapter::emit_compiled_artifact(&compiled, &snapshot_digest)
-            .map_err(CompileError::from)?;
+        let artifact = compile_validated_to_bytecode(&validated, &snapshot_digest)
+            .map_err(bytecode_compile_error)?;
         BuiltArtifact::from_bytecode(artifact, source_set_analysis(&sources, &snapshot_digest))
     }
 
@@ -433,9 +429,8 @@ impl Compiler {
                 })?;
         operation.check().map_err(CompileError::from)?;
         let snapshot_digest = in_memory_snapshot_digest(&sources, &interfaces);
-        let compiled = compile_validated_to_ir(&validated);
-        let artifact = vm_adapter::emit_compiled_artifact(&compiled, &snapshot_digest)
-            .map_err(CompileError::from)?;
+        let artifact = compile_validated_to_bytecode(&validated, &snapshot_digest)
+            .map_err(bytecode_compile_error)?;
         operation.check().map_err(CompileError::from)?;
         let built = BuiltArtifact::from_bytecode(
             artifact,
@@ -474,6 +469,14 @@ impl Compiler {
             ),
             operation,
         )
+    }
+}
+
+#[cfg(feature = "execution")]
+fn bytecode_compile_error(error: impl fmt::Display) -> CompileError {
+    CompileError::Bytecode {
+        code: CompileErrorCode::Bytecode,
+        message: error.to_string(),
     }
 }
 
