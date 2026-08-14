@@ -268,6 +268,32 @@ fn workspace_tiers_are_exhaustive_and_define_default_members() {
 }
 
 #[test]
+fn selfhost_parity_is_an_explicit_research_feature_not_a_release_gate() {
+    let root = workspace_root();
+    let compiler_manifest = read(&root.join("crates/rsscript-compiler/Cargo.toml"));
+    let compiler = read(&root.join("crates/rsscript-compiler/src/lib.rs"));
+    let selfhost_workflow = read(&root.join(".github/workflows/selfhost.yml"));
+    let release_workflow = read(&root.join(".github/workflows/release.yml"));
+
+    assert!(
+        compiler_manifest.contains("selfhost-parity = []"),
+        "the Research harness must require an explicit compiler feature"
+    );
+    assert!(
+        compiler.contains("feature = \"selfhost-parity\""),
+        "self-host test modules must be gated at their compilation boundary"
+    );
+    assert!(
+        selfhost_workflow.contains("--features execution,selfhost-parity"),
+        "the dedicated Research workflow must opt in explicitly"
+    );
+    assert!(
+        !release_workflow.contains("selfhost_parity::"),
+        "Research parity must not block the supported release path"
+    );
+}
+
+#[test]
 fn root_workspace_excludes_experimental_packages() {
     let root = workspace_root();
     let metadata = cargo_metadata(&root);
