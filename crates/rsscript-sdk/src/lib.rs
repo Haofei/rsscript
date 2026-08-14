@@ -240,12 +240,37 @@ pub mod project {
             base: &Path,
             package_dir: &Path,
         ) -> Result<CapturedProjectSnapshot, CompileError> {
-            let workspace = WorkspaceLoader::default()
-                .snapshot_from(base, package_dir)
-                .map_err(|error| CompileError::Package {
-                    code: CompileErrorCode::PackageSnapshot,
-                    message: error.to_string(),
-                })?;
+            self.capture_frontend_inner(base, package_dir, None)
+        }
+
+        /// Operation-aware capture that keeps cancellation and deadline checks
+        /// in the loader boundary before immutable frontend input is created.
+        pub fn capture_frontend_from_with_operation(
+            &self,
+            base: &Path,
+            package_dir: &Path,
+            operation: &OperationContext,
+        ) -> Result<CapturedProjectSnapshot, CompileError> {
+            self.capture_frontend_inner(base, package_dir, Some(operation))
+        }
+
+        fn capture_frontend_inner(
+            &self,
+            base: &Path,
+            package_dir: &Path,
+            operation: Option<&OperationContext>,
+        ) -> Result<CapturedProjectSnapshot, CompileError> {
+            let loader = WorkspaceLoader::default();
+            let workspace = match operation {
+                Some(operation) => {
+                    loader.snapshot_from_with_operation(base, package_dir, operation)
+                }
+                None => loader.snapshot_from(base, package_dir),
+            }
+            .map_err(|error| CompileError::Package {
+                code: CompileErrorCode::PackageSnapshot,
+                message: error.to_string(),
+            })?;
             let sources = workspace
                 .files()
                 .iter()
@@ -349,8 +374,8 @@ pub mod project {
         }
 
         pub fn compile_package(&self, path: &Path) -> Result<BuiltArtifact, CompileError> {
-            let snapshot = self.snapshot(path)?;
-            self.build(&snapshot)
+            let captured = self.capture_frontend_from(path, Path::new("."))?;
+            self.build_captured(&captured)
         }
 
         pub fn compile_package_with_operation(
@@ -358,8 +383,9 @@ pub mod project {
             path: &Path,
             operation: &OperationContext,
         ) -> Result<BuiltArtifact, CompileError> {
-            let snapshot = self.snapshot_with_operation(path, operation)?;
-            self.build_with_operation(&snapshot, operation)
+            let captured =
+                self.capture_frontend_from_with_operation(path, Path::new("."), operation)?;
+            self.build_captured_with_operation(&captured, operation)
         }
     }
 }
@@ -1650,6 +1676,11 @@ mod tests {
             .expect("pure compiler accepts the loader-captured input");
         assert!(!built.artifact_bytes().is_empty());
         assert_eq!(built.snapshot_digest(), captured.frontend_digest());
+        let convenience = project
+            .compile_package(directory.path())
+            .expect("package convenience path captures once then uses the pure compiler");
+        assert_eq!(convenience.artifact_bytes(), built.artifact_bytes());
+        assert_eq!(convenience.snapshot_digest(), captured.frontend_digest());
         let cancellation = CancellationToken::new();
         cancellation.cancel();
         let cancelled = project

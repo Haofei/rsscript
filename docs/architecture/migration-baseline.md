@@ -583,7 +583,10 @@ mechanical acceptance condition holds.
     `FrontendInputSnapshot` path, and a focused test proves that snapshot feeds
     the pure in-memory compiler without absolute paths. Its frontend digest now
     binds exactly the source/interface input used by `build_captured`, separate
-    from the broader package digest that can include tests. Compiler package
+    from the broader package digest that can include tests. The normal project
+    `compile_package` path now captures through this loader and delegates to
+    the pure compiler; legacy snapshot/build APIs remain only for package
+    analysis/native compatibility. Compiler package
     callers that also require native/review compatibility remain to be migrated.
   - [ ] **S05.2 — Move Artifact persistence to an adapter.** Relocate locks,
     atomic writes, temporary files, compression, and artifact-store policy out

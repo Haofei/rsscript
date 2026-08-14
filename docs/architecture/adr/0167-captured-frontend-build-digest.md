@@ -20,6 +20,11 @@ remains available for package-level identity and may include test files.
 Its operation-aware counterpart preserves the same capture while forwarding
 cancellation and deadline checks into the pure compiler.
 
+`ProjectCompiler::compile_package` and its operation-aware counterpart now use
+this captured frontend route as their default product path. The older
+`snapshot`/`build` methods remain explicit compatibility APIs for package
+analysis, native authorization, and review migration work.
+
 ## Non-goals
 
 This does not migrate legacy package review, lock, native, or AOT compatibility
@@ -43,5 +48,7 @@ semantics change.
 The SDK project-loader test captures a package through the loader, builds the
 captured frontend input, and requires its Artifact digest to equal the
 frontend digest; it also proves a pre-cancelled build fails before work begins.
+The package convenience API must produce the same Artifact bytes as that
+explicit capture.
 Architecture tests require the explicit API to remain in the project adapter
 rather than the pure compiler façade.
