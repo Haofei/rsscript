@@ -104,6 +104,14 @@ pub enum MirInstruction {
         destination: ValueId,
         fields: Vec<(String, ValueId)>,
     },
+    /// Build a canonical `Result` variant without routing a language builtin
+    /// name through a backend. `ok = true` is `Ok(value)` and `ok = false` is
+    /// `Err(value)`.
+    MakeResult {
+        destination: ValueId,
+        ok: bool,
+        value: ValueId,
+    },
     /// Read an element from a resolved list value. The lowerer emits this only
     /// when checked type facts identify the base as `List<...>`.
     ListGet {
@@ -168,6 +176,14 @@ pub enum MirInstruction {
     Await {
         destination: ValueId,
         task: TaskId,
+    },
+    /// Unwrap an `Ok`/`Some` value, or short-circuit the current function with
+    /// its `Err`/`None` after releasing the listed lexical resources. The
+    /// cleanup edge is data in MIR rather than a backend-specific inference.
+    TryResult {
+        destination: ValueId,
+        source: ValueId,
+        cleanup: Vec<PlaceId>,
     },
     /// Cancel one child task. Cancellation is a lifecycle transition, not a
     /// best-effort backend hint.
@@ -815,6 +831,7 @@ fn instruction_definition(instruction: &MirInstruction) -> Option<ValueId> {
         | MirInstruction::MakeList { destination, .. }
         | MirInstruction::MakeMap { destination, .. }
         | MirInstruction::MakeObject { destination, .. }
+        | MirInstruction::MakeResult { destination, .. }
         | MirInstruction::ListGet { destination, .. }
         | MirInstruction::ListLen { destination, .. }
         | MirInstruction::ReadPlace { destination, .. }
@@ -822,7 +839,8 @@ fn instruction_definition(instruction: &MirInstruction) -> Option<ValueId> {
         | MirInstruction::TakePlace { destination, .. }
         | MirInstruction::Binary { destination, .. }
         | MirInstruction::Call { destination, .. }
-        | MirInstruction::Await { destination, .. } => Some(*destination),
+        | MirInstruction::Await { destination, .. }
+        | MirInstruction::TryResult { destination, .. } => Some(*destination),
         MirInstruction::WritePlace { .. }
         | MirInstruction::Retain { .. }
         | MirInstruction::Drop { .. }
@@ -848,6 +866,7 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         MirInstruction::MakeObject { fields, .. } => {
             fields.iter().map(|(_, value)| *value).collect()
         }
+        MirInstruction::MakeResult { value, .. } => vec![*value],
         MirInstruction::ListGet { list, index, .. } => vec![*list, *index],
         MirInstruction::ListLen { list, .. } => vec![*list],
         MirInstruction::AcquireResource { source, .. } => vec![*source],
@@ -880,6 +899,7 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         | MirInstruction::Await { .. }
         | MirInstruction::Cancel { .. }
         | MirInstruction::Join { .. } => Vec::new(),
+        MirInstruction::TryResult { source, .. } => vec![*source],
     }
 }
 
@@ -1019,6 +1039,7 @@ fn transfer_move_state(
         | MirInstruction::MakeList { .. }
         | MirInstruction::MakeMap { .. }
         | MirInstruction::MakeObject { .. }
+        | MirInstruction::MakeResult { .. }
         | MirInstruction::ListGet { .. }
         | MirInstruction::ListLen { .. }
         | MirInstruction::Binary { .. }
@@ -1026,6 +1047,12 @@ fn transfer_move_state(
         | MirInstruction::Cancel { .. }
         | MirInstruction::Join { .. }
         | MirInstruction::Discard { .. } => Ok(()),
+        MirInstruction::TryResult { cleanup, .. } => {
+            for place in cleanup {
+                check_live(*place, moved_places)?;
+            }
+            Ok(())
+        }
     }
 }
 
@@ -1074,6 +1101,7 @@ fn verify_instruction(
         | MirInstruction::MakeList { destination, .. }
         | MirInstruction::MakeMap { destination, .. }
         | MirInstruction::MakeObject { destination, .. }
+        | MirInstruction::MakeResult { destination, .. }
         | MirInstruction::ListGet { destination, .. }
         | MirInstruction::ListLen { destination, .. } => define(*destination, defined),
         MirInstruction::ReadPlace { destination, place } => {
@@ -1121,6 +1149,18 @@ fn verify_instruction(
             define(*destination, defined)?;
             used.push(*left);
             used.push(*right);
+            Ok(())
+        }
+        MirInstruction::TryResult {
+            destination,
+            source,
+            cleanup,
+        } => {
+            define(*destination, defined)?;
+            used.push(*source);
+            for place in cleanup {
+                check_live_place(*place, moved_places)?;
+            }
             Ok(())
         }
         MirInstruction::Call {

@@ -227,6 +227,11 @@ impl<'a> Interpreter<'a> {
                                 .collect::<Result<Vec<_>, MirExecutionError>>()?,
                         ));
                     }
+                    MirInstruction::MakeResult { .. } | MirInstruction::TryResult { .. } => {
+                        return Err(MirExecutionError::InvalidOperation(
+                            "Result operations are outside the scalar MIR oracle",
+                        ));
+                    }
                     MirInstruction::ListGet {
                         destination,
                         list,

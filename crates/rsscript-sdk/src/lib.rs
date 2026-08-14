@@ -1529,6 +1529,28 @@ fn main() -> Result<Unit, String> {
     }
 
     #[test]
+    fn mir_result_try_short_circuits_through_verified_bytecode() {
+        let source = r#"
+fn fail() -> Result<Int, String> {
+    return Err("boom")
+}
+
+fn main() -> Result<Int, String> {
+    let value = fail()?
+    return Ok(value)
+}
+"#;
+        let package = verified(Compiler.compile("result-try.rss", source).expect("compile"));
+        let report = Runtime::default()
+            .link(&package)
+            .expect("link")
+            .execute(ExecutionRequest::default());
+        assert_eq!(report.termination_reason, TerminationReason::Completed);
+        assert!(report.value.contains("Err"));
+        assert!(report.value.contains("boom"));
+    }
+
+    #[test]
     fn cancelled_execution_reports_request_to_observation_latency() {
         let package = verified(
             Compiler

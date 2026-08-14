@@ -283,6 +283,21 @@ fn lower_instruction(
                 ),
             ],
         )),
+        MirInstruction::MakeResult {
+            destination,
+            ok,
+            value,
+        } => {
+            let name = if *ok { "Ok" } else { "Err" };
+            code.push(instr(
+                "MakeVariant",
+                [
+                    ("dst", json!(value_reg(function, *destination))),
+                    ("layout", json!({"name": name, "field_names": ["value"]})),
+                    ("fields", json!([["value", value_reg(function, *value)]])),
+                ],
+            ));
+        }
         MirInstruction::ListGet {
             destination,
             list,
@@ -365,6 +380,26 @@ fn lower_instruction(
             [
                 ("dst", json!(value_reg(function, *destination))),
                 ("src", json!(task_reg(function, *task))),
+            ],
+        )),
+        MirInstruction::TryResult {
+            destination,
+            source,
+            cleanup,
+        } => code.push(instr(
+            "TryResult",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("src", json!(value_reg(function, *source))),
+                (
+                    "cleanup",
+                    json!(
+                        cleanup
+                            .iter()
+                            .map(|place| place_reg(*place))
+                            .collect::<Vec<_>>()
+                    ),
+                ),
             ],
         )),
         MirInstruction::Cancel { .. } => {

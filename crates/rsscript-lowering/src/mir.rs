@@ -646,11 +646,12 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             }
             checked::HirExpr::Index { .. } => self.unsupported("non-list checked HIR index"),
             checked::HirExpr::Call {
+                callee,
                 receiver,
                 args,
                 resolution,
                 ..
-            } => self.lower_direct_call(receiver.as_ref(), args, resolution),
+            } => self.lower_direct_call(callee, receiver.as_ref(), args, resolution),
             checked::HirExpr::Effect {
                 effect: checked::ParamEffect::Read,
                 value,
@@ -665,7 +666,16 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             checked::HirExpr::Manage { .. } => self.unsupported("checked HIR managed value"),
             checked::HirExpr::Spawn { .. } => self.unsupported("checked HIR spawn"),
             checked::HirExpr::Await { value, .. } => self.lower_await(value),
-            checked::HirExpr::Try { .. } => self.unsupported("checked HIR try"),
+            checked::HirExpr::Try { value, .. } => {
+                let source = self.lower_expression(value)?;
+                let destination = self.value();
+                self.emit(MirInstruction::TryResult {
+                    destination,
+                    source,
+                    cleanup: self.resource_cleanup_places(),
+                });
+                Ok(destination)
+            }
             checked::HirExpr::Closure { .. } => self.unsupported("checked HIR closure"),
             checked::HirExpr::Field { .. } => self.unsupported("checked HIR field access"),
             checked::HirExpr::Match { value, arms, .. } => self.lower_match_expression(value, arms),
@@ -681,6 +691,7 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
 
     fn lower_direct_call(
         &mut self,
+        callee: &rsscript_syntax::ast::Callee,
         receiver: Option<&checked::HirCallReceiver>,
         args: &[checked::HirCallArg],
         resolution: &checked::CallResolution,
@@ -688,11 +699,14 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         if receiver.is_some() {
             return self.unsupported("checked HIR receiver call");
         }
+        if matches!(resolution, checked::CallResolution::EnumVariant) {
+            return self.lower_enum_variant_call(callee, args);
+        }
         let checked::CallResolution::Resolved { signature, .. } = resolution else {
             return self.unsupported("unresolved checked HIR call");
         };
         if signature.is_builtin {
-            return self.unsupported("builtin checked HIR call");
+            return self.lower_builtin_call(signature, args);
         }
         let target = if signature.is_external {
             let symbol = checked_external_symbol(signature)?;
@@ -751,6 +765,64 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         for place in retained_places {
             self.emit(MirInstruction::Retain { place });
         }
+        Ok(destination)
+    }
+
+    /// `Ok` and `Err` are language result constructors, not normal runtime
+    /// intrinsics. Lower them into a typed operation so VM codegen never has
+    /// to rediscover a source-level builtin name.
+    fn lower_builtin_call(
+        &mut self,
+        signature: &checked::FunctionSig,
+        args: &[checked::HirCallArg],
+    ) -> Result<ValueId, MirLoweringError> {
+        let ok = match signature.name.as_str() {
+            "Ok" => true,
+            "Err" => false,
+            _ => return self.unsupported("builtin checked HIR call"),
+        };
+        if args.len() != 1 {
+            return self.unsupported("Result constructor with non-unary arity");
+        }
+        let value = self.lower_expression(&args[0].value)?;
+        let destination = self.value();
+        self.emit(MirInstruction::MakeResult {
+            destination,
+            ok,
+            value,
+        });
+        Ok(destination)
+    }
+
+    fn lower_enum_variant_call(
+        &mut self,
+        callee: &rsscript_syntax::ast::Callee,
+        args: &[checked::HirCallArg],
+    ) -> Result<ValueId, MirLoweringError> {
+        let name = match callee {
+            rsscript_syntax::ast::Callee::Name(name)
+            | rsscript_syntax::ast::Callee::Qualified { name, .. } => {
+                name.split('<').next().unwrap_or(name).trim()
+            }
+            rsscript_syntax::ast::Callee::ReceiverCall { .. } => {
+                return self.unsupported("checked HIR receiver enum variant call");
+            }
+        };
+        let ok = match name {
+            "Ok" => true,
+            "Err" => false,
+            _ => return self.unsupported("non-Result checked HIR enum variant"),
+        };
+        if args.len() != 1 {
+            return self.unsupported("Result enum variant with non-unary arity");
+        }
+        let value = self.lower_expression(&args[0].value)?;
+        let destination = self.value();
+        self.emit(MirInstruction::MakeResult {
+            destination,
+            ok,
+            value,
+        });
         Ok(destination)
     }
 
@@ -873,6 +945,7 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         // destination. Do not fabricate an internal task merely to represent
         // `await Host.call()`.
         if let checked::HirExpr::Call {
+            callee,
             receiver,
             args,
             resolution,
@@ -883,7 +956,7 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                 return self.unsupported("unresolved awaited checked HIR call");
             };
             if signature.is_external && signature.is_async {
-                return self.lower_direct_call(receiver.as_ref(), args, resolution);
+                return self.lower_direct_call(callee, receiver.as_ref(), args, resolution);
             }
         }
         let checked::HirExpr::Ident { name, .. } = value else {
@@ -1288,14 +1361,22 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
     }
 
     fn emit_resource_cleanup_from(&mut self, depth: usize) {
-        let places = self.resource_scopes[depth..]
-            .iter()
-            .rev()
-            .copied()
-            .collect::<Vec<_>>();
+        let places = self.resource_cleanup_places_from(depth);
         for place in places {
             self.emit(MirInstruction::ReleaseResource { place });
         }
+    }
+
+    fn resource_cleanup_places(&self) -> Vec<PlaceId> {
+        self.resource_cleanup_places_from(0)
+    }
+
+    fn resource_cleanup_places_from(&self, depth: usize) -> Vec<PlaceId> {
+        self.resource_scopes[depth..]
+            .iter()
+            .rev()
+            .copied()
+            .collect()
     }
 
     fn place(&mut self, name: &str) -> PlaceId {

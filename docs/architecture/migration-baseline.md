@@ -709,6 +709,12 @@ mechanical acceptance condition holds.
     - [x] **M03.1e — Lower standalone local moves.** A checked `take local`
       expression becomes explicit `TakePlace`, which consumes the source place
       in MIR and remains visible to the scalar codegen/conformance paths.
+    - [x] **M03.1f — Lower Result construction and propagation.** Checked
+      `Ok`/`Err` enum variants lower to a typed `MakeResult` operation, and
+      checked `?` lowers to `TryResult { source, cleanup }`. The latter records
+      the lexical resource cleanup edge before the VM short-circuits an
+      `Err`/`None`; codegen emits the verifier-checked v1 instructions and the
+      execution-feature SDK tests cover both task results and an `Err` return.
   - [ ] **M03.2 — Add resource lifetime instructions and cleanup edges.** Model
     acquire/manage/release and verify cleanup for normal return, branch exit,
     error, and cancellation.
