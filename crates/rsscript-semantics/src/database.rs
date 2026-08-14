@@ -977,11 +977,39 @@ impl CompilationSession {
         self.module_header_snapshot_file(SessionFileRole::Source, file)
     }
 
+    /// Query one source module header while observing the shared operation
+    /// boundary. Cached syntax facts must not escape after cancellation or a
+    /// deadline, just like parse and HIR query results.
+    pub fn module_header_with_operation(
+        &mut self,
+        path: &str,
+        operation: &OperationContext,
+    ) -> Result<Option<Arc<ModuleHeader>>, OperationAbort> {
+        operation.check()?;
+        let header = self.module_header(path);
+        operation.check()?;
+        Ok(header)
+    }
+
     /// Return parsed module and import paths for one interface revision.
     pub fn interface_module_header(&mut self, path: &str) -> Option<Arc<ModuleHeader>> {
         let snapshot = self.interface_snapshot();
         let file = snapshot.files().iter().find(|file| file.path() == path)?;
         self.module_header_snapshot_file(SessionFileRole::Interface, file)
+    }
+
+    /// Interface headers use the same cancellation/deadline contract as
+    /// source headers, so editor clients cannot bypass it through the separate
+    /// interface store.
+    pub fn interface_module_header_with_operation(
+        &mut self,
+        path: &str,
+        operation: &OperationContext,
+    ) -> Result<Option<Arc<ModuleHeader>>, OperationAbort> {
+        operation.check()?;
+        let header = self.interface_module_header(path);
+        operation.check()?;
+        Ok(header)
     }
 
     pub fn stats(&self) -> CompilationSessionStats {
@@ -1790,5 +1818,64 @@ mod tests {
                 workspace_diagnostic_cache_misses: 0,
             }
         );
+    }
+
+    #[test]
+    fn module_header_queries_reject_cancelled_and_expired_cached_requests() {
+        let mut session = CompilationSession::default();
+        session
+            .set_file("main.rss", "module app.core\nuse host.api\n")
+            .unwrap();
+        session
+            .set_interface("host.rssi", "module host.api\npub fn value() -> Unit\n")
+            .unwrap();
+        let source = session.module_header("main.rss").unwrap();
+        let interface = session.interface_module_header("host.rssi").unwrap();
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let cancelled = OperationContext {
+            cancellation: Some(cancellation),
+            ..OperationContext::default()
+        };
+        assert_eq!(
+            session.module_header_with_operation("main.rss", &cancelled),
+            Err(OperationAbort::Cancelled)
+        );
+        assert_eq!(
+            session.interface_module_header_with_operation("host.rssi", &cancelled),
+            Err(OperationAbort::Cancelled)
+        );
+
+        let expired = OperationContext {
+            deadline: Some(MonotonicDeadline::at(
+                Instant::now() - Duration::from_millis(1),
+            )),
+            ..OperationContext::default()
+        };
+        assert_eq!(
+            session.module_header_with_operation("main.rss", &expired),
+            Err(OperationAbort::DeadlineExceeded)
+        );
+        assert_eq!(
+            session.interface_module_header_with_operation("host.rssi", &expired),
+            Err(OperationAbort::DeadlineExceeded)
+        );
+
+        let live = OperationContext::default();
+        assert!(Arc::ptr_eq(
+            &source,
+            &session
+                .module_header_with_operation("main.rss", &live)
+                .unwrap()
+                .unwrap()
+        ));
+        assert!(Arc::ptr_eq(
+            &interface,
+            &session
+                .interface_module_header_with_operation("host.rssi", &live)
+                .unwrap()
+                .unwrap()
+        ));
     }
 }
