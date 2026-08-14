@@ -524,11 +524,11 @@ mechanical acceptance condition holds.
     declaration/signature `SemanticTypeFacts` owned by that HIR now also have a
     revision-invalidated workspace query with cancellation/deadline handling.
     Complete workspace diagnostics also use a session-owned, immutable
-    source/interface snapshot cache with revision invalidation. The language
-    service now obtains document bytes from those session snapshots, retaining
-    only LSP revision/kind metadata rather than a second source-text cache;
-    the remaining compiler compatibility analysis sequence now has one
-    snapshot-forwarding adapter rather than separate LSP and test copies;
+    source/interface snapshot cache with revision invalidation. Their explicit
+    `WorkspaceDiagnosticQuery` contract now lives in `rsscript-semantics`, so
+    the language service is only a client of the session query and cannot
+    define a competing callback protocol. The remaining compiler compatibility
+    analysis implementation is injected through that semantic contract;
     resolve/type and dependency-precise semantic-diagnostic invalidation remain
     open.
   - [ ] **S03.4 — Thread cancellation and deadlines through every query.** Add
@@ -562,10 +562,11 @@ mechanical acceptance condition holds.
     overlay diagnostics to the language service workspace query instead of
     reconstructing a second analyzer call sequence. `LanguageService` no
     longer depends on the compiler: its composition root injects the temporary
-    compiler diagnostic adapter while the service owns the immutable session
-    snapshot and cache, including document text. Replacing it with a
-    semantic-owned analyzer no longer
-    requires changing the language-service crate. Cargo metadata tests reject
+    compiler diagnostic implementation through the semantic-owned
+    `WorkspaceDiagnosticQuery` contract while the service owns the immutable
+    session snapshot and cache, including document text. Replacing it with a
+    semantic-owned analyzer no longer requires changing the language-service
+    crate. Cargo metadata tests reject
     a language-service edge to compiler, VM, SDK, package persistence, or
     concrete Providers.
   - [x] **S04.2 — Add document revision and invalidation tests.** The language

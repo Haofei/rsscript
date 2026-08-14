@@ -100,7 +100,7 @@ pub use database::{
     AnalysisResult, CompilationSession, CompilationSessionStats, FrontendCompletion,
     FrontendInputSnapshot, FrontendStopReason, ModuleHeader, SemanticDatabase, SessionSourceStore,
     SourceFileSnapshot, SourceSnapshot, SourceStoreError, SourceUpdate, ValidatedProgram,
-    WorkspaceModuleGraph, WorkspaceModuleNode,
+    WorkspaceDiagnosticQuery, WorkspaceModuleGraph, WorkspaceModuleNode,
 };
 pub use declarations::{
     duplicate_declaration_diagnostics, unknown_binding_diagnostics, unknown_field_diagnostics,

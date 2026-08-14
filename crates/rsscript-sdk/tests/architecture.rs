@@ -2826,6 +2826,21 @@ fn namespace_isolation_and_workspace_hir_are_semantic_queries() {
 }
 
 #[test]
+fn workspace_diagnostic_query_contract_is_semantic_owned() {
+    let root = workspace_root();
+    let semantics = read(&root.join("crates/rsscript-semantics/src/database.rs"));
+    assert!(semantics.contains("pub trait WorkspaceDiagnosticQuery"));
+    assert!(semantics.contains("query: &dyn WorkspaceDiagnosticQuery"));
+
+    let language_service = read(&root.join("crates/rsscript-language-service/src/lib.rs"));
+    assert!(language_service.contains("Arc<dyn WorkspaceDiagnosticQuery>"));
+    assert!(
+        !language_service.contains("trait WorkspaceDiagnosticAnalyzer"),
+        "language-service must consume the semantic query contract rather than declare a competing one"
+    );
+}
+
+#[test]
 fn reir_is_a_one_way_optional_integration() {
     let root = workspace_root();
     let compiler_manifest: toml::Value =

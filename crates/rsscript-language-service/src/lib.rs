@@ -18,7 +18,7 @@ pub use rsscript_diagnostics::{
 };
 pub use rsscript_semantics::{
     CompilationSession, Definition, FrontendInputSnapshot, Reference, RssDocumentSymbol,
-    SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup, document_symbols,
+    SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup, WorkspaceDiagnosticQuery, document_symbols,
     document_symbols_from_program, symbol_index, symbol_index_from_program,
 };
 pub use rsscript_syntax::{format_source, lint_source};
@@ -46,7 +46,7 @@ pub struct DocumentSnapshot {
 pub struct LanguageService {
     documents: BTreeMap<String, Document>,
     frontend: CompilationSession,
-    analyzer: Arc<dyn WorkspaceDiagnosticAnalyzer>,
+    analyzer: Arc<dyn WorkspaceDiagnosticQuery>,
     lint_cache: BTreeMap<(String, u64), Arc<[Diagnostic]>>,
     format_cache: BTreeMap<(String, u64), Arc<str>>,
     symbol_cache: BTreeMap<(String, u64), Arc<SymbolIndex>>,
@@ -55,38 +55,6 @@ pub struct LanguageService {
     cache_hits: u64,
     cache_misses: u64,
     invalidations: u64,
-}
-
-/// Semantic diagnostic implementation supplied by a composition root.
-///
-/// `LanguageService` owns revisioned inputs, module facts, cache lifetime, and
-/// request cancellation. It deliberately does not choose a compiler analyzer:
-/// that temporary integration belongs to the LSP/CLI composition root until
-/// the remaining full diagnostic queries live in `rsscript-semantics`.
-pub trait WorkspaceDiagnosticAnalyzer: Send + Sync {
-    fn analyze(
-        &self,
-        input: &FrontendInputSnapshot,
-        operation: &OperationContext,
-    ) -> Result<Vec<Diagnostic>, rsscript_operation::OperationAbort>;
-}
-
-impl<F> WorkspaceDiagnosticAnalyzer for F
-where
-    F: Fn(
-            &FrontendInputSnapshot,
-            &OperationContext,
-        ) -> Result<Vec<Diagnostic>, rsscript_operation::OperationAbort>
-        + Send
-        + Sync,
-{
-    fn analyze(
-        &self,
-        input: &FrontendInputSnapshot,
-        operation: &OperationContext,
-    ) -> Result<Vec<Diagnostic>, rsscript_operation::OperationAbort> {
-        self(input, operation)
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -157,7 +125,7 @@ impl LanguageService {
     /// Create a language service over one explicit semantic diagnostic
     /// integration. Editor clients retain only document overlays and LSP
     /// protocol adaptation; all multi-file inputs remain session-owned.
-    pub fn new(analyzer: impl WorkspaceDiagnosticAnalyzer + 'static) -> Self {
+    pub fn new(analyzer: impl WorkspaceDiagnosticQuery + 'static) -> Self {
         Self {
             documents: BTreeMap::new(),
             frontend: CompilationSession::default(),
@@ -320,12 +288,9 @@ impl LanguageService {
         record_query_stats: bool,
     ) -> Result<Arc<[Diagnostic]>, LanguageServiceError> {
         let before = self.frontend.stats();
-        let analyzer = Arc::clone(&self.analyzer);
         let diagnostics = self
             .frontend
-            .workspace_diagnostics_with_operation(operation, move |input, operation| {
-                analyzer.analyze(input, operation)
-            })
+            .workspace_diagnostics_with_operation(operation, self.analyzer.as_ref())
             .map_err(LanguageServiceError::from)?;
         let after = self.frontend.stats();
         if record_query_stats {
