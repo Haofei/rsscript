@@ -40,6 +40,9 @@ snapshot path during migration.
 - Provider lifecycle: `ProviderRegistry`, provider descriptors, structured
   signatures, `WireInterpreterFn`/`WireValue` for the canonical scalar
   Provider path, registration errors, and typed execution context contracts.
+  Legacy `NativeInterpreterFn`/`NativeValue` are not re-exported from this
+  reviewed façade; compatibility adapters must opt into the SDK
+  `compatibility` surface or depend directly on the low-level Provider crate.
 - Runtime lifecycle: `Runtime`, `LinkedArtifact`, `ExecutionRequest`, bounded
   `RunLimits`, `ExecutionReport`, termination reason, usage, and diagnostics.
 - Shared operation control: cancellation tokens, monotonic deadlines, and
@@ -47,8 +50,9 @@ snapshot path during migration.
 
 ## Compatibility-only APIs
 
-The `reg_vm_*` helpers, `RegVmExecutable`, package review/risk types, and raw
-bytecode helpers are retained only behind `compatibility` while the MIR
+The `reg_vm_*` helpers, `RegVmExecutable`, legacy `NativeInterpreterFn` and
+`NativeValue`, package review/risk types, and raw bytecode helpers are retained
+only behind `compatibility` while the MIR
 migration runs its old/new differential corpus. They are deliberately hidden
 from the reviewed default surface and must not be used as new embedding entry
 points.

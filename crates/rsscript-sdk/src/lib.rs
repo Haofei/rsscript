@@ -448,10 +448,9 @@ pub mod provider_api {
     pub use super::ProviderRegistry;
     pub use rsscript_provider_api::{
         BlockingBehavior, CancellationBehavior, ExternalSymbol, FunctionSignature, HostCallContext,
-        NativeInterpreterFn, NativeValue, ProviderCallContext, ProviderCallMode,
-        ProviderDescriptor, ProviderError, ProviderErrorCode, ProviderFunction,
-        ProviderFunctionDescriptor, ProviderLoadError, ResourceHandle, WireInterpreterFn,
-        WireValue,
+        ProviderCallContext, ProviderCallMode, ProviderDescriptor, ProviderError,
+        ProviderErrorCode, ProviderFunction, ProviderFunctionDescriptor, ProviderLoadError,
+        ResourceHandle, WireInterpreterFn, WireValue,
     };
 }
 

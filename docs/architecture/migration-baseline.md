@@ -1261,6 +1261,9 @@ mechanical acceptance condition holds.
     Structured and asynchronous Provider migrations remain follow-up.
   - [ ] **P06.4 — Remove legacy escape variants from canonical APIs.** JSON stays
     only behind a named extension codec with explicit interface declaration.
+    The reviewed SDK Provider façade no longer re-exports `NativeValue` or
+    `NativeInterpreterFn`; both remain compatibility-only while report and VM
+    adapters still carry the legacy representation.
 - [x] **P07 — Remove policy-shaped authority from Core ABI.** `HostCallContext`
   carries host-defined labels to Provider calls without Core interpreting an
   authorization policy. The runtime reports required symbols; provider profiles
