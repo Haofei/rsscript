@@ -113,7 +113,7 @@ pub use rsscript_artifact::{
     ArtifactBundle, ArtifactBundleError, ArtifactIdentityV1, AwaitFactV1, BuildProvenanceV1,
     CallEdgeFactV1, ChangedFactV1, CountChangeV1, DiagnosticFactV1, ExportFactV1,
     ExternalCallFactV1, ExternalContractFactV1, FactSetDiffV1, FunctionParameterFactV1,
-    InterfaceRequirementV1, PACKAGE_ANALYSIS_SCHEMA, ResourceLifetimeFactV1,
+    InterfaceRequirementV1, PACKAGE_ANALYSIS_SCHEMA, PackageAnalysisV1, ResourceLifetimeFactV1,
     ResourceTransferFactV1, SEMANTIC_DIFF_SCHEMA, SOURCE_ANALYSIS_SCHEMA, SemanticDiffV1,
     SourceAnalysisV1, TaskGroupFactV1,
 };
@@ -427,8 +427,8 @@ pub mod artifact {
         ARTIFACT_BUNDLE_MAGIC, ARTIFACT_BUNDLE_SCHEMA, AdmissionError, AdmittedArtifact,
         AnalysisEnvelopeV1, AnalysisSchemaV1, ArtifactAdmission, ArtifactAdmissionPolicy,
         ArtifactBundle, ArtifactBundleError, ArtifactVerifier, BuildProvenanceV1, BuiltArtifact,
-        InterfaceRequirementV1, PACKAGE_ANALYSIS_SCHEMA, SOURCE_ANALYSIS_SCHEMA, SourceAnalysisV1,
-        TrustedInputAdmission, VerifiedArtifact, VerifyError,
+        InterfaceRequirementV1, PACKAGE_ANALYSIS_SCHEMA, PackageAnalysisV1, SOURCE_ANALYSIS_SCHEMA,
+        SourceAnalysisV1, TrustedInputAdmission, VerifiedArtifact, VerifyError,
     };
     pub use rsscript_bytecode::{
         BYTECODE_CONTAINER_FORMAT_VERSION, BYTECODE_ISA_VERSION, BYTECODE_MAGIC, BYTECODE_SCHEMA,
@@ -668,8 +668,21 @@ impl BuiltArtifact {
         self.bundle.artifact_bytes()
     }
 
+    /// Versioned analysis evidence bound to this Artifact Bundle.
+    ///
+    /// Reviewed callers select a typed source/package projection from this
+    /// envelope instead of treating analysis as arbitrary JSON.
+    pub fn analysis_envelope(&self) -> &AnalysisEnvelopeV1 {
+        self.bundle.analysis_envelope()
+    }
+
+    /// Historical raw JSON projection for compatibility consumers. New embeds
+    /// should use [`Self::analysis_envelope`], [`Self::source_analysis`], or
+    /// [`Self::package_analysis`].
+    #[cfg(feature = "compatibility")]
+    #[doc(hidden)]
     pub fn analysis(&self) -> &serde_json::Value {
-        self.bundle.analysis()
+        self.analysis_envelope().payload()
     }
 
     /// Typed source evidence for direct source/interface builds. Package
@@ -681,8 +694,7 @@ impl BuiltArtifact {
 
     /// Typed package evidence for immutable package compatibility builds.
     /// Direct source/interface builds instead carry `source_analysis.v1`.
-    #[cfg(feature = "compatibility")]
-    pub fn package_analysis(&self) -> Option<&PackageAnalysis> {
+    pub fn package_analysis(&self) -> Option<&PackageAnalysisV1> {
         self.bundle.package_analysis()
     }
 
@@ -1941,25 +1953,24 @@ mod tests {
         let second = project::legacy::PackageCompatibility::build(&snapshot).expect("repeat build");
         assert_eq!(first.artifact_bytes(), second.artifact_bytes());
         assert_eq!(first.snapshot_digest(), snapshot.digest());
-        let analysis = first.analysis();
-        assert_eq!(analysis["snapshot_digest"], snapshot.digest());
-        assert_eq!(analysis["module_digest"], first.module_digest());
+        let analysis = first
+            .package_analysis()
+            .expect("package build carries typed package analysis");
+        assert_eq!(analysis.snapshot_digest, snapshot.digest());
+        assert_eq!(
+            analysis.module_digest.as_deref(),
+            Some(first.module_digest())
+        );
         let artifact = rsscript_bytecode::BytecodeArtifact::from_bytes(first.artifact_bytes())
             .expect("artifact envelope");
         assert_eq!(
             artifact.header.snapshot_digest.as_deref(),
             Some(snapshot.digest())
         );
+        assert_eq!(analysis.language_version, artifact.header.language_version);
+        assert_eq!(analysis.producer.version, artifact.header.compiler_version);
         assert_eq!(
-            analysis["language_version"],
-            artifact.header.language_version
-        );
-        assert_eq!(
-            analysis["producer"]["version"],
-            artifact.header.compiler_version
-        );
-        assert_eq!(
-            analysis["interface_catalog_digest"],
+            analysis.interface_catalog_digest,
             artifact.header.interface_catalog_digest
         );
         let first = admitted(first);
@@ -2293,7 +2304,7 @@ fn main() -> Result<Int, String> {
             .compile_snapshot(&input)
             .expect("the checked snapshot should compile");
         assert_eq!(
-            artifact.analysis()["snapshot_digest"],
+            artifact.analysis_envelope().payload()["snapshot_digest"],
             artifact.snapshot_digest()
         );
     }

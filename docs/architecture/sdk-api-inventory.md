@@ -32,10 +32,13 @@ snapshot path during migration.
 - Artifact lifecycle: `BuiltArtifact`, `VerifiedArtifact`,
   `AdmittedArtifact`, `ArtifactAdmissionPolicy`, `ArtifactBundle`,
   `ArtifactVerifier`, typed `SourceAnalysisV1`,
-  `AnalysisEnvelopeV1`/`AnalysisSchemaV1`, provenance,
+  `PackageAnalysisV1`, `AnalysisEnvelopeV1`/`AnalysisSchemaV1`, provenance,
   interface requirements, the versioned source and package analysis schema
   identifiers, and neutral semantic diff data,
-  including structural external-call, public function ownership, call-graph,
+  `BuiltArtifact::analysis_envelope` is the schema-discriminated access point;
+  `source_analysis` and `package_analysis` expose the corresponding typed
+  payload only when its schema matches. This keeps raw JSON outside the
+  reviewed embedding contract. The analysis facts include structural external-call, public function ownership, call-graph,
   recursion, lexical resource-lifetime and explicit resource-transfer, and
   structured task-group contracts. Verification proves format and semantic
   integrity; a host must then explicitly admit the verified Artifact before

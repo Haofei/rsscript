@@ -1243,6 +1243,19 @@ fn package_analysis_schema_is_an_artifact_contract_not_compiler_implementation()
 }
 
 #[test]
+fn reviewed_sdk_exposes_analysis_through_the_versioned_envelope() {
+    let root = workspace_root();
+    let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
+    assert!(sdk.contains("pub fn analysis_envelope(&self) -> &AnalysisEnvelopeV1"));
+    assert!(sdk.contains("pub fn package_analysis(&self) -> Option<&PackageAnalysisV1>"));
+    assert!(
+        sdk.contains(
+            "#[cfg(feature = \"compatibility\")]\n    #[doc(hidden)]\n    pub fn analysis"
+        )
+    );
+}
+
+#[test]
 fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
     let root = workspace_root();
     let package_types = read(&root.join("crates/rsscript-compiler/src/package/types.rs"));

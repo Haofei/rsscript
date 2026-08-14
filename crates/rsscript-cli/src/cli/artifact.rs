@@ -57,7 +57,7 @@ pub(crate) fn run_build(args: &[String]) -> ExitCode {
             eprintln!("cannot create {}: {error}", parent.display());
             return ExitCode::from(2);
         }
-        let analysis = serde_json::to_string_pretty(build.analysis())
+        let analysis = serde_json::to_string_pretty(build.analysis_envelope().payload())
             .expect("Artifact Bundle analysis must serialize");
         if let Err(error) = fs::write(&analysis_output, format!("{analysis}\n")) {
             eprintln!("cannot write {}: {error}", analysis_output.display());

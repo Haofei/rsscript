@@ -637,6 +637,10 @@ mechanical acceptance condition holds.
     CLI/application boundary rather than the compiler. Review/risk and the
     remaining legacy package presentation remain separate compiler
     compatibility responsibilities.
+    Reviewed `BuiltArtifact` callers now receive a versioned analysis envelope
+    and typed source/package projections instead of a raw JSON value; the latter
+    is compatibility-only and CLI output remains the application serialization
+    boundary.
     Their implementations and package types still need to move to dedicated
     project/review/AOT crates before this item can close.
   - [ ] **S05.4 — Move Rust/AOT lowering to its experimental boundary.** Compiler
