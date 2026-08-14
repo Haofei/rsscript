@@ -212,6 +212,25 @@ fn main() -> Int {
 "#,
     },
     MigrationCase {
+        name: "variant_payload_binding",
+        capability: "resolved flat sum-variant payload binding",
+        stage: MigrationStage::DualPath,
+        source: r#"
+sum ResultValue {
+    Value(count: Int)
+    Empty
+}
+
+fn main() -> Int {
+    let value = Value(count: 42)
+    match value {
+        Value(count) => { return count }
+        Empty => { return 0 }
+    }
+}
+"#,
+    },
+    MigrationCase {
         name: "list_index",
         capability: "resolved list indexing",
         stage: MigrationStage::DualPath,

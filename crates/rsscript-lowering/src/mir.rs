@@ -1156,9 +1156,10 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             }
             let arm_block = self.new_block();
             let next = self.new_block();
-            match &arm.pattern {
+            let variant_bindings = match &arm.pattern {
                 rsscript_syntax::ast::MatchPattern::Wildcard(_) => {
                     self.terminate(MirTerminator::Jump(arm_block));
+                    None
                 }
                 rsscript_syntax::ast::MatchPattern::Literal { value: literal, .. } => {
                     let literal = match_literal(literal, self.function_name)?;
@@ -1175,24 +1176,25 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                         then_target: arm_block,
                         else_target: next,
                     });
+                    None
                 }
-                rsscript_syntax::ast::MatchPattern::Variant { name, bindings, .. }
-                    if bindings.is_empty() =>
-                {
-                    if !self.targets.variants.contains_key(name) {
-                        return self.unsupported("unresolved checked HIR variant match pattern");
-                    }
+                rsscript_syntax::ast::MatchPattern::Variant { name, bindings, .. } => {
+                    let layout = self.variant_pattern_layout(name, bindings)?;
                     self.terminate(MirTerminator::MatchVariant {
                         value,
                         expected: name.clone(),
                         match_target: arm_block,
                         else_target: next,
                     });
+                    Some((layout, bindings.clone()))
                 }
                 _ => return self.unsupported("non-literal checked HIR match pattern"),
-            }
+            };
 
             self.current = arm_block;
+            if let Some((layout, bindings)) = variant_bindings {
+                self.lower_variant_pattern_bindings(value, &layout, &bindings)?;
+            }
             self.lower_checked_block(&arm.body)?;
             if self.current_block().terminator.is_none() {
                 self.terminate(MirTerminator::Jump(join));
@@ -1218,9 +1220,10 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             }
             let arm_block = self.new_block();
             let next = self.new_block();
-            match &arm.pattern {
+            let variant_bindings = match &arm.pattern {
                 rsscript_syntax::ast::MatchPattern::Wildcard(_) => {
                     self.terminate(MirTerminator::Jump(arm_block));
+                    None
                 }
                 rsscript_syntax::ast::MatchPattern::Literal { value: literal, .. } => {
                     let expected = self.literal(match_literal(literal, self.function_name)?)?;
@@ -1236,26 +1239,25 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                         then_target: arm_block,
                         else_target: next,
                     });
+                    None
                 }
-                rsscript_syntax::ast::MatchPattern::Variant { name, bindings, .. }
-                    if bindings.is_empty() =>
-                {
-                    if !self.targets.variants.contains_key(name) {
-                        return self.unsupported(
-                            "unresolved checked HIR variant match expression pattern",
-                        );
-                    }
+                rsscript_syntax::ast::MatchPattern::Variant { name, bindings, .. } => {
+                    let layout = self.variant_pattern_layout(name, bindings)?;
                     self.terminate(MirTerminator::MatchVariant {
                         value,
                         expected: name.clone(),
                         match_target: arm_block,
                         else_target: next,
                     });
+                    Some((layout, bindings.clone()))
                 }
                 _ => return self.unsupported("non-literal checked HIR match expression pattern"),
-            }
+            };
 
             self.current = arm_block;
+            if let Some((layout, bindings)) = variant_bindings {
+                self.lower_variant_pattern_bindings(value, &layout, &bindings)?;
+            }
             self.lower_match_expression_arm(&arm.body, result_place)?;
             if self.current_block().terminator.is_none() {
                 self.terminate(MirTerminator::Jump(join));
@@ -1270,6 +1272,58 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             place: result_place,
         });
         Ok(destination)
+    }
+
+    /// Resolve the checked semantic layout before emitting a match edge. The
+    /// direct MIR subset deliberately accepts only a flat positional binding
+    /// or wildcard for each declared field: nested patterns require their own
+    /// projection and cleanup semantics.
+    fn variant_pattern_layout(
+        &self,
+        name: &str,
+        bindings: &[rsscript_syntax::ast::MatchPattern],
+    ) -> Result<VariantLayout, MirLoweringError> {
+        let Some(layout) = self.targets.variants.get(name) else {
+            return self.unsupported("unresolved checked HIR variant match pattern");
+        };
+        if layout.fields.len() != bindings.len() {
+            return self.unsupported("checked HIR variant match binding arity");
+        }
+        if bindings.iter().any(|binding| {
+            !matches!(
+                binding,
+                rsscript_syntax::ast::MatchPattern::Binding { .. }
+                    | rsscript_syntax::ast::MatchPattern::Wildcard(_)
+            )
+        }) {
+            return self.unsupported("nested checked HIR variant match binding");
+        }
+        Ok(layout.clone())
+    }
+
+    fn lower_variant_pattern_bindings(
+        &mut self,
+        value: ValueId,
+        layout: &VariantLayout,
+        bindings: &[rsscript_syntax::ast::MatchPattern],
+    ) -> Result<(), MirLoweringError> {
+        for (field, binding) in layout.fields.iter().zip(bindings) {
+            let rsscript_syntax::ast::MatchPattern::Binding { name, .. } = binding else {
+                continue;
+            };
+            let destination = self.value();
+            self.emit(MirInstruction::GetField {
+                destination,
+                base: value,
+                field: field.clone(),
+            });
+            let place = self.place(name);
+            self.emit(MirInstruction::WritePlace {
+                place,
+                value: destination,
+            });
+        }
+        Ok(())
     }
 
     fn lower_match_expression_arm(

@@ -707,6 +707,12 @@ mechanical acceptance condition holds.
       migration corpus covers both statement and expression arms. Payload
       destructuring and guards remain fail-closed pending explicit binding and
       cleanup semantics.
+    - [x] **M02.3k — Lower flat variant payload bindings.** A resolved sum
+      variant arm can now bind or ignore each positional field. The lowerer
+      validates semantic layout arity, emits explicit `GetField` plus local
+      `WritePlace` operations in the matching CFG block, and rejects nested
+      patterns. The direct migration corpus differentially executes a bound
+      payload across the legacy VM, MIR interpreter, and verified bytecode VM.
 - [x] **M02.4 — Add MIR structural validation.** Reject dangling blocks,
     invalid IDs, unterminated blocks, undefined values, and malformed CFG edges.
     - [x] **M02.4a — Verify the initial structural subset.** The verifier
