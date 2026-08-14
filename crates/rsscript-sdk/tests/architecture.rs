@@ -1076,11 +1076,11 @@ fn language_engine_does_not_read_the_operating_system() {
         .expect("language-service description");
     assert!(description.to_ascii_lowercase().contains("incremental"));
     for boundary in [
-        "dependency_cache",
         "lint_cache",
         "format_cache",
         "symbol_cache",
         "invalidate_interface_dependents",
+        "workspace_module_graph",
     ] {
         assert!(
             language_service.contains(boundary),
@@ -1106,6 +1106,8 @@ fn language_engine_does_not_read_the_operating_system() {
         "parse_source",
         "fn document_dependencies",
         "fn interface_modules",
+        "dependency_cache:",
+        "fn dependency_matches_module",
     ] {
         assert!(
             !language_service.contains(forbidden),

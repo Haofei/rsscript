@@ -514,17 +514,21 @@ mechanical acceptance condition holds.
     `CompilationSession` now owns parse-tree and local HIR caching keyed by
     immutable role/file/revision, including replacement/deletion invalidation
     and deterministic source iteration. Module-header/import facts now share
-    that cache. Complete workspace diagnostics now also use a session-owned,
-    immutable source/interface snapshot cache with revision invalidation;
-    resolve/type, interface-aware workspace HIR, and dependency-precise
-    diagnostic invalidation remain open.
+    that cache. `WorkspaceModuleGraph` now owns parsed import closure and
+    transitive interface-dependent-path facts, so editor clients no longer
+    retain a second dependency graph. Complete workspace diagnostics also use a
+    session-owned, immutable source/interface snapshot cache with revision
+    invalidation; resolve/type, interface-aware workspace HIR, and
+    dependency-precise semantic-diagnostic invalidation remain open.
   - [ ] **S03.4 — Thread cancellation and deadlines through every query.** Add
     cancellation, deadline, and diagnostic-budget tests for cold and cached
     paths. Session parse and local HIR queries now check the shared operation
     context before and after cache access for source and interface inputs. The
     session-owned workspace diagnostic query now applies the same checks before
-    cache access, during transitional analysis, and before caching the result;
-    resolve/type and workspace-HIR queries remain to be migrated.
+    cache access, during transitional analysis, and before caching the result.
+    Workspace-module graph queries and language-service document diagnostics
+    now apply the same rule across dependency closure, lint, and cached-result
+    paths; resolve/type and workspace-HIR queries remain to be migrated.
   - [ ] **S03.5 — Migrate CLI/package/test callers.** All frontend consumers use
     the session API; direct analyzer construction becomes private.
 - [ ] **S04 — Make language service consume semantic queries directly.** It
@@ -535,9 +539,9 @@ mechanical acceptance condition holds.
     query dependencies.** Editor symbols and formatting now come directly from
     `rsscript-semantics` and `rsscript-syntax`; syntax lint now also bypasses
     compiler. Module/import dependency discovery and local editor symbols now
-    consume shared CompilationSession parse/header queries instead of reparsing
-    or line-oriented text extraction, including interface visibility and
-    invalidation traversal. The LSP now delegates both single-file and package
+    consume shared CompilationSession parse/header/module-graph queries instead
+    of reparsing or line-oriented text extraction, including interface
+    visibility and invalidation traversal. The LSP now delegates both single-file and package
     overlay diagnostics to the language service workspace query instead of
     reconstructing a second analyzer call sequence. Diagnostics remain on the
     compiler transition path *inside* the language-service query until the
