@@ -4083,6 +4083,24 @@ fn abi_and_provider_crates_keep_one_way_dependencies() {
 }
 
 #[test]
+fn official_providers_use_canonical_wire_callables() {
+    let root = workspace_root();
+    for provider in [
+        "cli", "entropy", "env", "fs", "http", "log", "process", "time",
+    ] {
+        let source = read(&root.join(format!("providers/{provider}/src/lib.rs")));
+        assert!(
+            source.contains("WireInterpreterFn"),
+            "official provider `{provider}` must use the canonical wire callable"
+        );
+        assert!(
+            !source.contains("NativeInterpreterFn") && !source.contains("NativeValue"),
+            "official provider `{provider}` must not regress to the legacy dynamic value boundary"
+        );
+    }
+}
+
+#[test]
 fn artifact_verifier_owns_instruction_validation() {
     let root = workspace_root();
     let manifest: toml::Value =

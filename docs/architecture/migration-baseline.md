@@ -1384,11 +1384,14 @@ mechanical acceptance condition holds.
     descriptor-scoped, deterministic type table now also bridges `List<T>`,
     tuples, `Option<T>`, and `Result<T, E>`: both the VM adapter and Provider
     derive numeric identities from the exact linked signature, and mismatched
-    element/type/variant identities fail closed. Named records, arbitrary
-    variants, maps, JSON, chars, and resources still require the Artifact-wide
-    type-table/lifecycle adapter. The same safe scalar/aggregate subset now
-    also works through `AsyncWireInterpreterFn`; named/resource async values
-    remain fail-closed.
+    element/type/variant identities fail closed. Provider descriptors now carry
+    canonical named-record layouts, including declaration-order field names and
+    structural field types; the VM uses those layouts to bridge positional
+    `WireValue::Record` payloads through the legacy VM adapter without guessing
+    names or types. Arbitrary variants, maps, JSON, chars, and resources still
+    require the Artifact-wide type-table/lifecycle adapter. The same safe
+    scalar/aggregate subset now also works through `AsyncWireInterpreterFn`;
+    named/resource async values remain fail-closed.
     - [x] **P06.2a — Bridge generation-safe resource handles.** Provider
       runtime handles now convert to/from the canonical numeric wire handle
       with a descriptor-supplied resource type; no legacy type-name string is
@@ -1397,7 +1400,7 @@ mechanical acceptance condition holds.
       Provider resource wrappers now encode/decode `WireValue::Resource` using
       explicit numeric resource identities; legacy `NativeValue` methods are
       visibly compatibility-only adapters.
-  - [ ] **P06.3 — Migrate official Providers and mocks.** Each migration keeps
+  - [x] **P06.3 — Migrate official Providers and mocks.** Each migration keeps
     signature, error, resource, and payload-budget conformance fixtures green.
     The scalar `time`, `entropy`, `log`, and rooted `fs` Providers now use
     `WireInterpreterFn`; the conformance kit validates wire callables directly,
@@ -1407,9 +1410,12 @@ mechanical acceptance condition holds.
     form for its in-memory and rooted filesystem/log providers, proving the
     reviewed Artifact/link/run path without the legacy adapter.
     The official CLI (`List<String>`) and environment (`Option<String>`)
-    Providers now use this descriptor-scoped wire path. Other structured
-    Provider migrations remain follow-up; async Providers can now use the same
-    safe subset through `AsyncWireInterpreterFn`.
+    Providers now use this descriptor-scoped wire path. The structured HTTP and
+    process Providers now return descriptor-layout-backed `WireValue::Record`
+    values, so every official Provider implementation and generated mock avoids
+    the legacy dynamic callable. An architecture test rejects any regression to
+    `NativeValue` or `NativeInterpreterFn` in official Provider source. Async
+    Providers can use the same safe subset through `AsyncWireInterpreterFn`.
   - [ ] **P06.4 — Remove legacy escape variants from canonical APIs.** JSON stays
     only behind a named extension codec with explicit interface declaration.
     The reviewed SDK Provider façade no longer re-exports `NativeValue` or
