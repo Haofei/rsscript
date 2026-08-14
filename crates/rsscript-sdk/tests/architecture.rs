@@ -1235,6 +1235,11 @@ fn package_analysis_schema_is_an_artifact_contract_not_compiler_implementation()
         !package_types.contains("pub struct PackageAnalysis {"),
         "compiler must not define a second package-analysis wire model"
     );
+    let package_format = read(&root.join("crates/rsscript-compiler/src/package/format.rs"));
+    assert!(
+        !package_format.contains("format_package_analysis_json"),
+        "compiler must not own presentation for Artifact-owned analysis evidence"
+    );
 }
 
 #[test]

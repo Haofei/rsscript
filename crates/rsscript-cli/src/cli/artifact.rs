@@ -2,9 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use rsscript_compiler::compatibility::{
-    PackageAnalysis, analyze_package_dir, format_package_analysis_json,
-};
+use rsscript_compiler::compatibility::{PackageAnalysis, analyze_package_dir};
 use rsscript_sdk::{
     analysis::SemanticDiffV1,
     artifact::{
@@ -267,7 +265,10 @@ fn inspect_analysis(view: &str, json_output: bool, input: &str) -> ExitCode {
         }
     };
     if view == "analysis" {
-        println!("{}", format_package_analysis_json(&analysis));
+        println!(
+            "{}",
+            serde_json::to_string(&analysis).expect("package analysis JSON serialization")
+        );
     } else if json_output {
         let value = match view {
             "resources" => resource_json(&analysis),

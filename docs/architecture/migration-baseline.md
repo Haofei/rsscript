@@ -633,8 +633,10 @@ mechanical acceptance condition holds.
     compiler exports that new frontend consumers can accidentally adopt.
     The provider- and review-neutral `rsscript.package_analysis.v1` model now
     lives in `rsscript-artifact`; compiler package compatibility only produces
-    and re-exports that typed schema. Review/risk and package presentation
-    remain separate compiler compatibility responsibilities.
+    and re-exports that typed schema. Its JSON presentation now belongs to the
+    CLI/application boundary rather than the compiler. Review/risk and the
+    remaining legacy package presentation remain separate compiler
+    compatibility responsibilities.
     Their implementations and package types still need to move to dedicated
     project/review/AOT crates before this item can close.
   - [ ] **S05.4 — Move Rust/AOT lowering to its experimental boundary.** Compiler

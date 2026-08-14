@@ -13,7 +13,7 @@ use rsscript_syntax::lint_source;
 
 use super::{is_package_directory, print_usage, read_interface_sources, required_flag_value};
 #[cfg(feature = "execution")]
-use rsscript_compiler::compatibility::{analyze_package_dir, format_package_analysis_json};
+use rsscript_compiler::compatibility::analyze_package_dir;
 
 /// Parse `--explain <CODE>` (optionally with `--json`), in any order.
 fn parse_explain_args(args: &[String]) -> Option<(&str, bool)> {
@@ -109,7 +109,10 @@ fn run_package_check(json: bool, path: &str) -> ExitCode {
         }
     };
     if json {
-        println!("{}", format_package_analysis_json(&analysis));
+        println!(
+            "{}",
+            serde_json::to_string(&analysis).expect("package analysis JSON serialization")
+        );
     } else if !analysis.diagnostics.is_empty() {
         print!("{}", format_diagnostics_human(&analysis.diagnostics));
     }

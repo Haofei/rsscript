@@ -1,17 +1,12 @@
 use crate::package::{
-    PackageAnalysis, PackageCheck, PackageDependencyKind, PackageDiff, PackageLock,
-    PackageLockDiff, PackageMetadataReport, PackageReview, PackageReviewAwaitBoundary,
-    PackageReviewAwaitSite, PackageReviewDependency, PackageReviewExport, PackageTree,
-    PackageTreeNode, package_risk_label,
+    PackageCheck, PackageDependencyKind, PackageDiff, PackageLock, PackageLockDiff,
+    PackageMetadataReport, PackageReview, PackageReviewAwaitBoundary, PackageReviewAwaitSite,
+    PackageReviewDependency, PackageReviewExport, PackageTree, PackageTreeNode, package_risk_label,
 };
 use crate::review::format_review_human;
 
 pub fn format_package_review_json(review: &PackageReview) -> String {
     serde_json::to_string(review).expect("package review JSON serialization should not fail")
-}
-
-pub fn format_package_analysis_json(analysis: &PackageAnalysis) -> String {
-    serde_json::to_string(analysis).expect("package analysis JSON serialization should not fail")
 }
 
 pub fn format_package_metadata_json(metadata: &PackageMetadataReport) -> String {
