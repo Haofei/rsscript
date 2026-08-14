@@ -1400,9 +1400,9 @@ mechanical acceptance condition holds.
     positional `WireValue::Variant` values: declaration-order case IDs and
     fields are checked before either direction reaches the legacy VM adapter.
     JSON and resources still require the Artifact-wide type-table/lifecycle
-    adapter. The same safe
-    scalar/aggregate subset now also works through `AsyncWireInterpreterFn`;
-    named/resource async values remain fail-closed.
+    adapter. The same descriptor-scoped scalar, aggregate, record, and named
+    sum subset now also works through `AsyncWireInterpreterFn`; resource async
+    values remain fail-closed until the Artifact lifecycle adapter is present.
     - [x] **P06.2a — Bridge generation-safe resource handles.** Provider
       runtime handles now convert to/from the canonical numeric wire handle
       with a descriptor-supplied resource type; no legacy type-name string is

@@ -2013,6 +2013,77 @@ mod provider_contract_tests {
     }
 
     #[test]
+    fn async_wire_dispatcher_adapts_descriptor_linked_named_variants() {
+        let symbol = ExternalSymbol::new("host.test.async_status").unwrap();
+        let status = WireType::from("host.test.Status");
+        let signature = FunctionSignature {
+            parameters: Vec::new(),
+            result: status.clone(),
+            asynchronous: true,
+        };
+        let layouts = vec![rsscript_abi_model::WireVariantLayout {
+            ty: status.clone(),
+            variants: vec![rsscript_abi_model::WireVariantCaseLayout {
+                name: "Ready".into(),
+                fields: Vec::new(),
+            }],
+        }];
+        let type_id = WireCallTypeTable::for_signature(&signature)
+            .unwrap()
+            .with_variant_layouts(layouts.clone())
+            .unwrap()
+            .type_id(&status)
+            .unwrap();
+        let descriptor = ProviderDescriptor {
+            provider_id: "test.provider".into(),
+            provider_version: "1.0.0".into(),
+            supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+            record_layouts: Vec::new(),
+            variant_layouts: layouts,
+            functions: vec![ProviderFunctionDescriptor {
+                symbol: symbol.clone(),
+                signature: signature.clone(),
+                entry: "async_status".into(),
+                call_mode: ProviderCallMode::Async,
+                blocking: BlockingBehavior::NonBlocking,
+                cancellation: CancellationBehavior::Cooperative,
+                thread_safe: true,
+                reentrant: true,
+                resource_cleanup: ResourceCleanupContract::None,
+                error_mapping: ProviderErrorMapping::StructuredV1,
+            }],
+        };
+        let mut registry = ExternalFunctionRegistry::new();
+        registry
+            .register_provider(
+                &descriptor,
+                BTreeMap::from([(
+                    symbol,
+                    ProviderFunction {
+                        signature,
+                        callable: AsyncWireInterpreterFn::new(move |_, _| async move {
+                            Ok(WireValue::Variant {
+                                type_id,
+                                variant_id: rsscript_abi_model::WireVariantId::new(0),
+                                payload: None,
+                            })
+                        }),
+                    },
+                )]),
+            )
+            .unwrap();
+        let function = registry.into_bindings().next().unwrap().1;
+        let mut future = function.start_async(async_context(None, None), Vec::new());
+        assert_eq!(
+            poll_once(&mut future),
+            Poll::Ready(Ok(NativeValue::Variant {
+                name: "Ready".into(),
+                fields: BTreeMap::new(),
+            }))
+        );
+    }
+
+    #[test]
     fn async_dispatcher_enforces_response_payload_limits() {
         let function = registered_async_function(AsyncInterpreterFn::new(|_, _| async move {
             Ok(NativeValue::String("response".into()))
