@@ -177,7 +177,8 @@ pub mod compile {
 pub mod project {
     use super::*;
     use rsscript_workspace_loader::{
-        WorkspaceFileKind, WorkspaceLoader, WorkspaceSnapshot as CapturedWorkspaceSnapshot,
+        WorkspaceFileKind, WorkspaceLoadError, WorkspaceLoadErrorCode, WorkspaceLoader,
+        WorkspaceSnapshot as CapturedWorkspaceSnapshot,
     };
 
     pub use rsscript_compiler::WorkspaceSnapshot;
@@ -267,10 +268,7 @@ pub mod project {
                 }
                 None => loader.snapshot_from(base, package_dir),
             }
-            .map_err(|error| CompileError::Package {
-                code: CompileErrorCode::PackageSnapshot,
-                message: error.to_string(),
-            })?;
+            .map_err(map_workspace_load_error)?;
             let sources = workspace
                 .files()
                 .iter()
@@ -386,6 +384,23 @@ pub mod project {
             let captured =
                 self.capture_frontend_from_with_operation(path, Path::new("."), operation)?;
             self.build_captured_with_operation(&captured, operation)
+        }
+    }
+
+    fn map_workspace_load_error(error: WorkspaceLoadError) -> CompileError {
+        let code = match error.code {
+            WorkspaceLoadErrorCode::Cancelled => CompileErrorCode::Cancelled,
+            WorkspaceLoadErrorCode::DeadlineExceeded => CompileErrorCode::DeadlineExceeded,
+            _ => CompileErrorCode::PackageSnapshot,
+        };
+        let message = error.to_string();
+        if matches!(
+            code,
+            CompileErrorCode::Cancelled | CompileErrorCode::DeadlineExceeded
+        ) {
+            CompileError::Operation { code, message }
+        } else {
+            CompileError::Package { code, message }
         }
     }
 }
@@ -1692,6 +1707,18 @@ mod tests {
                 },
             )
             .expect_err("cancelled captured build");
+        assert_eq!(cancelled.code(), CompileErrorCode::Cancelled);
+        let loader_cancel = CancellationToken::new();
+        loader_cancel.cancel();
+        let cancelled = project
+            .compile_package_with_operation(
+                directory.path(),
+                &OperationContext {
+                    cancellation: Some(loader_cancel),
+                    ..OperationContext::default()
+                },
+            )
+            .expect_err("cancelled package capture");
         assert_eq!(cancelled.code(), CompileErrorCode::Cancelled);
     }
 

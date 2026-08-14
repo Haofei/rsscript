@@ -49,6 +49,7 @@ The SDK project-loader test captures a package through the loader, builds the
 captured frontend input, and requires its Artifact digest to equal the
 frontend digest; it also proves a pre-cancelled build fails before work begins.
 The package convenience API must produce the same Artifact bytes as that
-explicit capture.
+explicit capture and preserve cancellation/deadline outcome codes from the
+loader rather than misclassifying them as package snapshot failures.
 Architecture tests require the explicit API to remain in the project adapter
 rather than the pure compiler façade.
