@@ -6,7 +6,10 @@ use std::sync::Arc;
 use rsscript_diagnostics::Diagnostic;
 use rsscript_operation::{OperationAbort, OperationContext};
 use rsscript_source_model::{FileId, SourceRevision};
-use rsscript_syntax::{ast::Program, parse_source};
+use rsscript_syntax::{
+    ast::{Item, Program},
+    parse_source,
+};
 
 use crate::SemanticTypeFacts;
 use crate::hir::Hir;
@@ -257,10 +260,13 @@ pub struct CompilationSession {
     interfaces: SessionSourceStore,
     parse_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<Program>>,
     hir_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<Hir>>,
+    module_header_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<ModuleHeader>>,
     parse_cache_hits: u64,
     parse_cache_misses: u64,
     hir_cache_hits: u64,
     hir_cache_misses: u64,
+    module_header_cache_hits: u64,
+    module_header_cache_misses: u64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -269,6 +275,28 @@ pub struct CompilationSessionStats {
     pub parse_cache_misses: u64,
     pub hir_cache_hits: u64,
     pub hir_cache_misses: u64,
+    pub module_header_cache_hits: u64,
+    pub module_header_cache_misses: u64,
+}
+
+/// Parsed module and import facts for one immutable document revision.
+///
+/// This is intentionally syntax-level: callers can build dependency graphs
+/// without implementing a second textual grammar or depending on HIR.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ModuleHeader {
+    modules: Arc<[String]>,
+    imports: Arc<[String]>,
+}
+
+impl ModuleHeader {
+    pub fn modules(&self) -> &[String] {
+        &self.modules
+    }
+
+    pub fn imports(&self) -> &[String] {
+        &self.imports
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -287,6 +315,7 @@ impl CompilationSession {
         if update.changed {
             self.invalidate_parse_cache(SessionFileRole::Source, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Source, update.file_id);
+            self.invalidate_module_header_cache(SessionFileRole::Source, update.file_id);
         }
         Ok(update)
     }
@@ -296,6 +325,7 @@ impl CompilationSession {
         if let Some(update) = update {
             self.invalidate_parse_cache(SessionFileRole::Source, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Source, update.file_id);
+            self.invalidate_module_header_cache(SessionFileRole::Source, update.file_id);
         }
         update
     }
@@ -309,6 +339,7 @@ impl CompilationSession {
         if update.changed {
             self.invalidate_parse_cache(SessionFileRole::Interface, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Interface, update.file_id);
+            self.invalidate_module_header_cache(SessionFileRole::Interface, update.file_id);
         }
         Ok(update)
     }
@@ -318,6 +349,7 @@ impl CompilationSession {
         if let Some(update) = update {
             self.invalidate_parse_cache(SessionFileRole::Interface, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Interface, update.file_id);
+            self.invalidate_module_header_cache(SessionFileRole::Interface, update.file_id);
         }
         update
     }
@@ -445,12 +477,28 @@ impl CompilationSession {
         Ok(hir)
     }
 
+    /// Return parsed module and import paths for one source revision.
+    pub fn module_header(&mut self, path: &str) -> Option<Arc<ModuleHeader>> {
+        let snapshot = self.source_snapshot();
+        let file = snapshot.files().iter().find(|file| file.path() == path)?;
+        self.module_header_snapshot_file(SessionFileRole::Source, file)
+    }
+
+    /// Return parsed module and import paths for one interface revision.
+    pub fn interface_module_header(&mut self, path: &str) -> Option<Arc<ModuleHeader>> {
+        let snapshot = self.interface_snapshot();
+        let file = snapshot.files().iter().find(|file| file.path() == path)?;
+        self.module_header_snapshot_file(SessionFileRole::Interface, file)
+    }
+
     pub fn stats(&self) -> CompilationSessionStats {
         CompilationSessionStats {
             parse_cache_hits: self.parse_cache_hits,
             parse_cache_misses: self.parse_cache_misses,
             hir_cache_hits: self.hir_cache_hits,
             hir_cache_misses: self.hir_cache_misses,
+            module_header_cache_hits: self.module_header_cache_hits,
+            module_header_cache_misses: self.module_header_cache_misses,
         }
     }
 
@@ -497,6 +545,61 @@ impl CompilationSession {
     fn invalidate_hir_cache(&mut self, role: SessionFileRole, file_id: FileId) {
         self.hir_cache
             .retain(|(cached_role, cached_id, _), _| *cached_role != role || *cached_id != file_id);
+    }
+
+    fn module_header_snapshot_file(
+        &mut self,
+        role: SessionFileRole,
+        file: &SourceFileSnapshot,
+    ) -> Option<Arc<ModuleHeader>> {
+        let key = (role, file.file_id(), file.revision());
+        if let Some(header) = self.module_header_cache.get(&key) {
+            self.module_header_cache_hits = self.module_header_cache_hits.saturating_add(1);
+            return Some(Arc::clone(header));
+        }
+        let program = self.parse_snapshot_file(role, file)?;
+        let header = Arc::new(module_header_from_program(&program));
+        self.module_header_cache.insert(key, Arc::clone(&header));
+        self.module_header_cache_misses = self.module_header_cache_misses.saturating_add(1);
+        Some(header)
+    }
+
+    fn invalidate_module_header_cache(&mut self, role: SessionFileRole, file_id: FileId) {
+        self.module_header_cache
+            .retain(|(cached_role, cached_id, _), _| *cached_role != role || *cached_id != file_id);
+    }
+}
+
+fn module_header_from_program(program: &Program) -> ModuleHeader {
+    let modules = program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Module(module) => (!module.path.is_empty()).then(|| module.path.join(".")),
+            Item::Use(_)
+            | Item::Type(_)
+            | Item::SumType(_)
+            | Item::TypeAlias(_)
+            | Item::Const(_)
+            | Item::Function(_) => None,
+        })
+        .collect::<Vec<_>>();
+    let imports = program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Use(import) => (!import.path.is_empty()).then(|| import.path.join(".")),
+            Item::Module(_)
+            | Item::Type(_)
+            | Item::SumType(_)
+            | Item::TypeAlias(_)
+            | Item::Const(_)
+            | Item::Function(_) => None,
+        })
+        .collect::<Vec<_>>();
+    ModuleHeader {
+        modules: modules.into(),
+        imports: imports.into(),
     }
 }
 
@@ -744,6 +847,8 @@ mod tests {
                 parse_cache_misses: 1,
                 hir_cache_hits: 0,
                 hir_cache_misses: 0,
+                module_header_cache_hits: 0,
+                module_header_cache_misses: 0,
             }
         );
 
@@ -867,5 +972,32 @@ mod tests {
             Err(OperationAbort::DeadlineExceeded)
         ));
         assert_eq!(session.stats().hir_cache_misses, 3);
+    }
+
+    #[test]
+    fn compilation_session_caches_parsed_module_headers() {
+        let mut session = CompilationSession::default();
+        session
+            .set_file(
+                "main.rss",
+                "// use ignored.*\nmodule app.core\nuse host.api as host\n",
+            )
+            .unwrap();
+        let first = session.module_header("main.rss").unwrap();
+        let second = session.module_header("main.rss").unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(first.modules(), ["app.core"]);
+        assert_eq!(first.imports(), ["host.api"]);
+        assert_eq!(
+            session.stats(),
+            CompilationSessionStats {
+                parse_cache_hits: 0,
+                parse_cache_misses: 1,
+                hir_cache_hits: 0,
+                hir_cache_misses: 0,
+                module_header_cache_hits: 1,
+                module_header_cache_misses: 1,
+            }
+        );
     }
 }

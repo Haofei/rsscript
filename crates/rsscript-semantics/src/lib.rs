@@ -96,8 +96,8 @@ pub use control_flow::{
 };
 pub use database::{
     AnalysisResult, CompilationSession, CompilationSessionStats, FrontendCompletion,
-    FrontendStopReason, SemanticDatabase, SessionSourceStore, SourceFileSnapshot, SourceSnapshot,
-    SourceStoreError, SourceUpdate, ValidatedProgram,
+    FrontendStopReason, ModuleHeader, SemanticDatabase, SessionSourceStore, SourceFileSnapshot,
+    SourceSnapshot, SourceStoreError, SourceUpdate, ValidatedProgram,
 };
 pub use declarations::{
     duplicate_declaration_diagnostics, unknown_binding_diagnostics, unknown_field_diagnostics,

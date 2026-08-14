@@ -510,8 +510,9 @@ mechanical acceptance condition holds.
     Record dependencies so unrelated file changes do not invalidate a workspace.
     `CompilationSession` now owns parse-tree and local HIR caching keyed by
     immutable role/file/revision, including replacement/deletion invalidation
-    and deterministic source iteration. Resolve/type, interface-aware workspace
-    HIR, and diagnostic query migration remains open.
+    and deterministic source iteration. Module-header/import facts now share
+    that cache; resolve/type, interface-aware workspace HIR, and diagnostic
+    query migration remains open.
   - [ ] **S03.4 — Thread cancellation and deadlines through every query.** Add
     cancellation, deadline, and diagnostic-budget tests for cold and cached
     paths. Session parse and local HIR queries now check the shared operation
