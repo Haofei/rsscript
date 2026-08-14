@@ -85,6 +85,7 @@ pub fn lower_executable_ir_to_mir(
                 )
             })
             .collect(),
+        variants: BTreeMap::new(),
     };
     let mut lowered = Vec::with_capacity(functions.len());
     let mut debug = Vec::with_capacity(functions.len());
@@ -140,6 +141,18 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<MirModule, MirLowe
         .map(|(_, _, signature)| types.checked_function_signature(signature))
         .collect::<Vec<_>>();
     let external_imports = checked_external_imports(hir)?;
+    let variants = hir
+        .sum_variants()
+        .map(|(variant, owner, fields)| {
+            (
+                variant.to_owned(),
+                VariantLayout {
+                    owner: owner.to_owned(),
+                    fields: fields.iter().map(|field| field.name.clone()).collect(),
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let targets = CallTargets {
         functions: functions
             .iter()
@@ -156,6 +169,7 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<MirModule, MirLowe
                 )
             })
             .collect(),
+        variants,
     };
     let mut lowered = Vec::with_capacity(functions.len());
     let mut debug = Vec::with_capacity(functions.len());
@@ -254,6 +268,13 @@ fn checked_external_signature(signature: &checked::FunctionSig) -> FunctionSigna
 struct CallTargets {
     functions: BTreeMap<String, FunctionId>,
     external_imports: BTreeMap<String, rsscript_mir::ExternalSymbolId>,
+    variants: BTreeMap<String, VariantLayout>,
+}
+
+#[derive(Debug, Clone)]
+struct VariantLayout {
+    owner: String,
+    fields: Vec<String>,
 }
 
 #[derive(Default)]
@@ -885,20 +906,61 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                 return self.unsupported("checked HIR receiver enum variant call");
             }
         };
-        let ok = match name {
-            "Ok" => true,
-            "Err" => false,
-            _ => return self.unsupported("non-Result checked HIR enum variant"),
-        };
-        if args.len() != 1 {
-            return self.unsupported("Result enum variant with non-unary arity");
+        if let Some(ok) = match name {
+            "Ok" => Some(true),
+            "Err" => Some(false),
+            _ => None,
+        } {
+            if args.len() != 1 {
+                return self.unsupported("Result enum variant with non-unary arity");
+            }
+            let value = self.lower_expression(&args[0].value)?;
+            let destination = self.value();
+            self.emit(MirInstruction::MakeResult {
+                destination,
+                ok,
+                value,
+            });
+            return Ok(destination);
         }
-        let value = self.lower_expression(&args[0].value)?;
+        let Some(layout) = self.targets.variants.get(name).cloned() else {
+            return self.unsupported("unknown checked HIR enum variant");
+        };
+        let mut values = vec![None; layout.fields.len()];
+        let mut ordered = args.iter().collect::<Vec<_>>();
+        ordered.sort_by_key(|argument| argument.evaluation_index);
+        for argument in ordered {
+            let index = argument
+                .parameter_index
+                .ok_or_else(|| MirLoweringError::Unsupported {
+                    function: self.function_name.to_owned(),
+                    construct: "enum variant with unresolved argument binding",
+                })?;
+            if index >= values.len() || values[index].is_some() {
+                return self.unsupported("enum variant with invalid argument binding");
+            }
+            values[index] = Some(self.lower_expression(&argument.value)?);
+        }
+        let fields = values
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| value.map(|value| (layout.fields[index].clone(), value)))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| MirLoweringError::Unsupported {
+                function: self.function_name.to_owned(),
+                construct: "enum variant missing checked field binding",
+            })?;
         let destination = self.value();
-        self.emit(MirInstruction::MakeResult {
+        let ty = self.types.intern(WireType::Named {
+            package: None,
+            name: layout.owner,
+            arguments: Vec::new(),
+        });
+        self.emit(MirInstruction::MakeVariant {
             destination,
-            ok,
-            value,
+            ty,
+            variant: name.to_owned(),
+            fields,
         });
         Ok(destination)
     }

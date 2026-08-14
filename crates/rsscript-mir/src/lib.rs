@@ -112,6 +112,14 @@ pub enum MirInstruction {
         ty: TypeId,
         fields: Vec<(String, ValueId)>,
     },
+    /// Construct a resolved sum variant. `ty` identifies the owning sum type;
+    /// `variant` and field labels are verified layout data, not a callee name.
+    MakeVariant {
+        destination: ValueId,
+        ty: TypeId,
+        variant: String,
+        fields: Vec<(String, ValueId)>,
+    },
     /// Build a canonical `Result` variant without routing a language builtin
     /// name through a backend. `ok = true` is `Ok(value)` and `ok = false` is
     /// `Err(value)`.
@@ -579,7 +587,8 @@ fn verify_record_types(
     for block in function.blocks() {
         for instruction in block.instructions() {
             match instruction {
-                MirInstruction::MakeStruct { ty, fields, .. } => {
+                MirInstruction::MakeStruct { ty, fields, .. }
+                | MirInstruction::MakeVariant { ty, fields, .. } => {
                     if !matches!(types.get(ty.index()), Some(WireType::Named { .. })) {
                         return Err(MirValidationError::InvalidRecordType {
                             function: function.id,
@@ -886,6 +895,7 @@ fn instruction_definition(instruction: &MirInstruction) -> Option<ValueId> {
         | MirInstruction::MakeMap { destination, .. }
         | MirInstruction::MakeObject { destination, .. }
         | MirInstruction::MakeStruct { destination, .. }
+        | MirInstruction::MakeVariant { destination, .. }
         | MirInstruction::MakeResult { destination, .. }
         | MirInstruction::ListGet { destination, .. }
         | MirInstruction::GetField { destination, .. }
@@ -923,6 +933,9 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
             fields.iter().map(|(_, value)| *value).collect()
         }
         MirInstruction::MakeStruct { fields, .. } => {
+            fields.iter().map(|(_, value)| *value).collect()
+        }
+        MirInstruction::MakeVariant { fields, .. } => {
             fields.iter().map(|(_, value)| *value).collect()
         }
         MirInstruction::MakeResult { value, .. } => vec![*value],
@@ -1100,6 +1113,7 @@ fn transfer_move_state(
         | MirInstruction::MakeMap { .. }
         | MirInstruction::MakeObject { .. }
         | MirInstruction::MakeStruct { .. }
+        | MirInstruction::MakeVariant { .. }
         | MirInstruction::MakeResult { .. }
         | MirInstruction::ListGet { .. }
         | MirInstruction::GetField { .. }
@@ -1167,7 +1181,8 @@ fn verify_instruction(
         | MirInstruction::ListGet { destination, .. }
         | MirInstruction::GetField { destination, .. }
         | MirInstruction::ListLen { destination, .. } => define(*destination, defined),
-        MirInstruction::MakeStruct { destination, .. } => define(*destination, defined),
+        MirInstruction::MakeStruct { destination, .. }
+        | MirInstruction::MakeVariant { destination, .. } => define(*destination, defined),
         MirInstruction::ReadPlace { destination, place } => {
             check_live_place(*place, moved_places)?;
             define(*destination, defined)

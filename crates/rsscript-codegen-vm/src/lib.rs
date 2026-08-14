@@ -318,6 +318,36 @@ fn lower_instruction(
                 ],
             ));
         }
+        MirInstruction::MakeVariant {
+            destination,
+            variant,
+            fields,
+            ..
+        } => code.push(instr(
+            "MakeVariant",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                (
+                    "layout",
+                    json!({
+                        "name": variant,
+                        "field_names": fields.iter().map(|(field, _)| field).collect::<Vec<_>>(),
+                    }),
+                ),
+                (
+                    "fields",
+                    json!(
+                        fields
+                            .iter()
+                            .map(|(field, value)| [
+                                serde_json::Value::String(field.clone()),
+                                json!(value_reg(function, *value)),
+                            ])
+                            .collect::<Vec<_>>()
+                    ),
+                ),
+            ],
+        )),
         MirInstruction::MakeResult {
             destination,
             ok,

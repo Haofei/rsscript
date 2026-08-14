@@ -50,6 +50,10 @@ pub enum MirValue {
         name: String,
         fields: Vec<(String, MirValue)>,
     },
+    Variant {
+        name: String,
+        fields: Vec<(String, MirValue)>,
+    },
     ResultOk(Box<MirValue>),
     ResultErr(Box<MirValue>),
 }
@@ -89,6 +93,14 @@ impl MirValue {
                 format!("{{{}}}", rendered.join(","))
             }
             Self::Record { name, fields } => {
+                let fields = fields
+                    .iter()
+                    .map(|(field, value)| format!("{field}: {}", value.render()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{name}({fields})")
+            }
+            Self::Variant { name, fields } => {
                 let fields = fields
                     .iter()
                     .map(|(field, value)| format!("{field}: {}", value.render()))
@@ -262,6 +274,22 @@ impl<'a> Interpreter<'a> {
                                 .collect::<Result<Vec<_>, MirExecutionError>>()?,
                         });
                     }
+                    MirInstruction::MakeVariant {
+                        destination,
+                        variant,
+                        fields,
+                        ..
+                    } => {
+                        values[destination.index()] = Some(MirValue::Variant {
+                            name: variant.clone(),
+                            fields: fields
+                                .iter()
+                                .map(|(field, value)| {
+                                    Ok((field.clone(), value_at(&values, *value)?))
+                                })
+                                .collect::<Result<Vec<_>, MirExecutionError>>()?,
+                        });
+                    }
                     MirInstruction::MakeResult {
                         destination,
                         ok,
@@ -318,14 +346,14 @@ impl<'a> Interpreter<'a> {
                         field,
                     } => {
                         let value = match value_at(&values, *base)? {
-                            MirValue::JsonObject(fields) | MirValue::Record { fields, .. } => {
-                                fields
-                                    .into_iter()
-                                    .find_map(|(name, value)| (name == *field).then_some(value))
-                                    .ok_or(MirExecutionError::InvalidOperation(
-                                        "missing object field",
-                                    ))?
-                            }
+                            MirValue::JsonObject(fields)
+                            | MirValue::Record { fields, .. }
+                            | MirValue::Variant { fields, .. } => fields
+                                .into_iter()
+                                .find_map(|(name, value)| (name == *field).then_some(value))
+                                .ok_or(MirExecutionError::InvalidOperation(
+                                    "missing object field",
+                                ))?,
                             _ => return Err(MirExecutionError::InvalidOperation("field base")),
                         };
                         values[destination.index()] = Some(value);

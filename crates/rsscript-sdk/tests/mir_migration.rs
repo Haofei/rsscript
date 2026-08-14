@@ -334,6 +334,35 @@ fn main() -> Int {
 }
 
 #[test]
+fn direct_checked_hir_variant_construction_reaches_verified_bytecode() {
+    let source = r#"
+sum ResultValue {
+    Value(count: Int)
+}
+
+fn main() -> ResultValue {
+    return Value(count: 42)
+}
+"#;
+    let compiled =
+        compile_source_to_ir("direct-hir-variant.rss", source).expect("variant fixture compiles");
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("checked HIR variant uses direct lowering");
+    assert!(mir.functions()[0]
+        .blocks()
+        .iter()
+        .flat_map(|block| block.instructions())
+        .any(|instruction| matches!(instruction, MirInstruction::MakeVariant { variant, .. } if variant == "Value")));
+    reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("direct HIR variant emits verified bytecode");
+}
+
+#[test]
 fn direct_checked_hir_branch_reaches_verified_bytecode() {
     let source = r#"
 fn main() -> Int {
