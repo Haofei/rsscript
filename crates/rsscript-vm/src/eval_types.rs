@@ -8,7 +8,9 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Instant;
 
-pub use rsscript_abi_model::{ExternalImport, ExternalSymbol, FunctionSignature, SignatureHash};
+pub use rsscript_abi_model::{
+    ExternalImport, ExternalSymbol, FunctionSignature, SignatureHash, WireType, WireValue,
+};
 pub use rsscript_provider_api::{
     AsyncInterpreterFn, AsyncProviderCallContext, BlockingBehavior, CancellationBehavior,
     HostCallContext, NativeInterpreterFn, NativeValue, ProviderCallContext, ProviderCallMode,
@@ -16,7 +18,7 @@ pub use rsscript_provider_api::{
     ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor, ProviderFuture,
     ProviderInvocationContract, ProviderLoadError, ProviderResource, ProviderResourceRegistry,
     ProviderResourceTable, ProviderTraceSink, ResolvedProviderFunction, ResourceCleanupContract,
-    ResourceHandle,
+    ResourceHandle, WireInterpreterFn,
 };
 
 #[derive(Default)]
@@ -89,6 +91,67 @@ fn check_payload_budget(
         )));
     }
     Ok(())
+}
+
+/// Convert the scalar subset that has an unambiguous legacy VM representation
+/// to the canonical Provider wire model. Records, variants, resources, lists,
+/// maps, JSON and chars deliberately fail closed until the linked Artifact type
+/// table is available: fabricating numeric identities or field order here would
+/// make `WireValue` less trustworthy than the legacy adapter it replaces.
+fn native_scalar_to_wire(
+    value: NativeValue,
+    expected: &WireType,
+) -> Result<WireValue, ProviderError> {
+    match (value, expected) {
+        (NativeValue::Unit, WireType::Unit) => Ok(WireValue::Unit),
+        (NativeValue::Bool(value), WireType::Bool) => Ok(WireValue::Bool { value }),
+        (NativeValue::Int(value), WireType::Int { .. }) => Ok(WireValue::Int { value }),
+        (NativeValue::Float(value), WireType::Float { .. }) => Ok(WireValue::Float { value }),
+        (NativeValue::String(value), WireType::String) => Ok(WireValue::String { value }),
+        (NativeValue::Bytes(value), WireType::Bytes) => Ok(WireValue::Bytes { value }),
+        (
+            _,
+            WireType::Unit
+            | WireType::Bool
+            | WireType::Int { .. }
+            | WireType::Float { .. }
+            | WireType::String
+            | WireType::Bytes,
+        ) => Err(ProviderError::invalid_argument(
+            "provider wire argument does not match its linked scalar signature",
+        )),
+        _ => Err(ProviderError::unavailable(
+            "structured provider wire values require a linked Artifact type-table adapter",
+        )),
+    }
+}
+
+fn wire_scalar_to_native(
+    value: WireValue,
+    expected: &WireType,
+) -> Result<NativeValue, ProviderError> {
+    match (value, expected) {
+        (WireValue::Unit, WireType::Unit) => Ok(NativeValue::Unit),
+        (WireValue::Bool { value }, WireType::Bool) => Ok(NativeValue::Bool(value)),
+        (WireValue::Int { value }, WireType::Int { .. }) => Ok(NativeValue::Int(value)),
+        (WireValue::Float { value }, WireType::Float { .. }) => Ok(NativeValue::Float(value)),
+        (WireValue::String { value }, WireType::String) => Ok(NativeValue::String(value)),
+        (WireValue::Bytes { value }, WireType::Bytes) => Ok(NativeValue::Bytes(value)),
+        (
+            _,
+            WireType::Unit
+            | WireType::Bool
+            | WireType::Int { .. }
+            | WireType::Float { .. }
+            | WireType::String
+            | WireType::Bytes,
+        ) => Err(ProviderError::invalid_argument(
+            "provider wire result does not match its linked scalar signature",
+        )),
+        _ => Err(ProviderError::unavailable(
+            "structured provider wire values require a linked Artifact type-table adapter",
+        )),
+    }
 }
 
 /// A shared permit held for the full lifetime of a non-reentrant Provider
@@ -227,6 +290,30 @@ impl ExternalFunction {
                 .map(ProviderResourceTable::created);
             let result = catch_unwind(AssertUnwindSafe(|| match &self.callable {
                 ProviderCallable::Sync(callable) => callable.call_with_context(context, args),
+                ProviderCallable::WireSync(callable) => {
+                    let signature = self
+                        .contract()
+                        .ok_or_else(|| {
+                            ProviderError::unavailable(
+                                "wire provider function requires a linked descriptor",
+                            )
+                        })?
+                        .descriptor
+                        .signature
+                        .clone();
+                    if signature.parameters.len() != args.len() {
+                        return Err(ProviderError::invalid_argument(
+                            "provider wire argument count does not match its linked signature",
+                        ));
+                    }
+                    let wire_args = args
+                        .into_iter()
+                        .zip(&signature.parameters)
+                        .map(|(value, parameter)| native_scalar_to_wire(value, &parameter.ty))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let result = callable.call_with_context(context, wire_args)?;
+                    wire_scalar_to_native(result, &signature.result)
+                }
                 ProviderCallable::Async(_) => Err(ProviderError::unavailable(
                     "async provider function requires the VM async dispatcher",
                 )),
@@ -455,6 +542,11 @@ impl From<ExternalFunction> for NativeInterpreterFn {
     fn from(function: ExternalFunction) -> Self {
         match function.callable {
             ProviderCallable::Sync(callable) => callable,
+            ProviderCallable::WireSync(_) => NativeInterpreterFn::new(|_| {
+                Err(ProviderError::unavailable(
+                    "wire Provider callable cannot be converted to the legacy sync adapter",
+                ))
+            }),
             ProviderCallable::Async(_) => NativeInterpreterFn::new(|_| {
                 Err(ProviderError::unavailable(
                     "async Provider callable cannot be converted to a sync callable",
@@ -726,6 +818,64 @@ mod provider_contract_tests {
             )
             .unwrap();
         registry.into_bindings().next().unwrap().1
+    }
+
+    fn registered_scalar_wire_function(callable: WireInterpreterFn) -> ExternalFunction {
+        let symbol = ExternalSymbol::new("host.test.increment").unwrap();
+        let signature = FunctionSignature {
+            parameters: vec![rsscript_abi_model::ParameterSignature {
+                name: "value".to_string(),
+                effect: rsscript_abi_model::DataEffect::Read,
+                ty: "Int".into(),
+                retained: false,
+            }],
+            result: "Int".into(),
+            asynchronous: false,
+        };
+        let descriptor = ProviderDescriptor {
+            provider_id: "test.provider".to_string(),
+            provider_version: "1.0.0".to_string(),
+            supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+            functions: vec![ProviderFunctionDescriptor {
+                symbol: symbol.clone(),
+                signature: signature.clone(),
+                entry: "increment".to_string(),
+                call_mode: ProviderCallMode::Sync,
+                blocking: BlockingBehavior::NonBlocking,
+                cancellation: CancellationBehavior::Cooperative,
+                thread_safe: true,
+                reentrant: true,
+                resource_cleanup: ResourceCleanupContract::None,
+                error_mapping: ProviderErrorMapping::StructuredV1,
+            }],
+        };
+        let mut registry = ExternalFunctionRegistry::new();
+        registry
+            .register_provider(
+                &descriptor,
+                BTreeMap::from([(
+                    symbol,
+                    ProviderFunction {
+                        signature,
+                        callable: ProviderCallable::from(callable),
+                    },
+                )]),
+            )
+            .unwrap();
+        registry.into_bindings().next().unwrap().1
+    }
+
+    #[test]
+    fn linked_scalar_wire_provider_avoids_the_native_callable_adapter() {
+        let function = registered_scalar_wire_function(WireInterpreterFn::new(|args| {
+            assert_eq!(args, vec![WireValue::Int { value: 41 }]);
+            Ok(WireValue::Int { value: 42 })
+        }));
+        let mut context = ProviderCallContext::default();
+        let result = function
+            .call_with_context(&mut context, vec![NativeValue::Int(41)])
+            .expect("linked scalar wire call");
+        assert_eq!(result, NativeValue::Int(42));
     }
 
     fn registered_async_function(callable: AsyncInterpreterFn) -> ExternalFunction {

@@ -436,7 +436,8 @@ pub mod provider_api {
         BlockingBehavior, CancellationBehavior, ExternalSymbol, FunctionSignature, HostCallContext,
         NativeInterpreterFn, NativeValue, ProviderCallContext, ProviderCallMode,
         ProviderDescriptor, ProviderError, ProviderErrorCode, ProviderFunction,
-        ProviderFunctionDescriptor, ProviderLoadError, ResourceHandle,
+        ProviderFunctionDescriptor, ProviderLoadError, ResourceHandle, WireInterpreterFn,
+        WireValue,
     };
 }
 

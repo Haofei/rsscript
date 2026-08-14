@@ -1232,6 +1232,10 @@ mechanical acceptance condition holds.
     bindgen now chooses `WireValue` for unresolved named types rather than
     extending its NativeValue fallback; registry/VM dispatch migration remains
     open.
+    The reference VM now admits descriptor-linked synchronous scalar
+    `WireValue` Providers (`Unit`, booleans, integer, float, string, bytes)
+    without routing their callable through `NativeInterpreterFn`; structured
+    wire values remain fail-closed until the type-table adapter exists.
     - [x] **P06.2a — Bridge generation-safe resource handles.** Provider
       runtime handles now convert to/from the canonical numeric wire handle
       with a descriptor-supplied resource type; no legacy type-name string is

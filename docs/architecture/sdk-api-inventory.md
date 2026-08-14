@@ -38,7 +38,8 @@ snapshot path during migration.
   recursion, lexical resource-lifetime and explicit resource-transfer, and
   structured task-group contracts.
 - Provider lifecycle: `ProviderRegistry`, provider descriptors, structured
-  signatures, registration errors, and typed execution context contracts.
+  signatures, `WireInterpreterFn`/`WireValue` for the canonical scalar
+  Provider path, registration errors, and typed execution context contracts.
 - Runtime lifecycle: `Runtime`, `LinkedArtifact`, `ExecutionRequest`, bounded
   `RunLimits`, `ExecutionReport`, termination reason, usage, and diagnostics.
 - Shared operation control: cancellation tokens, monotonic deadlines, and

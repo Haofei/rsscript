@@ -801,13 +801,17 @@ impl AsyncInterpreterFn {
 #[derive(Clone)]
 pub enum ProviderCallable {
     Sync(NativeInterpreterFn),
+    /// Canonical typed wire callable. The current reference VM admits this
+    /// only for synchronous scalar signatures; structured values wait for the
+    /// linked type-table adapter rather than degrading to string identities.
+    WireSync(WireInterpreterFn),
     Async(AsyncInterpreterFn),
 }
 
 impl ProviderCallable {
     pub const fn call_mode(&self) -> ProviderCallMode {
         match self {
-            Self::Sync(_) => ProviderCallMode::Sync,
+            Self::Sync(_) | Self::WireSync(_) => ProviderCallMode::Sync,
             Self::Async(_) => ProviderCallMode::Async,
         }
     }
@@ -822,6 +826,12 @@ impl From<NativeInterpreterFn> for ProviderCallable {
 impl From<AsyncInterpreterFn> for ProviderCallable {
     fn from(value: AsyncInterpreterFn) -> Self {
         Self::Async(value)
+    }
+}
+
+impl From<WireInterpreterFn> for ProviderCallable {
+    fn from(value: WireInterpreterFn) -> Self {
+        Self::WireSync(value)
     }
 }
 
