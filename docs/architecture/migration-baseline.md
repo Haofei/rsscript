@@ -1249,6 +1249,9 @@ mechanical acceptance condition holds.
       visibly compatibility-only adapters.
   - [ ] **P06.3 — Migrate official Providers and mocks.** Each migration keeps
     signature, error, resource, and payload-budget conformance fixtures green.
+    The scalar `time` Provider now uses `WireInterpreterFn`; the conformance
+    kit validates wire callables directly, without a `NativeValue` detour.
+    Structured and asynchronous Provider migrations remain follow-up.
   - [ ] **P06.4 — Remove legacy escape variants from canonical APIs.** JSON stays
     only behind a named extension codec with explicit interface declaration.
 - [x] **P07 — Remove policy-shaped authority from Core ABI.** `HostCallContext`

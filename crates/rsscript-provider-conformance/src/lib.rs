@@ -15,7 +15,7 @@ use rsscript_provider_api::{
     BlockingBehavior, CancellationBehavior, CancellationToken, ExternalImport, ExternalSymbol,
     MonotonicDeadline, NativeInterpreterFn, ProviderCallContext, ProviderDescriptor,
     ProviderErrorCode, ProviderFunction, ProviderLoadError, ProviderRegistry, RUNTIME_ABI_VERSION,
-    ResourceCleanupContract,
+    ResourceCleanupContract, WireInterpreterFn,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,6 +189,151 @@ pub fn assert_provider_conforms(
     implementations: BTreeMap<ExternalSymbol, ProviderFunction<NativeInterpreterFn>>,
 ) -> ProviderConformanceReport {
     check_provider(descriptor, implementations).unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// Check a canonical synchronous wire Provider against the same descriptor,
+/// registry, cancellation, and deadline contracts as a legacy native Provider.
+///
+/// This lets an official Provider migrate without routing its public callable
+/// through `NativeValue` merely to satisfy the conformance harness.
+pub fn check_wire_provider(
+    descriptor: ProviderDescriptor,
+    implementations: BTreeMap<ExternalSymbol, ProviderFunction<WireInterpreterFn>>,
+) -> Result<ProviderConformanceReport, ProviderConformanceError> {
+    check_wire_provider_inner(&descriptor, implementations)?;
+    Ok(conformance_report(&descriptor))
+}
+
+#[track_caller]
+pub fn assert_wire_provider_conforms(
+    descriptor: ProviderDescriptor,
+    implementations: BTreeMap<ExternalSymbol, ProviderFunction<WireInterpreterFn>>,
+) -> ProviderConformanceReport {
+    check_wire_provider(descriptor, implementations).unwrap_or_else(|error| panic!("{error}"))
+}
+
+fn check_wire_provider_inner(
+    descriptor: &ProviderDescriptor,
+    implementations: BTreeMap<ExternalSymbol, ProviderFunction<WireInterpreterFn>>,
+) -> Result<(), ProviderConformanceError> {
+    check_descriptor_shape(descriptor)?;
+    let mut registry = ProviderRegistry::new(RUNTIME_ABI_VERSION);
+    registry.register_provider(descriptor, implementations)?;
+
+    for function in &descriptor.functions {
+        let import = ExternalImport {
+            symbol: function.symbol.clone(),
+            signature: function.signature.clone(),
+            signature_hash: function.signature.hash(),
+            abi_version: RUNTIME_ABI_VERSION,
+        };
+        let resolved = registry.resolve(&import)?;
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let mut cancelled_context = ProviderCallContext {
+            cancellation: Some(&cancellation),
+            blocking_allowed: true,
+            async_allowed: true,
+            ..ProviderCallContext::default()
+        };
+        let observed = resolved
+            .callable
+            .call_with_context(&mut cancelled_context, Vec::new())
+            .err()
+            .map(|error| error.code);
+        if observed != Some(ProviderErrorCode::Cancelled) {
+            return Err(ProviderConformanceError::CancellationPreflight {
+                symbol: function.symbol.clone(),
+                observed,
+            });
+        }
+
+        let mut expired_context = ProviderCallContext {
+            deadline: Some(MonotonicDeadline::at(
+                Instant::now()
+                    .checked_sub(Duration::from_millis(1))
+                    .expect("one millisecond before now is representable"),
+            )),
+            blocking_allowed: true,
+            async_allowed: true,
+            ..ProviderCallContext::default()
+        };
+        let observed = resolved
+            .callable
+            .call_with_context(&mut expired_context, Vec::new())
+            .err()
+            .map(|error| error.code);
+        if observed != Some(ProviderErrorCode::DeadlineExceeded) {
+            return Err(ProviderConformanceError::DeadlinePreflight {
+                symbol: function.symbol.clone(),
+                observed,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn check_descriptor_shape(descriptor: &ProviderDescriptor) -> Result<(), ProviderConformanceError> {
+    if descriptor.functions.is_empty() {
+        return Err(ProviderConformanceError::EmptyDescriptor);
+    }
+    let mut abi_versions = BTreeSet::new();
+    for abi in &descriptor.supported_abi {
+        if !abi_versions.insert(*abi) {
+            return Err(ProviderConformanceError::DuplicateAbi(*abi));
+        }
+    }
+    let mut entries = BTreeSet::new();
+    for function in &descriptor.functions {
+        if function.entry.trim().is_empty() {
+            return Err(ProviderConformanceError::EmptyEntry(
+                function.symbol.clone(),
+            ));
+        }
+        if !entries.insert(function.entry.clone()) {
+            return Err(ProviderConformanceError::DuplicateEntry(
+                function.entry.clone(),
+            ));
+        }
+        let mut parameters = BTreeSet::new();
+        for parameter in &function.signature.parameters {
+            if parameter.name.trim().is_empty() {
+                return Err(ProviderConformanceError::EmptyParameterName(
+                    function.symbol.clone(),
+                ));
+            }
+            if !parameters.insert(parameter.name.clone()) {
+                return Err(ProviderConformanceError::DuplicateParameterName {
+                    symbol: function.symbol.clone(),
+                    parameter: parameter.name.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn conformance_report(descriptor: &ProviderDescriptor) -> ProviderConformanceReport {
+    ProviderConformanceReport {
+        provider_id: descriptor.provider_id.clone(),
+        functions_checked: descriptor.functions.len(),
+        blocking_functions: descriptor
+            .functions
+            .iter()
+            .filter(|function| function.blocking == BlockingBehavior::MayBlock)
+            .count(),
+        cancellable_functions: descriptor
+            .functions
+            .iter()
+            .filter(|function| function.cancellation != CancellationBehavior::NotApplicable)
+            .count(),
+        resource_functions: descriptor
+            .functions
+            .iter()
+            .filter(|function| function.resource_cleanup != ResourceCleanupContract::None)
+            .count(),
+    }
 }
 
 #[cfg(test)]
