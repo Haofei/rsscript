@@ -216,7 +216,7 @@ fn load_package_documents_at_generation(
     // Capture one immutable input before constructing editor documents. The
     // loader owns filesystem access; later language-service queries consume
     // only these captured bytes.
-    let Ok(snapshot) = WorkspaceLoader::default().snapshot(package_dir) else {
+    let Ok(snapshot) = WorkspaceLoader::default().snapshot_from(package_dir, Path::new(".")) else {
         return HashMap::new();
     };
     snapshot

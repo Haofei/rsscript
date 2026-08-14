@@ -1075,6 +1075,17 @@ fn language_engine_does_not_read_the_operating_system() {
             "workspace loader must retain explicit input boundary {boundary}"
         );
     }
+    for forbidden in [
+        "std::env::current_dir",
+        "pub fn snapshot(",
+        "pub fn snapshot_with_operation(",
+        "pub fn load(",
+    ] {
+        assert!(
+            !workspace_loader.contains(forbidden),
+            "workspace loader must not retain ambient-current-directory compatibility API `{forbidden}`"
+        );
+    }
 
     let description = language_manifest["package"]["description"]
         .as_str()

@@ -162,23 +162,6 @@ impl WorkspaceLoader {
         self.snapshot_from_inner(base, package_dir, Some(operation))
     }
 
-    /// Compatibility capture API using the process current directory for
-    /// relative paths. New embedding code should use snapshot_from.
-    pub fn snapshot(&self, package_dir: &Path) -> Result<WorkspaceSnapshot, WorkspaceLoadError> {
-        self.snapshot_inner(package_dir, None)
-    }
-
-    /// Compatibility capture API with explicit operation control. New embeds
-    /// should prefer [`Self::snapshot_from_with_operation`] to avoid ambient
-    /// current-directory lookup as well.
-    pub fn snapshot_with_operation(
-        &self,
-        package_dir: &Path,
-        operation: &OperationContext,
-    ) -> Result<WorkspaceSnapshot, WorkspaceLoadError> {
-        self.snapshot_inner(package_dir, Some(operation))
-    }
-
     fn snapshot_from_inner(
         &self,
         base: &Path,
@@ -193,33 +176,6 @@ impl WorkspaceLoader {
             base.join(package_dir)
         };
         self.snapshot_at(root, operation)
-    }
-
-    fn snapshot_inner(
-        &self,
-        package_dir: &Path,
-        operation: Option<&OperationContext>,
-    ) -> Result<WorkspaceSnapshot, WorkspaceLoadError> {
-        check_operation(operation)?;
-        let root = if package_dir.is_absolute() {
-            package_dir.to_path_buf()
-        } else {
-            std::env::current_dir()
-                .map_err(|error| {
-                    WorkspaceLoadError::global(
-                        WorkspaceLoadErrorCode::ResolveRoot,
-                        format!("cannot resolve current directory: {error}"),
-                    )
-                })?
-                .join(package_dir)
-        };
-        self.snapshot_at(root, operation)
-    }
-
-    /// Compatibility API returning the captured file list.
-    pub fn load(&self, package_dir: &Path) -> Result<Vec<WorkspaceSourceFile>, WorkspaceLoadError> {
-        self.snapshot(package_dir)
-            .map(WorkspaceSnapshot::into_files)
     }
 
     /// Capture files relative to an explicit base and return the compatibility
@@ -507,8 +463,9 @@ mod tests {
 
     #[test]
     fn missing_root_has_a_stable_structured_error() {
+        let base = Path::new(env!("CARGO_MANIFEST_DIR"));
         let error = WorkspaceLoader::default()
-            .load(Path::new("definitely-missing-rsscript-workspace"))
+            .load_from(base, Path::new("definitely-missing-rsscript-workspace"))
             .unwrap_err();
         assert_eq!(error.code, WorkspaceLoadErrorCode::RootNotDirectory);
         assert!(error.path.is_some());

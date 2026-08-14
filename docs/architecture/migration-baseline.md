@@ -567,8 +567,9 @@ mechanical acceptance condition holds.
     directory traversal, manifest/dependency discovery, path normalization, and
     snapshot capture from compiler. The loader now exposes immutable
     WorkspaceSnapshot capture with explicit-base and operation-aware APIs plus
-    a stable, absolute-path-independent content digest; compiler package
-    callers remain to be migrated.
+    a stable, absolute-path-independent content digest. Ambient-current-directory
+    compatibility capture APIs have been removed and the LSP captures from its
+    explicit package root; compiler package callers remain to be migrated.
   - [ ] **S05.2 — Move Artifact persistence to an adapter.** Relocate locks,
     atomic writes, temporary files, compression, and artifact-store policy out
     of compiler. The confined lock/read/write implementation now lives in the
