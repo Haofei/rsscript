@@ -277,4 +277,53 @@ mod tests {
             descriptor.to_json_bytes().unwrap()
         );
     }
+
+    #[test]
+    fn descriptor_preserves_provider_record_layouts_in_canonical_order() {
+        let descriptor = InterfaceDescriptorV1::from_interface_source(
+            "host.rssi",
+            r#"module host.http
+pub struct Z {
+    body: String
+}
+pub struct HttpResponse {
+    status: Int
+    body: String
+}
+pub fn get(url: read String) -> HttpResponse
+"#,
+        )
+        .expect("valid record interface");
+        assert_eq!(
+            descriptor
+                .records
+                .iter()
+                .map(|record| record.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["host.http.HttpResponse", "host.http.Z"],
+        );
+        let response = &descriptor.records[0];
+        assert_eq!(
+            response
+                .fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["status", "body"],
+        );
+        assert_eq!(
+            response
+                .fields
+                .iter()
+                .map(|field| &field.ty)
+                .collect::<Vec<_>>(),
+            vec![
+                &WireType::Int {
+                    bits: 64,
+                    signed: true,
+                },
+                &WireType::String,
+            ],
+        );
+    }
 }
