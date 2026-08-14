@@ -2043,6 +2043,7 @@ dependencies = [
  "rsscript-provider-api",
  "rsscript-review-reir",
  "rsscript-vm",
+ "rsscript-workspace-loader",
  "serde",
  "serde_json",
  "sha1",
