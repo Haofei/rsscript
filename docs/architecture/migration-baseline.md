@@ -699,6 +699,13 @@ mechanical acceptance condition holds.
       fields. The direct build path emits the existing verified bytecode opcode;
       variant matching, destructuring, and guards remain fail-closed pending
       explicit CFG dispatch.
+    - [x] **M02.3j — Lower resolved payload-free variant dispatch.** Checked HIR
+      now lowers a resolved, tag-only sum-variant match arm to
+      `MatchVariant { value, expected, match_target, else_target }`. The MIR
+      verifier validates both CFG edges and non-empty tags; the direct codegen
+      path reuses the verified `MatchVariant` bytecode instruction. Payload
+      destructuring and guards remain fail-closed pending explicit binding and
+      cleanup semantics.
 - [x] **M02.4 — Add MIR structural validation.** Reject dangling blocks,
     invalid IDs, unterminated blocks, undefined values, and malformed CFG edges.
     - [x] **M02.4a — Verify the initial structural subset.** The verifier

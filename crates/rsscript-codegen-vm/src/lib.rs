@@ -608,6 +608,25 @@ fn lower_terminator(
             code.push(instr("Jump", [("target", json!(0))]));
             patches.push((index, *else_target, "target"));
         }
+        MirTerminator::MatchVariant {
+            value,
+            expected,
+            match_target,
+            else_target,
+        } => {
+            let index = code.len();
+            code.push(instr(
+                "MatchVariant",
+                [
+                    ("src", json!(value_reg(function, *value))),
+                    ("expected", json!(expected)),
+                    ("match_ip", json!(0)),
+                    ("else_ip", json!(0)),
+                ],
+            ));
+            patches.push((index, *match_target, "match_ip"));
+            patches.push((index, *else_target, "else_ip"));
+        }
         MirTerminator::Unreachable => code.push(instr(
             "RuntimeError",
             [("message", json!("entered unreachable MIR block"))],

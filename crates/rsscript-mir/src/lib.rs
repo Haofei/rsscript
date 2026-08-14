@@ -286,6 +286,14 @@ pub enum MirTerminator {
         then_target: BlockId,
         else_target: BlockId,
     },
+    /// Branch on a resolved sum-variant tag. The expected tag is layout data
+    /// from semantic HIR, not a source-level pattern node.
+    MatchVariant {
+        value: ValueId,
+        expected: String,
+        match_target: BlockId,
+        else_target: BlockId,
+    },
     Unreachable,
 }
 
@@ -980,6 +988,7 @@ fn terminator_uses(terminator: &MirTerminator) -> Vec<ValueId> {
     match terminator {
         MirTerminator::Return(Some(value)) => vec![*value],
         MirTerminator::Branch { condition, .. } => vec![*condition],
+        MirTerminator::MatchVariant { value, .. } => vec![*value],
         MirTerminator::Return(None) | MirTerminator::Jump(_) | MirTerminator::Unreachable => {
             Vec::new()
         }
@@ -1028,6 +1037,14 @@ fn successors(terminator: &MirTerminator) -> impl Iterator<Item = BlockId> {
             ..
         } => {
             successors[0] = Some(*then_target);
+            successors[1] = Some(*else_target);
+        }
+        MirTerminator::MatchVariant {
+            match_target,
+            else_target,
+            ..
+        } => {
+            successors[0] = Some(*match_target);
             successors[1] = Some(*else_target);
         }
         MirTerminator::Return(_) | MirTerminator::Unreachable => {}
@@ -1411,6 +1428,20 @@ fn verify_terminator(
             check_target(*then_target)?;
             check_target(*else_target)?;
         }
+        MirTerminator::MatchVariant {
+            expected,
+            match_target,
+            else_target,
+            ..
+        } => {
+            if expected.is_empty() {
+                return Err(MirValidationError::InvalidVariantTag {
+                    function: function.id,
+                });
+            }
+            check_target(*match_target)?;
+            check_target(*else_target)?;
+        }
         MirTerminator::Unreachable => {}
     }
     Ok(())
@@ -1462,6 +1493,9 @@ pub enum MirValidationError {
     InvalidAggregateField {
         function: FunctionId,
         field: String,
+    },
+    InvalidVariantTag {
+        function: FunctionId,
     },
     InvalidResourceType {
         function: FunctionId,

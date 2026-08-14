@@ -174,6 +174,25 @@ fn main() -> Int {
 "#,
     },
     MigrationCase {
+        name: "tag_only_variant_match",
+        capability: "resolved payload-free sum-variant dispatch",
+        stage: MigrationStage::DualPath,
+        source: r#"
+sum State {
+    Ready
+    Waiting
+}
+
+fn main() -> Int {
+    let state = Ready()
+    match state {
+        Ready => { return 42 }
+        Waiting => { return 0 }
+    }
+}
+"#,
+    },
+    MigrationCase {
         name: "list_index",
         capability: "resolved list indexing",
         stage: MigrationStage::DualPath,

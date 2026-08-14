@@ -1176,6 +1176,19 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                         else_target: next,
                     });
                 }
+                rsscript_syntax::ast::MatchPattern::Variant { name, bindings, .. }
+                    if bindings.is_empty() =>
+                {
+                    if !self.targets.variants.contains_key(name) {
+                        return self.unsupported("unresolved checked HIR variant match pattern");
+                    }
+                    self.terminate(MirTerminator::MatchVariant {
+                        value,
+                        expected: name.clone(),
+                        match_target: arm_block,
+                        else_target: next,
+                    });
+                }
                 _ => return self.unsupported("non-literal checked HIR match pattern"),
             }
 
@@ -1221,6 +1234,21 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                     self.terminate(MirTerminator::Branch {
                         condition,
                         then_target: arm_block,
+                        else_target: next,
+                    });
+                }
+                rsscript_syntax::ast::MatchPattern::Variant { name, bindings, .. }
+                    if bindings.is_empty() =>
+                {
+                    if !self.targets.variants.contains_key(name) {
+                        return self.unsupported(
+                            "unresolved checked HIR variant match expression pattern",
+                        );
+                    }
+                    self.terminate(MirTerminator::MatchVariant {
+                        value,
+                        expected: name.clone(),
+                        match_target: arm_block,
                         else_target: next,
                     });
                 }

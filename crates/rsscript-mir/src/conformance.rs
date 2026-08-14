@@ -488,6 +488,17 @@ impl<'a> Interpreter<'a> {
                     MirValue::Bool(false) => block = else_target.index(),
                     _ => return Err(MirExecutionError::InvalidBranchCondition),
                 },
+                MirTerminator::MatchVariant {
+                    value,
+                    expected,
+                    match_target,
+                    else_target,
+                } => match value_at(&values, *value)? {
+                    MirValue::Variant { name, .. } if name == *expected => {
+                        block = match_target.index();
+                    }
+                    _ => block = else_target.index(),
+                },
                 MirTerminator::Unreachable => {
                     return Err(MirExecutionError::InvalidOperation("unreachable"));
                 }
