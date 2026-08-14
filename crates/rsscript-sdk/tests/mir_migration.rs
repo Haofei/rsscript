@@ -417,11 +417,7 @@ fn supported_sdk_builds_use_the_mir_codegen_artifact() {
     let validated = validate_sources_with_interfaces(&[(&file, case.source)], &[])
         .expect("snapshot fixture validates");
     let compiled = compile_validated_to_ir(&validated);
-    let verified_mir = compiled
-        .mir()
-        .expect("fixture lowers to MIR")
-        .into_verified()
-        .expect("fixture MIR verifies");
+    let verified_mir = compiled.mir().expect("fixture lowers to verified MIR");
     let mut expected = rsscript_codegen_vm::emit_artifact(
         &verified_mir,
         compiled.source_hash(),

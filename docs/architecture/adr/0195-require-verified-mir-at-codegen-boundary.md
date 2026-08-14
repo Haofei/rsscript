@@ -13,10 +13,10 @@ skip the MIR verifier by convention.
 ## Decision
 
 `rsscript-mir` provides `VerifiedMir`, an owning phase wrapper constructed only
-by re-running `MirModule` verification. `rsscript-codegen-vm::emit_artifact`
-accepts `&VerifiedMir` rather than raw MIR. The compiler and compatibility
-adapters perform this admission before codegen; the legacy adapter may accept
-raw MIR only because it immediately verifies it before delegating.
+by re-running `MirModule` verification. The normal checked-HIR lowerer returns
+that phase directly, and `rsscript-codegen-vm::emit_artifact` accepts
+`&VerifiedMir` rather than raw MIR. The legacy adapter may accept raw MIR only
+because it immediately verifies it before delegating.
 
 ## Consequences
 

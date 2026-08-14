@@ -20,7 +20,7 @@ use rsscript_mir::{
     BasicBlock, BlockId, FunctionId, MirBinaryOp, MirCallArgument, MirCallTarget,
     MirExternalImport, MirFunction, MirFunctionDebug, MirFunctionSignature, MirInstruction,
     MirLiteral, MirModule, MirParameterMode, MirTerminator, PlaceId, ResourceTypeId, TaskGroupId,
-    TaskId, TypeId, ValueId,
+    TaskId, TypeId, ValueId, VerifiedMir,
 };
 use rsscript_semantics::hir as checked;
 
@@ -124,7 +124,7 @@ pub fn lower_executable_ir_to_mir(
 /// type facts directly. Unsupported resources and async constructs continue to
 /// fail closed so callers can choose the explicit compatibility path during
 /// migration.
-pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<MirModule, MirLoweringError> {
+pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<VerifiedMir, MirLoweringError> {
     let mut functions = hir
         .function_bodies()
         .filter_map(|(name, body)| {
@@ -202,7 +202,7 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<MirModule, MirLowe
             )
         })
         .collect();
-    Ok(MirModule::new(types.into_types(), lowered, debug, imports)?)
+    Ok(MirModule::new(types.into_types(), lowered, debug, imports)?.into_verified()?)
 }
 
 fn checked_external_imports(

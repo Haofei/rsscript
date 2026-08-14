@@ -3061,6 +3061,11 @@ fn mir_codegen_is_a_vm_independent_verified_bytecode_boundary() {
         codegen.contains("mir: &VerifiedMir"),
         "MIR codegen must accept only verifier-admitted MIR"
     );
+    let lowering = read(&root.join("crates/rsscript-lowering/src/mir.rs"));
+    assert!(
+        lowering.contains("Result<VerifiedMir, MirLoweringError>"),
+        "the checked-HIR lowerer must return verifier-admitted MIR"
+    );
     let manifest: toml::Value =
         toml::from_str(&read(&root.join("crates/rsscript-codegen-vm/Cargo.toml"))).unwrap();
     assert_eq!(

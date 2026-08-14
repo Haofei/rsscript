@@ -894,9 +894,10 @@ mechanical acceptance condition holds.
       verified bytecode rather than checked frontend representations.
     - [x] **M04.3b — Require a verifier-owned MIR phase at bytecode admission.**
       `VerifiedMir` re-runs MIR structural, ownership, resource, and task
-      validation at the lowering-to-codegen boundary; `rsscript-codegen-vm`
-      accepts only that phase type. The migration-only SDK adapter verifies raw
-      MIR before delegating so it cannot bypass the same backend boundary.
+      validation at the lowering-to-codegen boundary. The normal checked-HIR
+      lowerer returns that phase directly and `rsscript-codegen-vm` accepts
+      only it. The migration-only SDK adapter verifies raw MIR before
+      delegating so it cannot bypass the same backend boundary.
 - [ ] **M05 — Run old/new lowering differentially.** The same corpus must
   produce equivalent diagnostics, external imports, termination reasons,
   values, cleanup behavior, and deterministic usage reports.

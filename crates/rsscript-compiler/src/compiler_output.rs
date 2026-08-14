@@ -27,7 +27,6 @@ pub struct CompiledIr {
 #[derive(Debug)]
 pub enum BytecodeCompileError {
     Mir(rsscript_lowering::MirLoweringError),
-    MirValidation(rsscript_mir::MirValidationError),
     Emit(rsscript_codegen_vm::CodegenError),
 }
 
@@ -36,7 +35,6 @@ impl fmt::Display for BytecodeCompileError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Mir(error) => write!(formatter, "cannot lower checked HIR to MIR: {error}"),
-            Self::MirValidation(error) => write!(formatter, "cannot verify lowered MIR: {error}"),
             Self::Emit(error) => write!(formatter, "cannot emit MIR bytecode: {error}"),
         }
     }
@@ -52,7 +50,7 @@ impl CompiledIr {
     /// The migration subset covers resolved calls, structured control flow,
     /// lexical resource scopes, and internal task-group spawn/await. Other
     /// unsupported semantic forms still fail closed.
-    pub fn mir(&self) -> Result<rsscript_mir::MirModule, rsscript_lowering::MirLoweringError> {
+    pub fn mir(&self) -> Result<rsscript_mir::VerifiedMir, rsscript_lowering::MirLoweringError> {
         self.checked_hir_mir()
     }
 
@@ -61,7 +59,7 @@ impl CompiledIr {
     /// compatibility decision rather than accidentally rebuilding syntax.
     pub fn checked_hir_mir(
         &self,
-    ) -> Result<rsscript_mir::MirModule, rsscript_lowering::MirLoweringError> {
+    ) -> Result<rsscript_mir::VerifiedMir, rsscript_lowering::MirLoweringError> {
         rsscript_lowering::lower_checked_hir_to_mir(&self.checked_hir)
     }
 
@@ -146,11 +144,8 @@ pub fn compile_ir_to_bytecode(
     let mir = compiled
         .checked_hir_mir()
         .map_err(BytecodeCompileError::Mir)?;
-    let verified = mir
-        .into_verified()
-        .map_err(BytecodeCompileError::MirValidation)?;
     let mut artifact = rsscript_codegen_vm::emit_artifact(
-        &verified,
+        &mir,
         compiled.source_hash(),
         compiled.interface_catalog_digest(),
         env!("CARGO_PKG_VERSION"),

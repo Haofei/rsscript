@@ -67,13 +67,11 @@ pub fn reg_vm_compile_mir(
 
 fn emit_ir(compiled: &CompiledIr) -> Result<RegVmExecutable, EvalError> {
     match compiled.checked_hir_mir() {
-        Ok(mir) => match verified_mir(mir).and_then(|mir| {
-            emit_mir(
-                &mir,
-                compiled.source_hash(),
-                compiled.interface_catalog_digest(),
-            )
-        }) {
+        Ok(mir) => match emit_mir(
+            &mir,
+            compiled.source_hash(),
+            compiled.interface_catalog_digest(),
+        ) {
             Ok(executable) => Ok(executable),
             Err(rsscript_codegen_vm::CodegenError::Unsupported(_)) => {
                 emit_legacy_executable_ir(compiled)
@@ -119,14 +117,12 @@ pub(crate) fn emit_compiled_artifact(
     snapshot_digest: &str,
 ) -> Result<BytecodeArtifact, EvalError> {
     match compiled.checked_hir_mir() {
-        Ok(mir) => match verified_mir(mir).and_then(|mir| {
-            emit_mir_artifact(
-                &mir,
-                compiled.source_hash(),
-                compiled.interface_catalog_digest(),
-                snapshot_digest,
-            )
-        }) {
+        Ok(mir) => match emit_mir_artifact(
+            &mir,
+            compiled.source_hash(),
+            compiled.interface_catalog_digest(),
+            snapshot_digest,
+        ) {
             Ok(artifact) => Ok(artifact),
             Err(rsscript_codegen_vm::CodegenError::Unsupported(_)) => {
                 emit_legacy_compiled_artifact(compiled, snapshot_digest)
@@ -203,13 +199,6 @@ fn emit_mir_artifact(
         .bind_snapshot_digest(snapshot_digest)
         .map_err(|error| rsscript_codegen_vm::CodegenError::Bytecode(error.to_string()))?;
     Ok(artifact)
-}
-
-fn verified_mir(
-    mir: rsscript_mir::MirModule,
-) -> Result<rsscript_mir::VerifiedMir, rsscript_codegen_vm::CodegenError> {
-    mir.into_verified()
-        .map_err(|error| rsscript_codegen_vm::CodegenError::InvalidMir(error.to_string()))
 }
 
 pub fn reg_vm_eval_source_main_with_args(
