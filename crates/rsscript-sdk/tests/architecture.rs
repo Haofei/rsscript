@@ -1289,6 +1289,38 @@ fn rust_aot_lowering_is_explicitly_feature_gated() {
         .collect::<BTreeSet<_>>();
     assert!(sdk_aot.contains("execution"));
     assert!(sdk_aot.contains("rsscript_compiler/aot-rust"));
+
+    let cli: toml::Value = toml::from_str(&read(&root.join("crates/rsscript-cli/Cargo.toml")))
+        .expect("CLI manifest should parse");
+    let cli_execution = cli["features"]["execution"]
+        .as_array()
+        .expect("CLI execution feature should be declared")
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .collect::<BTreeSet<_>>();
+    assert!(
+        !cli_execution.contains("rsscript-compiler/aot-rust"),
+        "ordinary CLI execution must not select the experimental Rust/AOT lowerer"
+    );
+    let cli_aot = cli["features"]["aot-rust"]
+        .as_array()
+        .expect("CLI aot-rust feature should be declared")
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .collect::<BTreeSet<_>>();
+    assert!(cli_aot.contains("execution"));
+    assert!(cli_aot.contains("rsscript-compiler/aot-rust"));
+
+    let run_command = read(&root.join("crates/rsscript-cli/src/cli/run_cmd.rs"));
+    assert!(
+        run_command.contains("#[cfg(not(feature = \"aot-rust\"))]"),
+        "an ordinary CLI build must reject the unavailable experimental AOT path explicitly"
+    );
+    let cli_help = read(&root.join("crates/rsscript-cli/src/cli/mod.rs"));
+    assert!(
+        cli_help.contains("#[cfg(feature = \"aot-rust\")]\nconst AOT_USAGE"),
+        "experimental AOT help must be feature-gated rather than advertised by the default CLI"
+    );
 }
 
 #[test]

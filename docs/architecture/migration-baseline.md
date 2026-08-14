@@ -597,9 +597,11 @@ mechanical acceptance condition holds.
     dependency identity now belongs to the package snapshot, and the Rust
     lowerer only consumes and temporarily re-exports it for compatibility. Rust
     lowering is now selected only by the explicit `aot-rust` feature rather
-    than ordinary compiler execution. Rust source lowering, source maps,
-    runtime ABI helpers, and the public AOT façade remain in compiler, so this
-    item remains open.
+    than ordinary compiler execution. The CLI mirrors this separation: its
+    normal `execution` feature builds only the reference VM/isolated runner,
+    while generated-Rust execution and its help text require an explicit
+    `aot-rust` feature. Rust source lowering, source maps, runtime ABI helpers,
+    and the public AOT façade remain in compiler, so this item remains open.
   - [ ] **S05.5 — Enforce a frontend-only compiler dependency closure.** Cargo
     metadata and `cargo tree` tests reject OS, persistence, Provider, VM, review,
     JIT, and AOT dependencies. Compiler lowering is now a dedicated feature;

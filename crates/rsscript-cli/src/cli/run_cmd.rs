@@ -1,18 +1,29 @@
+#[cfg(feature = "aot-rust")]
 use std::ffi::OsString;
+#[cfg(feature = "aot-rust")]
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+#[cfg(feature = "aot-rust")]
+use std::process::Command;
+use std::process::ExitCode;
+#[cfg(feature = "aot-rust")]
 use std::time::Duration;
 
+#[cfg(feature = "aot-rust")]
 use rsscript_compiler::{parse_runtime_diagnostics, write_generated_rust_package};
 
+#[cfg(feature = "aot-rust")]
 use super::{
     cleanup_temp_dir, cli_input_package_name, default_runtime_path, generated_target_dir_from_env,
-    lower_cli_input_to_rust_package, print_diagnostics, print_usage, read_cached_fingerprint,
-    required_flag_value, run_cache_dir, run_input_fingerprint, write_cached_fingerprint,
+    lower_cli_input_to_rust_package, print_diagnostics, read_cached_fingerprint, run_cache_dir,
+    run_input_fingerprint, write_cached_fingerprint,
 };
+use super::{print_usage, required_flag_value};
+#[cfg(feature = "aot-rust")]
 use crate::cli::process::{BoundedProcessKind, run_bounded, run_bounded_with_limits};
 
+#[cfg(feature = "aot-rust")]
 const CLI_AOT_WALL_TIME: Duration = Duration::from_secs(10 * 60);
+#[cfg(feature = "aot-rust")]
 const CLI_AOT_OUTPUT_MAX_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug)]
@@ -106,16 +117,28 @@ pub(crate) fn run_input(args: &[String]) -> ExitCode {
         print_usage();
         return ExitCode::from(2);
     };
-    if !options.aot {
-        if options.trusted_in_process {
-            return super::runner::run_trusted_in_process(
-                path,
-                &options.program_args,
-                options.json,
+    if options.aot {
+        #[cfg(not(feature = "aot-rust"))]
+        {
+            eprintln!(
+                "`rss run --aot` requires this experimental CLI build to enable the `aot-rust` feature."
             );
+            return ExitCode::from(2);
         }
-        return super::runner::run_isolated(path, &options.program_args, options.json);
+        #[cfg(feature = "aot-rust")]
+        return run_aot(path, &options);
     }
+    if options.trusted_in_process {
+        return super::runner::run_trusted_in_process(path, &options.program_args, options.json);
+    }
+    super::runner::run_isolated(path, &options.program_args, options.json)
+}
+
+/// Experimental generated-Rust execution path. It is deliberately excluded
+/// from the ordinary CLI `execution` feature so the reference VM/runner path
+/// remains the only default execution product.
+#[cfg(feature = "aot-rust")]
+fn run_aot(path: &str, options: &RunOptions<'_>) -> ExitCode {
     let runtime_path = match default_runtime_path() {
         Ok(path) => path,
         Err(error) => {
@@ -212,6 +235,7 @@ pub(crate) fn run_input(args: &[String]) -> ExitCode {
 /// Runs the fast-path cache hit: the generated package in `cache_dir` is already
 /// up to date for the current source, so cargo's incremental check makes this a
 /// near no-op build (or a direct run of the cached binary).
+#[cfg(feature = "aot-rust")]
 fn run_cached_package(
     cache_dir: &Path,
     release: bool,
@@ -224,6 +248,7 @@ fn run_cached_package(
 /// Build in a reduced environment, then execute the emitted binary as a
 /// separately bounded child. Build scripts never inherit the program's ambient
 /// environment.
+#[cfg(feature = "aot-rust")]
 fn build_and_run_package(
     package_dir: &Path,
     release: bool,
@@ -297,6 +322,7 @@ fn build_and_run_package(
     exit_code(output.status)
 }
 
+#[cfg(feature = "aot-rust")]
 fn finish_failed_aot_build(stderr: &str, status: std::process::ExitStatus) -> ExitCode {
     if !stderr.trim().is_empty() {
         eprintln!("{}", stderr.trim());
@@ -304,6 +330,7 @@ fn finish_failed_aot_build(stderr: &str, status: std::process::ExitStatus) -> Ex
     exit_code(status)
 }
 
+#[cfg(feature = "aot-rust")]
 fn configure_reduced_build_environment(command: &mut Command) {
     const ALLOWED: &[&str] = &[
         "PATH",
@@ -339,6 +366,7 @@ fn configure_reduced_build_environment(command: &mut Command) {
         .env_remove("CARGO_TARGET_DIR");
 }
 
+#[cfg(feature = "aot-rust")]
 fn exit_code(status: std::process::ExitStatus) -> ExitCode {
     if let Some(code) = status.code() {
         return ExitCode::from(portable_exit_code(code));
@@ -353,10 +381,12 @@ fn exit_code(status: std::process::ExitStatus) -> ExitCode {
     ExitCode::from(1)
 }
 
+#[cfg(feature = "aot-rust")]
 fn portable_exit_code(code: i32) -> u8 {
     u8::try_from(code).unwrap_or(1)
 }
 
+#[cfg(feature = "aot-rust")]
 fn cargo_build_args(package_dir: &Path, release: bool) -> Vec<String> {
     let mut args = vec![
         "build".to_string(),
@@ -372,6 +402,7 @@ fn cargo_build_args(package_dir: &Path, release: bool) -> Vec<String> {
     args
 }
 
+#[cfg(feature = "aot-rust")]
 fn cargo_artifact_executable(stdout: &[u8]) -> Result<PathBuf, String> {
     String::from_utf8_lossy(stdout)
         .lines()
@@ -387,6 +418,7 @@ fn cargo_artifact_executable(stdout: &[u8]) -> Result<PathBuf, String> {
         .ok_or_else(|| "Cargo emitted no executable compiler artifact".to_string())
 }
 
+#[cfg(feature = "aot-rust")]
 fn print_run_dry_run(
     package: &rsscript_compiler::GeneratedRustPackage,
     package_dir: Option<&Path>,
@@ -438,6 +470,7 @@ mod tests {
         values.iter().map(|value| (*value).to_string()).collect()
     }
 
+    #[cfg(feature = "aot-rust")]
     #[test]
     fn portable_exit_code_rejects_values_that_exit_code_cannot_represent() {
         assert_eq!(super::portable_exit_code(0), 0);
@@ -512,6 +545,7 @@ mod tests {
         assert_eq!(options.program_args, vec!["--dry-run"]);
     }
 
+    #[cfg(feature = "aot-rust")]
     #[test]
     fn cargo_build_args_include_manifest_release_and_json_messages() {
         let package_dir = std::path::Path::new("/tmp/rss-generated");
@@ -531,6 +565,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "aot-rust")]
     #[test]
     fn cargo_artifact_parser_selects_binary_executable() {
         let messages = br#"{"reason":"compiler-artifact","target":{"kind":["lib"]},"executable":null}

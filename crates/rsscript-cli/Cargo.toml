@@ -17,14 +17,14 @@ test = false
 [features]
 default = []
 execution = [
-    "rsscript-compiler/aot-rust",
     "dep:rsscript-sdk",
     "rsscript-sdk/project",
     "dep:rss-process-guard",
     "dep:rsscript-runner-protocol",
 ]
+aot-rust = ["execution", "rsscript-compiler/aot-rust"]
 host-tools = ["execution"]
-native-jit = ["rsscript-sdk/native-jit", "execution"]
+native-jit = ["rsscript-sdk/native-jit", "aot-rust"]
 
 [dependencies]
 rsscript-compiler = { path = "../rsscript-compiler", default-features = false }

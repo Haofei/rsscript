@@ -3,16 +3,16 @@ use std::fs;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
-#[cfg(feature = "execution")]
+#[cfg(all(feature = "execution", feature = "aot-rust"))]
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-#[cfg(feature = "execution")]
+#[cfg(all(feature = "execution", feature = "aot-rust"))]
 use rsscript_compiler::{
     Diagnostic, format_diagnostics_human, format_diagnostics_json, lower_source_to_rust_package,
     lower_sources_to_rust_package_with_options, prepare_package_for_execution,
 };
-#[cfg(feature = "execution")]
+#[cfg(all(feature = "execution", feature = "aot-rust"))]
 use sha2::{Digest, Sha256};
 
 #[cfg(feature = "execution")]
@@ -20,7 +20,7 @@ mod artifact;
 mod check;
 mod fix;
 mod fmt;
-#[cfg(feature = "execution")]
+#[cfg(all(feature = "execution", feature = "aot-rust"))]
 mod process;
 #[cfg(feature = "execution")]
 mod run_cmd;
@@ -66,7 +66,7 @@ pub fn run() -> ExitCode {
     }
 }
 
-#[cfg(feature = "execution")]
+#[cfg(all(feature = "execution", feature = "aot-rust"))]
 pub(crate) fn generated_target_dir_from_env() -> Option<PathBuf> {
     let path = env::var_os("RSSCRIPT_GENERATED_TARGET_DIR")
         .filter(|value| !value.is_empty())
@@ -76,7 +76,7 @@ pub(crate) fn generated_target_dir_from_env() -> Option<PathBuf> {
 
     Some(path)
 }
-#[cfg(feature = "execution")]
+#[cfg(all(feature = "execution", feature = "aot-rust"))]
 pub(crate) fn print_diagnostics(json: bool, diagnostics: &[Diagnostic]) {
     if json {
         println!("{}", format_diagnostics_json(diagnostics));
@@ -178,7 +178,7 @@ pub(crate) fn read_interface_sources(paths: &[&str]) -> Result<Vec<InterfaceSour
         })
         .collect()
 }
-#[cfg(feature = "execution")]
+#[cfg(all(feature = "execution", feature = "aot-rust"))]
 pub(crate) fn lower_cli_input_to_rust_package(
     path: &str,
     runtime_path: &Path,
@@ -216,7 +216,7 @@ pub(crate) fn lower_cli_input_to_rust_package(
     )
 }
 
-#[cfg(feature = "execution")]
+#[cfg(all(feature = "execution", feature = "aot-rust"))]
 fn package_execution_lowering_input(
     package_dir: &Path,
 ) -> Result<rsscript_compiler::PackageLoweringInput, String> {
@@ -228,7 +228,7 @@ fn package_execution_lowering_input(
     Ok(package.lowering_input().clone())
 }
 
-#[cfg(feature = "execution")]
+#[cfg(all(feature = "execution", feature = "aot-rust"))]
 pub(crate) fn default_runtime_path() -> Result<PathBuf, String> {
     let current_dir =
         env::current_dir().map_err(|error| format!("failed to read current directory: {error}"))?;
@@ -248,7 +248,7 @@ pub(crate) fn default_runtime_path() -> Result<PathBuf, String> {
     select_runtime_path(candidates)
 }
 
-#[cfg(feature = "execution")]
+#[cfg(all(feature = "execution", feature = "aot-rust"))]
 pub(crate) fn select_runtime_path(
     candidates: Vec<(&'static str, PathBuf)>,
 ) -> Result<PathBuf, String> {
@@ -271,7 +271,7 @@ pub(crate) fn select_runtime_path(
 /// full lowering, so the run cache directory can be located before deciding
 /// whether re-lowering is needed. Returns `None` for a package directory whose
 /// manifest can't be read (the caller then falls back to lowering).
-#[cfg(feature = "execution")]
+#[cfg(all(feature = "execution", feature = "aot-rust"))]
 pub(crate) fn cli_input_package_name(input_path: &str) -> Option<String> {
     if is_package_directory(input_path) {
         package_execution_lowering_input(Path::new(input_path))
@@ -282,7 +282,7 @@ pub(crate) fn cli_input_package_name(input_path: &str) -> Option<String> {
     }
 }
 
-#[cfg(feature = "execution")]
+#[cfg(all(feature = "execution", feature = "aot-rust"))]
 pub(crate) fn generated_package_name(path: &str) -> String {
     Path::new(path)
         .file_stem()
@@ -297,7 +297,7 @@ pub(crate) fn generated_package_name(path: &str) -> String {
 /// release flag, and a compiler-version marker (so a rebuilt `rss` invalidates
 /// stale generated output). Returns `None` if any input can't be read, which
 /// forces the cautious full lower+write path.
-#[cfg(feature = "execution")]
+#[cfg(all(feature = "execution", feature = "aot-rust"))]
 pub(crate) fn run_input_fingerprint(
     input_path: &str,
     runtime_path: &Path,
@@ -352,7 +352,7 @@ pub(crate) fn run_input_fingerprint(
 }
 
 /// Reads the fingerprint stored alongside a cached generated package.
-#[cfg(feature = "execution")]
+#[cfg(all(feature = "execution", feature = "aot-rust"))]
 pub(crate) fn read_cached_fingerprint(cache_dir: &Path) -> Option<String> {
     fs::read_to_string(cache_dir.join(".rss-cache-hash"))
         .ok()
@@ -361,13 +361,13 @@ pub(crate) fn read_cached_fingerprint(cache_dir: &Path) -> Option<String> {
 }
 
 /// Stores the fingerprint alongside the cached generated package.
-#[cfg(feature = "execution")]
+#[cfg(all(feature = "execution", feature = "aot-rust"))]
 pub(crate) fn write_cached_fingerprint(cache_dir: &Path, fingerprint: &str) {
     let _ = fs::create_dir_all(cache_dir);
     let _ = fs::write(cache_dir.join(".rss-cache-hash"), fingerprint);
 }
 
-#[cfg(feature = "execution")]
+#[cfg(all(feature = "execution", feature = "aot-rust"))]
 pub(crate) fn run_cache_dir(input_path: &str, package_name: &str) -> PathBuf {
     let key = stable_input_key(input_path);
     run_cache_root_dir().join(format!(
@@ -377,7 +377,7 @@ pub(crate) fn run_cache_dir(input_path: &str, package_name: &str) -> PathBuf {
     ))
 }
 
-#[cfg(feature = "execution")]
+#[cfg(all(feature = "execution", feature = "aot-rust"))]
 fn run_cache_root_dir() -> PathBuf {
     let root = env::var_os("RSSCRIPT_RUN_CACHE_DIR")
         .filter(|value| !value.is_empty())
@@ -392,7 +392,7 @@ fn run_cache_root_dir() -> PathBuf {
     root
 }
 
-#[cfg(feature = "execution")]
+#[cfg(all(feature = "execution", feature = "aot-rust"))]
 fn stable_input_key(input_path: &str) -> String {
     let path = Path::new(input_path);
     path.canonicalize()
@@ -401,12 +401,12 @@ fn stable_input_key(input_path: &str) -> String {
         .to_string()
 }
 
-#[cfg(feature = "execution")]
+#[cfg(all(feature = "execution", feature = "aot-rust"))]
 fn stable_hash_hex(value: &str) -> String {
     hex::encode(Sha256::digest(value.as_bytes()))
 }
 
-#[cfg(feature = "execution")]
+#[cfg(all(feature = "execution", feature = "aot-rust"))]
 fn sanitize_path_component(value: &str) -> String {
     let sanitized = value
         .chars()
@@ -425,14 +425,14 @@ fn sanitize_path_component(value: &str) -> String {
     }
 }
 
-#[cfg(feature = "execution")]
+#[cfg(all(feature = "execution", feature = "aot-rust"))]
 fn ramdisk_root_dir() -> Option<PathBuf> {
     env::var_os("RSSCRIPT_RAMDISK_PATH")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
 }
 
-#[cfg(feature = "execution")]
+#[cfg(all(feature = "execution", feature = "aot-rust"))]
 pub(crate) fn cleanup_temp_dir(path: &Path) {
     let _ = fs::remove_dir_all(path);
 }
@@ -452,15 +452,30 @@ const USAGE: &str = r#"usage:
   rss inspect <imports|bytecode> [--json] <file-or-artifact-or-package>
   rss inspect <analysis|resources|async|call-graph> [--json] <package-directory>
   rss run [--json] <file-package-or-bundle> [-- <args>...]  # isolated runner + verified VM
-  rss run --trusted-in-process [--json] <file-package-or-bundle> [-- <args>...]
-  rss run --aot [--json] [--release] [--dry-run] <file-or-package-directory> [--out-dir <directory>] [-- <args>...]"#;
+  rss run --trusted-in-process [--json] <file-package-or-bundle> [-- <args>...]"#;
+
+#[cfg(feature = "aot-rust")]
+const AOT_USAGE: &str = "\n  rss run --aot [--json] [--release] [--dry-run] <file-or-package-directory> [--out-dir <directory>] [-- <args>...]";
+
+fn usage() -> String {
+    #[cfg(feature = "aot-rust")]
+    {
+        let mut usage = USAGE.to_owned();
+        usage.push_str(AOT_USAGE);
+        usage
+    }
+    #[cfg(not(feature = "aot-rust"))]
+    {
+        USAGE.to_owned()
+    }
+}
 
 pub(crate) fn print_usage() {
-    eprintln!("{USAGE}");
+    eprintln!("{}", usage());
 }
 
 fn print_help() {
-    println!("{USAGE}");
+    println!("{}", usage());
 }
 
 #[cfg(test)]
@@ -481,7 +496,7 @@ mod tests {
         assert_eq!(error, "unexpected extra path `two.rss`.");
     }
 
-    #[cfg(feature = "execution")]
+    #[cfg(all(feature = "execution", feature = "aot-rust"))]
     #[test]
     fn runtime_path_selection_uses_first_valid_candidate() {
         let root = unique_temp_dir("runtime-path-selection");
@@ -507,7 +522,7 @@ mod tests {
         fs::remove_dir_all(root).expect("temp runtime path should clean up");
     }
 
-    #[cfg(feature = "execution")]
+    #[cfg(all(feature = "execution", feature = "aot-rust"))]
     #[test]
     fn runtime_path_selection_reports_checked_candidates() {
         let root = unique_temp_dir("runtime-path-missing");
@@ -520,7 +535,7 @@ mod tests {
         fs::remove_dir_all(root).expect("temp runtime path should clean up");
     }
 
-    #[cfg(feature = "execution")]
+    #[cfg(all(feature = "execution", feature = "aot-rust"))]
     #[test]
     fn run_cache_dir_is_stable_per_input_path() {
         let first = super::run_cache_dir("examples/one.rss", "demo");
@@ -537,7 +552,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "execution")]
+    #[cfg(all(feature = "execution", feature = "aot-rust"))]
     #[test]
     fn run_fingerprint_changes_for_every_run_specific_input() {
         let root = unique_temp_dir("run-fingerprint");
@@ -577,7 +592,7 @@ mod tests {
         fs::remove_dir_all(root).expect("temp directory should clean up");
     }
 
-    #[cfg(feature = "execution")]
+    #[cfg(all(feature = "execution", feature = "aot-rust"))]
     #[test]
     fn aot_execution_input_preserves_unlocked_pure_package_compatibility() {
         let root = package_fixture("aot-pure-package", "");
@@ -589,7 +604,7 @@ mod tests {
         fs::remove_dir_all(root).expect("temp directory should clean up");
     }
 
-    #[cfg(feature = "host-tools")]
+    #[cfg(all(feature = "host-tools", feature = "aot-rust"))]
     #[test]
     fn aot_execution_input_rejects_unreviewed_native_package() {
         let native = r#"
@@ -632,7 +647,7 @@ transitive_unsafe_blocks = "forbid"
         fs::remove_dir_all(root).expect("temp directory should clean up");
     }
 
-    #[cfg(feature = "execution")]
+    #[cfg(all(feature = "execution", feature = "aot-rust"))]
     fn package_fixture(name: &str, extra_manifest: &str) -> PathBuf {
         let root = unique_temp_dir(name);
         fs::create_dir_all(root.join("src")).expect("package source directory");
