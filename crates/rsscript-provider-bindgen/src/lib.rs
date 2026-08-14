@@ -102,6 +102,9 @@ impl ProviderInterface {
         for resource in &self.resources {
             render_resource_wrapper(&mut output, resource);
         }
+        for record in &self.record_layouts {
+            render_record_wrapper(&mut output, record, &self.resources, &self.record_layouts);
+        }
         output.push_str("pub trait GeneratedProviderContract {\n");
         for function in &self.functions {
             let parameters = function
@@ -112,7 +115,7 @@ impl ProviderInterface {
                     format!(
                         "{}: {}",
                         rust_identifier(&parameter.name),
-                        render_rust_type(&parameter.ty, &self.resources)
+                        render_rust_type(&parameter.ty, &self.resources, &self.record_layouts)
                     )
                 })
                 .collect::<Vec<_>>()
@@ -127,7 +130,11 @@ impl ProviderInterface {
                 rust_identifier(&function.entry),
                 if parameters.is_empty() { "" } else { ", " },
                 parameters,
-                render_rust_type(&function.signature.result, &self.resources),
+                render_rust_type(
+                    &function.signature.result,
+                    &self.resources,
+                    &self.record_layouts,
+                ),
             ));
         }
         output
@@ -202,6 +209,32 @@ fn render_resource_wrapper(output: &mut String, resource: &InterfaceDescriptorRe
     ));
 }
 
+fn render_record_wrapper(
+    output: &mut String,
+    record: &WireRecordLayout,
+    resources: &[InterfaceDescriptorResourceV1],
+    records: &[WireRecordLayout],
+) {
+    let type_name = record_wrapper_name(&record.ty).expect("record layouts have named identities");
+    output.push_str(&format!(
+        "/// Generated typed representation for the `{}` interface record.\n#[derive(Debug, Clone, PartialEq)]\npub struct {type_name} {{\n",
+        wire_type_source(&record.ty),
+    ));
+    for field in &record.fields {
+        let ty = if field.ty == record.ty {
+            format!("Box<{type_name}>")
+        } else {
+            render_rust_type(&field.ty, resources, records)
+        };
+        output.push_str(&format!(
+            "    pub {}: {},\n",
+            rust_identifier(&field.name),
+            ty
+        ));
+    }
+    output.push_str("}\n\n");
+}
+
 fn resource_wrapper_name(resource: &str) -> String {
     let mut output = resource
         .split('.')
@@ -226,7 +259,11 @@ fn resource_wrapper_name(resource: &str) -> String {
     output
 }
 
-fn render_rust_type(ty: &WireType, resources: &[InterfaceDescriptorResourceV1]) -> String {
+fn render_rust_type(
+    ty: &WireType,
+    resources: &[InterfaceDescriptorResourceV1],
+    records: &[WireRecordLayout],
+) -> String {
     match ty {
         WireType::Unit => "()".into(),
         WireType::Bool => "bool".into(),
@@ -234,27 +271,78 @@ fn render_rust_type(ty: &WireType, resources: &[InterfaceDescriptorResourceV1]) 
         WireType::Float { .. } => "f64".into(),
         WireType::String => "String".into(),
         WireType::Bytes => "Vec<u8>".into(),
-        WireType::List { element } => format!("Vec<{}>", render_rust_type(element, resources)),
-        WireType::Option { value } => format!("Option<{}>", render_rust_type(value, resources)),
+        WireType::List { element } => {
+            format!("Vec<{}>", render_rust_type(element, resources, records))
+        }
+        WireType::Option { value } => {
+            format!("Option<{}>", render_rust_type(value, resources, records))
+        }
         WireType::Result { ok, error } => format!(
             "Result<{}, {}>",
-            render_rust_type(ok, resources),
-            render_rust_type(error, resources)
+            render_rust_type(ok, resources, records),
+            render_rust_type(error, resources, records)
         ),
         WireType::Tuple { elements } => format!(
             "({})",
             elements
                 .iter()
-                .map(|element| render_rust_type(element, resources))
+                .map(|element| render_rust_type(element, resources, records))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-        WireType::Qualified { value, .. } => render_rust_type(value, resources),
+        WireType::Qualified { value, .. } => render_rust_type(value, resources, records),
+        WireType::Named {
+            name, arguments, ..
+        } if arguments.is_empty() => record_wrapper_for(ty, records)
+            .or_else(|| resource_wrapper_for(name, resources))
+            .unwrap_or_else(|| "rsscript_abi_model::WireValue".into()),
         WireType::Named { name, .. } | WireType::Resource { name } | WireType::Handle { name } => {
             resource_wrapper_for(name, resources)
                 .unwrap_or_else(|| "rsscript_abi_model::WireValue".into())
         }
     }
+}
+
+fn record_wrapper_for(ty: &WireType, records: &[WireRecordLayout]) -> Option<String> {
+    records
+        .iter()
+        .find(|record| record.ty == *ty)
+        .and_then(|record| record_wrapper_name(&record.ty))
+}
+
+fn record_wrapper_name(ty: &WireType) -> Option<String> {
+    let WireType::Named { package, name, .. } = ty else {
+        return None;
+    };
+    let source = package
+        .as_ref()
+        .map_or_else(|| name.clone(), |package| format!("{package}.{name}"));
+    let mut capitalize_next = true;
+    let mut output = source
+        .chars()
+        .filter_map(|character| {
+            if !character.is_ascii_alphanumeric() {
+                capitalize_next = true;
+                return None;
+            }
+            let output = if capitalize_next {
+                capitalize_next = false;
+                character.to_ascii_uppercase()
+            } else {
+                character
+            };
+            Some(output)
+        })
+        .collect::<String>();
+    if output.is_empty()
+        || output
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_digit())
+    {
+        output.insert(0, '_');
+    }
+    Some(output)
 }
 
 fn resource_wrapper_for(
@@ -549,6 +637,8 @@ mod tests {
         assert!(rust.contains("record_layouts: vec![rsscript_abi_model::WireRecordLayout"));
         assert!(rust.contains("name: \"status\".into()"));
         assert!(rust.contains("name: \"body\".into()"));
+        assert!(rust.contains("pub struct HostHttpResponse"));
+        assert!(rust.contains("fn get(&self, url: String) -> Result<HostHttpResponse"));
     }
 
     #[test]

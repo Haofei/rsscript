@@ -1337,10 +1337,16 @@ mechanical acceptance condition holds.
   - [ ] **P05.1 — Generate scalar and aggregate Rust type mappings.** Cover unit,
     booleans, integers, floats, strings, bytes, lists, options, results, tuples,
     records, and variants.
-    - [x] **P05.1a — Generate scalar and aggregate method signatures.** Generated
+  - [x] **P05.1a — Generate scalar and aggregate method signatures.** Generated
       Provider traits now map unit, bool, numeric, string, bytes, lists,
       options, results, tuples, and qualifiers to Rust types. Named records,
-      variants, and resources remain adapter-layer values until P05.3.
+    variants, and resources remain adapter-layer values until P05.3.
+  - [x] **P05.1b — Generate named record Rust types.** Bindgen now emits a
+    public, canonical PascalCase Rust struct for every descriptor record and
+    uses that type in generated trait parameters/results. Record field names
+    and structural field types come from the same descriptor layout used by
+    the positional wire adapter; self-recursive fields are boxed. Variants
+    remain follow-up work.
   - [x] **P05.2 — Generate sync and async Provider traits.** Method signatures
     reflect descriptor parameters, results, effects, and async shape. Bindgen
     emits Rust `async fn` methods and matching `ProviderCallMode::Async` from
