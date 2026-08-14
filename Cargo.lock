@@ -2041,6 +2041,7 @@ dependencies = [
  "rsscript-operation",
  "rsscript-provider-api",
  "rsscript-review-reir",
+ "rsscript-semantics",
  "rsscript-vm",
  "rsscript-workspace-loader",
  "serde",
