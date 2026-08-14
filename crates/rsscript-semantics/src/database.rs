@@ -145,38 +145,6 @@ pub struct FrontendInputSnapshot {
     interfaces: SourceSnapshot,
 }
 
-/// Transitional full-workspace diagnostic query supplied by a composition
-/// root while the remaining analyzer passes move into `rsscript-semantics`.
-///
-/// The session owns the immutable input revision, operation boundary, and
-/// cache. Implementations therefore receive exactly the snapshot being cached
-/// and cannot make language-service clients rebuild source/interface vectors.
-pub trait WorkspaceDiagnosticQuery: Send + Sync {
-    fn analyze(
-        &self,
-        input: &FrontendInputSnapshot,
-        operation: &OperationContext,
-    ) -> Result<Vec<Diagnostic>, OperationAbort>;
-}
-
-impl<F> WorkspaceDiagnosticQuery for F
-where
-    F: for<'input, 'operation> Fn(
-            &'input FrontendInputSnapshot,
-            &'operation OperationContext,
-        ) -> Result<Vec<Diagnostic>, OperationAbort>
-        + Send
-        + Sync,
-{
-    fn analyze(
-        &self,
-        input: &FrontendInputSnapshot,
-        operation: &OperationContext,
-    ) -> Result<Vec<Diagnostic>, OperationAbort> {
-        self(input, operation)
-    }
-}
-
 impl FrontendInputSnapshot {
     pub fn single(path: &str, source: &str) -> Self {
         Self {
@@ -647,17 +615,12 @@ impl CompilationSession {
         FrontendInputSnapshot::from_snapshots(self.source_snapshot(), self.interface_snapshot())
     }
 
-    /// Cache a complete workspace diagnostic query against the current
-    /// source/interface revision set.
-    ///
-    /// Full semantic analysis is still migrating into this crate, so callers
-    /// supply the transitional analyzer callback. The session nevertheless
-    /// owns the immutable input, cache lifetime, and cancellation/deadline
-    /// checks; callers cannot retain a competing cache for a different input.
-    pub fn workspace_diagnostics_with_operation(
+    /// Diagnose the current immutable workspace through the semantic-owned
+    /// frontend implementation, caching by the session's source/interface
+    /// revisions. No caller can inject a competing diagnostic pipeline.
+    pub fn semantic_workspace_diagnostics_with_operation(
         &mut self,
         operation: &OperationContext,
-        query: &dyn WorkspaceDiagnosticQuery,
     ) -> Result<Arc<[Diagnostic]>, OperationAbort> {
         operation.check()?;
         if let Some(diagnostics) = &self.workspace_diagnostic_cache {
@@ -670,23 +633,11 @@ impl CompilationSession {
         self.workspace_diagnostic_cache_misses =
             self.workspace_diagnostic_cache_misses.saturating_add(1);
         let input = self.frontend_input_snapshot();
-        let diagnostics: Arc<[Diagnostic]> = query.analyze(&input, operation)?.into();
+        let diagnostics: Arc<[Diagnostic]> =
+            crate::analyze_frontend_input_snapshot_with_operation(&input, operation)?.into();
         operation.check()?;
         self.workspace_diagnostic_cache = Some(Arc::clone(&diagnostics));
         Ok(diagnostics)
-    }
-
-    /// Diagnose the current immutable workspace through the semantic-owned
-    /// frontend implementation. Editor and CLI clients use this entry point;
-    /// they cannot choose or inject a second diagnostic pipeline.
-    pub fn semantic_workspace_diagnostics_with_operation(
-        &mut self,
-        operation: &OperationContext,
-    ) -> Result<Arc<[Diagnostic]>, OperationAbort> {
-        self.workspace_diagnostics_with_operation(
-            operation,
-            &crate::analyze_frontend_input_snapshot_with_operation,
-        )
     }
 
     /// Return the parsed workspace module graph for the current immutable
@@ -1481,8 +1432,6 @@ mod tests {
 
     #[test]
     fn compilation_session_caches_workspace_diagnostics_for_one_input_snapshot() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
         let mut session = CompilationSession::default();
         session
             .set_file("main.rss", "fn main() -> Unit { return Unit }")
@@ -1491,44 +1440,20 @@ mod tests {
             .set_interface("host.rssi", "module host\npub fn emit() -> Unit")
             .unwrap();
         let operation = OperationContext::default();
-        let calls = AtomicUsize::new(0);
-
         let first = session
-            .workspace_diagnostics_with_operation(
-                &operation,
-                &|input: &FrontendInputSnapshot, _: &OperationContext| {
-                    calls.fetch_add(1, Ordering::Relaxed);
-                    assert_eq!(input.sources().files()[0].path(), "main.rss");
-                    assert_eq!(input.interfaces().files()[0].path(), "host.rssi");
-                    Ok(Vec::new())
-                },
-            )
+            .semantic_workspace_diagnostics_with_operation(&operation)
             .unwrap();
         let second = session
-            .workspace_diagnostics_with_operation(
-                &operation,
-                &|_: &FrontendInputSnapshot, _: &OperationContext| {
-                    panic!("unchanged session input must use its diagnostic cache")
-                },
-            )
+            .semantic_workspace_diagnostics_with_operation(&operation)
             .unwrap();
         assert!(Arc::ptr_eq(&first, &second));
-        assert_eq!(calls.load(Ordering::Relaxed), 1);
 
         session
             .set_interface("host.rssi", "module host\npub fn replacement() -> Unit")
             .unwrap();
         session
-            .workspace_diagnostics_with_operation(
-                &operation,
-                &|input: &FrontendInputSnapshot, _: &OperationContext| {
-                    calls.fetch_add(1, Ordering::Relaxed);
-                    assert!(input.interfaces().files()[0].text().contains("replacement"));
-                    Ok(Vec::new())
-                },
-            )
+            .semantic_workspace_diagnostics_with_operation(&operation)
             .unwrap();
-        assert_eq!(calls.load(Ordering::Relaxed), 2);
         assert_eq!(
             session.stats().workspace_diagnostic_cache_hits,
             1,
@@ -1620,10 +1545,7 @@ mod tests {
             .set_file("main.rss", "fn main() -> Unit { return Unit }")
             .unwrap();
         session
-            .workspace_diagnostics_with_operation(
-                &OperationContext::default(),
-                &|_: &FrontendInputSnapshot, _: &OperationContext| Ok(Vec::new()),
-            )
+            .semantic_workspace_diagnostics_with_operation(&OperationContext::default())
             .unwrap();
 
         let cancelled = CancellationToken::new();
@@ -1633,12 +1555,7 @@ mod tests {
             ..OperationContext::default()
         };
         assert!(matches!(
-            session.workspace_diagnostics_with_operation(
-                &cancelled_operation,
-                &|_: &FrontendInputSnapshot, _: &OperationContext| {
-                    panic!("a cancelled request must not read the diagnostic cache")
-                },
-            ),
+            session.semantic_workspace_diagnostics_with_operation(&cancelled_operation),
             Err(OperationAbort::Cancelled)
         ));
 
@@ -1649,12 +1566,7 @@ mod tests {
             ..OperationContext::default()
         };
         assert!(matches!(
-            session.workspace_diagnostics_with_operation(
-                &expired_operation,
-                &|_: &FrontendInputSnapshot, _: &OperationContext| {
-                    panic!("an expired request must not read the diagnostic cache")
-                },
-            ),
+            session.semantic_workspace_diagnostics_with_operation(&expired_operation),
             Err(OperationAbort::DeadlineExceeded)
         ));
         assert_eq!(session.stats().workspace_diagnostic_cache_hits, 0);

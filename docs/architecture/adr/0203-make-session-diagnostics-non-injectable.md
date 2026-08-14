@@ -21,5 +21,5 @@ manages document overlays and protocol conversion.
 ## Consequences
 
 There is one diagnostic implementation for normal workspace requests. The
-generic query hook remains internal migration machinery for focused session
-tests only and is no longer exposed through the language-service boundary.
+generic query hook was deleted, so neither session consumers nor focused tests
+can preserve an alternate diagnostic pipeline.
