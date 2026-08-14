@@ -726,6 +726,12 @@ mechanical acceptance condition holds.
       targets, while unsupported nested bindings and guards remain fail-closed.
       Statement and expression fixtures compare the legacy VM, MIR interpreter,
       and verified bytecode VM.
+    - [x] **M02.3m — Lower canonical Option match dispatch.** `Some` and `None`
+      constructors and patterns now lower to explicit `MakeOption`,
+      `MatchOption`, and (for named `Some` payloads) `UnwrapOption` operations.
+      Both control-flow targets participate in verifier dataflow; nested
+      patterns and guards remain fail-closed. Statement and expression fixtures
+      compare legacy VM, MIR interpreter, and verified bytecode VM.
 - [x] **M02.4 — Add MIR structural validation.** Reject dangling blocks,
     invalid IDs, unterminated blocks, undefined values, and malformed CFG edges.
     - [x] **M02.4a — Verify the initial structural subset.** The verifier

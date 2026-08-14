@@ -56,6 +56,8 @@ pub enum MirValue {
     },
     ResultOk(Box<MirValue>),
     ResultErr(Box<MirValue>),
+    OptionSome(Box<MirValue>),
+    OptionNone,
 }
 
 impl MirValue {
@@ -110,6 +112,8 @@ impl MirValue {
             }
             Self::ResultOk(value) => format!("Ok({})", value.render()),
             Self::ResultErr(value) => format!("Err({})", value.render()),
+            Self::OptionSome(value) => format!("Some({})", value.render()),
+            Self::OptionNone => "None".into(),
         }
     }
 }
@@ -319,6 +323,27 @@ impl<'a> Interpreter<'a> {
                             ));
                         }
                     },
+                    MirInstruction::MakeOption { destination, value } => {
+                        values[destination.index()] = Some(match value {
+                            Some(value) => {
+                                MirValue::OptionSome(Box::new(value_at(&values, *value)?))
+                            }
+                            None => MirValue::OptionNone,
+                        });
+                    }
+                    MirInstruction::UnwrapOption {
+                        destination,
+                        source,
+                    } => match value_at(&values, *source)? {
+                        MirValue::OptionSome(value) => {
+                            values[destination.index()] = Some(*value);
+                        }
+                        _ => {
+                            return Err(MirExecutionError::InvalidOperation(
+                                "Option arm projection",
+                            ));
+                        }
+                    },
                     MirInstruction::TryResult {
                         destination,
                         source,
@@ -524,6 +549,15 @@ impl<'a> Interpreter<'a> {
                     MirValue::ResultOk(_) => block = ok_target.index(),
                     MirValue::ResultErr(_) => block = err_target.index(),
                     _ => return Err(MirExecutionError::InvalidOperation("Result match")),
+                },
+                MirTerminator::MatchOption {
+                    value,
+                    some_target,
+                    none_target,
+                } => match value_at(&values, *value)? {
+                    MirValue::OptionSome(_) => block = some_target.index(),
+                    MirValue::OptionNone => block = none_target.index(),
+                    _ => return Err(MirExecutionError::InvalidOperation("Option match")),
                 },
                 MirTerminator::Unreachable => {
                     return Err(MirExecutionError::InvalidOperation("unreachable"));

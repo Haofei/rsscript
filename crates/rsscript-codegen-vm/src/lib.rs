@@ -375,6 +375,29 @@ fn lower_instruction(
                 ("expected", json!(if *ok { "Ok" } else { "Err" })),
             ],
         )),
+        MirInstruction::MakeOption { destination, value } => match value {
+            Some(value) => code.push(instr(
+                "MakeSome",
+                [
+                    ("dst", json!(value_reg(function, *destination))),
+                    ("value", json!(value_reg(function, *value))),
+                ],
+            )),
+            None => code.push(instr(
+                "LoadNone",
+                [("dst", json!(value_reg(function, *destination)))],
+            )),
+        },
+        MirInstruction::UnwrapOption {
+            destination,
+            source,
+        } => code.push(instr(
+            "UnwrapSome",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("src", json!(value_reg(function, *source))),
+            ],
+        )),
         MirInstruction::ListGet {
             destination,
             list,
@@ -655,6 +678,23 @@ fn lower_terminator(
             ));
             patches.push((index, *ok_target, "ok_ip"));
             patches.push((index, *err_target, "err_ip"));
+        }
+        MirTerminator::MatchOption {
+            value,
+            some_target,
+            none_target,
+        } => {
+            let index = code.len();
+            code.push(instr(
+                "MatchOption",
+                [
+                    ("src", json!(value_reg(function, *value))),
+                    ("some_ip", json!(0)),
+                    ("none_ip", json!(0)),
+                ],
+            ));
+            patches.push((index, *some_target, "some_ip"));
+            patches.push((index, *none_target, "none_ip"));
         }
         MirTerminator::Unreachable => code.push(instr(
             "RuntimeError",

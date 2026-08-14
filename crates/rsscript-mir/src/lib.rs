@@ -136,6 +136,17 @@ pub enum MirInstruction {
         source: ValueId,
         ok: bool,
     },
+    /// Construct a canonical `Option`. `Some(value)` carries a value and
+    /// `None` carries no payload.
+    MakeOption {
+        destination: ValueId,
+        value: Option<ValueId>,
+    },
+    /// Project a `Some(value)` payload after a matching `MatchOption` edge.
+    UnwrapOption {
+        destination: ValueId,
+        source: ValueId,
+    },
     /// Read an element from a resolved list value. The lowerer emits this only
     /// when checked type facts identify the base as `List<...>`.
     ListGet {
@@ -308,6 +319,13 @@ pub enum MirTerminator {
         value: ValueId,
         ok_target: BlockId,
         err_target: BlockId,
+    },
+    /// Branch on a canonical `Option` without representing `Some`/`None` as
+    /// unresolved source-level constructor names.
+    MatchOption {
+        value: ValueId,
+        some_target: BlockId,
+        none_target: BlockId,
     },
     Unreachable,
 }
@@ -921,6 +939,8 @@ fn instruction_definition(instruction: &MirInstruction) -> Option<ValueId> {
         | MirInstruction::MakeVariant { destination, .. }
         | MirInstruction::MakeResult { destination, .. }
         | MirInstruction::UnwrapResult { destination, .. }
+        | MirInstruction::MakeOption { destination, .. }
+        | MirInstruction::UnwrapOption { destination, .. }
         | MirInstruction::ListGet { destination, .. }
         | MirInstruction::GetField { destination, .. }
         | MirInstruction::ListLen { destination, .. }
@@ -964,6 +984,8 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         }
         MirInstruction::MakeResult { value, .. } => vec![*value],
         MirInstruction::UnwrapResult { source, .. } => vec![*source],
+        MirInstruction::MakeOption { value, .. } => value.iter().copied().collect(),
+        MirInstruction::UnwrapOption { source, .. } => vec![*source],
         MirInstruction::ListGet { list, index, .. } => vec![*list, *index],
         MirInstruction::GetField { base, .. } => vec![*base],
         MirInstruction::ListLen { list, .. } => vec![*list],
@@ -1007,6 +1029,7 @@ fn terminator_uses(terminator: &MirTerminator) -> Vec<ValueId> {
         MirTerminator::Branch { condition, .. } => vec![*condition],
         MirTerminator::MatchVariant { value, .. } => vec![*value],
         MirTerminator::MatchResult { value, .. } => vec![*value],
+        MirTerminator::MatchOption { value, .. } => vec![*value],
         MirTerminator::Return(None) | MirTerminator::Jump(_) | MirTerminator::Unreachable => {
             Vec::new()
         }
@@ -1072,6 +1095,14 @@ fn successors(terminator: &MirTerminator) -> impl Iterator<Item = BlockId> {
         } => {
             successors[0] = Some(*ok_target);
             successors[1] = Some(*err_target);
+        }
+        MirTerminator::MatchOption {
+            some_target,
+            none_target,
+            ..
+        } => {
+            successors[0] = Some(*some_target);
+            successors[1] = Some(*none_target);
         }
         MirTerminator::Return(_) | MirTerminator::Unreachable => {}
     }
@@ -1159,6 +1190,8 @@ fn transfer_move_state(
         | MirInstruction::MakeVariant { .. }
         | MirInstruction::MakeResult { .. }
         | MirInstruction::UnwrapResult { .. }
+        | MirInstruction::MakeOption { .. }
+        | MirInstruction::UnwrapOption { .. }
         | MirInstruction::ListGet { .. }
         | MirInstruction::GetField { .. }
         | MirInstruction::ListLen { .. }
@@ -1231,6 +1264,15 @@ fn verify_instruction(
             destination,
             source,
             ..
+        } => {
+            define(*destination, defined)?;
+            used.push(*source);
+            Ok(())
+        }
+        MirInstruction::MakeOption { destination, .. } => define(*destination, defined),
+        MirInstruction::UnwrapOption {
+            destination,
+            source,
         } => {
             define(*destination, defined)?;
             used.push(*source);
@@ -1485,6 +1527,14 @@ fn verify_terminator(
         } => {
             check_target(*ok_target)?;
             check_target(*err_target)?;
+        }
+        MirTerminator::MatchOption {
+            some_target,
+            none_target,
+            ..
+        } => {
+            check_target(*some_target)?;
+            check_target(*none_target)?;
         }
         MirTerminator::Unreachable => {}
     }

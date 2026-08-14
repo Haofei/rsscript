@@ -278,6 +278,34 @@ fn main() -> Int {
 "#,
     },
     MigrationCase {
+        name: "option_payload_binding",
+        capability: "canonical Option dispatch and payload binding",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn main() -> Int {
+    let option: Option<Int> = Some(42)
+    match option {
+        Some(value) => { return value }
+        None => { return 0 }
+    }
+}
+"#,
+    },
+    MigrationCase {
+        name: "option_payload_binding_expression",
+        capability: "canonical Option match expressions",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn main() -> Int {
+    let option: Option<Int> = Some(42)
+    return match option {
+        Some(value) => { value }
+        None => { 0 }
+    }
+}
+"#,
+    },
+    MigrationCase {
         name: "list_index",
         capability: "resolved list indexing",
         stage: MigrationStage::DualPath,

@@ -286,6 +286,10 @@ enum MatchBindings {
         ok: bool,
         binding: rsscript_syntax::ast::MatchPattern,
     },
+    Option {
+        some: bool,
+        binding: Option<rsscript_syntax::ast::MatchPattern>,
+    },
 }
 
 #[derive(Default)]
@@ -885,21 +889,40 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         signature: &checked::FunctionSig,
         args: &[checked::HirCallArg],
     ) -> Result<ValueId, MirLoweringError> {
-        let ok = match signature.name.as_str() {
-            "Ok" => true,
-            "Err" => false,
-            _ => return self.unsupported("builtin checked HIR call"),
-        };
-        if args.len() != 1 {
-            return self.unsupported("Result constructor with non-unary arity");
-        }
-        let value = self.lower_expression(&args[0].value)?;
         let destination = self.value();
-        self.emit(MirInstruction::MakeResult {
-            destination,
-            ok,
-            value,
-        });
+        match signature.name.as_str() {
+            "Ok" | "Err" => {
+                if args.len() != 1 {
+                    return self.unsupported("Result constructor with non-unary arity");
+                }
+                let value = self.lower_expression(&args[0].value)?;
+                self.emit(MirInstruction::MakeResult {
+                    destination,
+                    ok: signature.name == "Ok",
+                    value,
+                });
+            }
+            "Some" => {
+                if args.len() != 1 {
+                    return self.unsupported("Option Some constructor with non-unary arity");
+                }
+                let value = self.lower_expression(&args[0].value)?;
+                self.emit(MirInstruction::MakeOption {
+                    destination,
+                    value: Some(value),
+                });
+            }
+            "None" => {
+                if !args.is_empty() {
+                    return self.unsupported("Option None constructor with non-zero arity");
+                }
+                self.emit(MirInstruction::MakeOption {
+                    destination,
+                    value: None,
+                });
+            }
+            _ => return self.unsupported("builtin checked HIR call"),
+        }
         Ok(destination)
     }
 
@@ -932,6 +955,31 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                 ok,
                 value,
             });
+            return Ok(destination);
+        }
+        if let Some(some) = option_variant_tag(name) {
+            let destination = self.value();
+            match some {
+                true => {
+                    if args.len() != 1 {
+                        return self.unsupported("Option Some variant with non-unary arity");
+                    }
+                    let value = self.lower_expression(&args[0].value)?;
+                    self.emit(MirInstruction::MakeOption {
+                        destination,
+                        value: Some(value),
+                    });
+                }
+                false => {
+                    if !args.is_empty() {
+                        return self.unsupported("Option None variant with non-zero arity");
+                    }
+                    self.emit(MirInstruction::MakeOption {
+                        destination,
+                        value: None,
+                    });
+                }
+            }
             return Ok(destination);
         }
         let Some(layout) = self.targets.variants.get(name).cloned() else {
@@ -1198,6 +1246,14 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                             err_target: if ok { next } else { arm_block },
                         });
                         Some(MatchBindings::Result { ok, binding })
+                    } else if let Some(some) = option_variant_tag(name) {
+                        let binding = self.option_pattern_binding(some, bindings)?;
+                        self.terminate(MirTerminator::MatchOption {
+                            value,
+                            some_target: if some { arm_block } else { next },
+                            none_target: if some { next } else { arm_block },
+                        });
+                        Some(MatchBindings::Option { some, binding })
                     } else {
                         let layout = self.variant_pattern_layout(name, bindings)?;
                         self.terminate(MirTerminator::MatchVariant {
@@ -1271,6 +1327,14 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                             err_target: if ok { next } else { arm_block },
                         });
                         Some(MatchBindings::Result { ok, binding })
+                    } else if let Some(some) = option_variant_tag(name) {
+                        let binding = self.option_pattern_binding(some, bindings)?;
+                        self.terminate(MirTerminator::MatchOption {
+                            value,
+                            some_target: if some { arm_block } else { next },
+                            none_target: if some { next } else { arm_block },
+                        });
+                        Some(MatchBindings::Option { some, binding })
                     } else {
                         let layout = self.variant_pattern_layout(name, bindings)?;
                         self.terminate(MirTerminator::MatchVariant {
@@ -1400,7 +1464,48 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                 });
                 Ok(())
             }
+            MatchBindings::Option { some, binding } => {
+                let Some(rsscript_syntax::ast::MatchPattern::Binding { name, .. }) = binding else {
+                    return Ok(());
+                };
+                let destination = self.value();
+                self.emit(MirInstruction::UnwrapOption {
+                    destination,
+                    source: value,
+                });
+                let place = self.place(&name);
+                self.emit(MirInstruction::WritePlace {
+                    place,
+                    value: destination,
+                });
+                debug_assert!(some, "only Some patterns bind an Option payload");
+                Ok(())
+            }
         }
+    }
+
+    fn option_pattern_binding(
+        &self,
+        some: bool,
+        bindings: &[rsscript_syntax::ast::MatchPattern],
+    ) -> Result<Option<rsscript_syntax::ast::MatchPattern>, MirLoweringError> {
+        if !some {
+            if bindings.is_empty() {
+                return Ok(None);
+            }
+            return self.unsupported("checked HIR None match binding arity");
+        }
+        let [binding] = bindings else {
+            return self.unsupported("checked HIR Some match binding arity");
+        };
+        if !matches!(
+            binding,
+            rsscript_syntax::ast::MatchPattern::Binding { .. }
+                | rsscript_syntax::ast::MatchPattern::Wildcard(_)
+        ) {
+            return self.unsupported("nested checked HIR Some match binding");
+        }
+        Ok(Some(binding.clone()))
     }
 
     fn lower_match_expression_arm(
@@ -2484,6 +2589,14 @@ fn result_variant_tag(name: &str) -> Option<bool> {
     match name {
         "Ok" => Some(true),
         "Err" => Some(false),
+        _ => None,
+    }
+}
+
+fn option_variant_tag(name: &str) -> Option<bool> {
+    match name {
+        "Some" => Some(true),
+        "None" => Some(false),
         _ => None,
     }
 }
