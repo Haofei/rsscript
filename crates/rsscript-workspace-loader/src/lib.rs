@@ -21,8 +21,14 @@ pub enum WorkspaceFileKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceSourceFile {
+    /// Physical path used only by the OS-facing loader and editor adapters.
     pub path: String,
+    /// Package-relative display path retained for user diagnostics.
     pub relative_path: String,
+    /// Stable snapshot identity. It never includes an absolute host path and
+    /// distinguishes root files from dependency interface files with the same
+    /// relative path.
+    pub logical_path: String,
     pub contents: String,
     pub kind: WorkspaceFileKind,
 }
@@ -129,6 +135,13 @@ pub struct WorkspaceLoader {
     pub max_source_bytes: u64,
 }
 
+struct ScanState<'a> {
+    limits: &'a WorkspaceLoader,
+    operation: Option<&'a OperationContext>,
+    file_count: usize,
+    total_bytes: u64,
+}
+
 impl Default for WorkspaceLoader {
     fn default() -> Self {
         Self {
@@ -203,16 +216,16 @@ impl WorkspaceLoader {
             ));
         }
         let mut files = Vec::new();
-        let mut total_bytes = 0u64;
-        scan_source_tree(
-            &root,
-            &root,
-            false,
-            self,
+        let mut scan = ScanState {
+            limits: self,
             operation,
-            &mut total_bytes,
-            &mut files,
-        )?;
+            file_count: 0,
+            total_bytes: 0,
+        };
+        let mut root_files = Vec::new();
+        scan_source_tree(&root, &root, false, &mut scan, &mut root_files)?;
+        assign_logical_paths("root", &mut root_files);
+        files.extend(root_files);
 
         let mut visited = BTreeSet::new();
         let mut pending_dependencies = dependency_paths(&root, operation)?;
@@ -228,15 +241,17 @@ impl WorkspaceLoader {
             if !visited.insert(dependency.clone()) {
                 continue;
             }
+            let mut dependency_files = Vec::new();
             scan_source_tree(
                 &dependency,
                 &dependency,
                 true,
-                self,
-                operation,
-                &mut total_bytes,
-                &mut files,
+                &mut scan,
+                &mut dependency_files,
             )?;
+            let identity = dependency_identity(&dependency_files);
+            assign_logical_paths(&format!("dependency/{identity}"), &mut dependency_files);
+            files.extend(dependency_files);
             pending_dependencies.extend(dependency_paths(&dependency, operation)?);
         }
         check_operation(operation)?;
@@ -255,12 +270,12 @@ fn snapshot_content_digest(files: &[WorkspaceSourceFile]) -> String {
     canonical_files.sort_by(|left, right| {
         (
             file_kind_tag(left.kind),
-            left.relative_path.as_str(),
+            left.logical_path.as_str(),
             left.contents.as_str(),
         )
             .cmp(&(
                 file_kind_tag(right.kind),
-                right.relative_path.as_str(),
+                right.logical_path.as_str(),
                 right.contents.as_str(),
             ))
     });
@@ -270,7 +285,7 @@ fn snapshot_content_digest(files: &[WorkspaceSourceFile]) -> String {
     for file in canonical_files {
         let kind = [file_kind_tag(file.kind)];
         hasher.update(kind);
-        hash_snapshot_field(&mut hasher, file.relative_path.as_bytes());
+        hash_snapshot_field(&mut hasher, file.logical_path.as_bytes());
         hash_snapshot_field(&mut hasher, file.contents.as_bytes());
     }
     format!("sha256:{:x}", hasher.finalize())
@@ -289,18 +304,46 @@ fn hash_snapshot_field(hasher: &mut Sha256, bytes: &[u8]) {
     hasher.update(bytes);
 }
 
+fn assign_logical_paths(prefix: &str, files: &mut [WorkspaceSourceFile]) {
+    for file in files {
+        file.logical_path = format!("{prefix}/{}", file.relative_path);
+    }
+}
+
+fn dependency_identity(files: &[WorkspaceSourceFile]) -> String {
+    let mut entries = files.iter().collect::<Vec<_>>();
+    entries.sort_by(|left, right| {
+        (
+            file_kind_tag(left.kind),
+            left.relative_path.as_str(),
+            left.contents.as_str(),
+        )
+            .cmp(&(
+                file_kind_tag(right.kind),
+                right.relative_path.as_str(),
+                right.contents.as_str(),
+            ))
+    });
+    let mut hasher = Sha256::new();
+    hasher.update(b"rsscript.workspace_dependency.v1\0");
+    for file in entries {
+        hasher.update([file_kind_tag(file.kind)]);
+        hash_snapshot_field(&mut hasher, file.relative_path.as_bytes());
+        hash_snapshot_field(&mut hasher, file.contents.as_bytes());
+    }
+    format!("sha256:{:x}", hasher.finalize())
+}
+
 fn scan_source_tree(
     root: &Path,
     display_root: &Path,
     interfaces_only: bool,
-    limits: &WorkspaceLoader,
-    operation: Option<&OperationContext>,
-    total_bytes: &mut u64,
+    scan: &mut ScanState<'_>,
     files: &mut Vec<WorkspaceSourceFile>,
 ) -> Result<(), WorkspaceLoadError> {
     let mut pending = vec![root.to_path_buf()];
     while let Some(directory) = pending.pop() {
-        check_operation(operation)?;
+        check_operation(scan.operation)?;
         let mut entries = fs::read_dir(&directory)
             .map_err(|error| {
                 WorkspaceLoadError::at(
@@ -319,7 +362,7 @@ fn scan_source_tree(
             })?;
         entries.sort_by_key(fs::DirEntry::file_name);
         for entry in entries {
-            check_operation(operation)?;
+            check_operation(scan.operation)?;
             let file_type = entry.file_type().map_err(|error| {
                 WorkspaceLoadError::at(
                     WorkspaceLoadErrorCode::InspectEntry,
@@ -350,7 +393,7 @@ fn scan_source_tree(
                 Some("rss") => WorkspaceFileKind::Source,
                 _ => continue,
             };
-            if files.len() >= limits.max_files {
+            if scan.file_count >= scan.limits.max_files {
                 return Err(WorkspaceLoadError::global(
                     WorkspaceLoadErrorCode::FileLimitExceeded,
                     "workspace source file count exceeds loader limit",
@@ -363,13 +406,16 @@ fn scan_source_tree(
                     format!("cannot inspect source: {error}"),
                 )
             })?;
-            *total_bytes = total_bytes.checked_add(metadata.len()).ok_or_else(|| {
-                WorkspaceLoadError::global(
-                    WorkspaceLoadErrorCode::SourceBytesOverflow,
-                    "workspace source byte count overflow",
-                )
-            })?;
-            if *total_bytes > limits.max_source_bytes {
+            scan.total_bytes = scan
+                .total_bytes
+                .checked_add(metadata.len())
+                .ok_or_else(|| {
+                    WorkspaceLoadError::global(
+                        WorkspaceLoadErrorCode::SourceBytesOverflow,
+                        "workspace source byte count overflow",
+                    )
+                })?;
+            if scan.total_bytes > scan.limits.max_source_bytes {
                 return Err(WorkspaceLoadError::global(
                     WorkspaceLoadErrorCode::SourceBytesLimitExceeded,
                     "workspace source bytes exceed loader limit",
@@ -390,9 +436,11 @@ fn scan_source_tree(
             files.push(WorkspaceSourceFile {
                 path: path.to_string_lossy().into_owned(),
                 relative_path,
+                logical_path: String::new(),
                 contents,
                 kind,
             });
+            scan.file_count = scan.file_count.saturating_add(1);
         }
     }
     Ok(())
@@ -523,12 +571,14 @@ mod tests {
             WorkspaceSourceFile {
                 path: "/one/src/main.rss".to_string(),
                 relative_path: "src/main.rss".to_string(),
+                logical_path: "root/src/main.rss".to_string(),
                 contents: "fn main() -> Unit {}".to_string(),
                 kind: WorkspaceFileKind::Source,
             },
             WorkspaceSourceFile {
                 path: "/one/interfaces/host.rssi".to_string(),
                 relative_path: "interfaces/host.rssi".to_string(),
+                logical_path: "root/interfaces/host.rssi".to_string(),
                 contents: "module host".to_string(),
                 kind: WorkspaceFileKind::Interface,
             },
@@ -537,12 +587,14 @@ mod tests {
             WorkspaceSourceFile {
                 path: "/two/interfaces/host.rssi".to_string(),
                 relative_path: "interfaces/host.rssi".to_string(),
+                logical_path: "root/interfaces/host.rssi".to_string(),
                 contents: "module host".to_string(),
                 kind: WorkspaceFileKind::Interface,
             },
             WorkspaceSourceFile {
                 path: "/two/src/main.rss".to_string(),
                 relative_path: "src/main.rss".to_string(),
+                logical_path: "root/src/main.rss".to_string(),
                 contents: "fn main() -> Unit {}".to_string(),
                 kind: WorkspaceFileKind::Source,
             },
@@ -557,6 +609,35 @@ mod tests {
         assert_ne!(
             snapshot_content_digest(&first),
             snapshot_content_digest(&changed)
+        );
+    }
+
+    #[test]
+    fn logical_paths_distinguish_root_and_dependency_files_with_the_same_relative_path() {
+        let mut root = WorkspaceSourceFile {
+            path: "/host-a/src/main.rss".to_string(),
+            relative_path: "src/main.rss".to_string(),
+            logical_path: String::new(),
+            contents: "fn main() -> Unit {}".to_string(),
+            kind: WorkspaceFileKind::Source,
+        };
+        let mut dependency = WorkspaceSourceFile {
+            path: "/host-b/src/main.rss".to_string(),
+            relative_path: "src/main.rss".to_string(),
+            logical_path: String::new(),
+            contents: "module dependency".to_string(),
+            kind: WorkspaceFileKind::Interface,
+        };
+        assign_logical_paths("root", std::slice::from_mut(&mut root));
+        assign_logical_paths(
+            "dependency/sha256:fixture",
+            std::slice::from_mut(&mut dependency),
+        );
+
+        assert_ne!(root.logical_path, dependency.logical_path);
+        assert_ne!(
+            snapshot_content_digest(&[root]),
+            snapshot_content_digest(&[dependency])
         );
     }
 }

@@ -576,7 +576,10 @@ mechanical acceptance condition holds.
     WorkspaceSnapshot capture with explicit-base and operation-aware APIs plus
     a stable, absolute-path-independent content digest. Ambient-current-directory
     compatibility capture APIs have been removed and the LSP captures from its
-    explicit package root; compiler package callers remain to be migrated.
+    explicit package root; captured files now separate physical paths from
+    stable root/dependency-qualified logical paths so snapshot identity cannot
+    collide across same-named dependency files. Compiler package callers remain
+    to be migrated.
   - [ ] **S05.2 — Move Artifact persistence to an adapter.** Relocate locks,
     atomic writes, temporary files, compression, and artifact-store policy out
     of compiler. The confined lock/read/write implementation now lives in the

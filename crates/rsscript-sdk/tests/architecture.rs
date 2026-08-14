@@ -1052,6 +1052,7 @@ fn language_engine_does_not_read_the_operating_system() {
         "pub fn snapshot_from_with_operation",
         "pub fn load_from",
         "pub fn content_digest",
+        "pub logical_path: String",
     ] {
         assert!(
             workspace_loader.contains(boundary),
