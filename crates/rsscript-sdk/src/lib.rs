@@ -1089,6 +1089,16 @@ impl LinkedArtifact<'_> {
             telemetry,
             value: output.value.unwrap_or_default(),
             display_value: output.display_value.unwrap_or_default(),
+            // The v1 JSON report still carries the legacy projection for
+            // backwards-compatible machine consumers. It is deliberately not
+            // part of the reviewed Rust API: new embedders receive only the
+            // stable textual result until the typed report outcome is ready.
+            #[cfg(not(feature = "compatibility"))]
+            legacy_native_value: output.native_value.map(|value| {
+                serde_json::to_value(value)
+                    .expect("NativeValue must remain serializable for the v1 report contract")
+            }),
+            #[cfg(feature = "compatibility")]
             native_value: output.native_value,
             stdout: output.stdout,
             stderr: output.stderr,
@@ -1241,6 +1251,14 @@ pub struct ExecutionReport {
     pub telemetry: ExecutionTelemetry,
     pub value: String,
     pub display_value: String,
+    /// Legacy v1 JSON projection retained only for consumers of the checked-in
+    /// report schema. New Rust embedders cannot observe or construct the
+    /// dynamic representation through the reviewed SDK.
+    #[cfg(not(feature = "compatibility"))]
+    #[serde(rename = "native_value")]
+    legacy_native_value: Option<serde_json::Value>,
+    /// Legacy dynamic result projection for compatibility callers only.
+    #[cfg(feature = "compatibility")]
     pub native_value: Option<NativeValue>,
     pub stdout: String,
     pub stderr: String,
@@ -1272,6 +1290,9 @@ impl ExecutionReport {
             ),
             value: String::new(),
             display_value: String::new(),
+            #[cfg(not(feature = "compatibility"))]
+            legacy_native_value: None,
+            #[cfg(feature = "compatibility")]
             native_value: None,
             stdout: String::new(),
             stderr: String::new(),

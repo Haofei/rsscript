@@ -120,7 +120,7 @@ required-features = ["native-jit"]
 [[test]]
 name = "execution_report_schema"
 path = "tests/execution_report_schema.rs"
-required-features = ["compatibility"]
+required-features = ["execution"]
 
 [[test]]
 name = "migration_baseline"

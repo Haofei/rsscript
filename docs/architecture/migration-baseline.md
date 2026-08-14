@@ -1278,8 +1278,12 @@ mechanical acceptance condition holds.
   - [ ] **P06.4 — Remove legacy escape variants from canonical APIs.** JSON stays
     only behind a named extension codec with explicit interface declaration.
     The reviewed SDK Provider façade no longer re-exports `NativeValue` or
-    `NativeInterpreterFn`; both remain compatibility-only while report and VM
-    adapters still carry the legacy representation.
+    `NativeInterpreterFn`; both remain compatibility-only. The reviewed Rust
+    `ExecutionReport` also no longer exposes a public `NativeValue` field; it
+    retains a private v1 JSON projection solely so existing machine consumers
+    can migrate independently. VM adapters and the v1 report schema still
+    carry the legacy representation until the typed report outcome replaces
+    that compatibility projection.
 - [x] **P07 — Remove policy-shaped authority from Core ABI.** `HostCallContext`
   carries host-defined labels to Provider calls without Core interpreting an
   authorization policy. The runtime reports required symbols; provider profiles

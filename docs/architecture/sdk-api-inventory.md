@@ -45,6 +45,9 @@ snapshot path during migration.
   `compatibility` surface or depend directly on the low-level Provider crate.
 - Runtime lifecycle: `Runtime`, `LinkedArtifact`, `ExecutionRequest`, bounded
   `RunLimits`, `ExecutionReport`, termination reason, usage, and diagnostics.
+  The reviewed Rust report exposes the stable textual result only. Its retained
+  v1 JSON `native_value` projection is private compatibility serialization, not
+  a value type new embedders can read or construct.
 - Shared operation control: cancellation tokens, monotonic deadlines, and
   operation contexts.
 
