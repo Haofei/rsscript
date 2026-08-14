@@ -944,7 +944,9 @@ mechanical acceptance condition holds.
       directly to a bytecode artifact, pass the ordinary bytecode verifier, and
       execute in the existing VM before their values are compared with both
       older paths. The corpus also compares CFG-lowered boolean short-circuit
-      behavior. Error, usage, cleanup, and async/provider report parity
+      behavior. For every pure dual-path fixture it now also requires identical
+      stdout, stderr, and execution-usage accounting between legacy and
+      MIR-produced bytecode. Error, cleanup, and async/provider report parity
       remain follow-up work.
   - [ ] **M05.2 — Add ownership/resource differential fixtures.** Compare move
     failures, retain behavior, cleanup counts, and resource limits.

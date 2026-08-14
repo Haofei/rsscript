@@ -411,6 +411,21 @@ fn dual_path_cases_match_the_legacy_vm() {
             "legacy/MIR-bytecode VM divergence for {} ({})",
             case.name, case.capability
         );
+        assert_eq!(
+            legacy.stdout, mir_vm.stdout,
+            "legacy/MIR-bytecode stdout divergence for {} ({})",
+            case.name, case.capability
+        );
+        assert_eq!(
+            legacy.stderr, mir_vm.stderr,
+            "legacy/MIR-bytecode stderr divergence for {} ({})",
+            case.name, case.capability
+        );
+        assert_eq!(
+            legacy.usage, mir_vm.usage,
+            "legacy/MIR-bytecode usage divergence for {} ({})",
+            case.name, case.capability
+        );
     }
 }
 
