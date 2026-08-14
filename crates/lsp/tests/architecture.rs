@@ -37,6 +37,23 @@ fn lsp_depends_on_the_language_service_boundary() {
 }
 
 #[test]
+fn lsp_diagnostics_delegate_workspace_analysis_to_language_service() {
+    let diagnostics = read("diagnostics.rs");
+    assert!(diagnostics.contains("workspace_diagnostics"));
+    for forbidden in [
+        "analyze_source_with_core",
+        "analyze_source_with_interfaces",
+        "analyze_sources_with_interfaces",
+        "lint_source(",
+    ] {
+        assert!(
+            !diagnostics.contains(forbidden),
+            "LSP diagnostics must not own compiler analysis call `{forbidden}`"
+        );
+    }
+}
+
+#[test]
 fn main_is_only_the_lsp_composition_root() {
     let main = read("main.rs");
     assert!(main.lines().count() <= 40, "LSP main.rs must stay small");

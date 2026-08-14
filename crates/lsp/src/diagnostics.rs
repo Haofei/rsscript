@@ -1,9 +1,9 @@
 //! Checker execution and conversion of checker diagnostics to LSP diagnostics.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use rsscript_language_service::{Diagnostic as RsDiagnostic, *};
-use rsscript_workspace_loader::WorkspaceFileKind;
 use serde_json::json;
 use tower_lsp::lsp_types::{Diagnostic as LspDiagnostic, *};
 
@@ -31,11 +31,17 @@ pub(crate) fn diagnostics_for_uri_cancellable(
         return None;
     }
     let Some(package_root) = package_root_for_uri(uri) else {
-        let mut diagnostics = analyze_source_with_core(uri.path(), &document.text);
+        let mut service = LanguageService::default();
+        service.set_file(
+            uri.path(),
+            document.revision,
+            document_kind_for_path(uri.path()),
+            Arc::clone(&document.text),
+        );
+        let diagnostics = service.workspace_diagnostics();
         if cancelled() {
             return None;
         }
-        diagnostics.extend(lint_source(uri.path(), &document.text));
         return (!cancelled()).then_some(diagnostics);
     };
 
@@ -76,74 +82,50 @@ pub(crate) fn lsp_diagnostics_from_diagnostics(
 
 #[cfg(test)]
 pub(crate) fn single_file_diagnostics(path: &str, text: &str) -> Vec<RsDiagnostic> {
-    let mut diagnostics = analyze_source_with_core(path, text);
-    diagnostics.extend(lint_source(path, text));
-    diagnostics
+    let mut service = LanguageService::default();
+    service.set_file(path, 1, document_kind_for_path(path), Arc::from(text));
+    service.workspace_diagnostics()
 }
 
 pub(crate) fn package_frontend_diagnostics_cancellable(
     documents: &[WorkspaceDocument],
     cancelled: &mut impl FnMut() -> bool,
 ) -> Option<Vec<RsDiagnostic>> {
-    if cancelled() {
-        return None;
-    }
-    let interfaces = documents
-        .iter()
-        .filter(|document| document.kind == Some(WorkspaceFileKind::Interface))
-        .map(|document| (document.uri.path(), document.text.as_ref()))
-        .collect::<Vec<_>>();
-    let sources = documents
-        .iter()
-        .filter(|document| document.kind == Some(WorkspaceFileKind::Source))
-        .map(|document| (document.uri.path(), document.text.as_ref()))
-        .collect::<Vec<_>>();
-
-    let mut diagnostics = Vec::new();
-    for (path, contents) in &interfaces {
-        if cancelled() {
-            return None;
-        }
-        let visible_interfaces = interfaces
-            .iter()
-            .filter(|(interface_path, _)| interface_path != path)
-            .map(|(interface_path, interface_contents)| (*interface_path, *interface_contents))
-            .collect::<Vec<_>>();
-        diagnostics.extend(analyze_source_with_interfaces(
-            path,
-            contents,
-            &visible_interfaces,
-        ));
-    }
-    if cancelled() {
-        return None;
-    }
-    diagnostics.extend(analyze_sources_with_interfaces(&sources, &interfaces));
+    let mut service = LanguageService::default();
     for document in documents {
         if cancelled() {
             return None;
         }
-        diagnostics.extend(lint_source(document.uri.path(), &document.text));
+        service.set_file(
+            document.uri.path(),
+            document.revision,
+            document_kind_for_workspace(document),
+            Arc::clone(&document.text),
+        );
     }
     if cancelled() {
         return None;
     }
-    dedup_diagnostics(&mut diagnostics);
-    Some(diagnostics)
+    Some(service.workspace_diagnostics())
 }
 
-pub(crate) fn dedup_diagnostics(diagnostics: &mut Vec<RsDiagnostic>) {
-    let mut seen = std::collections::HashSet::new();
-    diagnostics.retain(|diagnostic| {
-        seen.insert((
-            diagnostic.code.clone(),
-            diagnostic.summary.clone(),
-            diagnostic.span.file.clone(),
-            diagnostic.span.line,
-            diagnostic.span.column,
-            diagnostic.span.length,
-        ))
-    });
+fn document_kind_for_workspace(document: &WorkspaceDocument) -> DocumentKind {
+    document.kind.map_or_else(
+        || document_kind_for_path(document.uri.path()),
+        |kind| match kind {
+            rsscript_workspace_loader::WorkspaceFileKind::Source => DocumentKind::Source,
+            rsscript_workspace_loader::WorkspaceFileKind::Test => DocumentKind::Source,
+            rsscript_workspace_loader::WorkspaceFileKind::Interface => DocumentKind::Interface,
+        },
+    )
+}
+
+fn document_kind_for_path(path: &str) -> DocumentKind {
+    if path.ends_with(".rssi") {
+        DocumentKind::Interface
+    } else {
+        DocumentKind::Source
+    }
 }
 
 pub(crate) fn to_lsp_diagnostic(source: &str, diagnostic: &RsDiagnostic) -> LspDiagnostic {

@@ -531,8 +531,11 @@ mechanical acceptance condition holds.
     compiler. Module/import dependency discovery and local editor symbols now
     consume shared CompilationSession parse/header queries instead of reparsing
     or line-oriented text extraction, including interface visibility and
-    invalidation traversal. Diagnostics and workspace semantic queries remain
-    on the compiler transition path. Cargo metadata
+    invalidation traversal. The LSP now delegates both single-file and package
+    overlay diagnostics to the language service workspace query instead of
+    reconstructing a second analyzer call sequence. Diagnostics remain on the
+    compiler transition path *inside* the language-service query until the
+    semantic query API replaces it. Cargo metadata
     tests must eventually reject a language-service edge to
     compiler, VM, SDK, package persistence, or concrete Providers.
   - [x] **S04.2 — Add document revision and invalidation tests.** The language

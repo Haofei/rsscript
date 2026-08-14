@@ -54,6 +54,7 @@ pub struct LanguageService {
     documents: BTreeMap<String, Document>,
     frontend: CompilationSession,
     diagnostic_cache: BTreeMap<(String, u64), Arc<[Diagnostic]>>,
+    workspace_diagnostic_cache: Option<Arc<[Diagnostic]>>,
     lint_cache: BTreeMap<(String, u64), Arc<[Diagnostic]>>,
     format_cache: BTreeMap<(String, u64), Arc<str>>,
     symbol_cache: BTreeMap<(String, u64), Arc<SymbolIndex>>,
@@ -174,6 +175,7 @@ impl LanguageService {
             changed_modules.extend(self.declared_modules(path.as_str(), DocumentKind::Interface));
         }
         self.invalidate_document_queries(&path);
+        self.workspace_diagnostic_cache = None;
         if previous
             .as_ref()
             .is_some_and(|document| document.kind == DocumentKind::Interface)
@@ -202,6 +204,7 @@ impl LanguageService {
             }
         }
         self.invalidate_document_queries(path);
+        self.workspace_diagnostic_cache = None;
         if let Some(modules) = removed_modules {
             self.invalidate_interface_dependents(&modules, path);
         }
@@ -284,6 +287,72 @@ impl LanguageService {
     pub fn diagnostics(&mut self, path: &str) -> Vec<Diagnostic> {
         self.diagnostics_with(path, LanguageRequest::default())
             .unwrap_or_default()
+    }
+
+    /// Diagnose every source and interface currently held by this revisioned
+    /// workspace. Editor adapters supply VFS and unsaved overlays through
+    /// [`set_file`](Self::set_file); they must not reconstruct a second module
+    /// graph or call compiler analysis entry points themselves.
+    pub fn workspace_diagnostics(&mut self) -> Vec<Diagnostic> {
+        self.workspace_diagnostics_with(LanguageRequest::default())
+            .unwrap_or_default()
+    }
+
+    pub fn workspace_diagnostics_with(
+        &mut self,
+        request: LanguageRequest<'_>,
+    ) -> Result<Vec<Diagnostic>, LanguageServiceError> {
+        check_request(request)?;
+        if let Some(cached) = self.workspace_diagnostic_cache.clone() {
+            self.cache_hits += 1;
+            self.record_hit(QueryKind::Diagnostics);
+            return Ok(cached
+                .iter()
+                .take(request.max_diagnostics)
+                .cloned()
+                .collect());
+        }
+
+        self.cache_misses += 1;
+        self.record_miss(QueryKind::Diagnostics);
+        let interfaces = self
+            .documents
+            .iter()
+            .filter(|(_, document)| document.kind == DocumentKind::Interface)
+            .map(|(path, document)| (path.as_str(), document.text.as_ref()))
+            .collect::<Vec<_>>();
+        let sources = self
+            .documents
+            .iter()
+            .filter(|(_, document)| document.kind == DocumentKind::Source)
+            .map(|(path, document)| (path.as_str(), document.text.as_ref()))
+            .collect::<Vec<_>>();
+
+        let mut diagnostics = Vec::new();
+        for (path, text) in &interfaces {
+            check_request(request)?;
+            let visible_interfaces = interfaces
+                .iter()
+                .copied()
+                .filter(|(candidate, _)| candidate != path)
+                .collect::<Vec<_>>();
+            diagnostics.extend(analyze_source_with_interfaces(
+                path,
+                text,
+                &visible_interfaces,
+            ));
+        }
+        check_request(request)?;
+        diagnostics.extend(analyze_sources_with_interfaces(&sources, &interfaces));
+        for path in self.documents.keys().cloned().collect::<Vec<_>>() {
+            check_request(request)?;
+            diagnostics.extend(self.lint(&path));
+        }
+        deduplicate_diagnostics(&mut diagnostics);
+        check_request(request)?;
+        self.workspace_diagnostic_cache = Some(Arc::from(diagnostics.clone()));
+        diagnostics.truncate(request.max_diagnostics);
+        Ok(diagnostics)
     }
 
     pub fn diagnostics_with(
@@ -554,6 +623,20 @@ fn check_request(request: LanguageRequest<'_>) -> Result<(), LanguageServiceErro
     Ok(())
 }
 
+fn deduplicate_diagnostics(diagnostics: &mut Vec<Diagnostic>) {
+    let mut seen = BTreeSet::new();
+    diagnostics.retain(|diagnostic| {
+        seen.insert((
+            diagnostic.code.clone(),
+            diagnostic.summary.clone(),
+            diagnostic.span.file.clone(),
+            diagnostic.span.line,
+            diagnostic.span.column,
+            diagnostic.span.length,
+        ))
+    });
+}
+
 fn retain_other_paths<V>(cache: &mut BTreeMap<(String, u64), V>, path: &str) -> u64 {
     let before = cache.len();
     cache.retain(|(cached_path, _), _| cached_path != path);
@@ -650,6 +733,47 @@ mod tests {
         );
         service.diagnostics("main.rss");
         assert_eq!(service.stats().cache_misses, 2);
+    }
+
+    #[test]
+    fn workspace_diagnostics_own_the_multi_document_analysis_query() {
+        let mut service = LanguageService::default();
+        service.set_file(
+            "host.rssi",
+            1,
+            DocumentKind::Interface,
+            "module host\npub fn value() -> Int\n",
+        );
+        service.set_file(
+            "main.rss",
+            1,
+            DocumentKind::Source,
+            "module app\nuse host.*\nfn main() -> Int { return value() }\n",
+        );
+
+        let diagnostics = service.workspace_diagnostics();
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != Severity::Error),
+            "unexpected workspace diagnostics: {diagnostics:?}"
+        );
+        service.workspace_diagnostics();
+        assert_eq!(service.query_stats(QueryKind::Diagnostics).misses, 1);
+        assert_eq!(service.query_stats(QueryKind::Diagnostics).hits, 1);
+
+        service.set_file(
+            "host.rssi",
+            2,
+            DocumentKind::Interface,
+            "module host\npub fn replacement() -> Int\n",
+        );
+        let diagnostics = service.workspace_diagnostics();
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.severity == Severity::Error)
+        );
     }
 
     #[test]
