@@ -956,7 +956,18 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                 );
                 self.emit(MirInstruction::Call {
                     destination,
-                    target: MirCallTarget::Builtin(builtin),
+                    target: MirCallTarget::Builtin {
+                        id: builtin,
+                        parameter_modes: signature
+                            .params
+                            .iter()
+                            .map(|parameter| match parameter.effect {
+                                Some(checked::ParamEffect::Read) | None => MirParameterMode::Read,
+                                Some(checked::ParamEffect::Mut) => MirParameterMode::Mut,
+                                Some(checked::ParamEffect::Take) => MirParameterMode::Take,
+                            })
+                            .collect(),
+                    },
                     arguments,
                 });
             }

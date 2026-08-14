@@ -262,13 +262,16 @@ pub enum MirInstruction {
 /// Fully resolved direct call target. Dynamic protocol dispatch deliberately
 /// has no representation until its semantic and cancellation contracts can be
 /// made explicit in MIR.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MirCallTarget {
     Function(FunctionId),
     /// Catalog-owned direct core-library call. The source namespace/name was
     /// resolved by semantic lowering; v1 bytecode spelling is an encoder-only
     /// compatibility projection through [`builtin_vm_name`].
-    Builtin(BuiltinId),
+    Builtin {
+        id: BuiltinId,
+        parameter_modes: Box<[MirParameterMode]>,
+    },
     External(ExternalSymbolId),
 }
 
@@ -1361,25 +1364,14 @@ fn verify_instruction(
                         target: *target,
                     });
                 }
-                MirCallTarget::Builtin(target) if builtin_vm_name(*target).is_some() => {
-                    // Direct builtin signatures are checked by the semantic
-                    // lowerer. v1 has no typed intrinsic-signature table yet,
-                    // so preserve argument modes rather than reconstructing a
-                    // source-level callee in the verifier.
-                    arguments
-                        .iter()
-                        .map(|argument| match argument.mode() {
-                            MirCallArgumentMode::Value => MirParameterMode::Read,
-                            MirCallArgumentMode::Read => MirParameterMode::Read,
-                            MirCallArgumentMode::Mut => MirParameterMode::Mut,
-                            MirCallArgumentMode::Take => MirParameterMode::Take,
-                        })
-                        .collect()
-                }
-                MirCallTarget::Builtin(target) => {
+                MirCallTarget::Builtin {
+                    id,
+                    parameter_modes,
+                } if builtin_vm_name(*id).is_some() => parameter_modes.to_vec(),
+                MirCallTarget::Builtin { id, .. } => {
                     return Err(MirValidationError::InvalidBuiltinTarget {
                         function: function.id,
-                        target: *target,
+                        target: *id,
                     });
                 }
                 MirCallTarget::External(target) if target.index() < external_imports.len() => {

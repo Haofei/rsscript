@@ -845,7 +845,8 @@ mechanical acceptance condition holds.
       identity to the legacy v1 `CallIntrinsic` spelling at the encoding
       boundary; the direct-HIR regression and primary embedding example cover
       both qualified and receiver `String.to_uppercase` calls. Typed/generic
-      signatures and async builtin contracts remain fail-closed follow-up work.
+      type signatures and async builtin contracts remain fail-closed follow-up
+      work; the resolved parameter effect sequence is verifier-checked now.
 - [ ] **M04 — Lower checked HIR to MIR exactly once.** Backend code cannot
   inspect syntax AST or reconstruct semantic facts. MIR verification rejects
   unresolved calls, invalid ownership state, incomplete cleanup, and malformed

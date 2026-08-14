@@ -577,7 +577,7 @@ fn lower_instruction(
                         ("mut_args", json!(mut_args)),
                     ],
                 )),
-                MirCallTarget::Builtin(id) => {
+                MirCallTarget::Builtin { id, .. } => {
                     let intrinsic = builtin_vm_name(*id).ok_or(CodegenError::InvalidMir(
                         "builtin call references missing catalog identity".to_owned(),
                     ))?;

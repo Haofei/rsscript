@@ -501,7 +501,7 @@ impl<'a> Interpreter<'a> {
                             MirCallTarget::External(_) => {
                                 return Err(MirExecutionError::UnsupportedExternalCall);
                             }
-                            MirCallTarget::Builtin(_) => {
+                            MirCallTarget::Builtin { .. } => {
                                 return Err(MirExecutionError::UnsupportedBuiltinCall);
                             }
                         };

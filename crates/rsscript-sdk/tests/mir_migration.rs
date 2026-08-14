@@ -12,8 +12,8 @@ use rsscript_compiler::{
 use rsscript_mir::conformance::{MigrationCase, MigrationStage, execute_named};
 use rsscript_mir::{
     BasicBlock, BlockId, FunctionId, MirCallTarget, MirFunction, MirFunctionDebug,
-    MirFunctionSignature, MirInstruction, MirLiteral, MirModule, MirTerminator, TaskGroupId,
-    TaskId, TypeId, ValueId,
+    MirFunctionSignature, MirInstruction, MirLiteral, MirModule, MirParameterMode, MirTerminator,
+    TaskGroupId, TaskId, TypeId, ValueId,
 };
 use rsscript_sdk::{
     AsyncInterpreterFn, BlockingBehavior, CancellationBehavior, CancellationToken, Compiler,
@@ -487,9 +487,9 @@ fn main() -> String {
             .any(|instruction| matches!(
                 instruction,
                 MirInstruction::Call {
-                    target: MirCallTarget::Builtin(_),
+                    target: MirCallTarget::Builtin { parameter_modes, .. },
                     ..
-                }
+                } if parameter_modes.as_ref() == [MirParameterMode::Read]
             ))
     );
     let output = reg_vm_compile_mir(
