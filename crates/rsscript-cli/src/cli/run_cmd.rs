@@ -9,7 +9,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 #[cfg(feature = "aot-rust")]
-use rsscript_compiler::{parse_runtime_diagnostics, write_generated_rust_package};
+use rsscript_compiler::compatibility::{parse_runtime_diagnostics, write_generated_rust_package};
 
 #[cfg(feature = "aot-rust")]
 use super::{
@@ -420,7 +420,7 @@ fn cargo_artifact_executable(stdout: &[u8]) -> Result<PathBuf, String> {
 
 #[cfg(feature = "aot-rust")]
 fn print_run_dry_run(
-    package: &rsscript_compiler::GeneratedRustPackage,
+    package: &rsscript_compiler::compatibility::GeneratedRustPackage,
     package_dir: Option<&Path>,
     release: bool,
     program_args: &[&str],

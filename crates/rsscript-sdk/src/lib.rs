@@ -45,12 +45,8 @@ pub use rsscript_bytecode::{
     BytecodeLimits, BytecodeVerifier, LANGUAGE_SEMANTICS_VERSION, SUPPORTED_LANGUAGE_SEMANTICS,
     VerificationContext, VerifiedBytecode, decode_executable_payload, encode_executable_payload,
 };
-#[cfg(feature = "execution")]
-#[cfg(not(feature = "compatibility"))]
-#[allow(unused_imports)]
-use rsscript_compiler::*;
 #[cfg(feature = "compatibility")]
-pub use rsscript_compiler::{
+pub use rsscript_compiler::compatibility::{
     CompiledIr, ExecutablePackageSnapshot, GeneratedRustPackage, LowerCoverageReport, LoweredRust,
     NativeRustDependency, PackageAnalysis, PackageAnalysisAwaitSite, PackageAnalysisExport,
     PackageAnalysisExternalImport, PackageAnalysisFile, PackageAnalysisProducer,
@@ -86,6 +82,10 @@ pub use rsscript_compiler::{
     review_map_sources, review_package_dir, review_sources, symbol_inventory,
     write_generated_rust_package,
 };
+#[cfg(feature = "execution")]
+#[cfg(not(feature = "compatibility"))]
+#[allow(unused_imports)]
+use rsscript_compiler::*;
 #[cfg(feature = "native-jit")]
 pub use rsscript_vm::NativeStats;
 #[cfg(feature = "execution")]

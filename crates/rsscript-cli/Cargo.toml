@@ -18,6 +18,7 @@ test = false
 default = []
 execution = [
     "dep:rsscript-sdk",
+    "rsscript-compiler/package",
     "rsscript-sdk/project",
     "dep:rss-process-guard",
     "dep:rsscript-runner-protocol",

@@ -163,7 +163,7 @@ pub fn compile_ir_to_bytecode(
 
 #[cfg(feature = "package")]
 pub fn compile_package_input_to_ir(
-    input: &crate::PackageLoweringInput,
+    input: &crate::package::PackageLoweringInput,
 ) -> Result<CompiledIr, Vec<Diagnostic>> {
     let mut interfaces = crate::interfaces::builtin_interfaces()
         .map(|(path, contents)| (path.to_string(), contents.to_string()))

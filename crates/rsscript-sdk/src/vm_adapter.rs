@@ -6,12 +6,12 @@
 #[cfg(any(feature = "project", feature = "compatibility"))]
 use std::path::Path;
 
+#[cfg(any(feature = "project", feature = "compatibility"))]
+use rsscript_compiler::compatibility::{
+    PackageLoweringInput, compile_package_input_to_ir, prepare_package_for_execution,
+};
 use rsscript_compiler::{
     CompiledIr, ValidatedProgram, compile_source_to_ir, compile_validated_to_ir,
-};
-#[cfg(any(feature = "project", feature = "compatibility"))]
-use rsscript_compiler::{
-    PackageLoweringInput, compile_package_input_to_ir, prepare_package_for_execution,
 };
 
 use rsscript_bytecode::BytecodeArtifact;

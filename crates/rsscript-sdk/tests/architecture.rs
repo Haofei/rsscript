@@ -2841,6 +2841,31 @@ fn workspace_diagnostic_query_contract_is_semantic_owned() {
 }
 
 #[test]
+fn compiler_legacy_package_review_and_aot_exports_are_quarantined() {
+    let root = workspace_root();
+    let compiler = read(&root.join("crates/rsscript-compiler/src/lib.rs"));
+    assert!(compiler.contains("pub mod compatibility"));
+    for legacy_root_export in [
+        "pub use package::{",
+        "pub use review::{",
+        "pub use rust_lower::{",
+    ] {
+        assert!(
+            !compiler.contains(legacy_root_export),
+            "compiler legacy API must be explicit compatibility-only: {legacy_root_export}"
+        );
+    }
+    assert!(compiler.contains("pub use crate::package::{"));
+    assert!(compiler.contains("pub use crate::review::{"));
+    assert!(compiler.contains("pub use crate::rust_lower::{"));
+
+    let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
+    assert!(sdk.contains("pub use rsscript_compiler::compatibility::{"));
+    let cli_aot = read(&root.join("crates/rsscript-cli/src/cli/mod.rs"));
+    assert!(cli_aot.contains("use rsscript_compiler::compatibility::{"));
+}
+
+#[test]
 fn reir_is_a_one_way_optional_integration() {
     let root = workspace_root();
     let compiler_manifest: toml::Value =

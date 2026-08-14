@@ -2,7 +2,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use rsscript_compiler::{PackageAnalysis, analyze_package_dir, format_package_analysis_json};
+use rsscript_compiler::compatibility::{
+    PackageAnalysis, analyze_package_dir, format_package_analysis_json,
+};
 use rsscript_sdk::{
     analysis::SemanticDiffV1,
     artifact::{
@@ -340,7 +342,7 @@ fn inspect_bundle_analysis(input: &str) -> ExitCode {
 
 fn resource_exports(
     analysis: &PackageAnalysis,
-) -> impl Iterator<Item = &rsscript_compiler::PackageAnalysisExport> {
+) -> impl Iterator<Item = &rsscript_compiler::compatibility::PackageAnalysisExport> {
     analysis.exports.iter().filter(|export| {
         export
             .semantic_facts

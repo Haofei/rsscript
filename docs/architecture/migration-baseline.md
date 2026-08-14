@@ -623,17 +623,23 @@ mechanical acceptance condition holds.
     explicit SDK compatibility façade exposes it directly.
   - [ ] **S05.3 — Move review, risk, and package presentation out of compiler.**
     Keep neutral analysis facts; make review formatting and policy adapters
-    optional consumers.
+    optional consumers. Package persistence, review/risk, and generated-Rust
+    APIs are now quarantined below the explicit
+    `rsscript_compiler::compatibility` namespace; they are no longer top-level
+    compiler exports that new frontend consumers can accidentally adopt.
+    Their implementations and package types still need to move to dedicated
+    project/review/AOT crates before this item can close.
   - [ ] **S05.4 — Move Rust/AOT lowering to its experimental boundary.** Compiler
-    no longer exposes generated Rust or native lowering APIs. Native package
-    dependency identity now belongs to the package snapshot, and the Rust
-    lowerer only consumes and temporarily re-exports it for compatibility. Rust
-    lowering is now selected only by the explicit `aot-rust` feature rather
-    than ordinary compiler execution. The CLI mirrors this separation: its
-    normal `execution` feature builds only the reference VM/isolated runner,
-    while generated-Rust execution and its help text require an explicit
-    `aot-rust` feature. Rust source lowering, source maps, runtime ABI helpers,
-    and the public AOT façade remain in compiler, so this item remains open.
+    reviewed top-level APIs no longer expose generated Rust or native lowering
+    APIs. Native package dependency identity now belongs to the package snapshot,
+    and the Rust lowerer only consumes and temporarily re-exports it through
+    `compatibility`. Rust lowering is now selected only by the explicit
+    `aot-rust` feature rather than ordinary compiler execution. The CLI mirrors
+    this separation: its normal `execution` feature builds only the reference
+    VM/isolated runner, while generated-Rust execution and its help text require
+    an explicit `aot-rust` feature. Rust source lowering, source maps, runtime
+    ABI helpers, and the compatibility AOT façade remain in compiler, so this
+    item remains open.
   - [ ] **S05.5 — Enforce a frontend-only compiler dependency closure.** Cargo
     metadata and `cargo tree` tests reject OS, persistence, Provider, VM, review,
     JIT, and AOT dependencies. Compiler lowering is now a dedicated feature;

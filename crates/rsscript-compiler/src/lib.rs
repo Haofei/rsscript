@@ -103,49 +103,73 @@ pub use generate::{
 pub use lint::lint_source;
 #[cfg(feature = "execution")]
 pub use lower_names::lowered_symbol_name;
-#[cfg(feature = "package")]
-pub use package::{
-    ExecutablePackageSnapshot, PackageAnalysis, PackageAnalysisAwaitSite, PackageAnalysisExport,
-    PackageAnalysisExternalImport, PackageAnalysisFile, PackageAnalysisProducer,
-    PackageAnalysisSummary, PackageCheck, PackageCheckLock, PackageDependencyKind, PackageDiff,
-    PackageGraphCheck, PackageIdentity, PackageInterfaceChange, PackageInterfaceChangeKind,
-    PackageLock, PackageLockDiff, PackageLockFieldChange, PackageLockMetadata, PackageLockPackage,
-    PackageLockPackageChange, PackageLoweringInput, PackageManifestChange, PackageMetadataMismatch,
-    PackageMetadataReport, PackageNativeRustAuthorDeclaration, PackageNativeRustCheck,
-    PackageNativeRustReview, PackageNativeRustSemanticReview, PackageNativeRustSourceScan,
-    PackageReview, PackageReviewExport, PackageReviewFile, PackageReviewFileKind,
-    PackageReviewMetadata, PackageReviewSummary, PackageRisk, PackageSourceFile, PackageTree,
-    PackageTreeNode, PackageTreeSummary, PreparedPackage, WorkspaceSnapshot, analyze_package_dir,
-    check_package_dir, diff_package_dirs, diff_package_locks, format_package_analysis_json,
-    format_package_check_human, format_package_check_json, format_package_diff_human,
-    format_package_diff_json, format_package_lock_diff_human, format_package_lock_diff_json,
-    format_package_lock_json, format_package_lock_toml, format_package_metadata_human,
-    format_package_metadata_json, format_package_review_human, format_package_review_json,
-    format_package_review_markdown, format_package_tree_human, format_package_tree_json,
-    load_workspace_snapshot, load_workspace_snapshot_with_operation, lock_package_dir,
-    package_lowering_input, package_metadata, package_metadata_verify, package_sources,
-    package_sources_with_dependency_interfaces, package_tree, prepare_executable_package,
-    prepare_package_for_execution, review_package_dir,
-};
-#[cfg(feature = "package")]
-pub use review::{
-    ReviewFinding, ReviewFix, ReviewMap, ReviewMapCategorySummary, ReviewMapClassification,
-    ReviewMapFile, ReviewMapFileRisk, ReviewMapRegion, ReviewMapSummary, ReviewRisk,
-    format_review_human, format_review_json, format_review_map_human, format_review_map_json,
-    review_map_sources, review_sources,
-};
+
+/// Explicit migration-only APIs for package persistence, review presentation,
+/// and Rust AOT emission.
+///
+/// The reviewed compiler surface is source/interface analysis and provider-neutral
+/// lowering. These historical APIs remain available only to compatibility
+/// adapters and experimental tooling while their implementations move to their
+/// respective project, review, and AOT boundaries.
+#[cfg(any(feature = "package", feature = "aot-rust"))]
+pub mod compatibility {
+    #[cfg(all(feature = "lowering", feature = "package"))]
+    pub use crate::compiler_output::compile_package_input_to_ir;
+    #[cfg(feature = "bytecode")]
+    pub use crate::compiler_output::{
+        BytecodeCompileError, compile_ir_to_bytecode, compile_validated_to_bytecode,
+    };
+    #[cfg(feature = "lowering")]
+    pub use crate::compiler_output::{CompiledIr, compile_source_to_ir, compile_validated_to_ir};
+    #[cfg(feature = "execution")]
+    pub use crate::lower_names::lowered_symbol_name;
+    #[cfg(feature = "package")]
+    pub use crate::package::{
+        ExecutablePackageSnapshot, PackageAnalysis, PackageAnalysisAwaitSite,
+        PackageAnalysisExport, PackageAnalysisExternalImport, PackageAnalysisFile,
+        PackageAnalysisProducer, PackageAnalysisSummary, PackageCheck, PackageCheckLock,
+        PackageDependencyKind, PackageDiff, PackageGraphCheck, PackageIdentity,
+        PackageInterfaceChange, PackageInterfaceChangeKind, PackageLock, PackageLockDiff,
+        PackageLockFieldChange, PackageLockMetadata, PackageLockPackage, PackageLockPackageChange,
+        PackageLoweringInput, PackageManifestChange, PackageMetadataMismatch,
+        PackageMetadataReport, PackageNativeRustAuthorDeclaration, PackageNativeRustCheck,
+        PackageNativeRustReview, PackageNativeRustSemanticReview, PackageNativeRustSourceScan,
+        PackageReview, PackageReviewExport, PackageReviewFile, PackageReviewFileKind,
+        PackageReviewMetadata, PackageReviewSummary, PackageRisk, PackageSourceFile, PackageTree,
+        PackageTreeNode, PackageTreeSummary, PreparedPackage, WorkspaceSnapshot,
+        analyze_package_dir, check_package_dir, diff_package_dirs, diff_package_locks,
+        format_package_analysis_json, format_package_check_human, format_package_check_json,
+        format_package_diff_human, format_package_diff_json, format_package_lock_diff_human,
+        format_package_lock_diff_json, format_package_lock_json, format_package_lock_toml,
+        format_package_metadata_human, format_package_metadata_json, format_package_review_human,
+        format_package_review_json, format_package_review_markdown, format_package_tree_human,
+        format_package_tree_json, load_workspace_snapshot, load_workspace_snapshot_with_operation,
+        lock_package_dir, package_lowering_input, package_metadata, package_metadata_verify,
+        package_sources, package_sources_with_dependency_interfaces, package_tree,
+        prepare_executable_package, prepare_package_for_execution, review_package_dir,
+    };
+    #[cfg(feature = "package")]
+    pub use crate::review::{
+        ReviewFinding, ReviewFix, ReviewMap, ReviewMapCategorySummary, ReviewMapClassification,
+        ReviewMapFile, ReviewMapFileRisk, ReviewMapRegion, ReviewMapSummary, ReviewRisk,
+        format_review_human, format_review_json, format_review_map_human, format_review_map_json,
+        review_map_sources, review_sources,
+    };
+    #[cfg(feature = "aot-rust")]
+    pub use crate::rust_lower::{
+        GeneratedRustPackage, LowerCoverageReport, LoweredRust, NativeRustDependency,
+        RemappedRustcDiagnostic, RustSourceMapEntry, lower_coverage_report, lower_program_to_rust,
+        lower_program_to_rust_with_map, lower_source_to_rust, lower_source_to_rust_package,
+        lower_source_to_rust_package_with_interfaces, lower_source_to_rust_with_map,
+        lower_sources_to_rust_package_with_interfaces, lower_sources_to_rust_package_with_options,
+        parse_runtime_diagnostics, parse_source_map_json, remap_rustc_diagnostic_json,
+        remap_rustc_diagnostic_json_lines, write_generated_rust_package,
+    };
+    #[cfg(feature = "execution")]
+    pub use crate::symbols::{SymbolInventoryEntry, symbol_inventory};
+}
 #[cfg(feature = "execution")]
 pub use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationId};
-#[cfg(feature = "aot-rust")]
-pub use rust_lower::{
-    GeneratedRustPackage, LowerCoverageReport, LoweredRust, NativeRustDependency,
-    RemappedRustcDiagnostic, RustSourceMapEntry, lower_coverage_report, lower_program_to_rust,
-    lower_program_to_rust_with_map, lower_source_to_rust, lower_source_to_rust_package,
-    lower_source_to_rust_package_with_interfaces, lower_source_to_rust_with_map,
-    lower_sources_to_rust_package_with_interfaces, lower_sources_to_rust_package_with_options,
-    parse_runtime_diagnostics, parse_source_map_json, remap_rustc_diagnostic_json,
-    remap_rustc_diagnostic_json_lines, write_generated_rust_package,
-};
 pub use semantic::{
     AnalysisResult, FrontendCompletion, FrontendInputSnapshot, FrontendStopReason,
     SemanticDatabase, SourceFileSnapshot, SourceSnapshot, ValidatedProgram,

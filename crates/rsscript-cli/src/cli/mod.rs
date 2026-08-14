@@ -8,10 +8,12 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 #[cfg(all(feature = "execution", feature = "aot-rust"))]
-use rsscript_compiler::{
-    Diagnostic, format_diagnostics_human, format_diagnostics_json, lower_source_to_rust_package,
-    lower_sources_to_rust_package_with_options, prepare_package_for_execution,
+use rsscript_compiler::compatibility::{
+    lower_source_to_rust_package, lower_sources_to_rust_package_with_options,
+    prepare_package_for_execution,
 };
+#[cfg(all(feature = "execution", feature = "aot-rust"))]
+use rsscript_compiler::{Diagnostic, format_diagnostics_human, format_diagnostics_json};
 #[cfg(all(feature = "execution", feature = "aot-rust"))]
 use sha2::{Digest, Sha256};
 
@@ -183,7 +185,7 @@ pub(crate) fn lower_cli_input_to_rust_package(
     path: &str,
     runtime_path: &Path,
     json: bool,
-) -> Result<rsscript_compiler::GeneratedRustPackage, ExitCode> {
+) -> Result<rsscript_compiler::compatibility::GeneratedRustPackage, ExitCode> {
     let runtime_path = runtime_path.display().to_string();
     if is_package_directory(path) {
         let input = package_execution_lowering_input(Path::new(path)).map_err(|error| {
@@ -219,7 +221,7 @@ pub(crate) fn lower_cli_input_to_rust_package(
 #[cfg(all(feature = "execution", feature = "aot-rust"))]
 fn package_execution_lowering_input(
     package_dir: &Path,
-) -> Result<rsscript_compiler::PackageLoweringInput, String> {
+) -> Result<rsscript_compiler::compatibility::PackageLoweringInput, String> {
     let prepared = prepare_package_for_execution(package_dir)?;
     if !prepared.requires_external_provider() {
         return prepared.into_lowering_input();

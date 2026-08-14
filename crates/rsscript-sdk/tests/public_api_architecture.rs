@@ -179,7 +179,7 @@ fn public_api_inventory_covers_the_current_migration_surface() {
         "native JIT execution helpers must remain feature-gated"
     );
     for legacy_export in [
-        "pub use rsscript_compiler::{",
+        "pub use rsscript_compiler::compatibility::{",
         "pub use rsscript_bytecode::{",
         "pub use rsscript_vm::{",
         "pub use vm_adapter::{",

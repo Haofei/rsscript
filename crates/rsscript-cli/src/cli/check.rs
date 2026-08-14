@@ -10,7 +10,7 @@ use rsscript_compiler::{
 
 use super::{is_package_directory, print_usage, read_interface_sources, required_flag_value};
 #[cfg(feature = "execution")]
-use rsscript_compiler::{analyze_package_dir, format_package_analysis_json};
+use rsscript_compiler::compatibility::{analyze_package_dir, format_package_analysis_json};
 
 /// Parse `--explain <CODE>` (optionally with `--json`), in any order.
 fn parse_explain_args(args: &[String]) -> Option<(&str, bool)> {

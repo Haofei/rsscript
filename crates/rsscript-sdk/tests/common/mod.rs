@@ -553,7 +553,9 @@ pub fn fail_fixture_expected_code_set() -> BTreeSet<String> {
     codes
 }
 
-pub fn source_map_summary(entries: &[rsscript_compiler::RustSourceMapEntry]) -> String {
+pub fn source_map_summary(
+    entries: &[rsscript_compiler::compatibility::RustSourceMapEntry],
+) -> String {
     entries
         .iter()
         .map(|entry| {
