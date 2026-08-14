@@ -3268,6 +3268,15 @@ fn mir_codegen_is_a_vm_independent_verified_bytecode_boundary() {
         !checked_signature.contains("WireType::parse(&parameter.ty.to_string())"),
         "direct MIR signatures must not round-trip semantic types through display strings"
     );
+    let checked_external_signature = function_source(&lowering, "fn checked_external_signature(");
+    assert!(
+        checked_external_signature.contains("checked_type_to_wire"),
+        "direct MIR external import signatures must consume structural semantic types"
+    );
+    assert!(
+        !checked_external_signature.contains("WireType::parse"),
+        "direct MIR external imports must not parse rendered semantic types"
+    );
     let checked_for = function_source(&lowering, "fn lower_for(");
     assert!(
         checked_for.contains("iterable_type.root_name()"),

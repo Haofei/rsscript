@@ -351,7 +351,7 @@ fn checked_external_imports(
         let symbol = checked_external_symbol(signature)?;
         imports
             .entry(symbol.as_str().to_owned())
-            .or_insert((symbol, checked_external_signature(signature)));
+            .or_insert((symbol, checked_external_signature(signature)?));
     }
     Ok(imports.into_values().collect())
 }
@@ -373,29 +373,34 @@ fn checked_external_symbol(
     })
 }
 
-fn checked_external_signature(signature: &checked::FunctionSig) -> FunctionSignature {
-    FunctionSignature {
+fn checked_external_signature(
+    signature: &checked::FunctionSig,
+) -> Result<FunctionSignature, MirLoweringError> {
+    Ok(FunctionSignature {
         parameters: signature
             .params
             .iter()
-            .map(|parameter| ParameterSignature {
-                name: parameter.name.clone(),
-                effect: match parameter.effect.unwrap_or(checked::ParamEffect::Read) {
-                    checked::ParamEffect::Read => DataEffect::Read,
-                    checked::ParamEffect::Mut => DataEffect::Mut,
-                    checked::ParamEffect::Take => DataEffect::Take,
-                },
-                ty: WireType::parse(&parameter.ty.to_string()),
-                retained: signature.retained_params.contains(&parameter.name),
+            .map(|parameter| {
+                Ok(ParameterSignature {
+                    name: parameter.name.clone(),
+                    effect: match parameter.effect.unwrap_or(checked::ParamEffect::Read) {
+                        checked::ParamEffect::Read => DataEffect::Read,
+                        checked::ParamEffect::Mut => DataEffect::Mut,
+                        checked::ParamEffect::Take => DataEffect::Take,
+                    },
+                    ty: checked_type_to_wire(&parameter.ty, &signature.name)?,
+                    retained: signature.retained_params.contains(&parameter.name),
+                })
             })
-            .collect(),
+            .collect::<Result<Vec<_>, MirLoweringError>>()?,
         result: signature
             .return_ty
             .as_ref()
-            .map(|ty| WireType::parse(&ty.to_string()))
+            .map(|ty| checked_type_to_wire(ty, &signature.name))
+            .transpose()?
             .unwrap_or(WireType::Unit),
         asynchronous: signature.is_async,
-    }
+    })
 }
 
 /// Select operations are syntactically an `await` boundary and may be wrapped
