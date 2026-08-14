@@ -19,7 +19,7 @@ default = []
 execution = [
     "rsscript-compiler/aot-rust",
     "dep:rsscript-sdk",
-    "rsscript-sdk/execution",
+    "rsscript-sdk/project",
     "dep:rss-process-guard",
     "dep:rsscript-runner-protocol",
 ]

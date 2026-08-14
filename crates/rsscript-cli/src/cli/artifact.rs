@@ -10,6 +10,7 @@ use rsscript_sdk::{
         BytecodeArtifact, BytecodeVerifier,
     },
     compile::Compiler,
+    project::ProjectCompiler,
 };
 use serde_json::json;
 
@@ -70,7 +71,7 @@ pub(crate) fn run_build(args: &[String]) -> ExitCode {
 fn build_input(input: &str) -> Result<BuiltArtifact, String> {
     let compiler = Compiler;
     if is_package_directory(input) {
-        compiler
+        ProjectCompiler::new()
             .compile_package(Path::new(input))
             .map_err(|error| error.to_string())
     } else {

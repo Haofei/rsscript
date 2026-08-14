@@ -562,7 +562,9 @@ mechanical acceptance condition holds.
   lowering live outside the compiler dependency closure. The reviewed SDK now
   exposes `FrontendInputSnapshot` and `Compiler::compile_snapshot`, keeping
   in-memory source/interface capture separate from package-path convenience
-  APIs; package traversal and persistence remain to be moved.
+  APIs. The latter now live behind the explicit SDK `project` adapter, so the
+  reviewed `Compiler` surface remains in-memory; compiler package traversal
+  and persistence remain to be moved.
   - [ ] **S05.1 — Move workspace capture to `rsscript-workspace-loader`.** Move
     directory traversal, manifest/dependency discovery, path normalization, and
     snapshot capture from compiler. The loader now exposes immutable

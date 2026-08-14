@@ -14,6 +14,10 @@ The transitional root exports are available only through the explicit
 `compatibility` feature while the MIR differential corpus migrates; they are
 not part of the default or `execution` SDK surface.
 
+Filesystem/package capture is an explicit `project` feature and
+`project::ProjectCompiler` adapter. It is a CLI/project-loader convenience,
+not part of the reviewed in-memory `compile::Compiler` contract.
+
 - Compilation and diagnostics: `Compiler`, `CompileError`, immutable
   `FrontendInputSnapshot`, snapshot-based check/build entry points, checked
   source, and language-service query types. The frontend language module also

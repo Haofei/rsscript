@@ -125,7 +125,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
-#[cfg(feature = "execution")]
+#[cfg(feature = "project")]
 use std::path::Path;
 #[cfg(feature = "execution")]
 use std::time::{Duration, Instant};
@@ -170,9 +170,100 @@ pub mod language {
 pub mod compile {
     pub use super::{CompileError, CompileErrorCode, Compiler};
     pub use rsscript_compiler::FrontendInputSnapshot;
-    #[cfg(feature = "execution")]
-    pub use rsscript_compiler::WorkspaceSnapshot;
     pub use rsscript_compiler::{Diagnostic, Severity};
+}
+
+/// Explicit filesystem/package convenience APIs.
+///
+/// This module is intentionally separate from [`compile`]. The reviewed
+/// [`Compiler`] takes only immutable in-memory snapshots, while this adapter
+/// owns path capture for CLI and project-oriented hosts.
+#[cfg(feature = "project")]
+pub mod project {
+    use super::*;
+
+    pub use rsscript_compiler::WorkspaceSnapshot;
+
+    #[derive(Default)]
+    pub struct ProjectCompiler;
+
+    impl ProjectCompiler {
+        pub fn new() -> Self {
+            Self
+        }
+
+        /// Capture all package and dependency inputs exactly once.
+        pub fn snapshot(&self, path: &Path) -> Result<WorkspaceSnapshot, CompileError> {
+            load_workspace_snapshot(path).map_err(|message| CompileError::Package {
+                code: CompileErrorCode::PackageSnapshot,
+                message,
+            })
+        }
+
+        /// Capture one package snapshot while honoring the caller's operation
+        /// boundary during filesystem traversal.
+        pub fn snapshot_with_operation(
+            &self,
+            path: &Path,
+            operation: &OperationContext,
+        ) -> Result<WorkspaceSnapshot, CompileError> {
+            operation.check().map_err(CompileError::from)?;
+            load_workspace_snapshot_with_operation(path, operation).map_err(|message| {
+                match operation.check() {
+                    Ok(()) => CompileError::Package {
+                        code: CompileErrorCode::PackageSnapshot,
+                        message,
+                    },
+                    Err(abort) => CompileError::from(abort),
+                }
+            })
+        }
+
+        /// Build analysis and executable bytes from one immutable package
+        /// snapshot. The underlying [`Compiler`] remains unaware of paths.
+        pub fn build(&self, snapshot: &WorkspaceSnapshot) -> Result<BuiltArtifact, CompileError> {
+            let mut analysis = snapshot.analysis().clone();
+            if analysis.summary.errors != 0 {
+                return Err(CompileError::Diagnostics(analysis.diagnostics.clone()));
+            }
+            let compiled = compile_package_input_to_ir(snapshot.lowering_input())
+                .map_err(CompileError::Diagnostics)?;
+            let artifact = vm_adapter::emit_compiled_artifact(&compiled, snapshot.digest())
+                .map_err(CompileError::from)?;
+            analysis.module_digest = Some(artifact.header.executable_hash.clone());
+            let analysis =
+                serde_json::to_value(&analysis).map_err(|error| CompileError::Package {
+                    code: CompileErrorCode::PackageAnalysis,
+                    message: error.to_string(),
+                })?;
+            BuiltArtifact::from_bytecode(artifact, analysis)
+        }
+
+        pub fn build_with_operation(
+            &self,
+            snapshot: &WorkspaceSnapshot,
+            operation: &OperationContext,
+        ) -> Result<BuiltArtifact, CompileError> {
+            operation.check().map_err(CompileError::from)?;
+            let package = self.build(snapshot)?;
+            operation.check().map_err(CompileError::from)?;
+            Ok(package)
+        }
+
+        pub fn compile_package(&self, path: &Path) -> Result<BuiltArtifact, CompileError> {
+            let snapshot = self.snapshot(path)?;
+            self.build(&snapshot)
+        }
+
+        pub fn compile_package_with_operation(
+            &self,
+            path: &Path,
+            operation: &OperationContext,
+        ) -> Result<BuiltArtifact, CompileError> {
+            let snapshot = self.snapshot_with_operation(path, operation)?;
+            self.build_with_operation(&snapshot, operation)
+        }
+    }
 }
 
 /// Reviewed operation-control types shared by compile, verification, and run.
@@ -383,80 +474,6 @@ impl Compiler {
             ),
             operation,
         )
-    }
-
-    #[cfg(feature = "execution")]
-    pub fn compile_package(&self, path: &Path) -> Result<BuiltArtifact, CompileError> {
-        let snapshot = self.snapshot(path)?;
-        self.build(&snapshot)
-    }
-
-    #[cfg(feature = "execution")]
-    pub fn compile_package_with_operation(
-        &self,
-        path: &Path,
-        operation: &OperationContext,
-    ) -> Result<BuiltArtifact, CompileError> {
-        let snapshot = self.snapshot_with_operation(path, operation)?;
-        self.build_with_operation(&snapshot, operation)
-    }
-
-    /// Capture all package and dependency inputs exactly once.
-    #[cfg(feature = "execution")]
-    pub fn snapshot(&self, path: &Path) -> Result<WorkspaceSnapshot, CompileError> {
-        load_workspace_snapshot(path).map_err(|message| CompileError::Package {
-            code: CompileErrorCode::PackageSnapshot,
-            message,
-        })
-    }
-
-    #[cfg(feature = "execution")]
-    pub fn snapshot_with_operation(
-        &self,
-        path: &Path,
-        operation: &OperationContext,
-    ) -> Result<WorkspaceSnapshot, CompileError> {
-        operation.check().map_err(CompileError::from)?;
-        load_workspace_snapshot_with_operation(path, operation).map_err(|message| {
-            match operation.check() {
-                Ok(()) => CompileError::Package {
-                    code: CompileErrorCode::PackageSnapshot,
-                    message,
-                },
-                Err(abort) => CompileError::from(abort),
-            }
-        })
-    }
-
-    /// Build analysis and executable bytes from one immutable snapshot.
-    #[cfg(feature = "execution")]
-    pub fn build(&self, snapshot: &WorkspaceSnapshot) -> Result<BuiltArtifact, CompileError> {
-        let mut analysis = snapshot.analysis().clone();
-        if analysis.summary.errors != 0 {
-            return Err(CompileError::Diagnostics(analysis.diagnostics.clone()));
-        }
-        let compiled = compile_package_input_to_ir(snapshot.lowering_input())
-            .map_err(CompileError::Diagnostics)?;
-        let artifact = vm_adapter::emit_compiled_artifact(&compiled, snapshot.digest())
-            .map_err(CompileError::from)?;
-        analysis.module_digest = Some(artifact.header.executable_hash.clone());
-        let analysis = serde_json::to_value(&analysis).map_err(|error| CompileError::Package {
-            code: CompileErrorCode::PackageAnalysis,
-            message: error.to_string(),
-        })?;
-        BuiltArtifact::from_bytecode(artifact, analysis)
-    }
-
-    #[cfg(feature = "execution")]
-    pub fn build_with_operation(
-        &self,
-        snapshot: &WorkspaceSnapshot,
-        operation: &OperationContext,
-    ) -> Result<BuiltArtifact, CompileError> {
-        operation.check().map_err(CompileError::from)?;
-        let package = self.build(snapshot)?;
-        operation.check().map_err(CompileError::from)?;
-        Ok(package)
     }
 }
 
@@ -1405,6 +1422,7 @@ mod tests {
         ArtifactVerifier.verify(built).expect("verify artifact")
     }
 
+    #[cfg(feature = "project")]
     #[test]
     fn package_build_uses_one_immutable_snapshot_and_binds_its_digest() {
         let directory = tempfile::tempdir().expect("workspace");
@@ -1417,7 +1435,7 @@ mod tests {
         let source_path = directory.path().join("src/main.rss");
         std::fs::write(&source_path, "fn main() -> Int { return 1 }").expect("source");
 
-        let compiler = Compiler;
+        let compiler = project::ProjectCompiler::new();
         let cancellation = CancellationToken::new();
         cancellation.cancel();
         let cancelled = OperationContext {

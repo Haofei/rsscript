@@ -3015,7 +3015,6 @@ fn mir_codegen_is_a_vm_independent_verified_bytecode_boundary() {
     for signature in [
         "pub fn compile_snapshot(",
         "pub fn compile_snapshot_with_operation(",
-        "pub fn build(&self, snapshot: &WorkspaceSnapshot)",
     ] {
         let build = function_source(&sdk, signature);
         assert!(
@@ -3035,6 +3034,42 @@ fn mir_codegen_is_a_vm_independent_verified_bytecode_boundary() {
         assert!(
             wrapper.contains("compile_snapshot"),
             "compatibility SDK compile helper `{signature}` must delegate to the immutable input snapshot"
+        );
+    }
+
+    let compiler_start = sdk
+        .find("impl Compiler {")
+        .expect("SDK Compiler implementation must exist");
+    let compiler_end = sdk[compiler_start..]
+        .find("#[cfg(feature = \"execution\")]\n#[derive(Debug)]\npub struct BuiltArtifact")
+        .map(|offset| compiler_start + offset)
+        .expect("SDK Compiler implementation must end before BuiltArtifact");
+    let compiler = &sdk[compiler_start..compiler_end];
+    for forbidden in [
+        "WorkspaceSnapshot",
+        "load_workspace_snapshot",
+        "compile_package",
+        "std::path::Path",
+    ] {
+        assert!(
+            !compiler.contains(forbidden),
+            "reviewed Compiler must remain an in-memory frontend boundary, not a project loader: `{forbidden}`"
+        );
+    }
+    let project = &sdk[sdk
+        .find("pub mod project {")
+        .expect("SDK project convenience module must exist")
+        ..compiler_start];
+    for required in [
+        "pub struct ProjectCompiler",
+        "load_workspace_snapshot",
+        "pub fn snapshot",
+        "pub fn build",
+        "pub fn compile_package",
+    ] {
+        assert!(
+            project.contains(required),
+            "project convenience adapter must own `{required}`"
         );
     }
 }

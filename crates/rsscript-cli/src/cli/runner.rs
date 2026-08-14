@@ -17,6 +17,7 @@ use rsscript_sdk::{
     artifact::{ARTIFACT_BUNDLE_MAGIC, ArtifactBundle, ArtifactVerifier},
     compile::Compiler,
     operation::MonotonicDeadline,
+    project::ProjectCompiler,
     provider_api::ProviderRegistry,
     runtime::{ExecutionRequest, RunLimits, Runtime, TracePolicy},
 };
@@ -97,7 +98,7 @@ fn build_bundle(path: &str) -> Result<ArtifactBundle, String> {
     }
     let compiler = Compiler;
     if is_package_directory(path) {
-        compiler
+        ProjectCompiler::new()
             .compile_package(Path::new(path))
             .map(|built| built.into_bundle())
             .map_err(|error| error.to_string())

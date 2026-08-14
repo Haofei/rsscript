@@ -26,6 +26,10 @@ execution = [
     "dep:rsscript-provider-api",
     "dep:rsscript-vm",
 ]
+# Filesystem/package capture is a CLI and project-loader convenience boundary,
+# not part of the reviewed in-memory Compiler API. Hosts that want this helper
+# opt in explicitly; ordinary `execution` accepts only immutable snapshots.
+project = ["execution"]
 aot-rust = ["execution", "rsscript_compiler/aot-rust"]
 # Transitional source-shaped executable IR remains available only to the
 # migration corpus and legacy API surface. Reviewed execution consumes MIR
