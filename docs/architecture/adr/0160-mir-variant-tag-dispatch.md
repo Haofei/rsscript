@@ -36,4 +36,5 @@ legacy executable-IR path remains gated while more match forms migrate.
 The terminator makes both dispatch edges explicit for control-flow, dominance,
 and cleanup verification. It introduces no host capability or policy decision.
 The direct migration corpus compares the legacy VM, MIR reference interpreter,
-and verified MIR bytecode VM for a payload-free sum match.
+and verified MIR bytecode VM for payload-free sum statement and expression
+matches.

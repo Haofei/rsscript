@@ -703,7 +703,8 @@ mechanical acceptance condition holds.
       now lowers a resolved, tag-only sum-variant match arm to
       `MatchVariant { value, expected, match_target, else_target }`. The MIR
       verifier validates both CFG edges and non-empty tags; the direct codegen
-      path reuses the verified `MatchVariant` bytecode instruction. Payload
+      path reuses the verified `MatchVariant` bytecode instruction. The
+      migration corpus covers both statement and expression arms. Payload
       destructuring and guards remain fail-closed pending explicit binding and
       cleanup semantics.
 - [x] **M02.4 — Add MIR structural validation.** Reject dangling blocks,
