@@ -2058,6 +2058,7 @@ dependencies = [
  "rsscript-operation",
  "rsscript-source-model",
  "rsscript-syntax",
+ "rsscript-work-budget",
  "serde",
  "serde_json",
 ]

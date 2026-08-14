@@ -368,16 +368,16 @@ fn compiler_checks_only_construct_nonsemantic_boundary_diagnostics() {
         })
         .collect::<BTreeSet<_>>();
     let permitted = BTreeSet::from([
-        "crates/rsscript-compiler/src/checks/budget.rs".to_owned(),
         "crates/rsscript-compiler/src/checks/declarations/duplicate_decls.rs".to_owned(),
     ]);
     assert_eq!(
         direct_diagnostic_owners, permitted,
-        "language diagnostics must be constructed by rsscript-semantics; compiler checks may only own documented orchestration or backend-boundary diagnostics"
+        "language diagnostics must be constructed by rsscript-semantics; compiler checks may only own documented backend-boundary diagnostics"
     );
 
     let budget = read(&root.join("crates/rsscript-compiler/src/checks/budget.rs"));
-    assert!(budget.contains("S02.6: this is an orchestration diagnostic"));
+    assert!(budget.contains("semantic-owned frontend budget"));
+    assert!(!budget.contains("Diagnostic::"));
     let declarations =
         read(&root.join("crates/rsscript-compiler/src/checks/declarations/duplicate_decls.rs"));
     assert!(declarations.contains("S02.6: `#lower_name` validates the Rust AOT backend namespace"));

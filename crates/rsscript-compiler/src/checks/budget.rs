@@ -1,123 +1,14 @@
-use std::ops::Deref;
-use std::rc::Rc;
+//! Transitional compiler aliases for the semantic-owned frontend budget.
+//!
+//! Frontend completion and diagnostic-budget behavior now belongs to
+//! `rsscript-semantics`; compiler checks retain these aliases only while their
+//! implementation is incrementally moved behind semantic query entry points.
 
-use crate::diagnostic::{Diagnostic, code};
-use crate::semantic::{FrontendCompletion, FrontendStopReason};
-
-pub(crate) use rsscript_work_budget::{BudgetExhaustion, FrontendBudget, FrontendBudgetLimits};
-
-pub(crate) fn incomplete_diagnostic(budget: &FrontendBudget) -> Option<Diagnostic> {
-    // S02.6: this is an orchestration diagnostic, not a language rule. The
-    // compiler owns frontend work-budget termination and its completion state.
-    let exhausted = budget.exhaustion()?;
-    Some(
-        Diagnostic::error(
-            code::ANALYSIS_INCOMPLETE,
-            "Frontend analysis stopped before completion.",
-            budget.span(),
-            "frontend work budget exhausted",
-        )
-        .with_cause(format!(
-            "The shared `{}` frontend budget was exhausted.",
-            exhausted.name()
-        ))
-        .with_fix(
-            "reduce_analysis_complexity",
-            "Reduce generated breadth or deeply nested generic/type expressions.",
-            "manual",
-        ),
-    )
-}
-
-pub(crate) fn budget_completion(budget: &FrontendBudget) -> FrontendCompletion {
-    match budget.exhaustion() {
-        None => FrontendCompletion::Complete,
-        Some(BudgetExhaustion::SourceBytes) => {
-            FrontendCompletion::Incomplete(FrontendStopReason::SourceBytes)
-        }
-        Some(BudgetExhaustion::Tokens) => {
-            FrontendCompletion::Incomplete(FrontendStopReason::Tokens)
-        }
-        Some(BudgetExhaustion::ParseDepth) => {
-            FrontendCompletion::Incomplete(FrontendStopReason::ParseDepth)
-        }
-        Some(BudgetExhaustion::AstNodes) => {
-            FrontendCompletion::Incomplete(FrontendStopReason::AstNodes)
-        }
-        Some(BudgetExhaustion::Nodes) => {
-            FrontendCompletion::Incomplete(FrontendStopReason::SemanticNodes)
-        }
-        Some(BudgetExhaustion::Substitutions) => {
-            FrontendCompletion::Incomplete(FrontendStopReason::Substitutions)
-        }
-        Some(BudgetExhaustion::Diagnostics) => {
-            FrontendCompletion::Incomplete(FrontendStopReason::Diagnostics)
-        }
-        Some(BudgetExhaustion::SemanticRecursion) => {
-            FrontendCompletion::Incomplete(FrontendStopReason::SemanticRecursion)
-        }
-        Some(BudgetExhaustion::Cancelled) => {
-            FrontendCompletion::Incomplete(FrontendStopReason::Cancelled)
-        }
-        Some(BudgetExhaustion::DeadlineExceeded) => {
-            FrontendCompletion::Incomplete(FrontendStopReason::DeadlineExceeded)
-        }
-    }
-}
-
-pub(crate) struct AnalysisDiagnostics {
-    values: Vec<Diagnostic>,
-    budget: Rc<FrontendBudget>,
-}
-
-impl AnalysisDiagnostics {
-    pub(crate) fn new(budget: Rc<FrontendBudget>) -> Self {
-        Self {
-            values: Vec::new(),
-            budget,
-        }
-    }
-
-    pub(crate) fn push(&mut self, diagnostic: Diagnostic) {
-        if self.budget.consume_diagnostic() {
-            self.values.push(diagnostic);
-        }
-    }
-
-    pub(crate) fn extend<I>(&mut self, diagnostics: I)
-    where
-        I: IntoIterator<Item = Diagnostic>,
-    {
-        for diagnostic in diagnostics {
-            self.push(diagnostic);
-            if self.budget.is_exhausted() {
-                break;
-            }
-        }
-    }
-
-    pub(crate) fn push_incomplete(&mut self) {
-        if let Some(diagnostic) = incomplete_diagnostic(&self.budget) {
-            self.values.push(diagnostic);
-        }
-    }
-
-    pub(crate) fn into_vec(self) -> Vec<Diagnostic> {
-        self.values
-    }
-
-    pub(crate) fn as_mut_slice(&mut self) -> &mut [Diagnostic] {
-        &mut self.values
-    }
-}
-
-impl Deref for AnalysisDiagnostics {
-    type Target = Vec<Diagnostic>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.values
-    }
-}
+#[cfg(test)]
+pub(crate) use rsscript_semantics::incomplete_diagnostic;
+pub(crate) use rsscript_semantics::{
+    AnalysisDiagnostics, FrontendBudget, FrontendBudgetLimits, budget_completion,
+};
 
 pub(crate) type AnalysisBudget = FrontendBudget;
 #[cfg(test)]

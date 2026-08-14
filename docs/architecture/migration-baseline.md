@@ -488,10 +488,12 @@ mechanical acceptance condition holds.
       compiler supplies the resolved declaration facts.
   - [x] **S02.6 — Guard compiler semantic-rule ownership.** Architecture tests
     now reject any direct language-diagnostic construction below compiler
-    checks. The only explicit exceptions are frontend-budget termination and
-    Rust `#lower_name` backend constraints, both documented at the source
-    boundary; all language diagnostic contracts are delegated to
-    `rsscript-semantics`.
+    checks. Frontend-budget completion, its terminal
+    `analysis_incomplete` diagnostic, and budget-aware diagnostic collection
+    are owned by `rsscript-semantics`; compiler keeps aliases only while its
+    compatibility analyzer migrates. The sole explicit compiler exception is
+    the Rust `#lower_name` backend constraint; all language diagnostic
+    contracts are delegated to `rsscript-semantics`.
 - [ ] **S03 — Add one `CompilationSession` query boundary.** Introduce stable
   source/module/interface/definition/type identities, dependency tracking,
   cancellation, deadlines, and cached HIR/MIR queries shared by CLI, package

@@ -26,6 +26,7 @@ mod flow_state;
 mod fresh_match_bindings;
 mod fresh_return_flow;
 mod fresh_return_projection;
+mod frontend_budget;
 mod generic_constraints;
 pub mod hir;
 mod hir_uses;
@@ -114,6 +115,10 @@ pub use fresh_match_bindings::{FreshMatchBinding, fresh_match_binding};
 pub use fresh_return_flow::fresh_return_issues_from_flow;
 pub use fresh_return_projection::{
     fresh_field_access_base, fresh_handle_or_weak_field_path, fresh_return_value_span,
+};
+pub use frontend_budget::{
+    AnalysisDiagnostics, BudgetExhaustion, FrontendBudget, FrontendBudgetLimits, budget_completion,
+    incomplete_diagnostic,
 };
 pub use generic_constraints::{
     ProtocolSatisfactionFacts, SubstitutionBudget, SubstitutionError,
