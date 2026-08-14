@@ -116,8 +116,12 @@ impl ArtifactBundle {
         let manifest_len = take_length(&mut input, MAX_MANIFEST_BYTES)?;
         let artifact_len = take_length(&mut input, MAX_ARTIFACT_BYTES)?;
         let analysis_len = take_length(&mut input, MAX_ANALYSIS_BYTES)?;
-        let manifest: BundleManifestV1 = serde_json::from_slice(take(&mut input, manifest_len)?)
+        let manifest_bytes = take(&mut input, manifest_len)?;
+        let manifest: BundleManifestV1 = serde_json::from_slice(manifest_bytes)
             .map_err(|error| ArtifactBundleError::Manifest(error.to_string()))?;
+        if canonical_json(&manifest)? != manifest_bytes {
+            return Err(ArtifactBundleError::NonCanonicalManifest);
+        }
         let artifact = take(&mut input, artifact_len)?.to_vec();
         let analysis_bytes = take(&mut input, analysis_len)?.to_vec();
         if !input.is_empty() {
@@ -355,6 +359,7 @@ pub enum ArtifactBundleError {
     Manifest(String),
     Analysis(String),
     Artifact(String),
+    NonCanonicalManifest,
     NonCanonicalAnalysis,
     ArtifactDigestMismatch,
     AnalysisDigestMismatch,
@@ -384,6 +389,7 @@ impl fmt::Display for ArtifactBundleError {
             Self::Manifest(message) => write!(f, "invalid bundle manifest: {message}"),
             Self::Analysis(message) => write!(f, "invalid bundle analysis: {message}"),
             Self::Artifact(message) => write!(f, "invalid bundled artifact: {message}"),
+            Self::NonCanonicalManifest => f.write_str("bundle manifest is not canonically encoded"),
             Self::NonCanonicalAnalysis => f.write_str("bundle analysis is not canonically encoded"),
             Self::ArtifactDigestMismatch => f.write_str("artifact digest mismatch"),
             Self::AnalysisDigestMismatch => f.write_str("analysis digest mismatch"),
@@ -474,6 +480,30 @@ mod tests {
         assert!(matches!(
             ArtifactBundle::from_bytes(&bytes),
             Err(ArtifactBundleError::NonCanonicalAnalysis)
+        ));
+    }
+
+    #[test]
+    fn bundle_rejects_equivalent_but_noncanonical_manifest_json() {
+        let bundle = bundle();
+        let canonical_manifest = canonical_json(&bundle.manifest).unwrap();
+        let mut noncanonical = Vec::with_capacity(canonical_manifest.len() + 1);
+        noncanonical.push(b' ');
+        noncanonical.extend_from_slice(&canonical_manifest);
+        assert_ne!(canonical_json(&bundle.manifest).unwrap(), noncanonical);
+
+        let analysis = canonical_json(&bundle.analysis).unwrap();
+        let mut bytes = ARTIFACT_BUNDLE_MAGIC.to_vec();
+        put_length(&mut bytes, noncanonical.len()).unwrap();
+        put_length(&mut bytes, bundle.artifact.len()).unwrap();
+        put_length(&mut bytes, analysis.len()).unwrap();
+        bytes.extend_from_slice(&noncanonical);
+        bytes.extend_from_slice(&bundle.artifact);
+        bytes.extend_from_slice(&analysis);
+
+        assert!(matches!(
+            ArtifactBundle::from_bytes(&bytes),
+            Err(ArtifactBundleError::NonCanonicalManifest)
         ));
     }
 }

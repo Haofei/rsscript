@@ -15,8 +15,9 @@ objects produce different bytes and therefore different Bundle identities.
 Bundle v1 serializes every JSON object recursively with keys ordered by Unicode
 scalar value, compact JSON punctuation, and `serde_json`'s valid JSON string
 and number encoding. The decoder recomputes this exact form and rejects a
-noncanonical analysis section. This decision does not turn arbitrary JSON into
-a typed analysis schema or replace the v1 three-section container with v2.
+noncanonical manifest or analysis section. This decision does not turn
+arbitrary JSON into a typed analysis schema or replace the v1 three-section
+container with v2.
 
 ## Compatibility and migration
 
@@ -41,5 +42,5 @@ runner consume the same normalized Bundle identity.
 ## Evidence
 
 Artifact tests prove nested objects serialize identically across insertion
-orders and that a syntactically valid but noncanonical analysis section is
-rejected.
+orders and that syntactically valid but noncanonical manifest and analysis
+sections are rejected.
