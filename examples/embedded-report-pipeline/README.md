@@ -8,8 +8,8 @@ boundary. A Rust host:
 3. runs it again with the real filesystem and stderr providers;
 4. asserts that provider selection did not change the artifact bytes.
 
-The script reads CSV-shaped text, creates an uppercase report, writes it, and
-emits a log message. Its `.rssi` files describe only semantic external symbols;
+The script reads CSV-shaped text, writes it as a report, and emits a log
+message. Its `.rssi` files describe only semantic external symbols;
 the Rust composition root chooses implementations.
 
 Run from the repository root:

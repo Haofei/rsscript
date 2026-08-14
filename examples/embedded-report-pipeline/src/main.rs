@@ -5,8 +5,8 @@ use std::fs;
 use std::sync::{Arc, Mutex};
 
 use rsscript_compiler::provider_api::{
-    ExternalSymbol, NativeInterpreterFn, NativeValue, ProviderError, ProviderErrorCode,
-    ProviderFunction,
+    ExternalSymbol, ProviderError, ProviderErrorCode, ProviderFunction, WireInterpreterFn,
+    WireValue,
 };
 use rsscript_compiler::{
     analysis::SemanticDiffV1,
@@ -22,7 +22,7 @@ const SOURCE: &str = include_str!("../script/main.rss");
 const FS_INTERFACE: &str = include_str!("../interfaces/fs.rssi");
 const LOG_INTERFACE: &str = include_str!("../interfaces/log.rssi");
 
-type ProviderFunctions = BTreeMap<ExternalSymbol, ProviderFunction<NativeInterpreterFn>>;
+type ProviderFunctions = BTreeMap<ExternalSymbol, ProviderFunction<WireInterpreterFn>>;
 
 fn memory_fs(files: Arc<Mutex<BTreeMap<String, String>>>) -> ProviderFunctions {
     let descriptor = rsscript_provider_fs::descriptor();
@@ -34,8 +34,8 @@ fn memory_fs(files: Arc<Mutex<BTreeMap<String, String>>>) -> ProviderFunctions {
             let signature = function.signature.clone();
             let files = Arc::clone(&files);
             let callable = match symbol.as_str() {
-                "host.fs.read_text" => NativeInterpreterFn::new(move |mut args| {
-                    let NativeValue::String(path) = args.remove(0) else {
+                "host.fs.read_text" => WireInterpreterFn::new(move |mut args| {
+                    let WireValue::String { value: path } = args.remove(0) else {
                         return Err(ProviderError::invalid_argument("path must be String"));
                     };
                     files
@@ -43,7 +43,7 @@ fn memory_fs(files: Arc<Mutex<BTreeMap<String, String>>>) -> ProviderFunctions {
                         .map_err(|_| ProviderError::internal("memory filesystem lock poisoned"))?
                         .get(&path)
                         .cloned()
-                        .map(NativeValue::String)
+                        .map(|value| WireValue::String { value })
                         .ok_or_else(|| {
                             ProviderError::new(
                                 ProviderErrorCode::NotFound,
@@ -51,18 +51,18 @@ fn memory_fs(files: Arc<Mutex<BTreeMap<String, String>>>) -> ProviderFunctions {
                             )
                         })
                 }),
-                "host.fs.write_text" => NativeInterpreterFn::new(move |mut args| {
-                    let NativeValue::String(path) = args.remove(0) else {
+                "host.fs.write_text" => WireInterpreterFn::new(move |mut args| {
+                    let WireValue::String { value: path } = args.remove(0) else {
                         return Err(ProviderError::invalid_argument("path must be String"));
                     };
-                    let NativeValue::String(text) = args.remove(0) else {
+                    let WireValue::String { value: text } = args.remove(0) else {
                         return Err(ProviderError::invalid_argument("text must be String"));
                     };
                     files
                         .lock()
                         .map_err(|_| ProviderError::internal("memory filesystem lock poisoned"))?
                         .insert(path, text);
-                    Ok(NativeValue::Unit)
+                    Ok(WireValue::Unit)
                 }),
                 unexpected => panic!("unexpected filesystem symbol: {unexpected}"),
             };

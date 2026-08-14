@@ -1257,7 +1257,9 @@ mechanical acceptance condition holds.
     `WireInterpreterFn`; the conformance kit validates wire callables directly,
     without a `NativeValue` detour. `fs` retains its host-chosen root authority
     and runtime byte-budget checks while its text arguments/results become wire
-    values.
+    values. The primary embedded-report-pipeline now uses the same wire callable
+    form for its in-memory and rooted filesystem/log providers, proving the
+    reviewed Artifact/link/run path without the legacy adapter.
     Structured and asynchronous Provider migrations remain follow-up.
   - [ ] **P06.4 — Remove legacy escape variants from canonical APIs.** JSON stays
     only behind a named extension codec with explicit interface declaration.
