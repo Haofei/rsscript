@@ -696,6 +696,11 @@ mechanical acceptance condition holds.
     - [x] **M01.2a — Add the initial module type table.** Function parameter and
       result types are interned as `TypeId` values during the executable-IR
       bridge; builtin and resource identities remain follow-up work.
+    - [x] **M01.2b — Convert checked semantic signatures structurally.** Direct
+      HIR-to-MIR lowering converts `ResolvedType` trees into canonical
+      `WireType` entries before interning them as `TypeId`; it no longer formats
+      semantic signatures to text and reparses them. Function-value types stay
+      fail-closed until the wire ABI gives them an explicit representation.
   - [ ] **M01.3 — Add stable display/debug/source-map side tables.** Human names
     remain available without becoming executable identity.
   - [x] **M01.3a — Add initial debug names.** Function/place debug names are

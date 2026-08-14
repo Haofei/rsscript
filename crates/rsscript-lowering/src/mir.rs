@@ -10,7 +10,7 @@ use std::error::Error;
 use std::fmt;
 
 use rsscript_abi_model::{
-    DataEffect, ExternalSymbol, FunctionSignature, ParameterSignature, WireType,
+    DataEffect, ExternalSymbol, FunctionSignature, ParameterSignature, WireQualifier, WireType,
 };
 #[cfg(feature = "legacy-exec-ir")]
 use rsscript_exec_ir::{
@@ -22,7 +22,7 @@ use rsscript_mir::{
     MirLiteral, MirModule, MirParameterMode, MirSourceLocation, MirTerminator, PlaceId,
     ResourceTypeId, TaskGroupId, TaskId, TypeId, ValueId, VerifiedMir,
 };
-use rsscript_semantics::hir as checked;
+use rsscript_semantics::{ResolvedTypeKind, hir as checked};
 use rsscript_text::{decode_char_token, decode_string_token};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,8 +142,8 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<VerifiedMir, MirLo
     let mut types = TypeTable::default();
     let signatures = functions
         .iter()
-        .map(|(_, _, signature)| types.checked_function_signature(signature))
-        .collect::<Vec<_>>();
+        .map(|(name, _, signature)| types.checked_function_signature(name, signature))
+        .collect::<Result<Vec<_>, _>>()?;
     let external_imports = checked_external_imports(hir)?;
     let async_external_binding_symbols = checked_async_external_binding_symbols(hir)?;
     let variants = hir
@@ -540,14 +540,17 @@ impl TypeTable {
 
     fn checked_function_signature(
         &mut self,
+        function_name: &str,
         signature: &checked::FunctionSig,
-    ) -> MirFunctionSignature {
-        MirFunctionSignature::with_modes(
+    ) -> Result<MirFunctionSignature, MirLoweringError> {
+        Ok(MirFunctionSignature::with_modes(
             signature
                 .params
                 .iter()
-                .map(|parameter| self.intern(WireType::parse(&parameter.ty.to_string())))
-                .collect(),
+                .map(|parameter| {
+                    checked_type_to_wire(&parameter.ty, function_name).map(|ty| self.intern(ty))
+                })
+                .collect::<Result<Vec<_>, _>>()?,
             signature
                 .params
                 .iter()
@@ -563,11 +566,12 @@ impl TypeTable {
                 signature
                     .return_ty
                     .as_ref()
-                    .map(|ty| WireType::parse(&ty.to_string()))
+                    .map(|ty| checked_type_to_wire(ty, function_name))
+                    .transpose()?
                     .unwrap_or(WireType::Unit),
             ),
             signature.is_async,
-        )
+        ))
     }
 
     fn wire_function_signature(&mut self, signature: &FunctionSignature) -> MirFunctionSignature {
@@ -3032,6 +3036,87 @@ fn is_list_type(type_name: &str) -> bool {
     type_name == "List" || type_name.starts_with("List<")
 }
 
+/// Convert semantic type facts into the provider-neutral wire representation
+/// without round-tripping through a rendered type string. This keeps source
+/// spelling and formatting changes out of MIR identity. Function values have
+/// no wire ABI representation yet, so direct lowering rejects them instead of
+/// silently encoding a synthetic named type.
+fn checked_type_to_wire(
+    ty: &rsscript_semantics::ResolvedType,
+    function_name: &str,
+) -> Result<WireType, MirLoweringError> {
+    let base = match &ty.kind {
+        ResolvedTypeKind::Function { .. } => {
+            return Err(MirLoweringError::Unsupported {
+                function: function_name.to_owned(),
+                construct: "function type in direct MIR signature",
+            });
+        }
+        ResolvedTypeKind::Named { name, arguments } => {
+            let arguments = arguments
+                .iter()
+                .map(|argument| checked_type_to_wire(argument, function_name))
+                .collect::<Result<Vec<_>, _>>()?;
+            match (name.as_str(), arguments.as_slice()) {
+                ("Unit", []) => WireType::Unit,
+                ("Bool", []) => WireType::Bool,
+                ("Int", []) => WireType::Int {
+                    bits: 64,
+                    signed: true,
+                },
+                ("Float", []) => WireType::Float { bits: 64 },
+                ("String", []) => WireType::String,
+                ("Bytes", []) => WireType::Bytes,
+                ("List", [element]) => WireType::List {
+                    element: Box::new(element.clone()),
+                },
+                ("Option", [value]) => WireType::Option {
+                    value: Box::new(value.clone()),
+                },
+                ("Result", [ok, error]) => WireType::Result {
+                    ok: Box::new(ok.clone()),
+                    error: Box::new(error.clone()),
+                },
+                _ => {
+                    let (package, name) = name.rsplit_once('.').map_or_else(
+                        || (None, name.clone()),
+                        |(package, name)| (Some(package.to_owned()), name.to_owned()),
+                    );
+                    WireType::Named {
+                        package,
+                        name,
+                        arguments,
+                    }
+                }
+            }
+        }
+    };
+    let base = if ty.qualifiers.owned && !ty.qualifiers.noescape {
+        WireType::Qualified {
+            qualifier: WireQualifier::Owned,
+            value: Box::new(base),
+        }
+    } else {
+        base
+    };
+    let base = if ty.qualifiers.noescape {
+        WireType::Qualified {
+            qualifier: WireQualifier::NoEscape,
+            value: Box::new(base),
+        }
+    } else {
+        base
+    };
+    Ok(if ty.qualifiers.fresh {
+        WireType::Qualified {
+            qualifier: WireQualifier::Fresh,
+            value: Box::new(base),
+        }
+    } else {
+        base
+    })
+}
+
 fn checked_binary_op(op: rsscript_syntax::ast::BinaryOp) -> MirBinaryOp {
     match op {
         rsscript_syntax::ast::BinaryOp::Add => MirBinaryOp::Add,
@@ -3091,6 +3176,62 @@ fn option_variant_tag(name: &str) -> Option<bool> {
         "Some" => Some(true),
         "None" => Some(false),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod checked_type_tests {
+    use super::*;
+    use rsscript_semantics::{ResolvedType, TypeQualifiers};
+
+    #[test]
+    fn checked_type_conversion_preserves_structure_without_display_parsing() {
+        let mut ty = ResolvedType::named(
+            "host.models.Page",
+            [ResolvedType::named(
+                "List",
+                [ResolvedType::named("String", [])],
+            )],
+        );
+        ty.qualifiers = TypeQualifiers {
+            fresh: true,
+            noescape: true,
+            owned: true,
+        };
+
+        assert_eq!(
+            checked_type_to_wire(&ty, "main").expect("named semantic type is wire-representable"),
+            WireType::Qualified {
+                qualifier: WireQualifier::Fresh,
+                value: Box::new(WireType::Qualified {
+                    qualifier: WireQualifier::NoEscape,
+                    value: Box::new(WireType::Named {
+                        package: Some("host.models".into()),
+                        name: "Page".into(),
+                        arguments: vec![WireType::List {
+                            element: Box::new(WireType::String),
+                        }],
+                    }),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn checked_function_type_fails_closed_until_the_wire_abi_supports_it() {
+        let ty = ResolvedType::function(
+            [ResolvedType::named("Int", [])],
+            [None],
+            Some(ResolvedType::named("Int", [])),
+            TypeQualifiers::default(),
+        );
+        assert!(matches!(
+            checked_type_to_wire(&ty, "main"),
+            Err(MirLoweringError::Unsupported {
+                construct: "function type in direct MIR signature",
+                ..
+            })
+        ));
     }
 }
 
