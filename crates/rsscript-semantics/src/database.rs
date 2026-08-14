@@ -929,15 +929,36 @@ impl CompilationSession {
     /// query is the stable cache boundary for already-resolved declaration and
     /// signature facts, not a replacement for those remaining checks.
     pub fn workspace_type_facts(&mut self) -> Arc<SemanticTypeFacts> {
+        self.workspace_type_facts_inner(None)
+            .expect("an unchecked workspace type-fact query cannot abort")
+    }
+
+    fn workspace_type_facts_inner(
+        &mut self,
+        operation: Option<&OperationContext>,
+    ) -> Result<Arc<SemanticTypeFacts>, OperationAbort> {
+        if let Some(operation) = operation {
+            operation.check()?;
+        }
         if let Some(types) = &self.workspace_type_cache {
             self.workspace_type_cache_hits = self.workspace_type_cache_hits.saturating_add(1);
-            return Arc::clone(types);
+            if let Some(operation) = operation {
+                operation.check()?;
+            }
+            return Ok(Arc::clone(types));
         }
 
-        let types = self.workspace_hir().semantic_types_arc();
+        let hir = match operation {
+            Some(operation) => self.workspace_hir_with_operation(operation)?,
+            None => self.workspace_hir(),
+        };
+        let types = hir.semantic_types_arc();
+        if let Some(operation) = operation {
+            operation.check()?;
+        }
         self.workspace_type_cache_misses = self.workspace_type_cache_misses.saturating_add(1);
         self.workspace_type_cache = Some(Arc::clone(&types));
-        types
+        Ok(types)
     }
 
     /// Operation-aware type-fact query. Cached facts must not escape a
@@ -946,10 +967,7 @@ impl CompilationSession {
         &mut self,
         operation: &OperationContext,
     ) -> Result<Arc<SemanticTypeFacts>, OperationAbort> {
-        operation.check()?;
-        let types = self.workspace_type_facts();
-        operation.check()?;
-        Ok(types)
+        self.workspace_type_facts_inner(Some(operation))
     }
 
     /// Return parsed module and import paths for one source revision.

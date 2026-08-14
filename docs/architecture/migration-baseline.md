@@ -536,7 +536,8 @@ mechanical acceptance condition holds.
     Workspace-HIR now polls before each source/interface parse, around namespace
     isolation, and before cache publication; workspace-module graph likewise
     polls between source/interface header queries and before cache publication;
-    language-service document
+    workspace type-fact queries propagate the same operation through their HIR
+    dependency; language-service document
     diagnostics now apply the same rule across dependency closure, lint, and
     cached-result paths; resolve/type queries remain to be migrated.
   - [ ] **S03.5 — Migrate CLI/package/test callers.** All frontend consumers use
