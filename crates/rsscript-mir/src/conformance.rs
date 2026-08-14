@@ -302,6 +302,23 @@ impl<'a> Interpreter<'a> {
                             MirValue::ResultErr(Box::new(value))
                         });
                     }
+                    MirInstruction::UnwrapResult {
+                        destination,
+                        source,
+                        ok,
+                    } => match value_at(&values, *source)? {
+                        MirValue::ResultOk(value) if *ok => {
+                            values[destination.index()] = Some(*value);
+                        }
+                        MirValue::ResultErr(value) if !*ok => {
+                            values[destination.index()] = Some(*value);
+                        }
+                        _ => {
+                            return Err(MirExecutionError::InvalidOperation(
+                                "Result arm projection",
+                            ));
+                        }
+                    },
                     MirInstruction::TryResult {
                         destination,
                         source,
@@ -498,6 +515,15 @@ impl<'a> Interpreter<'a> {
                         block = match_target.index();
                     }
                     _ => block = else_target.index(),
+                },
+                MirTerminator::MatchResult {
+                    value,
+                    ok_target,
+                    err_target,
+                } => match value_at(&values, *value)? {
+                    MirValue::ResultOk(_) => block = ok_target.index(),
+                    MirValue::ResultErr(_) => block = err_target.index(),
+                    _ => return Err(MirExecutionError::InvalidOperation("Result match")),
                 },
                 MirTerminator::Unreachable => {
                     return Err(MirExecutionError::InvalidOperation("unreachable"));

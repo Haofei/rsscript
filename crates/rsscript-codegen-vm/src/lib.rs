@@ -363,6 +363,18 @@ fn lower_instruction(
                 ],
             ));
         }
+        MirInstruction::UnwrapResult {
+            destination,
+            source,
+            ok,
+        } => code.push(instr(
+            "UnwrapVariantValue",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("src", json!(value_reg(function, *source))),
+                ("expected", json!(if *ok { "Ok" } else { "Err" })),
+            ],
+        )),
         MirInstruction::ListGet {
             destination,
             list,
@@ -626,6 +638,23 @@ fn lower_terminator(
             ));
             patches.push((index, *match_target, "match_ip"));
             patches.push((index, *else_target, "else_ip"));
+        }
+        MirTerminator::MatchResult {
+            value,
+            ok_target,
+            err_target,
+        } => {
+            let index = code.len();
+            code.push(instr(
+                "MatchResult",
+                [
+                    ("src", json!(value_reg(function, *value))),
+                    ("ok_ip", json!(0)),
+                    ("err_ip", json!(0)),
+                ],
+            ));
+            patches.push((index, *ok_target, "ok_ip"));
+            patches.push((index, *err_target, "err_ip"));
         }
         MirTerminator::Unreachable => code.push(instr(
             "RuntimeError",

@@ -719,6 +719,13 @@ mechanical acceptance condition holds.
       patterns. The direct migration corpus differentially executes statement
       and expression payload bindings across the legacy VM, MIR interpreter,
       and verified bytecode VM.
+    - [x] **M02.3l — Lower canonical Result match dispatch.** `Ok` and `Err`
+      patterns now lower to `MatchResult` CFG edges, with named payload arms
+      emitting `UnwrapResult` and `WritePlace` only after their selected edge.
+      The verifier and cleanup/task dataflow traverse both explicit result
+      targets, while unsupported nested bindings and guards remain fail-closed.
+      Statement and expression fixtures compare the legacy VM, MIR interpreter,
+      and verified bytecode VM.
 - [x] **M02.4 — Add MIR structural validation.** Reject dangling blocks,
     invalid IDs, unterminated blocks, undefined values, and malformed CFG edges.
     - [x] **M02.4a — Verify the initial structural subset.** The verifier

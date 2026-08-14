@@ -250,6 +250,34 @@ fn main() -> Int {
 "#,
     },
     MigrationCase {
+        name: "result_payload_binding",
+        capability: "canonical Result dispatch and payload binding",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn main() -> Int {
+    let result: Result<Int, String> = Ok(42)
+    match result {
+        Ok(value) => { return value }
+        Err(_) => { return 0 }
+    }
+}
+"#,
+    },
+    MigrationCase {
+        name: "result_payload_binding_expression",
+        capability: "canonical Result match expressions",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn main() -> Int {
+    let result: Result<Int, String> = Ok(42)
+    return match result {
+        Ok(value) => { value }
+        Err(_) => { 0 }
+    }
+}
+"#,
+    },
+    MigrationCase {
         name: "list_index",
         capability: "resolved list indexing",
         stage: MigrationStage::DualPath,

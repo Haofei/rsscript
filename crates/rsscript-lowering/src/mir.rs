@@ -277,6 +277,17 @@ struct VariantLayout {
     fields: Vec<String>,
 }
 
+/// Bindings made available after a checked match edge. User sum variants use
+/// their semantic layout; `Result` is a language primitive and therefore has
+/// a dedicated typed payload projection instead of a synthetic source name.
+enum MatchBindings {
+    Variant(VariantLayout, Vec<rsscript_syntax::ast::MatchPattern>),
+    Result {
+        ok: bool,
+        binding: rsscript_syntax::ast::MatchPattern,
+    },
+}
+
 #[derive(Default)]
 struct TypeTable {
     ids: BTreeMap<WireType, TypeId>,
@@ -1179,21 +1190,31 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                     None
                 }
                 rsscript_syntax::ast::MatchPattern::Variant { name, bindings, .. } => {
-                    let layout = self.variant_pattern_layout(name, bindings)?;
-                    self.terminate(MirTerminator::MatchVariant {
-                        value,
-                        expected: name.clone(),
-                        match_target: arm_block,
-                        else_target: next,
-                    });
-                    Some((layout, bindings.clone()))
+                    if let Some(ok) = result_variant_tag(name) {
+                        let binding = self.result_pattern_binding(bindings)?;
+                        self.terminate(MirTerminator::MatchResult {
+                            value,
+                            ok_target: if ok { arm_block } else { next },
+                            err_target: if ok { next } else { arm_block },
+                        });
+                        Some(MatchBindings::Result { ok, binding })
+                    } else {
+                        let layout = self.variant_pattern_layout(name, bindings)?;
+                        self.terminate(MirTerminator::MatchVariant {
+                            value,
+                            expected: name.clone(),
+                            match_target: arm_block,
+                            else_target: next,
+                        });
+                        Some(MatchBindings::Variant(layout, bindings.clone()))
+                    }
                 }
                 _ => return self.unsupported("non-literal checked HIR match pattern"),
             };
 
             self.current = arm_block;
-            if let Some((layout, bindings)) = variant_bindings {
-                self.lower_variant_pattern_bindings(value, &layout, &bindings)?;
+            if let Some(bindings) = variant_bindings {
+                self.lower_match_bindings(value, bindings)?;
             }
             self.lower_checked_block(&arm.body)?;
             if self.current_block().terminator.is_none() {
@@ -1242,21 +1263,31 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                     None
                 }
                 rsscript_syntax::ast::MatchPattern::Variant { name, bindings, .. } => {
-                    let layout = self.variant_pattern_layout(name, bindings)?;
-                    self.terminate(MirTerminator::MatchVariant {
-                        value,
-                        expected: name.clone(),
-                        match_target: arm_block,
-                        else_target: next,
-                    });
-                    Some((layout, bindings.clone()))
+                    if let Some(ok) = result_variant_tag(name) {
+                        let binding = self.result_pattern_binding(bindings)?;
+                        self.terminate(MirTerminator::MatchResult {
+                            value,
+                            ok_target: if ok { arm_block } else { next },
+                            err_target: if ok { next } else { arm_block },
+                        });
+                        Some(MatchBindings::Result { ok, binding })
+                    } else {
+                        let layout = self.variant_pattern_layout(name, bindings)?;
+                        self.terminate(MirTerminator::MatchVariant {
+                            value,
+                            expected: name.clone(),
+                            match_target: arm_block,
+                            else_target: next,
+                        });
+                        Some(MatchBindings::Variant(layout, bindings.clone()))
+                    }
                 }
                 _ => return self.unsupported("non-literal checked HIR match expression pattern"),
             };
 
             self.current = arm_block;
-            if let Some((layout, bindings)) = variant_bindings {
-                self.lower_variant_pattern_bindings(value, &layout, &bindings)?;
+            if let Some(bindings) = variant_bindings {
+                self.lower_match_bindings(value, bindings)?;
             }
             self.lower_match_expression_arm(&arm.body, result_place)?;
             if self.current_block().terminator.is_none() {
@@ -1324,6 +1355,52 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             });
         }
         Ok(())
+    }
+
+    fn result_pattern_binding(
+        &self,
+        bindings: &[rsscript_syntax::ast::MatchPattern],
+    ) -> Result<rsscript_syntax::ast::MatchPattern, MirLoweringError> {
+        let [binding] = bindings else {
+            return self.unsupported("checked HIR Result match binding arity");
+        };
+        if !matches!(
+            binding,
+            rsscript_syntax::ast::MatchPattern::Binding { .. }
+                | rsscript_syntax::ast::MatchPattern::Wildcard(_)
+        ) {
+            return self.unsupported("nested checked HIR Result match binding");
+        }
+        Ok(binding.clone())
+    }
+
+    fn lower_match_bindings(
+        &mut self,
+        value: ValueId,
+        bindings: MatchBindings,
+    ) -> Result<(), MirLoweringError> {
+        match bindings {
+            MatchBindings::Variant(layout, bindings) => {
+                self.lower_variant_pattern_bindings(value, &layout, &bindings)
+            }
+            MatchBindings::Result { ok, binding } => {
+                let rsscript_syntax::ast::MatchPattern::Binding { name, .. } = binding else {
+                    return Ok(());
+                };
+                let destination = self.value();
+                self.emit(MirInstruction::UnwrapResult {
+                    destination,
+                    source: value,
+                    ok,
+                });
+                let place = self.place(&name);
+                self.emit(MirInstruction::WritePlace {
+                    place,
+                    value: destination,
+                });
+                Ok(())
+            }
+        }
     }
 
     fn lower_match_expression_arm(
@@ -2400,6 +2477,14 @@ fn match_literal(
             }
         }
         rsscript_syntax::ast::MatchLiteral::Bool(value) => Ok(MirLiteral::Bool(*value)),
+    }
+}
+
+fn result_variant_tag(name: &str) -> Option<bool> {
+    match name {
+        "Ok" => Some(true),
+        "Err" => Some(false),
+        _ => None,
     }
 }
 
