@@ -498,7 +498,6 @@ impl BuiltArtifact {
 }
 
 #[cfg(feature = "execution")]
-#[cfg(feature = "execution")]
 fn source_set_analysis(sources: &[(&str, &str)], snapshot_digest: &str) -> serde_json::Value {
     serde_json::json!({
         "$schema": "rsscript.source_analysis.v1",
@@ -509,11 +508,13 @@ fn source_set_analysis(sources: &[(&str, &str)], snapshot_digest: &str) -> serde
 }
 
 fn snapshot_pairs(snapshot: &SourceSnapshot) -> Vec<(&str, &str)> {
-    snapshot
+    let mut pairs = snapshot
         .files()
         .iter()
         .map(|file| (file.path(), file.text()))
-        .collect()
+        .collect::<Vec<_>>();
+    pairs.sort_unstable();
+    pairs
 }
 
 #[cfg(feature = "execution")]
@@ -1609,6 +1610,32 @@ fn main() -> Result<Unit, String> {
         assert_eq!(
             artifact.analysis()["snapshot_digest"],
             artifact.snapshot_digest()
+        );
+    }
+
+    #[test]
+    fn frontend_snapshot_file_enumeration_does_not_change_artifact_bytes() {
+        let first = FrontendInputSnapshot::from_sources(
+            [
+                ("helper.rss", "fn helper() -> Int { return 41 }\n"),
+                ("main.rss", "fn main() -> Int { return helper() + 1 }\n"),
+            ],
+            std::iter::empty(),
+        );
+        let second = FrontendInputSnapshot::from_sources(
+            [
+                ("main.rss", "fn main() -> Int { return helper() + 1 }\n"),
+                ("helper.rss", "fn helper() -> Int { return 41 }\n"),
+            ],
+            std::iter::empty(),
+        );
+        let compiler = Compiler;
+        let first = compiler.compile_snapshot(&first).expect("first snapshot");
+        let second = compiler.compile_snapshot(&second).expect("second snapshot");
+        assert_eq!(first.snapshot_digest(), second.snapshot_digest());
+        assert_eq!(
+            first.bundle_bytes().unwrap(),
+            second.bundle_bytes().unwrap()
         );
     }
 

@@ -23,7 +23,9 @@ manifest parsing, or Artifact persistence out of the compiler package boundary.
 
 Existing `compile` and `compile_with_interfaces` calls continue to work with
 the same output. Embedders may migrate by capturing their buffers once and
-calling `compile_snapshot`; no filesystem path is required.
+calling `compile_snapshot`; no filesystem path is required. Snapshot source
+and interface pairs are normalized by logical path/content before frontend
+analysis, so equivalent file enumeration orders produce the same Bundle bytes.
 
 ## Verifier and security impact
 
