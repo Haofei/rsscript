@@ -3277,6 +3277,15 @@ fn mir_codegen_is_a_vm_independent_verified_bytecode_boundary() {
         !checked_external_signature.contains("WireType::parse"),
         "direct MIR external imports must not parse rendered semantic types"
     );
+    let checked_record_constructor = function_source(&lowering, "fn lower_record_constructor(");
+    assert!(
+        checked_record_constructor.contains("checked_type_to_wire"),
+        "direct MIR record constructors must consume structural result types"
+    );
+    assert!(
+        !checked_record_constructor.contains("WireType::parse"),
+        "direct MIR record constructors must not parse rendered semantic types"
+    );
     let checked_for = function_source(&lowering, "fn lower_for(");
     assert!(
         checked_for.contains("iterable_type.root_name()"),

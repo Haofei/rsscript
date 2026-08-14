@@ -1173,7 +1173,8 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         let wire_type = signature
             .return_ty
             .as_ref()
-            .map(|ty| WireType::parse(&ty.to_string()))
+            .map(|ty| checked_type_to_wire(ty, self.function_name))
+            .transpose()?
             .ok_or_else(|| MirLoweringError::Unsupported {
                 function: self.function_name.to_owned(),
                 construct: "record constructor without result type",
