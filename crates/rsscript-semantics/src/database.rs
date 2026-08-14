@@ -652,15 +652,32 @@ impl CompilationSession {
     /// `module` declaration keep the historical filename fallback, so all
     /// session clients resolve the same graph.
     pub fn workspace_module_graph(&mut self) -> Arc<WorkspaceModuleGraph> {
+        self.workspace_module_graph_inner(None)
+            .expect("an unchecked workspace module-graph query cannot abort")
+    }
+
+    fn workspace_module_graph_inner(
+        &mut self,
+        operation: Option<&OperationContext>,
+    ) -> Result<Arc<WorkspaceModuleGraph>, OperationAbort> {
+        if let Some(operation) = operation {
+            operation.check()?;
+        }
         if let Some(graph) = &self.workspace_module_graph_cache {
             self.workspace_module_graph_cache_hits =
                 self.workspace_module_graph_cache_hits.saturating_add(1);
-            return Arc::clone(graph);
+            if let Some(operation) = operation {
+                operation.check()?;
+            }
+            return Ok(Arc::clone(graph));
         }
 
         let mut nodes = Vec::new();
         let sources = self.source_snapshot();
         for file in sources.files() {
+            if let Some(operation) = operation {
+                operation.check()?;
+            }
             let header = self
                 .module_header_snapshot_file(SessionFileRole::Source, file)
                 .expect("session source snapshot file must remain parseable");
@@ -673,6 +690,9 @@ impl CompilationSession {
         }
         let interfaces = self.interface_snapshot();
         for file in interfaces.files() {
+            if let Some(operation) = operation {
+                operation.check()?;
+            }
             let header = self
                 .module_header_snapshot_file(SessionFileRole::Interface, file)
                 .expect("session interface snapshot file must remain parseable");
@@ -694,10 +714,13 @@ impl CompilationSession {
         let graph = Arc::new(WorkspaceModuleGraph {
             nodes: nodes.into(),
         });
+        if let Some(operation) = operation {
+            operation.check()?;
+        }
         self.workspace_module_graph_cache_misses =
             self.workspace_module_graph_cache_misses.saturating_add(1);
         self.workspace_module_graph_cache = Some(Arc::clone(&graph));
-        graph
+        Ok(graph)
     }
 
     /// Operation-aware module graph query. Cached syntax facts still obey a
@@ -706,10 +729,7 @@ impl CompilationSession {
         &mut self,
         operation: &OperationContext,
     ) -> Result<Arc<WorkspaceModuleGraph>, OperationAbort> {
-        operation.check()?;
-        let graph = self.workspace_module_graph();
-        operation.check()?;
-        Ok(graph)
+        self.workspace_module_graph_inner(Some(operation))
     }
 
     /// Parse one source revision exactly once. Replacing or removing a file

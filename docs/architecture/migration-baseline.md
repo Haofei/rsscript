@@ -534,7 +534,8 @@ mechanical acceptance condition holds.
     session-owned workspace diagnostic query now applies the same checks before
     cache access, during transitional analysis, and before caching the result.
     Workspace-HIR now polls before each source/interface parse, around namespace
-    isolation, and before cache publication; workspace-module graph and
+    isolation, and before cache publication; workspace-module graph likewise
+    polls between source/interface header queries and before cache publication;
     language-service document
     diagnostics now apply the same rule across dependency closure, lint, and
     cached-result paths; resolve/type queries remain to be migrated.
