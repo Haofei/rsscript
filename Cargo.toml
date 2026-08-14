@@ -40,7 +40,6 @@ members = [
     "crates/rsscript-compiler",
     "crates/lsp",
     "crates/process-guard",
-    "examples/structured-async-pipeline",
 ]
 
 # Integration, experimental, and research packages are physically maintained
