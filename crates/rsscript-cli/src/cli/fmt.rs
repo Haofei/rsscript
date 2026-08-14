@@ -1,7 +1,9 @@
 use std::fs;
 use std::process::ExitCode;
 
-use rsscript_compiler::{analyze_syntax_source, format_diagnostics_human, format_source};
+use rsscript_diagnostics::format_diagnostics_human;
+use rsscript_semantics::analyze_syntax_source;
+use rsscript_syntax::format_source;
 
 use super::{parse_path_args, print_usage};
 

@@ -548,7 +548,11 @@ mechanical acceptance condition holds.
     diagnostics now apply the same rule across dependency closure, lint, and
     cached-result paths; resolve/type queries remain to be migrated.
   - [ ] **S03.5 — Migrate CLI/package/test callers.** All frontend consumers use
-    the session API; direct analyzer construction becomes private.
+    the session API; direct analyzer construction becomes private. The normal
+    CLI `check`, `fix`, and `fmt` commands now consume semantics, syntax, and
+    diagnostics directly, so the default `rsscript-cli` dependency closure no
+    longer includes the compiler compatibility facade. Package compatibility
+    and the remaining test/AOT callers are still explicit migration work.
 - [ ] **S04 — Make language service consume semantic queries directly.** It
   must not depend on the compiler compatibility façade, package persistence,
   VM, SDK, or Providers; revision invalidation and request cancellation require

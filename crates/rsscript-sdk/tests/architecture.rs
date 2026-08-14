@@ -397,6 +397,7 @@ fn rss_check_default_cargo_closure_is_frontend_only() {
     );
     let closure = String::from_utf8(output.stdout).expect("cargo tree should be UTF-8");
     for forbidden in [
+        "rsscript-compiler ",
         "rsscript-runtime ",
         "rsscript-aot-runtime ",
         "rsscript-bytecode ",

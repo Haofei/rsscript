@@ -13,10 +13,12 @@ path = "src/main.rs"
 name = "gen-grammar"
 path = "src/bin/gen-grammar.rs"
 test = false
+required-features = ["grammar-tools"]
 
 [features]
 default = []
 execution = [
+    "dep:rsscript-compiler",
     "dep:rsscript-sdk",
     "rsscript-compiler/package",
     "rsscript-sdk/project",
@@ -26,9 +28,13 @@ execution = [
 aot-rust = ["execution", "rsscript-compiler/aot-rust"]
 host-tools = ["execution"]
 native-jit = ["rsscript-sdk/native-jit", "aot-rust"]
+grammar-tools = ["dep:rsscript-compiler"]
 
 [dependencies]
-rsscript-compiler = { path = "../rsscript-compiler", default-features = false }
+rsscript-compiler = { path = "../rsscript-compiler", default-features = false, optional = true }
+rsscript-diagnostics = { path = "../rsscript-diagnostics" }
+rsscript-semantics = { path = "../rsscript-semantics" }
+rsscript-syntax = { path = "../rsscript-syntax" }
 rsscript-sdk = { path = "../rsscript-sdk", optional = true, default-features = false }
 rss-process-guard = { path = "../process-guard", optional = true }
 rsscript-runner-protocol = { path = "../rsscript-runner-protocol", optional = true }

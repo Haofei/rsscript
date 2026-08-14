@@ -1,12 +1,15 @@
 use std::fs;
 use std::process::ExitCode;
 
-use rsscript_compiler::{
-    analyze_source_with_interfaces, analyze_source_with_interfaces_without_core,
-    analyze_source_without_core, explain_diagnostic_code, format_diagnostic_explanation,
-    format_diagnostics_human, format_diagnostics_json_with_source, lint_source,
-    standard_package_interfaces,
+use rsscript_diagnostics::{
+    explain_diagnostic_code, format_diagnostic_explanation, format_diagnostics_human,
+    format_diagnostics_json_with_source,
 };
+use rsscript_semantics::{
+    analyze_source_with_interfaces, analyze_source_with_interfaces_without_core,
+    analyze_source_without_core, standard_package_interfaces,
+};
+use rsscript_syntax::lint_source;
 
 use super::{is_package_directory, print_usage, read_interface_sources, required_flag_value};
 #[cfg(feature = "execution")]
