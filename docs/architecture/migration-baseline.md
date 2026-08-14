@@ -1100,6 +1100,9 @@ mechanical acceptance condition holds.
     handles; canonical values contain no free-form type or field-name identity.
   - [ ] **P06.2 — Implement the compatibility adapter.** Convert legacy
     `NativeValue` at generated boundaries while Core contracts use wire values.
+    A parallel `WireInterpreterFn` now carries canonical `WireValue` arguments
+    through the same cancellation/deadline context as the legacy callable;
+    registry/VM dispatch migration remains open.
     - [x] **P06.2a — Bridge generation-safe resource handles.** Provider
       runtime handles now convert to/from the canonical numeric wire handle
       with a descriptor-supplied resource type; no legacy type-name string is

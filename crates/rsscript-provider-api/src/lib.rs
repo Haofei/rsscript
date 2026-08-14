@@ -652,6 +652,64 @@ impl AsyncProviderCallContext {
 
 pub type NativeHostFn = fn(Vec<NativeValue>) -> Result<NativeValue, ProviderError>;
 
+/// Canonical Provider wire callable for new Provider implementations.
+///
+/// This is deliberately separate from [`NativeInterpreterFn`]: the latter is
+/// the compatibility adapter used by the existing register VM. New generated
+/// Provider adapters can accept structural [`WireValue`]s without reintroducing
+/// names, JSON, or native IDs into their public call contract.
+pub type WireHostFn = fn(Vec<WireValue>) -> Result<WireValue, ProviderError>;
+
+type ContextualWireProviderFn = dyn for<'a> Fn(&mut ProviderCallContext<'a>, Vec<WireValue>) -> Result<WireValue, ProviderError>
+    + Send
+    + Sync;
+
+#[derive(Clone)]
+pub struct WireInterpreterFn {
+    inner: Arc<ContextualWireProviderFn>,
+}
+
+impl WireInterpreterFn {
+    pub fn from_fn(function: WireHostFn) -> Self {
+        Self::new(function)
+    }
+
+    pub fn new(
+        function: impl Fn(Vec<WireValue>) -> Result<WireValue, ProviderError> + Send + Sync + 'static,
+    ) -> Self {
+        Self::new_contextual(move |_, args| function(args))
+    }
+
+    pub fn new_contextual(
+        function: impl for<'a> Fn(
+            &mut ProviderCallContext<'a>,
+            Vec<WireValue>,
+        ) -> Result<WireValue, ProviderError>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        Self {
+            inner: Arc::new(function),
+        }
+    }
+
+    pub fn call_with_context(
+        &self,
+        context: &mut ProviderCallContext<'_>,
+        args: Vec<WireValue>,
+    ) -> Result<WireValue, ProviderError> {
+        context.check_cancelled()?;
+        (self.inner)(context, args)
+    }
+}
+
+impl From<WireHostFn> for WireInterpreterFn {
+    fn from(function: WireHostFn) -> Self {
+        Self::from_fn(function)
+    }
+}
+
 /// Cloneable provider callable used by the runtime registry.
 type ContextualProviderFn = dyn for<'a> Fn(&mut ProviderCallContext<'a>, Vec<NativeValue>) -> Result<NativeValue, ProviderError>
     + Send
@@ -1159,6 +1217,27 @@ mod tests {
         let error = callable
             .call_with_context(&mut context, vec![])
             .expect_err("cancelled call must not enter Provider code");
+        assert_eq!(error.code, ProviderErrorCode::Cancelled);
+        assert!(!called.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn wire_callable_uses_the_same_runtime_cancellation_gate() {
+        let called = Arc::new(AtomicBool::new(false));
+        let called_by_provider = Arc::clone(&called);
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        let callable = WireInterpreterFn::new_contextual(move |_, _| {
+            called_by_provider.store(true, Ordering::Relaxed);
+            Ok(WireValue::Unit)
+        });
+        let mut context = ProviderCallContext {
+            cancellation: Some(&cancelled),
+            ..ProviderCallContext::default()
+        };
+        let error = callable
+            .call_with_context(&mut context, vec![])
+            .expect_err("cancelled wire call must not enter Provider code");
         assert_eq!(error.code, ProviderErrorCode::Cancelled);
         assert!(!called.load(Ordering::Relaxed));
     }
