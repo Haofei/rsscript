@@ -19,6 +19,11 @@ receive a child after silently omitting the control. The regular guarded-child
 API remains unchanged, so compiler and trusted helper processes do not acquire
 an implicit behavior change.
 
+The Unix CLI runner also starts the child in `/` rather than inheriting the
+caller's project working directory. Its bundle arrives over stdin and the
+runner executable path is absolute, so this removes an unnecessary ambient
+filesystem reference without granting any filesystem isolation claim.
+
 This is one defense-in-depth control only. It does not create namespaces,
 restrict filesystem or network access, install seccomp, enforce cgroups, or
 turn the in-process VM or isolated runner into a universal sandbox.

@@ -125,6 +125,13 @@ fn invoke_runner(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env_clear();
+    // The runner receives all executable input through stdin and an absolute
+    // current executable path. It therefore has no reason to inherit the
+    // caller's working directory, which may expose project-relative files to
+    // future optional host integrations. This is environment narrowing, not a
+    // filesystem isolation claim.
+    #[cfg(unix)]
+    command.current_dir("/");
     let limits = ProcessLimits {
         cpu_seconds: request.limits.wall_time_ms.div_ceil(1000).saturating_add(5),
         address_space_bytes: 1024 * 1024 * 1024,
