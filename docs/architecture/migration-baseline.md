@@ -527,6 +527,8 @@ mechanical acceptance condition holds.
     source/interface snapshot cache with revision invalidation. The language
     service now obtains document bytes from those session snapshots, retaining
     only LSP revision/kind metadata rather than a second source-text cache;
+    the remaining compiler compatibility analysis sequence now has one
+    snapshot-forwarding adapter rather than separate LSP and test copies;
     resolve/type and dependency-precise semantic-diagnostic invalidation remain
     open.
   - [ ] **S03.4 — Thread cancellation and deadlines through every query.** Add

@@ -20,46 +20,7 @@ pub(crate) fn compiler_workspace_diagnostics(
     input: &FrontendInputSnapshot,
     operation: &OperationContext,
 ) -> Result<Vec<RsDiagnostic>, rsscript_operation::OperationAbort> {
-    let interfaces = input
-        .interfaces()
-        .files()
-        .iter()
-        .map(|file| (file.path(), file.text()))
-        .collect::<Vec<_>>();
-    let sources = input
-        .sources()
-        .files()
-        .iter()
-        .map(|file| (file.path(), file.text()))
-        .collect::<Vec<_>>();
-    let mut diagnostics = Vec::new();
-    for (path, text) in &interfaces {
-        operation.check()?;
-        let visible_interfaces = interfaces
-            .iter()
-            .copied()
-            .filter(|(candidate, _)| candidate != path)
-            .collect::<Vec<_>>();
-        diagnostics.extend(
-            rsscript_compiler::analyze_source_with_interfaces_result_with_operation(
-                path,
-                text,
-                &visible_interfaces,
-                operation,
-            )
-            .into_diagnostics(),
-        );
-    }
-    operation.check()?;
-    diagnostics.extend(
-        rsscript_compiler::analyze_sources_with_interfaces_result_with_operation(
-            &sources,
-            &interfaces,
-            operation,
-        )
-        .into_diagnostics(),
-    );
-    Ok(diagnostics)
+    rsscript_compiler::analyze_frontend_input_snapshot_with_operation(input, operation)
 }
 
 #[cfg(test)]

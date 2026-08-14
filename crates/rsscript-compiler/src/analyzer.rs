@@ -14,7 +14,9 @@ use crate::hir::{
 };
 use crate::interfaces::CORE_INTERFACES;
 use crate::lexer::{Token, lex_with_budget};
-use crate::semantic::{AnalysisResult, SemanticDatabase, SourceSnapshot, ValidatedProgram};
+use crate::semantic::{
+    AnalysisResult, FrontendInputSnapshot, SemanticDatabase, SourceSnapshot, ValidatedProgram,
+};
 use crate::syntax::ast::merge_programs;
 use crate::syntax::ast::{
     AssignStmt, Block, Callee, DataEffect, Expr, FunctionDecl, Item, MatchPattern, Stmt, TypeKind,
@@ -428,6 +430,58 @@ pub fn analyze_sources_with_interfaces_result_with_operation(
         FrontendBudgetLimits::default(),
         Some(operation),
     )
+}
+
+/// Analyze the complete immutable source/interface input captured by a
+/// [`FrontendInputSnapshot`].
+///
+/// This is the sole transitional compiler adapter for session-owned workspace
+/// diagnostics. The language service and LSP must pass the snapshot through
+/// unchanged rather than each rebuilding source/interface vectors and
+/// independently deciding interface visibility. Once full diagnostic
+/// orchestration moves into `rsscript-semantics`, this adapter can be replaced
+/// at one composition boundary without changing editor request handling.
+pub fn analyze_frontend_input_snapshot_with_operation(
+    input: &FrontendInputSnapshot,
+    operation: &OperationContext,
+) -> Result<Vec<Diagnostic>, rsscript_operation::OperationAbort> {
+    let interfaces = input
+        .interfaces()
+        .files()
+        .iter()
+        .map(|file| (file.path(), file.text()))
+        .collect::<Vec<_>>();
+    let sources = input
+        .sources()
+        .files()
+        .iter()
+        .map(|file| (file.path(), file.text()))
+        .collect::<Vec<_>>();
+
+    let mut diagnostics = Vec::new();
+    for (path, text) in &interfaces {
+        operation.check()?;
+        let visible_interfaces = interfaces
+            .iter()
+            .copied()
+            .filter(|(candidate, _)| candidate != path)
+            .collect::<Vec<_>>();
+        diagnostics.extend(
+            analyze_source_with_interfaces_result_with_operation(
+                path,
+                text,
+                &visible_interfaces,
+                operation,
+            )
+            .into_diagnostics(),
+        );
+    }
+    operation.check()?;
+    diagnostics.extend(
+        analyze_sources_with_interfaces_result_with_operation(&sources, &interfaces, operation)
+            .into_diagnostics(),
+    );
+    Ok(diagnostics)
 }
 
 pub fn validate_sources_with_interfaces(

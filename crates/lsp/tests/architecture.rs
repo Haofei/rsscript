@@ -44,18 +44,22 @@ fn lsp_composes_the_transitional_compiler_diagnostic_adapter() {
     assert!(diagnostics.contains("fn compiler_workspace_diagnostics"));
     assert_eq!(
         diagnostics
-            .matches("rsscript_compiler::analyze_source_with_interfaces_result_with_operation")
+            .matches("rsscript_compiler::analyze_frontend_input_snapshot_with_operation")
             .count(),
         1,
-        "the LSP may use the compiler only in its explicit transitional adapter"
+        "the LSP may use the compiler only through its single session-snapshot adapter"
     );
-    assert_eq!(
-        diagnostics
-            .matches("rsscript_compiler::analyze_sources_with_interfaces_result_with_operation")
-            .count(),
-        1,
-        "the LSP may use the compiler only in its explicit transitional adapter"
-    );
+    for forbidden in [
+        "analyze_source_with_interfaces_result_with_operation",
+        "analyze_sources_with_interfaces_result_with_operation",
+        ".interfaces()",
+        ".sources()",
+    ] {
+        assert!(
+            !diagnostics.contains(forbidden),
+            "the LSP diagnostic adapter must forward its immutable session snapshot, not reconstruct `{forbidden}`"
+        );
+    }
     assert!(
         !diagnostics.contains("lint_source("),
         "LSP diagnostics must leave local linting to language service"
