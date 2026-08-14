@@ -3084,6 +3084,33 @@ fn legacy_executable_ir_lowering_is_an_explicit_vm_compatibility_feature() {
 }
 
 #[test]
+fn checked_hir_mir_is_the_default_compiler_and_sdk_path() {
+    let root = workspace_root();
+    let compiler_output = read(&root.join("crates/rsscript-compiler/src/compiler_output.rs"));
+    let mir = function_source(&compiler_output, "pub fn mir(&self)");
+    assert!(mir.contains("self.checked_hir_mir()"));
+    assert!(
+        !mir.contains("lower_executable_ir_to_mir"),
+        "the default compiler MIR query must not retry the legacy executable-IR bridge"
+    );
+    assert!(compiler_output.contains("pub fn legacy_executable("));
+    assert!(compiler_output.contains("pub fn into_legacy_executable("));
+
+    let adapter = read(&root.join("crates/rsscript-sdk/src/vm_adapter.rs"));
+    let emit = function_source(&adapter, "fn emit_ir(compiled: &CompiledIr)");
+    assert!(emit.contains("compiled.checked_hir_mir()"));
+    assert!(emit.contains("MirLoweringError::Unsupported"));
+    assert!(emit.contains("emit_legacy_executable_ir(compiled)"));
+    assert!(
+        !emit.contains("compiled.mir()"),
+        "SDK execution must make the direct-MIR/legacy boundary explicit"
+    );
+    let artifact = function_source(&adapter, "pub(crate) fn emit_compiled_artifact(");
+    assert!(artifact.contains("compiled.checked_hir_mir()"));
+    assert!(artifact.contains("emit_legacy_compiled_artifact(compiled, snapshot_digest)"));
+}
+
+#[test]
 fn vm_public_loader_requires_a_verifier_token() {
     let root = workspace_root();
     let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));

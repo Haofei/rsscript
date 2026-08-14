@@ -629,7 +629,10 @@ mechanical acceptance condition holds.
     - [x] **M02.2a — Bridge the initial scalar subset.** The executable-IR
       bridge lowers literals, local bindings, assignment, binary expressions,
       direct internal calls, returns, branches, loops, break, and continue;
-      unsupported operations fail closed.
+      unsupported operations fail closed. `CompiledIr::mir` now uses only the
+      direct checked-HIR path; the SDK enters the legacy executable-IR encoder
+      only after an explicit `Unsupported` result, never to mask an invalid
+      direct MIR lowering.
   - [ ] **M02.3 — Lower aggregate and pattern operations.** Cover records,
     variants, collections, field/index operations, and match dispatch without
     source AST nodes in MIR.

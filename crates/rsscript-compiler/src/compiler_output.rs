@@ -25,7 +25,6 @@ impl CompiledIr {
     /// unsupported semantic forms still fail closed.
     pub fn mir(&self) -> Result<rsscript_mir::MirModule, rsscript_lowering::MirLoweringError> {
         self.checked_hir_mir()
-            .or_else(|_| rsscript_lowering::lower_executable_ir_to_mir(&self.executable))
     }
 
     /// Preferred projection-free checked-HIR path. Unsupported capabilities
@@ -37,12 +36,32 @@ impl CompiledIr {
         rsscript_lowering::lower_checked_hir_to_mir(&self.checked_hir)
     }
 
-    pub fn executable(&self) -> &rsscript_lowering::ExecutableIr {
+    /// Transitional source-shaped compatibility representation.
+    ///
+    /// New backends must call [`Self::mir`] and consume only checked-HIR MIR.
+    /// This value remains available solely for the explicitly gated legacy VM
+    /// fallback while unsupported MIR constructs are being migrated.
+    #[doc(hidden)]
+    pub fn legacy_executable(&self) -> &rsscript_lowering::ExecutableIr {
         &self.executable
     }
 
-    pub fn into_executable(self) -> rsscript_lowering::ExecutableIr {
+    /// Consume the transitional source-shaped compatibility representation.
+    #[doc(hidden)]
+    pub fn into_legacy_executable(self) -> rsscript_lowering::ExecutableIr {
         self.executable
+    }
+
+    #[deprecated(note = "use `mir` for new backends; this is legacy executable-IR compatibility")]
+    #[doc(hidden)]
+    pub fn executable(&self) -> &rsscript_lowering::ExecutableIr {
+        self.legacy_executable()
+    }
+
+    #[deprecated(note = "use `mir` for new backends; this is legacy executable-IR compatibility")]
+    #[doc(hidden)]
+    pub fn into_executable(self) -> rsscript_lowering::ExecutableIr {
+        self.into_legacy_executable()
     }
 
     pub fn source_hash(&self) -> &str {

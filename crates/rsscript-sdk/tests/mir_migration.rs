@@ -6,7 +6,9 @@
 //! interpreter, and the verified-bytecode VM emitted directly from MIR.
 
 use rsscript_abi_model::WireType;
-use rsscript_compiler::{compile_source_to_ir, compile_validated_to_ir};
+use rsscript_compiler::{
+    compile_source_to_ir, compile_validated_to_ir, validate_sources_with_interfaces,
+};
 use rsscript_mir::conformance::{MigrationCase, MigrationStage, execute_named};
 use rsscript_mir::{
     BasicBlock, BlockId, FunctionId, MirFunction, MirFunctionDebug, MirFunctionSignature,
@@ -261,7 +263,14 @@ fn supported_sdk_builds_use_the_mir_codegen_artifact() {
         .find(|case| case.name == "loop_and_assignment")
         .expect("scalar CFG migration fixture");
     let file = format!("{}.rss", case.name);
-    let compiled = compile_source_to_ir(&file, case.source).expect("fixture compiles");
+    // Match the reviewed snapshot API's multi-source frontend flavor exactly:
+    // it includes the builtin interface set but has no supplied interfaces.
+    // `compile_source_to_ir` uses the historical standard-package flavor and
+    // therefore has a different immutable source hash even for this scalar
+    // program.
+    let validated = validate_sources_with_interfaces(&[(&file, case.source)], &[])
+        .expect("snapshot fixture validates");
+    let compiled = compile_validated_to_ir(&validated);
     let mut expected = rsscript_codegen_vm::emit_artifact(
         &compiled.mir().expect("fixture lowers to MIR"),
         compiled.source_hash(),
