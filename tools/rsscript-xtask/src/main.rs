@@ -171,7 +171,9 @@ fn run_core_metrics(arguments: Arguments) -> Result<(), Box<dyn Error>> {
         &[("provider-metrics.rss", PROVIDER_WORKLOAD)],
         &[("provider-metrics.rssi", PROVIDER_INTERFACE)],
     )?;
-    let provider_package = ArtifactVerifier.verify(provider_package)?;
+    let provider_package = ArtifactVerifier
+        .verify(provider_package)?
+        .admit_trusted_input();
     let provider_runtime = metrics_provider_runtime()?;
 
     // Warm each path before collecting distributions so the report measures
@@ -180,7 +182,7 @@ fn run_core_metrics(arguments: Arguments) -> Result<(), Box<dyn Error>> {
         let _ = compiler.check("core-metrics.rss", WORKLOAD);
         let package = compiler.compile("core-metrics.rss", WORKLOAD)?;
         let bytes = package.bundle_bytes()?;
-        let loaded = ArtifactVerifier.verify_bytes(&bytes)?;
+        let loaded = ArtifactVerifier.verify_bytes(&bytes)?.admit_trusted_input();
         Runtime::default()
             .link(&loaded)?
             .execute(ExecutionRequest::default());
@@ -204,8 +206,9 @@ fn run_core_metrics(arguments: Arguments) -> Result<(), Box<dyn Error>> {
     let mut provider_total_duration_ns = 0;
     let mut provider_max_duration_ns = 0;
 
-    let cancellation_package =
-        ArtifactVerifier.verify(compiler.compile("cancel.rss", CANCELLATION_WORKLOAD)?)?;
+    let cancellation_package = ArtifactVerifier
+        .verify(compiler.compile("cancel.rss", CANCELLATION_WORKLOAD)?)?
+        .admit_trusted_input();
     for _ in 0..arguments.iterations {
         check.push(measure(|| {
             let diagnostics = compiler.check("core-metrics.rss", WORKLOAD);
@@ -222,14 +225,14 @@ fn run_core_metrics(arguments: Arguments) -> Result<(), Box<dyn Error>> {
         let bytes = package.bundle_bytes()?;
         artifact_bytes = bytes.len();
         let started = Instant::now();
-        let loaded = ArtifactVerifier.verify_bytes(&bytes)?;
+        let loaded = ArtifactVerifier.verify_bytes(&bytes)?.admit_trusted_input();
         verify.push(elapsed_ms(started));
 
         let runtime = Runtime::default();
         let linked = runtime.link(&loaded)?;
         let started = Instant::now();
         let report = linked.execute(ExecutionRequest::default());
-        if let Some(error) = &report.failure {
+        if let Some(error) = report.failure() {
             return Err(error.to_string().into());
         }
         execute.push(elapsed_ms(started));
@@ -239,7 +242,7 @@ fn run_core_metrics(arguments: Arguments) -> Result<(), Box<dyn Error>> {
         let linked = provider_runtime.link(&provider_package)?;
         let started = Instant::now();
         let report = linked.execute(ExecutionRequest::default());
-        if let Some(error) = &report.failure {
+        if let Some(error) = report.failure() {
             return Err(error.to_string().into());
         }
         provider_execute.push(elapsed_ms(started));
@@ -264,10 +267,10 @@ fn run_core_metrics(arguments: Arguments) -> Result<(), Box<dyn Error>> {
                 .limits(RunLimits::unbounded_for_trusted_host().with_cancellation(cancellation)),
         );
         cancel.push(elapsed_ms(started));
-        if report.termination_reason.as_str() != "cancelled" {
+        if report.termination_reason().as_str() != "cancelled" {
             return Err(format!(
                 "pre-cancel workload terminated as {}",
-                report.termination_reason.as_str()
+                report.termination_reason().as_str()
             )
             .into());
         }
