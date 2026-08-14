@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use crate::diagnostic::{Diagnostic, Span};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -9,15 +7,6 @@ pub struct GeneratedRustPackage {
     pub lib_rs: String,
     pub main_rs: Option<String>,
     pub source_map_json: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NativeRustDependency {
-    pub crate_name: String,
-    pub path: String,
-    pub cargo_features: Vec<String>,
-    pub default_features: bool,
-    pub bindings: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

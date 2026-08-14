@@ -4,7 +4,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::diagnostic::{Diagnostic, Span};
 use crate::review::{ReviewFinding, ReviewMap};
-use crate::rust_lower::NativeRustDependency;
+
+/// Native package dependency metadata captured during package preparation.
+///
+/// The package boundary owns this input because it is part of the immutable
+/// package graph. Experimental Rust/AOT lowering consumes the value but does
+/// not define package identity or native dependency policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeRustDependency {
+    pub crate_name: String,
+    pub path: String,
+    pub cargo_features: Vec<String>,
+    pub default_features: bool,
+    pub bindings: BTreeMap<String, String>,
+}
 
 /// Schema id for the platform-neutral package analysis artifact.
 pub const PACKAGE_ANALYSIS_SCHEMA: &str = "rsscript.package_analysis.v1";

@@ -579,7 +579,11 @@ mechanical acceptance condition holds.
     Keep neutral analysis facts; make review formatting and policy adapters
     optional consumers.
   - [ ] **S05.4 — Move Rust/AOT lowering to its experimental boundary.** Compiler
-    no longer exposes generated Rust or native lowering APIs.
+    no longer exposes generated Rust or native lowering APIs. Native package
+    dependency identity now belongs to the package snapshot, and the Rust
+    lowerer only consumes and temporarily re-exports it for compatibility.
+    Rust source lowering, source maps, runtime ABI helpers, and the public AOT
+    façade remain in compiler, so this item remains open.
   - [ ] **S05.5 — Enforce a frontend-only compiler dependency closure.** Cargo
     metadata and `cargo tree` tests reject OS, persistence, Provider, VM, review,
     JIT, and AOT dependencies. Package-capture and persistence dependencies are

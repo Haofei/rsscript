@@ -6,7 +6,7 @@ use std::path::{Component, Path, PathBuf};
 #[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::rust_lower::NativeRustDependency;
+use super::NativeRustDependency;
 
 use super::dependency::package_dependency_spec;
 use super::source_set::{

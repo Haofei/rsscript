@@ -1171,6 +1171,38 @@ fn artifact_persistence_is_an_execution_only_adapter() {
 }
 
 #[test]
+fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
+    let root = workspace_root();
+    let package_types = read(&root.join("crates/rsscript-compiler/src/package/types.rs"));
+    assert!(
+        package_types.contains("pub struct NativeRustDependency"),
+        "the package snapshot must own native dependency identity"
+    );
+
+    let native_loader = read(&root.join("crates/rsscript-compiler/src/package/native.rs"));
+    assert!(
+        native_loader.contains("use super::NativeRustDependency;"),
+        "native package loading must consume the package-owned dependency model"
+    );
+    assert!(
+        !native_loader.contains("crate::rust_lower::NativeRustDependency"),
+        "package loading must not depend on the experimental Rust lowerer"
+    );
+
+    let lower_types = read(&root.join("crates/rsscript-compiler/src/rust_lower/types.rs"));
+    assert!(
+        !lower_types.contains("pub struct NativeRustDependency"),
+        "the experimental Rust lowerer must not define package dependency identity"
+    );
+
+    let lowerer = read(&root.join("crates/rsscript-compiler/src/rust_lower/mod.rs"));
+    assert!(
+        lowerer.contains("pub use crate::package::NativeRustDependency;"),
+        "the Rust lowerer may retain a compatibility re-export while it consumes package input"
+    );
+}
+
+#[test]
 fn linked_provider_contracts_reach_the_invocation_path() {
     let root = workspace_root();
     let provider_api = read(&root.join("crates/rsscript-provider-api/src/lib.rs"));
