@@ -263,7 +263,15 @@ pub enum HirStmt {
     For {
         binding: String,
         iterable: HirExpr,
+        /// Structural semantic fact consumed by new backends. The rendered
+        /// fields below remain only for compatibility diagnostics/adapters.
+        iterable_type: Option<ResolvedType>,
+        item_type: Option<ResolvedType>,
+        /// Rendered compatibility projection for consumers that have not yet
+        /// migrated their loop facts to structural types.
         iterable_type_name: Option<String>,
+        /// Rendered compatibility projection for consumers that have not yet
+        /// migrated their loop facts to structural types.
         item_type_name: Option<String>,
         is_async: bool,
         body: HirBlock,

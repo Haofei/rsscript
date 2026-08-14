@@ -3259,6 +3259,24 @@ fn mir_codegen_is_a_vm_independent_verified_bytecode_boundary() {
         lowering.contains("Result<VerifiedMir, MirLoweringError>"),
         "the checked-HIR lowerer must return verifier-admitted MIR"
     );
+    let checked_signature = function_source(&lowering, "fn checked_function_signature(");
+    assert!(
+        checked_signature.contains("checked_type_to_wire"),
+        "direct MIR signatures must consume structural semantic types"
+    );
+    assert!(
+        !checked_signature.contains("WireType::parse(&parameter.ty.to_string())"),
+        "direct MIR signatures must not round-trip semantic types through display strings"
+    );
+    let checked_for = function_source(&lowering, "fn lower_for(");
+    assert!(
+        checked_for.contains("iterable_type.root_name()"),
+        "direct MIR loop lowering must inspect the structural iterable type"
+    );
+    assert!(
+        !checked_for.contains("starts_with(\"List<\")"),
+        "direct MIR loop lowering must not reconstruct type facts from rendered text"
+    );
     let manifest: toml::Value =
         toml::from_str(&read(&root.join("crates/rsscript-codegen-vm/Cargo.toml"))).unwrap();
     assert_eq!(

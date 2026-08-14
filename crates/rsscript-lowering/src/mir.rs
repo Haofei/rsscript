@@ -766,17 +766,11 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             checked::HirStmt::For {
                 binding,
                 iterable,
-                iterable_type_name,
+                iterable_type,
                 is_async,
                 body,
                 ..
-            } => self.lower_for(
-                binding,
-                iterable,
-                iterable_type_name.as_deref(),
-                *is_async,
-                body,
-            ),
+            } => self.lower_for(binding, iterable, iterable_type.as_ref(), *is_async, body),
             checked::HirStmt::Match { value, arms, .. } => self.lower_match(value, arms),
             checked::HirStmt::Select { arms, .. } => self.lower_select(arms),
             checked::HirStmt::Break(_) => {
@@ -2079,17 +2073,17 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         &mut self,
         binding: &str,
         iterable: &checked::HirExpr,
-        iterable_type_name: Option<&str>,
+        iterable_type: Option<&rsscript_semantics::ResolvedType>,
         is_async: bool,
         body: &checked::HirBlock,
     ) -> Result<(), MirLoweringError> {
         if is_async {
             return self.unsupported("async checked HIR for loop");
         }
-        let Some(iterable_type_name) = iterable_type_name else {
+        let Some(iterable_type) = iterable_type else {
             return self.unsupported("checked HIR for loop without resolved iterable type");
         };
-        if !iterable_type_name.trim_start().starts_with("List<") {
+        if iterable_type.root_name() != Some("List") || iterable_type.arguments().len() != 1 {
             return self.unsupported("non-list checked HIR for loop");
         }
 

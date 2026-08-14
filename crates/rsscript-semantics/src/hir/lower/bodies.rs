@@ -488,8 +488,10 @@ pub(super) fn lower_hir_stmt(
             HirStmt::For {
                 binding: stmt.binding.clone(),
                 iterable: lower_hir_expr(hir, function_name, &stmt.iterable, value_types),
-                iterable_type_name: iterable_type.map(|ty| ty.to_string()),
-                item_type_name: item_type.map(|ty| ty.to_string()),
+                iterable_type_name: iterable_type.as_ref().map(ToString::to_string),
+                item_type_name: item_type.as_ref().map(ToString::to_string),
+                iterable_type,
+                item_type,
                 is_async: stmt.is_async,
                 body: lower_hir_block(hir, function_name, &stmt.body, &mut body_types),
                 span: stmt.span.clone(),

@@ -699,7 +699,9 @@ mechanical acceptance condition holds.
     - [x] **M01.2b — Convert checked semantic signatures structurally.** Direct
       HIR-to-MIR lowering converts `ResolvedType` trees into canonical
       `WireType` entries before interning them as `TypeId`; it no longer formats
-      semantic signatures to text and reparses them. Function-value types stay
+      semantic signatures to text and reparses them. Checked `for` HIR also
+      carries structural iterable/item types, so direct list-loop lowering no
+      longer recognizes `List<...>` by text. Function-value types stay
       fail-closed until the wire ABI gives them an explicit representation.
   - [ ] **M01.3 — Add stable display/debug/source-map side tables.** Human names
     remain available without becoming executable identity.
