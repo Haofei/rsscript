@@ -11,6 +11,7 @@ use std::fmt;
 use rsscript_abi_model::ExternalImport;
 use rsscript_bytecode::BytecodeArtifact;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 pub const ARTIFACT_BUNDLE_SCHEMA: &str = "rsscript.artifact_bundle.v1";
@@ -233,8 +234,72 @@ fn verify_analysis_schema(analysis: &serde_json::Value) -> Result<(), ArtifactBu
         ))
     }
 }
+/// Encode JSON sections using the Bundle v1 canonical form.
+///
+/// Object keys are serialized in Unicode scalar-value order at every depth.
+/// This deliberately does not rely on `serde_json::Map`'s backing type: the
+/// workspace may enable `preserve_order` for other consumers, but an Artifact
+/// digest must not change when an equivalent JSON object is constructed with a
+/// different insertion order.
 fn canonical_json(value: &impl Serialize) -> Result<Vec<u8>, ArtifactBundleError> {
-    serde_json::to_vec(value).map_err(|error| ArtifactBundleError::Manifest(error.to_string()))
+    let value = serde_json::to_value(value)
+        .map_err(|error| ArtifactBundleError::Manifest(error.to_string()))?;
+    let mut output = Vec::new();
+    write_canonical_json(&mut output, &value)?;
+    Ok(output)
+}
+
+fn write_canonical_json(output: &mut Vec<u8>, value: &Value) -> Result<(), ArtifactBundleError> {
+    match value {
+        Value::Null => output.extend_from_slice(b"null"),
+        Value::Bool(value) => {
+            if *value {
+                output.extend_from_slice(b"true");
+            } else {
+                output.extend_from_slice(b"false");
+            }
+        }
+        Value::Number(value) => output.extend_from_slice(value.to_string().as_bytes()),
+        Value::String(value) => output.extend_from_slice(
+            serde_json::to_string(value)
+                .map_err(|error| ArtifactBundleError::Manifest(error.to_string()))?
+                .as_bytes(),
+        ),
+        Value::Array(values) => {
+            output.push(b'[');
+            for (index, value) in values.iter().enumerate() {
+                if index != 0 {
+                    output.push(b',');
+                }
+                write_canonical_json(output, value)?;
+            }
+            output.push(b']');
+        }
+        Value::Object(values) => {
+            output.push(b'{');
+            let mut keys = values.keys().collect::<Vec<_>>();
+            keys.sort_unstable();
+            for (index, key) in keys.into_iter().enumerate() {
+                if index != 0 {
+                    output.push(b',');
+                }
+                output.extend_from_slice(
+                    serde_json::to_string(key)
+                        .map_err(|error| ArtifactBundleError::Manifest(error.to_string()))?
+                        .as_bytes(),
+                );
+                output.push(b':');
+                write_canonical_json(
+                    output,
+                    values
+                        .get(key)
+                        .expect("canonical JSON key came from object"),
+                )?;
+            }
+            output.push(b'}');
+        }
+    }
+    Ok(())
 }
 fn digest(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
@@ -375,5 +440,40 @@ mod tests {
         let mut bytes = bundle().to_bytes().unwrap();
         *bytes.last_mut().unwrap() ^= 1;
         assert!(ArtifactBundle::from_bytes(&bytes).is_err());
+    }
+
+    #[test]
+    fn canonical_json_sorts_nested_object_keys_independently_of_insertion_order() {
+        let left = serde_json::json!({
+            "$schema": SOURCE_ANALYSIS_SCHEMA,
+            "outer": { "z": 1, "a": 2 },
+        });
+        let right = serde_json::json!({
+            "outer": { "a": 2, "z": 1 },
+            "$schema": SOURCE_ANALYSIS_SCHEMA,
+        });
+        assert_eq!(
+            canonical_json(&left).unwrap(),
+            canonical_json(&right).unwrap()
+        );
+    }
+
+    #[test]
+    fn bundle_rejects_equivalent_but_noncanonical_analysis_json() {
+        let bundle = bundle();
+        let manifest = canonical_json(&bundle.manifest).unwrap();
+        let noncanonical = format!(r#"{{"z":1,"$schema":"{}"}}"#, SOURCE_ANALYSIS_SCHEMA);
+        let mut bytes = ARTIFACT_BUNDLE_MAGIC.to_vec();
+        put_length(&mut bytes, manifest.len()).unwrap();
+        put_length(&mut bytes, bundle.artifact.len()).unwrap();
+        put_length(&mut bytes, noncanonical.len()).unwrap();
+        bytes.extend_from_slice(&manifest);
+        bytes.extend_from_slice(&bundle.artifact);
+        bytes.extend_from_slice(noncanonical.as_bytes());
+
+        assert!(matches!(
+            ArtifactBundle::from_bytes(&bytes),
+            Err(ArtifactBundleError::NonCanonicalAnalysis)
+        ));
     }
 }
