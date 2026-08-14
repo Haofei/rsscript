@@ -1046,6 +1046,7 @@ fn language_engine_does_not_read_the_operating_system() {
         loader_dependencies,
         BTreeSet::from([
             "rsscript-operation".to_string(),
+            "serde".to_string(),
             "sha2".to_string(),
             "toml".to_string(),
         ])
@@ -1058,6 +1059,8 @@ fn language_engine_does_not_read_the_operating_system() {
         "pub fn load_from",
         "pub fn content_digest",
         "pub logical_path: String",
+        "pub struct WorkspaceManifestV1",
+        "pub struct WorkspacePathDependencyV1",
     ] {
         assert!(
             workspace_loader.contains(boundary),
@@ -3054,6 +3057,10 @@ fn mir_codegen_is_a_vm_independent_verified_bytecode_boundary() {
             "MIR codegen must lower verified MIR fact `{required}`"
         );
     }
+    assert!(
+        codegen.contains("mir: &VerifiedMir"),
+        "MIR codegen must accept only verifier-admitted MIR"
+    );
     let manifest: toml::Value =
         toml::from_str(&read(&root.join("crates/rsscript-codegen-vm/Cargo.toml"))).unwrap();
     assert_eq!(

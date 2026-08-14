@@ -27,6 +27,7 @@ pub struct CompiledIr {
 #[derive(Debug)]
 pub enum BytecodeCompileError {
     Mir(rsscript_lowering::MirLoweringError),
+    MirValidation(rsscript_mir::MirValidationError),
     Emit(rsscript_codegen_vm::CodegenError),
 }
 
@@ -35,6 +36,7 @@ impl fmt::Display for BytecodeCompileError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Mir(error) => write!(formatter, "cannot lower checked HIR to MIR: {error}"),
+            Self::MirValidation(error) => write!(formatter, "cannot verify lowered MIR: {error}"),
             Self::Emit(error) => write!(formatter, "cannot emit MIR bytecode: {error}"),
         }
     }
@@ -144,8 +146,11 @@ pub fn compile_ir_to_bytecode(
     let mir = compiled
         .checked_hir_mir()
         .map_err(BytecodeCompileError::Mir)?;
+    let verified = mir
+        .into_verified()
+        .map_err(BytecodeCompileError::MirValidation)?;
     let mut artifact = rsscript_codegen_vm::emit_artifact(
-        &mir,
+        &verified,
         compiled.source_hash(),
         compiled.interface_catalog_digest(),
         env!("CARGO_PKG_VERSION"),

@@ -15,7 +15,8 @@ use rsscript_abi_model::{ExternalImport, RUNTIME_ABI_VERSION};
 use rsscript_bytecode::{BytecodeArtifact, BytecodeError, LANGUAGE_SEMANTICS_VERSION};
 use rsscript_mir::{
     BlockId, MirBinaryOp, MirCallArgument, MirCallTarget, MirFunction, MirInstruction, MirLiteral,
-    MirModule, MirParameterMode, MirTerminator, PlaceId, TaskId, ValueId, builtin_vm_name,
+    MirModule, MirParameterMode, MirTerminator, PlaceId, TaskId, ValueId, VerifiedMir,
+    builtin_vm_name,
 };
 use serde_json::{Map, Value, json};
 
@@ -47,13 +48,11 @@ impl Error for CodegenError {}
 /// subset. The caller still sends the bytes through `BytecodeVerifier` before
 /// loading them into the VM.
 pub fn emit_artifact(
-    mir: &MirModule,
+    mir: &VerifiedMir,
     source_content_hash: &str,
     interface_catalog_digest: &str,
     compiler_provenance: &str,
 ) -> Result<BytecodeArtifact, CodegenError> {
-    mir.verify()
-        .map_err(|error| CodegenError::InvalidMir(error.to_string()))?;
     let payload =
         rsscript_bytecode::encode_executable_payload(&wire_unit(mir)?).map_err(bytecode_error)?;
     let imports = mir
@@ -867,6 +866,7 @@ mod tests {
             vec![],
         )
         .unwrap();
+        let module = module.into_verified().expect("scalar MIR must verify");
         let artifact = emit_artifact(
             &module,
             &format!("sha256:{}", "a".repeat(64)),
@@ -920,6 +920,7 @@ mod tests {
             vec![],
         )
         .expect("field MIR verifies");
+        let module = module.into_verified().expect("field MIR must verify");
         let artifact = emit_artifact(
             &module,
             &format!("sha256:{}", "a".repeat(64)),
@@ -971,6 +972,7 @@ mod tests {
             vec![],
         )
         .expect("list MIR verifies");
+        let module = module.into_verified().expect("list MIR must verify");
         let artifact = emit_artifact(
             &module,
             &format!("sha256:{}", "a".repeat(64)),
@@ -1027,6 +1029,7 @@ mod tests {
             vec![],
         )
         .unwrap();
+        let module = module.into_verified().expect("resource MIR must verify");
         let artifact = emit_artifact(
             &module,
             &format!("sha256:{}", "a".repeat(64)),
@@ -1109,6 +1112,7 @@ mod tests {
             vec![],
         )
         .unwrap();
+        let module = module.into_verified().expect("task MIR must verify");
         let artifact = emit_artifact(
             &module,
             &format!("sha256:{}", "a".repeat(64)),
@@ -1155,6 +1159,7 @@ mod tests {
             vec![],
         )
         .expect("ownership MIR verifies");
+        let module = module.into_verified().expect("ownership MIR must verify");
         let artifact = emit_artifact(
             &module,
             &format!("sha256:{}", "a".repeat(64)),

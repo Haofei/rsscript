@@ -57,17 +57,23 @@ pub fn reg_vm_compile_mir(
     source_hash: &str,
     interface_catalog_digest: &str,
 ) -> Result<RegVmExecutable, EvalError> {
-    emit_mir(mir, source_hash, interface_catalog_digest)
+    let verified = mir
+        .clone()
+        .into_verified()
+        .map_err(|error| EvalError::Runtime(error.to_string()))?;
+    emit_mir(&verified, source_hash, interface_catalog_digest)
         .map_err(|error| EvalError::Runtime(error.to_string()))
 }
 
 fn emit_ir(compiled: &CompiledIr) -> Result<RegVmExecutable, EvalError> {
     match compiled.checked_hir_mir() {
-        Ok(mir) => match emit_mir(
-            &mir,
-            compiled.source_hash(),
-            compiled.interface_catalog_digest(),
-        ) {
+        Ok(mir) => match verified_mir(mir).and_then(|mir| {
+            emit_mir(
+                &mir,
+                compiled.source_hash(),
+                compiled.interface_catalog_digest(),
+            )
+        }) {
             Ok(executable) => Ok(executable),
             Err(rsscript_codegen_vm::CodegenError::Unsupported(_)) => {
                 emit_legacy_executable_ir(compiled)
@@ -113,12 +119,14 @@ pub(crate) fn emit_compiled_artifact(
     snapshot_digest: &str,
 ) -> Result<BytecodeArtifact, EvalError> {
     match compiled.checked_hir_mir() {
-        Ok(mir) => match emit_mir_artifact(
-            &mir,
-            compiled.source_hash(),
-            compiled.interface_catalog_digest(),
-            snapshot_digest,
-        ) {
+        Ok(mir) => match verified_mir(mir).and_then(|mir| {
+            emit_mir_artifact(
+                &mir,
+                compiled.source_hash(),
+                compiled.interface_catalog_digest(),
+                snapshot_digest,
+            )
+        }) {
             Ok(artifact) => Ok(artifact),
             Err(rsscript_codegen_vm::CodegenError::Unsupported(_)) => {
                 emit_legacy_compiled_artifact(compiled, snapshot_digest)
@@ -159,7 +167,7 @@ fn emit_legacy_compiled_artifact(_: &CompiledIr, _: &str) -> Result<BytecodeArti
 }
 
 fn emit_mir(
-    mir: &rsscript_mir::MirModule,
+    mir: &rsscript_mir::VerifiedMir,
     source_hash: &str,
     interface_catalog_digest: &str,
 ) -> Result<RegVmExecutable, rsscript_codegen_vm::CodegenError> {
@@ -180,7 +188,7 @@ fn emit_mir(
 }
 
 fn emit_mir_artifact(
-    mir: &rsscript_mir::MirModule,
+    mir: &rsscript_mir::VerifiedMir,
     source_hash: &str,
     interface_catalog_digest: &str,
     snapshot_digest: &str,
@@ -195,6 +203,13 @@ fn emit_mir_artifact(
         .bind_snapshot_digest(snapshot_digest)
         .map_err(|error| rsscript_codegen_vm::CodegenError::Bytecode(error.to_string()))?;
     Ok(artifact)
+}
+
+fn verified_mir(
+    mir: rsscript_mir::MirModule,
+) -> Result<rsscript_mir::VerifiedMir, rsscript_codegen_vm::CodegenError> {
+    mir.into_verified()
+        .map_err(|error| rsscript_codegen_vm::CodegenError::InvalidMir(error.to_string()))
 }
 
 pub fn reg_vm_eval_source_main_with_args(

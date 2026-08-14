@@ -9,6 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
 use std::fmt;
+use std::ops::Deref;
 
 use rsscript_abi_model::{ExternalSymbol, FunctionSignature, WireType};
 
@@ -530,6 +531,46 @@ pub struct MirModule {
     external_imports: Vec<MirExternalImport>,
 }
 
+/// A MIR module that has passed the structural, ownership, resource, and task
+/// lifetime verifier.
+///
+/// Backends consume this phase type rather than raw [`MirModule`] so their
+/// public entry points cannot accidentally accept an unchecked intermediate
+/// representation. `MirModule` keeps its validated constructor for lowering
+/// and test construction; this wrapper additionally marks the explicit
+/// verifier boundary used between lowering and code generation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VerifiedMir {
+    module: MirModule,
+}
+
+impl VerifiedMir {
+    /// Re-run MIR verification at a backend admission boundary.
+    pub fn verify(module: MirModule) -> Result<Self, MirValidationError> {
+        module.verify()?;
+        Ok(Self { module })
+    }
+
+    pub fn module(&self) -> &MirModule {
+        &self.module
+    }
+
+    /// Consume the verified wrapper after a backend has finished admission.
+    /// The returned module has no mutable public fields, but callers crossing
+    /// another trust boundary must verify it again before execution.
+    pub fn into_module(self) -> MirModule {
+        self.module
+    }
+}
+
+impl Deref for VerifiedMir {
+    type Target = MirModule;
+
+    fn deref(&self) -> &Self::Target {
+        self.module()
+    }
+}
+
 impl MirModule {
     pub fn new(
         types: Vec<WireType>,
@@ -545,6 +586,13 @@ impl MirModule {
         };
         module.verify()?;
         Ok(module)
+    }
+
+    /// Mark this validated module for a backend admission boundary. The
+    /// verifier is deliberately run again so a caller cannot mistake
+    /// construction-time validation for a later phase admission check.
+    pub fn into_verified(self) -> Result<VerifiedMir, MirValidationError> {
+        VerifiedMir::verify(self)
     }
 
     pub fn functions(&self) -> &[MirFunction] {

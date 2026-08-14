@@ -892,6 +892,11 @@ mechanical acceptance condition holds.
       Cargo metadata, rejecting frontend imports or dependencies. Rust AOT
       remains an explicit experimental migration item until it consumes MIR or
       verified bytecode rather than checked frontend representations.
+    - [x] **M04.3b — Require a verifier-owned MIR phase at bytecode admission.**
+      `VerifiedMir` re-runs MIR structural, ownership, resource, and task
+      validation at the lowering-to-codegen boundary; `rsscript-codegen-vm`
+      accepts only that phase type. The migration-only SDK adapter verifies raw
+      MIR before delegating so it cannot bypass the same backend boundary.
 - [ ] **M05 — Run old/new lowering differentially.** The same corpus must
   produce equivalent diagnostics, external imports, termination reasons,
   values, cleanup behavior, and deterministic usage reports.
@@ -967,6 +972,9 @@ mechanical acceptance condition holds.
     `rsscript-codegen-vm` now owns scalar-CFG Artifact emission; architecture
     tests enforce its dependency closure and verify SDK MIR builds use
     codegen → verifier → VM-token loading.
+    Its public artifact emitter now requires `VerifiedMir`, making the MIR
+    verifier admission explicit rather than relying on callers to invoke
+    `MirModule::verify` by convention.
   - [ ] **V02.2 — Lower the scalar MIR subset to bytecode.** Preserve source maps
     and deterministic module ordering.
     - [x] **V02.2a — Prove the transitional VM-local adapter.** The current
