@@ -57,6 +57,18 @@ fn main() -> Int {
 "#,
     },
     MigrationCase {
+        name: "logical_short_circuit",
+        capability: "short-circuit boolean control flow",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn main() -> Bool {
+    let left = false && true
+    let right = true || false
+    return left || right
+}
+"#,
+    },
+    MigrationCase {
         name: "loop_and_assignment",
         capability: "loops and assignment",
         stage: MigrationStage::DualPath,

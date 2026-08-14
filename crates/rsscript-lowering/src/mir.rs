@@ -626,6 +626,14 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                 }
             }
             checked::HirExpr::Binary {
+                op:
+                    op @ (rsscript_syntax::ast::BinaryOp::LogicalAnd
+                    | rsscript_syntax::ast::BinaryOp::LogicalOr),
+                left,
+                right,
+                ..
+            } => self.lower_logical_binary(*op, left, right),
+            checked::HirExpr::Binary {
                 op, left, right, ..
             } => {
                 let left = self.lower_expression(left)?;
@@ -738,6 +746,66 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             checked::HirExpr::Match { value, arms, .. } => self.lower_match_expression(value, arms),
             checked::HirExpr::Unknown(_) => self.unsupported("unknown checked HIR expression"),
         }
+    }
+
+    /// Lower boolean `&&`/`||` as explicit CFG rather than a binary opcode.
+    ///
+    /// Short-circuiting is an observable execution property: evaluating the
+    /// right side before branching could invoke a Provider, allocate a
+    /// resource, or fail even when the result is already known. Keeping both
+    /// paths explicit also means bytecode codegen needs only ordinary branch,
+    /// write, and read operations; it never has to recover source-level
+    /// short-circuit behavior from a generic binary instruction.
+    fn lower_logical_binary(
+        &mut self,
+        op: rsscript_syntax::ast::BinaryOp,
+        left: &checked::HirExpr,
+        right: &checked::HirExpr,
+    ) -> Result<ValueId, MirLoweringError> {
+        let left = self.lower_expression(left)?;
+        let right_block = self.new_block();
+        let short_circuit_block = self.new_block();
+        let join_block = self.new_block();
+        let result_place = self.place(&format!("__rss_mir_logical_result_{}", self.next_value));
+        let short_circuit_value = match op {
+            rsscript_syntax::ast::BinaryOp::LogicalAnd => false,
+            rsscript_syntax::ast::BinaryOp::LogicalOr => true,
+            _ => return self.unsupported("non-logical checked HIR binary operation"),
+        };
+        let (then_target, else_target) = match op {
+            rsscript_syntax::ast::BinaryOp::LogicalAnd => (right_block, short_circuit_block),
+            rsscript_syntax::ast::BinaryOp::LogicalOr => (short_circuit_block, right_block),
+            _ => return self.unsupported("non-logical checked HIR binary operation"),
+        };
+        self.terminate(MirTerminator::Branch {
+            condition: left,
+            then_target,
+            else_target,
+        });
+
+        self.current = right_block;
+        let right = self.lower_expression(right)?;
+        self.emit(MirInstruction::WritePlace {
+            place: result_place,
+            value: right,
+        });
+        self.terminate(MirTerminator::Jump(join_block));
+
+        self.current = short_circuit_block;
+        let value = self.literal(MirLiteral::Bool(short_circuit_value))?;
+        self.emit(MirInstruction::WritePlace {
+            place: result_place,
+            value,
+        });
+        self.terminate(MirTerminator::Jump(join_block));
+
+        self.current = join_block;
+        let destination = self.value();
+        self.emit(MirInstruction::ReadPlace {
+            destination,
+            place: result_place,
+        });
+        Ok(destination)
     }
 
     fn literal(&mut self, value: MirLiteral) -> Result<ValueId, MirLoweringError> {

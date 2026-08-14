@@ -202,6 +202,7 @@ fn source_hash(validated: &ValidatedProgram) -> String {
 #[cfg(test)]
 mod tests {
     use super::compile_source_to_ir;
+    use rsscript_mir::{MirBinaryOp, MirInstruction};
 
     #[test]
     fn pure_control_flow_compiles_to_verified_mir() {
@@ -264,6 +265,43 @@ fn main() -> Int {
         assert_eq!(source.file(), "direct-hir-mir.rss");
         assert!(source.length() > 0);
         mir.verify().expect("direct HIR MIR verifies");
+    }
+
+    #[test]
+    fn logical_short_circuit_uses_cfg_not_a_logical_binary_opcode() {
+        let compiled = compile_source_to_ir(
+            "logical-mir.rss",
+            r#"
+fn main() -> Bool {
+    let left = false && true
+    let right = true || false
+    return left || right
+}
+"#,
+        )
+        .expect("source should compile");
+
+        let mir = compiled
+            .checked_hir_mir()
+            .expect("logical source should lower directly to MIR");
+        assert!(
+            mir.functions()
+                .iter()
+                .flat_map(|function| function.blocks())
+                .flat_map(|block| block.instructions())
+                .all(|instruction| !matches!(
+                    instruction,
+                    MirInstruction::Binary {
+                        op: MirBinaryOp::LogicalAnd | MirBinaryOp::LogicalOr,
+                        ..
+                    }
+                )),
+            "short-circuit semantics must be represented by explicit CFG branches"
+        );
+        assert!(
+            mir.functions()[0].blocks().len() >= 10,
+            "each logical expression contributes right-hand, short-circuit, and join blocks"
+        );
     }
 
     #[test]

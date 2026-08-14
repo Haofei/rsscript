@@ -703,7 +703,9 @@ mechanical acceptance condition holds.
       only after an explicit `Unsupported` result, never to mask an invalid
       direct MIR lowering. Reviewed SDK `execution` no longer selects that
       encoder; only the explicit `legacy-exec-ir` compatibility feature may do
-      so.
+      so. Boolean `&&`/`||` now lower as explicit short-circuit CFG branches
+      rather than eager MIR binary operations, so the direct bytecode path
+      preserves right-hand evaluation semantics without the legacy encoder.
   - [x] **M02.3 — Lower aggregate and pattern operations.** Cover records,
     variants, collections, field/index operations, and match dispatch without
     source AST nodes in MIR.
@@ -933,7 +935,8 @@ mechanical acceptance condition holds.
       CFG, direct-call, `read`, `mut`, and `take` fixtures now compile MIR
       directly to a bytecode artifact, pass the ordinary bytecode verifier, and
       execute in the existing VM before their values are compared with both
-      older paths. Error, usage, cleanup, and async/provider report parity
+      older paths. The corpus also compares CFG-lowered boolean short-circuit
+      behavior. Error, usage, cleanup, and async/provider report parity
       remain follow-up work.
   - [ ] **M05.2 — Add ownership/resource differential fixtures.** Compare move
     failures, retain behavior, cleanup counts, and resource limits.
