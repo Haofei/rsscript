@@ -20,6 +20,11 @@ queries. Both workspace and per-document diagnostics consume the same
 session-owned workspace diagnostic result; document queries only filter by
 source span and add their local lint diagnostics.
 
+The service deliberately has no per-document semantic diagnostic cache.
+Interface changes invalidate the session-owned workspace diagnostic query;
+precise dependency invalidation belongs in `CompilationSession`, not in an
+editor-side approximation.
+
 The LSP application is the composition root for the temporary compiler-backed
 adapter. The production language-service dependency closure contains only
 syntax, semantics, diagnostics, and operation contracts. Test-only code may

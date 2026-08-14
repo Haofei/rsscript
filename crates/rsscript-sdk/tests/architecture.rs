@@ -1078,7 +1078,6 @@ fn language_engine_does_not_read_the_operating_system() {
         "lint_cache",
         "format_cache",
         "symbol_cache",
-        "invalidate_interface_dependents",
         "workspace_module_graph",
     ] {
         assert!(
@@ -1086,6 +1085,10 @@ fn language_engine_does_not_read_the_operating_system() {
             "language service must retain query boundary `{boundary}`"
         );
     }
+    assert!(
+        !language_service.contains("diagnostic_cache:"),
+        "language-service semantic diagnostics must use only the shared CompilationSession cache"
+    );
     assert!(
         language_service.contains("CompilationSession"),
         "language-service dependency queries must consume the shared frontend session"

@@ -556,8 +556,11 @@ mechanical acceptance condition holds.
     concrete Providers.
   - [x] **S04.2 — Add document revision and invalidation tests.** The language
     service suite verifies revision replacement and deletion, direct and
-    transitive interface invalidation, unrelated-interface cache retention,
-    cancellation, deadlines, and response-budget cache semantics.
+    transitive interface invalidation, session-owned semantic-cache
+    recomputation after interface edits, cancellation, deadlines, and
+    response-budget cache semantics. Document diagnostics no longer retain a
+    competing per-document semantic cache; precise dependency invalidation is
+    an open `CompilationSession` query-engine responsibility.
 - [ ] **S05 — Finish compiler purity.** Compiler input is an explicit immutable
   `SourceSet`/`WorkspaceSnapshot`; package traversal, filesystem locking,
   temporary files, compression, Artifact persistence, review/risk, and Rust AOT

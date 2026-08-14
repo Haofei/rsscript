@@ -2,13 +2,12 @@
 
 //! Revisioned, cached editor-facing RSScript language service.
 //!
-//! This crate is the only compiler-facing dependency of the LSP. Its API is
-//! deliberately document-oriented so editor clients do not couple themselves to
-//! analyzer databases, runtime values, VM registers, or optional backends.
-//! Parsing-adjacent queries are cached independently, while semantic diagnostics
-//! retain an explicit dependency edge to imported interface modules. Editing an
-//! unrelated interface therefore does not invalidate formatting, symbols, lint,
-//! or diagnostics for unaffected documents.
+//! Its API is deliberately document-oriented so editor clients do not couple
+//! themselves to analyzer databases, runtime values, VM registers, or optional
+//! backends.
+//! Parsing-adjacent queries are cached independently. Semantic diagnostics are
+//! cached only by the shared [`CompilationSession`], so editor clients never
+//! maintain a competing interface-dependency cache.
 
 use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationContext};
 use std::collections::{BTreeMap, BTreeSet};
@@ -49,7 +48,6 @@ pub struct LanguageService {
     documents: BTreeMap<String, Document>,
     frontend: CompilationSession,
     analyzer: Arc<dyn WorkspaceDiagnosticAnalyzer>,
-    diagnostic_cache: BTreeMap<(String, u64), Arc<[Diagnostic]>>,
     lint_cache: BTreeMap<(String, u64), Arc<[Diagnostic]>>,
     format_cache: BTreeMap<(String, u64), Arc<str>>,
     symbol_cache: BTreeMap<(String, u64), Arc<SymbolIndex>>,
@@ -165,7 +163,6 @@ impl LanguageService {
             documents: BTreeMap::new(),
             frontend: CompilationSession::default(),
             analyzer: Arc::new(analyzer),
-            diagnostic_cache: BTreeMap::new(),
             lint_cache: BTreeMap::new(),
             format_cache: BTreeMap::new(),
             symbol_cache: BTreeMap::new(),
@@ -194,12 +191,6 @@ impl LanguageService {
         }
         let previous = self.documents.get(&path).cloned();
         let text = text.into();
-        let mut changed_modules = BTreeSet::new();
-        if let Some(document) = &previous
-            && document.kind == DocumentKind::Interface
-        {
-            changed_modules.extend(self.declared_modules(path.as_str(), DocumentKind::Interface));
-        }
         self.documents.insert(
             path.clone(),
             Document {
@@ -226,26 +217,10 @@ impl LanguageService {
                 DocumentKind::Interface => self.frontend.set_interface(path.clone(), text.as_ref()),
             };
         }
-        if kind == DocumentKind::Interface {
-            changed_modules.extend(self.declared_modules(path.as_str(), DocumentKind::Interface));
-        }
         self.invalidate_document_queries(&path);
-        if previous
-            .as_ref()
-            .is_some_and(|document| document.kind == DocumentKind::Interface)
-            || kind == DocumentKind::Interface
-        {
-            self.invalidate_interface_dependents(&changed_modules, &path);
-        }
     }
 
     pub fn remove_file(&mut self, path: &str) -> bool {
-        let removed_interface = self
-            .documents
-            .get(path)
-            .is_some_and(|document| document.kind == DocumentKind::Interface);
-        let removed_modules =
-            removed_interface.then(|| self.declared_modules(path, DocumentKind::Interface));
         let removed = self.documents.remove(path);
         if let Some(document) = &removed {
             match document.kind {
@@ -258,31 +233,16 @@ impl LanguageService {
             }
         }
         self.invalidate_document_queries(path);
-        if let Some(modules) = removed_modules {
-            self.invalidate_interface_dependents(&modules, path);
-        }
         removed.is_some()
     }
 
     fn invalidate_document_queries(&mut self, path: &str) {
         let mut removed = 0u64;
-        removed += retain_other_paths(&mut self.diagnostic_cache, path);
         removed += retain_other_paths(&mut self.lint_cache, path);
         removed += retain_other_paths(&mut self.format_cache, path);
         removed += retain_other_paths(&mut self.symbol_cache, path);
         removed += retain_other_paths(&mut self.document_symbol_cache, path);
         self.invalidations = self.invalidations.saturating_add(removed);
-    }
-
-    fn invalidate_interface_dependents(&mut self, modules: &BTreeSet<String>, changed_path: &str) {
-        let dependents = self
-            .frontend
-            .workspace_module_graph()
-            .interface_dependent_paths(modules, changed_path);
-        for dependent in dependents {
-            let removed = retain_other_paths(&mut self.diagnostic_cache, &dependent);
-            self.invalidations = self.invalidations.saturating_add(removed);
-        }
     }
 
     pub fn snapshot(&self, path: &str) -> Option<DocumentSnapshot> {
@@ -339,29 +299,16 @@ impl LanguageService {
         request: LanguageRequest<'_>,
     ) -> Result<Vec<Diagnostic>, LanguageServiceError> {
         check_request(request)?;
-        let Some(document) = self.documents.get(path).cloned() else {
+        if !self.documents.contains_key(path) {
             return Ok(Vec::new());
-        };
+        }
         let operation = OperationContext {
             cancellation: request.cancellation.cloned(),
             deadline: request.deadline,
             ..OperationContext::default()
         };
-        let cache_key = (path.to_string(), document.revision);
-        if let Some(cached) = self.diagnostic_cache.get(&cache_key).cloned() {
-            operation.check().map_err(LanguageServiceError::from)?;
-            self.cache_hits += 1;
-            self.record_hit(QueryKind::Diagnostics);
-            return Ok(cached
-                .iter()
-                .take(request.max_diagnostics)
-                .cloned()
-                .collect());
-        }
-        self.cache_misses += 1;
-        self.record_miss(QueryKind::Diagnostics);
         let mut diagnostics = self
-            .semantic_workspace_diagnostics(&operation, false)?
+            .semantic_workspace_diagnostics(&operation, true)?
             .iter()
             .filter(|diagnostic| diagnostic.span.file == path)
             .cloned()
@@ -371,8 +318,6 @@ impl LanguageService {
                 .map_err(LanguageServiceError::from)?,
         );
         operation.check().map_err(LanguageServiceError::from)?;
-        self.diagnostic_cache
-            .insert(cache_key, Arc::from(diagnostics.clone()));
         diagnostics.truncate(request.max_diagnostics);
         Ok(diagnostics)
     }
@@ -511,19 +456,6 @@ impl LanguageService {
         }
         operation.check()?;
         Ok(imports)
-    }
-
-    /// Return declared modules from the shared workspace graph. Interface-file
-    /// fallback is owned by the session, so editor clients cannot drift from
-    /// other frontend users.
-    fn declared_modules(&mut self, path: &str, kind: DocumentKind) -> BTreeSet<String> {
-        let graph = self.frontend.workspace_module_graph();
-        match kind {
-            DocumentKind::Source => graph.source(path),
-            DocumentKind::Interface => graph.interface(path),
-        }
-        .map(|node| node.modules().iter().cloned().collect::<BTreeSet<_>>())
-        .unwrap_or_default()
     }
 
     fn record_hit(&mut self, query: QueryKind) {
@@ -757,7 +689,7 @@ mod tests {
     }
 
     #[test]
-    fn unrelated_interface_edit_preserves_semantic_query_cache() {
+    fn unrelated_interface_edit_recomputes_session_semantic_diagnostics() {
         let mut service = service();
         service.set_file(
             "host.rssi",
@@ -785,8 +717,8 @@ mod tests {
             "module other\npub fn ignored() -> String\n",
         );
         service.diagnostics("main.rss");
-        assert_eq!(service.query_stats(QueryKind::Diagnostics).misses, 1);
-        assert_eq!(service.query_stats(QueryKind::Diagnostics).hits, 1);
+        assert_eq!(service.query_stats(QueryKind::Diagnostics).misses, 2);
+        assert_eq!(service.query_stats(QueryKind::Diagnostics).hits, 0);
     }
 
     #[test]
@@ -833,7 +765,10 @@ mod tests {
                 QueryStats { hits: 1, misses: 1 }
             );
         }
-        assert!(service.stats().invalidations >= 1);
+        // Semantic diagnostics are owned by the shared session cache. The
+        // service keeps its document-local formatting, symbol, and lint
+        // caches because an interface edit cannot change their local facts.
+        assert_eq!(service.stats().invalidations, 0);
     }
 
     #[test]
@@ -888,21 +823,6 @@ mod tests {
                 .unwrap()
                 .as_ref(),
             ["host.api"]
-        );
-
-        service.set_file(
-            "host.rssi",
-            1,
-            DocumentKind::Interface,
-            r#"
-            // module ignored
-            module host.api
-            pub fn value() -> Unit
-        "#,
-        );
-        assert_eq!(
-            service.declared_modules("host.rssi", DocumentKind::Interface),
-            BTreeSet::from(["host.api".to_string()])
         );
     }
 
