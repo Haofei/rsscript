@@ -92,7 +92,16 @@ pub struct WireCallTypeTable {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WireRecordLayout {
     pub ty: WireType,
-    pub fields: Vec<WireType>,
+    pub fields: Vec<WireRecordFieldLayout>,
+}
+
+/// One canonical record field. Field names live in the linked descriptor,
+/// never in a [`WireValue::Record`]; the positional value payload is decoded
+/// against this layout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WireRecordFieldLayout {
+    pub name: String,
+    pub ty: WireType,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,7 +142,7 @@ impl WireCallTypeTable {
         for record in &records {
             self.insert(&record.ty)?;
             for field in &record.fields {
-                self.insert(field)?;
+                self.insert(&field.ty)?;
             }
         }
         self.records = records;
@@ -743,13 +752,19 @@ mod tests {
             .with_record_layouts(vec![
                 WireRecordLayout {
                     ty: WireType::from("host.Z"),
-                    fields: vec![WireType::String],
+                    fields: vec![WireRecordFieldLayout {
+                        name: "value".into(),
+                        ty: WireType::String,
+                    }],
                 },
                 WireRecordLayout {
                     ty: WireType::from("host.A"),
-                    fields: vec![WireType::Int {
-                        bits: 64,
-                        signed: true,
+                    fields: vec![WireRecordFieldLayout {
+                        name: "value".into(),
+                        ty: WireType::Int {
+                            bits: 64,
+                            signed: true,
+                        },
                     }],
                 },
             ])

@@ -1,4 +1,4 @@
-use rsscript_abi_model::{WireRecordLayout, WireType};
+use rsscript_abi_model::{WireRecordFieldLayout, WireRecordLayout, WireType};
 use rsscript_syntax::ast::{DataEffect as SyntaxEffect, Item, Program, TypeKind, TypeRef};
 use rsscript_syntax::parse_source;
 use serde::Serialize;
@@ -61,7 +61,14 @@ impl InterfaceDescriptorV1 {
             .iter()
             .map(|record| WireRecordLayout {
                 ty: WireType::from(record.name.clone()),
-                fields: record.fields.iter().map(|field| field.ty.clone()).collect(),
+                fields: record
+                    .fields
+                    .iter()
+                    .map(|field| WireRecordFieldLayout {
+                        name: field.name.clone(),
+                        ty: field.ty.clone(),
+                    })
+                    .collect(),
             })
             .collect()
     }
@@ -340,11 +347,17 @@ pub fn get(url: read String) -> HttpResponse
             WireRecordLayout {
                 ty: WireType::from("host.http.HttpResponse"),
                 fields: vec![
-                    WireType::Int {
-                        bits: 64,
-                        signed: true,
+                    WireRecordFieldLayout {
+                        name: "status".into(),
+                        ty: WireType::Int {
+                            bits: 64,
+                            signed: true,
+                        },
                     },
-                    WireType::String,
+                    WireRecordFieldLayout {
+                        name: "body".into(),
+                        ty: WireType::String,
+                    },
                 ],
             }
         );
