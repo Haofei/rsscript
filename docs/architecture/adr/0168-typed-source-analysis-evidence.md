@@ -29,6 +29,10 @@ Package analysis remains a JSON-shaped migration adapter behind the known
 does not change the Bundle v1 container, and does not add policy or authority
 semantics to analysis evidence.
 
+Artifact and SDK readers expose `source_analysis()` only when the envelope is
+the source schema. This gives consumers typed access without conflating it with
+the distinct package-analysis compatibility schema.
+
 ## Compatibility and migration
 
 Bundle v1 bytes remain compatible. Existing source-analysis readers continue

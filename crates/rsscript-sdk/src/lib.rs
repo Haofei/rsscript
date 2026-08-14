@@ -664,6 +664,13 @@ impl BuiltArtifact {
         self.bundle.analysis()
     }
 
+    /// Typed source evidence for direct source/interface builds. Package
+    /// compatibility builds may instead carry their distinct package-analysis
+    /// schema and return `None` here.
+    pub fn source_analysis(&self) -> Option<&SourceAnalysisV1> {
+        self.bundle.source_analysis()
+    }
+
     pub fn snapshot_digest(&self) -> &str {
         &self.bundle.provenance().snapshot_digest
     }

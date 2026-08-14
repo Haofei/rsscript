@@ -68,6 +68,7 @@ impl AnalysisSchemaV1 {
 pub struct AnalysisEnvelopeV1 {
     schema: AnalysisSchemaV1,
     payload: Value,
+    source: Option<SourceAnalysisV1>,
 }
 
 impl AnalysisEnvelopeV1 {
@@ -80,13 +81,14 @@ impl AnalysisEnvelopeV1 {
     pub fn source(source: SourceAnalysisV1) -> Self {
         let payload = serde_json::json!({
             "$schema": SOURCE_ANALYSIS_SCHEMA,
-            "language_version": source.language_version,
-            "snapshot_digest": source.snapshot_digest,
-            "sources": source.sources,
+            "language_version": source.language_version.clone(),
+            "snapshot_digest": source.snapshot_digest.clone(),
+            "sources": source.sources.clone(),
         });
         Self {
             schema: AnalysisSchemaV1::Source,
             payload,
+            source: Some(source),
         }
     }
 
@@ -107,7 +109,11 @@ impl AnalysisEnvelopeV1 {
             let source = SourceAnalysisV1::from_json(payload)?;
             return Ok(Self::source(source));
         }
-        Ok(Self { schema, payload })
+        Ok(Self {
+            schema,
+            payload,
+            source: None,
+        })
     }
 
     pub const fn schema(&self) -> AnalysisSchemaV1 {
@@ -120,6 +126,13 @@ impl AnalysisEnvelopeV1 {
 
     pub fn into_payload(self) -> Value {
         self.payload
+    }
+
+    /// Return typed direct-source evidence when this envelope carries the
+    /// `source_analysis.v1` schema. Package evidence remains a separate
+    /// migration schema and intentionally does not pretend to be this type.
+    pub fn source_analysis(&self) -> Option<&SourceAnalysisV1> {
+        self.source.as_ref()
     }
 }
 
@@ -361,6 +374,11 @@ impl ArtifactBundle {
     }
     pub fn analysis_envelope(&self) -> &AnalysisEnvelopeV1 {
         &self.analysis
+    }
+    /// Typed direct-source evidence, if this Bundle was built from an
+    /// in-memory source/interface snapshot.
+    pub fn source_analysis(&self) -> Option<&SourceAnalysisV1> {
+        self.analysis.source_analysis()
     }
     pub fn provenance(&self) -> &BuildProvenanceV1 {
         &self.manifest.provenance
@@ -622,6 +640,13 @@ mod tests {
         assert_eq!(
             decoded.analysis_envelope().schema(),
             AnalysisSchemaV1::Source
+        );
+        assert_eq!(
+            decoded
+                .source_analysis()
+                .expect("source Bundle exposes typed evidence")
+                .sources,
+            ["src/main.rss"]
         );
         assert_eq!(
             decoded.provenance().snapshot_digest,
