@@ -1047,7 +1047,8 @@ mechanical acceptance condition holds.
     - [x] **M05.3h — Compare first-ready external Provider select.** Two
       resolved async Provider arms now execute through both paths; direct MIR
       emits typed external-call task wrappers before `SelectWait`, and the
-      fixture compares selected value, usage, and provider call traces.
+      fixture compares selected value, usage, provider call traces, and the
+      required cancellation/reaping of exactly one losing task.
   - [ ] **M05.4 — Gate replacement on corpus parity.** New lowering cannot become
     default until all supported Core fixtures agree.
 - [ ] **M06 — Delete the source-shaped executable IR.** Remove nested

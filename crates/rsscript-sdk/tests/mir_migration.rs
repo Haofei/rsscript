@@ -1595,6 +1595,10 @@ async fn main() -> Int {
     assert_eq!(legacy.value, direct.value);
     assert_eq!(legacy.usage, direct.usage);
     assert_matching_provider_trace(&legacy.provider_call_traces, &direct.provider_call_traces);
+    assert_eq!(
+        direct.usage.tasks_cancelled, 1,
+        "first-ready select must cancel and reap its losing Provider task"
+    );
 }
 
 #[test]
