@@ -720,11 +720,72 @@ fn source_set_analysis(
     sources: &[(&str, &str)],
     snapshot_digest: &str,
 ) -> AnalysisEnvelopeV1 {
-    use rsscript_semantics::hir::CallResolution;
+    use rsscript_semantics::hir::{CallResolution, ParamEffect};
+
+    let hir = validated.database().hir();
+    let mut exports = Vec::new();
+    for (name, _) in hir.function_bodies() {
+        let Some(signature) = hir.resolve_function(None, name) else {
+            continue;
+        };
+        if signature.is_builtin || signature.is_external {
+            continue;
+        }
+
+        let mut retained_params = signature
+            .retained_params
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        retained_params.sort();
+        let mut semantic_facts = Vec::new();
+        if signature.is_async {
+            semantic_facts.push("async boundary".to_string());
+        }
+        if signature.returns_fresh {
+            semantic_facts.push("returns fresh value".to_string());
+        }
+        for parameter in &signature.params {
+            let effect = parameter.effect.unwrap_or(ParamEffect::Read).as_str();
+            if effect != "read" {
+                semantic_facts.push(format!("{effect} parameter `{}`", parameter.name));
+            }
+        }
+        semantic_facts.extend(
+            retained_params
+                .iter()
+                .map(|parameter| format!("retains({parameter})")),
+        );
+        semantic_facts.sort();
+        semantic_facts.dedup();
+
+        exports.push(ExportFactV1 {
+            name: name.to_string(),
+            kind: "function".to_string(),
+            function_kind: Some(if signature.is_async { "async" } else { "sync" }.to_string()),
+            parameters: signature
+                .params
+                .iter()
+                .map(|parameter| FunctionParameterFactV1 {
+                    name: parameter.name.clone(),
+                    effect: parameter
+                        .effect
+                        .unwrap_or(ParamEffect::Read)
+                        .as_str()
+                        .to_string(),
+                    ty: parameter.ty.to_string(),
+                    retained: signature.retained_params.contains(&parameter.name),
+                })
+                .collect(),
+            return_type: signature.return_ty.as_ref().map(ToString::to_string),
+            retained_params,
+            semantic_facts,
+        });
+    }
 
     let mut call_edges = Vec::new();
     let mut external_calls = Vec::new();
-    for call in validated.database().hir().call_sites() {
+    for call in hir.call_sites() {
         let CallResolution::Resolved { signature, .. } = &call.resolution else {
             continue;
         };
@@ -751,6 +812,7 @@ fn source_set_analysis(
             snapshot_digest,
             sources.iter().map(|(path, _)| *path),
         )
+        .with_function_contracts(exports)
         .with_call_facts(call_edges, external_calls),
     )
 }
@@ -2238,6 +2300,60 @@ mod tests {
                 .iter()
                 .any(|call| call.function == "helper" && call.symbol == "Host.value")
         );
+    }
+
+    #[test]
+    fn source_artifacts_carry_ownership_and_retention_contracts_for_semantic_diff() {
+        let compiler = Compiler;
+        let old = compiler
+            .compile(
+                "contracts.rss",
+                r#"
+struct Payload { value: Int }
+fn process(value: mut Payload) -> Unit { return Unit }
+fn main() -> Unit { return Unit }
+"#,
+            )
+            .expect("baseline ownership contract compiles");
+        let new = compiler
+            .compile(
+                "contracts.rss",
+                r#"
+struct Payload { value: Int }
+fn process(value: read Payload) -> Unit retains(value) { return Unit }
+fn main() -> Unit { return Unit }
+"#,
+            )
+            .expect("retention contract compiles");
+
+        let analysis = new
+            .source_analysis()
+            .expect("source build carries typed source analysis");
+        let process = analysis
+            .exports
+            .iter()
+            .find(|export| export.name == "process")
+            .expect("function contract is recorded");
+        assert_eq!(process.parameters[0].effect, "read");
+        assert!(process.parameters[0].retained);
+        assert_eq!(process.retained_params, ["value"]);
+        assert!(
+            process
+                .semantic_facts
+                .iter()
+                .any(|fact| fact == "retains(value)")
+        );
+
+        let diff = SemanticDiffV1::between(old.bundle(), new.bundle());
+        let changed = diff
+            .exports
+            .changed
+            .iter()
+            .find(|change| change.old.name == "process")
+            .expect("ownership contract change is diffed");
+        assert_eq!(changed.old.parameters[0].effect, "mut");
+        assert_eq!(changed.new.parameters[0].effect, "read");
+        assert_eq!(changed.new.retained_params, ["value"]);
     }
 
     #[test]

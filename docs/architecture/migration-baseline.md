@@ -1450,10 +1450,10 @@ mechanical acceptance condition holds.
   `rsscript-artifact`; SDK only composes it into phase APIs. Direct
   `source_analysis.v1` evidence is constructed and decoded through the
   Artifact-owned `SourceAnalysisV1` model. Direct source builds now bind
-  resolved checked-HIR call edges and direct external-call facts to the same
-  immutable snapshot as bytecode, so the ordinary `rss build`/`rss diff` path
-  carries neutral call evidence without invoking package review. Package
-  analysis remains an
+  checked function ownership/retention contracts, resolved HIR call edges, and
+  direct external-call facts to the same immutable snapshot as bytecode, so the
+  ordinary `rss build`/`rss diff` path carries neutral semantic evidence without
+  invoking package review. Package analysis remains an
   explicitly bounded compatibility adapter pending its own typed schema.
 - [x] **A07 — Complete semantic diff evidence.** Add read/mut/take, retention and
   escape, resource acquire/transfer/cleanup, structured-task fan-out and
@@ -1464,7 +1464,9 @@ mechanical acceptance condition holds.
     canonical Artifact import contracts (parameter names/effects/retention and
     structured types, result, async shape, ABI and signature hash), so a changed
     `read`/`mut`/`take` or retention contract is evidence rather than an opaque
-    hash transition. Neutral package analysis likewise emits explicit local
+    hash transition. Direct source analysis records the same checked function
+    contract facts, so ordinary source Artifact diffs do not need the legacy
+    package path. Neutral package analysis likewise emits explicit local
     parameter effects/types/retention plus return contracts, including source
     escape qualifiers, for every public function.
   - [x] **A07.2 — Diff resources and concurrency.** Report acquire/transfer/close,

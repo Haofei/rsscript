@@ -35,8 +35,9 @@ snapshot path during migration.
   `PackageAnalysisV1`, `AnalysisEnvelopeV1`/`AnalysisSchemaV1`, provenance,
   interface requirements, the versioned source and package analysis schema
   identifiers, and neutral semantic diff data,
-  `SourceAnalysisV1` includes the checked direct call graph and external-call
-  facts bound to ordinary source builds. `BuiltArtifact::analysis_envelope` is the schema-discriminated access point;
+  `SourceAnalysisV1` includes checked function ownership/retention contracts,
+  the direct call graph, and external-call facts bound to ordinary source
+  builds. `BuiltArtifact::analysis_envelope` is the schema-discriminated access point;
   `source_analysis` and `package_analysis` expose the corresponding typed
   payload only when its schema matches. This keeps raw JSON outside the
   reviewed embedding contract. The analysis facts include structural external-call, public function ownership, call-graph,

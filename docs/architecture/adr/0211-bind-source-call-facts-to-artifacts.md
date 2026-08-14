@@ -13,4 +13,5 @@ direct external-call facts from the exact checked HIR used to emit bytecode.
 The facts remain provider-neutral and make no risk, authority, or deployment
 decision. Package analysis may still add richer transitive chains and package
 metadata, but normal `rss build` and `rss diff` no longer need that compatibility
-path to report direct call behavior.
+path to report direct call behavior. Function ownership and retention contracts
+are recorded by ADR 0212.

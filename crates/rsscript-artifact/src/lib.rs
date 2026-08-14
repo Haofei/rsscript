@@ -285,6 +285,7 @@ impl AnalysisEnvelopeV1 {
             "language_version": source.language_version.clone(),
             "snapshot_digest": source.snapshot_digest.clone(),
             "sources": source.sources.clone(),
+            "exports": source.exports.clone(),
             "call_edges": source.call_edges.clone(),
             "external_calls": source.external_calls.clone(),
         });
@@ -373,6 +374,12 @@ pub struct SourceAnalysisV1 {
     pub language_version: String,
     pub snapshot_digest: String,
     pub sources: Vec<String>,
+    /// Checked source function contracts. These use the same neutral fact
+    /// model as package analysis, so semantic diffs can compare ownership and
+    /// retention changes without reparsing source text or consulting review
+    /// policy.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exports: Vec<ExportFactV1>,
     /// Resolved direct calls from checked semantic input. These are neutral
     /// program facts, not host authorization or review policy.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -396,9 +403,19 @@ impl SourceAnalysisV1 {
             language_version: language_version.into(),
             snapshot_digest: snapshot_digest.into(),
             sources,
+            exports: Vec::new(),
             call_edges: Vec::new(),
             external_calls: Vec::new(),
         }
+    }
+
+    /// Attach canonically ordered checked function contracts derived from the
+    /// same validated input that produced this Artifact.
+    pub fn with_function_contracts(mut self, mut exports: Vec<ExportFactV1>) -> Self {
+        exports.sort();
+        exports.dedup();
+        self.exports = exports;
+        self
     }
 
     /// Attach canonically ordered semantic call facts derived from the same
