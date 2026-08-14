@@ -23,7 +23,8 @@ pub use rsscript_diagnostics::{
 };
 pub use rsscript_semantics::{
     CompilationSession, Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo,
-    SymbolKind, SymbolLookup, document_symbols, symbol_index,
+    SymbolKind, SymbolLookup, document_symbols, document_symbols_from_program, symbol_index,
+    symbol_index_from_program,
 };
 use rsscript_syntax::{ast::Item, parse_source};
 pub use rsscript_syntax::{format_source, lint_source};
@@ -354,7 +355,11 @@ impl LanguageService {
             self.record_hit(QueryKind::Symbols);
             return Some(value);
         }
-        let value = Arc::new(symbol_index(path, &document.text));
+        let program = match document.kind {
+            DocumentKind::Source => self.frontend.parse_file(path),
+            DocumentKind::Interface => self.frontend.parse_interface(path),
+        }?;
+        let value = Arc::new(symbol_index_from_program(&document.text, &program));
         self.symbol_cache.insert(key, Arc::clone(&value));
         self.record_miss(QueryKind::Symbols);
         Some(value.as_ref().clone())
@@ -370,7 +375,13 @@ impl LanguageService {
             self.record_hit(QueryKind::DocumentSymbols);
             return value;
         }
-        let value: Arc<[RssDocumentSymbol]> = document_symbols(path, &document.text).into();
+        let program = match document.kind {
+            DocumentKind::Source => self.frontend.parse_file(path),
+            DocumentKind::Interface => self.frontend.parse_interface(path),
+        };
+        let value: Arc<[RssDocumentSymbol]> = program
+            .map(|program| document_symbols_from_program(&program).into())
+            .unwrap_or_else(|| Arc::from([]));
         self.document_symbol_cache.insert(key, Arc::clone(&value));
         self.record_miss(QueryKind::DocumentSymbols);
         value.to_vec()
@@ -774,6 +785,23 @@ mod tests {
         let stats = service.frontend.stats();
         assert_eq!(stats.module_header_cache_misses, 1);
         assert_eq!(stats.module_header_cache_hits, 1);
+    }
+
+    #[test]
+    fn editor_symbols_reuse_the_session_parse_cache() {
+        let mut service = LanguageService::default();
+        service.set_file(
+            "main.rss",
+            1,
+            DocumentKind::Source,
+            "fn main() -> Unit { return Unit }\n",
+        );
+
+        assert!(service.symbols("main.rss").is_some());
+        assert_eq!(service.document_symbols("main.rss").len(), 1);
+        let stats = service.frontend.stats();
+        assert_eq!(stats.parse_cache_misses, 1);
+        assert_eq!(stats.parse_cache_hits, 1);
     }
 
     #[test]

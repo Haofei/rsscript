@@ -86,13 +86,21 @@ pub struct SymbolIndex {
 /// Parse `source` and build its [`SymbolIndex`].
 pub fn symbol_index(file: &str, source: &str) -> SymbolIndex {
     let program = parse_source_raw(file, source);
+    symbol_index_from_program(source, &program)
+}
+
+/// Build a file-local symbol index from an already parsed document.
+///
+/// Incremental callers should use this entrypoint to share their parse cache
+/// with editor navigation instead of reparsing source text.
+pub fn symbol_index_from_program(source: &str, program: &Program) -> SymbolIndex {
     let mut builder = Builder {
         source,
         definitions: Vec::new(),
         references: Vec::new(),
         scopes: vec![HashMap::new()],
     };
-    builder.visit_program(&program);
+    builder.visit_program(program);
     SymbolIndex {
         definitions: builder.definitions,
         references: builder.references,
@@ -102,6 +110,11 @@ pub fn symbol_index(file: &str, source: &str) -> SymbolIndex {
 /// Parse `source` and return a top-level document outline.
 pub fn document_symbols(file: &str, source: &str) -> Vec<RssDocumentSymbol> {
     let program = parse_source_raw(file, source);
+    document_symbols_from_program(&program)
+}
+
+/// Return a top-level document outline from an already parsed document.
+pub fn document_symbols_from_program(program: &Program) -> Vec<RssDocumentSymbol> {
     program
         .items
         .iter()

@@ -265,7 +265,7 @@ pub use source_rules::{
 };
 pub use symbols::{
     Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
-    document_symbols, symbol_index,
+    document_symbols, document_symbols_from_program, symbol_index, symbol_index_from_program,
 };
 pub use take_handle_fields::take_handle_fields;
 pub use task_groups::task_group_async_let_diagnostics;
