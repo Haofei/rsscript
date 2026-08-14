@@ -33,7 +33,11 @@ execution = [
 # Filesystem/package capture is a CLI and project-loader convenience boundary,
 # not part of the reviewed in-memory Compiler API. Hosts that want this helper
 # opt in explicitly; ordinary `execution` accepts only immutable snapshots.
-project = ["execution", "rsscript_compiler/package"]
+project = [
+    "execution",
+    "rsscript_compiler/package",
+    "dep:rsscript-workspace-loader",
+]
 aot-rust = ["execution", "rsscript_compiler/aot-rust"]
 # Transitional source-shaped executable IR remains available only to the
 # migration corpus and legacy API surface. Reviewed execution consumes MIR
@@ -54,6 +58,7 @@ rsscript-lowering = { path = "../rsscript-lowering", optional = true }
 rsscript-mir = { path = "../rsscript-mir", optional = true }
 rsscript-provider-api = { path = "../rsscript-provider-api", optional = true }
 rsscript-vm = { path = "../rsscript-vm", optional = true, default-features = false }
+rsscript-workspace-loader = { path = "../rsscript-workspace-loader", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

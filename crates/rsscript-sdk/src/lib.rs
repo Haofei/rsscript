@@ -176,8 +176,40 @@ pub mod compile {
 #[cfg(feature = "project")]
 pub mod project {
     use super::*;
+    use rsscript_workspace_loader::{
+        WorkspaceFileKind, WorkspaceLoader, WorkspaceSnapshot as CapturedWorkspaceSnapshot,
+    };
 
     pub use rsscript_compiler::WorkspaceSnapshot;
+
+    /// Immutable frontend input captured by the OS-facing workspace loader.
+    ///
+    /// This is deliberately distinct from the legacy compiler
+    /// [`WorkspaceSnapshot`], which still carries package-review and native
+    /// authorization compatibility state. New embedders can pass
+    /// [`Self::frontend`] directly to the pure in-memory [`Compiler`] API.
+    #[derive(Debug, Clone)]
+    pub struct CapturedProjectSnapshot {
+        workspace: CapturedWorkspaceSnapshot,
+        frontend: FrontendInputSnapshot,
+    }
+
+    impl CapturedProjectSnapshot {
+        pub fn frontend(&self) -> &FrontendInputSnapshot {
+            &self.frontend
+        }
+
+        /// Stable source/interface identity from the loader. It excludes
+        /// physical host paths and therefore remains comparable across
+        /// equivalent captures on different machines.
+        pub fn content_digest(&self) -> &str {
+            self.workspace.content_digest()
+        }
+
+        pub fn files(&self) -> &[rsscript_workspace_loader::WorkspaceSourceFile] {
+            self.workspace.files()
+        }
+    }
 
     #[derive(Default)]
     pub struct ProjectCompiler;
@@ -185,6 +217,45 @@ pub mod project {
     impl ProjectCompiler {
         pub fn new() -> Self {
             Self
+        }
+
+        /// Capture a project through the explicit-base workspace loader and
+        /// convert its executable source/interface files into the compiler's
+        /// immutable frontend boundary. Test files remain available in the
+        /// captured workspace but are intentionally excluded from a normal
+        /// build input.
+        ///
+        /// This method never reads the process current directory. It is the
+        /// preferred project entry point for hosts that do not need legacy
+        /// package review or native-authorization compatibility APIs.
+        pub fn capture_frontend_from(
+            &self,
+            base: &Path,
+            package_dir: &Path,
+        ) -> Result<CapturedProjectSnapshot, CompileError> {
+            let workspace = WorkspaceLoader::default()
+                .snapshot_from(base, package_dir)
+                .map_err(|error| CompileError::Package {
+                    code: CompileErrorCode::PackageSnapshot,
+                    message: error.to_string(),
+                })?;
+            let sources = workspace
+                .files()
+                .iter()
+                .filter(|file| file.kind == WorkspaceFileKind::Source)
+                .map(|file| (file.logical_path.as_str(), file.contents.as_str()))
+                .collect::<Vec<_>>();
+            let interfaces = workspace
+                .files()
+                .iter()
+                .filter(|file| file.kind == WorkspaceFileKind::Interface)
+                .map(|file| (file.logical_path.as_str(), file.contents.as_str()))
+                .collect::<Vec<_>>();
+            let frontend = FrontendInputSnapshot::from_sources(sources, interfaces);
+            Ok(CapturedProjectSnapshot {
+                workspace,
+                frontend,
+            })
         }
 
         /// Capture all package and dependency inputs exactly once.
@@ -1483,6 +1554,62 @@ mod tests {
             .expect("link captured source")
             .execute(ExecutionRequest::default());
         assert_eq!(output.value, "1");
+    }
+
+    #[cfg(feature = "project")]
+    #[test]
+    fn project_loader_capture_feeds_the_pure_frontend_compiler_boundary() {
+        let directory = tempfile::tempdir().expect("workspace");
+        std::fs::create_dir(directory.path().join("src")).expect("source directory");
+        std::fs::create_dir(directory.path().join("interfaces")).expect("interface directory");
+        std::fs::write(
+            directory.path().join("rsspkg.toml"),
+            "[package]\nname = \"captured-project\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[sources]\npaths = [\"src\"]\n",
+        )
+        .expect("manifest");
+        std::fs::write(
+            directory.path().join("src/main.rss"),
+            "fn main() -> Int { return 42 }\n",
+        )
+        .expect("source");
+        std::fs::write(
+            directory.path().join("interfaces/host.rssi"),
+            "module host\npub fn version() -> Int\n",
+        )
+        .expect("interface");
+
+        let project = project::ProjectCompiler::new();
+        let captured = project
+            .capture_frontend_from(directory.path(), std::path::Path::new("."))
+            .expect("explicit-base loader capture");
+        assert!(captured.content_digest().starts_with("sha256:"));
+        assert!(
+            captured
+                .files()
+                .iter()
+                .all(|file| !file.logical_path.starts_with('/')),
+            "compiler-facing snapshot identity must not contain host-absolute paths"
+        );
+        assert!(
+            captured
+                .frontend()
+                .sources()
+                .files()
+                .iter()
+                .any(|file| file.path() == "root/src/main.rss")
+        );
+        assert!(
+            captured
+                .frontend()
+                .interfaces()
+                .files()
+                .iter()
+                .any(|file| file.path() == "root/interfaces/host.rssi")
+        );
+        let built = Compiler
+            .compile_snapshot(captured.frontend())
+            .expect("pure compiler accepts the loader-captured input");
+        assert!(!built.artifact_bytes().is_empty());
     }
 
     #[test]

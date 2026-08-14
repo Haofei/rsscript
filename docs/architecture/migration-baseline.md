@@ -578,8 +578,11 @@ mechanical acceptance condition holds.
     compatibility capture APIs have been removed and the LSP captures from its
     explicit package root; captured files now separate physical paths from
     stable root/dependency-qualified logical paths so snapshot identity cannot
-    collide across same-named dependency files. Compiler package callers remain
-    to be migrated.
+    collide across same-named dependency files. The SDK project adapter now
+    exposes explicit-base loader capture as a separate immutable
+    `FrontendInputSnapshot` path, and a focused test proves that snapshot feeds
+    the pure in-memory compiler without absolute paths. Compiler package
+    callers that also require native/review compatibility remain to be migrated.
   - [ ] **S05.2 — Move Artifact persistence to an adapter.** Relocate locks,
     atomic writes, temporary files, compression, and artifact-store policy out
     of compiler. The confined lock/read/write implementation now lives in the

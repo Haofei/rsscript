@@ -3116,6 +3116,9 @@ fn mir_codegen_is_a_vm_independent_verified_bytecode_boundary() {
         ..compiler_start];
     for required in [
         "pub struct ProjectCompiler",
+        "pub struct CapturedProjectSnapshot",
+        "pub fn capture_frontend_from",
+        "WorkspaceLoader::default()",
         "load_workspace_snapshot",
         "pub fn snapshot",
         "pub fn build",
@@ -3415,6 +3418,10 @@ fn compiler_default_dependency_closure_is_host_neutral() {
         .filter_map(toml::Value::as_str)
         .collect::<BTreeSet<_>>();
     assert!(sdk_project.contains("rsscript_compiler/package"));
+    assert!(
+        sdk_project.contains("dep:rsscript-workspace-loader"),
+        "project capture must select the dedicated OS workspace loader rather than widening normal execution"
+    );
     for removed in [
         "base64",
         "chrono",

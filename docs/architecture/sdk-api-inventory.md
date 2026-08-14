@@ -17,6 +17,11 @@ not part of the default or `execution` SDK surface.
 Filesystem/package capture is an explicit `project` feature and
 `project::ProjectCompiler` adapter. It is a CLI/project-loader convenience,
 not part of the reviewed in-memory `compile::Compiler` contract.
+`ProjectCompiler::capture_frontend_from` is the preferred explicit-base path
+for a normal source/interface workspace: it returns a loader-owned logical
+snapshot plus the immutable `FrontendInputSnapshot` accepted by `Compiler`.
+Legacy package review/native authorization remains on the separate package
+snapshot path during migration.
 
 - Compilation and diagnostics: `Compiler`, `CompileError`, immutable
   `FrontendInputSnapshot`, snapshot-based check/build entry points, checked
