@@ -1051,6 +1051,14 @@ mechanical acceptance condition holds.
       required cancellation/reaping of exactly one losing task.
   - [ ] **M05.4 — Gate replacement on corpus parity.** New lowering cannot become
     default until all supported Core fixtures agree.
+    - [x] **M05.4a — Make the declared parity corpus non-filterable.** The
+      reusable migration gate rejects an empty, duplicate, malformed,
+      `LegacyOnly`, or `MirOnly` manifest before executing any fixture. The
+      SDK migration suite must therefore execute every declared Core case
+      through checked-HIR MIR, the reference interpreter, legacy VM, and
+      verified MIR bytecode; adding a capability cannot silently exclude it
+      from replacement evidence. This is a corpus gate, not yet proof that
+      every language capability has reached direct MIR parity.
 - [ ] **M06 — Delete the source-shaped executable IR.** Remove nested
   `If`/`For`/`Match`/`With` backend nodes, string type/callee identities, and
   `ExecutableStmt::Unknown`/`ExecutableExpr::Unknown` only after M05 passes.

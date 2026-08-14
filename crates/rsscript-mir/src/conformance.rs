@@ -5,6 +5,7 @@
 //! the `conformance` feature. Migration tests use it to compare the legacy VM
 //! path with the typed MIR path before a capability can become MIR-only.
 
+use std::collections::BTreeSet;
 use std::fmt;
 
 use crate::{
@@ -32,6 +33,111 @@ pub struct MigrationCase {
     pub capability: &'static str,
     pub stage: MigrationStage,
     pub source: &'static str,
+}
+
+/// Structural failure in the declarative replacement corpus.
+///
+/// The old executable-IR bridge cannot be removed based on a test that merely
+/// filters to the cases it happens to exercise. Before a capability is part of
+/// the reviewed Core migration corpus, it must have one named source fixture
+/// and remain on the dual path until the compatibility bridge is deleted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MigrationGateError {
+    EmptyCorpus,
+    EmptyName,
+    EmptyCapability {
+        name: &'static str,
+    },
+    EmptySource {
+        name: &'static str,
+    },
+    DuplicateName {
+        name: &'static str,
+    },
+    DuplicateCapability {
+        capability: &'static str,
+    },
+    NotDualPath {
+        name: &'static str,
+        stage: MigrationStage,
+    },
+}
+
+impl fmt::Display for MigrationGateError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyCorpus => formatter.write_str("MIR replacement corpus is empty"),
+            Self::EmptyName => formatter.write_str("MIR migration case has an empty name"),
+            Self::EmptyCapability { name } => {
+                write!(
+                    formatter,
+                    "MIR migration case `{name}` has an empty capability"
+                )
+            }
+            Self::EmptySource { name } => {
+                write!(
+                    formatter,
+                    "MIR migration case `{name}` has an empty source fixture"
+                )
+            }
+            Self::DuplicateName { name } => {
+                write!(formatter, "MIR migration corpus repeats case `{name}`")
+            }
+            Self::DuplicateCapability { capability } => {
+                write!(
+                    formatter,
+                    "MIR migration corpus repeats capability `{capability}`"
+                )
+            }
+            Self::NotDualPath { name, stage } => write!(
+                formatter,
+                "MIR migration case `{name}` is {stage:?}; replacement requires DualPath parity"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for MigrationGateError {}
+
+/// Validate the complete corpus used to decide whether the legacy lowering
+/// may be removed.
+///
+/// This intentionally rejects both `LegacyOnly` and `MirOnly`: the gate is
+/// about proving old/new observable parity *before* deletion. Once the old
+/// bridge has been removed, this migration-only manifest and gate disappear
+/// with it rather than silently treating a one-path fixture as parity proof.
+pub fn require_dual_path_parity(cases: &[MigrationCase]) -> Result<(), MigrationGateError> {
+    if cases.is_empty() {
+        return Err(MigrationGateError::EmptyCorpus);
+    }
+    let mut names = BTreeSet::new();
+    let mut capabilities = BTreeSet::new();
+    for case in cases {
+        if case.name.trim().is_empty() {
+            return Err(MigrationGateError::EmptyName);
+        }
+        if case.capability.trim().is_empty() {
+            return Err(MigrationGateError::EmptyCapability { name: case.name });
+        }
+        if case.source.trim().is_empty() {
+            return Err(MigrationGateError::EmptySource { name: case.name });
+        }
+        if !names.insert(case.name) {
+            return Err(MigrationGateError::DuplicateName { name: case.name });
+        }
+        if !capabilities.insert(case.capability) {
+            return Err(MigrationGateError::DuplicateCapability {
+                capability: case.capability,
+            });
+        }
+        if case.stage != MigrationStage::DualPath {
+            return Err(MigrationGateError::NotDualPath {
+                name: case.name,
+                stage: case.stage,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Scalar value model used only by the reference interpreter.
@@ -659,6 +765,46 @@ mod tests {
     use crate::{
         BasicBlock, BlockId, MirFunction, MirFunctionDebug, MirFunctionSignature, TypeId, WireType,
     };
+
+    const CASE: MigrationCase = MigrationCase {
+        name: "scalar",
+        capability: "scalar arithmetic",
+        stage: MigrationStage::DualPath,
+        source: "fn main() -> Int { return 1 }",
+    };
+
+    #[test]
+    fn replacement_gate_requires_a_complete_unique_dual_path_manifest() {
+        assert_eq!(require_dual_path_parity(&[CASE]), Ok(()));
+        assert!(matches!(
+            require_dual_path_parity(&[]),
+            Err(MigrationGateError::EmptyCorpus)
+        ));
+        assert!(matches!(
+            require_dual_path_parity(&[CASE, CASE]),
+            Err(MigrationGateError::DuplicateName { .. })
+        ));
+        assert!(matches!(
+            require_dual_path_parity(&[MigrationCase {
+                stage: MigrationStage::LegacyOnly,
+                ..CASE
+            }]),
+            Err(MigrationGateError::NotDualPath {
+                stage: MigrationStage::LegacyOnly,
+                ..
+            })
+        ));
+        assert!(matches!(
+            require_dual_path_parity(&[MigrationCase {
+                stage: MigrationStage::MirOnly,
+                ..CASE
+            }]),
+            Err(MigrationGateError::NotDualPath {
+                stage: MigrationStage::MirOnly,
+                ..
+            })
+        ));
+    }
 
     #[test]
     fn result_try_returns_the_failure_from_the_current_frame() {

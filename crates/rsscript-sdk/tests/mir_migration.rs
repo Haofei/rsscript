@@ -9,7 +9,9 @@ use rsscript_abi_model::WireType;
 use rsscript_compiler::{
     compile_source_to_ir, compile_validated_to_ir, validate_sources_with_interfaces,
 };
-use rsscript_mir::conformance::{MigrationCase, MigrationStage, execute_named};
+use rsscript_mir::conformance::{
+    MigrationCase, MigrationStage, execute_named, require_dual_path_parity,
+};
 use rsscript_mir::{
     BasicBlock, BlockId, FunctionId, MirCallTarget, MirFunction, MirFunctionDebug,
     MirFunctionSignature, MirInstruction, MirLiteral, MirModule, MirParameterMode, MirTerminator,
@@ -377,16 +379,11 @@ fn main() -> Int {
 
 #[test]
 fn dual_path_cases_match_the_legacy_vm() {
-    let dual_path_cases = CASES
-        .iter()
-        .filter(|case| case.stage == MigrationStage::DualPath)
-        .collect::<Vec<_>>();
-    assert!(
-        !dual_path_cases.is_empty(),
-        "the migration harness needs at least one dual-path capability"
-    );
+    require_dual_path_parity(CASES).unwrap_or_else(|error| {
+        panic!("the complete replacement corpus must remain dual-path: {error}")
+    });
 
-    for case in dual_path_cases {
+    for case in CASES {
         let compiled = compile_source_to_ir(&format!("{}.rss", case.name), case.source)
             .unwrap_or_else(|diagnostics| {
                 panic!(
