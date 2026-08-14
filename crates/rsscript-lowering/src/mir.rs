@@ -87,6 +87,7 @@ pub fn lower_executable_ir_to_mir(
                 )
             })
             .collect(),
+        async_external_wrappers: BTreeMap::new(),
         variants: BTreeMap::new(),
     };
     let mut lowered = Vec::with_capacity(functions.len());
@@ -155,6 +156,22 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<VerifiedMir, MirLo
             )
         })
         .collect::<BTreeMap<_, _>>();
+    let async_external_wrappers = external_imports
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, signature))| signature.asynchronous)
+        .enumerate()
+        .map(|(wrapper_index, (import_index, (symbol, signature)))| {
+            let id = FunctionId::new((functions.len() + wrapper_index) as u32);
+            AsyncExternalWrapper::new(
+                id,
+                rsscript_mir::ExternalSymbolId::new(import_index as u32),
+                symbol,
+                signature,
+                types.wire_function_signature(signature),
+            )
+        })
+        .collect::<Vec<_>>();
     let targets = CallTargets {
         functions: functions
             .iter()
@@ -170,6 +187,10 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<VerifiedMir, MirLo
                     rsscript_mir::ExternalSymbolId::new(index as u32),
                 )
             })
+            .collect(),
+        async_external_wrappers: async_external_wrappers
+            .iter()
+            .map(|wrapper| (wrapper.symbol.as_str().to_owned(), wrapper.id))
             .collect(),
         variants,
     };
@@ -190,6 +211,10 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<VerifiedMir, MirLo
         .lower()?;
         lowered.push(output.function);
         debug.push(output.debug);
+    }
+    for wrapper in async_external_wrappers {
+        lowered.push(wrapper.function);
+        debug.push(wrapper.debug);
     }
     let imports = external_imports
         .into_iter()
@@ -270,7 +295,70 @@ fn checked_external_signature(signature: &checked::FunctionSig) -> FunctionSigna
 struct CallTargets {
     functions: BTreeMap<String, FunctionId>,
     external_imports: BTreeMap<String, rsscript_mir::ExternalSymbolId>,
+    async_external_wrappers: BTreeMap<String, FunctionId>,
     variants: BTreeMap<String, VariantLayout>,
+}
+
+/// Synthetic async functions let `async let value = Host.call()` retain the
+/// structured task model without adding a second Provider-specific spawn
+/// instruction to MIR. The wrapper contains only a resolved external call and
+/// is generated from the same checked signature as the import table.
+struct AsyncExternalWrapper {
+    id: FunctionId,
+    symbol: ExternalSymbol,
+    function: MirFunction,
+    debug: MirFunctionDebug,
+}
+
+impl AsyncExternalWrapper {
+    fn new(
+        id: FunctionId,
+        external: rsscript_mir::ExternalSymbolId,
+        symbol: &ExternalSymbol,
+        signature: &FunctionSignature,
+        mir_signature: MirFunctionSignature,
+    ) -> Self {
+        let arguments = signature
+            .parameters
+            .iter()
+            .enumerate()
+            .map(|(index, parameter)| match parameter.effect {
+                DataEffect::Read => MirCallArgument::BorrowRead(PlaceId::new(index as u32)),
+                DataEffect::Mut => MirCallArgument::BorrowMut(PlaceId::new(index as u32)),
+                DataEffect::Take => MirCallArgument::Take(PlaceId::new(index as u32)),
+            })
+            .collect();
+        let result = ValueId::new(0);
+        let function = MirFunction::new(
+            id,
+            mir_signature,
+            signature.parameters.len() as u32,
+            1,
+            vec![BasicBlock::new(
+                BlockId::new(0),
+                vec![MirInstruction::Call {
+                    destination: result,
+                    target: MirCallTarget::External(external),
+                    arguments,
+                }],
+                MirTerminator::Return(Some(result)),
+            )],
+        );
+        let debug = MirFunctionDebug::new(
+            format!("__rss_async_external_{}", symbol.as_str().replace('.', "_")),
+            signature
+                .parameters
+                .iter()
+                .map(|parameter| parameter.name.clone())
+                .collect(),
+        );
+        Self {
+            id,
+            symbol: symbol.clone(),
+            function,
+            debug,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -373,6 +461,27 @@ impl TypeTable {
                     .unwrap_or(WireType::Unit),
             ),
             signature.is_async,
+        )
+    }
+
+    fn wire_function_signature(&mut self, signature: &FunctionSignature) -> MirFunctionSignature {
+        MirFunctionSignature::with_modes(
+            signature
+                .parameters
+                .iter()
+                .map(|parameter| self.intern(parameter.ty.clone()))
+                .collect(),
+            signature
+                .parameters
+                .iter()
+                .map(|parameter| match parameter.effect {
+                    DataEffect::Read => MirParameterMode::Read,
+                    DataEffect::Mut => MirParameterMode::Mut,
+                    DataEffect::Take => MirParameterMode::Take,
+                })
+                .collect(),
+            self.intern(signature.result.clone()),
+            signature.asynchronous,
         )
     }
 
@@ -1255,27 +1364,38 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         let checked::CallResolution::Resolved { signature, .. } = resolution else {
             return self.unsupported("unresolved async checked HIR call");
         };
-        if signature.is_external || signature.is_builtin {
-            return self.unsupported("async external or builtin checked HIR call");
+        if signature.is_builtin {
+            return self.unsupported("async builtin checked HIR call");
         }
         let qualified = signature
             .namespace
             .as_ref()
             .map(|namespace| format!("{namespace}.{}", signature.name));
-        let target = self
-            .targets
-            .functions
-            .get(&signature.name)
-            .or_else(|| {
-                qualified
-                    .as_ref()
-                    .and_then(|name| self.targets.functions.get(name))
-            })
-            .copied()
-            .ok_or_else(|| MirLoweringError::Unsupported {
-                function: self.function_name.to_owned(),
-                construct: "direct async checked HIR call target",
-            })?;
+        let target = if signature.is_external {
+            let symbol = checked_external_symbol(signature)?;
+            self.targets
+                .async_external_wrappers
+                .get(symbol.as_str())
+                .copied()
+                .ok_or_else(|| MirLoweringError::Unsupported {
+                    function: self.function_name.to_owned(),
+                    construct: "async external checked HIR wrapper",
+                })?
+        } else {
+            self.targets
+                .functions
+                .get(&signature.name)
+                .or_else(|| {
+                    qualified
+                        .as_ref()
+                        .and_then(|name| self.targets.functions.get(name))
+                })
+                .copied()
+                .ok_or_else(|| MirLoweringError::Unsupported {
+                    function: self.function_name.to_owned(),
+                    construct: "direct async checked HIR call target",
+                })?
+        };
         let mut ordered = args.iter().collect::<Vec<_>>();
         ordered.sort_by_key(|argument| argument.evaluation_index);
         let arguments = ordered

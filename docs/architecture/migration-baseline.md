@@ -909,8 +909,11 @@ mechanical acceptance condition holds.
       direct-lowerable. Internal task-group `async let`/`await` also lower to
       explicit MIR `Spawn`/`Await`; direct `await Host.call()` lowers to the
       resolved external `Call` and uses the VM's Provider-future suspension
-      path. Async bindings to external calls and cancellation remain follow-up
-      direct-lowering work.
+      path. `async let` bindings to resolved async external calls now lower
+      through synthetic, typed internal wrappers containing only the checked
+      `CallExternal`; this preserves normal task-group lifecycle without a
+      Provider-specific MIR spawn operation. Cancellation syntax remains
+      follow-up direct-lowering work.
   - [x] **M04.2 — Verify MIR ownership, resources, and task scopes.** The
     construction verifier runs ownership-mode, move/drop, resource-lifetime,
     resource-cleanup-over-CFG, and structured-task-close passes. Targeted
@@ -986,6 +989,11 @@ mechanical acceptance condition holds.
       values, usage, and stable traces agree, with the trace symbol sequence
       fixed as `Host.first`, then `Host.second`. Task-group child cancellation
       remains follow-up work.
+    - [x] **M05.3e — Compare async external task bindings.** `async let value =
+      Host.call()` now produces a verified synthetic async wrapper around the
+      resolved external import. The legacy and direct-MIR bytecode paths execute
+      the same task-group fixture with identical result, usage, and stable
+      Provider trace fields.
   - [ ] **M05.4 — Gate replacement on corpus parity.** New lowering cannot become
     default until all supported Core fixtures agree.
 - [ ] **M06 — Delete the source-shaped executable IR.** Remove nested
