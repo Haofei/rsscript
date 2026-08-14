@@ -1255,9 +1255,11 @@ mechanical acceptance condition holds.
     implementations fail to compile or conformance-test when symbols drift.
     Generated contracts now include registry registration glue, a call-recording
     sync/async mock that builds a descriptor-complete implementation map, and a
-    `#[cfg(test)]` registration skeleton. The same fail-closed registry path
-    rejects missing, undeclared, or signature-mismatched symbols for real and
-    generated mock Providers.
+    `#[cfg(test)]` registration skeleton. Generated mocks record canonical
+    `WireValue` arguments and use `WireSync`/`WireAsync` dispatch rather than
+    the legacy dynamic callable. The same fail-closed registry path rejects
+    missing, undeclared, or signature-mismatched symbols for real and generated
+    mock Providers.
 - [ ] **P06 — Tighten the canonical wire value model.** Replace JSON, string
   type/field identity, and generic `Native { type_name, id }` escape hatches
   with typed records, variants, lists, resources, and generation-safe handles;

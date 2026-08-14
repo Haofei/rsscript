@@ -161,7 +161,7 @@ impl ProviderInterface {
 
 fn render_mock_support(output: &mut String, functions: &[InterfaceFunction]) {
     output.push_str(
-        "\n/// One call observed by the generated contract mock. The mock deliberately\n/// records dynamic boundary values; typed conversion remains in the generated\n/// adapter owned by the real Provider implementation.\n#[derive(Debug, Clone)]\npub struct MockCall {\n    pub symbol: rsscript_abi_model::ExternalSymbol,\n    pub args: Vec<rsscript_provider_api::NativeValue>,\n}\n\n#[derive(Clone, Default)]\npub struct MockProvider {\n    calls: std::sync::Arc<std::sync::Mutex<Vec<MockCall>>>,\n}\n\nimpl MockProvider {\n    pub fn calls(&self) -> Vec<MockCall> {\n        self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()\n    }\n\n    pub fn implementations(&self) -> std::collections::BTreeMap<rsscript_abi_model::ExternalSymbol, rsscript_provider_api::ProviderFunction<rsscript_provider_api::ProviderCallable>> {\n        let mut implementations = std::collections::BTreeMap::new();\n",
+        "\n/// One call observed by the generated contract mock. The mock records the\n/// canonical wire values seen by a Provider boundary, so tests exercise the\n/// same typed dispatch path as production implementations.\n#[derive(Debug, Clone)]\npub struct MockCall {\n    pub symbol: rsscript_abi_model::ExternalSymbol,\n    pub args: Vec<rsscript_abi_model::WireValue>,\n}\n\n#[derive(Clone, Default)]\npub struct MockProvider {\n    calls: std::sync::Arc<std::sync::Mutex<Vec<MockCall>>>,\n}\n\nimpl MockProvider {\n    pub fn calls(&self) -> Vec<MockCall> {\n        self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()\n    }\n\n    pub fn implementations(&self) -> std::collections::BTreeMap<rsscript_abi_model::ExternalSymbol, rsscript_provider_api::ProviderFunction<rsscript_provider_api::ProviderCallable>> {\n        let mut implementations = std::collections::BTreeMap::new();\n",
     );
     for function in functions {
         let symbol = format!(
@@ -171,11 +171,11 @@ fn render_mock_support(output: &mut String, functions: &[InterfaceFunction]) {
         let signature = render_signature(&function.signature);
         let callable = if function.signature.asynchronous {
             format!(
-                "rsscript_provider_api::ProviderCallable::Async(rsscript_provider_api::AsyncInterpreterFn::new({{ let calls = std::sync::Arc::clone(&self.calls); move |_context, args| {{ let calls = std::sync::Arc::clone(&calls); async move {{ calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(MockCall {{ symbol: {symbol}, args }}); Err(rsscript_provider_api::ProviderError::unavailable(\"generated mock has no configured response\")) }} }} }}))"
+                "rsscript_provider_api::ProviderCallable::WireAsync(rsscript_provider_api::AsyncWireInterpreterFn::new({{ let calls = std::sync::Arc::clone(&self.calls); move |_context, args| {{ let calls = std::sync::Arc::clone(&calls); async move {{ calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(MockCall {{ symbol: {symbol}, args }}); Err(rsscript_provider_api::ProviderError::unavailable(\"generated mock has no configured response\")) }} }} }}))"
             )
         } else {
             format!(
-                "rsscript_provider_api::ProviderCallable::Sync(rsscript_provider_api::NativeInterpreterFn::new_contextual({{ let calls = std::sync::Arc::clone(&self.calls); move |_context, args| {{ calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(MockCall {{ symbol: {symbol}, args }}); Err(rsscript_provider_api::ProviderError::unavailable(\"generated mock has no configured response\")) }} }}))"
+                "rsscript_provider_api::ProviderCallable::WireSync(rsscript_provider_api::WireInterpreterFn::new_contextual({{ let calls = std::sync::Arc::clone(&self.calls); move |_context, args| {{ calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(MockCall {{ symbol: {symbol}, args }}); Err(rsscript_provider_api::ProviderError::unavailable(\"generated mock has no configured response\")) }} }}))"
             )
         };
         output.push_str(&format!(
@@ -461,6 +461,8 @@ mod tests {
         assert!(rust.contains("pub fn register<T>("));
         assert!(rust.contains("registry.register_provider(&descriptor(), implementations)"));
         assert!(rust.contains("pub struct MockProvider"));
+        assert!(rust.contains("pub args: Vec<rsscript_abi_model::WireValue>"));
+        assert!(rust.contains("ProviderCallable::WireSync"));
         assert!(rust.contains("pub fn implementations(&self)"));
         assert!(rust.contains("assert_generated_mock_contract"));
     }
@@ -538,6 +540,6 @@ mod tests {
         assert!(rust.contains("ProviderCallMode::Async"));
         assert!(rust.contains("DataEffect::Take"));
         assert!(rust.contains("retained: true"));
-        assert!(rust.contains("ProviderCallable::Async"));
+        assert!(rust.contains("ProviderCallable::WireAsync"));
     }
 }
