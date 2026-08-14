@@ -6,5 +6,6 @@ description = "Bounded OS workspace loader for RSScript tools"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+rsscript-operation = { path = "../rsscript-operation" }
 toml = "0.8"
 sha2 = "0.10"

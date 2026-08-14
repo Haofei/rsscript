@@ -562,9 +562,9 @@ mechanical acceptance condition holds.
   - [ ] **S05.1 — Move workspace capture to `rsscript-workspace-loader`.** Move
     directory traversal, manifest/dependency discovery, path normalization, and
     snapshot capture from compiler. The loader now exposes immutable
-    WorkspaceSnapshot capture with explicit-base APIs and a stable,
-    absolute-path-independent content digest; compiler package callers remain
-    to be migrated.
+    WorkspaceSnapshot capture with explicit-base and operation-aware APIs plus
+    a stable, absolute-path-independent content digest; compiler package
+    callers remain to be migrated.
   - [ ] **S05.2 — Move Artifact persistence to an adapter.** Relocate locks,
     atomic writes, temporary files, compression, and artifact-store policy out
     of compiler.

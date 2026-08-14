@@ -1056,12 +1056,17 @@ fn language_engine_does_not_read_the_operating_system() {
     let loader_dependencies = dependency_packages(&loader_manifest);
     assert_eq!(
         loader_dependencies,
-        BTreeSet::from(["sha2".to_string(), "toml".to_string()])
+        BTreeSet::from([
+            "rsscript-operation".to_string(),
+            "sha2".to_string(),
+            "toml".to_string(),
+        ])
     );
     let workspace_loader = read(&root.join("crates/rsscript-workspace-loader/src/lib.rs"));
     for boundary in [
         "pub struct WorkspaceSnapshot",
         "pub fn snapshot_from",
+        "pub fn snapshot_from_with_operation",
         "pub fn load_from",
         "pub fn content_digest",
     ] {
@@ -1094,8 +1099,7 @@ fn language_engine_does_not_read_the_operating_system() {
     for query in [
         "symbol_index_from_program",
         "document_symbols_from_program",
-        "module_header",
-        "interface_module_header",
+        "workspace_module_graph",
     ] {
         assert!(
             language_service.contains(query),

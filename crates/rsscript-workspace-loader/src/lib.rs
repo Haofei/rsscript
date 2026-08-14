@@ -6,6 +6,7 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use rsscript_operation::{OperationAbort, OperationContext};
 use sha2::{Digest, Sha256};
 
 const MAX_WORKSPACE_FILES: usize = 20_000;
@@ -71,6 +72,8 @@ pub enum WorkspaceLoadErrorCode {
     ReadSource,
     ReadManifest,
     ParseManifest,
+    Cancelled,
+    DeadlineExceeded,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,17 +148,59 @@ impl WorkspaceLoader {
         base: &Path,
         package_dir: &Path,
     ) -> Result<WorkspaceSnapshot, WorkspaceLoadError> {
-        let root = if package_dir.is_absolute() {
-            package_dir.to_path_buf()
-        } else {
-            base.join(package_dir)
-        };
-        self.snapshot_at(root)
+        self.snapshot_from_inner(base, package_dir, None)
+    }
+
+    /// Capture a workspace relative to an explicit base while observing the
+    /// caller's cancellation and deadline boundary during filesystem traversal.
+    pub fn snapshot_from_with_operation(
+        &self,
+        base: &Path,
+        package_dir: &Path,
+        operation: &OperationContext,
+    ) -> Result<WorkspaceSnapshot, WorkspaceLoadError> {
+        self.snapshot_from_inner(base, package_dir, Some(operation))
     }
 
     /// Compatibility capture API using the process current directory for
     /// relative paths. New embedding code should use snapshot_from.
     pub fn snapshot(&self, package_dir: &Path) -> Result<WorkspaceSnapshot, WorkspaceLoadError> {
+        self.snapshot_inner(package_dir, None)
+    }
+
+    /// Compatibility capture API with explicit operation control. New embeds
+    /// should prefer [`Self::snapshot_from_with_operation`] to avoid ambient
+    /// current-directory lookup as well.
+    pub fn snapshot_with_operation(
+        &self,
+        package_dir: &Path,
+        operation: &OperationContext,
+    ) -> Result<WorkspaceSnapshot, WorkspaceLoadError> {
+        self.snapshot_inner(package_dir, Some(operation))
+    }
+
+    fn snapshot_from_inner(
+        &self,
+        base: &Path,
+        package_dir: &Path,
+        operation: Option<&OperationContext>,
+    ) -> Result<WorkspaceSnapshot, WorkspaceLoadError> {
+        check_operation(operation)?;
+        let root = if package_dir.is_absolute() {
+            package_dir.to_path_buf()
+        } else {
+            check_operation(operation)?;
+            base.join(package_dir)
+        };
+        self.snapshot_at(root, operation)
+    }
+
+    fn snapshot_inner(
+        &self,
+        package_dir: &Path,
+        operation: Option<&OperationContext>,
+    ) -> Result<WorkspaceSnapshot, WorkspaceLoadError> {
+        check_operation(operation)?;
         let root = if package_dir.is_absolute() {
             package_dir.to_path_buf()
         } else {
@@ -168,7 +213,7 @@ impl WorkspaceLoader {
                 })?
                 .join(package_dir)
         };
-        self.snapshot_at(root)
+        self.snapshot_at(root, operation)
     }
 
     /// Compatibility API returning the captured file list.
@@ -188,7 +233,12 @@ impl WorkspaceLoader {
             .map(WorkspaceSnapshot::into_files)
     }
 
-    fn snapshot_at(&self, root: PathBuf) -> Result<WorkspaceSnapshot, WorkspaceLoadError> {
+    fn snapshot_at(
+        &self,
+        root: PathBuf,
+        operation: Option<&OperationContext>,
+    ) -> Result<WorkspaceSnapshot, WorkspaceLoadError> {
+        check_operation(operation)?;
         if !root.is_dir() {
             return Err(WorkspaceLoadError::at(
                 WorkspaceLoadErrorCode::RootNotDirectory,
@@ -198,11 +248,20 @@ impl WorkspaceLoader {
         }
         let mut files = Vec::new();
         let mut total_bytes = 0u64;
-        scan_source_tree(&root, &root, false, self, &mut total_bytes, &mut files)?;
+        scan_source_tree(
+            &root,
+            &root,
+            false,
+            self,
+            operation,
+            &mut total_bytes,
+            &mut files,
+        )?;
 
         let mut visited = BTreeSet::new();
-        let mut pending_dependencies = dependency_paths(&root)?;
+        let mut pending_dependencies = dependency_paths(&root, operation)?;
         while let Some(dependency) = pending_dependencies.pop() {
+            check_operation(operation)?;
             let dependency = dependency.canonicalize().map_err(|error| {
                 WorkspaceLoadError::at(
                     WorkspaceLoadErrorCode::ResolveDependency,
@@ -218,11 +277,13 @@ impl WorkspaceLoader {
                 &dependency,
                 true,
                 self,
+                operation,
                 &mut total_bytes,
                 &mut files,
             )?;
-            pending_dependencies.extend(dependency_paths(&dependency)?);
+            pending_dependencies.extend(dependency_paths(&dependency, operation)?);
         }
+        check_operation(operation)?;
         files.sort_by(|left, right| left.path.cmp(&right.path));
         let content_digest = snapshot_content_digest(&files);
         Ok(WorkspaceSnapshot {
@@ -277,11 +338,13 @@ fn scan_source_tree(
     display_root: &Path,
     interfaces_only: bool,
     limits: &WorkspaceLoader,
+    operation: Option<&OperationContext>,
     total_bytes: &mut u64,
     files: &mut Vec<WorkspaceSourceFile>,
 ) -> Result<(), WorkspaceLoadError> {
     let mut pending = vec![root.to_path_buf()];
     while let Some(directory) = pending.pop() {
+        check_operation(operation)?;
         let mut entries = fs::read_dir(&directory)
             .map_err(|error| {
                 WorkspaceLoadError::at(
@@ -300,6 +363,7 @@ fn scan_source_tree(
             })?;
         entries.sort_by_key(fs::DirEntry::file_name);
         for entry in entries {
+            check_operation(operation)?;
             let file_type = entry.file_type().map_err(|error| {
                 WorkspaceLoadError::at(
                     WorkspaceLoadErrorCode::InspectEntry,
@@ -378,7 +442,11 @@ fn scan_source_tree(
     Ok(())
 }
 
-fn dependency_paths(package_dir: &Path) -> Result<Vec<PathBuf>, WorkspaceLoadError> {
+fn dependency_paths(
+    package_dir: &Path,
+    operation: Option<&OperationContext>,
+) -> Result<Vec<PathBuf>, WorkspaceLoadError> {
+    check_operation(operation)?;
     let manifest_path = package_dir.join("rsspkg.toml");
     let source = match fs::read_to_string(&manifest_path) {
         Ok(source) => source,
@@ -400,10 +468,12 @@ fn dependency_paths(package_dir: &Path) -> Result<Vec<PathBuf>, WorkspaceLoadErr
     })?;
     let mut paths = Vec::new();
     for section in ["dependencies", "dev-dependencies"] {
+        check_operation(operation)?;
         let Some(dependencies) = manifest.get(section).and_then(toml::Value::as_table) else {
             continue;
         };
         for dependency in dependencies.values() {
+            check_operation(operation)?;
             if let Some(path) = dependency
                 .as_table()
                 .and_then(|entry| entry.get("path"))
@@ -417,9 +487,23 @@ fn dependency_paths(package_dir: &Path) -> Result<Vec<PathBuf>, WorkspaceLoadErr
     Ok(paths)
 }
 
+fn check_operation(operation: Option<&OperationContext>) -> Result<(), WorkspaceLoadError> {
+    operation.map_or(Ok(()), |operation| {
+        operation.check().map_err(|abort| {
+            let code = match abort {
+                OperationAbort::Cancelled => WorkspaceLoadErrorCode::Cancelled,
+                OperationAbort::DeadlineExceeded => WorkspaceLoadErrorCode::DeadlineExceeded,
+            };
+            WorkspaceLoadError::global(code, format!("workspace capture stopped: {abort:?}"))
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rsscript_operation::{CancellationToken, MonotonicDeadline};
+    use std::time::{Duration, Instant};
 
     #[test]
     fn missing_root_has_a_stable_structured_error() {
@@ -441,6 +525,39 @@ mod tests {
             snapshot.files()
         );
         assert!(snapshot.content_digest().starts_with("sha256:"));
+    }
+
+    #[test]
+    fn operation_aware_capture_rejects_cancelled_and_expired_requests_before_io() {
+        let loader = WorkspaceLoader::default();
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        let cancelled_error = loader
+            .snapshot_from_with_operation(
+                root,
+                Path::new("."),
+                &OperationContext {
+                    cancellation: Some(cancelled),
+                    ..OperationContext::default()
+                },
+            )
+            .expect_err("cancelled request must not capture a workspace");
+        assert_eq!(cancelled_error.code, WorkspaceLoadErrorCode::Cancelled);
+
+        let expired_error = loader
+            .snapshot_from_with_operation(
+                root,
+                Path::new("."),
+                &OperationContext {
+                    deadline: Some(MonotonicDeadline::at(
+                        Instant::now() - Duration::from_millis(1),
+                    )),
+                    ..OperationContext::default()
+                },
+            )
+            .expect_err("expired request must not capture a workspace");
+        assert_eq!(expired_error.code, WorkspaceLoadErrorCode::DeadlineExceeded);
     }
 
     #[test]
