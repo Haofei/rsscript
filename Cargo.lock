@@ -2031,6 +2031,7 @@ dependencies = [
  "reir",
  "rsscript-abi-model",
  "rsscript-artifact",
+ "rsscript-artifact-store",
  "rsscript-build-support",
  "rsscript-bytecode",
  "rsscript-codegen-vm",
