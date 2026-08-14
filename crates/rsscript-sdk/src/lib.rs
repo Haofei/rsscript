@@ -2691,6 +2691,7 @@ fn main() -> Result<Int, String> {
             provider_version: "1".into(),
             supported_abi: vec![RUNTIME_ABI_VERSION],
             record_layouts: Vec::new(),
+            variant_layouts: Vec::new(),
             functions: vec![ProviderFunctionDescriptor {
                 symbol: symbol.clone(),
                 signature: incompatible.clone(),
@@ -2764,6 +2765,7 @@ fn main() -> Result<Int, String> {
             provider_version: "1".into(),
             supported_abi: vec![RUNTIME_ABI_VERSION],
             record_layouts: Vec::new(),
+            variant_layouts: Vec::new(),
             functions: vec![ProviderFunctionDescriptor {
                 symbol: symbol.clone(),
                 signature: signature.clone(),
@@ -2875,6 +2877,7 @@ fn main() -> Result<Int, String> {
             provider_version: "1".into(),
             supported_abi: vec![RUNTIME_ABI_VERSION],
             record_layouts: Vec::new(),
+            variant_layouts: Vec::new(),
             functions: vec![ProviderFunctionDescriptor {
                 symbol: symbol.clone(),
                 signature: signature.clone(),
@@ -2958,6 +2961,7 @@ fn main() -> Result<Int, String> {
             provider_version: "1".into(),
             supported_abi: vec![RUNTIME_ABI_VERSION],
             record_layouts: Vec::new(),
+            variant_layouts: Vec::new(),
             functions: vec![ProviderFunctionDescriptor {
                 symbol: symbol.clone(),
                 signature: signature.clone(),

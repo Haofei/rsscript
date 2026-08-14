@@ -212,6 +212,53 @@ fn native_to_wire(
                 fields,
             })
         }
+        (NativeValue::Variant { name, fields }, named @ WireType::Named { .. }) => {
+            let layout = types.variant_layout(named).ok_or_else(|| {
+                ProviderError::unavailable(
+                    "provider named variant is missing from its linked interface layout",
+                )
+            })?;
+            let (index, variant) = layout
+                .variants
+                .iter()
+                .enumerate()
+                .find(|(_, variant)| variant.name == name)
+                .ok_or_else(|| {
+                    ProviderError::invalid_argument(
+                        "provider named variant argument is not declared by its linked interface",
+                    )
+                })?;
+            if fields.len() != variant.fields.len() {
+                return Err(ProviderError::invalid_argument(
+                    "provider named variant argument does not match its linked interface layout",
+                ));
+            }
+            let values = variant
+                .fields
+                .iter()
+                .map(|field| {
+                    fields
+                        .get(&field.name)
+                        .cloned()
+                        .ok_or_else(|| {
+                            ProviderError::invalid_argument(
+                                "provider named variant argument is missing a linked field",
+                            )
+                        })
+                        .and_then(|value| native_to_wire(value, &field.ty, types))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let payload = match values.len() {
+                0 => None,
+                1 => Some(Box::new(values.into_iter().next().expect("one value"))),
+                _ => Some(Box::new(WireValue::Tuple { values })),
+            };
+            Ok(WireValue::Variant {
+                type_id: type_id(types, named)?,
+                variant_id: rsscript_abi_model::WireVariantId::new(index as u32),
+                payload,
+            })
+        }
         (NativeValue::Variant { name, fields }, option @ WireType::Option { value: element })
             if name == "Some" && fields.len() == 1 =>
         {
@@ -380,6 +427,57 @@ fn wire_to_native(
                 .collect::<Result<BTreeMap<_, _>, _>>()?;
             Ok(NativeValue::Struct {
                 name: native_record_name(named),
+                fields,
+            })
+        }
+        (
+            WireValue::Variant {
+                type_id: actual_type,
+                variant_id,
+                payload,
+            },
+            named @ WireType::Named { .. },
+        ) if actual_type == type_id(types, named)? => {
+            let layout = types.variant_layout(named).ok_or_else(|| {
+                ProviderError::unavailable(
+                    "provider named variant is missing from its linked interface layout",
+                )
+            })?;
+            let variant = layout
+                .variants
+                .get(variant_id.get() as usize)
+                .ok_or_else(|| {
+                    ProviderError::invalid_argument(
+                        "provider wire variant result uses an unknown linked case identity",
+                    )
+                })?;
+            let values = match (variant.fields.len(), payload) {
+                (0, None) => Vec::new(),
+                (1, Some(value)) => vec![*value],
+                (_, Some(value)) => match *value {
+                    WireValue::Tuple { values } if values.len() == variant.fields.len() => values,
+                    _ => {
+                        return Err(ProviderError::invalid_argument(
+                            "provider wire variant result payload does not match its linked layout",
+                        ));
+                    }
+                },
+                _ => {
+                    return Err(ProviderError::invalid_argument(
+                        "provider wire variant result payload does not match its linked layout",
+                    ));
+                }
+            };
+            let fields = variant
+                .fields
+                .iter()
+                .zip(values)
+                .map(|(field, value)| {
+                    wire_to_native(value, &field.ty, types).map(|value| (field.name.clone(), value))
+                })
+                .collect::<Result<BTreeMap<_, _>, _>>()?;
+            Ok(NativeValue::Variant {
+                name: variant.name.clone(),
                 fields,
             })
         }
@@ -635,7 +733,11 @@ impl ExternalFunction {
                             "provider wire argument count does not match its linked signature",
                         ));
                     }
-                    let types = wire_type_table(&signature, &contract.record_layouts)?;
+                    let types = wire_type_table(
+                        &signature,
+                        &contract.record_layouts,
+                        &contract.variant_layouts,
+                    )?;
                     let wire_args = args
                         .into_iter()
                         .zip(&signature.parameters)
@@ -779,7 +881,11 @@ impl ExternalFunction {
                                 "provider wire argument count does not match its linked signature",
                             ));
                         }
-                        let types = wire_type_table(&signature, &contract.record_layouts)?;
+                        let types = wire_type_table(
+                            &signature,
+                            &contract.record_layouts,
+                            &contract.variant_layouts,
+                        )?;
                         let wire_args = args
                             .into_iter()
                             .zip(&signature.parameters)
@@ -864,6 +970,7 @@ impl ExternalFunction {
                 provider_id: function.provider_id,
                 provider_version: function.provider_version,
                 record_layouts: function.record_layouts,
+                variant_layouts: function.variant_layouts,
                 descriptor: function.descriptor,
             }),
             host_context,
@@ -875,9 +982,11 @@ impl ExternalFunction {
 fn wire_type_table(
     signature: &FunctionSignature,
     record_layouts: &[rsscript_abi_model::WireRecordLayout],
+    variant_layouts: &[rsscript_abi_model::WireVariantLayout],
 ) -> Result<WireCallTypeTable, ProviderError> {
     WireCallTypeTable::for_signature(signature)
         .and_then(|table| table.with_record_layouts(record_layouts.to_vec()))
+        .and_then(|table| table.with_variant_layouts(variant_layouts.to_vec()))
         .map_err(|error| {
             ProviderError::internal(format!(
                 "linked provider signature cannot form a wire type table: {error}"
@@ -1183,6 +1292,7 @@ mod provider_contract_tests {
             provider_version: "1.0.0".to_string(),
             supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
             record_layouts: Vec::new(),
+            variant_layouts: Vec::new(),
             functions: vec![ProviderFunctionDescriptor {
                 symbol: symbol.clone(),
                 signature: signature.clone(),
@@ -1229,6 +1339,7 @@ mod provider_contract_tests {
             provider_version: "1.0.0".to_string(),
             supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
             record_layouts: Vec::new(),
+            variant_layouts: Vec::new(),
             functions: vec![ProviderFunctionDescriptor {
                 symbol: symbol.clone(),
                 signature: signature.clone(),
@@ -1301,6 +1412,7 @@ mod provider_contract_tests {
             provider_version: "1.0.0".into(),
             supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
             record_layouts: layouts,
+            variant_layouts: Vec::new(),
             functions: vec![ProviderFunctionDescriptor {
                 symbol: symbol.clone(),
                 signature: signature.clone(),
@@ -1343,6 +1455,57 @@ mod provider_contract_tests {
                 fields: BTreeMap::from([("value".into(), NativeValue::Int(42))]),
             }
         );
+    }
+
+    #[test]
+    fn descriptor_type_table_adapts_named_variant_values() {
+        let status = WireType::from("host.test.Status");
+        let signature = FunctionSignature {
+            parameters: vec![rsscript_abi_model::ParameterSignature {
+                name: "status".into(),
+                effect: rsscript_abi_model::DataEffect::Read,
+                ty: status.clone(),
+                retained: false,
+            }],
+            result: status.clone(),
+            asynchronous: false,
+        };
+        let layouts = vec![rsscript_abi_model::WireVariantLayout {
+            ty: status.clone(),
+            variants: vec![
+                rsscript_abi_model::WireVariantCaseLayout {
+                    name: "Ready".into(),
+                    fields: Vec::new(),
+                },
+                rsscript_abi_model::WireVariantCaseLayout {
+                    name: "Failed".into(),
+                    fields: vec![rsscript_abi_model::WireRecordFieldLayout {
+                        name: "message".into(),
+                        ty: WireType::String,
+                    }],
+                },
+            ],
+        }];
+        let types = WireCallTypeTable::for_signature(&signature)
+            .unwrap()
+            .with_variant_layouts(layouts)
+            .unwrap();
+        let native = NativeValue::Variant {
+            name: "Failed".into(),
+            fields: BTreeMap::from([("message".into(), NativeValue::String("nope".into()))]),
+        };
+        let wire = native_to_wire(native.clone(), &status, &types).unwrap();
+        assert_eq!(
+            wire,
+            WireValue::Variant {
+                type_id: types.type_id(&status).unwrap(),
+                variant_id: rsscript_abi_model::WireVariantId::new(1),
+                payload: Some(Box::new(WireValue::String {
+                    value: "nope".into(),
+                })),
+            }
+        );
+        assert_eq!(wire_to_native(wire, &status, &types).unwrap(), native);
     }
 
     #[test]
@@ -1564,6 +1727,7 @@ mod provider_contract_tests {
             provider_version: "1.0.0".into(),
             supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
             record_layouts: Vec::new(),
+            variant_layouts: Vec::new(),
             functions: vec![ProviderFunctionDescriptor {
                 symbol: symbol.clone(),
                 signature: signature.clone(),
@@ -1610,6 +1774,7 @@ mod provider_contract_tests {
             provider_version: "1.0.0".into(),
             supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
             record_layouts: Vec::new(),
+            variant_layouts: Vec::new(),
             functions: vec![ProviderFunctionDescriptor {
                 symbol: symbol.clone(),
                 signature: signature.clone(),
@@ -1752,6 +1917,7 @@ mod provider_contract_tests {
             provider_version: "1.0.0".into(),
             supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
             record_layouts: Vec::new(),
+            variant_layouts: Vec::new(),
             functions: vec![ProviderFunctionDescriptor {
                 symbol: symbol.clone(),
                 signature: signature.clone(),

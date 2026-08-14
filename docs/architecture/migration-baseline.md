@@ -1396,8 +1396,11 @@ mechanical acceptance condition holds.
     canonical named-record layouts, including declaration-order field names and
     structural field types; the VM uses those layouts to bridge positional
     `WireValue::Record` payloads through the legacy VM adapter without guessing
-    names or types. Arbitrary variants, maps, JSON, chars, and resources still
-    require the Artifact-wide type-table/lifecycle adapter. The same safe
+    names or types. Descriptor-owned named sum layouts likewise bridge
+    positional `WireValue::Variant` values: declaration-order case IDs and
+    fields are checked before either direction reaches the legacy VM adapter.
+    JSON and resources still require the Artifact-wide type-table/lifecycle
+    adapter. The same safe
     scalar/aggregate subset now also works through `AsyncWireInterpreterFn`;
     named/resource async values remain fail-closed.
     - [x] **P06.2a — Bridge generation-safe resource handles.** Provider

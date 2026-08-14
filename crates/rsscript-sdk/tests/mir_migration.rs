@@ -1223,6 +1223,7 @@ fn direct_checked_hir_awaited_external_provider_matches_legacy_vm() {
         provider_version: "1.0.0".into(),
         supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
         record_layouts: Vec::new(),
+        variant_layouts: Vec::new(),
         functions: vec![ProviderFunctionDescriptor {
             symbol: symbol.clone(),
             signature: signature.clone(),
@@ -1326,6 +1327,7 @@ async fn main() -> Unit {
             provider_version: "1.0.0".into(),
             supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
             record_layouts: Vec::new(),
+            variant_layouts: Vec::new(),
             functions: vec![ProviderFunctionDescriptor {
                 symbol: symbol.clone(),
                 signature: signature.clone(),
@@ -1526,6 +1528,7 @@ async fn main() -> Int {
             provider_version: "1.0.0".into(),
             supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
             record_layouts: Vec::new(),
+            variant_layouts: Vec::new(),
             functions: vec![
                 ProviderFunctionDescriptor {
                     symbol: first.clone(),
@@ -1632,6 +1635,7 @@ fn direct_checked_hir_awaited_provider_cancellation_matches_legacy_vm() {
             provider_version: "1.0.0".into(),
             supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
             record_layouts: Vec::new(),
+            variant_layouts: Vec::new(),
             functions: vec![ProviderFunctionDescriptor {
                 symbol: symbol.clone(),
                 signature: signature.clone(),
@@ -1752,6 +1756,7 @@ fn direct_checked_hir_awaited_provider_deadline_matches_legacy_vm() {
             provider_version: "1.0.0".into(),
             supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
             record_layouts: Vec::new(),
+            variant_layouts: Vec::new(),
             functions: vec![ProviderFunctionDescriptor {
                 symbol: symbol.clone(),
                 signature: signature.clone(),
@@ -1857,6 +1862,7 @@ async fn main() -> Int {
             provider_version: "1.0.0".into(),
             supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
             record_layouts: Vec::new(),
+            variant_layouts: Vec::new(),
             functions: vec![
                 ProviderFunctionDescriptor {
                     symbol: first.clone(),

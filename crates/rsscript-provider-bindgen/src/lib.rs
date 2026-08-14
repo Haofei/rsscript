@@ -23,6 +23,7 @@ pub struct ProviderInterface {
     pub functions: Vec<InterfaceFunction>,
     pub resources: Vec<InterfaceDescriptorResourceV1>,
     pub record_layouts: Vec<WireRecordLayout>,
+    pub variant_layouts: Vec<rsscript_abi_model::WireVariantLayout>,
     pub sums: Vec<InterfaceDescriptorSumV1>,
 }
 
@@ -83,6 +84,7 @@ impl ProviderInterface {
             ));
         }
         let record_layouts = descriptor.wire_record_layouts();
+        let variant_layouts = descriptor.wire_variant_layouts();
         Ok(Self {
             functions: descriptor
                 .functions
@@ -96,6 +98,7 @@ impl ProviderInterface {
                 .collect(),
             resources: descriptor.resources,
             record_layouts,
+            variant_layouts,
             sums: descriptor.sums,
         })
     }
@@ -158,9 +161,10 @@ impl ProviderInterface {
         output
             .push_str("}\n\npub fn descriptor() -> rsscript_provider_api::ProviderDescriptor {\n");
         output.push_str(&format!(
-            "    rsscript_provider_api::ProviderDescriptor {{ provider_id: {:?}.into(), provider_version: env!(\"CARGO_PKG_VERSION\").into(), supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION], record_layouts: vec![{}], functions: vec![\n",
+            "    rsscript_provider_api::ProviderDescriptor {{ provider_id: {:?}.into(), provider_version: env!(\"CARGO_PKG_VERSION\").into(), supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION], record_layouts: vec![{}], variant_layouts: vec![{}], functions: vec![\n",
             options.provider_id,
             render_record_layouts(&self.record_layouts),
+            render_variant_layouts(&self.variant_layouts),
         ));
         for function in &self.functions {
             output.push_str("        rsscript_provider_api::ProviderFunctionDescriptor {\n");
@@ -498,6 +502,39 @@ fn render_record_layouts(layouts: &[WireRecordLayout]) -> String {
         .join(", ")
 }
 
+fn render_variant_layouts(layouts: &[rsscript_abi_model::WireVariantLayout]) -> String {
+    layouts
+        .iter()
+        .map(|layout| {
+            let variants = layout
+                .variants
+                .iter()
+                .map(|variant| {
+                    let fields = variant
+                        .fields
+                        .iter()
+                        .map(|field| format!(
+                            "rsscript_abi_model::WireRecordFieldLayout {{ name: {:?}.into(), ty: {} }}",
+                            field.name, render_wire_type(&field.ty)
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!(
+                        "rsscript_abi_model::WireVariantCaseLayout {{ name: {:?}.into(), fields: vec![{}] }}",
+                        variant.name, fields
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "rsscript_abi_model::WireVariantLayout {{ ty: {}, variants: vec![{}] }}",
+                render_wire_type(&layout.ty), variants
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Render the canonical RSScript type spelling carried by the legacy
 /// `FunctionSignature` compatibility envelope. This must not use
 /// `render_wire_type`: that helper emits Rust source expressions for generated
@@ -809,6 +846,8 @@ mod tests {
         assert!(generated.contains("Failed {"));
         assert!(generated.contains("message: String"));
         assert!(generated.contains("fn current(&self) -> Result<HostStatusStatus"));
+        assert!(generated.contains("variant_layouts: vec![rsscript_abi_model::WireVariantLayout"));
+        assert!(generated.contains("WireVariantCaseLayout { name: \"Failed\".into()"));
     }
 
     #[test]

@@ -455,6 +455,7 @@ fn eval_suspends_and_resumes_an_async_provider_call() {
         provider_version: "1.0.0".into(),
         supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
         record_layouts: Vec::new(),
+        variant_layouts: Vec::new(),
         functions: vec![ProviderFunctionDescriptor {
             symbol: symbol.clone(),
             signature: signature.clone(),

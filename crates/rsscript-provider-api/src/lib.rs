@@ -12,7 +12,7 @@ pub use rsscript_abi_model::{
     DataEffect, ExternalImport, ExternalSymbol, FunctionSignature, InvalidExternalSymbol,
     ParameterSignature, RUNTIME_ABI_VERSION, SignatureHash, WireCallTypeTable,
     WireRecordFieldLayout, WireRecordLayout, WireResourceHandle, WireResourceTypeId, WireType,
-    WireTypeId, WireTypeTableOverflow, WireValue, WireVariantId,
+    WireTypeId, WireTypeTableOverflow, WireValue, WireVariantId, WireVariantLayout,
 };
 pub use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationId};
 use serde::{Deserialize, Serialize};
@@ -937,6 +937,10 @@ pub struct ProviderDescriptor {
     /// field or type identity into [`WireValue`].
     #[serde(default)]
     pub record_layouts: Vec<WireRecordLayout>,
+    /// Public sum layouts supplied by the interface descriptor. The caller
+    /// resolves cases through declaration-order IDs, never Provider text.
+    #[serde(default)]
+    pub variant_layouts: Vec<WireVariantLayout>,
     pub functions: Vec<ProviderFunctionDescriptor>,
 }
 
@@ -945,6 +949,7 @@ pub struct ProviderInvocationContract {
     pub provider_id: String,
     pub provider_version: String,
     pub record_layouts: Vec<WireRecordLayout>,
+    pub variant_layouts: Vec<WireVariantLayout>,
     pub descriptor: ProviderFunctionDescriptor,
 }
 
@@ -958,6 +963,7 @@ pub struct ResolvedProviderFunction<T> {
     pub provider_id: String,
     pub provider_version: String,
     pub record_layouts: Vec<WireRecordLayout>,
+    pub variant_layouts: Vec<WireVariantLayout>,
     pub descriptor: ProviderFunctionDescriptor,
     pub callable: T,
 }
@@ -991,6 +997,7 @@ impl<T> ProviderRegistry<T> {
             });
         }
         validate_record_layouts(descriptor)?;
+        validate_variant_layouts(descriptor)?;
 
         let mut declared = BTreeSet::new();
         for function in &descriptor.functions {
@@ -1021,6 +1028,7 @@ impl<T> ProviderRegistry<T> {
                     provider_id: descriptor.provider_id.clone(),
                     provider_version: descriptor.provider_version.clone(),
                     record_layouts: descriptor.record_layouts.clone(),
+                    variant_layouts: descriptor.variant_layouts.clone(),
                     descriptor: function.clone(),
                     callable: implementation.callable,
                 },
@@ -1092,6 +1100,30 @@ fn validate_record_layouts(descriptor: &ProviderDescriptor) -> Result<(), Provid
     Ok(())
 }
 
+fn validate_variant_layouts(descriptor: &ProviderDescriptor) -> Result<(), ProviderLoadError> {
+    let mut types = BTreeSet::new();
+    for layout in &descriptor.variant_layouts {
+        if !matches!(layout.ty, WireType::Named { .. }) || !types.insert(layout.ty.clone()) {
+            return Err(ProviderLoadError::InvalidVariantLayout(layout.ty.clone()));
+        }
+        let mut variants = BTreeSet::new();
+        for variant in &layout.variants {
+            if variant.name.trim().is_empty() || !variants.insert(variant.name.clone()) {
+                return Err(ProviderLoadError::InvalidVariantLayout(layout.ty.clone()));
+            }
+            let mut fields = BTreeSet::new();
+            if variant
+                .fields
+                .iter()
+                .any(|field| field.name.trim().is_empty() || !fields.insert(field.name.clone()))
+            {
+                return Err(ProviderLoadError::InvalidVariantLayout(layout.ty.clone()));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderLoadError {
     InvalidProviderIdentity,
@@ -1110,6 +1142,7 @@ pub enum ProviderLoadError {
         record: WireType,
         field: String,
     },
+    InvalidVariantLayout(WireType),
     UnresolvedImport(ExternalSymbol),
     ImportAbiMismatch {
         symbol: ExternalSymbol,
@@ -1133,6 +1166,7 @@ pub enum ProviderLoadErrorCode {
     InvalidRecordLayout,
     DuplicateRecordLayout,
     InvalidRecordField,
+    InvalidVariantLayout,
     UnresolvedImport,
     ImportAbiMismatch,
     ImportSignatureMismatch,
@@ -1154,6 +1188,7 @@ impl ProviderLoadError {
             Self::InvalidRecordLayout(_) => ProviderLoadErrorCode::InvalidRecordLayout,
             Self::DuplicateRecordLayout(_) => ProviderLoadErrorCode::DuplicateRecordLayout,
             Self::InvalidRecordField { .. } => ProviderLoadErrorCode::InvalidRecordField,
+            Self::InvalidVariantLayout(_) => ProviderLoadErrorCode::InvalidVariantLayout,
             Self::UnresolvedImport(_) => ProviderLoadErrorCode::UnresolvedImport,
             Self::ImportAbiMismatch { .. } => ProviderLoadErrorCode::ImportAbiMismatch,
             Self::ImportSignatureMismatch(_) => ProviderLoadErrorCode::ImportSignatureMismatch,
@@ -1209,6 +1244,7 @@ mod tests {
             provider_version: "1.0.0".to_string(),
             supported_abi: vec![1],
             record_layouts: Vec::new(),
+            variant_layouts: Vec::new(),
             functions: vec![ProviderFunctionDescriptor {
                 symbol: symbol.clone(),
                 signature,
