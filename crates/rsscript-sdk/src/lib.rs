@@ -550,7 +550,10 @@ impl Compiler {
         let snapshot_digest = in_memory_snapshot_digest(&sources, &interfaces);
         let artifact = compile_validated_to_bytecode(&validated, &snapshot_digest)
             .map_err(bytecode_compile_error)?;
-        BuiltArtifact::from_bytecode(artifact, source_set_analysis(&sources, &snapshot_digest))
+        BuiltArtifact::from_bytecode(
+            artifact,
+            source_set_analysis(&validated, &sources, &snapshot_digest),
+        )
     }
 
     #[cfg(feature = "execution")]
@@ -587,7 +590,7 @@ impl Compiler {
         operation.check().map_err(CompileError::from)?;
         let built = BuiltArtifact::from_bytecode(
             artifact,
-            source_set_analysis(&sources, &snapshot_digest),
+            source_set_analysis(&validated, &sources, &snapshot_digest),
         )?;
         operation.check().map_err(CompileError::from)?;
         Ok(built)
@@ -712,12 +715,44 @@ impl BuiltArtifact {
 }
 
 #[cfg(feature = "execution")]
-fn source_set_analysis(sources: &[(&str, &str)], snapshot_digest: &str) -> AnalysisEnvelopeV1 {
-    AnalysisEnvelopeV1::source(SourceAnalysisV1::new(
-        rsscript_abi_model::LANGUAGE_SEMANTICS_VERSION,
-        snapshot_digest,
-        sources.iter().map(|(path, _)| *path),
-    ))
+fn source_set_analysis(
+    validated: &ValidatedProgram,
+    sources: &[(&str, &str)],
+    snapshot_digest: &str,
+) -> AnalysisEnvelopeV1 {
+    use rsscript_semantics::hir::CallResolution;
+
+    let mut call_edges = Vec::new();
+    let mut external_calls = Vec::new();
+    for call in validated.database().hir().call_sites() {
+        let CallResolution::Resolved { signature, .. } = &call.resolution else {
+            continue;
+        };
+        let callee = signature
+            .namespace
+            .as_ref()
+            .map(|namespace| format!("{namespace}.{}", signature.name))
+            .unwrap_or_else(|| signature.name.clone());
+        call_edges.push(CallEdgeFactV1 {
+            caller: call.function_name.clone(),
+            callee: callee.clone(),
+        });
+        if signature.is_external {
+            external_calls.push(ExternalCallFactV1 {
+                function: call.function_name.clone(),
+                symbol: callee.clone(),
+                call_chain: vec![call.function_name.clone(), callee],
+            });
+        }
+    }
+    AnalysisEnvelopeV1::source(
+        SourceAnalysisV1::new(
+            rsscript_abi_model::LANGUAGE_SEMANTICS_VERSION,
+            snapshot_digest,
+            sources.iter().map(|(path, _)| *path),
+        )
+        .with_call_facts(call_edges, external_calls),
+    )
 }
 
 fn snapshot_pairs(snapshot: &SourceSnapshot) -> Vec<(&str, &str)> {
@@ -2150,6 +2185,59 @@ mod tests {
         );
         assert!(!RunLimits::bounded().blocking_provider_calls_allowed());
         assert!(RunLimits::unbounded_for_trusted_host().blocking_provider_calls_allowed());
+    }
+
+    #[test]
+    fn source_artifacts_carry_resolved_call_facts_for_semantic_diff() {
+        let compiler = Compiler;
+        let old = compiler
+            .compile(
+                "call-facts.rss",
+                "fn main() -> Int { return helper() }\nfn helper() -> Int { return 1 }",
+            )
+            .expect("baseline source compiles");
+        let new = compiler
+            .compile_with_interfaces(
+                &[ (
+                    "call-facts.rss",
+                    "fn main() -> Int { return helper() }\nfn helper() -> Int { return Host.value() }",
+                ) ],
+                &[("host.rssi", "fn Host.value() -> Int")],
+            )
+            .expect("external-call source compiles");
+
+        let analysis = new
+            .source_analysis()
+            .expect("source build carries typed source analysis");
+        assert!(
+            analysis
+                .call_edges
+                .iter()
+                .any(|edge| edge.caller == "main" && edge.callee == "helper")
+        );
+        assert!(
+            analysis
+                .call_edges
+                .iter()
+                .any(|edge| edge.caller == "helper" && edge.callee == "Host.value")
+        );
+        assert_eq!(analysis.external_calls.len(), 1);
+        assert_eq!(analysis.external_calls[0].function, "helper");
+        assert_eq!(analysis.external_calls[0].symbol, "Host.value");
+
+        let diff = SemanticDiffV1::between(old.bundle(), new.bundle());
+        assert!(
+            diff.call_edges
+                .added
+                .iter()
+                .any(|edge| edge.caller == "helper" && edge.callee == "Host.value")
+        );
+        assert!(
+            diff.external_calls
+                .added
+                .iter()
+                .any(|call| call.function == "helper" && call.symbol == "Host.value")
+        );
     }
 
     #[test]

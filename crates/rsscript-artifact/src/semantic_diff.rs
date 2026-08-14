@@ -370,7 +370,11 @@ fn analysis_parameters(value: &serde_json::Value) -> Vec<FunctionParameterFactV1
 }
 
 fn analysis_external_calls(analysis: &serde_json::Value) -> Vec<ExternalCallFactV1> {
-    analysis["external_imports"]
+    let calls = analysis
+        .get("external_calls")
+        .filter(|value| value.is_array())
+        .unwrap_or(&analysis["external_imports"]);
+    calls
         .as_array()
         .into_iter()
         .flatten()

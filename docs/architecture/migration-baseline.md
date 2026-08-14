@@ -1449,7 +1449,11 @@ mechanical acceptance condition holds.
   persisted Bundle schema and integrity checks are owned by
   `rsscript-artifact`; SDK only composes it into phase APIs. Direct
   `source_analysis.v1` evidence is constructed and decoded through the
-  Artifact-owned `SourceAnalysisV1` model; package analysis remains an
+  Artifact-owned `SourceAnalysisV1` model. Direct source builds now bind
+  resolved checked-HIR call edges and direct external-call facts to the same
+  immutable snapshot as bytecode, so the ordinary `rss build`/`rss diff` path
+  carries neutral call evidence without invoking package review. Package
+  analysis remains an
   explicitly bounded compatibility adapter pending its own typed schema.
 - [x] **A07 — Complete semantic diff evidence.** Add read/mut/take, retention and
   escape, resource acquire/transfer/cleanup, structured-task fan-out and

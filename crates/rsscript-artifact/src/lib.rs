@@ -285,6 +285,8 @@ impl AnalysisEnvelopeV1 {
             "language_version": source.language_version.clone(),
             "snapshot_digest": source.snapshot_digest.clone(),
             "sources": source.sources.clone(),
+            "call_edges": source.call_edges.clone(),
+            "external_calls": source.external_calls.clone(),
         });
         Self {
             schema: AnalysisSchemaV1::Source,
@@ -371,6 +373,15 @@ pub struct SourceAnalysisV1 {
     pub language_version: String,
     pub snapshot_digest: String,
     pub sources: Vec<String>,
+    /// Resolved direct calls from checked semantic input. These are neutral
+    /// program facts, not host authorization or review policy.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub call_edges: Vec<CallEdgeFactV1>,
+    /// Resolved external calls with their direct caller. A full package
+    /// analysis may add transitive call chains; direct source snapshots retain
+    /// the checked call-site fact available at their own boundary.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub external_calls: Vec<ExternalCallFactV1>,
 }
 
 impl SourceAnalysisV1 {
@@ -385,7 +396,25 @@ impl SourceAnalysisV1 {
             language_version: language_version.into(),
             snapshot_digest: snapshot_digest.into(),
             sources,
+            call_edges: Vec::new(),
+            external_calls: Vec::new(),
         }
+    }
+
+    /// Attach canonically ordered semantic call facts derived from the same
+    /// validated input that produced this Artifact.
+    pub fn with_call_facts(
+        mut self,
+        mut call_edges: Vec<CallEdgeFactV1>,
+        mut external_calls: Vec<ExternalCallFactV1>,
+    ) -> Self {
+        call_edges.sort();
+        call_edges.dedup();
+        external_calls.sort();
+        external_calls.dedup();
+        self.call_edges = call_edges;
+        self.external_calls = external_calls;
+        self
     }
 
     fn from_json(payload: Value) -> Result<Self, ArtifactBundleError> {
