@@ -878,6 +878,21 @@ mod provider_contract_tests {
         assert_eq!(result, NativeValue::Int(42));
     }
 
+    #[test]
+    fn scalar_wire_adapter_rejects_structured_signatures_before_provider_code() {
+        let error = native_scalar_to_wire(
+            NativeValue::List(vec![NativeValue::Int(1)]),
+            &WireType::List {
+                element: Box::new(WireType::Int {
+                    bits: 64,
+                    signed: true,
+                }),
+            },
+        )
+        .expect_err("structured wire dispatch requires the linked type-table adapter");
+        assert_eq!(error.code, ProviderErrorCode::Unavailable);
+    }
+
     fn registered_async_function(callable: AsyncInterpreterFn) -> ExternalFunction {
         registered_async_function_with_reentrancy(callable, true)
     }
