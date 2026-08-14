@@ -1264,8 +1264,10 @@ mechanical acceptance condition holds.
     tuples, `Option<T>`, and `Result<T, E>`: both the VM adapter and Provider
     derive numeric identities from the exact linked signature, and mismatched
     element/type/variant identities fail closed. Named records, arbitrary
-    variants, maps, JSON, chars, resources, and asynchronous wire calls still
-    require the Artifact-wide type-table/lifecycle adapter.
+    variants, maps, JSON, chars, and resources still require the Artifact-wide
+    type-table/lifecycle adapter. The same safe scalar/aggregate subset now
+    also works through `AsyncWireInterpreterFn`; named/resource async values
+    remain fail-closed.
     - [x] **P06.2a — Bridge generation-safe resource handles.** Provider
       runtime handles now convert to/from the canonical numeric wire handle
       with a descriptor-supplied resource type; no legacy type-name string is
@@ -1284,8 +1286,9 @@ mechanical acceptance condition holds.
     form for its in-memory and rooted filesystem/log providers, proving the
     reviewed Artifact/link/run path without the legacy adapter.
     The official CLI (`List<String>`) and environment (`Option<String>`)
-    Providers now use this descriptor-scoped wire path. Other structured and
-    asynchronous Provider migrations remain follow-up.
+    Providers now use this descriptor-scoped wire path. Other structured
+    Provider migrations remain follow-up; async Providers can now use the same
+    safe subset through `AsyncWireInterpreterFn`.
   - [ ] **P06.4 — Remove legacy escape variants from canonical APIs.** JSON stays
     only behind a named extension codec with explicit interface declaration.
     The reviewed SDK Provider façade no longer re-exports `NativeValue` or

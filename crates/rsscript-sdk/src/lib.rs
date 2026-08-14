@@ -447,10 +447,11 @@ pub mod artifact {
 pub mod provider_api {
     pub use super::ProviderRegistry;
     pub use rsscript_provider_api::{
-        BlockingBehavior, CancellationBehavior, ExternalSymbol, FunctionSignature, HostCallContext,
-        ProviderCallContext, ProviderCallMode, ProviderDescriptor, ProviderError,
-        ProviderErrorCode, ProviderFunction, ProviderFunctionDescriptor, ProviderLoadError,
-        ResourceHandle, WireInterpreterFn, WireValue,
+        AsyncWireInterpreterFn, BlockingBehavior, CancellationBehavior, ExternalSymbol,
+        FunctionSignature, HostCallContext, ProviderCallContext, ProviderCallMode,
+        ProviderDescriptor, ProviderError, ProviderErrorCode, ProviderFunction,
+        ProviderFunctionDescriptor, ProviderLoadError, ResourceHandle, WireInterpreterFn,
+        WireProviderFuture, WireValue,
     };
 }
 

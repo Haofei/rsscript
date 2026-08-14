@@ -13,13 +13,13 @@ pub use rsscript_abi_model::{
     WireValue,
 };
 pub use rsscript_provider_api::{
-    AsyncInterpreterFn, AsyncProviderCallContext, BlockingBehavior, CancellationBehavior,
-    HostCallContext, NativeInterpreterFn, NativeValue, ProviderCallContext, ProviderCallMode,
-    ProviderCallTrace, ProviderCallable, ProviderDescriptor, ProviderError, ProviderErrorCode,
-    ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor, ProviderFuture,
-    ProviderInvocationContract, ProviderLoadError, ProviderResource, ProviderResourceRegistry,
-    ProviderResourceTable, ProviderTraceSink, ResolvedProviderFunction, ResourceCleanupContract,
-    ResourceHandle, WireInterpreterFn,
+    AsyncInterpreterFn, AsyncProviderCallContext, AsyncWireInterpreterFn, BlockingBehavior,
+    CancellationBehavior, HostCallContext, NativeInterpreterFn, NativeValue, ProviderCallContext,
+    ProviderCallMode, ProviderCallTrace, ProviderCallable, ProviderDescriptor, ProviderError,
+    ProviderErrorCode, ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor,
+    ProviderFuture, ProviderInvocationContract, ProviderLoadError, ProviderResource,
+    ProviderResourceRegistry, ProviderResourceTable, ProviderTraceSink, ResolvedProviderFunction,
+    ResourceCleanupContract, ResourceHandle, WireInterpreterFn, WireProviderFuture,
 };
 
 #[derive(Default)]
@@ -53,6 +53,31 @@ impl ProviderTraceCollector {
 /// the isolated runner boundary.
 struct PanicContainedProviderFuture {
     inner: ProviderFuture,
+}
+
+/// The wire equivalent of [`PanicContainedProviderFuture`]. The VM converts
+/// its completed canonical value only after this boundary, so a Provider panic
+/// cannot skip the normal structured error path merely because it is async.
+struct PanicContainedWireProviderFuture {
+    inner: WireProviderFuture,
+}
+
+impl PanicContainedWireProviderFuture {
+    fn new(inner: WireProviderFuture) -> Self {
+        Self { inner }
+    }
+}
+
+impl Future for PanicContainedWireProviderFuture {
+    type Output = Result<WireValue, ProviderError>;
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        match catch_unwind(AssertUnwindSafe(|| this.inner.as_mut().poll(context))) {
+            Ok(result) => result,
+            Err(_) => Poll::Ready(Err(provider_panic_error())),
+        }
+    }
 }
 
 impl PanicContainedProviderFuture {
@@ -349,6 +374,12 @@ struct NonReentrantCallPermit {
     active: Arc<AtomicBool>,
 }
 
+#[derive(Clone)]
+enum AsyncProviderCallable {
+    Native(AsyncInterpreterFn),
+    Wire(AsyncWireInterpreterFn),
+}
+
 impl Drop for NonReentrantCallPermit {
     fn drop(&mut self) {
         self.active.store(false, Ordering::Release);
@@ -510,6 +541,9 @@ impl ExternalFunction {
                 ProviderCallable::Async(_) => Err(ProviderError::unavailable(
                     "async provider function requires the VM async dispatcher",
                 )),
+                ProviderCallable::WireAsync(_) => Err(ProviderError::unavailable(
+                    "async wire provider function requires the VM async dispatcher",
+                )),
             }))
             .unwrap_or_else(|_| Err(provider_panic_error()));
             if self.contract().is_some_and(|contract| {
@@ -590,14 +624,17 @@ impl ExternalFunction {
             .provider_version
             .clone_from(&contract.provider_version);
         context.symbol = contract.descriptor.symbol.as_str().to_string();
-        let ProviderCallable::Async(callable) = &self.callable else {
-            return Box::pin(async {
-                Err(ProviderError::unavailable(
-                    "sync provider function cannot enter the async dispatcher",
-                ))
-            });
+        let callable = match &self.callable {
+            ProviderCallable::Async(callable) => AsyncProviderCallable::Native(callable.clone()),
+            ProviderCallable::WireAsync(callable) => AsyncProviderCallable::Wire(callable.clone()),
+            ProviderCallable::Sync(_) | ProviderCallable::WireSync(_) => {
+                return Box::pin(async {
+                    Err(ProviderError::unavailable(
+                        "sync provider function cannot enter the async dispatcher",
+                    ))
+                });
+            }
         };
-        let callable = callable.clone();
         let request_bytes = rsscript_provider_api::estimated_payload_bytes(&args);
         let trace = context.trace.clone();
         let trace_context = context.clone();
@@ -622,9 +659,38 @@ impl ExternalFunction {
                         "blocking work must not run inside an async Provider future",
                     ));
                 }
-                let result = match catch_unwind(AssertUnwindSafe(|| callable.call(context, args))) {
-                    Ok(future) => PanicContainedProviderFuture::new(future).await,
-                    Err(_) => Err(provider_panic_error()),
+                let result = match callable {
+                    AsyncProviderCallable::Native(callable) => {
+                        match catch_unwind(AssertUnwindSafe(|| callable.call(context, args))) {
+                            Ok(future) => PanicContainedProviderFuture::new(future).await,
+                            Err(_) => Err(provider_panic_error()),
+                        }
+                    }
+                    AsyncProviderCallable::Wire(callable) => {
+                        let signature = contract.descriptor.signature.clone();
+                        if signature.parameters.len() != args.len() {
+                            return Err(ProviderError::invalid_argument(
+                                "provider wire argument count does not match its linked signature",
+                            ));
+                        }
+                        let types = WireCallTypeTable::for_signature(&signature).map_err(|error| {
+                            ProviderError::internal(format!(
+                                "linked provider signature cannot form a wire type table: {error}"
+                            ))
+                        })?;
+                        let wire_args = args
+                            .into_iter()
+                            .zip(&signature.parameters)
+                            .map(|(value, parameter)| native_to_wire(value, &parameter.ty, &types))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        let result = match catch_unwind(AssertUnwindSafe(|| {
+                            callable.call(context, wire_args)
+                        })) {
+                            Ok(future) => PanicContainedWireProviderFuture::new(future).await,
+                            Err(_) => Err(provider_panic_error()),
+                        };
+                        result.and_then(|value| wire_to_native(value, &signature.result, &types))
+                    }
                 };
                 if matches!(
                     contract.descriptor.cancellation,
@@ -731,6 +797,17 @@ impl From<AsyncInterpreterFn> for ExternalFunction {
     }
 }
 
+impl From<AsyncWireInterpreterFn> for ExternalFunction {
+    fn from(callable: AsyncWireInterpreterFn) -> Self {
+        Self {
+            callable: callable.into(),
+            contract: None,
+            host_context: Arc::new(HostCallContext::default()),
+            active_non_reentrant_call: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
 impl From<ExternalFunction> for NativeInterpreterFn {
     fn from(function: ExternalFunction) -> Self {
         match function.callable {
@@ -743,6 +820,11 @@ impl From<ExternalFunction> for NativeInterpreterFn {
             ProviderCallable::Async(_) => NativeInterpreterFn::new(|_| {
                 Err(ProviderError::unavailable(
                     "async Provider callable cannot be converted to a sync callable",
+                ))
+            }),
+            ProviderCallable::WireAsync(_) => NativeInterpreterFn::new(|_| {
+                Err(ProviderError::unavailable(
+                    "async wire Provider callable cannot be converted to a sync callable",
                 ))
             }),
         }
@@ -1267,6 +1349,51 @@ mod provider_contract_tests {
         registry.into_bindings().next().unwrap().1
     }
 
+    fn registered_async_wire_function(callable: AsyncWireInterpreterFn) -> ExternalFunction {
+        let symbol = ExternalSymbol::new("host.test.async_increment").unwrap();
+        let signature = FunctionSignature {
+            parameters: vec![rsscript_abi_model::ParameterSignature {
+                name: "value".to_string(),
+                effect: rsscript_abi_model::DataEffect::Read,
+                ty: "Int".into(),
+                retained: false,
+            }],
+            result: "Int".into(),
+            asynchronous: true,
+        };
+        let descriptor = ProviderDescriptor {
+            provider_id: "test.provider".into(),
+            provider_version: "1.0.0".into(),
+            supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+            functions: vec![ProviderFunctionDescriptor {
+                symbol: symbol.clone(),
+                signature: signature.clone(),
+                entry: "async_increment".into(),
+                call_mode: ProviderCallMode::Async,
+                blocking: BlockingBehavior::NonBlocking,
+                cancellation: CancellationBehavior::Cooperative,
+                thread_safe: true,
+                reentrant: true,
+                resource_cleanup: ResourceCleanupContract::None,
+                error_mapping: ProviderErrorMapping::StructuredV1,
+            }],
+        };
+        let mut registry = ExternalFunctionRegistry::new();
+        registry
+            .register_provider(
+                &descriptor,
+                BTreeMap::from([(
+                    symbol,
+                    ProviderFunction {
+                        signature,
+                        callable,
+                    },
+                )]),
+            )
+            .unwrap();
+        registry.into_bindings().next().unwrap().1
+    }
+
     fn async_context(
         cancellation: Option<CancellationToken>,
         deadline: Option<MonotonicDeadline>,
@@ -1456,6 +1583,21 @@ mod provider_contract_tests {
             result => panic!("expected cancellation after pending provider future, got {result:?}"),
         };
         assert_eq!(error.code, ProviderErrorCode::Cancelled);
+    }
+
+    #[test]
+    fn async_wire_dispatcher_adapts_the_linked_signature() {
+        let function =
+            registered_async_wire_function(AsyncWireInterpreterFn::new(|_, args| async move {
+                assert_eq!(args, vec![WireValue::Int { value: 41 }]);
+                Ok(WireValue::Int { value: 42 })
+            }));
+        let mut future =
+            function.start_async(async_context(None, None), vec![NativeValue::Int(41)]);
+        assert_eq!(
+            poll_once(&mut future),
+            Poll::Ready(Ok(NativeValue::Int(42)))
+        );
     }
 
     #[test]

@@ -770,6 +770,12 @@ impl From<NativeHostFn> for NativeInterpreterFn {
 pub type ProviderFuture =
     Pin<Box<dyn Future<Output = Result<NativeValue, ProviderError>> + Send + 'static>>;
 
+/// Canonical asynchronous Provider wire callable result. It is separate from
+/// [`ProviderFuture`] so new asynchronous Providers do not need to publish the
+/// legacy dynamic value model merely to suspend.
+pub type WireProviderFuture =
+    Pin<Box<dyn Future<Output = Result<WireValue, ProviderError>> + Send + 'static>>;
+
 type AsyncContextualProviderFn =
     dyn Fn(AsyncProviderCallContext, Vec<NativeValue>) -> ProviderFuture + Send + Sync;
 
@@ -798,21 +804,50 @@ impl AsyncInterpreterFn {
     }
 }
 
+type AsyncContextualWireProviderFn =
+    dyn Fn(AsyncProviderCallContext, Vec<WireValue>) -> WireProviderFuture + Send + Sync;
+
+/// Canonical asynchronous Provider callable for descriptor-linked wire values.
+#[derive(Clone)]
+pub struct AsyncWireInterpreterFn {
+    inner: Arc<AsyncContextualWireProviderFn>,
+}
+
+impl AsyncWireInterpreterFn {
+    pub fn new<F, Fut>(function: F) -> Self
+    where
+        F: Fn(AsyncProviderCallContext, Vec<WireValue>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<WireValue, ProviderError>> + Send + 'static,
+    {
+        Self {
+            inner: Arc::new(move |context, args| Box::pin(function(context, args))),
+        }
+    }
+
+    pub fn call(
+        &self,
+        context: AsyncProviderCallContext,
+        args: Vec<WireValue>,
+    ) -> WireProviderFuture {
+        (self.inner)(context, args)
+    }
+}
+
 #[derive(Clone)]
 pub enum ProviderCallable {
     Sync(NativeInterpreterFn),
-    /// Canonical typed wire callable. The current reference VM admits this
-    /// only for synchronous scalar signatures; structured values wait for the
-    /// linked type-table adapter rather than degrading to string identities.
+    /// Canonical typed wire callable for descriptor-linked synchronous calls.
     WireSync(WireInterpreterFn),
     Async(AsyncInterpreterFn),
+    /// Canonical typed wire callable for descriptor-linked asynchronous calls.
+    WireAsync(AsyncWireInterpreterFn),
 }
 
 impl ProviderCallable {
     pub const fn call_mode(&self) -> ProviderCallMode {
         match self {
             Self::Sync(_) | Self::WireSync(_) => ProviderCallMode::Sync,
-            Self::Async(_) => ProviderCallMode::Async,
+            Self::Async(_) | Self::WireAsync(_) => ProviderCallMode::Async,
         }
     }
 }
@@ -826,6 +861,12 @@ impl From<NativeInterpreterFn> for ProviderCallable {
 impl From<AsyncInterpreterFn> for ProviderCallable {
     fn from(value: AsyncInterpreterFn) -> Self {
         Self::Async(value)
+    }
+}
+
+impl From<AsyncWireInterpreterFn> for ProviderCallable {
+    fn from(value: AsyncWireInterpreterFn) -> Self {
+        Self::WireAsync(value)
     }
 }
 

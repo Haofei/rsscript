@@ -26,10 +26,10 @@ stable variant ordinals. The adapter validates every identity before converting
 to or from the legacy VM representation.
 
 This is deliberately not an Artifact-wide type table. Named records, arbitrary
-variants, resources, maps, JSON, chars, and asynchronous wire calls remain
-fail-closed until their complete Artifact layout and lifecycle contracts are
-available. A type ID from one function descriptor is never valid for another
-descriptor.
+variants, resources, maps, JSON, and chars remain fail-closed until their
+complete Artifact layout and lifecycle contracts are available. Asynchronous
+wire dispatch is a separate contract covered by ADR 0190. A type ID from one
+function descriptor is never valid for another descriptor.
 
 ## Compatibility and migration
 

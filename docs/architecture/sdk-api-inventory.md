@@ -38,10 +38,10 @@ snapshot path during migration.
   recursion, lexical resource-lifetime and explicit resource-transfer, and
   structured task-group contracts.
 - Provider lifecycle: `ProviderRegistry`, provider descriptors, structured
-  signatures, `WireInterpreterFn`/`WireValue` for the canonical scalar plus
-  descriptor-scoped aggregate Provider path (`List<T>`, tuples, `Option<T>`,
-  and `Result<T, E>`), registration errors, and typed execution context
-  contracts.
+  signatures, `WireInterpreterFn`/`AsyncWireInterpreterFn`/`WireValue` for the
+  canonical scalar plus descriptor-scoped aggregate Provider path (`List<T>`,
+  tuples, `Option<T>`, and `Result<T, E>`), registration errors, and typed
+  execution context contracts.
   Legacy `NativeInterpreterFn`/`NativeValue` are not re-exported from this
   reviewed façade; compatibility adapters must opt into the SDK
   `compatibility` surface or depend directly on the low-level Provider crate.
