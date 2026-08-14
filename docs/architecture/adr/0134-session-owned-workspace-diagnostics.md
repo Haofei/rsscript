@@ -43,5 +43,6 @@ None.
 ## Evidence
 
 Semantic tests prove cache reuse, immutable source/interface capture, and
-revision invalidation. Language-service and LSP tests exercise the same
-workspace diagnostics path.
+revision invalidation, including rejection of cancelled and expired cached
+requests. Language-service and LSP tests exercise the same workspace diagnostics
+path.

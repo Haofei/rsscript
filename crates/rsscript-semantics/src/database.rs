@@ -1034,6 +1034,48 @@ mod tests {
     }
 
     #[test]
+    fn cached_workspace_diagnostics_obey_cancellation_and_deadline() {
+        use std::time::{Duration, Instant};
+
+        let mut session = CompilationSession::default();
+        session
+            .set_file("main.rss", "fn main() -> Unit { return Unit }")
+            .unwrap();
+        session
+            .workspace_diagnostics_with_operation(&OperationContext::default(), |_, _| {
+                Ok(Vec::new())
+            })
+            .unwrap();
+
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        let cancelled_operation = OperationContext {
+            cancellation: Some(cancelled),
+            ..OperationContext::default()
+        };
+        assert!(matches!(
+            session.workspace_diagnostics_with_operation(&cancelled_operation, |_, _| {
+                panic!("a cancelled request must not read the diagnostic cache")
+            }),
+            Err(OperationAbort::Cancelled)
+        ));
+
+        let expired_operation = OperationContext {
+            deadline: Some(MonotonicDeadline::at(
+                Instant::now() - Duration::from_millis(1),
+            )),
+            ..OperationContext::default()
+        };
+        assert!(matches!(
+            session.workspace_diagnostics_with_operation(&expired_operation, |_, _| {
+                panic!("an expired request must not read the diagnostic cache")
+            }),
+            Err(OperationAbort::DeadlineExceeded)
+        ));
+        assert_eq!(session.stats().workspace_diagnostic_cache_hits, 0);
+    }
+
+    #[test]
     fn source_and_interface_parse_caches_do_not_alias_the_same_file_id() {
         let mut session = CompilationSession::default();
         session
