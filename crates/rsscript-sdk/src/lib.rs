@@ -1722,6 +1722,50 @@ mod tests {
         assert_eq!(cancelled.code(), CompileErrorCode::Cancelled);
     }
 
+    #[cfg(feature = "project")]
+    #[test]
+    fn project_capture_builds_with_dependency_interface_inputs() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let root = workspace.path().join("root");
+        let dependency = workspace.path().join("dependency");
+        for directory in [root.join("src"), dependency.join("interfaces")] {
+            std::fs::create_dir_all(directory).expect("package directory");
+        }
+        std::fs::write(
+            root.join("rsspkg.toml"),
+            "[package]\nname = \"root\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[sources]\npaths = [\"src\"]\n\n[dependencies]\ndependency = { path = \"../dependency\" }\n",
+        )
+        .expect("root manifest");
+        std::fs::write(
+            root.join("src/main.rss"),
+            "fn main() -> Int { return Dependency.value() }\n",
+        )
+        .expect("root source");
+        std::fs::write(
+            dependency.join("rsspkg.toml"),
+            "[package]\nname = \"dependency\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
+        )
+        .expect("dependency manifest");
+        std::fs::write(
+            dependency.join("interfaces/dependency.rssi"),
+            "pub fn Dependency.value() -> Int\n",
+        )
+        .expect("dependency interface");
+
+        let project = project::ProjectCompiler::new();
+        let captured = project
+            .capture_frontend_from(workspace.path(), std::path::Path::new("root"))
+            .expect("capture dependency interfaces");
+        assert!(captured.frontend().interfaces().files().iter().any(|file| {
+            file.path().starts_with("dependency/")
+                && file.path().ends_with("/interfaces/dependency.rssi")
+        }));
+        let direct = project.build_captured(&captured).expect("pure build");
+        let convenience = project.compile_package(&root).expect("convenience build");
+        assert_eq!(direct.artifact_bytes(), convenience.artifact_bytes());
+        assert_eq!(direct.snapshot_digest(), captured.frontend_digest());
+    }
+
     #[test]
     fn stable_facade_compiles_serializes_loads_and_runs() {
         let compiler = Compiler;

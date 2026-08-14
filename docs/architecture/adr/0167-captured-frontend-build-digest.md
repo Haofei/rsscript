@@ -51,5 +51,7 @@ frontend digest; it also proves a pre-cancelled build fails before work begins.
 The package convenience API must produce the same Artifact bytes as that
 explicit capture and preserve cancellation/deadline outcome codes from the
 loader rather than misclassifying them as package snapshot failures.
+The same invariant applies when a captured package consumes path-dependency
+interfaces, whose logical paths remain dependency-qualified.
 Architecture tests require the explicit API to remain in the project adapter
 rather than the pure compiler façade.
