@@ -13,7 +13,7 @@ default = []
 # callers that have not yet moved to the reviewed façade modules. New embeds
 # must use `compile`, `artifact`, `provider_api`, `runtime`, `report`, and
 # `operation` instead.
-compatibility = ["aot-rust"]
+compatibility = ["aot-rust", "legacy-exec-ir"]
 execution = [
     "dep:rsscript-abi-model",
     "dep:rsscript-artifact",
@@ -25,9 +25,12 @@ execution = [
     "dep:rsscript-mir",
     "dep:rsscript-provider-api",
     "dep:rsscript-vm",
-    "rsscript-vm/legacy-exec-ir",
 ]
 aot-rust = ["execution", "rsscript_compiler/aot-rust"]
+# Transitional source-shaped executable IR remains available only to the
+# migration corpus and legacy API surface. Reviewed execution consumes MIR
+# bytecode through the verifier and does not select this feature.
+legacy-exec-ir = ["execution", "rsscript-vm/legacy-exec-ir"]
 native-jit = ["compatibility", "rsscript-vm/native-jit"]
 
 [dependencies]

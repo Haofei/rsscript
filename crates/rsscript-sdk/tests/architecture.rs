@@ -3078,8 +3078,26 @@ fn legacy_executable_ir_lowering_is_an_explicit_vm_compatibility_feature() {
     assert!(
         execution
             .iter()
+            .all(|entry| entry.as_str() != Some("rsscript-vm/legacy-exec-ir")),
+        "reviewed SDK execution must not select legacy lowering"
+    );
+    let legacy = sdk_manifest["features"]["legacy-exec-ir"]
+        .as_array()
+        .expect("SDK legacy-exec-ir feature should be declared");
+    assert!(
+        legacy
+            .iter()
             .any(|entry| entry.as_str() == Some("rsscript-vm/legacy-exec-ir")),
-        "the transitional SDK compatibility adapter must opt into legacy lowering explicitly"
+        "only the explicit SDK compatibility feature may select legacy lowering"
+    );
+    let compatibility = sdk_manifest["features"]["compatibility"]
+        .as_array()
+        .expect("SDK compatibility feature should be declared");
+    assert!(
+        compatibility
+            .iter()
+            .any(|entry| entry.as_str() == Some("legacy-exec-ir")),
+        "legacy root APIs must opt into the explicit compatibility feature"
     );
 }
 

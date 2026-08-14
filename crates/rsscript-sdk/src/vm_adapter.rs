@@ -78,12 +78,21 @@ fn emit_ir(compiled: &CompiledIr) -> Result<RegVmExecutable, EvalError> {
 /// Explicit migration-only bridge for checked-HIR constructs that do not yet
 /// have a CFG MIR representation. A direct-HIR failure other than `Unsupported`
 /// is never hidden by this compatibility encoder.
+#[cfg(feature = "legacy-exec-ir")]
 fn emit_legacy_executable_ir(compiled: &CompiledIr) -> Result<RegVmExecutable, EvalError> {
     rsscript_vm::compile_executable_ir(
         compiled.legacy_executable(),
         compiled.source_hash(),
         compiled.interface_catalog_digest(),
     )
+}
+
+#[cfg(not(feature = "legacy-exec-ir"))]
+fn emit_legacy_executable_ir(_: &CompiledIr) -> Result<RegVmExecutable, EvalError> {
+    Err(EvalError::Runtime(
+        "the checked program requires a legacy executable-IR operation; migrate it to MIR or enable the explicit `legacy-exec-ir` compatibility feature"
+            .to_string(),
+    ))
 }
 
 /// Build a provider-neutral Artifact from compiler output without first
@@ -120,6 +129,7 @@ pub(crate) fn emit_compiled_artifact(
 /// Explicit migration-only Artifact path for unsupported checked-HIR forms.
 /// Its use is confined to the SDK compatibility adapter and remains behind
 /// the VM's `legacy-exec-ir` feature.
+#[cfg(feature = "legacy-exec-ir")]
 fn emit_legacy_compiled_artifact(
     compiled: &CompiledIr,
     snapshot_digest: &str,
@@ -132,6 +142,14 @@ fn emit_legacy_compiled_artifact(
     executable.bind_snapshot_digest(snapshot_digest)?;
     let bytes = executable.to_bytecode()?;
     BytecodeArtifact::from_bytes(&bytes).map_err(|error| EvalError::Runtime(error.to_string()))
+}
+
+#[cfg(not(feature = "legacy-exec-ir"))]
+fn emit_legacy_compiled_artifact(_: &CompiledIr, _: &str) -> Result<BytecodeArtifact, EvalError> {
+    Err(EvalError::Runtime(
+        "the checked program requires a legacy executable-IR operation; migrate it to MIR or enable the explicit `legacy-exec-ir` compatibility feature"
+            .to_string(),
+    ))
 }
 
 fn emit_mir(

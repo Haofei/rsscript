@@ -1,6 +1,9 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+#[cfg(feature = "legacy-exec-ir")]
+use std::collections::BTreeSet;
 use std::rc::Rc;
 
+#[cfg(feature = "legacy-exec-ir")]
 use rsscript_abi_model::{ExternalImport, RUNTIME_ABI_VERSION};
 #[cfg(feature = "legacy-exec-ir")]
 use rsscript_bytecode::BytecodeVerifier;

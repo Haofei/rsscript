@@ -150,6 +150,7 @@ pub(super) fn functions_reaching_call_cycle(edges: &[Vec<usize>]) -> Vec<bool> {
 /// TCO pass runs regardless of the `native-jit` feature). Used to ignore the
 /// lowerer's unreachable defensive `LoadUnit; Return` tail when deciding whether
 /// a self-tail-recursive function has a genuine base case.
+#[cfg(feature = "legacy-exec-ir")]
 pub(super) fn tco_reachable_instructions(code: &[RegInstr]) -> Vec<bool> {
     let n = code.len();
     let mut reachable = vec![false; n];
@@ -260,6 +261,7 @@ pub(super) fn tco_reachable_instructions(code: &[RegInstr]) -> Vec<bool> {
 ///     transformed bytecode) nor asserted anywhere — and native already relies on
 ///     `step_budget`, not `max_depth`, to bound every ordinary loop, so this does
 ///     not change native's safety posture.
+#[cfg(feature = "legacy-exec-ir")]
 pub(super) fn optimize_self_tail_calls(function: &mut RegFunction, function_id: usize) {
     // Locate every candidate self-tail-call site: (call_ip, dst, args, ...).
     let mut sites: Vec<(usize, Reg, Vec<Reg>)> = Vec::new();

@@ -50,9 +50,11 @@ pub(crate) struct RegNativeSignature {
     pub(crate) return_type: Option<String>,
 }
 
+#[cfg(feature = "legacy-exec-ir")]
 mod deep_copy;
 mod profile;
 
+#[cfg(feature = "legacy-exec-ir")]
 use deep_copy::*;
 pub(crate) use profile::*;
 
@@ -198,6 +200,7 @@ pub(crate) enum OsrTrigger {
 }
 
 impl RegFunction {
+    #[allow(dead_code)]
     pub(crate) fn placeholder(name: String) -> Self {
         Self {
             name,
@@ -832,6 +835,7 @@ pub(crate) enum RegIntCompare {
 
 pub(crate) type Reg = usize;
 
+#[cfg(feature = "legacy-exec-ir")]
 #[derive(Debug, Default)]
 pub(crate) struct LoopPatch {
     pub(crate) breaks: Vec<usize>,
@@ -839,6 +843,7 @@ pub(crate) struct LoopPatch {
     pub(crate) cleanup_base: usize,
 }
 
+#[cfg(feature = "legacy-exec-ir")]
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum MatchFailurePatch {
     Jump(usize),

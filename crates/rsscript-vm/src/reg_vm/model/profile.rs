@@ -362,6 +362,7 @@ pub(crate) fn closure_captures_all_scalar(closure: &VmClosure) -> bool {
     })
 }
 
+#[cfg(feature = "legacy-exec-ir")]
 pub(crate) fn scalar_param_type_needs_no_deep_copy(type_name: &str) -> bool {
     matches!(
         type_name,

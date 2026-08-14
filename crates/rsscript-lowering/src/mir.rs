@@ -777,6 +777,19 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         let checked::HirExpr::Effect { effect, value, .. } = argument else {
             return self.lower_expression(argument).map(MirCallArgument::Value);
         };
+        // `read` is an observation-only qualifier. It may be attached to an
+        // rvalue such as a string literal, where there is no caller-owned
+        // place to borrow. Preserve that distinction in MIR as an ordinary
+        // value argument; only local `read` values use `BorrowRead` so the
+        // verifier can track the place lifetime.
+        if *effect == checked::ParamEffect::Read
+            && !matches!(
+                value.as_ref(),
+                checked::HirExpr::Ident { .. } | checked::HirExpr::Manage { .. }
+            )
+        {
+            return self.lower_expression(value).map(MirCallArgument::Value);
+        }
         let value = match value.as_ref() {
             checked::HirExpr::Ident { .. } => value.as_ref(),
             checked::HirExpr::Manage { value, .. } => value.as_ref(),

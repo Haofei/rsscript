@@ -26,7 +26,9 @@
 
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+#[cfg(feature = "legacy-exec-ir")]
+use std::collections::BTreeSet;
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
@@ -50,14 +52,17 @@ use crate::eval_types::{
 };
 #[cfg(feature = "native-jit")]
 use crate::text_util::string_pad_len;
+#[cfg(feature = "legacy-exec-ir")]
+use crate::text_util::{decode_char_token, decode_string_token};
 use crate::text_util::{
-    decode_char_token, decode_string_token, string_format, string_pad, string_slice_range,
-    type_arg_names, type_root_name,
+    string_format, string_pad, string_slice_range, type_arg_names, type_root_name,
 };
 #[cfg(feature = "native-jit")]
 use crate::vm_value::clone_value_map_preserving_capacity;
+#[cfg(feature = "legacy-exec-ir")]
+use crate::vm_value::intern_layout;
 use crate::vm_value::{
-    TypeLayout, TypedVec, ValueMap, VmClosure, VmMapKey, VmNative, VmStruct, VmValue, intern_layout,
+    TypeLayout, TypedVec, ValueMap, VmClosure, VmMapKey, VmNative, VmStruct, VmValue,
 };
 use rsscript_abi_model::BinaryOp;
 #[cfg(feature = "legacy-exec-ir")]
@@ -71,6 +76,7 @@ use rsscript_exec_ir::{
 /// Intern the layout for a struct/variant whose canonical field order is given by
 /// `fields` (slot order). Used at lowering time so `MakeStruct`/`MakeVariant` carry
 /// a precomputed `Rc<TypeLayout>` and never re-hash per construction (V2.0).
+#[cfg(feature = "legacy-exec-ir")]
 fn intern_struct_layout(name: &str, fields: &[(String, Reg)]) -> Rc<TypeLayout> {
     let field_names: Vec<Rc<str>> = fields
         .iter()
@@ -1440,6 +1446,7 @@ fn type_name_may_contain_fn(type_name: &str, hir: &Hir) -> bool {
 /// The leading identifier of a (possibly generic) type spelling, e.g. the `List`
 /// of `List<Fn(Int) -> Int>` or the bare name otherwise. Used only to classify
 /// scalars and to look named user types up in the `types` table.
+#[cfg(feature = "legacy-exec-ir")]
 fn type_name_root(type_name: &str) -> &str {
     let name = type_name.trim();
     let end = name.find(['<', '(', ' ']).unwrap_or(name.len());

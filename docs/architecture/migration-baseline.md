@@ -632,7 +632,9 @@ mechanical acceptance condition holds.
       unsupported operations fail closed. `CompiledIr::mir` now uses only the
       direct checked-HIR path; the SDK enters the legacy executable-IR encoder
       only after an explicit `Unsupported` result, never to mask an invalid
-      direct MIR lowering.
+      direct MIR lowering. Reviewed SDK `execution` no longer selects that
+      encoder; only the explicit `legacy-exec-ir` compatibility feature may do
+      so.
   - [ ] **M02.3 — Lower aggregate and pattern operations.** Cover records,
     variants, collections, field/index operations, and match dispatch without
     source AST nodes in MIR.
