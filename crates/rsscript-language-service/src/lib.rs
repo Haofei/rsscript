@@ -328,7 +328,10 @@ impl LanguageService {
         let mut diagnostics = semantic_diagnostics.to_vec();
         for path in self.documents.keys().cloned().collect::<Vec<_>>() {
             check_request(request)?;
-            diagnostics.extend(self.lint(&path));
+            diagnostics.extend(
+                self.lint_with_operation(&path, &operation)
+                    .map_err(LanguageServiceError::from)?,
+            );
         }
         deduplicate_diagnostics(&mut diagnostics);
         check_request(request)?;
@@ -345,8 +348,14 @@ impl LanguageService {
         let Some(document) = self.documents.get(path).cloned() else {
             return Ok(Vec::new());
         };
+        let operation = OperationContext {
+            cancellation: request.cancellation.cloned(),
+            deadline: request.deadline,
+            ..OperationContext::default()
+        };
         let cache_key = (path.to_string(), document.revision);
         if let Some(cached) = self.diagnostic_cache.get(&cache_key).cloned() {
+            operation.check().map_err(LanguageServiceError::from)?;
             self.cache_hits += 1;
             self.record_hit(QueryKind::Diagnostics);
             return Ok(cached
@@ -357,8 +366,12 @@ impl LanguageService {
         }
         self.cache_misses += 1;
         self.record_miss(QueryKind::Diagnostics);
-        let dependencies = self.dependencies(path);
-        let visible_paths = self.visible_interface_paths(path, &dependencies);
+        let dependencies = self
+            .dependencies_with_operation(path, &operation)
+            .map_err(LanguageServiceError::from)?;
+        let visible_paths = self
+            .visible_interface_paths_with_operation(path, &dependencies, &operation)
+            .map_err(LanguageServiceError::from)?;
         let interfaces = self
             .documents
             .iter()
@@ -366,11 +379,6 @@ impl LanguageService {
             .filter(|(interface_path, _)| visible_paths.contains(interface_path.as_str()))
             .map(|(path, candidate)| (path.as_str(), candidate.text.as_ref()))
             .collect::<Vec<_>>();
-        let operation = OperationContext {
-            cancellation: request.cancellation.cloned(),
-            deadline: request.deadline,
-            ..OperationContext::default()
-        };
         let mut diagnostics = match document.kind {
             DocumentKind::Source if interfaces.is_empty() => {
                 analyze_source_result_with_operation(path, &document.text, &operation)
@@ -398,8 +406,11 @@ impl LanguageService {
                 .into_diagnostics()
             }
         };
-        diagnostics.extend(self.lint(path));
-        check_request(request)?;
+        diagnostics.extend(
+            self.lint_with_operation(path, &operation)
+                .map_err(LanguageServiceError::from)?,
+        );
+        operation.check().map_err(LanguageServiceError::from)?;
         self.diagnostic_cache
             .insert(cache_key, Arc::from(diagnostics.clone()));
         diagnostics.truncate(request.max_diagnostics);
@@ -460,28 +471,42 @@ impl LanguageService {
         value.to_vec()
     }
 
-    fn lint(&mut self, path: &str) -> Vec<Diagnostic> {
+    fn lint_with_operation(
+        &mut self,
+        path: &str,
+        operation: &OperationContext,
+    ) -> Result<Vec<Diagnostic>, rsscript_operation::OperationAbort> {
+        operation.check()?;
         let Some(document) = self.documents.get(path).cloned() else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         let key = (path.to_string(), document.revision);
         if let Some(cached) = self.lint_cache.get(&key) {
             let value = cached.to_vec();
             self.record_hit(QueryKind::Lint);
-            return value;
+            operation.check()?;
+            return Ok(value);
         }
         let value: Arc<[Diagnostic]> = lint_source(path, &document.text).into();
         self.lint_cache.insert(key, Arc::clone(&value));
         self.record_miss(QueryKind::Lint);
-        value.to_vec()
+        operation.check()?;
+        Ok(value.to_vec())
     }
 
-    fn dependencies(&mut self, path: &str) -> Arc<[String]> {
+    fn dependencies_with_operation(
+        &mut self,
+        path: &str,
+        operation: &OperationContext,
+    ) -> Result<Arc<[String]>, rsscript_operation::OperationAbort> {
+        operation.check()?;
         let Some(document) = self.documents.get(path).cloned() else {
-            return Arc::from([]);
+            return Ok(Arc::from([]));
         };
         let before = self.frontend.stats();
-        let graph = self.frontend.workspace_module_graph();
+        let graph = self
+            .frontend
+            .workspace_module_graph_with_operation(operation)?;
         let after = self.frontend.stats();
         let imports = match document.kind {
             DocumentKind::Source => graph.source(path),
@@ -494,7 +519,8 @@ impl LanguageService {
         } else {
             self.record_miss(QueryKind::Dependencies);
         }
-        imports
+        operation.check()?;
+        Ok(imports)
     }
 
     /// Return declared modules from the shared workspace graph. Interface-file
@@ -510,14 +536,19 @@ impl LanguageService {
         .unwrap_or_default()
     }
 
-    fn visible_interface_paths(
+    fn visible_interface_paths_with_operation(
         &mut self,
         current_path: &str,
         root_dependencies: &[String],
-    ) -> BTreeSet<String> {
-        self.frontend
-            .workspace_module_graph()
-            .visible_interface_paths(current_path, root_dependencies.iter().cloned())
+        operation: &OperationContext,
+    ) -> Result<BTreeSet<String>, rsscript_operation::OperationAbort> {
+        let graph = self
+            .frontend
+            .workspace_module_graph_with_operation(operation)?;
+        let visible =
+            graph.visible_interface_paths(current_path, root_dependencies.iter().cloned());
+        operation.check()?;
+        Ok(visible)
     }
 
     fn record_hit(&mut self, query: QueryKind) {
@@ -826,7 +857,13 @@ mod tests {
             fn main() -> Unit {}
         "#,
         );
-        assert_eq!(service.dependencies("main.rss").as_ref(), ["host.api"]);
+        assert_eq!(
+            service
+                .dependencies_with_operation("main.rss", &OperationContext::default())
+                .unwrap()
+                .as_ref(),
+            ["host.api"]
+        );
 
         service.set_file(
             "host.rssi",
@@ -854,9 +891,21 @@ mod tests {
             "module app\nuse host.api as host\nfn main() -> Unit {}\n",
         );
 
-        assert_eq!(service.dependencies("main.rss").as_ref(), ["host.api"]);
+        assert_eq!(
+            service
+                .dependencies_with_operation("main.rss", &OperationContext::default())
+                .unwrap()
+                .as_ref(),
+            ["host.api"]
+        );
         service.invalidate_document_queries("main.rss");
-        assert_eq!(service.dependencies("main.rss").as_ref(), ["host.api"]);
+        assert_eq!(
+            service
+                .dependencies_with_operation("main.rss", &OperationContext::default())
+                .unwrap()
+                .as_ref(),
+            ["host.api"]
+        );
         let stats = service.frontend.stats();
         assert_eq!(stats.module_header_cache_misses, 1);
         assert_eq!(stats.module_header_cache_hits, 0);
@@ -949,5 +998,45 @@ mod tests {
             .unwrap();
         assert!(complete.len() > limited.len());
         assert_eq!(service.stats().cache_hits, 1);
+    }
+
+    #[test]
+    fn cached_document_diagnostics_obey_cancellation_and_deadline() {
+        let mut service = LanguageService::default();
+        service.set_file(
+            "main.rss",
+            1,
+            DocumentKind::Source,
+            "fn main() -> Unit { return Unit }\n",
+        );
+        service
+            .diagnostics_with("main.rss", LanguageRequest::default())
+            .expect("warm diagnostic cache");
+
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        assert_eq!(
+            service.diagnostics_with(
+                "main.rss",
+                LanguageRequest {
+                    cancellation: Some(&cancelled),
+                    ..LanguageRequest::default()
+                },
+            ),
+            Err(LanguageServiceError::Cancelled)
+        );
+        assert_eq!(
+            service.diagnostics_with(
+                "main.rss",
+                LanguageRequest {
+                    deadline: Some(MonotonicDeadline::at(
+                        std::time::Instant::now() - Duration::from_millis(1),
+                    )),
+                    ..LanguageRequest::default()
+                },
+            ),
+            Err(LanguageServiceError::DeadlineExceeded)
+        );
+        assert_eq!(service.stats().cache_hits, 0);
     }
 }
