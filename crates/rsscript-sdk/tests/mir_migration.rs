@@ -1222,6 +1222,7 @@ fn direct_checked_hir_awaited_external_provider_matches_legacy_vm() {
         provider_id: "test.direct-async".into(),
         provider_version: "1.0.0".into(),
         supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+        record_layouts: Vec::new(),
         functions: vec![ProviderFunctionDescriptor {
             symbol: symbol.clone(),
             signature: signature.clone(),
@@ -1324,6 +1325,7 @@ async fn main() -> Unit {
             provider_id: "test.direct-async-binding".into(),
             provider_version: "1.0.0".into(),
             supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+            record_layouts: Vec::new(),
             functions: vec![ProviderFunctionDescriptor {
                 symbol: symbol.clone(),
                 signature: signature.clone(),
@@ -1523,6 +1525,7 @@ async fn main() -> Int {
             provider_id: "test.direct-external-select".into(),
             provider_version: "1.0.0".into(),
             supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+            record_layouts: Vec::new(),
             functions: vec![
                 ProviderFunctionDescriptor {
                     symbol: first.clone(),
@@ -1628,6 +1631,7 @@ fn direct_checked_hir_awaited_provider_cancellation_matches_legacy_vm() {
             provider_id: "test.direct-async-cancel".into(),
             provider_version: "1.0.0".into(),
             supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+            record_layouts: Vec::new(),
             functions: vec![ProviderFunctionDescriptor {
                 symbol: symbol.clone(),
                 signature: signature.clone(),
@@ -1747,6 +1751,7 @@ fn direct_checked_hir_awaited_provider_deadline_matches_legacy_vm() {
             provider_id: "test.direct-async-deadline".into(),
             provider_version: "1.0.0".into(),
             supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+            record_layouts: Vec::new(),
             functions: vec![ProviderFunctionDescriptor {
                 symbol: symbol.clone(),
                 signature: signature.clone(),
@@ -1851,6 +1856,7 @@ async fn main() -> Int {
             provider_id: "test.direct-async-order".into(),
             provider_version: "1.0.0".into(),
             supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+            record_layouts: Vec::new(),
             functions: vec![
                 ProviderFunctionDescriptor {
                     symbol: first.clone(),

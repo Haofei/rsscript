@@ -162,6 +162,37 @@ fn native_to_wire(
                     .collect::<Result<Vec<_>, _>>()?,
             })
         }
+        (NativeValue::Struct { name, fields }, named @ WireType::Named { .. }) => {
+            let layout = types.record_layout(named).ok_or_else(|| {
+                ProviderError::unavailable(
+                    "provider named record is missing from its linked interface layout",
+                )
+            })?;
+            if !native_record_name_matches(&name, named) || fields.len() != layout.fields.len() {
+                return Err(ProviderError::invalid_argument(
+                    "provider named record argument does not match its linked interface layout",
+                ));
+            }
+            let fields = layout
+                .fields
+                .iter()
+                .map(|field| {
+                    fields
+                        .get(&field.name)
+                        .cloned()
+                        .ok_or_else(|| {
+                            ProviderError::invalid_argument(
+                                "provider named record argument is missing a linked field",
+                            )
+                        })
+                        .and_then(|value| native_to_wire(value, &field.ty, types))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(WireValue::Record {
+                type_id: type_id(types, named)?,
+                fields,
+            })
+        }
         (NativeValue::Variant { name, fields }, option @ WireType::Option { value: element })
             if name == "Some" && fields.len() == 1 =>
         {
@@ -285,6 +316,36 @@ fn wire_to_native(
             })
         }
         (
+            WireValue::Record {
+                type_id: actual_type,
+                fields,
+            },
+            named @ WireType::Named { .. },
+        ) if actual_type == type_id(types, named)? => {
+            let layout = types.record_layout(named).ok_or_else(|| {
+                ProviderError::unavailable(
+                    "provider named record is missing from its linked interface layout",
+                )
+            })?;
+            if fields.len() != layout.fields.len() {
+                return Err(ProviderError::invalid_argument(
+                    "provider wire record result length does not match its linked interface layout",
+                ));
+            }
+            let fields = layout
+                .fields
+                .iter()
+                .zip(fields)
+                .map(|(field, value)| {
+                    wire_to_native(value, &field.ty, types).map(|value| (field.name.clone(), value))
+                })
+                .collect::<Result<BTreeMap<_, _>, _>>()?;
+            Ok(NativeValue::Struct {
+                name: native_record_name(named),
+                fields,
+            })
+        }
+        (
             WireValue::Variant {
                 type_id: actual_type,
                 variant_id,
@@ -365,6 +426,20 @@ fn type_id(
     types.type_id(expected).ok_or_else(|| {
         ProviderError::internal("linked provider signature is missing a wire type identity")
     })
+}
+
+fn native_record_name_matches(name: &str, ty: &WireType) -> bool {
+    let canonical = native_record_name(ty);
+    canonical == name || matches!(ty, WireType::Named { name: local, .. } if local == name)
+}
+
+fn native_record_name(ty: &WireType) -> String {
+    let WireType::Named { package, name, .. } = ty else {
+        return String::new();
+    };
+    package
+        .as_ref()
+        .map_or_else(|| name.clone(), |package| format!("{package}.{name}"))
 }
 
 /// A shared permit held for the full lifetime of a non-reentrant Provider
@@ -510,26 +585,18 @@ impl ExternalFunction {
             let result = catch_unwind(AssertUnwindSafe(|| match &self.callable {
                 ProviderCallable::Sync(callable) => callable.call_with_context(context, args),
                 ProviderCallable::WireSync(callable) => {
-                    let signature = self
-                        .contract()
-                        .ok_or_else(|| {
-                            ProviderError::unavailable(
-                                "wire provider function requires a linked descriptor",
-                            )
-                        })?
-                        .descriptor
-                        .signature
-                        .clone();
+                    let contract = self.contract().ok_or_else(|| {
+                        ProviderError::unavailable(
+                            "wire provider function requires a linked descriptor",
+                        )
+                    })?;
+                    let signature = contract.descriptor.signature.clone();
                     if signature.parameters.len() != args.len() {
                         return Err(ProviderError::invalid_argument(
                             "provider wire argument count does not match its linked signature",
                         ));
                     }
-                    let types = WireCallTypeTable::for_signature(&signature).map_err(|error| {
-                        ProviderError::internal(format!(
-                            "linked provider signature cannot form a wire type table: {error}"
-                        ))
-                    })?;
+                    let types = wire_type_table(&signature, &contract.record_layouts)?;
                     let wire_args = args
                         .into_iter()
                         .zip(&signature.parameters)
@@ -673,11 +740,7 @@ impl ExternalFunction {
                                 "provider wire argument count does not match its linked signature",
                             ));
                         }
-                        let types = WireCallTypeTable::for_signature(&signature).map_err(|error| {
-                            ProviderError::internal(format!(
-                                "linked provider signature cannot form a wire type table: {error}"
-                            ))
-                        })?;
+                        let types = wire_type_table(&signature, &contract.record_layouts)?;
                         let wire_args = args
                             .into_iter()
                             .zip(&signature.parameters)
@@ -761,12 +824,26 @@ impl ExternalFunction {
             contract: Some(ProviderInvocationContract {
                 provider_id: function.provider_id,
                 provider_version: function.provider_version,
+                record_layouts: function.record_layouts,
                 descriptor: function.descriptor,
             }),
             host_context,
             active_non_reentrant_call: Arc::new(AtomicBool::new(false)),
         }
     }
+}
+
+fn wire_type_table(
+    signature: &FunctionSignature,
+    record_layouts: &[rsscript_abi_model::WireRecordLayout],
+) -> Result<WireCallTypeTable, ProviderError> {
+    WireCallTypeTable::for_signature(signature)
+        .and_then(|table| table.with_record_layouts(record_layouts.to_vec()))
+        .map_err(|error| {
+            ProviderError::internal(format!(
+                "linked provider signature cannot form a wire type table: {error}"
+            ))
+        })
 }
 
 impl From<rsscript_provider_api::NativeHostFn> for ExternalFunction {
@@ -1066,6 +1143,7 @@ mod provider_contract_tests {
             provider_id: "test.provider".to_string(),
             provider_version: "1.0.0".to_string(),
             supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+            record_layouts: Vec::new(),
             functions: vec![ProviderFunctionDescriptor {
                 symbol: symbol.clone(),
                 signature: signature.clone(),
@@ -1111,6 +1189,7 @@ mod provider_contract_tests {
             provider_id: "test.provider".to_string(),
             provider_version: "1.0.0".to_string(),
             supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+            record_layouts: Vec::new(),
             functions: vec![ProviderFunctionDescriptor {
                 symbol: symbol.clone(),
                 signature: signature.clone(),
@@ -1151,6 +1230,80 @@ mod provider_contract_tests {
             .call_with_context(&mut context, vec![NativeValue::Int(41)])
             .expect("linked scalar wire call");
         assert_eq!(result, NativeValue::Int(42));
+    }
+
+    #[test]
+    fn linked_wire_provider_decodes_record_results_from_descriptor_layout() {
+        let symbol = ExternalSymbol::new("host.test.record").unwrap();
+        let record = WireType::from("host.test.Result");
+        let signature = FunctionSignature {
+            parameters: Vec::new(),
+            result: record.clone(),
+            asynchronous: false,
+        };
+        let layouts = vec![rsscript_abi_model::WireRecordLayout {
+            ty: record.clone(),
+            fields: vec![rsscript_abi_model::WireRecordFieldLayout {
+                name: "value".into(),
+                ty: WireType::Int {
+                    bits: 64,
+                    signed: true,
+                },
+            }],
+        }];
+        let type_id = WireCallTypeTable::for_signature(&signature)
+            .unwrap()
+            .with_record_layouts(layouts.clone())
+            .unwrap()
+            .type_id(&record)
+            .unwrap();
+        let descriptor = ProviderDescriptor {
+            provider_id: "test.provider".into(),
+            provider_version: "1.0.0".into(),
+            supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+            record_layouts: layouts,
+            functions: vec![ProviderFunctionDescriptor {
+                symbol: symbol.clone(),
+                signature: signature.clone(),
+                entry: "record".into(),
+                call_mode: ProviderCallMode::Sync,
+                blocking: BlockingBehavior::NonBlocking,
+                cancellation: CancellationBehavior::Cooperative,
+                thread_safe: true,
+                reentrant: true,
+                resource_cleanup: ResourceCleanupContract::None,
+                error_mapping: ProviderErrorMapping::StructuredV1,
+            }],
+        };
+        let mut registry = ExternalFunctionRegistry::new();
+        registry
+            .register_provider(
+                &descriptor,
+                BTreeMap::from([(
+                    symbol,
+                    ProviderFunction {
+                        signature,
+                        callable: WireInterpreterFn::new(move |_| {
+                            Ok(WireValue::Record {
+                                type_id,
+                                fields: vec![WireValue::Int { value: 42 }],
+                            })
+                        }),
+                    },
+                )]),
+            )
+            .unwrap();
+        let function = registry.into_bindings().next().unwrap().1;
+        let mut context = ProviderCallContext::default();
+        assert_eq!(
+            function
+                .call_with_context(&mut context, Vec::new())
+                .unwrap(),
+            NativeValue::Struct {
+                name: "host.test.Result".into(),
+                fields: BTreeMap::from([("value".into(), NativeValue::Int(42))]),
+            }
+        );
     }
 
     #[test]
@@ -1320,6 +1473,7 @@ mod provider_contract_tests {
             provider_id: "test.provider".into(),
             provider_version: "1.0.0".into(),
             supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+            record_layouts: Vec::new(),
             functions: vec![ProviderFunctionDescriptor {
                 symbol: symbol.clone(),
                 signature: signature.clone(),
@@ -1365,6 +1519,7 @@ mod provider_contract_tests {
             provider_id: "test.provider".into(),
             provider_version: "1.0.0".into(),
             supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+            record_layouts: Vec::new(),
             functions: vec![ProviderFunctionDescriptor {
                 symbol: symbol.clone(),
                 signature: signature.clone(),
@@ -1506,6 +1661,7 @@ mod provider_contract_tests {
             provider_id: "test.provider".into(),
             provider_version: "1.0.0".into(),
             supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+            record_layouts: Vec::new(),
             functions: vec![ProviderFunctionDescriptor {
                 symbol: symbol.clone(),
                 signature: signature.clone(),

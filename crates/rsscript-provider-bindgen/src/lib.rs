@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
-use rsscript_abi_model::{ExternalSymbol, FunctionSignature, WireQualifier, WireType};
+use rsscript_abi_model::{
+    ExternalSymbol, FunctionSignature, WireQualifier, WireRecordLayout, WireType,
+};
 use rsscript_semantics::{
     InterfaceDescriptorError, InterfaceDescriptorResourceV1, InterfaceDescriptorV1,
 };
@@ -19,6 +21,7 @@ pub struct InterfaceFunction {
 pub struct ProviderInterface {
     pub functions: Vec<InterfaceFunction>,
     pub resources: Vec<InterfaceDescriptorResourceV1>,
+    pub record_layouts: Vec<WireRecordLayout>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,6 +80,7 @@ impl ProviderInterface {
                 InterfaceDescriptorError::MalformedInterface,
             ));
         }
+        let record_layouts = descriptor.wire_record_layouts();
         Ok(Self {
             functions: descriptor
                 .functions
@@ -89,6 +93,7 @@ impl ProviderInterface {
                 })
                 .collect(),
             resources: descriptor.resources,
+            record_layouts,
         })
     }
 
@@ -128,8 +133,9 @@ impl ProviderInterface {
         output
             .push_str("}\n\npub fn descriptor() -> rsscript_provider_api::ProviderDescriptor {\n");
         output.push_str(&format!(
-            "    rsscript_provider_api::ProviderDescriptor {{ provider_id: {:?}.into(), provider_version: env!(\"CARGO_PKG_VERSION\").into(), supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION], functions: vec![\n",
-            options.provider_id
+            "    rsscript_provider_api::ProviderDescriptor {{ provider_id: {:?}.into(), provider_version: env!(\"CARGO_PKG_VERSION\").into(), supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION], record_layouts: vec![{}], functions: vec![\n",
+            options.provider_id,
+            render_record_layouts(&self.record_layouts),
         ));
         for function in &self.functions {
             output.push_str("        rsscript_provider_api::ProviderFunctionDescriptor {\n");
@@ -287,6 +293,32 @@ fn render_signature(signature: &FunctionSignature) -> String {
         wire_type_source(&signature.result),
         signature.asynchronous
     )
+}
+
+fn render_record_layouts(layouts: &[WireRecordLayout]) -> String {
+    layouts
+        .iter()
+        .map(|layout| {
+            let fields = layout
+                .fields
+                .iter()
+                .map(|field| {
+                    format!(
+                        "rsscript_abi_model::WireRecordFieldLayout {{ name: {:?}.into(), ty: {} }}",
+                        field.name,
+                        render_wire_type(&field.ty),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "rsscript_abi_model::WireRecordLayout {{ ty: {}, fields: vec![{}] }}",
+                render_wire_type(&layout.ty),
+                fields,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Render the canonical RSScript type spelling carried by the legacy
@@ -496,6 +528,27 @@ mod tests {
         assert!(rust.contains("self.0.to_wire(resource_type)"));
         assert!(rust.contains("pub const TYPE_NAME: &'static str = \"host.fs.File\""));
         assert!(rust.contains("fn open(&self, path: String) -> Result<hostfsFileHandle"));
+    }
+
+    #[test]
+    fn generated_descriptor_carries_canonical_record_layouts() {
+        let descriptor = InterfaceDescriptorV1::from_interface_source(
+            "http.rssi",
+            "module host.http\n\npub struct Response {\n    status: Int\n    body: String\n}\n\npub fn get(url: read String) -> Response\n",
+        )
+        .unwrap();
+        let interface = ProviderInterface::from_descriptor(descriptor).unwrap();
+        let rust = interface.render_rust(&RustProviderOptions {
+            provider_id: "rsscript.http",
+            blocking: GeneratedBlocking::MayBlock,
+            cancellation: GeneratedCancellation::NotApplicable,
+            thread_safe: true,
+            reentrant: true,
+            cleanup: GeneratedCleanup::None,
+        });
+        assert!(rust.contains("record_layouts: vec![rsscript_abi_model::WireRecordLayout"));
+        assert!(rust.contains("name: \"status\".into()"));
+        assert!(rust.contains("name: \"body\".into()"));
     }
 
     #[test]

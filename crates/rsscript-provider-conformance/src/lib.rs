@@ -363,6 +363,7 @@ mod tests {
             provider_id: "test".into(),
             provider_version: "1.0.0".into(),
             supported_abi: vec![RUNTIME_ABI_VERSION],
+            record_layouts: Vec::new(),
             functions: vec![ProviderFunctionDescriptor {
                 symbol: symbol.clone(),
                 signature: signature.clone(),

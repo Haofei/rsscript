@@ -335,6 +335,7 @@ fn metrics_provider_runtime() -> Result<Runtime, Box<dyn Error>> {
         provider_id: "rsscript.metrics".into(),
         provider_version: "1.0.0".into(),
         supported_abi: vec![RUNTIME_ABI_VERSION],
+        record_layouts: Vec::new(),
         functions: vec![ProviderFunctionDescriptor {
             symbol: symbol.clone(),
             signature: signature.clone(),

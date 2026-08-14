@@ -5,7 +5,9 @@ use std::io::Read;
 use std::time::{Duration, Instant};
 
 use rsscript_abi_model::ExternalSymbol;
-use rsscript_provider_api::{NativeInterpreterFn, NativeValue, ProviderError, ProviderFunction};
+use rsscript_provider_api::{
+    ProviderError, ProviderFunction, WireCallTypeTable, WireInterpreterFn, WireValue,
+};
 
 include!(concat!(env!("OUT_DIR"), "/provider_contract.rs"));
 
@@ -56,19 +58,25 @@ impl HttpProvider {
         self
     }
 
-    pub fn functions(&self) -> BTreeMap<ExternalSymbol, ProviderFunction<NativeInterpreterFn>> {
-        let function = descriptor().functions.into_iter().next().unwrap();
+    pub fn functions(&self) -> BTreeMap<ExternalSymbol, ProviderFunction<WireInterpreterFn>> {
+        let contract = descriptor();
+        let function = contract.functions.into_iter().next().unwrap();
+        let response_type = WireCallTypeTable::for_signature(&function.signature)
+            .and_then(|types| types.with_record_layouts(contract.record_layouts))
+            .expect("generated HTTP descriptor has a valid wire layout")
+            .type_id(&rsscript_abi_model::WireType::from("host.http.HttpResponse"))
+            .expect("HTTP response record is present in the generated wire layout");
         let provider = self.clone();
         BTreeMap::from([(
             function.symbol,
             ProviderFunction {
                 signature: function.signature,
-                callable: NativeInterpreterFn::new_contextual(move |context, mut values| {
+                callable: WireInterpreterFn::new_contextual(move |context, mut values| {
                     context.check_cancelled()?;
-                    let NativeValue::String(url) = values.remove(0) else {
+                    let [WireValue::String { value: url }] = values.as_mut_slice() else {
                         return Err(ProviderError::invalid_argument("url must be String"));
                     };
-                    let url = reqwest::Url::parse(&url).map_err(|error| {
+                    let url = reqwest::Url::parse(url).map_err(|error| {
                         ProviderError::invalid_argument(format!("invalid HTTP URL: {error}"))
                     })?;
                     let origin = url.origin().ascii_serialization();
@@ -107,12 +115,12 @@ impl HttpProvider {
                         return Err(response_too_large(limit));
                     }
                     let body = read_response_bounded(&mut response, limit)?;
-                    Ok(NativeValue::Struct {
-                        name: "HttpResponse".into(),
-                        fields: BTreeMap::from([
-                            ("status".into(), NativeValue::Int(status)),
-                            ("body".into(), NativeValue::String(body)),
-                        ]),
+                    Ok(WireValue::Record {
+                        type_id: response_type,
+                        fields: vec![
+                            WireValue::Int { value: status },
+                            WireValue::String { value: body },
+                        ],
                     })
                 }),
             },
@@ -173,7 +181,7 @@ mod tests {
             ["https://example.com"],
         )
         .unwrap();
-        let report = rsscript_provider_conformance::assert_provider_conforms(
+        let report = rsscript_provider_conformance::assert_wire_provider_conforms(
             descriptor(),
             provider.functions(),
         );
@@ -196,7 +204,9 @@ mod tests {
             .callable
             .call_with_context(
                 &mut context,
-                vec![NativeValue::String("https://denied.example/path".into())],
+                vec![WireValue::String {
+                    value: "https://denied.example/path".into(),
+                }],
             )
             .unwrap_err();
         assert_eq!(
@@ -239,7 +249,9 @@ mod tests {
             .callable
             .call_with_context(
                 &mut context,
-                vec![NativeValue::String(format!("{origin}/slow"))],
+                vec![WireValue::String {
+                    value: format!("{origin}/slow"),
+                }],
             )
             .unwrap_err();
         assert_eq!(

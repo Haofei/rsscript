@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 use rsscript_abi_model::ExternalSymbol;
-use rsscript_provider_api::{NativeInterpreterFn, NativeValue, ProviderError, ProviderFunction};
+use rsscript_provider_api::{
+    ProviderError, ProviderFunction, WireCallTypeTable, WireInterpreterFn, WireValue,
+};
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::process::{Command, Stdio};
@@ -11,23 +13,33 @@ include!(concat!(env!("OUT_DIR"), "/provider_contract.rs"));
 
 const MAX_CAPTURE_BYTES: usize = 16 * 1024 * 1024;
 
-pub fn functions() -> BTreeMap<ExternalSymbol, ProviderFunction<NativeInterpreterFn>> {
-    let function = descriptor().functions.into_iter().next().unwrap();
+pub fn functions() -> BTreeMap<ExternalSymbol, ProviderFunction<WireInterpreterFn>> {
+    let contract = descriptor();
+    let function = contract.functions.into_iter().next().unwrap();
+    let types = WireCallTypeTable::for_signature(&function.signature)
+        .and_then(|types| types.with_record_layouts(contract.record_layouts))
+        .expect("generated process descriptor has a valid wire layout");
+    let output_type = types
+        .type_id(&rsscript_abi_model::WireType::from("host.process.ProcessOutput"))
+        .expect("process output record is present in the generated wire layout");
+    let string_type = types
+        .type_id(&rsscript_abi_model::WireType::String)
+        .expect("process signature contains String");
     BTreeMap::from([(
         function.symbol,
         ProviderFunction {
             signature: function.signature,
-            callable: NativeInterpreterFn::new_contextual(|context, mut values| {
-                let NativeValue::String(program) = values.remove(0) else {
+            callable: WireInterpreterFn::new_contextual(move |context, values| {
+                let [WireValue::String { value: program }, WireValue::List { element_type, values: args }] = values.as_slice() else {
                     return Err(ProviderError::invalid_argument("program must be String"));
                 };
-                let NativeValue::List(args) = values.remove(0) else {
+                if *element_type != string_type {
                     return Err(ProviderError::invalid_argument("args must be List<String>"));
-                };
+                }
                 let args = args
-                    .into_iter()
+                    .iter()
                     .map(|value| match value {
-                        NativeValue::String(value) => Ok(value),
+                        WireValue::String { value } => Ok(value.clone()),
                         _ => Err(ProviderError::invalid_argument(
                             "args must contain String values",
                         )),
@@ -101,22 +113,19 @@ pub fn functions() -> BTreeMap<ExternalSymbol, ProviderFunction<NativeInterprete
                     .map_err(|error| ProviderError::from_io("wait for process", error))?;
                 let stdout = join_pipe(stdout_reader, "stdout")?;
                 let stderr = join_pipe(stderr_reader, "stderr")?;
-                Ok(NativeValue::Struct {
-                    name: "ProcessOutput".into(),
-                    fields: BTreeMap::from([
-                        (
-                            "status".into(),
-                            NativeValue::Int(status.code().unwrap_or(-1).into()),
-                        ),
-                        (
-                            "stdout".into(),
-                            NativeValue::String(String::from_utf8_lossy(&stdout).into_owned()),
-                        ),
-                        (
-                            "stderr".into(),
-                            NativeValue::String(String::from_utf8_lossy(&stderr).into_owned()),
-                        ),
-                    ]),
+                Ok(WireValue::Record {
+                    type_id: output_type,
+                    fields: vec![
+                        WireValue::Int {
+                            value: status.code().unwrap_or(-1).into(),
+                        },
+                        WireValue::String {
+                            value: String::from_utf8_lossy(&stdout).into_owned(),
+                        },
+                        WireValue::String {
+                            value: String::from_utf8_lossy(&stderr).into_owned(),
+                        },
+                    ],
                 })
             }),
         },
@@ -172,9 +181,27 @@ mod tests {
     use super::*;
     #[test]
     fn conforms_to_provider_contract() {
-        let report =
-            rsscript_provider_conformance::assert_provider_conforms(descriptor(), functions());
+        let report = rsscript_provider_conformance::assert_wire_provider_conforms(
+            descriptor(),
+            functions(),
+        );
         assert_eq!(report.provider_id, "rsscript.process");
+    }
+
+    fn string_list(values: impl IntoIterator<Item = impl Into<String>>) -> WireValue {
+        let string_type = WireCallTypeTable::for_signature(&descriptor().functions[0].signature)
+            .unwrap()
+            .type_id(&rsscript_abi_model::WireType::String)
+            .unwrap();
+        WireValue::List {
+            element_type: string_type,
+            values: values
+                .into_iter()
+                .map(|value| WireValue::String {
+                    value: value.into(),
+                })
+                .collect(),
+        }
     }
 
     #[cfg(unix)]
@@ -198,11 +225,8 @@ mod tests {
             .call_with_context(
                 &mut context,
                 vec![
-                    NativeValue::String("sh".into()),
-                    NativeValue::List(vec![
-                        NativeValue::String("-c".into()),
-                        NativeValue::String("sleep 10".into()),
-                    ]),
+                    WireValue::String { value: "sh".into() },
+                    string_list(["-c", "sleep 10"]),
                 ],
             )
             .unwrap_err();
@@ -229,11 +253,8 @@ mod tests {
             .call_with_context(
                 &mut context,
                 vec![
-                    NativeValue::String("sh".into()),
-                    NativeValue::List(vec![
-                        NativeValue::String("-c".into()),
-                        NativeValue::String("printf '%0200d' 0".into()),
-                    ]),
+                    WireValue::String { value: "sh".into() },
+                    string_list(["-c", "printf '%0200d' 0"]),
                 ],
             )
             .unwrap_err();

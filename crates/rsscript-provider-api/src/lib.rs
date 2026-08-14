@@ -10,8 +10,9 @@ use std::time::Duration;
 
 pub use rsscript_abi_model::{
     DataEffect, ExternalImport, ExternalSymbol, FunctionSignature, InvalidExternalSymbol,
-    ParameterSignature, RUNTIME_ABI_VERSION, SignatureHash, WireCallTypeTable, WireResourceHandle,
-    WireResourceTypeId, WireType, WireTypeId, WireTypeTableOverflow, WireValue, WireVariantId,
+    ParameterSignature, RUNTIME_ABI_VERSION, SignatureHash, WireCallTypeTable,
+    WireRecordFieldLayout, WireRecordLayout, WireResourceHandle, WireResourceTypeId, WireType,
+    WireTypeId, WireTypeTableOverflow, WireValue, WireVariantId,
 };
 pub use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationId};
 use serde::{Deserialize, Serialize};
@@ -931,6 +932,11 @@ pub struct ProviderDescriptor {
     pub provider_id: String,
     pub provider_version: String,
     pub supported_abi: Vec<u32>,
+    /// Named record layouts supplied by the interface descriptor. Wire calls
+    /// use them to decode positional records without reintroducing dynamic
+    /// field or type identity into [`WireValue`].
+    #[serde(default)]
+    pub record_layouts: Vec<WireRecordLayout>,
     pub functions: Vec<ProviderFunctionDescriptor>,
 }
 
@@ -938,6 +944,7 @@ pub struct ProviderDescriptor {
 pub struct ProviderInvocationContract {
     pub provider_id: String,
     pub provider_version: String,
+    pub record_layouts: Vec<WireRecordLayout>,
     pub descriptor: ProviderFunctionDescriptor,
 }
 
@@ -950,6 +957,7 @@ pub struct ProviderFunction<T> {
 pub struct ResolvedProviderFunction<T> {
     pub provider_id: String,
     pub provider_version: String,
+    pub record_layouts: Vec<WireRecordLayout>,
     pub descriptor: ProviderFunctionDescriptor,
     pub callable: T,
 }
@@ -1011,6 +1019,7 @@ impl<T> ProviderRegistry<T> {
                 ResolvedProviderFunction {
                     provider_id: descriptor.provider_id.clone(),
                     provider_version: descriptor.provider_version.clone(),
+                    record_layouts: descriptor.record_layouts.clone(),
                     descriptor: function.clone(),
                     callable: implementation.callable,
                 },
@@ -1164,6 +1173,7 @@ mod tests {
             provider_id: "test".to_string(),
             provider_version: "1.0.0".to_string(),
             supported_abi: vec![1],
+            record_layouts: Vec::new(),
             functions: vec![ProviderFunctionDescriptor {
                 symbol: symbol.clone(),
                 signature,

@@ -89,7 +89,7 @@ pub struct WireCallTypeTable {
 
 /// Canonical positional layout for one named record in a linked interface
 /// scope. The record type itself is present in the enclosing type table.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireRecordLayout {
     pub ty: WireType,
     pub fields: Vec<WireRecordFieldLayout>,
@@ -98,7 +98,7 @@ pub struct WireRecordLayout {
 /// One canonical record field. Field names live in the linked descriptor,
 /// never in a [`WireValue::Record`]; the positional value payload is decoded
 /// against this layout.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireRecordFieldLayout {
     pub name: String,
     pub ty: WireType,
