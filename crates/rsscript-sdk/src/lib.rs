@@ -20,6 +20,7 @@ pub use rsscript_compiler::{
     analyze_source_with_interfaces_result_with_operation,
     analyze_source_with_interfaces_without_core, analyze_source_without_core,
     analyze_sources_with_interfaces, analyze_sources_with_interfaces_result,
+    analyze_sources_with_interfaces_result_with_operation,
     analyze_sources_with_interfaces_without_core,
     analyze_sources_with_interfaces_without_core_result, analyze_syntax_source, core_interfaces,
     core_package_index_json, document_symbols, explain_diagnostic_code,
@@ -160,8 +161,8 @@ pub mod language {
         Span, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
         analyze_source_result_with_operation, analyze_source_with_core,
         analyze_source_with_interfaces, analyze_source_with_interfaces_result_with_operation,
-        analyze_sources_with_interfaces, document_symbols, explain_diagnostic_code, format_source,
-        lint_source, symbol_index,
+        analyze_sources_with_interfaces, analyze_sources_with_interfaces_result_with_operation,
+        document_symbols, explain_diagnostic_code, format_source, lint_source, symbol_index,
     };
 }
 
@@ -265,9 +266,23 @@ impl Compiler {
         source: &str,
         operation: &OperationContext,
     ) -> Result<Vec<Diagnostic>, CompileError> {
+        self.check_snapshot_with_operation(&FrontendInputSnapshot::single(file, source), operation)
+    }
+
+    /// Check one immutable source/interface snapshot while honoring the shared
+    /// cancellation and deadline boundary. This is the operation-aware
+    /// counterpart of [`Self::check_snapshot`].
+    pub fn check_snapshot_with_operation(
+        &self,
+        snapshot: &FrontendInputSnapshot,
+        operation: &OperationContext,
+    ) -> Result<Vec<Diagnostic>, CompileError> {
         operation.check().map_err(CompileError::from)?;
+        let sources = snapshot_pairs(snapshot.sources());
+        let interfaces = snapshot_pairs(snapshot.interfaces());
         let diagnostics =
-            analyze_source_result_with_operation(file, source, operation).into_diagnostics();
+            analyze_sources_with_interfaces_result_with_operation(&sources, &interfaces, operation)
+                .into_diagnostics();
         operation.check().map_err(CompileError::from)?;
         Ok(diagnostics)
     }

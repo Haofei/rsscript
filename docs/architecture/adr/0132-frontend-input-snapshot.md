@@ -13,8 +13,9 @@ not give source/interface bytes a named shared identity before compilation.
 
 `rsscript-semantics` owns `FrontendInputSnapshot`, which keeps immutable source
 and interface snapshots in distinct roles. The SDK exposes
-`Compiler::check_snapshot`, `Compiler::compile_snapshot`, and its
-operation-aware form as the preferred in-memory embedding path. Existing
+`Compiler::check_snapshot`, `Compiler::check_snapshot_with_operation`, and
+`Compiler::compile_snapshot` (with its operation-aware form) as the preferred
+in-memory embedding path. Existing
 single-source and slice-based helpers build this snapshot and remain
 compatibility conveniences. This does not yet migrate package graph capture,
 manifest parsing, or Artifact persistence out of the compiler package boundary.
