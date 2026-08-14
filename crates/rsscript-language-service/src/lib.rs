@@ -17,6 +17,7 @@ use std::sync::Arc;
 pub use rsscript_compiler::{
     analyze_source_result_with_operation, analyze_source_with_core, analyze_source_with_interfaces,
     analyze_source_with_interfaces_result_with_operation, analyze_sources_with_interfaces,
+    analyze_sources_with_interfaces_result_with_operation,
 };
 pub use rsscript_diagnostics::{
     Diagnostic, DiagnosticExplanation, Severity, Span, explain_diagnostic_code,
@@ -54,7 +55,6 @@ pub struct LanguageService {
     documents: BTreeMap<String, Document>,
     frontend: CompilationSession,
     diagnostic_cache: BTreeMap<(String, u64), Arc<[Diagnostic]>>,
-    workspace_diagnostic_cache: Option<Arc<[Diagnostic]>>,
     lint_cache: BTreeMap<(String, u64), Arc<[Diagnostic]>>,
     format_cache: BTreeMap<(String, u64), Arc<str>>,
     symbol_cache: BTreeMap<(String, u64), Arc<SymbolIndex>>,
@@ -121,6 +121,15 @@ impl LanguageServiceError {
     }
 }
 
+impl From<rsscript_operation::OperationAbort> for LanguageServiceError {
+    fn from(abort: rsscript_operation::OperationAbort) -> Self {
+        match abort {
+            rsscript_operation::OperationAbort::Cancelled => Self::Cancelled,
+            rsscript_operation::OperationAbort::DeadlineExceeded => Self::DeadlineExceeded,
+        }
+    }
+}
+
 impl LanguageService {
     pub fn set_file(
         &mut self,
@@ -175,7 +184,6 @@ impl LanguageService {
             changed_modules.extend(self.declared_modules(path.as_str(), DocumentKind::Interface));
         }
         self.invalidate_document_queries(&path);
-        self.workspace_diagnostic_cache = None;
         if previous
             .as_ref()
             .is_some_and(|document| document.kind == DocumentKind::Interface)
@@ -204,7 +212,6 @@ impl LanguageService {
             }
         }
         self.invalidate_document_queries(path);
-        self.workspace_diagnostic_cache = None;
         if let Some(modules) = removed_modules {
             self.invalidate_interface_dependents(&modules, path);
         }
@@ -303,54 +310,72 @@ impl LanguageService {
         request: LanguageRequest<'_>,
     ) -> Result<Vec<Diagnostic>, LanguageServiceError> {
         check_request(request)?;
-        if let Some(cached) = self.workspace_diagnostic_cache.clone() {
+        let operation = OperationContext {
+            cancellation: request.cancellation.cloned(),
+            deadline: request.deadline,
+            ..OperationContext::default()
+        };
+        let before = self.frontend.stats();
+        let semantic_diagnostics = self
+            .frontend
+            .workspace_diagnostics_with_operation(&operation, |input, operation| {
+                let interfaces = input
+                    .interfaces()
+                    .files()
+                    .iter()
+                    .map(|file| (file.path(), file.text()))
+                    .collect::<Vec<_>>();
+                let sources = input
+                    .sources()
+                    .files()
+                    .iter()
+                    .map(|file| (file.path(), file.text()))
+                    .collect::<Vec<_>>();
+                let mut diagnostics = Vec::new();
+                for (path, text) in &interfaces {
+                    operation.check()?;
+                    let visible_interfaces = interfaces
+                        .iter()
+                        .copied()
+                        .filter(|(candidate, _)| candidate != path)
+                        .collect::<Vec<_>>();
+                    diagnostics.extend(
+                        analyze_source_with_interfaces_result_with_operation(
+                            path,
+                            text,
+                            &visible_interfaces,
+                            operation,
+                        )
+                        .into_diagnostics(),
+                    );
+                }
+                operation.check()?;
+                diagnostics.extend(
+                    analyze_sources_with_interfaces_result_with_operation(
+                        &sources,
+                        &interfaces,
+                        operation,
+                    )
+                    .into_diagnostics(),
+                );
+                Ok(diagnostics)
+            })
+            .map_err(LanguageServiceError::from)?;
+        let after = self.frontend.stats();
+        if after.workspace_diagnostic_cache_hits > before.workspace_diagnostic_cache_hits {
             self.cache_hits += 1;
             self.record_hit(QueryKind::Diagnostics);
-            return Ok(cached
-                .iter()
-                .take(request.max_diagnostics)
-                .cloned()
-                .collect());
+        } else {
+            self.cache_misses += 1;
+            self.record_miss(QueryKind::Diagnostics);
         }
-
-        self.cache_misses += 1;
-        self.record_miss(QueryKind::Diagnostics);
-        let interfaces = self
-            .documents
-            .iter()
-            .filter(|(_, document)| document.kind == DocumentKind::Interface)
-            .map(|(path, document)| (path.as_str(), document.text.as_ref()))
-            .collect::<Vec<_>>();
-        let sources = self
-            .documents
-            .iter()
-            .filter(|(_, document)| document.kind == DocumentKind::Source)
-            .map(|(path, document)| (path.as_str(), document.text.as_ref()))
-            .collect::<Vec<_>>();
-
-        let mut diagnostics = Vec::new();
-        for (path, text) in &interfaces {
-            check_request(request)?;
-            let visible_interfaces = interfaces
-                .iter()
-                .copied()
-                .filter(|(candidate, _)| candidate != path)
-                .collect::<Vec<_>>();
-            diagnostics.extend(analyze_source_with_interfaces(
-                path,
-                text,
-                &visible_interfaces,
-            ));
-        }
-        check_request(request)?;
-        diagnostics.extend(analyze_sources_with_interfaces(&sources, &interfaces));
+        let mut diagnostics = semantic_diagnostics.to_vec();
         for path in self.documents.keys().cloned().collect::<Vec<_>>() {
             check_request(request)?;
             diagnostics.extend(self.lint(&path));
         }
         deduplicate_diagnostics(&mut diagnostics);
         check_request(request)?;
-        self.workspace_diagnostic_cache = Some(Arc::from(diagnostics.clone()));
         diagnostics.truncate(request.max_diagnostics);
         Ok(diagnostics)
     }

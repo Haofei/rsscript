@@ -500,6 +500,24 @@ pub fn analyze_sources_with_interfaces_result(
     )
 }
 
+/// Analyze a complete immutable source/interface set while observing the
+/// caller-owned cancellation and deadline boundary.
+pub fn analyze_sources_with_interfaces_result_with_operation(
+    sources: &[(&str, &str)],
+    interfaces: &[(&str, &str)],
+    operation: &OperationContext,
+) -> AnalysisResult {
+    analyze_input_result(
+        AnalysisInput {
+            sources: AnalysisSources::Many(sources),
+            interfaces,
+            flavor: AnalysisFlavor::FullWithBuiltinInterfaces,
+        },
+        FrontendBudgetLimits::default(),
+        Some(operation),
+    )
+}
+
 pub fn validate_sources_with_interfaces(
     sources: &[(&str, &str)],
     interfaces: &[(&str, &str)],

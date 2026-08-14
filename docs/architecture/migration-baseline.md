@@ -514,13 +514,17 @@ mechanical acceptance condition holds.
     `CompilationSession` now owns parse-tree and local HIR caching keyed by
     immutable role/file/revision, including replacement/deletion invalidation
     and deterministic source iteration. Module-header/import facts now share
-    that cache; resolve/type, interface-aware workspace HIR, and diagnostic
-    query migration remains open.
+    that cache. Complete workspace diagnostics now also use a session-owned,
+    immutable source/interface snapshot cache with revision invalidation;
+    resolve/type, interface-aware workspace HIR, and dependency-precise
+    diagnostic invalidation remain open.
   - [ ] **S03.4 — Thread cancellation and deadlines through every query.** Add
     cancellation, deadline, and diagnostic-budget tests for cold and cached
     paths. Session parse and local HIR queries now check the shared operation
-    context before and after cache access for source and interface inputs;
-    resolve/type, workspace-HIR, and diagnostic queries remain to be migrated.
+    context before and after cache access for source and interface inputs. The
+    session-owned workspace diagnostic query now applies the same checks before
+    cache access, during transitional analysis, and before caching the result;
+    resolve/type and workspace-HIR queries remain to be migrated.
   - [ ] **S03.5 — Migrate CLI/package/test callers.** All frontend consumers use
     the session API; direct analyzer construction becomes private.
 - [ ] **S04 — Make language service consume semantic queries directly.** It

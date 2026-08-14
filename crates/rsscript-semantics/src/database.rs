@@ -308,12 +308,15 @@ pub struct CompilationSession {
     parse_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<Program>>,
     hir_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<Hir>>,
     module_header_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<ModuleHeader>>,
+    workspace_diagnostic_cache: Option<Arc<[Diagnostic]>>,
     parse_cache_hits: u64,
     parse_cache_misses: u64,
     hir_cache_hits: u64,
     hir_cache_misses: u64,
     module_header_cache_hits: u64,
     module_header_cache_misses: u64,
+    workspace_diagnostic_cache_hits: u64,
+    workspace_diagnostic_cache_misses: u64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -324,6 +327,8 @@ pub struct CompilationSessionStats {
     pub hir_cache_misses: u64,
     pub module_header_cache_hits: u64,
     pub module_header_cache_misses: u64,
+    pub workspace_diagnostic_cache_hits: u64,
+    pub workspace_diagnostic_cache_misses: u64,
 }
 
 /// Parsed module and import facts for one immutable document revision.
@@ -363,6 +368,7 @@ impl CompilationSession {
             self.invalidate_parse_cache(SessionFileRole::Source, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Source, update.file_id);
             self.invalidate_module_header_cache(SessionFileRole::Source, update.file_id);
+            self.workspace_diagnostic_cache = None;
         }
         Ok(update)
     }
@@ -373,6 +379,7 @@ impl CompilationSession {
             self.invalidate_parse_cache(SessionFileRole::Source, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Source, update.file_id);
             self.invalidate_module_header_cache(SessionFileRole::Source, update.file_id);
+            self.workspace_diagnostic_cache = None;
         }
         update
     }
@@ -387,6 +394,7 @@ impl CompilationSession {
             self.invalidate_parse_cache(SessionFileRole::Interface, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Interface, update.file_id);
             self.invalidate_module_header_cache(SessionFileRole::Interface, update.file_id);
+            self.workspace_diagnostic_cache = None;
         }
         Ok(update)
     }
@@ -397,6 +405,7 @@ impl CompilationSession {
             self.invalidate_parse_cache(SessionFileRole::Interface, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Interface, update.file_id);
             self.invalidate_module_header_cache(SessionFileRole::Interface, update.file_id);
+            self.workspace_diagnostic_cache = None;
         }
         update
     }
@@ -407,6 +416,47 @@ impl CompilationSession {
 
     pub fn interface_snapshot(&self) -> SourceSnapshot {
         self.interfaces.snapshot()
+    }
+
+    /// Capture both session-owned input roles for one workspace semantic query.
+    ///
+    /// The returned input owns immutable bytes and stable file revisions. A
+    /// caller can therefore not analyze a document set different from the one
+    /// whose query result the session caches.
+    pub fn frontend_input_snapshot(&self) -> FrontendInputSnapshot {
+        FrontendInputSnapshot::from_snapshots(self.source_snapshot(), self.interface_snapshot())
+    }
+
+    /// Cache a complete workspace diagnostic query against the current
+    /// source/interface revision set.
+    ///
+    /// Full semantic analysis is still migrating into this crate, so callers
+    /// supply the transitional analyzer callback. The session nevertheless
+    /// owns the immutable input, cache lifetime, and cancellation/deadline
+    /// checks; callers cannot retain a competing cache for a different input.
+    pub fn workspace_diagnostics_with_operation(
+        &mut self,
+        operation: &OperationContext,
+        analyze: impl FnOnce(
+            &FrontendInputSnapshot,
+            &OperationContext,
+        ) -> Result<Vec<Diagnostic>, OperationAbort>,
+    ) -> Result<Arc<[Diagnostic]>, OperationAbort> {
+        operation.check()?;
+        if let Some(diagnostics) = &self.workspace_diagnostic_cache {
+            self.workspace_diagnostic_cache_hits =
+                self.workspace_diagnostic_cache_hits.saturating_add(1);
+            operation.check()?;
+            return Ok(Arc::clone(diagnostics));
+        }
+
+        self.workspace_diagnostic_cache_misses =
+            self.workspace_diagnostic_cache_misses.saturating_add(1);
+        let input = self.frontend_input_snapshot();
+        let diagnostics: Arc<[Diagnostic]> = analyze(&input, operation)?.into();
+        operation.check()?;
+        self.workspace_diagnostic_cache = Some(Arc::clone(&diagnostics));
+        Ok(diagnostics)
     }
 
     /// Parse one source revision exactly once. Replacing or removing a file
@@ -546,6 +596,8 @@ impl CompilationSession {
             hir_cache_misses: self.hir_cache_misses,
             module_header_cache_hits: self.module_header_cache_hits,
             module_header_cache_misses: self.module_header_cache_misses,
+            workspace_diagnostic_cache_hits: self.workspace_diagnostic_cache_hits,
+            workspace_diagnostic_cache_misses: self.workspace_diagnostic_cache_misses,
         }
     }
 
@@ -908,6 +960,8 @@ mod tests {
                 hir_cache_misses: 0,
                 module_header_cache_hits: 0,
                 module_header_cache_misses: 0,
+                workspace_diagnostic_cache_hits: 0,
+                workspace_diagnostic_cache_misses: 0,
             }
         );
 
@@ -928,6 +982,55 @@ mod tests {
         assert!(!Arc::ptr_eq(&first, &replacement));
         session.remove_file("main.rss");
         assert!(session.parse_file("main.rss").is_none());
+    }
+
+    #[test]
+    fn compilation_session_caches_workspace_diagnostics_for_one_input_snapshot() {
+        use std::cell::Cell;
+
+        let mut session = CompilationSession::default();
+        session
+            .set_file("main.rss", "fn main() -> Unit { return Unit }")
+            .unwrap();
+        session
+            .set_interface("host.rssi", "module host\npub fn emit() -> Unit")
+            .unwrap();
+        let operation = OperationContext::default();
+        let calls = Cell::new(0);
+
+        let first = session
+            .workspace_diagnostics_with_operation(&operation, |input, _| {
+                calls.set(calls.get() + 1);
+                assert_eq!(input.sources().files()[0].path(), "main.rss");
+                assert_eq!(input.interfaces().files()[0].path(), "host.rssi");
+                Ok(Vec::new())
+            })
+            .unwrap();
+        let second = session
+            .workspace_diagnostics_with_operation(&operation, |_, _| {
+                panic!("unchanged session input must use its diagnostic cache")
+            })
+            .unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(calls.get(), 1);
+
+        session
+            .set_interface("host.rssi", "module host\npub fn replacement() -> Unit")
+            .unwrap();
+        session
+            .workspace_diagnostics_with_operation(&operation, |input, _| {
+                calls.set(calls.get() + 1);
+                assert!(input.interfaces().files()[0].text().contains("replacement"));
+                Ok(Vec::new())
+            })
+            .unwrap();
+        assert_eq!(calls.get(), 2);
+        assert_eq!(
+            session.stats().workspace_diagnostic_cache_hits,
+            1,
+            "the unchanged query must be served from the session cache"
+        );
+        assert_eq!(session.stats().workspace_diagnostic_cache_misses, 2);
     }
 
     #[test]
@@ -1056,6 +1159,8 @@ mod tests {
                 hir_cache_misses: 0,
                 module_header_cache_hits: 1,
                 module_header_cache_misses: 1,
+                workspace_diagnostic_cache_hits: 0,
+                workspace_diagnostic_cache_misses: 0,
             }
         );
     }

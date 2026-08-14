@@ -70,6 +70,7 @@ pub use analyzer::{
     analyze_source_with_interfaces_result, analyze_source_with_interfaces_result_with_operation,
     analyze_source_with_interfaces_without_core, analyze_source_without_core,
     analyze_sources_with_interfaces, analyze_sources_with_interfaces_result,
+    analyze_sources_with_interfaces_result_with_operation,
     analyze_sources_with_interfaces_without_core,
     analyze_sources_with_interfaces_without_core_result, analyze_syntax_source, core_interfaces,
     standard_package_interfaces, validate_source, validate_source_with_operation,
