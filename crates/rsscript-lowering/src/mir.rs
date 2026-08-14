@@ -144,6 +144,7 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<VerifiedMir, MirLo
         .map(|(_, _, signature)| types.checked_function_signature(signature))
         .collect::<Vec<_>>();
     let external_imports = checked_external_imports(hir)?;
+    let async_external_binding_symbols = checked_async_external_binding_symbols(hir)?;
     let variants = hir
         .sum_variants()
         .map(|(variant, owner, fields)| {
@@ -159,7 +160,9 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<VerifiedMir, MirLo
     let async_external_wrappers = external_imports
         .iter()
         .enumerate()
-        .filter(|(_, (_, signature))| signature.asynchronous)
+        .filter(|(_, (symbol, signature))| {
+            signature.asynchronous && async_external_binding_symbols.contains(symbol.as_str())
+        })
         .enumerate()
         .map(|(wrapper_index, (import_index, (symbol, signature)))| {
             let id = FunctionId::new((functions.len() + wrapper_index) as u32);
@@ -228,6 +231,86 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<VerifiedMir, MirLo
         })
         .collect();
     Ok(MirModule::new(types.into_types(), lowered, debug, imports)?.into_verified()?)
+}
+
+/// External async imports need a synthetic task function only when they appear
+/// in `async let`. A direct `await Host.call()` already suspends the current
+/// task through `CallExternal`, so emitting an unused wrapper would widen the
+/// Artifact and debug surface for no semantic benefit.
+fn checked_async_external_binding_symbols(
+    hir: &checked::Hir,
+) -> Result<std::collections::BTreeSet<String>, MirLoweringError> {
+    let mut symbols = std::collections::BTreeSet::new();
+    for (_, body) in hir.function_bodies() {
+        let Some(block) = body.block.as_ref() else {
+            continue;
+        };
+        collect_async_external_bindings_from_block(block, &mut symbols)?;
+    }
+    Ok(symbols)
+}
+
+fn collect_async_external_bindings_from_block(
+    block: &checked::HirBlock,
+    symbols: &mut std::collections::BTreeSet<String>,
+) -> Result<(), MirLoweringError> {
+    for statement in &block.statements {
+        collect_async_external_bindings_from_statement(statement, symbols)?;
+    }
+    Ok(())
+}
+
+fn collect_async_external_bindings_from_statement(
+    statement: &checked::HirStmt,
+    symbols: &mut std::collections::BTreeSet<String>,
+) -> Result<(), MirLoweringError> {
+    match statement {
+        checked::HirStmt::Let {
+            is_async: true,
+            value: Some(checked::HirExpr::Call { resolution, .. }),
+            ..
+        } => {
+            if let checked::CallResolution::Resolved { signature, .. } = resolution
+                && signature.is_external
+                && signature.is_async
+            {
+                symbols.insert(checked_external_symbol(signature)?.as_str().to_owned());
+            }
+        }
+        checked::HirStmt::With { body, .. }
+        | checked::HirStmt::Loop { body, .. }
+        | checked::HirStmt::For { body, .. } => {
+            collect_async_external_bindings_from_block(body, symbols)?;
+        }
+        checked::HirStmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            collect_async_external_bindings_from_block(then_body, symbols)?;
+            if let Some(else_body) = else_body {
+                collect_async_external_bindings_from_block(else_body, symbols)?;
+            }
+        }
+        checked::HirStmt::Match { arms, .. } => {
+            for arm in arms {
+                collect_async_external_bindings_from_block(&arm.body, symbols)?;
+            }
+        }
+        checked::HirStmt::Select { arms, .. } => {
+            for arm in arms {
+                collect_async_external_bindings_from_block(&arm.body, symbols)?;
+            }
+        }
+        checked::HirStmt::Let { .. }
+        | checked::HirStmt::Return { .. }
+        | checked::HirStmt::Assign { .. }
+        | checked::HirStmt::Break(_)
+        | checked::HirStmt::Continue(_)
+        | checked::HirStmt::Expr(_)
+        | checked::HirStmt::Unknown(_) => {}
+    }
+    Ok(())
 }
 
 fn checked_external_imports(

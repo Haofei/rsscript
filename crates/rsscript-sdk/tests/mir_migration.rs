@@ -1132,6 +1132,13 @@ fn direct_checked_hir_awaited_external_provider_matches_legacy_vm() {
             })
         })
     }));
+    assert!(
+        !mir.functions()
+            .iter()
+            .filter_map(|function| mir.function_debug(function.id()))
+            .any(|debug| debug.name() == "__rss_async_external_Host_async_value"),
+        "a direct await must not add an unused async task wrapper"
+    );
 
     let symbol = ExternalSymbol::new("Host.async_value").expect("valid test symbol");
     let signature = FunctionSignature {

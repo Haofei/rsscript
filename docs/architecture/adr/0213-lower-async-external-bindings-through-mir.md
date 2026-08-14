@@ -13,11 +13,12 @@ legacy IR on the normal bytecode path.
 ## Decision
 
 For each resolved asynchronous external import used by a checked HIR module,
-the MIR lowerer emits one synthetic asynchronous function. Its only executable
-operation is a typed `CallExternal` using the canonical import ID and
-signature; its parameters preserve the import's `read`/`mut`/`take` modes.
-An `async let` binding spawns that function through the ordinary `Spawn`
-instruction and the existing `Await`/`Join` task lifecycle.
+the MIR lowerer emits one synthetic asynchronous function only when the import
+appears in `async let`. Its only executable operation is a typed `CallExternal`
+using the canonical import ID and signature; its parameters preserve the
+import's `read`/`mut`/`take` modes. An `async let` binding spawns that function
+through the ordinary `Spawn` instruction and the existing `Await`/`Join` task
+lifecycle. A direct `await Host.call()` emits no wrapper.
 
 This keeps Provider calls in the import table, lets the existing MIR verifier
 check call modes and structured tasks, and lets codegen produce ordinary
