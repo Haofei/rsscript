@@ -1287,6 +1287,12 @@ mechanical acceptance condition holds.
     neutral self-diff. Trusted/isolated report snapshots remain follow-up work.
   - [ ] **E02.2 — Add an async/resource workflow example.** Demonstrate task
     groups, cancellation, cleanup, mock/production-like Providers, and failures.
+    - [~] **E02.2.1 — Add the Provider-free structured-async baseline.**
+      `examples/structured-async-pipeline` now proves the verified,
+      provider-neutral `task_group` / `async let` / `await` execution path and
+      bounded `ExecutionReport`. Cancellation, resource cleanup, Provider
+      replacement, isolated-runner fixtures, and failure-report snapshots still
+      need to be added before E02.2 can close.
 - [ ] **E03 — Establish compatibility and conformance corpora.** Add source to
   diagnostic/HIR/MIR goldens, MIR to bytecode fixtures, old Artifact readers,
   cross-platform deterministic builds, Provider ABI compatibility, resource

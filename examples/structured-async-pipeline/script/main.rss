@@ -1,0 +1,22 @@
+module async.pipeline
+
+async fn fetch_user() -> Result<String, String> {
+    return Ok("user")
+}
+
+async fn fetch_profile() -> Result<String, String> {
+    return Ok("profile")
+}
+
+fn main() -> Result<Unit, String> {
+    task_group {
+        async let user = fetch_user()
+        async let profile = fetch_profile()
+
+        let resolved_user = await user?
+        let resolved_profile = await profile?
+        Output.write(message: read resolved_user)
+        Output.write(message: read resolved_profile)
+    }
+    return Ok(Unit)
+}

@@ -80,6 +80,11 @@ bytecode and neutral analysis. The primary
 `embedded-report-pipeline` demo runs identical artifact bytes with memory and
 filesystem providers. The roadmap now prioritizes conformance and boundary
 hardening over new language, JIT, self-hosting, or package-system scope.
+`structured-async-pipeline` is the companion in-process embedding example: it
+compiles, verifies, links, and executes a Provider-free `task_group` under
+bounded limits, then exposes the complete execution report. It makes the
+structured-async path executable without implying that bounded in-process
+execution is a sandbox.
 Execution reports now have a strict checked-in v1 schema and representative
 success/failure fixtures. A reusable conformance crate validates every official
 Provider's descriptor, ABI linkage, import resolution, and runtime-owned

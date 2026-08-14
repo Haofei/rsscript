@@ -67,4 +67,5 @@ tooling = [
 
 examples = [
   "embedded-report-pipeline",
+  "structured-async-pipeline",
 ]
