@@ -19,6 +19,11 @@ without an explicit module declaration use the established filename fallback
 inside this query. The graph is invalidated with any source or interface
 revision change and is available through an operation-aware API.
 
+The graph also owns interface-visibility closure and transitive dependent-path
+calculation. Those are parsed module facts, so keeping them beside the graph
+ensures interface rename/removal invalidation cannot diverge between editor
+clients.
+
 The language service consumes this graph and no longer owns a separate
 dependency cache. This is a syntax-level dependency query, not the final
 semantic resolver: it does not prove import validity, type-check a workspace,

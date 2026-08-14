@@ -228,53 +228,11 @@ impl LanguageService {
     }
 
     fn invalidate_interface_dependents(&mut self, modules: &BTreeSet<String>, changed_path: &str) {
-        let mut affected_modules = modules.clone();
-        let interface_paths = self
-            .documents
-            .iter()
-            .filter(|(_, document)| document.kind == DocumentKind::Interface)
-            .map(|(path, _)| path.clone())
-            .collect::<Vec<_>>();
-        loop {
-            let mut changed = false;
-            for path in &interface_paths {
-                if path == changed_path {
-                    continue;
-                }
-                let dependencies = self.imported_modules(path, DocumentKind::Interface);
-                if dependencies.iter().any(|dependency| {
-                    affected_modules
-                        .iter()
-                        .any(|module| dependency_matches_module(dependency, module))
-                }) {
-                    for module in self.declared_modules(path, DocumentKind::Interface) {
-                        changed |= affected_modules.insert(module);
-                    }
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
-        let document_paths = self
-            .documents
-            .iter()
-            .map(|(path, document)| (path.clone(), document.kind))
-            .collect::<Vec<_>>();
-        for (dependent, kind) in document_paths {
-            if dependent == changed_path {
-                continue;
-            }
-            let dependencies = self.imported_modules(&dependent, kind);
-            if !affected_modules.is_empty()
-                && !dependencies.iter().any(|dependency| {
-                    affected_modules
-                        .iter()
-                        .any(|module| dependency_matches_module(dependency, module))
-                })
-            {
-                continue;
-            }
+        let dependents = self
+            .frontend
+            .workspace_module_graph()
+            .interface_dependent_paths(modules, changed_path);
+        for dependent in dependents {
             let removed = retain_other_paths(&mut self.diagnostic_cache, &dependent);
             self.invalidations = self.invalidations.saturating_add(removed);
         }
@@ -552,52 +510,14 @@ impl LanguageService {
         .unwrap_or_default()
     }
 
-    fn imported_modules(&mut self, path: &str, kind: DocumentKind) -> BTreeSet<String> {
-        let graph = self.frontend.workspace_module_graph();
-        match kind {
-            DocumentKind::Source => graph.source(path),
-            DocumentKind::Interface => graph.interface(path),
-        }
-        .map(|node| node.imports().iter().cloned().collect())
-        .unwrap_or_default()
-    }
-
     fn visible_interface_paths(
         &mut self,
         current_path: &str,
         root_dependencies: &[String],
     ) -> BTreeSet<String> {
-        let mut dependencies = root_dependencies.iter().cloned().collect::<BTreeSet<_>>();
-        let interface_paths = self
-            .documents
-            .iter()
-            .filter(|(_, document)| document.kind == DocumentKind::Interface)
-            .map(|(path, _)| path.clone())
-            .collect::<Vec<_>>();
-        let mut visible = BTreeSet::new();
-        loop {
-            let mut changed = false;
-            for path in &interface_paths {
-                if path == current_path {
-                    continue;
-                }
-                let selected = self
-                    .declared_modules(path, DocumentKind::Interface)
-                    .iter()
-                    .any(|module| {
-                        dependencies
-                            .iter()
-                            .any(|dependency| dependency_matches_module(dependency, module))
-                    });
-                if selected && visible.insert(path.clone()) {
-                    dependencies.extend(self.imported_modules(path, DocumentKind::Interface));
-                    changed = true;
-                }
-            }
-            if !changed {
-                return visible;
-            }
-        }
+        self.frontend
+            .workspace_module_graph()
+            .visible_interface_paths(current_path, root_dependencies.iter().cloned())
     }
 
     fn record_hit(&mut self, query: QueryKind) {
@@ -652,13 +572,6 @@ fn retain_other_paths<V>(cache: &mut BTreeMap<(String, u64), V>, path: &str) -> 
     let before = cache.len();
     cache.retain(|(cached_path, _), _| cached_path != path);
     u64::try_from(before.saturating_sub(cache.len())).unwrap_or(u64::MAX)
-}
-
-fn dependency_matches_module(dependency: &str, module: &str) -> bool {
-    dependency == module
-        || dependency
-            .strip_prefix(module)
-            .is_some_and(|suffix| suffix.starts_with('.') || suffix.starts_with('{'))
 }
 
 #[cfg(test)]
@@ -913,10 +826,7 @@ mod tests {
             fn main() -> Unit {}
         "#,
         );
-        assert_eq!(
-            service.imported_modules("main.rss", DocumentKind::Source),
-            BTreeSet::from(["host.api".to_string()])
-        );
+        assert_eq!(service.dependencies("main.rss").as_ref(), ["host.api"]);
 
         service.set_file(
             "host.rssi",

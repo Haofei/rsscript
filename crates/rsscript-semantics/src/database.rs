@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
@@ -400,6 +400,84 @@ impl WorkspaceModuleGraph {
         self.nodes
             .iter()
             .find(|node| node.is_interface && node.path.as_ref() == path)
+    }
+
+    /// Find interface files reachable from one document's parsed import set.
+    ///
+    /// This deliberately follows only interface declarations: source files
+    /// retain their own module scope, while interfaces supply the visible
+    /// external contract closure used by editor and package clients.
+    pub fn visible_interface_paths(
+        &self,
+        current_path: &str,
+        root_imports: impl IntoIterator<Item = String>,
+    ) -> BTreeSet<String> {
+        let mut imports = root_imports.into_iter().collect::<BTreeSet<_>>();
+        let mut visible = BTreeSet::new();
+        loop {
+            let mut changed = false;
+            for node in self.nodes.iter().filter(|node| node.is_interface) {
+                if node.path() == current_path {
+                    continue;
+                }
+                let selected = node.modules().iter().any(|module| {
+                    imports
+                        .iter()
+                        .any(|import| import_matches_module(import, module))
+                });
+                if selected && visible.insert(node.path().to_string()) {
+                    imports.extend(node.imports().iter().cloned());
+                    changed = true;
+                }
+            }
+            if !changed {
+                return visible;
+            }
+        }
+    }
+
+    /// Find source and interface files whose diagnostics depend on a changed
+    /// interface module closure. Callers pass both the old and new declared
+    /// modules so renames/removals invalidate consumers fail-closed.
+    pub fn interface_dependent_paths(
+        &self,
+        changed_modules: &BTreeSet<String>,
+        changed_path: &str,
+    ) -> BTreeSet<String> {
+        let mut affected_modules = changed_modules.clone();
+        loop {
+            let mut changed = false;
+            for node in self.nodes.iter().filter(|node| node.is_interface) {
+                if node.path() == changed_path {
+                    continue;
+                }
+                if node.imports().iter().any(|import| {
+                    affected_modules
+                        .iter()
+                        .any(|module| import_matches_module(import, module))
+                }) {
+                    for module in node.modules() {
+                        changed |= affected_modules.insert(module.clone());
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        self.nodes
+            .iter()
+            .filter(|node| node.path() != changed_path)
+            .filter(|node| {
+                node.imports().iter().any(|import| {
+                    affected_modules
+                        .iter()
+                        .any(|module| import_matches_module(import, module))
+                })
+            })
+            .map(|node| node.path().to_string())
+            .collect()
     }
 }
 
@@ -812,6 +890,13 @@ fn interface_filename_module(path: &str) -> Option<String> {
     (!fallback.is_empty()).then(|| fallback.to_string())
 }
 
+fn import_matches_module(import: &str, module: &str) -> bool {
+    import == module
+        || import
+            .strip_prefix(module)
+            .is_some_and(|suffix| suffix.starts_with('.') || suffix.starts_with('{'))
+}
+
 fn module_header_from_program(program: &Program) -> ModuleHeader {
     let modules = program
         .items
@@ -1191,6 +1276,12 @@ mod tests {
             .set_interface("host.rssi", "module host.api\npub fn emit() -> Unit\n")
             .unwrap();
         session
+            .set_interface(
+                "host-base.rssi",
+                "module host.base\npub fn base() -> Unit\n",
+            )
+            .unwrap();
+        session
             .set_interface("fallback.rssi", "pub fn fallback() -> Unit\n")
             .unwrap();
 
@@ -1203,6 +1294,10 @@ mod tests {
         assert_eq!(
             first.interface("fallback.rssi").unwrap().modules(),
             ["fallback"]
+        );
+        assert_eq!(
+            first.visible_interface_paths("main.rss", ["host.api".to_string()]),
+            BTreeSet::from(["host.rssi".to_string()])
         );
         let second = session.workspace_module_graph();
         assert!(Arc::ptr_eq(&first, &second));
@@ -1220,6 +1315,13 @@ mod tests {
         assert_eq!(
             replacement.interface("host.rssi").unwrap().imports(),
             ["host.base"]
+        );
+        assert_eq!(
+            replacement.interface_dependent_paths(
+                &BTreeSet::from(["host.base".to_string()]),
+                "host-base.rssi",
+            ),
+            BTreeSet::from(["host.rssi".to_string(), "main.rss".to_string()])
         );
         assert_eq!(session.stats().workspace_module_graph_cache_misses, 2);
 
