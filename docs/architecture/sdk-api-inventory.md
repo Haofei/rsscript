@@ -25,8 +25,9 @@ not part of the reviewed in-memory `compile::Compiler` contract.
   the shared workspace diagnostics path; it remains frontend-only and has no
   runtime or Provider dependency.
 - Artifact lifecycle: `BuiltArtifact`, `VerifiedArtifact`, `ArtifactBundle`,
-  `ArtifactVerifier`, provenance, interface requirements, the versioned source
-  and package analysis schema identifiers, and neutral semantic diff data,
+  `ArtifactVerifier`, `AnalysisEnvelopeV1`/`AnalysisSchemaV1`, provenance,
+  interface requirements, the versioned source and package analysis schema
+  identifiers, and neutral semantic diff data,
   including structural external-call, public function ownership, call-graph,
   recursion, lexical resource-lifetime and explicit resource-transfer, and
   structured task-group contracts.

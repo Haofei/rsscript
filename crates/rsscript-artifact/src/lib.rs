@@ -31,6 +31,69 @@ const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 const MAX_ANALYSIS_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES: usize = 64 * 1024 * 1024;
 
+/// The versioned analysis families that a Bundle v1 may carry.
+///
+/// The payload remains JSON during the v1 compatibility window, but consumers
+/// must select a known schema through this enum rather than interpreting an
+/// unbounded `$schema` string themselves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AnalysisSchemaV1 {
+    Source,
+    Package,
+}
+
+impl AnalysisSchemaV1 {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Source => SOURCE_ANALYSIS_SCHEMA,
+            Self::Package => PACKAGE_ANALYSIS_SCHEMA,
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            SOURCE_ANALYSIS_SCHEMA => Some(Self::Source),
+            PACKAGE_ANALYSIS_SCHEMA => Some(Self::Package),
+            _ => None,
+        }
+    }
+}
+
+/// A validated analysis section from one Artifact Bundle.
+///
+/// This is the stable section boundary. Individual source/package analysis
+/// payloads can evolve behind their own schemas without turning Bundle loading
+/// into ad-hoc `$schema` string inspection at every consumer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnalysisEnvelopeV1 {
+    schema: AnalysisSchemaV1,
+    payload: Value,
+}
+
+impl AnalysisEnvelopeV1 {
+    pub fn new(payload: Value) -> Result<Self, ArtifactBundleError> {
+        let schema = payload
+            .get("$schema")
+            .and_then(Value::as_str)
+            .ok_or(ArtifactBundleError::MissingAnalysisSchema)?;
+        let schema = AnalysisSchemaV1::parse(schema)
+            .ok_or_else(|| ArtifactBundleError::UnsupportedAnalysisSchema(schema.to_string()))?;
+        Ok(Self { schema, payload })
+    }
+
+    pub const fn schema(&self) -> AnalysisSchemaV1 {
+        self.schema
+    }
+
+    pub fn payload(&self) -> &Value {
+        &self.payload
+    }
+
+    pub fn into_payload(self) -> Value {
+        self.payload
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BuildProvenanceV1 {
@@ -78,19 +141,17 @@ struct BundleManifestV1 {
 pub struct ArtifactBundle {
     manifest: BundleManifestV1,
     artifact: Vec<u8>,
-    analysis: serde_json::Value,
+    analysis: AnalysisEnvelopeV1,
     external_contracts: Vec<ExternalImport>,
     digest: String,
 }
 
 impl ArtifactBundle {
-    pub fn new(
-        artifact: Vec<u8>,
-        analysis: serde_json::Value,
-    ) -> Result<Self, ArtifactBundleError> {
+    pub fn new(artifact: Vec<u8>, analysis: Value) -> Result<Self, ArtifactBundleError> {
         let envelope = BytecodeArtifact::from_bytes(&artifact)
             .map_err(|error| ArtifactBundleError::Artifact(error.to_string()))?;
-        let analysis_bytes = canonical_json(&analysis)?;
+        let analysis = AnalysisEnvelopeV1::new(analysis)?;
+        let analysis_bytes = canonical_json(analysis.payload())?;
         let manifest = BundleManifestV1 {
             schema: ARTIFACT_BUNDLE_SCHEMA.to_string(),
             provenance: BuildProvenanceV1 {
@@ -135,9 +196,14 @@ impl ArtifactBundle {
         if !input.is_empty() {
             return Err(ArtifactBundleError::TrailingBytes);
         }
-        let analysis: serde_json::Value = serde_json::from_slice(&analysis_bytes)
+        let analysis: Value = serde_json::from_slice(&analysis_bytes)
             .map_err(|error| ArtifactBundleError::Analysis(error.to_string()))?;
-        validate_v1_json_encoding(&analysis, &analysis_bytes, ArtifactBundleSection::Analysis)?;
+        let analysis = AnalysisEnvelopeV1::new(analysis)?;
+        validate_v1_json_encoding(
+            analysis.payload(),
+            &analysis_bytes,
+            ArtifactBundleSection::Analysis,
+        )?;
         Self::from_sections(manifest, manifest_bytes, artifact, analysis, analysis_bytes)
     }
 
@@ -145,13 +211,12 @@ impl ArtifactBundle {
         manifest: BundleManifestV1,
         manifest_bytes: Vec<u8>,
         artifact: Vec<u8>,
-        analysis: serde_json::Value,
+        analysis: AnalysisEnvelopeV1,
         analysis_bytes: Vec<u8>,
     ) -> Result<Self, ArtifactBundleError> {
         if manifest.schema != ARTIFACT_BUNDLE_SCHEMA {
             return Err(ArtifactBundleError::UnsupportedSchema(manifest.schema));
         }
-        verify_analysis_schema(&analysis)?;
         if manifest.artifact_digest != digest(&artifact) {
             return Err(ArtifactBundleError::ArtifactDigestMismatch);
         }
@@ -192,7 +257,7 @@ impl ArtifactBundle {
 
     pub fn to_bytes(&self) -> Result<Vec<u8>, ArtifactBundleError> {
         let manifest = canonical_json(&self.manifest)?;
-        let analysis = canonical_json(&self.analysis)?;
+        let analysis = canonical_json(self.analysis.payload())?;
         let mut output = Vec::with_capacity(
             ARTIFACT_BUNDLE_MAGIC.len()
                 + 24
@@ -214,6 +279,9 @@ impl ArtifactBundle {
         &self.artifact
     }
     pub fn analysis(&self) -> &serde_json::Value {
+        self.analysis.payload()
+    }
+    pub fn analysis_envelope(&self) -> &AnalysisEnvelopeV1 {
         &self.analysis
     }
     pub fn provenance(&self) -> &BuildProvenanceV1 {
@@ -231,19 +299,6 @@ impl ArtifactBundle {
     }
 }
 
-fn verify_analysis_schema(analysis: &serde_json::Value) -> Result<(), ArtifactBundleError> {
-    let schema = analysis
-        .get("$schema")
-        .and_then(serde_json::Value::as_str)
-        .ok_or(ArtifactBundleError::MissingAnalysisSchema)?;
-    if [SOURCE_ANALYSIS_SCHEMA, PACKAGE_ANALYSIS_SCHEMA].contains(&schema) {
-        Ok(())
-    } else {
-        Err(ArtifactBundleError::UnsupportedAnalysisSchema(
-            schema.to_string(),
-        ))
-    }
-}
 /// Encode JSON sections using the Bundle v1 canonical form.
 ///
 /// Object keys are serialized in Unicode scalar-value order at every depth.
@@ -483,6 +538,10 @@ mod tests {
         assert_eq!(decoded.artifact_bytes(), original.artifact_bytes());
         assert_eq!(decoded.analysis(), original.analysis());
         assert_eq!(
+            decoded.analysis_envelope().schema(),
+            AnalysisSchemaV1::Source
+        );
+        assert_eq!(
             decoded.provenance().snapshot_digest,
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
@@ -492,7 +551,7 @@ mod tests {
     fn bundle_digest_is_domain_separated_from_raw_section_concatenation() {
         let bundle = bundle();
         let manifest = canonical_json(&bundle.manifest).unwrap();
-        let analysis = canonical_json(&bundle.analysis).unwrap();
+        let analysis = canonical_json(bundle.analysis.payload()).unwrap();
         let legacy = {
             let mut hasher = Sha256::new();
             for section in [
@@ -559,7 +618,7 @@ mod tests {
         noncanonical.extend_from_slice(&canonical_manifest);
         assert_ne!(canonical_json(&bundle.manifest).unwrap(), noncanonical);
 
-        let analysis = canonical_json(&bundle.analysis).unwrap();
+        let analysis = canonical_json(bundle.analysis.payload()).unwrap();
         let mut bytes = ARTIFACT_BUNDLE_MAGIC.to_vec();
         put_length(&mut bytes, noncanonical.len()).unwrap();
         put_length(&mut bytes, bundle.artifact.len()).unwrap();
@@ -580,7 +639,7 @@ mod tests {
         let legacy_manifest = legacy_compact_json(&bundle.manifest).unwrap();
         let canonical_manifest = canonical_json(&bundle.manifest).unwrap();
         assert_ne!(legacy_manifest, canonical_manifest);
-        let analysis = canonical_json(&bundle.analysis).unwrap();
+        let analysis = canonical_json(bundle.analysis.payload()).unwrap();
 
         let mut bytes = ARTIFACT_BUNDLE_MAGIC.to_vec();
         put_length(&mut bytes, legacy_manifest.len()).unwrap();
