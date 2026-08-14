@@ -741,10 +741,10 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         args: &[checked::HirCallArg],
         resolution: &checked::CallResolution,
     ) -> Result<ValueId, MirLoweringError> {
-        if receiver.is_some() {
-            return self.unsupported("checked HIR receiver call");
-        }
         if matches!(resolution, checked::CallResolution::EnumVariant) {
+            if receiver.is_some() {
+                return self.unsupported("checked HIR receiver enum-variant call");
+            }
             return self.lower_enum_variant_call(callee, args);
         }
         let checked::CallResolution::Resolved { signature, kind } = resolution else {
@@ -762,7 +762,10 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             return self.unsupported("non-record checked HIR constructor");
         }
         if signature.is_builtin {
-            return self.lower_builtin_call(signature, args);
+            return self.lower_builtin_call(signature, receiver, args);
+        }
+        if receiver.is_some() {
+            return self.unsupported("checked HIR receiver call");
         }
         let target = if signature.is_external {
             let symbol = checked_external_symbol(signature)?;
@@ -887,6 +890,7 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
     fn lower_builtin_call(
         &mut self,
         signature: &checked::FunctionSig,
+        receiver: Option<&checked::HirCallReceiver>,
         args: &[checked::HirCallArg],
     ) -> Result<ValueId, MirLoweringError> {
         let destination = self.value();
@@ -921,7 +925,28 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                     value: None,
                 });
             }
-            _ => return self.unsupported("builtin checked HIR call"),
+            _ => {
+                let Some(namespace) = signature.namespace.as_deref() else {
+                    return self.unsupported("builtin checked HIR call without namespace");
+                };
+                let Some(builtin) = rsscript_mir::builtin_id(namespace, &signature.name) else {
+                    return self.unsupported("unsupported checked HIR builtin call");
+                };
+                if receiver.is_some() {
+                    return self.unsupported("checked HIR receiver builtin call");
+                }
+                let mut ordered = args.iter().collect::<Vec<_>>();
+                ordered.sort_by_key(|argument| argument.evaluation_index);
+                let arguments = ordered
+                    .into_iter()
+                    .map(|argument| self.lower_direct_call_argument(&argument.value))
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.emit(MirInstruction::Call {
+                    destination,
+                    target: MirCallTarget::Builtin(builtin),
+                    arguments,
+                });
+            }
         }
         Ok(destination)
     }

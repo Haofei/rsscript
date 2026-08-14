@@ -15,7 +15,7 @@ use rsscript_abi_model::{ExternalImport, RUNTIME_ABI_VERSION};
 use rsscript_bytecode::{BytecodeArtifact, BytecodeError, LANGUAGE_SEMANTICS_VERSION};
 use rsscript_mir::{
     BlockId, MirBinaryOp, MirCallArgument, MirCallTarget, MirFunction, MirInstruction, MirLiteral,
-    MirModule, MirParameterMode, MirTerminator, PlaceId, TaskId, ValueId,
+    MirModule, MirParameterMode, MirTerminator, PlaceId, TaskId, ValueId, builtin_vm_name,
 };
 use serde_json::{Map, Value, json};
 
@@ -577,6 +577,19 @@ fn lower_instruction(
                         ("mut_args", json!(mut_args)),
                     ],
                 )),
+                MirCallTarget::Builtin(id) => {
+                    let intrinsic = builtin_vm_name(*id).ok_or(CodegenError::InvalidMir(
+                        "builtin call references missing catalog identity".to_owned(),
+                    ))?;
+                    code.push(instr(
+                        "CallIntrinsic",
+                        [
+                            ("dst", json!(dst)),
+                            ("intrinsic", json!(intrinsic)),
+                            ("args", json!(args)),
+                        ],
+                    ));
+                }
                 MirCallTarget::External(id) => {
                     let import =
                         mir.external_imports()

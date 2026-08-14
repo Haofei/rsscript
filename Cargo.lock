@@ -1873,6 +1873,7 @@ name = "rsscript-mir"
 version = "0.1.0"
 dependencies = [
  "rsscript-abi-model",
+ "rsscript-build-support",
 ]
 
 [[package]]

@@ -11,8 +11,9 @@ use rsscript_compiler::{
 };
 use rsscript_mir::conformance::{MigrationCase, MigrationStage, execute_named};
 use rsscript_mir::{
-    BasicBlock, BlockId, FunctionId, MirFunction, MirFunctionDebug, MirFunctionSignature,
-    MirInstruction, MirLiteral, MirModule, MirTerminator, TaskGroupId, TaskId, TypeId, ValueId,
+    BasicBlock, BlockId, FunctionId, MirCallTarget, MirFunction, MirFunctionDebug,
+    MirFunctionSignature, MirInstruction, MirLiteral, MirModule, MirTerminator, TaskGroupId,
+    TaskId, TypeId, ValueId,
 };
 use rsscript_sdk::{
     AsyncInterpreterFn, BlockingBehavior, CancellationBehavior, CancellationToken, Compiler,
@@ -463,6 +464,43 @@ fn main() -> Int {
     .eval_main_with_args(std::iter::empty::<String>())
     .expect("direct HIR bytecode executes");
     assert_eq!(output.value, "42");
+}
+
+#[test]
+fn direct_checked_hir_builtin_uses_catalog_identity_and_verified_bytecode() {
+    let source = r#"
+fn main() -> String {
+    let input = "report"
+    return String.to_uppercase(value: read input)
+}
+"#;
+    let compiled =
+        compile_source_to_ir("direct-hir-builtin.rss", source).expect("builtin fixture compiles");
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("direct builtin should not require executable IR");
+    assert!(
+        mir.functions()[0]
+            .blocks()
+            .iter()
+            .flat_map(|block| block.instructions())
+            .any(|instruction| matches!(
+                instruction,
+                MirInstruction::Call {
+                    target: MirCallTarget::Builtin(_),
+                    ..
+                }
+            ))
+    );
+    let output = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("direct builtin MIR emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("direct builtin bytecode executes");
+    assert_eq!(output.value, "REPORT");
 }
 
 #[test]

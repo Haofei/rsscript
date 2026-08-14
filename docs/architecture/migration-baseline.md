@@ -839,6 +839,13 @@ mechanical acceptance condition holds.
       the Artifact import table, verified against the bytecode call table, and
       dispatched through the same Provider binding as the legacy VM. Builtin
       identity and the remaining effect/retention facts stay open.
+    - [x] **M03.4b — Lower catalog-owned direct builtins through `BuiltinId`.**
+      Checked direct core-library calls now become `MirCallTarget::Builtin` and
+      cannot carry source callee text into MIR. The MIR-only codegen maps that
+      identity to the legacy v1 `CallIntrinsic` spelling at the encoding
+      boundary; the direct-HIR regression and primary embedding example cover
+      `String.to_uppercase`. Receiver syntax, typed/generic signatures, and
+      async builtin contracts remain fail-closed follow-up work.
 - [ ] **M04 — Lower checked HIR to MIR exactly once.** Backend code cannot
   inspect syntax AST or reconstruct semantic facts. MIR verification rejects
   unresolved calls, invalid ownership state, incomplete cleanup, and malformed

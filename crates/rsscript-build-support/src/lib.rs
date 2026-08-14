@@ -405,6 +405,77 @@ pub fn write_reg_vm_runtime_intrinsics() -> Result<(), String> {
     Ok(())
 }
 
+/// Generate the typed MIR-to-v1 compatibility catalog for direct core-library
+/// calls. MIR carries only a [`BuiltinId`]-compatible numeric identity; the
+/// legacy v1 bytecode spelling is recovered by the code generator, never by a
+/// backend inspecting source syntax.
+pub fn write_mir_builtin_catalog() -> Result<(), String> {
+    println!("cargo:rerun-if-changed=intrinsics.toml");
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
+    let local_catalog = manifest_dir.join("intrinsics.toml");
+    let catalog_path = if local_catalog.exists() {
+        local_catalog
+    } else {
+        workspace_root(&manifest_dir)?.join("crates/rsscript-compiler/intrinsics.toml")
+    };
+    let source = fs::read_to_string(&catalog_path)
+        .map_err(|error| format!("failed to read {}: {error}", catalog_path.display()))?;
+    let catalog: IntrinsicCatalog = toml::from_str(&source)
+        .map_err(|error| format!("failed to parse {}: {error}", catalog_path.display()))?;
+    validate_intrinsic_catalog(&catalog)?;
+
+    let direct = catalog
+        .binding
+        .iter()
+        .filter(|binding| binding.lowering == IntrinsicLowering::Direct)
+        .collect::<Vec<_>>();
+    let lookup_arms = direct
+        .iter()
+        .enumerate()
+        .map(|(index, binding)| {
+            format!(
+                "        ({:?}, {:?}) => Some(BuiltinId::new({index})),",
+                binding.namespace, binding.name
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let vm_name_arms = direct
+        .iter()
+        .enumerate()
+        .map(|(index, binding)| {
+            let vm_id = binding
+                .vm_id
+                .as_deref()
+                .expect("validated direct intrinsic must have a VM id");
+            format!("        {index} => Some({vm_id:?}),")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let generated = format!(
+        r#"/// Resolve a catalog-owned direct builtin without retaining its source spelling in MIR.
+pub fn builtin_id(namespace: &str, name: &str) -> Option<BuiltinId> {{
+    match (namespace, name) {{
+{lookup_arms}
+        _ => None,
+    }}
+}}
+
+/// Compatibility spelling required only by the v1 bytecode encoder.
+pub fn builtin_vm_name(id: BuiltinId) -> Option<&'static str> {{
+    match id.index() {{
+{vm_name_arms}
+        _ => None,
+    }}
+}}
+"#
+    );
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("out dir"));
+    fs::write(out_dir.join("rss-mir-builtin-catalog.rs"), generated)
+        .map_err(|error| format!("MIR builtin catalog should be written: {error}"))?;
+    Ok(())
+}
+
 fn validate_intrinsic_catalog(catalog: &IntrinsicCatalog) -> Result<(), String> {
     if catalog.schema != 1 {
         return Err(format!(

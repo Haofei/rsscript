@@ -132,6 +132,7 @@ pub enum MirExecutionError {
     InvalidOperation(&'static str),
     DivisionByZero,
     UnsupportedExternalCall,
+    UnsupportedBuiltinCall,
     UnsupportedStructuredConcurrency,
     RecursionLimit,
     StepLimit,
@@ -499,6 +500,9 @@ impl<'a> Interpreter<'a> {
                             }
                             MirCallTarget::External(_) => {
                                 return Err(MirExecutionError::UnsupportedExternalCall);
+                            }
+                            MirCallTarget::Builtin(_) => {
+                                return Err(MirExecutionError::UnsupportedBuiltinCall);
                             }
                         };
                         for (caller_place, callee_parameter) in writebacks {

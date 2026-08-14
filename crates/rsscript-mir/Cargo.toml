@@ -17,3 +17,6 @@ conformance = []
 
 [dependencies]
 rsscript-abi-model = { path = "../rsscript-abi-model" }
+
+[build-dependencies]
+rsscript-build-support = { path = "../rsscript-build-support" }
