@@ -35,7 +35,6 @@ mod analysis;
 #[path = "package/review/review_await.rs"]
 mod analysis_await;
 mod analysis_execution;
-mod artifact_store;
 mod authorization;
 mod check;
 mod contract;
@@ -60,7 +59,6 @@ const PACKAGE_TREE_MAX_DEPTH: usize = 64;
 const PACKAGE_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
 
 pub use analysis::analyze_package_dir;
-pub use artifact_store::ArtifactStore;
 pub use authorization::{
     ExecutablePackageSnapshot, PreparedPackage, WorkspaceSnapshot, load_workspace_snapshot,
     load_workspace_snapshot_with_operation, prepare_executable_package,
@@ -80,6 +78,7 @@ pub use metadata::{package_lowering_input, package_metadata, package_metadata_ve
 pub(crate) use native::package_native_plugin_build_dependencies;
 use native::{manifest_native_enabled, manifest_native_unsafe_boundary};
 pub use review::review_package_dir;
+pub use rsscript_artifact_store::ArtifactStore;
 use source_set::{LoadedPackage, Manifest, ManifestNativeRust, PackageSource};
 pub use types::*;
 
@@ -520,21 +519,7 @@ fn canonical_checked_root(path: &Path, operation: &str) -> Result<PathBuf, Strin
 
 /// Atomically replace a regular package artifact without following symlinks in
 /// its parent path or at the destination.
-pub fn write_package_artifact_atomic(
-    package_root: &Path,
-    destination: &Path,
-    contents: &[u8],
-    label: &str,
-) -> Result<(), String> {
-    let store = ArtifactStore::open(package_root)?;
-    let relative = destination.strip_prefix(package_root).map_err(|_| {
-        format!(
-            "{label} destination escapes package root: {}",
-            destination.display()
-        )
-    })?;
-    store.write_atomic(relative, contents, label)
-}
+pub use rsscript_artifact_store::write_package_artifact_atomic;
 
 pub(super) fn package_path_metadata(path: &Path, operation: &str) -> Result<fs::Metadata, String> {
     let metadata = fs::symlink_metadata(path)

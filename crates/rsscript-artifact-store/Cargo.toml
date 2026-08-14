@@ -1,0 +1,12 @@
+[package]
+name = "rsscript-artifact-store"
+version = "0.1.0"
+edition = "2024"
+description = "Confined, locked artifact persistence adapter for RSScript tools"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+fs2 = "0.4"
+rustix = { version = "1.1", features = ["fs"] }
+uuid = { version = "1", features = ["v4"] }

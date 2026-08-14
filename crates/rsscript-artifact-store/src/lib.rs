@@ -6,12 +6,66 @@ use std::path::{Component, Path, PathBuf};
 
 use fs2::FileExt;
 
-#[cfg(not(unix))]
-use super::open_regular_file_no_follow;
-use super::{canonical_checked_root, is_package_link_like};
-
 const MUTATION_LOCK: &str = ".rsscript-artifacts.lock";
 const ARTIFACT_READ_MAX_BYTES: u64 = 16 * 1024 * 1024;
+
+fn canonical_checked_root(path: &Path, operation: &str) -> Result<PathBuf, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+    if is_link_like(&metadata) || !metadata.is_dir() {
+        return Err(format!(
+            "{operation} requires a real directory and rejects symlinks or reparse points: {}",
+            path.display()
+        ));
+    }
+    fs::canonicalize(path)
+        .map_err(|error| format!("failed to canonicalize {}: {error}", path.display()))
+}
+
+fn is_link_like(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    false
+}
+
+#[cfg(not(unix))]
+fn open_regular_file_no_follow(
+    path: &Path,
+    operation: &str,
+) -> Result<(File, fs::Metadata), String> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(path).map_err(|error| {
+        format!(
+            "failed to open {} without following links: {error}",
+            path.display()
+        )
+    })?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("failed to inspect opened {}: {error}", path.display()))?;
+    if !metadata.is_file() || is_link_like(&metadata) {
+        return Err(format!(
+            "{operation} requires a regular file and rejects symlinks or reparse points: {}",
+            path.display()
+        ));
+    }
+    Ok((file, metadata))
+}
 
 /// A locked, confined writer for artifacts owned by one package.
 ///
@@ -33,7 +87,7 @@ impl ArtifactStore {
         let root = canonical_checked_root(package_root, "package artifact store")?;
         let metadata = fs::symlink_metadata(&root)
             .map_err(|error| format!("failed to inspect {}: {error}", root.display()))?;
-        if !metadata.is_dir() || is_package_link_like(&metadata) {
+        if !metadata.is_dir() || is_link_like(&metadata) {
             return Err(format!(
                 "package artifact root must be a real directory: {}",
                 root.display()
@@ -143,7 +197,7 @@ impl ArtifactStore {
                 };
                 current.push(component);
                 match fs::symlink_metadata(&current) {
-                    Ok(metadata) if metadata.is_dir() && !is_package_link_like(&metadata) => {}
+                    Ok(metadata) if metadata.is_dir() && !is_link_like(&metadata) => {}
                     Ok(_) => {
                         return Err(format!(
                             "{label} must be a real directory: {}",
@@ -250,7 +304,7 @@ impl ArtifactStore {
             current.push(component);
             let leaf = components.peek().is_none();
             match fs::symlink_metadata(&current) {
-                Ok(metadata) if is_package_link_like(&metadata) => {
+                Ok(metadata) if is_link_like(&metadata) => {
                     return Err(format!(
                         "{label} rejects symlinks or reparse points: {}",
                         current.display()
@@ -324,6 +378,27 @@ impl ArtifactStore {
     }
 }
 
+/// Atomically replace a regular artifact below `package_root` without following
+/// symlinks in its parent path or at the destination.
+///
+/// This convenience adapter preserves the historical package-tooling call
+/// shape while keeping all persistence policy outside the compiler crate.
+pub fn write_package_artifact_atomic(
+    package_root: &Path,
+    destination: &Path,
+    contents: &[u8],
+    label: &str,
+) -> Result<(), String> {
+    let store = ArtifactStore::open(package_root)?;
+    let relative = destination.strip_prefix(package_root).map_err(|_| {
+        format!(
+            "{label} destination escapes package root: {}",
+            destination.display()
+        )
+    })?;
+    store.write_atomic(relative, contents, label)
+}
+
 /// Publish a staged regular file on platforms without descriptor-relative
 /// rename support in the standard library.
 ///
@@ -335,7 +410,7 @@ impl ArtifactStore {
 #[cfg(not(unix))]
 fn replace_portable_file(source: &Path, destination: &Path, label: &str) -> Result<(), String> {
     match fs::symlink_metadata(destination) {
-        Ok(metadata) if !metadata.is_file() || is_package_link_like(&metadata) => {
+        Ok(metadata) if !metadata.is_file() || is_link_like(&metadata) => {
             return Err(format!(
                 "{label} destination must be a regular file, not a symlink or reparse point"
             ));
@@ -532,7 +607,7 @@ fn open_unix_child_file(
 fn open_portable_lock(root: &Path) -> Result<File, String> {
     let path = root.join(MUTATION_LOCK);
     if let Ok(metadata) = fs::symlink_metadata(&path)
-        && (is_package_link_like(&metadata) || !metadata.is_file())
+        && (is_link_like(&metadata) || !metadata.is_file())
     {
         return Err(format!(
             "package mutation lock must be a regular file: {}",
@@ -553,7 +628,7 @@ fn open_portable_lock(root: &Path) -> Result<File, String> {
     let metadata = file
         .metadata()
         .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
-    if !metadata.is_file() || is_package_link_like(&metadata) {
+    if !metadata.is_file() || is_link_like(&metadata) {
         return Err(format!(
             "package mutation lock must be a regular file: {}",
             path.display()

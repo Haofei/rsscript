@@ -8,11 +8,13 @@ use super::native::{
     native_binding_interface_sources, package_external_bindings, package_native_rust_dependencies,
 };
 use super::source_set::load_package;
+use rsscript_artifact_store::ArtifactStore;
+
 use super::{
-    ArtifactStore, PACKAGE_REVIEW_METADATA_SCHEMA, PackageIdentity, PackageLoweringInput,
-    PackageMetadataMismatch, PackageMetadataReport, PackageReview, PackageReviewFileKind,
-    PackageReviewMetadata, PackageRisk, collect_dependency_interface_sources,
-    collect_dependency_lowering_sources, review_package_dir,
+    PACKAGE_REVIEW_METADATA_SCHEMA, PackageIdentity, PackageLoweringInput, PackageMetadataMismatch,
+    PackageMetadataReport, PackageReview, PackageReviewFileKind, PackageReviewMetadata,
+    PackageRisk, collect_dependency_interface_sources, collect_dependency_lowering_sources,
+    review_package_dir,
 };
 
 pub fn package_metadata(

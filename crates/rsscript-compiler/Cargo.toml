@@ -12,6 +12,7 @@ doctest = false
 
 [dependencies]
 rsscript-abi-model = { path = "../rsscript-abi-model" }
+rsscript-artifact-store = { path = "../rsscript-artifact-store", optional = true }
 rsscript-diagnostics = { path = "../rsscript-diagnostics" }
 rsscript-interface-catalog = { path = "../rsscript-interface-catalog" }
 rsscript-lowering = { path = "../rsscript-lowering", optional = true }
@@ -48,7 +49,7 @@ tempfile = "3"
 # Frontend-only by default so `rss check`, formatting, and language tooling do
 # not compile the VM/runtime/provider closure. Hosts opt into execution.
 default = []
-execution = ["dep:rsscript-lowering", "dep:rsscript-mir", "dep:rsscript-provider-api"]
+execution = ["dep:rsscript-artifact-store", "dep:rsscript-lowering", "dep:rsscript-mir", "dep:rsscript-provider-api"]
 language-service = []
 # The RSS-written frontend is a research parity harness.  Keep it out of Core
 # test builds; the dedicated self-host workflow opts in explicitly.

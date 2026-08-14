@@ -1734,6 +1734,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsscript-artifact-store"
+version = "0.1.0"
+dependencies = [
+ "fs2",
+ "rustix",
+ "uuid",
+]
+
+[[package]]
 name = "rsscript-build-support"
 version = "0.1.0"
 dependencies = [
@@ -1801,6 +1810,7 @@ dependencies = [
  "regex",
  "reir",
  "rsscript-abi-model",
+ "rsscript-artifact-store",
  "rsscript-build-support",
  "rsscript-diagnostics",
  "rsscript-interface-catalog",

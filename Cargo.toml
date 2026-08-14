@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/rsscript-abi-model",
     "crates/rsscript-artifact",
+    "crates/rsscript-artifact-store",
     "crates/rsscript-bytecode",
     "crates/rsscript-codegen-vm",
     "crates/rsscript-diagnostics",
@@ -62,6 +63,7 @@ exclude = [
 default-members = [
     "crates/rsscript-abi-model",
     "crates/rsscript-artifact",
+    "crates/rsscript-artifact-store",
     "crates/rsscript-bytecode",
     "crates/rsscript-codegen-vm",
     "crates/rsscript-diagnostics",

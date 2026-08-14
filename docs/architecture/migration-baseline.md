@@ -567,7 +567,12 @@ mechanical acceptance condition holds.
     callers remain to be migrated.
   - [ ] **S05.2 — Move Artifact persistence to an adapter.** Relocate locks,
     atomic writes, temporary files, compression, and artifact-store policy out
-    of compiler.
+    of compiler. The confined lock/read/write implementation now lives in the
+    standalone `rsscript-artifact-store` adapter; compiler package metadata
+    uses that adapter through its explicit execution-only dependency. Remaining
+    package lock, review, native snapshot, and generated-Rust persistence paths
+    still need to leave the compiler compatibility layer before this item can
+    close.
   - [ ] **S05.3 — Move review, risk, and package presentation out of compiler.**
     Keep neutral analysis facts; make review formatting and policy adapters
     optional consumers.

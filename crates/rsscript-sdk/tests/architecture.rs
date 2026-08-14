@@ -1125,6 +1125,52 @@ fn language_engine_does_not_read_the_operating_system() {
 }
 
 #[test]
+fn artifact_persistence_is_an_execution_only_adapter() {
+    let root = workspace_root();
+    let adapter_manifest: toml::Value = toml::from_str(&read(
+        &root.join("crates/rsscript-artifact-store/Cargo.toml"),
+    ))
+    .expect("artifact-store manifest should parse");
+    let dependencies = dependency_packages(&adapter_manifest);
+    assert_eq!(
+        dependencies,
+        BTreeSet::from(["fs2".to_string(), "rustix".to_string(), "uuid".to_string(),]),
+        "artifact persistence adapter must not depend on compiler, VM, package, or Provider crates"
+    );
+
+    let compiler_manifest: toml::Value =
+        toml::from_str(&read(&root.join("crates/rsscript-compiler/Cargo.toml")))
+            .expect("compiler manifest should parse");
+    let store = compiler_manifest["dependencies"]["rsscript-artifact-store"]
+        .as_table()
+        .expect("compiler must declare the persistence adapter as a dependency");
+    assert_eq!(
+        store.get("optional").and_then(toml::Value::as_bool),
+        Some(true)
+    );
+    let execution = compiler_manifest["features"]["execution"]
+        .as_array()
+        .expect("compiler execution feature should be declared");
+    assert!(
+        execution
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .any(|entry| entry == "dep:rsscript-artifact-store"),
+        "compiler may use persistence only through its explicit execution feature"
+    );
+
+    let package = read(&root.join("crates/rsscript-compiler/src/package.rs"));
+    assert!(package.contains("pub use rsscript_artifact_store::ArtifactStore"));
+    assert!(package.contains("pub use rsscript_artifact_store::write_package_artifact_atomic"));
+    assert!(
+        !root
+            .join("crates/rsscript-compiler/src/package/artifact_store.rs")
+            .exists(),
+        "the compiler must not retain a second persistence implementation"
+    );
+}
+
+#[test]
 fn linked_provider_contracts_reach_the_invocation_path() {
     let root = workspace_root();
     let provider_api = read(&root.join("crates/rsscript-provider-api/src/lib.rs"));
