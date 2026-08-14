@@ -7,8 +7,8 @@ use std::path::{Component, Path, PathBuf};
 
 use rsscript_abi_model::ExternalSymbol;
 use rsscript_provider_api::{
-    NativeInterpreterFn, NativeValue, ProviderCallContext, ProviderError, ProviderFunction,
-    ProviderFunctionDescriptor,
+    ProviderCallContext, ProviderError, ProviderFunction, ProviderFunctionDescriptor,
+    WireInterpreterFn, WireValue,
 };
 
 include!(concat!(env!("OUT_DIR"), "/provider_contract.rs"));
@@ -41,7 +41,9 @@ impl RootedFsProvider {
         &self.root
     }
 
-    pub fn functions(&self) -> BTreeMap<ExternalSymbol, ProviderFunction<NativeInterpreterFn>> {
+    /// Canonical wire implementation. The filesystem interface is scalar-only;
+    /// filesystem authority stays instance-owned by this Provider.
+    pub fn functions(&self) -> BTreeMap<ExternalSymbol, ProviderFunction<WireInterpreterFn>> {
         let mut generated = descriptor()
             .functions
             .into_iter()
@@ -54,7 +56,7 @@ impl RootedFsProvider {
         BTreeMap::from([
             binding(read, move |context, mut args| {
                 context.check_cancelled()?;
-                let NativeValue::String(path) = args.remove(0) else {
+                let WireValue::String { value: path } = args.remove(0) else {
                     return Err(ProviderError::invalid_argument("path must be String"));
                 };
                 let path = read_provider
@@ -82,14 +84,14 @@ impl RootedFsProvider {
                     )));
                 }
                 context.check_cancelled()?;
-                Ok(NativeValue::String(text))
+                Ok(WireValue::String { value: text })
             }),
             binding(write, move |context, mut args| {
                 context.check_cancelled()?;
-                let NativeValue::String(path) = args.remove(0) else {
+                let WireValue::String { value: path } = args.remove(0) else {
                     return Err(ProviderError::invalid_argument("path must be String"));
                 };
-                let NativeValue::String(text) = args.remove(0) else {
+                let WireValue::String { value: text } = args.remove(0) else {
                     return Err(ProviderError::invalid_argument("text must be String"));
                 };
                 let path = write_provider
@@ -97,7 +99,7 @@ impl RootedFsProvider {
                     .map_err(|error| ProviderError::from_io("resolve write path", error))?;
                 std::fs::write(path, text)
                     .map_err(|error| ProviderError::from_io("write text", error))?;
-                Ok(NativeValue::Unit)
+                Ok(WireValue::Unit)
             }),
         ])
     }
@@ -157,17 +159,17 @@ fn binding(
     descriptor: ProviderFunctionDescriptor,
     call: impl for<'a> Fn(
         &mut ProviderCallContext<'a>,
-        Vec<NativeValue>,
-    ) -> Result<NativeValue, ProviderError>
+        Vec<WireValue>,
+    ) -> Result<WireValue, ProviderError>
     + Send
     + Sync
     + 'static,
-) -> (ExternalSymbol, ProviderFunction<NativeInterpreterFn>) {
+) -> (ExternalSymbol, ProviderFunction<WireInterpreterFn>) {
     (
         descriptor.symbol,
         ProviderFunction {
             signature: descriptor.signature,
-            callable: NativeInterpreterFn::new_contextual(call),
+            callable: WireInterpreterFn::new_contextual(call),
         },
     )
 }
@@ -184,7 +186,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).unwrap();
         let provider = RootedFsProvider::new(&root).unwrap();
-        let report = rsscript_provider_conformance::assert_provider_conforms(
+        let report = rsscript_provider_conformance::assert_wire_provider_conforms(
             descriptor(),
             provider.functions(),
         );
@@ -227,7 +229,12 @@ mod tests {
         };
         let error = read
             .callable
-            .call_with_context(&mut context, vec![NativeValue::String("large.txt".into())])
+            .call_with_context(
+                &mut context,
+                vec![WireValue::String {
+                    value: "large.txt".into(),
+                }],
+            )
             .unwrap_err();
         assert_eq!(
             error.code,

@@ -1249,9 +1249,11 @@ mechanical acceptance condition holds.
       visibly compatibility-only adapters.
   - [ ] **P06.3 — Migrate official Providers and mocks.** Each migration keeps
     signature, error, resource, and payload-budget conformance fixtures green.
-    The scalar `time`, `entropy`, and `log` Providers now use
+    The scalar `time`, `entropy`, `log`, and rooted `fs` Providers now use
     `WireInterpreterFn`; the conformance kit validates wire callables directly,
-    without a `NativeValue` detour.
+    without a `NativeValue` detour. `fs` retains its host-chosen root authority
+    and runtime byte-budget checks while its text arguments/results become wire
+    values.
     Structured and asynchronous Provider migrations remain follow-up.
   - [ ] **P06.4 — Remove legacy escape variants from canonical APIs.** JSON stays
     only behind a named extension codec with explicit interface declaration.
