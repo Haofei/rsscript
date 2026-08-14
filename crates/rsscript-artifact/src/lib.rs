@@ -310,7 +310,14 @@ fn digest(bytes: &[u8]) -> String {
 }
 fn bundle_digest(manifest: &[u8], artifact: &[u8], analysis: &[u8]) -> String {
     let mut hasher = Sha256::new();
-    for section in [manifest, artifact, analysis] {
+    hasher.update(b"rsscript.artifact_bundle.v1.digest\0");
+    for (name, section) in [
+        (b"manifest".as_slice(), manifest),
+        (b"artifact".as_slice(), artifact),
+        (b"analysis".as_slice(), analysis),
+    ] {
+        hasher.update((name.len() as u64).to_be_bytes());
+        hasher.update(name);
         hasher.update((section.len() as u64).to_be_bytes());
         hasher.update(section);
     }
@@ -439,6 +446,26 @@ mod tests {
             decoded.provenance().snapshot_digest,
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
+    }
+
+    #[test]
+    fn bundle_digest_is_domain_separated_from_raw_section_concatenation() {
+        let bundle = bundle();
+        let manifest = canonical_json(&bundle.manifest).unwrap();
+        let analysis = canonical_json(&bundle.analysis).unwrap();
+        let legacy = {
+            let mut hasher = Sha256::new();
+            for section in [
+                manifest.as_slice(),
+                bundle.artifact.as_slice(),
+                analysis.as_slice(),
+            ] {
+                hasher.update((section.len() as u64).to_be_bytes());
+                hasher.update(section);
+            }
+            format!("sha256:{:x}", hasher.finalize())
+        };
+        assert_ne!(bundle.digest(), legacy);
     }
 
     #[test]

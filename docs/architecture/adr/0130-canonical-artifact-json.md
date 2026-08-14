@@ -17,7 +17,9 @@ scalar value, compact JSON punctuation, and `serde_json`'s valid JSON string
 and number encoding. The decoder recomputes this exact form and rejects a
 noncanonical manifest or analysis section. This decision does not turn
 arbitrary JSON into a typed analysis schema or replace the v1 three-section
-container with v2.
+container with v2. Bundle identity also uses an explicit `artifact_bundle.v1`
+hash domain and names each length-delimited section, so it cannot be confused
+with a hash from another sectioned protocol.
 
 ## Compatibility and migration
 
