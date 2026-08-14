@@ -243,3 +243,24 @@ fn reviewed_execution_report_hides_legacy_native_value_behind_compatibility() {
         "the v1 JSON compatibility projection must stay private to the reviewed SDK"
     );
 }
+
+#[test]
+fn reviewed_execution_report_has_one_terminal_outcome() {
+    let source = library_source();
+    let report_start = source
+        .find("pub struct ExecutionReport")
+        .expect("ExecutionReport must remain a reviewed report type");
+    let report = &source[report_start..];
+    assert!(report.contains("outcome: ExecutionOutcome"));
+    for legacy_phase_field in [
+        "pub termination_reason:",
+        "pub value:",
+        "pub display_value:",
+        "pub failure:",
+    ] {
+        assert!(
+            !report.contains(legacy_phase_field),
+            "reviewed report must derive terminal evidence from ExecutionOutcome, not expose `{legacy_phase_field}`"
+        );
+    }
+}

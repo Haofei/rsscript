@@ -78,9 +78,9 @@ fn verified_execution_outcomes_are_migration_baselines() {
         .link(&verified)
         .expect("baseline Artifact links")
         .execute(ExecutionRequest::default());
-    assert_eq!(report.termination_reason, TerminationReason::Completed);
-    assert_eq!(report.value, "496");
-    assert!(report.failure.is_none());
+    assert_eq!(report.termination_reason(), TerminationReason::Completed);
+    assert_eq!(report.value(), Some("496"));
+    assert!(report.failure().is_none());
     assert!(report.usage.steps_consumed > 0);
 
     let loop_artifact = ArtifactVerifier
@@ -95,10 +95,10 @@ fn verified_execution_outcomes_are_migration_baselines() {
     let budget_report = linked
         .execute(ExecutionRequest::default().limits(RunLimits::bounded().with_step_budget(32)));
     assert_eq!(
-        budget_report.termination_reason,
+        budget_report.termination_reason(),
         TerminationReason::StepBudgetExceeded
     );
-    assert!(budget_report.failure.is_some());
+    assert!(budget_report.failure().is_some());
 
     let cancellation = CancellationToken::new();
     cancellation.cancel();
@@ -106,10 +106,10 @@ fn verified_execution_outcomes_are_migration_baselines() {
         ExecutionRequest::default().limits(RunLimits::bounded().with_cancellation(cancellation)),
     );
     assert_eq!(
-        cancelled_report.termination_reason,
+        cancelled_report.termination_reason(),
         TerminationReason::Cancelled
     );
-    assert!(cancelled_report.failure.is_some());
+    assert!(cancelled_report.failure().is_some());
 }
 
 #[test]
@@ -135,13 +135,13 @@ fn checked_in_v1_bundle_remains_read_only_verifiable_and_executable() {
         .execute(ExecutionRequest::default());
 
     assert_eq!(
-        report.termination_reason,
+        report.termination_reason(),
         TerminationReason::Completed,
         "v1 compatibility bundle must retain its terminal result"
     );
-    assert_eq!(report.value, expected["value"].as_str().unwrap());
+    assert_eq!(report.value(), expected["value"].as_str());
     assert_eq!(
-        format!("{:?}", report.termination_reason).to_lowercase(),
+        format!("{:?}", report.termination_reason()).to_lowercase(),
         expected["termination_reason"].as_str().unwrap()
     );
 }

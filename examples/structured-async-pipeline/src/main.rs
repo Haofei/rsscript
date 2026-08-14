@@ -22,19 +22,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .trace(TracePolicy::MetadataOnly),
     );
 
-    if report.termination_reason != TerminationReason::Completed {
+    if report.termination_reason() != TerminationReason::Completed {
         let failure = report
-            .failure
+            .failure()
             .as_ref()
             .map(ToString::to_string)
-            .unwrap_or_else(|| report.termination_reason.as_str().to_string());
+            .unwrap_or_else(|| report.termination_reason().as_str().to_string());
         return Err(failure.into());
     }
     assert_eq!(report.stdout, "user\nprofile\n");
     assert!(report.provider_call_traces.is_empty());
 
     println!("artifact digest: {}", report.artifact_digest);
-    println!("termination: {}", report.termination_reason.as_str());
+    println!("termination: {}", report.termination_reason().as_str());
     println!("steps: {}", report.usage.steps_consumed);
     print!("structured output:\n{}", report.stdout);
     Ok(())

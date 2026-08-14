@@ -145,7 +145,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .limits(RunLimits::bounded().allow_blocking_provider_calls(true))
             .trace(TracePolicy::MetadataOnly),
     );
-    if let Some(error) = memory_execution.failure {
+    if let Some(error) = memory_execution.failure() {
         return Err(error.to_string().into());
     }
 
@@ -168,7 +168,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ExecutionRequest::default()
             .limits(RunLimits::bounded().allow_blocking_provider_calls(true)),
     );
-    if let Some(error) = production_report.failure {
+    if let Some(error) = production_report.failure() {
         return Err(error.to_string().into());
     }
     let disk_report = fs::read_to_string(demo_dir.join("report.txt"))?;

@@ -465,8 +465,8 @@ pub mod runtime {
 /// Reviewed machine-readable execution-report types.
 pub mod report {
     pub use super::{
-        EXECUTION_REPORT_SCHEMA, ExecutionReport, ExecutionTelemetry, ProviderFunctionTelemetry,
-        RuntimeError, TerminationReason,
+        EXECUTION_REPORT_SCHEMA, ExecutionOutcome, ExecutionReport, ExecutionTelemetry,
+        ProviderFunctionTelemetry, RuntimeError, TerminationReason,
     };
 }
 
@@ -1072,10 +1072,14 @@ impl LinkedArtifact<'_> {
             Some(EvalError::Diagnostics(diagnostics)) => diagnostics.clone(),
             _ => Vec::new(),
         };
-        let failure = output.failure.map(RuntimeError::from_execution);
-        let termination_reason = failure
-            .as_ref()
-            .map_or(TerminationReason::Completed, |error| error.reason);
+        let outcome = match output.failure.map(RuntimeError::from_execution) {
+            Some(failure) => ExecutionOutcome::Failed(failure),
+            None => ExecutionOutcome::Completed {
+                value: output.value.unwrap_or_default(),
+                display_value: output.display_value.unwrap_or_default(),
+            },
+        };
+        let termination_reason = outcome.termination_reason();
         let telemetry = ExecutionTelemetry::from_traces(
             started.elapsed(),
             termination_reason,
@@ -1085,11 +1089,9 @@ impl LinkedArtifact<'_> {
         ExecutionReport {
             schema: EXECUTION_REPORT_SCHEMA,
             artifact_digest: self.artifact.module_digest().to_string(),
-            termination_reason,
             usage: output.usage,
             telemetry,
-            value: output.value.unwrap_or_default(),
-            display_value: output.display_value.unwrap_or_default(),
+            outcome,
             // The v1 JSON report still carries the legacy projection for
             // backwards-compatible machine consumers. It is deliberately not
             // part of the reviewed Rust API: new embedders receive only the
@@ -1110,7 +1112,6 @@ impl LinkedArtifact<'_> {
                 }
             },
             diagnostics,
-            failure,
         }
     }
 }
@@ -1243,20 +1244,69 @@ pub struct ProviderFunctionTelemetry {
 }
 
 #[cfg(feature = "execution")]
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+/// Mutually exclusive script-level completion states.
+///
+/// An execution report always has exactly one of these outcomes. Host protocol,
+/// linking, and verification failures stay outside execution and therefore do
+/// not manufacture a partial report.
+#[cfg(feature = "execution")]
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExecutionOutcome {
+    Completed {
+        value: String,
+        display_value: String,
+    },
+    Failed(RuntimeError),
+}
+
+#[cfg(feature = "execution")]
+impl ExecutionOutcome {
+    pub const fn termination_reason(&self) -> TerminationReason {
+        match self {
+            Self::Completed { .. } => TerminationReason::Completed,
+            Self::Failed(error) => error.reason,
+        }
+    }
+
+    pub fn value(&self) -> Option<&str> {
+        match self {
+            Self::Completed { value, .. } => Some(value),
+            Self::Failed(_) => None,
+        }
+    }
+
+    pub fn display_value(&self) -> Option<&str> {
+        match self {
+            Self::Completed { display_value, .. } => Some(display_value),
+            Self::Failed(_) => None,
+        }
+    }
+
+    pub const fn failure(&self) -> Option<&RuntimeError> {
+        match self {
+            Self::Completed { .. } => None,
+            Self::Failed(error) => Some(error),
+        }
+    }
+}
+
+/// Structured execution evidence for one linked Artifact run.
+///
+/// [`Self::outcome`] is the only terminal program state. The JSON serializer
+/// intentionally retains the checked-in v1 wire projection while Rust callers
+/// use the phase-safe outcome accessors below.
+#[cfg(feature = "execution")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ExecutionReport {
     pub schema: &'static str,
     pub artifact_digest: String,
-    pub termination_reason: TerminationReason,
+    outcome: ExecutionOutcome,
     pub usage: ExecutionUsage,
     pub telemetry: ExecutionTelemetry,
-    pub value: String,
-    pub display_value: String,
     /// Legacy v1 JSON projection retained only for consumers of the checked-in
     /// report schema. New Rust embedders cannot observe or construct the
     /// dynamic representation through the reviewed SDK.
     #[cfg(not(feature = "compatibility"))]
-    #[serde(rename = "native_value")]
     legacy_native_value: Option<serde_json::Value>,
     /// Legacy dynamic result projection for compatibility callers only.
     #[cfg(feature = "compatibility")]
@@ -1265,11 +1315,30 @@ pub struct ExecutionReport {
     pub stderr: String,
     pub provider_call_traces: Vec<provider::ProviderCallTrace>,
     pub diagnostics: Vec<Diagnostic>,
-    pub failure: Option<RuntimeError>,
 }
 
 #[cfg(feature = "execution")]
 impl ExecutionReport {
+    pub const fn outcome(&self) -> &ExecutionOutcome {
+        &self.outcome
+    }
+
+    pub const fn termination_reason(&self) -> TerminationReason {
+        self.outcome.termination_reason()
+    }
+
+    pub fn value(&self) -> Option<&str> {
+        self.outcome.value()
+    }
+
+    pub fn display_value(&self) -> Option<&str> {
+        self.outcome.display_value()
+    }
+
+    pub const fn failure(&self) -> Option<&RuntimeError> {
+        self.outcome.failure()
+    }
+
     fn failed(
         artifact_digest: impl Into<String>,
         failure: RuntimeError,
@@ -1277,11 +1346,12 @@ impl ExecutionReport {
         elapsed: Duration,
         cancellation: Option<&CancellationToken>,
     ) -> Self {
-        let termination_reason = failure.reason;
+        let outcome = ExecutionOutcome::Failed(failure);
+        let termination_reason = outcome.termination_reason();
         Self {
             schema: EXECUTION_REPORT_SCHEMA,
             artifact_digest: artifact_digest.into(),
-            termination_reason,
+            outcome,
             usage: ExecutionUsage::default(),
             telemetry: ExecutionTelemetry::from_traces(
                 elapsed,
@@ -1289,8 +1359,6 @@ impl ExecutionReport {
                 cancellation,
                 &[],
             ),
-            value: String::new(),
-            display_value: String::new(),
             #[cfg(not(feature = "compatibility"))]
             legacy_native_value: None,
             #[cfg(feature = "compatibility")]
@@ -1299,8 +1367,38 @@ impl ExecutionReport {
             stderr: String::new(),
             provider_call_traces: Vec::new(),
             diagnostics,
-            failure: Some(failure),
         }
+    }
+}
+
+/// Preserve the versioned JSON report contract while the Rust SDK moves from
+/// independent optional terminal fields to [`ExecutionOutcome`].
+#[cfg(feature = "execution")]
+impl serde::Serialize for ExecutionReport {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        let mut state = serializer.serialize_struct("ExecutionReport", 13)?;
+        state.serialize_field("schema", self.schema)?;
+        state.serialize_field("artifact_digest", &self.artifact_digest)?;
+        state.serialize_field("termination_reason", &self.termination_reason())?;
+        state.serialize_field("usage", &self.usage)?;
+        state.serialize_field("telemetry", &self.telemetry)?;
+        state.serialize_field("value", self.value().unwrap_or_default())?;
+        state.serialize_field("display_value", self.display_value().unwrap_or_default())?;
+        #[cfg(not(feature = "compatibility"))]
+        state.serialize_field("native_value", &self.legacy_native_value)?;
+        #[cfg(feature = "compatibility")]
+        state.serialize_field("native_value", &self.native_value)?;
+        state.serialize_field("stdout", &self.stdout)?;
+        state.serialize_field("stderr", &self.stderr)?;
+        state.serialize_field("provider_call_traces", &self.provider_call_traces)?;
+        state.serialize_field("diagnostics", &self.diagnostics)?;
+        state.serialize_field("failure", &self.failure())?;
+        state.end()
     }
 }
 
@@ -1826,11 +1924,18 @@ mod tests {
             .link(&loaded)
             .expect("link")
             .execute(ExecutionRequest::default());
-        assert_eq!(report.value, "Unit");
-        assert_eq!(report.termination_reason, TerminationReason::Completed);
+        assert!(matches!(
+            report.outcome(),
+            ExecutionOutcome::Completed {
+                value,
+                display_value,
+            } if value == "Unit" && display_value == "Unit"
+        ));
+        assert_eq!(report.value(), Some("Unit"));
+        assert_eq!(report.termination_reason(), TerminationReason::Completed);
         assert_eq!(report.artifact_digest, loaded.module_digest());
         assert!(report.usage.steps_consumed > 0);
-        assert_eq!(report.termination_reason.as_str(), "completed");
+        assert_eq!(report.termination_reason().as_str(), "completed");
         let json = serde_json::to_value(&report).expect("serialize execution report");
         assert_eq!(json["schema"], EXECUTION_REPORT_SCHEMA);
         assert_eq!(json["termination_reason"], "completed");
@@ -1866,7 +1971,7 @@ fn main() -> Result<Unit, String> {
             .link(&package)
             .expect("link")
             .execute(ExecutionRequest::default());
-        assert_eq!(report.termination_reason, TerminationReason::Completed);
+        assert_eq!(report.termination_reason(), TerminationReason::Completed);
         assert_eq!(report.usage.tasks_created, 3);
         assert_eq!(report.usage.tasks_completed, 3);
         assert_eq!(report.usage.tasks_cancelled, 0);
@@ -1891,9 +1996,9 @@ fn main() -> Result<Int, String> {
             .link(&package)
             .expect("link")
             .execute(ExecutionRequest::default());
-        assert_eq!(report.termination_reason, TerminationReason::Completed);
-        assert!(report.value.contains("Err"));
-        assert!(report.value.contains("boom"));
+        assert_eq!(report.termination_reason(), TerminationReason::Completed);
+        assert!(report.value().is_some_and(|value| value.contains("Err")));
+        assert!(report.value().is_some_and(|value| value.contains("boom")));
     }
 
     #[test]
@@ -1913,7 +2018,11 @@ fn main() -> Result<Int, String> {
             ExecutionRequest::default()
                 .limits(RunLimits::bounded().with_cancellation(cancellation)),
         );
-        assert_eq!(report.termination_reason, TerminationReason::Cancelled);
+        assert_eq!(report.termination_reason(), TerminationReason::Cancelled);
+        assert!(matches!(
+            report.outcome(),
+            ExecutionOutcome::Failed(error) if error.reason == TerminationReason::Cancelled
+        ));
         assert!(report.telemetry.cancellation_latency_ns.is_some());
         assert!(report.telemetry.execution_duration_ns > 0);
     }
@@ -2164,15 +2273,14 @@ fn main() -> Result<Int, String> {
                 .trace(TracePolicy::MetadataOnly),
         );
         assert_eq!(
-            report.termination_reason,
+            report.termination_reason(),
             TerminationReason::ProviderBudgetExceeded
         );
         assert_eq!(report.usage.provider_calls, 2);
         assert_eq!(report.provider_call_traces.len(), 1);
         assert!(
             report
-                .failure
-                .as_ref()
+                .failure()
                 .is_some_and(|error| error.message.contains("provider call budget exceeded"))
         );
 
@@ -2200,7 +2308,10 @@ fn main() -> Result<Int, String> {
             .link(&package)
             .expect("link failing provider")
             .execute(ExecutionRequest::default().trace(TracePolicy::MetadataOnly));
-        assert_eq!(report.termination_reason, TerminationReason::ProviderError);
+        assert_eq!(
+            report.termination_reason(),
+            TerminationReason::ProviderError
+        );
         assert_eq!(report.provider_call_traces.len(), 1);
         assert_eq!(
             report.provider_call_traces[0].result,
@@ -2208,8 +2319,7 @@ fn main() -> Result<Int, String> {
         );
         assert!(
             report
-                .failure
-                .as_ref()
+                .failure()
                 .is_some_and(|error| error.message == "provider call failed (invalid_argument)")
         );
     }
@@ -2276,10 +2386,13 @@ fn main() -> Result<Int, String> {
             .link(&package)
             .expect("link provider")
             .execute(ExecutionRequest::default());
-        assert_eq!(report.termination_reason, TerminationReason::ProviderError);
+        assert_eq!(
+            report.termination_reason(),
+            TerminationReason::ProviderError
+        );
         assert!(report.provider_call_traces.is_empty());
         assert_eq!(report.telemetry.provider_functions.len(), 1);
-        let failure = report.failure.as_ref().expect("provider failure evidence");
+        let failure = report.failure().expect("provider failure evidence");
         assert_eq!(failure.message, "provider call failed (invalid_argument)");
         let serialized = serde_json::to_string(&report).expect("serialize report");
         assert!(!serialized.contains("secret-token"));
