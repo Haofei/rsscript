@@ -11,7 +11,8 @@ length-prefixed protocol. The child:
 2. re-verifies the complete Artifact Bundle;
 3. links only Providers installed by its local profile;
 4. applies VM budgets and a monotonic deadline;
-5. returns `rsscript.runner_response.v1` containing the normal
+5. returns `rsscript.runner_response.v1` containing the host-selected profile
+   identity plus the normal
    `rsscript.execution_report.v1`.
 
 Runner termination and VM termination are separate. A protocol, verification,

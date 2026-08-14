@@ -507,6 +507,7 @@ fn cli_defaults_to_verified_vm_and_requires_explicit_aot() {
     assert!(run.contains("options.trusted_in_process"));
     assert!(runner.contains("ArtifactVerifier.verify_bytes"));
     assert!(runner.contains("spawn_guarded_child_strict"));
+    assert!(runner.contains("validate_response_profile"));
     let process_guard = read(&root.join("crates/process-guard/src/lib.rs"));
     assert!(process_guard.contains("PR_SET_NO_NEW_PRIVS"));
     assert!(process_guard.contains("configure_strict_platform"));

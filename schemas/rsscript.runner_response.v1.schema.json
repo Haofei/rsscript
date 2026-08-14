@@ -4,9 +4,22 @@
   "title": "RSScript runner response v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "runner_termination", "report", "error"],
+  "required": ["schema", "profile", "runner_termination", "report", "error"],
   "properties": {
     "schema": { "const": "rsscript.runner_response.v1" },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "descriptor_digest"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": "integer", "minimum": 1 },
+        "descriptor_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
     "runner_termination": {
       "enum": ["completed", "verification_rejected", "link_rejected", "protocol_rejected", "host_failure"]
     },

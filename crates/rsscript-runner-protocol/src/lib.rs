@@ -33,6 +33,33 @@ pub enum RunnerProfileV1 {
     NoProviders,
 }
 
+/// Stable, non-secret identity of the host-selected runner profile.
+///
+/// This is response evidence, not a capability grant. Provider code,
+/// credentials, filesystem roots, endpoints, and other authorities remain
+/// deliberately absent from the protocol.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunnerProfileIdentityV1 {
+    pub id: String,
+    pub version: u32,
+    pub descriptor_digest: String,
+}
+
+impl RunnerProfileV1 {
+    pub fn identity(self) -> RunnerProfileIdentityV1 {
+        match self {
+            Self::NoProviders => RunnerProfileIdentityV1 {
+                id: "rsscript.runner.no_providers".to_string(),
+                version: 1,
+                descriptor_digest:
+                    "sha256:59e7504d735fe8ba29a406c993312a784d338892b279c60d6bdb5670165745dd"
+                        .to_string(),
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunnerLimitsV1 {
@@ -100,28 +127,54 @@ pub enum RunnerTerminationV1 {
 #[serde(deny_unknown_fields)]
 pub struct RunnerResponseV1 {
     pub schema: String,
+    pub profile: RunnerProfileIdentityV1,
     pub runner_termination: RunnerTerminationV1,
     pub report: Option<serde_json::Value>,
     pub error: Option<String>,
 }
 
 impl RunnerResponseV1 {
-    pub fn report(report: serde_json::Value) -> Self {
+    pub fn report(profile: RunnerProfileV1, report: serde_json::Value) -> Self {
         Self {
             schema: RUNNER_RESPONSE_SCHEMA.to_string(),
+            profile: profile.identity(),
             runner_termination: RunnerTerminationV1::Completed,
             report: Some(report),
             error: None,
         }
     }
 
-    pub fn rejected(termination: RunnerTerminationV1, error: impl Into<String>) -> Self {
+    pub fn rejected(
+        profile: RunnerProfileV1,
+        termination: RunnerTerminationV1,
+        error: impl Into<String>,
+    ) -> Self {
         Self {
             schema: RUNNER_RESPONSE_SCHEMA.to_string(),
+            profile: profile.identity(),
             runner_termination: termination,
             report: None,
             error: Some(error.into()),
         }
+    }
+}
+
+/// Reject a response from a child that claims an unexpected host profile.
+///
+/// The parent already knows the requested profile and must not infer it from a
+/// child-controlled JSON frame. Keeping this check in the protocol crate makes
+/// the response identity useful to every runner host, not only the CLI.
+pub fn validate_response_profile(
+    requested: RunnerProfileV1,
+    response: &RunnerResponseV1,
+) -> Result<(), ProtocolError> {
+    if response.profile == requested.identity() {
+        Ok(())
+    } else {
+        Err(ProtocolError::ProfileMismatch {
+            expected: requested.identity(),
+            actual: response.profile.clone(),
+        })
     }
 }
 
@@ -304,6 +357,10 @@ pub enum ProtocolError {
     Schema(String),
     Limit(&'static str),
     Invalid(&'static str),
+    ProfileMismatch {
+        expected: RunnerProfileIdentityV1,
+        actual: RunnerProfileIdentityV1,
+    },
     TrailingBytes,
 }
 
@@ -316,6 +373,16 @@ impl std::fmt::Display for ProtocolError {
             Self::Schema(schema) => write!(formatter, "unsupported runner schema `{schema}`"),
             Self::Limit(name) => write!(formatter, "{name} exceeds the protocol limit"),
             Self::Invalid(message) => formatter.write_str(message),
+            Self::ProfileMismatch { expected, actual } => write!(
+                formatter,
+                "runner response profile mismatch: expected {}@{} ({}) but received {}@{} ({})",
+                expected.id,
+                expected.version,
+                expected.descriptor_digest,
+                actual.id,
+                actual.version,
+                actual.descriptor_digest,
+            ),
             Self::TrailingBytes => {
                 formatter.write_str("runner protocol frame contains trailing bytes")
             }
@@ -346,7 +413,10 @@ mod tests {
         assert_eq!(decoded, request);
         assert_eq!(bundle, b"bundle");
 
-        let response = RunnerResponseV1::report(serde_json::json!({"ok": true}));
+        let response = RunnerResponseV1::report(
+            RunnerProfileV1::NoProviders,
+            serde_json::json!({"ok": true}),
+        );
         let mut bytes = Vec::new();
         write_response(&mut bytes, &response).expect("encode response");
         assert_eq!(
@@ -373,6 +443,7 @@ mod tests {
     fn response_state_machine_rejects_report_error_ambiguity() {
         let completed_without_report = RunnerResponseV1 {
             schema: RUNNER_RESPONSE_SCHEMA.to_string(),
+            profile: RunnerProfileV1::NoProviders.identity(),
             runner_termination: RunnerTerminationV1::Completed,
             report: None,
             error: None,
@@ -384,6 +455,7 @@ mod tests {
 
         let rejected_with_report = RunnerResponseV1 {
             schema: RUNNER_RESPONSE_SCHEMA.to_string(),
+            profile: RunnerProfileV1::NoProviders.identity(),
             runner_termination: RunnerTerminationV1::LinkRejected,
             report: Some(serde_json::json!({"forged": true})),
             error: Some("link failed".to_string()),
@@ -408,7 +480,10 @@ mod tests {
         )
         .expect("parse response schema");
         let request = RunnerRequestV1::new(vec!["hello".to_string()]).expect("request");
-        let response = RunnerResponseV1::report(serde_json::json!({"schema": "report"}));
+        let response = RunnerResponseV1::report(
+            RunnerProfileV1::NoProviders,
+            serde_json::json!({"schema": "report"}),
+        );
         assert!(
             jsonschema::validator_for(&request_schema)
                 .expect("request validator")
@@ -448,7 +523,10 @@ mod tests {
             );
         }
 
-        let response = RunnerResponseV1::report(serde_json::json!({"ok": true}));
+        let response = RunnerResponseV1::report(
+            RunnerProfileV1::NoProviders,
+            serde_json::json!({"ok": true}),
+        );
         let mut response_bytes = Vec::new();
         write_response(&mut response_bytes, &response).expect("response frame");
         for length in 0..response_bytes.len() {
@@ -460,6 +538,21 @@ mod tests {
                 "response prefix {length} must fail as incomplete I/O"
             );
         }
+    }
+
+    #[test]
+    fn response_profile_must_match_the_parent_selected_profile() {
+        let mut response = RunnerResponseV1::report(
+            RunnerProfileV1::NoProviders,
+            serde_json::json!({"ok": true}),
+        );
+        validate_response_profile(RunnerProfileV1::NoProviders, &response)
+            .expect("matching profile");
+        response.profile.descriptor_digest = "sha256:forged".to_string();
+        assert!(matches!(
+            validate_response_profile(RunnerProfileV1::NoProviders, &response),
+            Err(ProtocolError::ProfileMismatch { .. })
+        ));
     }
 
     #[test]

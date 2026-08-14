@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 use rss_process_guard::{GuardedChild, ProcessLimits};
 use rsscript_runner_protocol::{
     MAX_RESPONSE_BYTES, RunnerLimitsV1, RunnerProfileV1, RunnerRequestV1, RunnerResponseV1,
-    RunnerTerminationV1, read_request, read_response, write_request, write_response,
+    RunnerTerminationV1, read_request, read_response, validate_response_profile, write_request,
+    write_response,
 };
 use rsscript_sdk::{
     artifact::{ARTIFACT_BUNDLE_MAGIC, ArtifactBundle, ArtifactVerifier},
@@ -202,7 +203,7 @@ fn invoke_runner(
         .map_err(|error| format!("runner wait failed: {error}"))?;
     let stdout = join_runner_output(stdout_reader, "stdout")?;
     let stderr = join_runner_output(stderr_reader, "stderr")?;
-    decode_runner_response(status, &stdout, &stderr)
+    decode_runner_response(request, status, &stdout, &stderr)
 }
 
 /// Decode the child response only after the child and both pipe readers have
@@ -211,6 +212,7 @@ fn invoke_runner(
 /// disconnect). Keeping that distinction prevents callers from treating an
 /// empty or truncated pipe as an `ExecutionReport`.
 fn decode_runner_response(
+    request: &RunnerRequestV1,
     status: std::process::ExitStatus,
     stdout: &[u8],
     stderr: &[u8],
@@ -221,7 +223,11 @@ fn decode_runner_response(
             String::from_utf8_lossy(stderr).trim()
         ));
     }
-    read_response(stdout).map_err(|error| format_runner_disconnect_error(status, stderr, error))
+    let response = read_response(stdout)
+        .map_err(|error| format_runner_disconnect_error(status, stderr, error))?;
+    validate_response_profile(request.profile, &response)
+        .map_err(|error| format_runner_disconnect_error(status, stderr, error))?;
+    Ok(response)
 }
 
 fn join_runner_output(
@@ -307,9 +313,11 @@ fn read_bounded(
 pub(crate) fn runner_entrypoint() -> ExitCode {
     let response = match read_request(io::stdin().lock()) {
         Ok((request, bundle)) => execute_request(request, bundle),
-        Err(error) => {
-            RunnerResponseV1::rejected(RunnerTerminationV1::ProtocolRejected, error.to_string())
-        }
+        Err(error) => RunnerResponseV1::rejected(
+            RunnerProfileV1::NoProviders,
+            RunnerTerminationV1::ProtocolRejected,
+            error.to_string(),
+        ),
     };
     match write_response(io::stdout().lock(), &response) {
         Ok(()) => ExitCode::SUCCESS,
@@ -321,20 +329,23 @@ pub(crate) fn runner_entrypoint() -> ExitCode {
 }
 
 fn execute_request(request: RunnerRequestV1, bundle: Vec<u8>) -> RunnerResponseV1 {
+    let profile = request.profile;
     let verified = match ArtifactVerifier.verify_bytes(&bundle) {
         Ok(verified) => verified,
         Err(error) => {
             return RunnerResponseV1::rejected(
+                profile,
                 RunnerTerminationV1::VerificationRejected,
                 error.to_string(),
             );
         }
     };
-    let runtime = Runtime::new(profiled_registry(request.profile));
+    let runtime = Runtime::new(profiled_registry(profile));
     let linked = match runtime.link(&verified) {
         Ok(linked) => linked,
         Err(error) => {
             return RunnerResponseV1::rejected(
+                profile,
                 RunnerTerminationV1::LinkRejected,
                 error.to_string(),
             );
@@ -351,8 +362,9 @@ fn execute_request(request: RunnerRequestV1, bundle: Vec<u8>) -> RunnerResponseV
             .trace(trace),
     );
     match serde_json::to_value(report) {
-        Ok(report) => RunnerResponseV1::report(report),
+        Ok(report) => RunnerResponseV1::report(profile, report),
         Err(error) => RunnerResponseV1::rejected(
+            profile,
             RunnerTerminationV1::HostFailure,
             format!("cannot serialize execution report: {error}"),
         ),
@@ -495,7 +507,8 @@ mod tests {
                 .status()
                 .expect("status")
         };
-        let error = decode_runner_response(status, b"", b"child stopped\n")
+        let request = RunnerRequestV1::new(Vec::new()).expect("request");
+        let error = decode_runner_response(&request, status, b"", b"child stopped\n")
             .expect_err("an empty pipe must not become a script report");
         assert!(error.contains("incomplete or malformed"));
         assert!(error.contains("reaped"));

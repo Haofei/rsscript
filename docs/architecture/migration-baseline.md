@@ -1382,7 +1382,10 @@ mechanical acceptance condition holds.
     - [x] **A09.1a — Ship the fail-closed reference profile.** The versioned
       protocol carries only the `no_providers` profile; runner selection maps it
       to a host-owned empty registry, and the schema rejects provider code,
-      library paths, credentials, roots, and authority injection fields.
+      library paths, credentials, roots, and authority injection fields. Every
+      runner response now returns a non-secret profile ID/version/descriptor
+      digest that the parent checks against its requested profile before it
+      accepts a report.
   - [ ] **A09.2 — Add Linux isolation adapters.** Implement optional namespace,
     syscall, filesystem, network, and cgroup controls with capability detection
     and fail-closed profile requirements. The strict Linux/Android child path
