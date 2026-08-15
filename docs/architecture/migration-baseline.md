@@ -1219,8 +1219,11 @@ an arbitrary shell executor.
       execution-boundary finalizer. Source-level cancellation syntax remains
       deliberately closed while its resource/cancellation scope contract is
       completed.
-  - [ ] **M03.4 — Add resolved builtin and external-call instructions.** Include
-    signature/effect/retention identity and no unresolved callee text.
+  - [x] **M03.4 — Add resolved builtin and external-call instructions.** Include
+    signature/effect/retention identity and no unresolved callee text. MIR owns
+    numeric `BuiltinId`/`ExternalSymbolId` targets and typed closure captures;
+    architecture checks reject source-shaped executable escape nodes from the
+    owned MIR boundary.
     - [x] **M03.4a — Execute resolved external calls through MIR bytecode.** A
       checked `.rssi` symbol is represented by `ExternalSymbolId`, emitted into
       the Artifact import table, verified against the bytecode call table, and
@@ -1240,9 +1243,9 @@ an arbitrary shell executor.
       `CallTypedIntrinsic` string field. Closed-world `Dyn<P>` calls now carry a
       verifier-checked table of canonical receiver `TypeId` and resolved
       implementation `FunctionId` pairs, with a common ownership-mode contract;
-      the encoder is the sole legacy `CallDynamic` projection. Argument capture
-      remains on the explicit migration-only executable-IR bridge until MIR owns
-      a typed closure environment.
+      the encoder is the sole legacy `CallDynamic` projection. Closure capture
+      is represented by typed `MirClosureCapture` and verifier-checked
+      `MirCallArgument` modes; no executable-IR bridge remains.
     - [x] **M03.4d — Admit catalog-backed async builtins.** Direct catalog
       membership, rather than the legacy `is_builtin` flag alone, now determines
       whether an interface-shaped standard-library call is lowered as a
