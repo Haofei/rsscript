@@ -49,8 +49,6 @@ impl WireUnit {
                 regs: function.regs,
                 local_regs: function.local_regs.into_iter().collect(),
                 code: function.code,
-                jit_analysis: std::cell::Cell::new(None),
-                jit_self_recursion_kind: std::cell::Cell::new(None),
                 native_status: std::cell::Cell::new(0),
                 call_count: std::cell::Cell::new(0),
                 branch_count: std::cell::Cell::new(0),
@@ -58,12 +56,6 @@ impl WireUnit {
                 osr_state: std::cell::Cell::new(OsrTrigger::Unknown),
             })
             .collect::<Vec<_>>();
-        let eligibility = compute_jit_eligibility(&functions);
-        for (function, &eligible) in functions.iter().zip(&eligibility) {
-            function
-                .jit_analysis
-                .set(Some((eligible, jit_function_has_loop(&function.code))));
-        }
         RegUnit {
             functions: functions.into_iter().map(Rc::new).collect(),
             function_ids: self.function_ids.into_iter().collect(),

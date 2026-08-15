@@ -12,6 +12,7 @@ mod jit_entry;
 #[cfg(feature = "native-jit")]
 mod osr_plan;
 mod recursion;
+mod state;
 
 #[cfg(feature = "native-jit")]
 use admission::*;
@@ -24,6 +25,7 @@ pub(in crate::reg_vm) use compile_result::NativeCompileTelemetry;
 use compile_result::{native_region_is_promotion_eligible, record_native_compile_stats};
 #[cfg(feature = "native-jit")]
 use osr_plan::*;
+pub(crate) use state::JitState;
 
 /// Step 1 cost model. Consult the profitability gate for a region that already
 /// translated (i.e. is ELIGIBLE native code). Returns `true` only when the gate is
@@ -1725,8 +1727,6 @@ impl RegVm {
                             regs: eregs,
                             local_regs: HashMap::new(),
                             code: ecode,
-                            jit_analysis: std::cell::Cell::new(None),
-                            jit_self_recursion_kind: std::cell::Cell::new(None),
                             native_status: std::cell::Cell::new(0),
                             call_count: std::cell::Cell::new(0),
                             branch_count: std::cell::Cell::new(0),

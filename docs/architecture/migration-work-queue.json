@@ -2,22 +2,22 @@
   "schema": "rsscript.migration_queue.v1",
   "tasks": [
     {
-      "id": "V05.1",
+      "id": "V05.2",
       "priority": 10,
-      "depends_on": [],
+      "depends_on": ["V05.1"],
       "scope": [
         "crates/rsscript-vm/**",
         "experiments/**",
         "docs/architecture/migration-baseline.md"
       ],
       "acceptance": [
-        "JIT profiling and planning state has an experiment-owned side-table type keyed by stable verified program identities.",
-        "Core VM program objects do not gain new JIT-only fields while the migration is in progress.",
-        "Architecture coverage proves the Core VM compiles without the experiment-owned side table."
+        "Native JIT profile, OSR/deopt, and code-handle state is held by an experiment-owned side table rather than RegFunction or RegUnit.",
+        "Native execution and differential tests retain the existing report and fallback behavior.",
+        "No RegFunction field is named profile, call_count, branch_count, native_status, or osr_state."
       ],
       "verification": [
-        "cargo test -p rsscript-vm --offline",
-        "cargo test -p rsscript-sdk --test architecture --offline"
+        "cargo test -p rsscript-vm --features native-jit --offline",
+        "cargo test -p rsscript-sdk --test architecture --features compatibility --offline"
       ]
     }
   ]

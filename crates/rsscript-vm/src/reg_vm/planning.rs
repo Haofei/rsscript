@@ -1,3 +1,5 @@
+use std::borrow::Borrow;
+
 use super::*;
 
 /// Per-program JIT eligibility: how many functions are fully covered by the
@@ -50,7 +52,7 @@ pub(super) fn jit_function_has_loop(code: &[RegInstr]) -> bool {
 ///     interpreter would not — a behavioural gap. We therefore drop any function
 ///     that can reach a cycle in the (non-suspending) call graph; recursive
 ///     functions keep running on the interpreter, which is gap-free by fallback.
-pub(super) fn compute_jit_eligibility(functions: &[RegFunction]) -> Vec<bool> {
+pub(super) fn compute_jit_eligibility<T: Borrow<RegFunction>>(functions: &[T]) -> Vec<bool> {
     let n = functions.len();
 
     // (1) Non-suspending least-fixpoint: start optimistic, demote any function
@@ -63,7 +65,7 @@ pub(super) fn compute_jit_eligibility(functions: &[RegFunction]) -> Vec<bool> {
             if !non_suspending[index] {
                 continue;
             }
-            let ok = functions[index].code.iter().all(|instr| match instr {
+            let ok = functions[index].borrow().code.iter().all(|instr| match instr {
                 RegInstr::CallKnown { function, .. } => *function < n && non_suspending[*function],
                 other => jit_supported_instruction(other),
             });
@@ -84,7 +86,7 @@ pub(super) fn compute_jit_eligibility(functions: &[RegFunction]) -> Vec<bool> {
                 return Vec::new();
             }
             let mut targets = Vec::new();
-            for instr in &functions[index].code {
+            for instr in &functions[index].borrow().code {
                 if let RegInstr::CallKnown { function, .. } = instr
                     && non_suspending[*function]
                 {

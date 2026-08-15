@@ -477,7 +477,11 @@ impl RegVm {
         // candidate recognises; it handles arbitrary depth without touching the host
         // C stack. A non-i64 body (Float, or one using `match`/heap that the i64
         // machine cannot run) routes to the full interpreter (`Ok(None)`).
-        let returns_bool = match self_recursive_scalar_jit_candidate(unit, function_id) {
+        let returns_bool = match self_recursive_scalar_jit_candidate(
+            unit,
+            &mut self.jit_state,
+            function_id,
+        ) {
             SelfRecursionKind::Ineligible => return Ok(None),
             SelfRecursionKind::Int => false,
             SelfRecursionKind::Bool => true,

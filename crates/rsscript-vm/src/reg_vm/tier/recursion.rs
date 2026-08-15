@@ -10,16 +10,17 @@ enum ScalarSlotKind {
 
 pub(super) fn self_recursive_scalar_jit_candidate(
     unit: &RegUnit,
+    jit_state: &mut JitState,
     function_id: usize,
 ) -> SelfRecursionKind {
     let Some(func) = unit.functions.get(function_id) else {
         return SelfRecursionKind::Ineligible;
     };
-    if let Some(cached) = func.jit_self_recursion_kind.get() {
+    if let Some(cached) = jit_state.self_recursion_kind(func) {
         return cached;
     }
     let kind = compute_self_recursive_scalar_jit_candidate(unit, function_id);
-    func.jit_self_recursion_kind.set(Some(kind));
+    jit_state.set_self_recursion_kind(func, kind);
     kind
 }
 

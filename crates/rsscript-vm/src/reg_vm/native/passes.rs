@@ -4,6 +4,8 @@
 //! verbatim (now redundant under the cfg-gated `native` module, but harmless).
 #![allow(unused_imports)]
 
+use std::collections::BTreeSet;
+
 use super::super::*;
 use super::*;
 

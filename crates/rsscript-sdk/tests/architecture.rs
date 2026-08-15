@@ -751,6 +751,42 @@ fn native_tier_state_machines_have_explicit_module_boundaries() {
 }
 
 #[test]
+fn jit_planning_state_is_kept_out_of_verified_program_objects() {
+    let root = workspace_root();
+    let tier = read(&root.join("crates/rsscript-vm/src/reg_vm/tier.rs"));
+    let state = read(&root.join("crates/rsscript-vm/src/reg_vm/tier/state.rs"));
+    let model = read(&root.join("crates/rsscript-vm/src/reg_vm/model.rs"));
+    let bytecode = read(&root.join("crates/rsscript-vm/src/reg_vm/bytecode.rs"));
+    let exec = read(&root.join("crates/rsscript-vm/src/reg_vm/exec.rs"));
+
+    assert!(tier.contains("mod state;"));
+    for required in [
+        "struct VerifiedProgramIdentity",
+        "struct JitFunctionKey",
+        "struct JitState",
+        "from_executable_digest",
+        "ordinal:",
+    ] {
+        assert!(
+            state.contains(required),
+            "JIT state side table must retain `{required}`"
+        );
+    }
+    for forbidden in ["jit_analysis:", "jit_self_recursion_kind:"] {
+        assert!(
+            !model.contains(forbidden),
+            "verified VM program model must not retain JIT planning field `{forbidden}`"
+        );
+        assert!(
+            !bytecode.contains(forbidden),
+            "bytecode decoder must not initialize JIT planning field `{forbidden}`"
+        );
+    }
+    assert!(exec.contains("JitState::for_verified_program"));
+    assert!(exec.contains("self.jit_state.tier0_analysis"));
+}
+
+#[test]
 fn register_vm_execution_policy_is_snapshotted_before_running() {
     let root = workspace_root();
     let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));

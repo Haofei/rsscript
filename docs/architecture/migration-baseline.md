@@ -1630,10 +1630,14 @@ an arbitrary shell executor.
       verification entry point and only decodes the opaque `VerifiedBytecode`
       token from the bytecode verifier.
 - [ ] **V05 — Remove experimental state from Core VM program objects.** JIT,
-  OSR, deopt, branch/call profiles, and native tier state live in experiment-owned
-  side tables keyed by stable function IDs.
-  - [ ] **V05.1 — Introduce experiment-owned `JitState` side tables.** Key state
-    by stable function IDs and lifetime-bound execution instances.
+  OSR, deopt, branch/call profiles, and native tier state move to
+  experiment-owned side tables keyed by stable function IDs. V05.1 establishes
+  the planning boundary; V05.2 completes the profile and native-state migration.
+  - [x] **V05.1 — Introduce experiment-owned `JitState` side tables.** Each VM
+    evaluation constructs this side table from the verified executable digest;
+    entries are keyed by that digest and a stable function ordinal. Tier-0
+    eligibility and self-recursive scalar classification no longer live on
+    `RegFunction`. Profile, OSR, deopt, and native-code state remain V05.2 work.
   - [ ] **V05.2 — Move profiles, OSR, deopt, and native code handles.** Remove
     these fields from `RegFunction` and program types.
   - [ ] **V05.3 — Make Core VM build without JIT data structures.** Add a

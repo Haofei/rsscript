@@ -45,10 +45,12 @@ impl RegVm {
 
     pub(super) fn new(
         unit: Rc<RegUnit>,
+        executable_digest: String,
         entry_args: Vec<String>,
         external_bindings: HashMap<String, ExternalFunction>,
     ) -> Self {
         Self {
+            jit_state: JitState::for_verified_program(executable_digest, &unit),
             unit,
             entry_args,
             external_bindings,
@@ -344,23 +346,15 @@ impl RegVm {
         Ok(())
     }
 
-    /// Whether `func` should run on the tier-0 JIT. Reads the analysis cached on
-    /// the function (`(eligible, has_loop)`, computed once for the whole unit by
-    /// [`compute_jit_eligibility`], which already accounts for cross-function
-    /// calls). A function is JIT'd only if (a) it is eligible — non-suspending and
+    /// Whether `func` should run on the tier-0 JIT. Reads evaluation-local JIT
+    /// state rather than mutating the verified program. A function is JIT'd only
+    /// if (a) it is eligible — non-suspending and
     /// non-recursive — and (b) it contains a back-edge (a loop): straight-line
     /// functions gain nothing from the specializing executor, so JIT-ing them in a
     /// hot call would only add overhead. This keeps the JIT at-least-parity with
     /// the interpreter.
     pub(super) fn is_jit_eligible(&self, func: &RegFunction) -> bool {
-        let (eligible, has_loop) = func.jit_analysis.get().unwrap_or_else(|| {
-            // Defensive: every unit function has its analysis pre-set in `lower`.
-            // A function with no cross-call context can only be the pure subset.
-            (
-                func.code.iter().all(jit_supported_instruction),
-                jit_function_has_loop(&func.code),
-            )
-        });
+        let (eligible, has_loop) = self.jit_state.tier0_analysis(func);
         // Production: only JIT functions with a loop (where the specializing
         // executor pays off). `jit_force_all` (tests) JITs every eligible function
         // so the differential verifies the whole covered subset.

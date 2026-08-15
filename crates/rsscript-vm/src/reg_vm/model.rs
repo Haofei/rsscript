@@ -79,14 +79,6 @@ pub(crate) struct RegFunction {
     pub(crate) regs: usize,
     pub(crate) local_regs: HashMap<String, Reg>,
     pub(crate) code: Vec<RegInstr>,
-    /// Cached tier-0 JIT analysis `(all_instructions_supported, has_loop)`,
-    /// computed once after `code` is emitted.
-    pub(crate) jit_analysis: std::cell::Cell<Option<(bool, bool)>>,
-    /// Cached verdict for the scalar self-recursive fast paths (native `CallSelf`
-    /// + tier-0 i64 executor). `None` means not inspected yet; `Some(Ineligible)`
-    ///   is the hot-path negative cache for ordinary call-heavy functions; `Int`/`Bool`
-    ///   record the i64-representable return kind so the dispatcher wraps the result.
-    pub(crate) jit_self_recursion_kind: std::cell::Cell<Option<SelfRecursionKind>>,
     /// Cached native-tier verdict, an invariant property of the function:
     /// `0` unknown, `1` known not native-eligible, `2` waiting for bounded
     /// closure-profile sampling. Lets `try_native` skip all per-call
@@ -205,8 +197,6 @@ impl RegFunction {
             regs: 0,
             local_regs: HashMap::new(),
             code: Vec::new(),
-            jit_analysis: std::cell::Cell::new(None),
-            jit_self_recursion_kind: std::cell::Cell::new(None),
             native_status: std::cell::Cell::new(0),
             call_count: std::cell::Cell::new(0),
             branch_count: std::cell::Cell::new(0),

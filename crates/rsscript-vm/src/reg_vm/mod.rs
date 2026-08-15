@@ -80,6 +80,7 @@ mod value_convert;
 mod value_ops;
 use execution_plan::*;
 pub(crate) use model::*;
+use tier::JitState;
 #[cfg(feature = "native-jit")]
 use native::*;
 pub use planning::JitPlan;
@@ -557,7 +558,12 @@ impl RegVmExecutable {
         external_bindings: HashMap<String, ExternalFunction>,
         plan: &ExecutionPlan,
     ) -> Result<RegVm, EvalError> {
-        let mut vm = RegVm::new(Rc::clone(&self.unit), args, external_bindings);
+        let mut vm = RegVm::new(
+            Rc::clone(&self.unit),
+            self.artifact.header.executable_hash.clone(),
+            args,
+            external_bindings,
+        );
         vm.set_limits(plan.limits.clone());
         vm.stream_stdout = plan.stdout == StdoutMode::Streaming;
         match &plan.tier {
@@ -585,11 +591,7 @@ impl RegVmExecutable {
         let mut plan = JitPlan::default();
         for function in &self.unit.functions {
             plan.total_functions += 1;
-            let eligible = function
-                .jit_analysis
-                .get()
-                .map(|(eligible, _)| eligible)
-                .unwrap_or_else(|| function.code.iter().all(jit_supported_instruction));
+            let eligible = function.code.iter().all(jit_supported_instruction);
             if eligible {
                 plan.eligible_functions += 1;
             } else {
@@ -1509,6 +1511,10 @@ impl VmLimits {
 
 struct RegVm {
     unit: Rc<RegUnit>,
+    /// Evaluation-local experimental JIT state. The decoded verified program
+    /// stays immutable; feedback is keyed by its executable digest and function
+    /// ordinal inside this side table.
+    jit_state: JitState,
     entry_args: Vec<String>,
     external_bindings: HashMap<String, ExternalFunction>,
     stdout: String,
