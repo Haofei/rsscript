@@ -34,9 +34,15 @@ use std::rc::Rc;
 use chrono::{DateTime, Datelike, NaiveDate, SecondsFormat, TimeZone, Timelike, Utc};
 use flate2::read::GzDecoder;
 use hmac::{Hmac, Mac};
-use rsscript_corelib::encoding::{
-    base64_decode, base64_encode, hex_decode as core_hex_decode, hex_encode as core_hex_encode,
-    url_decode_component, url_encode_component,
+use rsscript_corelib::{
+    collections::{
+        dedup as core_list_dedup, reverse as core_list_reverse, skip as core_list_skip,
+        slice as core_list_slice, take as core_list_take,
+    },
+    encoding::{
+        base64_decode, base64_encode, hex_decode as core_hex_decode, hex_encode as core_hex_encode,
+        url_decode_component, url_encode_component,
+    },
 };
 use sha2::{Digest, Sha256};
 use sha3::{

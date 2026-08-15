@@ -48,9 +48,41 @@ pub mod encoding {
     }
 }
 
+/// Pure, representation-independent collection transformations. Callers own
+/// allocation accounting and choose their concrete collection layout.
+pub mod collections {
+    pub fn dedup<T: PartialEq>(values: impl IntoIterator<Item = T>) -> Vec<T> {
+        let mut result = Vec::new();
+        for value in values {
+            if !result.contains(&value) {
+                result.push(value);
+            }
+        }
+        result
+    }
+
+    pub fn reverse<T>(values: impl IntoIterator<Item = T>) -> Vec<T> {
+        let mut result = values.into_iter().collect::<Vec<_>>();
+        result.reverse();
+        result
+    }
+
+    pub fn skip<T>(values: impl IntoIterator<Item = T>, count: usize) -> Vec<T> {
+        values.into_iter().skip(count).collect()
+    }
+
+    pub fn take<T>(values: impl IntoIterator<Item = T>, count: usize) -> Vec<T> {
+        values.into_iter().take(count).collect()
+    }
+
+    pub fn slice<T>(values: impl IntoIterator<Item = T>, start: usize, len: usize) -> Vec<T> {
+        values.into_iter().skip(start).take(len).collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::encoding::*;
+    use super::{collections::*, encoding::*};
 
     #[test]
     fn encoding_algorithms_are_deterministic_and_round_trip() {
@@ -68,5 +100,14 @@ mod tests {
         assert!(base64_decode("%%%not-base64%%%").is_err());
         assert!(hex_decode("xyz").is_err());
         assert!(url_decode_component("%FF").is_err());
+    }
+
+    #[test]
+    fn collection_transforms_are_generic_and_preserve_order() {
+        assert_eq!(dedup([1, 2, 1, 3, 2]), vec![1, 2, 3]);
+        assert_eq!(reverse([1, 2, 3]), vec![3, 2, 1]);
+        assert_eq!(skip([1, 2, 3], 1), vec![2, 3]);
+        assert_eq!(take([1, 2, 3], 2), vec![1, 2]);
+        assert_eq!(slice([1, 2, 3, 4], 1, 2), vec![2, 3]);
     }
 }

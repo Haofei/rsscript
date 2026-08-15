@@ -168,12 +168,7 @@ impl RegVm {
             }
             RegIntrinsic::ListDedup => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let mut values = Vec::new();
-                for value in list.borrow().iter() {
-                    if !values.contains(&value) {
-                        values.push(value);
-                    }
-                }
+                let values = core_list_dedup(list.borrow().iter());
                 self.fresh_list(TypedVec::from_values(values))
             }
             RegIntrinsic::ListEnumerate => {
@@ -235,27 +230,20 @@ impl RegVm {
             }
             RegIntrinsic::ListReverse => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let mut values = list.borrow().clone();
-                values.reverse();
-                self.fresh_list(values)
+                let values = core_list_reverse(list.borrow().iter());
+                self.fresh_list(TypedVec::from_values(values))
             }
             RegIntrinsic::ListSkip => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let count = nonnegative_count(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let values = list.borrow().iter().skip(count).collect();
+                let values = core_list_skip(list.borrow().iter(), count);
                 self.fresh_list(TypedVec::from_values(values))
             }
             RegIntrinsic::ListSlice => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let start = nonnegative_count(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let len = nonnegative_count(intrinsic_arg(&self.stack, base, args, 2)?)?;
-                let borrowed = list.borrow();
-                if start >= borrowed.len() {
-                    return self.fresh_list(TypedVec::new());
-                }
-                let end = start.saturating_add(len).min(borrowed.len());
-                let values = borrowed.slice_to_vec(start, end);
-                drop(borrowed);
+                let values = core_list_slice(list.borrow().iter(), start, len);
                 self.fresh_list(TypedVec::from_values(values))
             }
             RegIntrinsic::ListSum => {
@@ -310,7 +298,7 @@ impl RegVm {
             RegIntrinsic::ListTake => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let count = nonnegative_count(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let values = list.borrow().iter().take(count).collect();
+                let values = core_list_take(list.borrow().iter(), count);
                 self.fresh_list(TypedVec::from_values(values))
             }
             RegIntrinsic::ListToJsonStrings => {

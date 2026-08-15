@@ -1678,6 +1678,13 @@ an arbitrary shell executor.
     - [ ] **V06.2.2 — Extract collection algorithms.** Move non-primitive list,
       map, set, and deque transformations behind the same pure-library boundary
       without moving ownership-sensitive mutation primitives out of the VM.
+      - [x] **V06.2.2a — Extract pure List transforms.** `List.dedup`, `reverse`,
+        `skip`, `take`, and `slice` now delegate their generic order-preserving
+        algorithms to `rsscript-corelib`; the VM still owns list representation,
+        allocation charging, and the ownership-sensitive boundary.
+      - [ ] **V06.2.2b — Extract pure map/set/deque transforms.** Continue only
+        with transformations that have no closure callback, mutable receiver, or
+        resource lifecycle behavior.
   - [ ] **V06.3 — Reduce VM dependencies to execution primitives.** Verify VM
     Core no longer directly depends on library implementation crates.
 - [ ] **V07 — Classify the intrinsic catalog.** Every entry is exactly one of a

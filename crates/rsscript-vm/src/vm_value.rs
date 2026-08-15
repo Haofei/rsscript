@@ -544,16 +544,6 @@ impl TypedVec {
         if len == 0 { None } else { self.get(len - 1) }
     }
 
-    /// Reverse the elements in place (kind-preserving — a flat scalar list reverses
-    /// its raw buffer; `Boxed` reverses its `Vec`).
-    pub(crate) fn reverse(&mut self) {
-        match self {
-            TypedVec::Boxed(v) => v.reverse(),
-            TypedVec::Ints(v) => v.reverse(),
-            TypedVec::Floats(v) => v.reverse(),
-        }
-    }
-
     pub(crate) fn clear(&mut self) {
         match self {
             TypedVec::Boxed(v) => v.clear(),
@@ -609,17 +599,6 @@ impl TypedVec {
             TypedVec::Boxed(v) => v.clone(),
             TypedVec::Ints(v) => v.iter().map(|i| VmValue::Int(*i)).collect(),
             TypedVec::Floats(v) => v.iter().map(|f| VmValue::Float(*f)).collect(),
-        }
-    }
-
-    /// Materialize the half-open `[start, end)` sub-range as a logical
-    /// `Vec<VmValue>` (callers bounds-check `start <= end <= len`). Mirrors the old
-    /// `borrowed[start..end].to_vec()`.
-    pub(crate) fn slice_to_vec(&self, start: usize, end: usize) -> Vec<VmValue> {
-        match self {
-            TypedVec::Boxed(v) => v[start..end].to_vec(),
-            TypedVec::Ints(v) => v[start..end].iter().map(|i| VmValue::Int(*i)).collect(),
-            TypedVec::Floats(v) => v[start..end].iter().map(|f| VmValue::Float(*f)).collect(),
         }
     }
 

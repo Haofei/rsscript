@@ -869,7 +869,7 @@ fn builtin_registry_is_versioned_and_keeps_library_calls_out_of_provider_dispatc
 }
 
 #[test]
-fn encoding_core_library_is_pure_and_the_vm_only_adapts_its_results() {
+fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
     let root = workspace_root();
     let corelib_manifest = read(&root.join("crates/rsscript-corelib/Cargo.toml"));
     let corelib = read(&root.join("crates/rsscript-corelib/src/lib.rs"));
@@ -878,6 +878,7 @@ fn encoding_core_library_is_pure_and_the_vm_only_adapts_its_results() {
     let intrinsics = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/mod.rs"));
     let hex = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/hex.rs"));
     let url = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/url.rs"));
+    let list = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/list.rs"));
 
     assert!(corelib_manifest.contains("name = \"rsscript-corelib\""));
     for forbidden in ["rsscript-vm", "rsscript-provider", "rsscript-bytecode"] {
@@ -893,6 +894,11 @@ fn encoding_core_library_is_pure_and_the_vm_only_adapts_its_results() {
         "pub fn hex_encode",
         "pub fn url_decode_component",
         "pub fn url_encode_component",
+        "pub fn dedup",
+        "pub fn reverse",
+        "pub fn skip",
+        "pub fn take",
+        "pub fn slice",
     ] {
         assert!(
             corelib.contains(required),
@@ -906,10 +912,24 @@ fn encoding_core_library_is_pure_and_the_vm_only_adapts_its_results() {
             "VM manifest must not directly own encoding implementation dependency `{removed}`"
         );
     }
-    assert!(vm.contains("rsscript_corelib::encoding"));
+    assert!(vm.contains("use rsscript_corelib::{"));
+    assert!(vm.contains("encoding::{"));
+    assert!(vm.contains("collections::{"));
     assert!(intrinsics.contains("base64_decode(text)"));
     assert!(hex.contains("core_hex_decode(text)"));
     assert!(url.contains("url_decode_component(value)"));
+    for required in [
+        "core_list_dedup(list.borrow().iter())",
+        "core_list_reverse(list.borrow().iter())",
+        "core_list_skip(list.borrow().iter(), count)",
+        "core_list_slice(list.borrow().iter(), start, len)",
+        "core_list_take(list.borrow().iter(), count)",
+    ] {
+        assert!(
+            list.contains(required),
+            "list adapter is missing `{required}`"
+        );
+    }
 }
 
 #[test]
