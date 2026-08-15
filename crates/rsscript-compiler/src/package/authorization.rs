@@ -799,12 +799,7 @@ fn snapshot_tree(source: &Path, destination: &Path) -> Result<(), String> {
         source,
         TreeLimits::default(),
         "authorized native snapshot",
-        |_parent, entry| {
-            matches!(
-                entry.file_name().to_str(),
-                Some("target" | ".git" | ".DS_Store")
-            )
-        },
+        |_parent, name| matches!(name, "target" | ".git" | ".DS_Store"),
     )?;
     fs::create_dir_all(destination).map_err(|error| {
         format!(

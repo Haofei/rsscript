@@ -146,6 +146,203 @@ pub struct ProjectSourceCapture {
     bytes: u64,
 }
 
+/// Resource limits for a generic project-owned regular-file tree scan.
+///
+/// This is intentionally independent of any package/review policy. Callers
+/// supply their operation label and entry filter; the project boundary owns
+/// confinement, link rejection, deterministic traversal, and accounting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectTreeLimits {
+    pub max_files: usize,
+    pub max_entries: usize,
+    pub max_bytes: u64,
+    pub max_depth: usize,
+}
+
+impl Default for ProjectTreeLimits {
+    fn default() -> Self {
+        Self {
+            max_files: PROJECT_CAPTURE_MAX_FILES,
+            max_entries: PROJECT_CAPTURE_MAX_ENTRIES,
+            max_bytes: PROJECT_CAPTURE_MAX_BYTES,
+            max_depth: PROJECT_CAPTURE_MAX_DEPTH,
+        }
+    }
+}
+
+/// One regular file admitted by [`collect_project_regular_files`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectRegularFile {
+    pub path: PathBuf,
+    pub bytes: u64,
+}
+
+/// Collect regular files under a non-link project root with deterministic,
+/// bounded traversal.
+///
+/// `skip` receives the parent directory and child entry name before the child
+/// is inspected. It is appropriate for caller-owned policy such as excluding
+/// build output; it cannot bypass the boundary checks for visited entries.
+pub fn collect_project_regular_files(
+    path: &Path,
+    limits: ProjectTreeLimits,
+    operation: &str,
+    skip: impl Fn(&Path, &str) -> bool,
+) -> Result<Vec<ProjectRegularFile>, String> {
+    fn visit(
+        root: &Path,
+        path: &Path,
+        depth: usize,
+        limits: ProjectTreeLimits,
+        operation: &str,
+        skip: &impl Fn(&Path, &str) -> bool,
+        budget: &mut ProjectTreeBudget,
+        files: &mut Vec<ProjectRegularFile>,
+    ) -> Result<(), String> {
+        budget.check_depth(limits, depth, operation, path)?;
+        let metadata = project_path_metadata(path, operation)?;
+        ensure_project_path_within_root(root, path, operation)?;
+        if metadata.is_file() {
+            let (_file, opened_metadata) =
+                open_project_regular_file_within_root(root, path, operation)?;
+            budget.add_file(limits, opened_metadata.len(), operation, path)?;
+            files.push(ProjectRegularFile {
+                path: path.to_path_buf(),
+                bytes: opened_metadata.len(),
+            });
+            return Ok(());
+        }
+        if !metadata.is_dir() {
+            return Err(format!(
+                "{operation} only accepts regular files or directories: {}",
+                path.display()
+            ));
+        }
+        let mut entries = fs::read_dir(path)
+            .map_err(|error| format!("failed to read {}: {error}", path.display()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("failed to read entry in {}: {error}", path.display()))?;
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let entry_path = entry.path();
+            budget.add_entry(limits, operation, &entry_path)?;
+            let name = entry.file_name();
+            if skip(path, &name.to_string_lossy()) {
+                continue;
+            }
+            visit(
+                root,
+                &entry_path,
+                depth + 1,
+                limits,
+                operation,
+                skip,
+                budget,
+                files,
+            )?;
+        }
+        Ok(())
+    }
+
+    let root = canonical_project_tree_root(path, operation)?;
+    let mut files = Vec::new();
+    visit(
+        &root,
+        path,
+        0,
+        limits,
+        operation,
+        &skip,
+        &mut ProjectTreeBudget::default(),
+        &mut files,
+    )?;
+    Ok(files)
+}
+
+#[derive(Debug, Default)]
+struct ProjectTreeBudget {
+    files: usize,
+    entries: usize,
+    bytes: u64,
+}
+
+impl ProjectTreeBudget {
+    fn check_depth(
+        &self,
+        limits: ProjectTreeLimits,
+        depth: usize,
+        operation: &str,
+        path: &Path,
+    ) -> Result<(), String> {
+        if depth > limits.max_depth {
+            return Err(format!(
+                "{operation} exceeded directory depth limit of {} at {}",
+                limits.max_depth,
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+
+    fn add_file(
+        &mut self,
+        limits: ProjectTreeLimits,
+        bytes: u64,
+        operation: &str,
+        path: &Path,
+    ) -> Result<(), String> {
+        self.files = self.files.checked_add(1).ok_or_else(|| {
+            format!(
+                "{operation} file count overflow while visiting {}",
+                path.display()
+            )
+        })?;
+        self.bytes = self.bytes.checked_add(bytes).ok_or_else(|| {
+            format!(
+                "{operation} byte count overflow while visiting {}",
+                path.display()
+            )
+        })?;
+        if self.files > limits.max_files {
+            return Err(format!(
+                "{operation} exceeded file count limit of {} at {}",
+                limits.max_files,
+                path.display()
+            ));
+        }
+        if self.bytes > limits.max_bytes {
+            return Err(format!(
+                "{operation} exceeded total byte limit of {} at {}",
+                limits.max_bytes,
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+
+    fn add_entry(
+        &mut self,
+        limits: ProjectTreeLimits,
+        operation: &str,
+        path: &Path,
+    ) -> Result<(), String> {
+        self.entries = self.entries.checked_add(1).ok_or_else(|| {
+            format!(
+                "{operation} directory entry count overflow while visiting {}",
+                path.display()
+            )
+        })?;
+        if self.entries > limits.max_entries {
+            return Err(format!(
+                "{operation} exceeded directory entry limit of {} at {}",
+                limits.max_entries,
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl ProjectSourceCapture {
     pub fn new(package_dir: &Path, limits: ProjectSourceCaptureLimits) -> Result<Self, String> {
         Ok(Self {
@@ -750,6 +947,18 @@ fn canonical_capture_root(path: &Path) -> Result<PathBuf, String> {
     })
 }
 
+fn canonical_project_tree_root(path: &Path, operation: &str) -> Result<PathBuf, String> {
+    let metadata = project_path_metadata(path, operation)?;
+    if !(metadata.is_dir() || metadata.is_file()) {
+        return Err(format!(
+            "{operation} only accepts regular files or directories: {}",
+            path.display()
+        ));
+    }
+    fs::canonicalize(path)
+        .map_err(|error| format!("failed to canonicalize {}: {error}", path.display()))
+}
+
 fn read_regular_utf8_no_follow(path: &Path, max_bytes: u64, label: &str) -> Result<String, String> {
     #[cfg(unix)]
     let mut file = {
@@ -865,16 +1074,224 @@ fn confined_project_path(root: &Path, value: &str, label: &str) -> Result<PathBu
     Ok(path)
 }
 
-fn project_path_metadata(path: &Path, label: &str) -> Result<fs::Metadata, String> {
+pub fn project_path_metadata(path: &Path, label: &str) -> Result<fs::Metadata, String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("failed to inspect {label} {}: {error}", path.display()))?;
     if is_link_like(&metadata) {
         return Err(format!(
-            "{label} contains a symlink or reparse point: {}",
+            "{label} rejects symlinks or reparse points because the path resolves outside the package root: {}",
             path.display()
         ));
     }
     Ok(metadata)
+}
+
+/// Open one regular project file while rejecting symlinks and reparse points.
+pub fn open_project_regular_file_no_follow(
+    path: &Path,
+    operation: &str,
+) -> Result<(File, fs::Metadata), String> {
+    #[cfg(unix)]
+    let file = {
+        use rustix::fs::{Mode, OFlags};
+
+        let descriptor = rustix::fs::open(
+            path,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|error| {
+            format!(
+                "failed to open {} without following links: {error}",
+                path.display()
+            )
+        })?;
+        File::from(descriptor)
+    };
+    #[cfg(not(unix))]
+    let file = {
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+            options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        }
+        options.open(path).map_err(|error| {
+            format!(
+                "failed to open {} without following links: {error}",
+                path.display()
+            )
+        })?
+    };
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("failed to inspect opened {}: {error}", path.display()))?;
+    if !metadata.is_file() || is_link_like(&metadata) {
+        return Err(format!(
+            "{operation} requires a regular file and rejects symlinks or reparse points: {}",
+            path.display()
+        ));
+    }
+    Ok((file, metadata))
+}
+
+/// Open a regular file through a checked project-root path walk.
+pub fn open_project_regular_file_within_root(
+    root: &Path,
+    path: &Path,
+    operation: &str,
+) -> Result<(File, fs::Metadata), String> {
+    let relative = confined_project_relative_path(root, path, operation)?;
+    if relative.as_os_str().is_empty() {
+        return open_project_regular_file_no_follow(path, operation);
+    }
+    #[cfg(unix)]
+    {
+        use rustix::fs::{Mode, OFlags};
+
+        let root_descriptor = rustix::fs::open(
+            root,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|error| format!("failed to open project root {}: {error}", root.display()))?;
+        let mut current = File::from(root_descriptor);
+        let mut components = relative.components().peekable();
+        while let Some(component) = components.next() {
+            let Component::Normal(component) = component else {
+                return Err(format!(
+                    "{operation} path is not confined: {}",
+                    path.display()
+                ));
+            };
+            let flags = if components.peek().is_some() {
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC
+            } else {
+                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC
+            };
+            let descriptor = rustix::fs::openat(&current, component, flags, Mode::empty())
+                .map_err(|error| {
+                    format!(
+                        "failed to open confined {operation} path {}: {error}",
+                        path.display()
+                    )
+                })?;
+            current = File::from(descriptor);
+        }
+        let metadata = current
+            .metadata()
+            .map_err(|error| format!("failed to inspect opened {}: {error}", path.display()))?;
+        if !metadata.is_file() {
+            return Err(format!(
+                "{operation} requires a regular file: {}",
+                path.display()
+            ));
+        }
+        Ok((current, metadata))
+    }
+    #[cfg(not(unix))]
+    {
+        ensure_project_path_components(root, path, operation)?;
+        let opened = open_project_regular_file_no_follow(path, operation)?;
+        ensure_project_path_components(root, path, operation)?;
+        Ok(opened)
+    }
+}
+
+/// Read a bounded UTF-8 regular file without following links.
+pub fn read_project_utf8_file_bounded(
+    path: &Path,
+    max_bytes: u64,
+    operation: &str,
+) -> Result<String, String> {
+    let (file, metadata) = open_project_regular_file_no_follow(path, operation)?;
+    if metadata.len() > max_bytes {
+        return Err(format!(
+            "{operation} exceeded byte limit of {max_bytes} at {}",
+            path.display()
+        ));
+    }
+    let capacity = usize::try_from(metadata.len()).map_err(|_| {
+        format!(
+            "{operation} file is too large for this platform: {}",
+            path.display()
+        )
+    })?;
+    let mut bytes = Vec::with_capacity(capacity);
+    Read::take(file, max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(format!(
+            "{operation} exceeded byte limit of {max_bytes} while reading {}",
+            path.display()
+        ));
+    }
+    String::from_utf8(bytes).map_err(|error| {
+        format!(
+            "{operation} is not valid UTF-8 at {}: {error}",
+            path.display()
+        )
+    })
+}
+
+pub fn ensure_project_path_within_root(
+    root: &Path,
+    path: &Path,
+    operation: &str,
+) -> Result<(), String> {
+    let canonical = fs::canonicalize(path)
+        .map_err(|error| format!("failed to canonicalize {}: {error}", path.display()))?;
+    if canonical.strip_prefix(root).is_ok() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{operation} path escapes package root: {}",
+            path.display()
+        ))
+    }
+}
+
+fn confined_project_relative_path(
+    root: &Path,
+    path: &Path,
+    operation: &str,
+) -> Result<PathBuf, String> {
+    if let Ok(relative) = path.strip_prefix(root) {
+        return Ok(relative.to_path_buf());
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("{operation} path has no parent: {}", path.display()))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| format!("{operation} path has no file name: {}", path.display()))?;
+    let canonical_parent = fs::canonicalize(parent)
+        .map_err(|error| format!("failed to canonicalize {}: {error}", parent.display()))?;
+    canonical_parent
+        .join(name)
+        .strip_prefix(root)
+        .map(Path::to_path_buf)
+        .map_err(|_| format!("{operation} path escapes package root: {}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn ensure_project_path_components(root: &Path, path: &Path, operation: &str) -> Result<(), String> {
+    let relative = confined_project_relative_path(root, path, operation)?;
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        let Component::Normal(component) = component else {
+            return Err(format!(
+                "{operation} path is not confined: {}",
+                path.display()
+            ));
+        };
+        current.push(component);
+        project_path_metadata(&current, operation)?;
+    }
+    ensure_project_path_within_root(root, path, operation)
 }
 
 fn is_rsscript_source_path(path: &Path) -> bool {
@@ -1603,6 +2020,55 @@ mod tests {
             vec!["src/api.rssi", "src/main.rss"]
         );
         assert!(capture.capture(&["../outside".to_string()], &[]).is_err());
+    }
+
+    #[test]
+    fn project_tree_scan_is_bounded_sorted_and_policy_filtered() {
+        let directory = tempfile::tempdir().expect("workspace");
+        std::fs::create_dir_all(directory.path().join("nested")).expect("tree");
+        std::fs::write(directory.path().join("z.txt"), "z").expect("source");
+        std::fs::write(directory.path().join("a.txt"), "a").expect("source");
+        std::fs::write(directory.path().join("nested/keep.txt"), "keep").expect("source");
+        std::fs::write(directory.path().join("nested/skip.txt"), "skip").expect("source");
+
+        let files = collect_project_regular_files(
+            directory.path(),
+            ProjectTreeLimits {
+                max_files: 3,
+                max_entries: 8,
+                max_bytes: 32,
+                max_depth: 4,
+            },
+            "project scan test",
+            |_, name| name == "skip.txt",
+        )
+        .expect("bounded tree scan");
+        assert_eq!(
+            files
+                .iter()
+                .map(|file| {
+                    file.path
+                        .strip_prefix(directory.path())
+                        .expect("project-relative output")
+                        .display()
+                        .to_string()
+                })
+                .collect::<Vec<_>>(),
+            vec!["a.txt", "nested/keep.txt", "z.txt"]
+        );
+        let error = collect_project_regular_files(
+            directory.path(),
+            ProjectTreeLimits {
+                max_files: 2,
+                max_entries: 8,
+                max_bytes: 32,
+                max_depth: 4,
+            },
+            "project scan test",
+            |_, name| name == "skip.txt",
+        )
+        .expect_err("file limit must apply before a fourth accepted file");
+        assert!(error.contains("file count limit"), "{error}");
     }
 
     #[test]

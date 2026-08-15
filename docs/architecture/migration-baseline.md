@@ -752,7 +752,10 @@ an arbitrary shell executor.
     now follows the same rule: `ProjectSourceCapture` owns confined manifest
     paths, deterministic `.rss`/`.rssi` traversal, aggregate limits, and
     no-follow file reads; compiler only assigns captured files their semantic
-    source kind. The remaining S05.1 work is typed dependency discovery and
+    source kind. The generic bounded regular-file scanner and no-follow UTF-8
+    reader used by compatibility native/review flows are now project-owned as
+    well; compiler compatibility code only supplies its domain-specific
+    exclusions. The remaining S05.1 work is typed dependency discovery and
     removal of the legacy review/native package resolver from the compiler.
     Manifest dependency discovery now parses the loader-owned
     `WorkspaceManifestV1` projection and admits only explicit local path

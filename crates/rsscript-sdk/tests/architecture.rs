@@ -1490,8 +1490,11 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
     assert!(
         project.contains("pub struct ProjectSourceCapture")
             && project.contains("pub struct ProjectSourceCaptureLimits")
-            && project.contains("pub fn capture_project_utf8"),
-        "project must own bounded source-tree traversal and captured snapshot metadata reads"
+            && project.contains("pub fn capture_project_utf8")
+            && project.contains("pub struct ProjectTreeLimits")
+            && project.contains("pub fn collect_project_regular_files")
+            && project.contains("pub fn read_project_utf8_file_bounded"),
+        "project must own bounded source-tree traversal, generic regular-file scanning, and captured snapshot reads"
     );
     let source_loader = function_source(&source_set, "fn read_package_sources_excluding(");
     assert!(
@@ -1500,6 +1503,15 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
             && !source_loader.contains("collect_rsscript_files_excluding")
             && !source_loader.contains("read_bounded_utf8_file"),
         "compiler package source assembly must consume project-captured source bytes rather than traverse directories"
+    );
+    let package_module = read(&root.join("crates/rsscript-compiler/src/package.rs"));
+    assert!(
+        package_module.contains("collect_project_regular_files as collect_bounded_regular_files")
+            && package_module.contains("read_project_utf8_file_bounded as read_utf8_file_bounded")
+            && !package_module.contains("struct TreeBudget")
+            && !package_module.contains("fn read_bounded_sorted_entries")
+            && !package_module.contains("fn open_regular_file_within_root"),
+        "compiler compatibility code must consume project-owned generic I/O primitives instead of reimplementing bounded traversal"
     );
 }
 
