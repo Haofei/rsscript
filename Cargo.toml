@@ -60,6 +60,7 @@ exclude = [
     "experiments/rss-testgen",
     "experiments/rsscript-review-reir",
     "experiments/vm-jit",
+    "experiments/fixtures/native-abi-fixture/native/rust",
     "packages/native-abi-fixture/native/rust",
 ]
 

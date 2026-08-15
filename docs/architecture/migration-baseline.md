@@ -153,13 +153,15 @@ an arbitrary shell executor.
 - [x] **G05 — Freeze behavior baselines.** Diagnostics, canonical Artifact,
   execution-report, cancellation, Provider, and Core SLO fixtures protect the
   migration.
-- [ ] **G06 — Physically isolate experiments from the Core workspace.** Move
+- [x] **G06 — Physically isolate experiments from the Core workspace.** Move
   JIT, AOT, native ABI, REIR, self-host, C/research fixtures, and test generation
   to an experiments workspace or repository. The `experiments/` workspace now
   owns JIT, AOT, native ABI, REIR, and test generation; root Cargo metadata
   excludes them, and CI invokes their maintenance gate explicitly. Self-host and
-  native package source remain migration/test fixtures, so the milestone stays
-  open until those assets have an explicit external maintenance boundary.
+  native package source are now physically owned by
+  `experiments/fixtures/`; root-level paths are compatibility symlinks only and
+  an architecture test rejects copied Core assets or a fixture bridge becoming a
+  workspace member.
   Self-host parity is now additionally feature-gated and only enabled by its
   dedicated workflow; it no longer participates in default Core test builds.
   The generated-program differential has also moved from the SDK test target to

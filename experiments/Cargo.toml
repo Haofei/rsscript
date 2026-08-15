@@ -12,3 +12,8 @@ members = [
 ]
 
 default-members = []
+
+# These are retained Research/Integration inputs, not experiment crates.  They
+# deliberately stay outside both workspace member sets so a Core build cannot
+# accidentally compile or publish their fixture bridge.
+exclude = ["fixtures/native-abi-fixture/native/rust"]

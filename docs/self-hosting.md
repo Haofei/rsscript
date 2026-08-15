@@ -1,8 +1,10 @@
 # RSScript Self-Hosting
 
 Self-hosting is frozen Research. The retained corpus and parity harness are
-regression assets; a standalone compiler, stage1/stage2 bootstrap, and further C
-backend expansion are not current product goals.
+regression assets owned under `experiments/fixtures/selfhost`; the root-level
+`selfhost` path is a compatibility symlink for the feature-gated harness, not a
+Core asset. A standalone compiler, stage1/stage2 bootstrap, and further C backend
+expansion are not current product goals.
 
 ## Terms
 

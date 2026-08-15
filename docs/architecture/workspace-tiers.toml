@@ -74,3 +74,11 @@ examples = [
   "embedded-report-pipeline",
   "structured-async-pipeline",
 ]
+
+# Non-Cargo Research/Integration inputs are physically owned by the separate
+# experiments workspace.  Root-level `selfhost` and `packages/native-abi-fixture`
+# are compatibility symlinks only; they must not become copied Core assets.
+fixture_roots = [
+  "experiments/fixtures/selfhost",
+  "experiments/fixtures/native-abi-fixture",
+]
