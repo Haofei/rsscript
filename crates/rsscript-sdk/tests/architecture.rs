@@ -4924,4 +4924,23 @@ fn github_workflows_follow_current_workspace_boundaries() {
     }
     assert!(release.contains("merge-multiple: true"));
     assert!(release.contains("prerelease: ${{ contains(github.ref_name, '-') }}"));
+
+    let sdk_api = read(&workflow_dir.join("sdk-api-compatibility.yml"));
+    for required in [
+        "cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239",
+        "package: rsscript-sdk",
+        "feature-group: default-features",
+        "features: execution",
+        "baseline-rev: ${{ steps.baseline.outputs.revision }}",
+        "git cat-file -e \"$revision^{commit}\"",
+    ] {
+        assert!(
+            sdk_api.contains(required),
+            "SDK API compatibility workflow must retain `{required}`"
+        );
+    }
+    assert!(
+        !sdk_api.contains("features: compatibility"),
+        "legacy compatibility exports must not become part of the reviewed semver gate"
+    );
 }

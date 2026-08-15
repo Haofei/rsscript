@@ -117,12 +117,16 @@ mechanical acceptance condition holds.
   The generated-program differential has also moved from the SDK test target to
   the `rss-testgen` experiment, so default Core tests no longer compile its
   experiment dependency.
-- [ ] **G07 — Establish public API compatibility gates.** Check in a reviewed
+- [x] **G07 — Establish public API compatibility gates.** Check in a reviewed
   SDK API inventory, run semver/API-diff checks in CI, and reject experimental
   symbols from default SDK features. The reviewed inventory and default-feature
   architecture gate are now present; a checked v1 façade-export snapshot runs
-  in the default Core test path. A generated semver baseline remains blocked on
-  completing the explicit façade modules in A03.
+  in the default Core test path. `sdk-api-compatibility.yml` now compares both
+  the default and reviewed `execution` façade feature closures against the
+  target-branch commit with pinned `cargo-semver-checks`; it deliberately
+  excludes compatibility and native-JIT exports. The workflow validates the
+  selected baseline is a real commit before comparing, so pre-1.0 development
+  receives an API-diff gate without requiring a crates.io release.
 
 ### 1. Semantic ownership and query boundary
 

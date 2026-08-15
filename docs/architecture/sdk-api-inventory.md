@@ -92,5 +92,8 @@ order, and flat brace-group member order cannot turn a `rustfmt` run into a
 spurious public-API change. CI rejects additions, removals, and reexports that
 are not accompanied by an intentional inventory and snapshot update. CI runs that suite for the default
 product path and for `execution`; the native JIT suite is maintained in the
-experiments workflow. Before a public API promise is made, this source-level
-snapshot will be complemented by a generated semver baseline.
+experiments workflow. `sdk-api-compatibility.yml` additionally runs pinned
+`cargo-semver-checks` against the target-branch commit for both reviewed
+feature closures. This branch baseline provides a generated API-diff gate
+before a crates.io release exists; compatibility and native-JIT features are
+intentionally excluded.
