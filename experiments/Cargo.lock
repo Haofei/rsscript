@@ -1035,6 +1035,7 @@ name = "rsscript-sdk"
 version = "0.1.0"
 dependencies = [
  "rsscript-abi-model",
+ "rsscript-aot-backend",
  "rsscript-artifact",
  "rsscript-artifact-store",
  "rsscript-build-support",
