@@ -50,8 +50,6 @@ mod review;
 mod source_set;
 mod types;
 
-pub const PACKAGE_REVIEW_METADATA_SCHEMA: &str = "rsscript.package_review.v1";
-
 const PACKAGE_TREE_MAX_FILES: usize = 20_000;
 const PACKAGE_TREE_MAX_ENTRIES: usize = 40_000;
 const PACKAGE_TREE_MAX_BYTES: u64 = 512 * 1024 * 1024;
@@ -74,7 +72,7 @@ pub use diff::diff_package_dirs;
 pub use format::*;
 pub use graph::package_tree;
 pub use lock::{diff_package_locks, lock_package_dir};
-pub use metadata::{package_lowering_input, package_metadata, package_metadata_verify};
+pub use metadata::package_lowering_input;
 pub(crate) use native::package_native_plugin_build_dependencies;
 use native::{manifest_native_enabled, manifest_native_unsafe_boundary};
 pub use review::review_package_dir;
@@ -515,11 +513,6 @@ fn canonical_checked_root(path: &Path, operation: &str) -> Result<PathBuf, Strin
     fs::canonicalize(path)
         .map_err(|error| format!("failed to canonicalize {}: {error}", path.display()))
 }
-
-/// Atomically replace a regular package artifact without following symlinks in
-/// its parent path or at the destination.
-#[cfg(test)]
-use rsscript_artifact_store::write_package_artifact_atomic;
 
 pub(super) fn package_path_metadata(path: &Path, operation: &str) -> Result<fs::Metadata, String> {
     let metadata = fs::symlink_metadata(path)
@@ -998,41 +991,6 @@ mod preparation_limit_tests {
             .expect_err("oversized manifest must be rejected");
         assert!(error.contains("byte limit of 4"), "{error}");
         fs::remove_dir_all(root).expect("fixture cleanup");
-    }
-
-    #[test]
-    fn package_artifact_write_replaces_regular_files_atomically() {
-        let root = test_dir("artifact-write");
-        fs::create_dir_all(&root).expect("fixture directory");
-        let path = root.join("rsspkg.lock");
-        fs::write(&path, b"old").expect("old fixture");
-
-        write_package_artifact_atomic(&root, &path, b"new", "test package lock")
-            .expect("regular artifact should update");
-
-        assert_eq!(fs::read(&path).expect("artifact should read"), b"new");
-        fs::remove_dir_all(root).expect("fixture cleanup");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn package_artifact_write_rejects_symlink_destinations() {
-        use std::os::unix::fs::symlink;
-
-        let root = test_dir("artifact-symlink");
-        let outside = test_dir("artifact-outside");
-        fs::create_dir_all(&root).expect("fixture directory");
-        fs::write(&outside, b"outside").expect("outside fixture");
-        let path = root.join("rsspkg.lock");
-        symlink(&outside, &path).expect("fixture symlink");
-
-        let error = write_package_artifact_atomic(&root, &path, b"new", "test package lock")
-            .expect_err("symlink artifact must be rejected");
-
-        assert!(error.contains("not a symlink"), "{error}");
-        assert_eq!(fs::read(&outside).expect("outside should read"), b"outside");
-        fs::remove_dir_all(root).expect("fixture cleanup");
-        fs::remove_file(outside).expect("outside cleanup");
     }
 
     #[test]

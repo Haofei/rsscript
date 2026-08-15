@@ -1,150 +1,14 @@
 use std::collections::BTreeSet;
-use std::fs;
 use std::path::{Path, PathBuf};
-
-use sha2::{Digest, Sha256};
 
 use super::native::{
     native_binding_interface_sources, package_external_bindings, package_native_rust_dependencies,
 };
 use super::source_set::load_package;
-use rsscript_artifact_store::ArtifactStore;
-
 use super::{
-    PACKAGE_REVIEW_METADATA_SCHEMA, PackageIdentity, PackageLoweringInput, PackageMetadataMismatch,
-    PackageMetadataReport, PackageReview, PackageReviewFileKind, PackageReviewMetadata,
-    PackageRisk, collect_dependency_interface_sources, collect_dependency_lowering_sources,
-    review_package_dir,
+    collect_dependency_interface_sources, collect_dependency_lowering_sources, PackageIdentity,
+    PackageLoweringInput, PackageReviewFileKind,
 };
-
-pub fn package_metadata(
-    package_dir: &Path,
-    dry_run: bool,
-) -> Result<PackageMetadataReport, String> {
-    package_metadata_inner(package_dir, dry_run, false)
-}
-
-pub fn package_metadata_verify(package_dir: &Path) -> Result<PackageMetadataReport, String> {
-    package_metadata_inner(package_dir, true, true)
-}
-
-fn package_metadata_inner(
-    package_dir: &Path,
-    dry_run: bool,
-    verify: bool,
-) -> Result<PackageMetadataReport, String> {
-    let store = if !dry_run && !verify {
-        Some(ArtifactStore::open(package_dir)?)
-    } else {
-        None
-    };
-    let review = review_package_dir(package_dir)?;
-    let metadata_path = package_dir.join("review").join("package-review.json");
-    let metadata = package_review_metadata_from_review(&review);
-    let metadata_json = serde_json::to_string_pretty(&metadata)
-        .expect("package metadata JSON serialization should not fail");
-    let mut mismatches = Vec::new();
-
-    // Fail closed: a package with error diagnostics must not produce authoritative
-    // review artifacts on disk. Downstream tools must not treat invalid source as
-    // evidence.
-    let error_count = review.summary.errors;
-    let blocked_by_errors = error_count > 0;
-
-    if verify {
-        verify_artifact(
-            "package_review",
-            &metadata_path,
-            &metadata_json,
-            &mut mismatches,
-        );
-    } else if !dry_run && !blocked_by_errors {
-        let store = store
-            .as_ref()
-            .expect("non-dry metadata generation has an artifact store");
-        store.create_directory_all("review", "package review artifact directory")?;
-        store.write_atomic(
-            "review/package-review.json",
-            metadata_json.as_bytes(),
-            "package review metadata",
-        )?;
-    }
-
-    let wrote = !dry_run && !verify && !blocked_by_errors;
-    let mut reasons = review.reasons;
-    if blocked_by_errors && !dry_run && !verify {
-        reasons.push(format!(
-            "refused to write authoritative review artifacts: package has {error_count} \
-             error diagnostic(s); fix them and re-run"
-        ));
-    }
-
-    let ok = error_count == 0 && review.risk != PackageRisk::Unknown && mismatches.is_empty();
-    Ok(PackageMetadataReport {
-        package: review.package,
-        package_dir: package_dir.display().to_string(),
-        metadata_path: metadata_path.display().to_string(),
-        dry_run,
-        written: wrote,
-        verified: verify && mismatches.is_empty(),
-        ok,
-        risk: review.risk,
-        reasons,
-        mismatches,
-        metadata,
-    })
-}
-
-fn verify_artifact(
-    artifact: &str,
-    path: &Path,
-    expected: &str,
-    mismatches: &mut Vec<PackageMetadataMismatch>,
-) {
-    let expected_sha256 = sha256_label(expected.as_bytes());
-    match fs::read_to_string(path) {
-        Ok(actual) => {
-            if actual == expected {
-                return;
-            }
-            mismatches.push(PackageMetadataMismatch {
-                artifact: artifact.to_string(),
-                path: path.display().to_string(),
-                kind: "stale".to_string(),
-                message: "artifact does not match the current package review result".to_string(),
-                expected_sha256,
-                actual_sha256: Some(sha256_label(actual.as_bytes())),
-            });
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            mismatches.push(PackageMetadataMismatch {
-                artifact: artifact.to_string(),
-                path: path.display().to_string(),
-                kind: "missing".to_string(),
-                message: "artifact is missing".to_string(),
-                expected_sha256,
-                actual_sha256: None,
-            });
-        }
-        Err(error) => mismatches.push(PackageMetadataMismatch {
-            artifact: artifact.to_string(),
-            path: path.display().to_string(),
-            kind: "unreadable".to_string(),
-            message: format!("failed to read artifact: {error}"),
-            expected_sha256,
-            actual_sha256: None,
-        }),
-    }
-}
-
-fn sha256_label(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let mut output = String::from("sha256:");
-    for byte in digest {
-        output.push_str(&format!("{byte:02x}"));
-    }
-    output
-}
 
 pub fn package_lowering_input(package_dir: &Path) -> Result<PackageLoweringInput, String> {
     let package = load_package(package_dir)?;
@@ -235,24 +99,4 @@ fn select_package_runnable_source<'a>(
         "rss run package lowering requires `src/main.rss` when a package has multiple `.rss` source files."
             .to_string(),
     )
-}
-
-fn package_review_metadata_from_review(review: &PackageReview) -> PackageReviewMetadata {
-    PackageReviewMetadata {
-        schema: PACKAGE_REVIEW_METADATA_SCHEMA.to_string(),
-        package: review.package.clone(),
-        risk: review.risk,
-        reasons: review.reasons.clone(),
-        virtual_package: review.virtual_package.clone(),
-        implements: review.implements.clone(),
-        dependencies: review.dependencies.clone(),
-        summary: review.summary.clone(),
-        files: review.files.clone(),
-        exports: review.exports.clone(),
-        external_bindings: review.external_bindings.clone(),
-        await_sites: review.await_sites.clone(),
-        native_rust: review.native_rust.clone(),
-        review_map: review.review_map.clone(),
-        diagnostics: review.diagnostics.clone(),
-    }
 }

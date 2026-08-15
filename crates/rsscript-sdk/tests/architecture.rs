@@ -1195,28 +1195,25 @@ fn artifact_persistence_is_an_execution_only_adapter() {
     let compiler_manifest: toml::Value =
         toml::from_str(&read(&root.join("crates/rsscript-compiler/Cargo.toml")))
             .expect("compiler manifest should parse");
-    let store = compiler_manifest["dependencies"]["rsscript-artifact-store"]
-        .as_table()
-        .expect("compiler package compatibility must declare the persistence adapter");
-    assert_eq!(
-        store.get("optional").and_then(toml::Value::as_bool),
-        Some(true),
-        "compiler persistence remains confined to its explicit package feature"
+    assert!(
+        compiler_manifest["dependencies"]
+            .as_table()
+            .expect("compiler dependency table should exist")
+            .get("rsscript-artifact-store")
+            .is_none(),
+        "compiler production dependencies must not include the persistence adapter"
     );
     let package_feature = compiler_manifest["features"]["package"]
         .as_array()
         .expect("compiler package feature should be declared");
     assert!(
-        package_feature
+        !package_feature
             .iter()
             .filter_map(toml::Value::as_str)
             .any(|entry| entry == "dep:rsscript-artifact-store"),
-        "compiler package compatibility must opt in explicitly to persistence"
+        "compiler package feature must not restore persistence as a runtime dependency"
     );
-
     let package = read(&root.join("crates/rsscript-compiler/src/package.rs"));
-    assert!(package
-        .contains("#[cfg(test)]\nuse rsscript_artifact_store::write_package_artifact_atomic"));
     assert!(
         !package.contains("pub use rsscript_artifact_store"),
         "compiler package compatibility code must not make persistence a compiler API"
@@ -1224,6 +1221,10 @@ fn artifact_persistence_is_an_execution_only_adapter() {
     let compiler = read(&root.join("crates/rsscript-compiler/src/lib.rs"));
     assert!(!compiler.contains("ArtifactStore,"));
     assert!(!compiler.contains("write_package_artifact_atomic,"));
+    assert!(
+        !compiler.contains("package_metadata,"),
+        "compiler compatibility facade must not expose review persistence"
+    );
     let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
     assert!(sdk.contains("pub use rsscript_artifact_store::{"));
     assert!(sdk.contains("ArtifactStore"));
@@ -3729,7 +3730,6 @@ fn compiler_default_dependency_closure_is_host_neutral() {
         "fs2",
         "hex",
         "libc",
-        "rsscript-artifact-store",
         "rustix",
         "sha2",
         "tempfile",
