@@ -24,6 +24,16 @@ const LOG_INTERFACE: &str = include_str!("../interfaces/log.rssi");
 
 type ProviderFunctions = BTreeMap<ExternalSymbol, ProviderFunction<WireInterpreterFn>>;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DemoOutcome {
+    artifact_hash: String,
+    descriptor_hash: String,
+    semantic_diff_schema: String,
+    import_count: usize,
+    memory_report: String,
+    filesystem_report: String,
+}
+
 fn memory_fs(files: Arc<Mutex<BTreeMap<String, String>>>) -> ProviderFunctions {
     let descriptor = rsscript_provider_fs::descriptor();
     descriptor
@@ -88,7 +98,7 @@ fn registry(fs_functions: ProviderFunctions, log_functions: ProviderFunctions) -
     providers
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn run_demo(filesystem_log: ProviderFunctions) -> Result<DemoOutcome, Box<dyn std::error::Error>> {
     let compiler = Compiler;
     let input = FrontendInputSnapshot::from_sources(
         [("main.rss", SOURCE)],
@@ -160,10 +170,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(&demo_dir)?;
     fs::write(demo_dir.join("input.csv"), "name,total\nbob,7\n")?;
     let disk_provider = rsscript_provider_fs::RootedFsProvider::new(&demo_dir)?;
-    let production_runtime = Runtime::new(registry(
-        disk_provider.functions(),
-        rsscript_provider_log::stderr_functions(),
-    ));
+    let production_runtime = Runtime::new(registry(disk_provider.functions(), filesystem_log));
     let production_report = production_runtime.link(&admitted)?.execute(
         ExecutionRequest::default()
             .limits(RunLimits::bounded().allow_blocking_provider_calls(true)),
@@ -175,14 +182,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     fs::remove_dir_all(&demo_dir)?;
 
     assert_eq!(admitted.bundle().to_bytes()?, bundle_before_providers);
-    println!("artifact sha256: {artifact_hash}");
-    println!("interface descriptor sha256: {descriptor_hash}");
+    Ok(DemoOutcome {
+        artifact_hash,
+        descriptor_hash,
+        semantic_diff_schema: unchanged.schema,
+        import_count: admitted.external_imports().len(),
+        memory_report,
+        filesystem_report: disk_report,
+    })
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let outcome = run_demo(rsscript_provider_log::stderr_functions())?;
+    println!("artifact sha256: {}", outcome.artifact_hash);
+    println!("interface descriptor sha256: {}", outcome.descriptor_hash);
     println!(
         "semantic diff schema: {} (self diff: empty)",
-        unchanged.schema
+        outcome.semantic_diff_schema
     );
-    println!("imports: {}", admitted.external_imports().len());
-    println!("memory provider report:\n{memory_report}");
-    println!("filesystem provider report:\n{disk_report}");
+    println!("imports: {}", outcome.import_count);
+    println!("memory provider report:\n{}", outcome.memory_report);
+    println!("filesystem provider report:\n{}", outcome.filesystem_report);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_verified_artifact_runs_with_replaceable_filesystem_providers() {
+        let outcome = run_demo(rsscript_provider_log::functions(|_| Ok(())))
+            .expect("the embedding pipeline must complete");
+        assert_eq!(outcome.semantic_diff_schema, "rsscript.semantic_diff.v2");
+        assert_eq!(outcome.import_count, 3);
+        assert!(outcome.artifact_hash.len() == 64);
+        assert!(outcome.descriptor_hash.len() == 64);
+        assert!(outcome.memory_report.contains("ALICE"));
+        assert!(outcome.filesystem_report.contains("BOB"));
+    }
 }

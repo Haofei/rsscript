@@ -2092,10 +2092,13 @@ an arbitrary shell executor.
   contain source, interfaces, generated Provider contract, memory and
   production-like Providers, Artifact identity, semantic-diff fixture, and
   success/failure reports for trusted and isolated execution.
-  - [ ] **E02.1 — Upgrade the embedded report pipeline fixtures.** The example
+  - [x] **E02.1 — Upgrade the embedded report pipeline fixtures.** The example
     now derives deterministic semantic interface-descriptor bytes, reports their
     digest alongside the provider-neutral Artifact digest, and asserts an empty
-    neutral self-diff. Trusted/isolated report snapshots remain follow-up work.
+    neutral self-diff. Its executable test now compiles, verifies, links, and
+    runs the same Artifact with both in-memory and rooted filesystem Providers,
+    asserting their distinct reports while Artifact bytes remain unchanged.
+    Trusted/isolated report snapshots remain follow-up work.
   - [ ] **E02.2 — Add an async/resource workflow example.** Demonstrate task
     groups, cancellation, cleanup, mock/production-like Providers, and failures.
     - [~] **E02.2.1 — Add the Provider-free structured-async baseline.**

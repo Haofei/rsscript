@@ -20,25 +20,6 @@
         "cargo test -p rss-process-guard --locked",
         "cargo test -p rsscript-cli --features execution --locked"
       ]
-    },
-    {
-      "id": "E02.1",
-      "priority": 90,
-      "depends_on": ["A06", "A07"],
-      "scope": [
-        "examples/embedded-report-pipeline/**",
-        "crates/rsscript-sdk/tests/artifact_bundle.rs",
-        "docs/getting-started/**"
-      ],
-      "acceptance": [
-        "The example compiles, verifies, links explicit providers, executes with limits, and emits an execution report.",
-        "The same artifact is exercised with replaceable provider implementations.",
-        "The example documents its snapshot and artifact identity."
-      ],
-      "verification": [
-        "cargo test -p embedded-report-pipeline --locked",
-        "cargo test -p rsscript-sdk --test artifact_bundle --locked"
-      ]
     }
   ]
 }
