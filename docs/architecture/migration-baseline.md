@@ -1624,9 +1624,11 @@ visible without manually re-sorting every open parent milestone.
   typed parameters/results, resource wrappers, descriptor/signature constants,
   registration glue, mocks, completeness checks, and conformance skeletons.
   `NativeValue` remains only in generated adapters.
-  - [ ] **P05.1 — Generate scalar and aggregate Rust type mappings.** Cover unit,
-    booleans, integers, floats, strings, bytes, lists, options, results, tuples,
-    records, and variants.
+  - [x] **P05.1 — Generate scalar and aggregate Rust type mappings.** Generated
+    traits cover unit, booleans, integers, floats, strings, bytes, lists,
+    options, results, tuples, records, and variants. The bindgen regression
+    suite checks scalar/aggregate rendering explicitly, including the Rust
+    one-element tuple comma that distinguishes `(T,)` from a grouping.
   - [x] **P05.1a — Generate scalar and aggregate method signatures.** Generated
       Provider traits now map unit, bool, numeric, string, bytes, lists,
       options, results, tuples, and qualifiers to Rust types. Named records,

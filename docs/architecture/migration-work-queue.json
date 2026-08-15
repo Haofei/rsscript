@@ -38,15 +38,6 @@
       ]
     },
     {
-      "id": "P05.1",
-      "priority": 50,
-      "depends_on": ["P04"],
-      "verification": [
-        "cargo test -p rsscript-provider-bindgen --locked",
-        "cargo test -p rsscript-provider-conformance --locked"
-      ]
-    },
-    {
       "id": "A04.1",
       "priority": 60,
       "depends_on": ["A04.1a"],

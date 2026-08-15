@@ -440,14 +440,18 @@ fn render_rust_type(
             render_rust_type(ok, resources, records, sums),
             render_rust_type(error, resources, records, sums)
         ),
-        WireType::Tuple { elements } => format!(
-            "({})",
-            elements
-                .iter()
-                .map(|element| render_rust_type(element, resources, records, sums))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
+        WireType::Tuple { elements } => match elements.as_slice() {
+            [] => "()".into(),
+            [element] => format!("({},)", render_rust_type(element, resources, records, sums)),
+            _ => format!(
+                "({})",
+                elements
+                    .iter()
+                    .map(|element| render_rust_type(element, resources, records, sums))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        },
         WireType::Qualified { value, .. } => render_rust_type(value, resources, records, sums),
         WireType::Named {
             name, arguments, ..
@@ -948,6 +952,61 @@ mod tests {
         assert!(generated.contains("-> Result<char"));
         assert!(generated.contains("ty: \"Map<String, Char>\".into()"));
         assert!(generated.contains("result: \"Char\".into()"));
+    }
+
+    #[test]
+    fn rust_type_mapping_preserves_scalar_and_aggregate_shapes() {
+        let resources = [];
+        let records = [];
+        let sums = [];
+        let render = |ty| render_rust_type(&ty, &resources, &records, &sums);
+
+        assert_eq!(render(WireType::Unit), "()");
+        assert_eq!(render(WireType::Bool), "bool");
+        assert_eq!(
+            render(WireType::Int {
+                bits: 64,
+                signed: true
+            }),
+            "i64"
+        );
+        assert_eq!(render(WireType::Float { bits: 64 }), "f64");
+        assert_eq!(render(WireType::String), "String");
+        assert_eq!(render(WireType::Bytes), "Vec<u8>");
+        assert_eq!(
+            render(WireType::List {
+                element: Box::new(WireType::Bytes)
+            }),
+            "Vec<Vec<u8>>"
+        );
+        assert_eq!(
+            render(WireType::Option {
+                value: Box::new(WireType::String)
+            }),
+            "Option<String>"
+        );
+        assert_eq!(
+            render(WireType::Result {
+                ok: Box::new(WireType::Int {
+                    bits: 64,
+                    signed: true
+                }),
+                error: Box::new(WireType::String)
+            }),
+            "Result<i64, String>"
+        );
+        assert_eq!(
+            render(WireType::Tuple {
+                elements: vec![WireType::String]
+            }),
+            "(String,)"
+        );
+        assert_eq!(
+            render(WireType::Tuple {
+                elements: vec![WireType::String, WireType::Bool]
+            }),
+            "(String, bool)"
+        );
     }
 
     #[test]
