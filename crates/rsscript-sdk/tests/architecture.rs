@@ -1008,6 +1008,49 @@ fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
 }
 
 #[test]
+fn vm_runtime_dependency_inventory_prevents_library_implementation_regressions() {
+    let root = workspace_root();
+    let vm_manifest = read(&root.join("crates/rsscript-vm/Cargo.toml"));
+    let inventory = read(&root.join("docs/architecture/vm-runtime-dependency-inventory.md"));
+    let dependencies = vm_manifest
+        .split("[dependencies]\n")
+        .nth(1)
+        .and_then(|section| section.split("\n[features]").next())
+        .expect("VM manifest must expose a normal dependency section");
+    let declared = dependencies
+        .lines()
+        .filter_map(|line| line.split_once('=').map(|(name, _)| name.trim()))
+        .collect::<BTreeSet<_>>();
+    let expected = BTreeSet::from([
+        "rsscript-abi-model",
+        "rsscript-bytecode",
+        "rsscript-corelib",
+        "rsscript-diagnostics",
+        "rsscript-operation",
+        "rsscript-provider-api",
+        "rsscript-text",
+        "serde",
+        "serde_json",
+        "vm-jit",
+    ]);
+    assert_eq!(
+        declared, expected,
+        "new VM runtime dependencies require an explicit inventory/ownership review"
+    );
+    for required in [
+        "rsscript-corelib",
+        "serde_json",
+        "P06.2/P06.4",
+        "must not directly add algorithm crates",
+    ] {
+        assert!(
+            inventory.contains(required),
+            "VM dependency inventory is missing `{required}`"
+        );
+    }
+}
+
+#[test]
 fn register_vm_execution_policy_is_snapshotted_before_running() {
     let root = workspace_root();
     let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));

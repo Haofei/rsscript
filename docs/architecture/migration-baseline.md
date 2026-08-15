@@ -1729,6 +1729,11 @@ an arbitrary shell executor.
         VM values or changing its execution semantics.
   - [ ] **V06.3 — Reduce VM dependencies to execution primitives.** Verify VM
     Core no longer directly depends on library implementation crates.
+    - [x] **V06.3a — Freeze the reviewed VM runtime dependency inventory.**
+      `vm-runtime-dependency-inventory.md` records each normal dependency,
+      explicitly separates Core execution contracts from deterministic corelib,
+      and binds the sole remaining legacy JSON adapter to P06. Architecture
+      tests reject any unreviewed direct VM runtime dependency.
 - [ ] **V07 — Classify the intrinsic catalog.** Every entry is exactly one of a
   VM primitive, deterministic builtin, or Provider external symbol; adding a
   library API must not silently change the VM instruction set.
