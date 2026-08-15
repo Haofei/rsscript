@@ -2210,11 +2210,13 @@ an arbitrary shell executor.
       compiled Artifact import equals the generated structural descriptor before
       link, verifies exact-once resource cleanup on success, preserves a
       pre-cancelled run of the same Artifact, and records an intentional cleanup
-      failure without losing its execution report. The source deliberately
-      scopes the resource after the task group drains, demonstrating the
-      language rule that resources cannot remain live across an `await`.
-      Production-like Provider replacement, isolated-runner fixtures, and
-      report snapshots still need to be added before E02.2 can close.
+      failure without losing its execution report. The same Artifact is linked
+      to both an in-memory and a production-like resource Provider; their
+      host-side cleanup evidence differs while Artifact digest and script
+      result stay equal. The source deliberately scopes the resource after the
+      task group drains, demonstrating the language rule that resources cannot
+      remain live across an `await`. Isolated-runner fixtures and report
+      snapshots still need to be added before E02.2 can close.
 - [ ] **E03 — Establish compatibility and conformance corpora.** Add source to
   diagnostic/HIR/MIR goldens, MIR to bytecode fixtures, old Artifact readers,
   cross-platform deterministic builds, Provider ABI compatibility, resource

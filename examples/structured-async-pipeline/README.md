@@ -22,6 +22,9 @@ language semantics that coordinate with an explicit, replaceable host service:
 9. the Provider returns a generation-safe `WireValue::Resource` handle. The
    Artifact import and generated descriptor are asserted equal before linking,
    so a source-string or type-name mismatch fails before any instruction runs.
+10. the exact same admitted Artifact is linked once with an in-memory Provider
+    and once with a production-like Provider. Their host-side cleanup evidence
+    differs while the script output and Artifact digest remain equal.
 
 Run from the repository root:
 

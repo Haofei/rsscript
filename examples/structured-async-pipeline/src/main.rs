@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use rsscript_abi_model::{ExternalSymbol, WireResourceTypeId, WireValue};
 use rsscript_compiler::{
@@ -23,12 +23,18 @@ include!(concat!(env!("OUT_DIR"), "/provider_contract.rs"));
 #[derive(Debug)]
 struct CountedSession {
     cleanups: Arc<AtomicU64>,
+    cleanup_events: Arc<Mutex<Vec<String>>>,
+    backend: &'static str,
     fail_cleanup: bool,
 }
 
 impl ProviderResource for CountedSession {
     fn cleanup(&mut self) -> Result<(), ProviderError> {
         self.cleanups.fetch_add(1, Ordering::SeqCst);
+        self.cleanup_events
+            .lock()
+            .map_err(|_| ProviderError::internal("session cleanup event lock poisoned"))?
+            .push(self.backend.to_owned());
         if self.fail_cleanup {
             Err(ProviderError::internal(
                 "intentional session cleanup failure",
@@ -41,6 +47,8 @@ impl ProviderResource for CountedSession {
 
 fn session_functions(
     cleanups: Arc<AtomicU64>,
+    cleanup_events: Arc<Mutex<Vec<String>>>,
+    backend: &'static str,
     fail_cleanup: bool,
 ) -> BTreeMap<ExternalSymbol, ProviderFunction<WireInterpreterFn>> {
     let function = descriptor()
@@ -62,6 +70,8 @@ fn session_functions(
                 }
                 let handle = context.register_resource(CountedSession {
                     cleanups: Arc::clone(&cleanups),
+                    cleanup_events: Arc::clone(&cleanup_events),
+                    backend,
                     fail_cleanup,
                 })?;
                 Ok(WireValue::Resource {
@@ -72,10 +82,18 @@ fn session_functions(
     )])
 }
 
-fn runtime_with_session(cleanups: Arc<AtomicU64>, fail_cleanup: bool) -> Runtime {
+fn runtime_with_session(
+    cleanups: Arc<AtomicU64>,
+    cleanup_events: Arc<Mutex<Vec<String>>>,
+    backend: &'static str,
+    fail_cleanup: bool,
+) -> Runtime {
     let mut providers = ProviderRegistry::default();
     providers
-        .register(&descriptor(), session_functions(cleanups, fail_cleanup))
+        .register(
+            &descriptor(),
+            session_functions(cleanups, cleanup_events, backend, fail_cleanup),
+        )
         .expect("generated session Provider must register against its descriptor");
     Runtime::new(providers)
 }
@@ -103,7 +121,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // but remains unchanged as this in-memory resource implementation is
     // replaced by a production implementation with the same descriptor.
     let cleanups = Arc::new(AtomicU64::new(0));
-    let runtime = runtime_with_session(Arc::clone(&cleanups), false);
+    let memory_events = Arc::new(Mutex::new(Vec::new()));
+    let runtime = runtime_with_session(
+        Arc::clone(&cleanups),
+        Arc::clone(&memory_events),
+        "memory",
+        false,
+    );
     let linked = runtime.link(&admitted)?;
     let report = linked.execute(
         ExecutionRequest::default()
@@ -124,6 +148,41 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(report.usage.resources_created, 1);
     assert_eq!(report.usage.resources_cleaned, 1);
     assert_eq!(cleanups.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        memory_events.lock().expect("memory event lock").as_slice(),
+        ["memory"]
+    );
+
+    // A second host implementation links the unchanged Artifact through the
+    // same generated descriptor. Its cleanup event is distinct host evidence,
+    // while the script result and Artifact identity remain identical.
+    let production_cleanups = Arc::new(AtomicU64::new(0));
+    let production_events = Arc::new(Mutex::new(Vec::new()));
+    let production_runtime = runtime_with_session(
+        Arc::clone(&production_cleanups),
+        Arc::clone(&production_events),
+        "production-like",
+        false,
+    );
+    let production_report = production_runtime.link(&admitted)?.execute(
+        ExecutionRequest::default()
+            .limits(RunLimits::bounded())
+            .trace(TracePolicy::MetadataOnly),
+    );
+    assert_eq!(
+        production_report.termination_reason(),
+        TerminationReason::Completed
+    );
+    assert_eq!(production_report.artifact_digest, report.artifact_digest);
+    assert_eq!(production_report.stdout, report.stdout);
+    assert_eq!(production_cleanups.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        production_events
+            .lock()
+            .expect("production event lock")
+            .as_slice(),
+        ["production-like"]
+    );
 
     // Reuse the exact same linked Artifact with a host-owned cancellation
     // request. This makes the execution boundary concrete: cancellation is a
@@ -146,7 +205,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // discarded by a convenience API. The resource is still finalized exactly
     // once and the report accounts for the failed cleanup separately.
     let failed_cleanups = Arc::new(AtomicU64::new(0));
-    let failed_runtime = runtime_with_session(Arc::clone(&failed_cleanups), true);
+    let failure_events = Arc::new(Mutex::new(Vec::new()));
+    let failed_runtime = runtime_with_session(
+        Arc::clone(&failed_cleanups),
+        Arc::clone(&failure_events),
+        "cleanup-failure",
+        true,
+    );
     let cleanup_failure = failed_runtime.link(&admitted)?.execute(
         ExecutionRequest::default()
             .limits(RunLimits::bounded())
@@ -156,6 +221,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(cleanup_failure.usage.resources_created, 1);
     assert_eq!(cleanup_failure.usage.resources_cleaned, 0);
     assert_eq!(cleanup_failure.usage.resource_cleanup_failures, 1);
+    assert_eq!(
+        failure_events
+            .lock()
+            .expect("failure event lock")
+            .as_slice(),
+        ["cleanup-failure"]
+    );
 
     println!("artifact digest: {}", report.artifact_digest);
     println!("termination: {}", report.termination_reason().as_str());
