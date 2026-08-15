@@ -1862,6 +1862,12 @@ an arbitrary shell executor.
       it, verifies it through the ordinary public reader, links it without
       Providers, and compares its completed execution result with a checked-in
       expected report.
+    - [x] **B05.1b — Verify a checked-in v2 Artifact without recompilation.**
+      The bytecode crate loads a static numeric v2 Artifact through its
+      standalone verifier, checks the common envelope and typed payload, and
+      proves a malformed container is rejected before its code section can be
+      admitted. This is a tooling-reader fixture only: v1 remains the deployed
+      compiler/VM schema.
   - [ ] **B05.2 — Add malformed and compatibility fixture suites.** Cover every
     section, table, opcode, version, and size boundary.
     - [x] **B05.2a — Preserve a static malformed v1 boundary case.** A
@@ -1874,11 +1880,13 @@ an arbitrary shell executor.
       size limits plus bytecode magic/container version, section count/flags,
       section hash, and verifier Artifact-size limits. The public reader checks
       every case fail-closed without recompiling the reference source.
-    - [x] **B05.2c — Add a static v2 typed-decoder corpus.** A checked-in
-      canonical v2 payload and named mutation manifest exercise the independent
-      numeric decoder without rebuilding a Rust wire program. Unknown opcode,
-      constant-table/register, and return-register references all fail closed
-      through `BytecodeV2Verifier`.
+    - [x] **B05.2c — Add a static v2 typed-decoder and Artifact corpus.** A
+      checked-in canonical v2 payload and named mutation manifest exercise the
+      independent numeric decoder without rebuilding a Rust wire program.
+      A separate static v2 Artifact covers the envelope-to-payload reader path.
+      Unknown opcode, constant-table/register, return-register references, and
+      malformed Artifact magic all fail closed through the appropriate v2
+      verifier.
   - [x] **B05.3 — Test deterministic bytes across supported platforms.** The
     checked-in canonical compilation baseline compares repeated Bundle bytes
     and their analysis/provenance digest from one immutable snapshot. It now

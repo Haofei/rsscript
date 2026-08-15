@@ -876,6 +876,7 @@ fn invalid(message: String) -> BytecodeError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
     use proptest::prelude::*;
 
     const TEST_CATALOG_DIGEST: &str =
@@ -1023,6 +1024,28 @@ mod tests {
             BytecodeV2ArtifactVerifier::default().verify(&artifact.to_bytes().unwrap()),
             Err(BytecodeError::InvalidPayload(message))
                 if message.contains("references missing Artifact import 0")
+        ));
+    }
+
+    #[test]
+    fn checked_in_v2_artifact_remains_verifiable_without_rebuilding_source() {
+        let encoded = include_str!("../fixtures/v2/reference.artifact.base64")
+            .lines()
+            .collect::<String>();
+        let bytes = STANDARD
+            .decode(encoded)
+            .expect("checked-in v2 Artifact uses base64");
+        let verified = BytecodeV2ArtifactVerifier::default()
+            .verify(&bytes)
+            .expect("checked-in v2 Artifact remains valid");
+        assert_eq!(verified.artifact().header.schema, BYTECODE_V2_SCHEMA);
+        assert_eq!(verified.program().functions().len(), 1);
+
+        let mut malformed = bytes;
+        malformed[0] ^= 0xff;
+        assert!(matches!(
+            BytecodeV2ArtifactVerifier::default().verify(&malformed),
+            Err(BytecodeError::InvalidMagic)
         ));
     }
 
