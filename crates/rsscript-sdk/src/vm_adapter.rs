@@ -8,10 +8,10 @@ use std::path::Path;
 
 #[cfg(any(feature = "project", feature = "compatibility"))]
 use rsscript_compiler::compatibility::{
-    PackageLoweringInput, compile_package_input_to_ir, prepare_package_for_execution,
+    compile_package_input_to_ir, prepare_package_for_execution, PackageLoweringInput,
 };
 use rsscript_compiler::{
-    CompiledIr, ValidatedProgram, compile_source_to_ir, compile_validated_to_ir,
+    compile_source_to_ir, compile_validated_to_ir, CompiledIr, ValidatedProgram,
 };
 
 use rsscript_bytecode::BytecodeArtifact;

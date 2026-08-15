@@ -20,8 +20,8 @@ mod semantic_diff;
 pub use semantic_diff::{
     ArtifactIdentityV1, AwaitFactV1, CallEdgeFactV1, ChangedFactV1, CountChangeV1,
     DiagnosticFactV1, ExportFactV1, ExternalCallFactV1, ExternalContractFactV1, FactSetDiffV1,
-    FunctionParameterFactV1, ResourceLifetimeFactV1, ResourceTransferFactV1, SEMANTIC_DIFF_SCHEMA,
-    SemanticDiffV1, TaskGroupFactV1,
+    FunctionParameterFactV1, ResourceLifetimeFactV1, ResourceTransferFactV1, SemanticDiffV1,
+    TaskGroupFactV1, SEMANTIC_DIFF_SCHEMA,
 };
 
 pub const ARTIFACT_BUNDLE_SCHEMA: &str = "rsscript.artifact_bundle.v1";
@@ -523,7 +523,7 @@ impl ArtifactBundle {
     ) -> Result<Self, ArtifactBundleError> {
         let envelope = BytecodeArtifact::from_bytes(&artifact)
             .map_err(|error| ArtifactBundleError::Artifact(error.to_string()))?;
-        let analysis_bytes = canonical_json(analysis.payload())?;
+        let analysis_bytes = canonical_analysis_json(&analysis)?;
         let manifest = BundleManifestV1 {
             schema: ARTIFACT_BUNDLE_SCHEMA.to_string(),
             provenance: BuildProvenanceV1 {
@@ -562,7 +562,7 @@ impl ArtifactBundle {
         let manifest_bytes = take(&mut input, manifest_len)?.to_vec();
         let manifest: BundleManifestV1 = serde_json::from_slice(&manifest_bytes)
             .map_err(|error| ArtifactBundleError::Manifest(error.to_string()))?;
-        validate_v1_json_encoding(&manifest, &manifest_bytes, ArtifactBundleSection::Manifest)?;
+        validate_v1_manifest_encoding(&manifest, &manifest_bytes)?;
         let artifact = take(&mut input, artifact_len)?.to_vec();
         let analysis_bytes = take(&mut input, analysis_len)?.to_vec();
         if !input.is_empty() {
@@ -571,11 +571,7 @@ impl ArtifactBundle {
         let analysis: Value = serde_json::from_slice(&analysis_bytes)
             .map_err(|error| ArtifactBundleError::Analysis(error.to_string()))?;
         let analysis = AnalysisEnvelopeV1::from_json(analysis)?;
-        validate_v1_json_encoding(
-            analysis.payload(),
-            &analysis_bytes,
-            ArtifactBundleSection::Analysis,
-        )?;
+        validate_v1_analysis_encoding(&analysis, &analysis_bytes)?;
         Self::from_sections(manifest, manifest_bytes, artifact, analysis, analysis_bytes)
     }
 
@@ -628,8 +624,14 @@ impl ArtifactBundle {
     }
 
     pub fn to_bytes(&self) -> Result<Vec<u8>, ArtifactBundleError> {
-        let manifest = canonical_json(&self.manifest)?;
-        let analysis = canonical_json(self.analysis.payload())?;
+        let analysis = canonical_analysis_json(&self.analysis)?;
+        // A reader may have accepted a historical compact JSON section. Every
+        // writer normalizes it back to canonical bytes and must consequently
+        // refresh the manifest's section digests before serializing.
+        let mut normalized_manifest = self.manifest.clone();
+        normalized_manifest.artifact_digest = digest(&self.artifact);
+        normalized_manifest.analysis_digest = digest(&analysis);
+        let manifest = canonical_json(&normalized_manifest)?;
         let mut output = Vec::with_capacity(
             ARTIFACT_BUNDLE_MAGIC.len()
                 + 24
@@ -706,28 +708,93 @@ fn canonical_json(value: &impl Serialize) -> Result<Vec<u8>, ArtifactBundleError
 /// decoded values must re-encode byte-for-byte with the historical compact
 /// serializer. Section hashes and the manifest's section digests still bind the
 /// exact accepted bytes.
-fn validate_v1_json_encoding(
+fn validate_v1_manifest_encoding(
     value: &impl Serialize,
     bytes: &[u8],
-    section: ArtifactBundleSection,
 ) -> Result<(), ArtifactBundleError> {
     if canonical_json(value)? == bytes || legacy_compact_json(value)? == bytes {
         return Ok(());
     }
-    Err(match section {
-        ArtifactBundleSection::Manifest => ArtifactBundleError::NonCanonicalManifest,
-        ArtifactBundleSection::Analysis => ArtifactBundleError::NonCanonicalAnalysis,
-    })
+    Err(ArtifactBundleError::NonCanonicalManifest)
+}
+
+/// Validate the analysis section without turning every compact JSON object
+/// into a historical compatibility encoding. Source analysis used to be
+/// serialized from a typed v1 record; accepting `serde_json::to_vec(Value)`
+/// here would instead accept any key order preserved by the parser. That would
+/// silently weaken the canonical-encoding boundary.
+fn validate_v1_analysis_encoding(
+    analysis: &AnalysisEnvelopeV1,
+    bytes: &[u8],
+) -> Result<(), ArtifactBundleError> {
+    if canonical_json(analysis.payload())? == bytes
+        || legacy_compact_analysis_json(analysis)? == bytes
+    {
+        return Ok(());
+    }
+    Err(ArtifactBundleError::NonCanonicalAnalysis)
+}
+
+fn legacy_compact_analysis_json(
+    analysis: &AnalysisEnvelopeV1,
+) -> Result<Vec<u8>, ArtifactBundleError> {
+    match (analysis.source_analysis(), analysis.package_analysis()) {
+        (Some(source), None) => {
+            #[derive(Serialize)]
+            struct LegacySourceAnalysis<'a> {
+                #[serde(rename = "$schema")]
+                schema: &'static str,
+                language_version: &'a str,
+                snapshot_digest: &'a str,
+                sources: &'a [String],
+                #[serde(skip_serializing_if = "slice_is_empty")]
+                exports: &'a [ExportFactV1],
+                #[serde(skip_serializing_if = "slice_is_empty")]
+                call_edges: &'a [CallEdgeFactV1],
+                #[serde(skip_serializing_if = "slice_is_empty")]
+                external_calls: &'a [ExternalCallFactV1],
+            }
+
+            legacy_compact_json(&LegacySourceAnalysis {
+                schema: SOURCE_ANALYSIS_SCHEMA,
+                language_version: &source.language_version,
+                snapshot_digest: &source.snapshot_digest,
+                sources: &source.sources,
+                exports: &source.exports,
+                call_edges: &source.call_edges,
+                external_calls: &source.external_calls,
+            })
+        }
+        (None, Some(package)) => legacy_compact_json(package),
+        _ => Err(ArtifactBundleError::Analysis(
+            "analysis envelope has an invalid schema/payload pairing".to_string(),
+        )),
+    }
+}
+
+/// Writers normalize source evidence through its typed model. This fills the
+/// optional empty fact arrays omitted by early v1 producers, so reading a
+/// historical compact Bundle and writing it again always produces the current
+/// canonical representation.
+fn canonical_analysis_json(analysis: &AnalysisEnvelopeV1) -> Result<Vec<u8>, ArtifactBundleError> {
+    match (analysis.source_analysis(), analysis.package_analysis()) {
+        (Some(source), None) => {
+            let normalized = AnalysisEnvelopeV1::source(source.clone());
+            canonical_json(normalized.payload())
+        }
+        (None, Some(package)) => canonical_json(package),
+        _ => Err(ArtifactBundleError::Analysis(
+            "analysis envelope has an invalid schema/payload pairing".to_string(),
+        )),
+    }
+}
+
+fn slice_is_empty<T>(values: &[T]) -> bool {
+    values.is_empty()
 }
 
 fn legacy_compact_json(value: &impl Serialize) -> Result<Vec<u8>, ArtifactBundleError> {
     serde_json::to_vec(value).map_err(|error| ArtifactBundleError::Manifest(error.to_string()))
-}
-
-#[derive(Clone, Copy)]
-enum ArtifactBundleSection {
-    Manifest,
-    Analysis,
 }
 
 fn write_canonical_json(output: &mut Vec<u8>, value: &Value) -> Result<(), ArtifactBundleError> {
@@ -1160,6 +1227,28 @@ mod tests {
         bytes.extend_from_slice(&analysis);
 
         let decoded = ArtifactBundle::from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.to_bytes().unwrap(), bundle.to_bytes().unwrap());
+    }
+
+    #[test]
+    fn reader_accepts_only_typed_historical_analysis_and_normalizes_on_write() {
+        let bundle = bundle();
+        let legacy_analysis = legacy_compact_analysis_json(&bundle.analysis).unwrap();
+        let canonical_analysis = canonical_json(bundle.analysis.payload()).unwrap();
+        assert_ne!(legacy_analysis, canonical_analysis);
+
+        let mut manifest = bundle.manifest.clone();
+        manifest.analysis_digest = digest(&legacy_analysis);
+        let manifest = canonical_json(&manifest).unwrap();
+        let mut bytes = ARTIFACT_BUNDLE_MAGIC.to_vec();
+        put_length(&mut bytes, manifest.len()).unwrap();
+        put_length(&mut bytes, bundle.artifact.len()).unwrap();
+        put_length(&mut bytes, legacy_analysis.len()).unwrap();
+        bytes.extend_from_slice(&manifest);
+        bytes.extend_from_slice(&bundle.artifact);
+        bytes.extend_from_slice(&legacy_analysis);
+
+        let decoded = ArtifactBundle::from_bytes(&bytes).expect("typed v1 analysis is accepted");
         assert_eq!(decoded.to_bytes().unwrap(), bundle.to_bytes().unwrap());
     }
 }

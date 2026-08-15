@@ -18,6 +18,7 @@ core = [
   "rsscript-lowering",
   "rsscript-mir",
   "rsscript-operation",
+  "rsscript-project",
   "rsscript-provider-api",
   "rsscript-provider-bindgen",
   "rsscript-provider-conformance",

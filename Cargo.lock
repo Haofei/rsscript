@@ -1888,6 +1888,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsscript-project"
+version = "0.1.0"
+dependencies = [
+ "rsscript-operation",
+ "rsscript-semantics",
+ "rsscript-workspace-loader",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "rsscript-provider-api"
 version = "0.1.0"
 dependencies = [
@@ -2040,11 +2051,11 @@ dependencies = [
  "rsscript-lowering",
  "rsscript-mir",
  "rsscript-operation",
+ "rsscript-project",
  "rsscript-provider-api",
  "rsscript-review-reir",
  "rsscript-semantics",
  "rsscript-vm",
- "rsscript-workspace-loader",
  "serde",
  "serde_json",
  "sha1",

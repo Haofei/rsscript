@@ -36,7 +36,7 @@ execution = [
 # opt in explicitly; ordinary `execution` accepts only immutable snapshots.
 project = [
     "execution",
-    "dep:rsscript-workspace-loader",
+    "dep:rsscript-project",
 ]
 aot-rust = ["execution", "rsscript_compiler/aot-rust"]
 # Transitional source-shaped executable IR remains available only to the
@@ -63,7 +63,7 @@ rsscript-mir = { path = "../rsscript-mir", optional = true }
 rsscript-provider-api = { path = "../rsscript-provider-api", optional = true }
 rsscript-semantics = { path = "../rsscript-semantics" }
 rsscript-vm = { path = "../rsscript-vm", optional = true, default-features = false }
-rsscript-workspace-loader = { path = "../rsscript-workspace-loader", optional = true }
+rsscript-project = { path = "../rsscript-project", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

@@ -4,7 +4,6 @@ use std::fmt;
 use sha2::{Digest, Sha256};
 
 use crate::{Diagnostic, ValidatedProgram};
-#[cfg(feature = "package")]
 use rsscript_semantics::CompilationSession;
 
 /// Owned output of the platform-neutral compiler boundary.

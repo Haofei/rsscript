@@ -62,7 +62,9 @@ capability can advance to MIR-only execution.
 compiler's analyzer database, register VM, Rust AOT, JIT, package review, or
 source-map types directly. `rsscript-cli` is the composition root.
 
-`WorkspaceLoader` is the OS/VFS adapter for editor files. The
+`WorkspaceLoader` is the low-level OS/VFS capture adapter. `rsscript-project`
+turns its captured file set into an immutable compiler-ready frontend snapshot
+without widening the compiler dependency closure. The
 `LanguageService` itself consumes explicit document revisions, rejects stale
 updates, caches diagnostics by document plus interface revision, and accepts
 cancellation, monotonic deadlines, and diagnostic budgets. It depends on the

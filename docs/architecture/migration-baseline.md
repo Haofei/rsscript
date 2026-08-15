@@ -626,7 +626,7 @@ mechanical acceptance condition holds.
   APIs. The latter now live behind the explicit SDK `project` adapter, so the
   reviewed `Compiler` surface remains in-memory; compiler package traversal
   and persistence remain to be moved.
-  - [ ] **S05.1 — Move workspace capture to `rsscript-workspace-loader`.** Move
+  - [ ] **S05.1 — Move workspace capture to `rsscript-project`.** Move
     directory traversal, manifest/dependency discovery, path normalization, and
     snapshot capture from compiler. The loader now exposes immutable
     WorkspaceSnapshot capture with explicit-base and operation-aware APIs plus
@@ -634,8 +634,11 @@ mechanical acceptance condition holds.
     compatibility capture APIs have been removed and the LSP captures from its
     explicit package root; captured files now separate physical paths from
     stable root/dependency-qualified logical paths so snapshot identity cannot
-    collide across same-named dependency files. The SDK project adapter now
-    exposes explicit-base loader capture as a separate immutable
+    collide across same-named dependency files. `rsscript-project` now owns
+    the typed conversion from that captured file set into the compiler-ready
+    immutable frontend input; the SDK project adapter only composes that
+    boundary with the pure compiler. The SDK project adapter now exposes
+    explicit-base project capture as a separate immutable
     `FrontendInputSnapshot` path, and a focused test proves that snapshot feeds
     the pure in-memory compiler without absolute paths. Its frontend digest now
     binds exactly the source/interface input used by `build_captured`, separate

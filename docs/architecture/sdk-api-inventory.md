@@ -14,9 +14,11 @@ The transitional root exports are available only through the explicit
 `compatibility` feature while the MIR differential corpus migrates; they are
 not part of the default or `execution` SDK surface.
 
-Filesystem/package capture is an explicit `project` feature and
-`project::ProjectCompiler` adapter. It is a CLI/project-loader convenience,
-not part of the reviewed in-memory `compile::Compiler` contract.
+Filesystem/package capture is an explicit `project` feature. The independent
+`rsscript-project` crate owns the OS-captured workspace-to-frontend-snapshot
+conversion; the SDK's `project::ProjectCompiler` only composes it with the
+reviewed in-memory compiler. It is a CLI/project-loader convenience, not part
+of the reviewed in-memory `compile::Compiler` contract.
 `ProjectCompiler::capture_frontend_from` is the preferred explicit-base path
 for a normal source/interface workspace: it returns a loader-owned logical
 snapshot plus the immutable `FrontendInputSnapshot` accepted by `Compiler`.

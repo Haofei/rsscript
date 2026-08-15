@@ -9,15 +9,9 @@ pub use rsscript_compiler::syntax;
 use rsscript_compiler::*;
 #[cfg(feature = "compatibility")]
 pub use rsscript_compiler::{
-    AnalysisResult, CommitBehavior, Completion, CompletionKind, ContinuationOptions, Continuations,
-    Definition, Diagnostic, DiagnosticExplanation, Effect, ExpectedType, Fix, FixEdit,
-    FrontendCompletion, FrontendInputSnapshot, FrontendStopReason, GenerateContext, LiteralClass,
-    PrefixStatus, Reference, RssDocumentSymbol, SemanticDatabase, Severity, SourceFileSnapshot,
-    SourceSnapshot, Span, SymbolCompleteness, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
-    TextRange, TypeRef, VSCODE_GRAMMAR_PATH, ValidatedProgram, analyze_source,
-    analyze_source_result, analyze_source_result_with_operation, analyze_source_with_core,
-    analyze_source_with_interfaces, analyze_source_with_interfaces_result,
-    analyze_source_with_interfaces_result_with_operation,
+    analyze_source, analyze_source_result, analyze_source_result_with_operation,
+    analyze_source_with_core, analyze_source_with_interfaces,
+    analyze_source_with_interfaces_result, analyze_source_with_interfaces_result_with_operation,
     analyze_source_with_interfaces_without_core, analyze_source_without_core,
     analyze_sources_with_interfaces, analyze_sources_with_interfaces_result,
     analyze_sources_with_interfaces_result_with_operation,
@@ -29,38 +23,30 @@ pub use rsscript_compiler::{
     standard_package_interfaces, symbol_index, valid_continuations, validate_source,
     validate_source_with_operation, validate_sources_with_interfaces,
     validate_sources_with_interfaces_with_operation, validate_sources_with_interfaces_without_core,
-    vscode_tmlanguage_json,
+    vscode_tmlanguage_json, AnalysisResult, CommitBehavior, Completion, CompletionKind,
+    ContinuationOptions, Continuations, Definition, Diagnostic, DiagnosticExplanation, Effect,
+    ExpectedType, Fix, FixEdit, FrontendCompletion, FrontendInputSnapshot, FrontendStopReason,
+    GenerateContext, LiteralClass, PrefixStatus, Reference, RssDocumentSymbol, SemanticDatabase,
+    Severity, SourceFileSnapshot, SourceSnapshot, Span, SymbolCompleteness, SymbolIndex,
+    SymbolInfo, SymbolKind, SymbolLookup, TextRange, TypeRef, ValidatedProgram,
+    VSCODE_GRAMMAR_PATH,
 };
 
 #[cfg(feature = "compatibility")]
-pub use rsscript_artifact_store::{ArtifactStore, write_package_artifact_atomic};
+pub use rsscript_artifact_store::{write_package_artifact_atomic, ArtifactStore};
 #[cfg(feature = "execution")]
 #[cfg(not(feature = "compatibility"))]
 #[allow(unused_imports)]
 use rsscript_bytecode::*;
 #[cfg(feature = "compatibility")]
 pub use rsscript_bytecode::{
-    BYTECODE_CONTAINER_FORMAT_VERSION, BYTECODE_ISA_VERSION, BYTECODE_MAGIC, BYTECODE_SCHEMA,
-    BytecodeArtifact, BytecodeCompatibility, BytecodeError, BytecodeErrorCode, BytecodeHeader,
-    BytecodeLimits, BytecodeVerifier, LANGUAGE_SEMANTICS_VERSION, SUPPORTED_LANGUAGE_SEMANTICS,
-    VerificationContext, VerifiedBytecode, decode_executable_payload, encode_executable_payload,
+    decode_executable_payload, encode_executable_payload, BytecodeArtifact, BytecodeCompatibility,
+    BytecodeError, BytecodeErrorCode, BytecodeHeader, BytecodeLimits, BytecodeVerifier,
+    VerificationContext, VerifiedBytecode, BYTECODE_CONTAINER_FORMAT_VERSION, BYTECODE_ISA_VERSION,
+    BYTECODE_MAGIC, BYTECODE_SCHEMA, LANGUAGE_SEMANTICS_VERSION, SUPPORTED_LANGUAGE_SEMANTICS,
 };
 #[cfg(feature = "compatibility")]
 pub use rsscript_compiler::compatibility::{
-    CompiledIr, ExecutablePackageSnapshot, GeneratedRustPackage, LowerCoverageReport, LoweredRust,
-    NativeRustDependency, PackageAnalysis, PackageAnalysisAwaitSite, PackageAnalysisExport,
-    PackageAnalysisExternalImport, PackageAnalysisFile, PackageAnalysisProducer,
-    PackageAnalysisSummary, PackageCheck, PackageCheckLock, PackageDependencyKind, PackageDiff,
-    PackageGraphCheck, PackageIdentity, PackageInterfaceChange, PackageInterfaceChangeKind,
-    PackageLock, PackageLockDiff, PackageLockFieldChange, PackageLockMetadata, PackageLockPackage,
-    PackageLockPackageChange, PackageLoweringInput, PackageManifestChange, PackageMetadataMismatch,
-    PackageMetadataReport, PackageNativeRustAuthorDeclaration, PackageNativeRustCheck,
-    PackageNativeRustReview, PackageNativeRustSemanticReview, PackageNativeRustSourceScan,
-    PackageReview, PackageReviewExport, PackageReviewFile, PackageReviewFileKind,
-    PackageReviewMetadata, PackageReviewSummary, PackageRisk, PackageSourceFile, PackageTree,
-    PackageTreeNode, PackageTreeSummary, PreparedPackage, RemappedRustcDiagnostic, ReviewFix,
-    ReviewMap, ReviewMapCategorySummary, ReviewMapClassification, ReviewMapFile, ReviewMapFileRisk,
-    ReviewMapRegion, ReviewMapSummary, ReviewRisk, SymbolInventoryEntry, WorkspaceSnapshot,
     analyze_package_dir, check_package_dir, compile_ir_to_bytecode, compile_package_input_to_ir,
     compile_source_to_ir, compile_validated_to_bytecode, compile_validated_to_ir,
     diff_package_dirs, diff_package_locks, format_package_check_human, format_package_check_json,
@@ -79,7 +65,21 @@ pub use rsscript_compiler::compatibility::{
     parse_runtime_diagnostics, parse_source_map_json, prepare_executable_package,
     prepare_package_for_execution, remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines,
     review_map_sources, review_package_dir, review_sources, symbol_inventory,
-    write_generated_rust_package,
+    write_generated_rust_package, CompiledIr, ExecutablePackageSnapshot, GeneratedRustPackage,
+    LowerCoverageReport, LoweredRust, NativeRustDependency, PackageAnalysis,
+    PackageAnalysisAwaitSite, PackageAnalysisExport, PackageAnalysisExternalImport,
+    PackageAnalysisFile, PackageAnalysisProducer, PackageAnalysisSummary, PackageCheck,
+    PackageCheckLock, PackageDependencyKind, PackageDiff, PackageGraphCheck, PackageIdentity,
+    PackageInterfaceChange, PackageInterfaceChangeKind, PackageLock, PackageLockDiff,
+    PackageLockFieldChange, PackageLockMetadata, PackageLockPackage, PackageLockPackageChange,
+    PackageLoweringInput, PackageManifestChange, PackageMetadataMismatch, PackageMetadataReport,
+    PackageNativeRustAuthorDeclaration, PackageNativeRustCheck, PackageNativeRustReview,
+    PackageNativeRustSemanticReview, PackageNativeRustSourceScan, PackageReview,
+    PackageReviewExport, PackageReviewFile, PackageReviewFileKind, PackageReviewMetadata,
+    PackageReviewSummary, PackageRisk, PackageSourceFile, PackageTree, PackageTreeNode,
+    PackageTreeSummary, PreparedPackage, RemappedRustcDiagnostic, ReviewFix, ReviewMap,
+    ReviewMapCategorySummary, ReviewMapClassification, ReviewMapFile, ReviewMapFileRisk,
+    ReviewMapRegion, ReviewMapSummary, ReviewRisk, SymbolInventoryEntry, WorkspaceSnapshot,
 };
 #[cfg(feature = "execution")]
 #[cfg(not(feature = "compatibility"))]
@@ -93,29 +93,29 @@ pub use rsscript_vm::NativeStats;
 use rsscript_vm::*;
 #[cfg(feature = "compatibility")]
 pub use rsscript_vm::{
-    AsyncInterpreterFn, AsyncProviderCallContext, BlockingBehavior, CancellationBehavior,
-    CoverageBucket, EvalError, EvalExecutionReport, EvalOutput, ExecutionFailureKind,
-    ExecutionUsage, ExternalFunction, ExternalFunctionRegistry, ExternalImport, ExternalSymbol,
-    FunctionSignature, HostCallContext, NativeInterpreterFn, NativeValue, ProviderCallContext,
-    ProviderCallMode, ProviderCallTrace, ProviderCallable, ProviderDescriptor, ProviderError,
-    ProviderErrorCode, ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor,
-    ProviderFuture, ProviderInvocationContract, ProviderLoadError, ProviderResource,
-    ProviderResourceRegistry, ProviderResourceTable, ProviderTraceSink, RegVmExecutable,
-    ResolvedProviderFunction, ResourceCleanupContract, ResourceHandle, SignatureHash, VmLimits,
-    compile_executable_ir,
+    compile_executable_ir, AsyncInterpreterFn, AsyncProviderCallContext, BlockingBehavior,
+    CancellationBehavior, CoverageBucket, EvalError, EvalExecutionReport, EvalOutput,
+    ExecutionFailureKind, ExecutionUsage, ExternalFunction, ExternalFunctionRegistry,
+    ExternalImport, ExternalSymbol, FunctionSignature, HostCallContext, NativeInterpreterFn,
+    NativeValue, ProviderCallContext, ProviderCallMode, ProviderCallTrace, ProviderCallable,
+    ProviderDescriptor, ProviderError, ProviderErrorCode, ProviderErrorMapping, ProviderFunction,
+    ProviderFunctionDescriptor, ProviderFuture, ProviderInvocationContract, ProviderLoadError,
+    ProviderResource, ProviderResourceRegistry, ProviderResourceTable, ProviderTraceSink,
+    RegVmExecutable, ResolvedProviderFunction, ResourceCleanupContract, ResourceHandle,
+    SignatureHash, VmLimits,
 };
 #[cfg(feature = "compatibility")]
 #[allow(dead_code)]
 mod vm_adapter;
 #[cfg(feature = "execution")]
 pub use rsscript_artifact::{
-    ARTIFACT_BUNDLE_MAGIC, ARTIFACT_BUNDLE_SCHEMA, AnalysisEnvelopeV1, AnalysisSchemaV1,
-    ArtifactBundle, ArtifactBundleError, ArtifactIdentityV1, AwaitFactV1, BuildProvenanceV1,
-    CallEdgeFactV1, ChangedFactV1, CountChangeV1, DiagnosticFactV1, ExportFactV1,
-    ExternalCallFactV1, ExternalContractFactV1, FactSetDiffV1, FunctionParameterFactV1,
-    InterfaceRequirementV1, PACKAGE_ANALYSIS_SCHEMA, PackageAnalysisV1, ResourceLifetimeFactV1,
-    ResourceTransferFactV1, SEMANTIC_DIFF_SCHEMA, SOURCE_ANALYSIS_SCHEMA, SemanticDiffV1,
-    SourceAnalysisV1, TaskGroupFactV1,
+    AnalysisEnvelopeV1, AnalysisSchemaV1, ArtifactBundle, ArtifactBundleError, ArtifactIdentityV1,
+    AwaitFactV1, BuildProvenanceV1, CallEdgeFactV1, ChangedFactV1, CountChangeV1, DiagnosticFactV1,
+    ExportFactV1, ExternalCallFactV1, ExternalContractFactV1, FactSetDiffV1,
+    FunctionParameterFactV1, InterfaceRequirementV1, PackageAnalysisV1, ResourceLifetimeFactV1,
+    ResourceTransferFactV1, SemanticDiffV1, SourceAnalysisV1, TaskGroupFactV1,
+    ARTIFACT_BUNDLE_MAGIC, ARTIFACT_BUNDLE_SCHEMA, PACKAGE_ANALYSIS_SCHEMA, SEMANTIC_DIFF_SCHEMA,
+    SOURCE_ANALYSIS_SCHEMA,
 };
 use rsscript_semantics::CompilationSession;
 #[cfg(feature = "execution")]
@@ -152,12 +152,12 @@ pub use vm_adapter::{
 /// Runtime and Provider types are deliberately excluded.
 pub mod language {
     pub use rsscript_compiler::{
-        Definition, Diagnostic, DiagnosticExplanation, Reference, RssDocumentSymbol, Severity,
-        Span, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
         analyze_source_result_with_operation, analyze_source_with_core,
         analyze_source_with_interfaces, analyze_source_with_interfaces_result_with_operation,
         analyze_sources_with_interfaces, analyze_sources_with_interfaces_result_with_operation,
         document_symbols, explain_diagnostic_code, format_source, lint_source, symbol_index,
+        Definition, Diagnostic, DiagnosticExplanation, Reference, RssDocumentSymbol, Severity,
+        Span, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
     };
 }
 
@@ -176,53 +176,29 @@ pub mod compile {
 #[cfg(feature = "project")]
 pub mod project {
     use super::*;
-    use rsscript_workspace_loader::{
-        WorkspaceFileKind, WorkspaceLoadError, WorkspaceLoadErrorCode, WorkspaceLoader,
-        WorkspaceSnapshot as CapturedWorkspaceSnapshot,
-    };
+    use rsscript_project::{ProjectLoadError, ProjectLoadErrorCode};
 
-    /// Immutable frontend input captured by the OS-facing workspace loader.
-    ///
-    /// This is deliberately distinct from the legacy compiler
-    /// [`WorkspaceSnapshot`], which still carries package-review and native
-    /// authorization compatibility state. New embedders can pass
-    /// [`Self::frontend`] directly to the pure in-memory [`Compiler`] API.
-    #[derive(Debug, Clone)]
-    pub struct CapturedProjectSnapshot {
-        workspace: CapturedWorkspaceSnapshot,
-        frontend: FrontendInputSnapshot,
-    }
+    /// The explicit OS/project capture boundary. It owns workspace traversal,
+    /// manifest dependency capture, and conversion into immutable frontend
+    /// inputs; it does not depend on the compiler, Artifact, or VM.
+    pub use rsscript_project::ProjectLoader;
+    /// Compatibility name for the project crate's immutable capture result.
+    /// New code can use [`ProjectLoader`] and this type without depending on
+    /// any SDK implementation detail.
+    pub use rsscript_project::ProjectSnapshot as CapturedProjectSnapshot;
 
-    impl CapturedProjectSnapshot {
-        pub fn frontend(&self) -> &FrontendInputSnapshot {
-            &self.frontend
-        }
-
-        /// Stable source/interface identity from the loader. It excludes
-        /// physical host paths and therefore remains comparable across
-        /// equivalent captures on different machines.
-        pub fn content_digest(&self) -> &str {
-            self.workspace.content_digest()
-        }
-
-        /// Digest of exactly the source and interface files passed to the
-        /// in-memory compiler. Unlike [`Self::content_digest`], this excludes
-        /// test-only files retained by the project snapshot.
-        pub fn frontend_digest(&self) -> String {
-            frontend_snapshot_digest(&self.frontend)
-        }
-
-        pub fn files(&self) -> &[rsscript_workspace_loader::WorkspaceSourceFile] {
-            self.workspace.files()
-        }
-    }
-
+    /// SDK composition helper for a project capture plus the pure in-memory
+    /// compiler. Filesystem work stays in [`ProjectLoader`].
     #[derive(Default)]
-    pub struct ProjectCompiler;
+    pub struct ProjectCompiler {
+        loader: ProjectLoader,
+    }
 
     impl ProjectCompiler {
         pub fn new() -> Self {
-            Self
+            Self {
+                loader: ProjectLoader::default(),
+            }
         }
 
         /// Capture a project through the explicit-base workspace loader and
@@ -239,7 +215,9 @@ pub mod project {
             base: &Path,
             package_dir: &Path,
         ) -> Result<CapturedProjectSnapshot, CompileError> {
-            self.capture_frontend_inner(base, package_dir, None)
+            self.loader
+                .capture_from(base, package_dir)
+                .map_err(map_project_load_error)
         }
 
         /// Operation-aware capture that keeps cancellation and deadline checks
@@ -250,40 +228,9 @@ pub mod project {
             package_dir: &Path,
             operation: &OperationContext,
         ) -> Result<CapturedProjectSnapshot, CompileError> {
-            self.capture_frontend_inner(base, package_dir, Some(operation))
-        }
-
-        fn capture_frontend_inner(
-            &self,
-            base: &Path,
-            package_dir: &Path,
-            operation: Option<&OperationContext>,
-        ) -> Result<CapturedProjectSnapshot, CompileError> {
-            let loader = WorkspaceLoader::default();
-            let workspace = match operation {
-                Some(operation) => {
-                    loader.snapshot_from_with_operation(base, package_dir, operation)
-                }
-                None => loader.snapshot_from(base, package_dir),
-            }
-            .map_err(map_workspace_load_error)?;
-            let sources = workspace
-                .files()
-                .iter()
-                .filter(|file| file.kind == WorkspaceFileKind::Source)
-                .map(|file| (file.logical_path.as_str(), file.contents.as_str()))
-                .collect::<Vec<_>>();
-            let interfaces = workspace
-                .files()
-                .iter()
-                .filter(|file| file.kind == WorkspaceFileKind::Interface)
-                .map(|file| (file.logical_path.as_str(), file.contents.as_str()))
-                .collect::<Vec<_>>();
-            let frontend = FrontendInputSnapshot::from_sources(sources, interfaces);
-            Ok(CapturedProjectSnapshot {
-                workspace,
-                frontend,
-            })
+            self.loader
+                .capture_from_with_operation(base, package_dir, operation)
+                .map_err(map_project_load_error)
         }
 
         /// Build exactly the source/interface snapshot captured by
@@ -396,10 +343,10 @@ pub mod project {
         }
     }
 
-    fn map_workspace_load_error(error: WorkspaceLoadError) -> CompileError {
-        let code = match error.code {
-            WorkspaceLoadErrorCode::Cancelled => CompileErrorCode::Cancelled,
-            WorkspaceLoadErrorCode::DeadlineExceeded => CompileErrorCode::DeadlineExceeded,
+    fn map_project_load_error(error: ProjectLoadError) -> CompileError {
+        let code = match error.code() {
+            ProjectLoadErrorCode::Cancelled => CompileErrorCode::Cancelled,
+            ProjectLoadErrorCode::DeadlineExceeded => CompileErrorCode::DeadlineExceeded,
             _ => CompileErrorCode::PackageSnapshot,
         };
         let message = error.to_string();
@@ -425,15 +372,16 @@ pub mod operation {
 /// Reviewed Artifact construction and verification entry points.
 pub mod artifact {
     pub use super::{
-        ARTIFACT_BUNDLE_MAGIC, ARTIFACT_BUNDLE_SCHEMA, AdmissionError, AdmittedArtifact,
-        AnalysisEnvelopeV1, AnalysisSchemaV1, ArtifactAdmission, ArtifactAdmissionPolicy,
-        ArtifactBundle, ArtifactBundleError, ArtifactVerifier, BuildProvenanceV1, BuiltArtifact,
-        InterfaceRequirementV1, PACKAGE_ANALYSIS_SCHEMA, PackageAnalysisV1, SOURCE_ANALYSIS_SCHEMA,
+        AdmissionError, AdmittedArtifact, AnalysisEnvelopeV1, AnalysisSchemaV1, ArtifactAdmission,
+        ArtifactAdmissionPolicy, ArtifactBundle, ArtifactBundleError, ArtifactVerifier,
+        BuildProvenanceV1, BuiltArtifact, InterfaceRequirementV1, PackageAnalysisV1,
         SourceAnalysisV1, TrustedInputAdmission, VerifiedArtifact, VerifyError,
+        ARTIFACT_BUNDLE_MAGIC, ARTIFACT_BUNDLE_SCHEMA, PACKAGE_ANALYSIS_SCHEMA,
+        SOURCE_ANALYSIS_SCHEMA,
     };
     pub use rsscript_bytecode::{
-        BYTECODE_CONTAINER_FORMAT_VERSION, BYTECODE_ISA_VERSION, BYTECODE_MAGIC, BYTECODE_SCHEMA,
-        BytecodeArtifact, BytecodeHeader, BytecodeVerifier,
+        BytecodeArtifact, BytecodeHeader, BytecodeVerifier, BYTECODE_CONTAINER_FORMAT_VERSION,
+        BYTECODE_ISA_VERSION, BYTECODE_MAGIC, BYTECODE_SCHEMA,
     };
 }
 
@@ -460,8 +408,8 @@ pub mod runtime {
 /// Reviewed machine-readable execution-report types.
 pub mod report {
     pub use super::{
-        EXECUTION_REPORT_SCHEMA, ExecutionOutcome, ExecutionReport, ExecutionTelemetry,
-        ProviderFunctionTelemetry, RuntimeError, TerminationReason,
+        ExecutionOutcome, ExecutionReport, ExecutionTelemetry, ProviderFunctionTelemetry,
+        RuntimeError, TerminationReason, EXECUTION_REPORT_SCHEMA,
     };
 }
 
@@ -470,7 +418,7 @@ pub mod report {
 pub mod analysis {
     pub use super::{
         CallEdgeFactV1, ExternalContractFactV1, FunctionParameterFactV1, ResourceLifetimeFactV1,
-        ResourceTransferFactV1, SEMANTIC_DIFF_SCHEMA, SemanticDiffV1, TaskGroupFactV1,
+        ResourceTransferFactV1, SemanticDiffV1, TaskGroupFactV1, SEMANTIC_DIFF_SCHEMA,
     };
 }
 #[cfg(not(feature = "compatibility"))]
@@ -913,13 +861,6 @@ fn snapshot_pairs(snapshot: &SourceSnapshot) -> Vec<(&str, &str)> {
         .collect::<Vec<_>>();
     pairs.sort_unstable();
     pairs
-}
-
-#[cfg(feature = "project")]
-fn frontend_snapshot_digest(snapshot: &FrontendInputSnapshot) -> String {
-    let sources = snapshot_pairs(snapshot.sources());
-    let interfaces = snapshot_pairs(snapshot.interfaces());
-    in_memory_snapshot_digest(&sources, &interfaces)
 }
 
 #[cfg(feature = "execution")]
@@ -2053,9 +1994,9 @@ mod tests {
         BlockingBehavior, CancellationBehavior, DataEffect, ExternalSymbol, FunctionSignature,
         ParameterSignature, ProviderCallMode, ProviderFunctionDescriptor, RUNTIME_ABI_VERSION,
     };
-    use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
+    use std::sync::Arc;
 
     fn admitted(built: BuiltArtifact) -> AdmittedArtifact {
         ArtifactVerifier
@@ -2201,22 +2142,18 @@ mod tests {
                 .all(|file| !file.logical_path.starts_with('/')),
             "compiler-facing snapshot identity must not contain host-absolute paths"
         );
-        assert!(
-            captured
-                .frontend()
-                .sources()
-                .files()
-                .iter()
-                .any(|file| file.path() == "root/src/main.rss")
-        );
-        assert!(
-            captured
-                .frontend()
-                .interfaces()
-                .files()
-                .iter()
-                .any(|file| file.path() == "root/interfaces/host.rssi")
-        );
+        assert!(captured
+            .frontend()
+            .sources()
+            .files()
+            .iter()
+            .any(|file| file.path() == "root/src/main.rss"));
+        assert!(captured
+            .frontend()
+            .interfaces()
+            .files()
+            .iter()
+            .any(|file| file.path() == "root/interfaces/host.rssi"));
         let built = project
             .build_captured(&captured)
             .expect("pure compiler accepts the loader-captured input");
@@ -2359,35 +2296,29 @@ mod tests {
         let analysis = new
             .source_analysis()
             .expect("source build carries typed source analysis");
-        assert!(
-            analysis
-                .call_edges
-                .iter()
-                .any(|edge| edge.caller == "main" && edge.callee == "helper")
-        );
-        assert!(
-            analysis
-                .call_edges
-                .iter()
-                .any(|edge| edge.caller == "helper" && edge.callee == "Host.value")
-        );
+        assert!(analysis
+            .call_edges
+            .iter()
+            .any(|edge| edge.caller == "main" && edge.callee == "helper"));
+        assert!(analysis
+            .call_edges
+            .iter()
+            .any(|edge| edge.caller == "helper" && edge.callee == "Host.value"));
         assert_eq!(analysis.external_calls.len(), 1);
         assert_eq!(analysis.external_calls[0].function, "helper");
         assert_eq!(analysis.external_calls[0].symbol, "Host.value");
 
         let diff = SemanticDiffV1::between(old.bundle(), new.bundle());
-        assert!(
-            diff.call_edges
-                .added
-                .iter()
-                .any(|edge| edge.caller == "helper" && edge.callee == "Host.value")
-        );
-        assert!(
-            diff.external_calls
-                .added
-                .iter()
-                .any(|call| call.function == "helper" && call.symbol == "Host.value")
-        );
+        assert!(diff
+            .call_edges
+            .added
+            .iter()
+            .any(|edge| edge.caller == "helper" && edge.callee == "Host.value"));
+        assert!(diff
+            .external_calls
+            .added
+            .iter()
+            .any(|call| call.function == "helper" && call.symbol == "Host.value"));
     }
 
     #[test]
@@ -2425,12 +2356,10 @@ fn main() -> Unit { return Unit }
         assert_eq!(process.parameters[0].effect, "read");
         assert!(process.parameters[0].retained);
         assert_eq!(process.retained_params, ["value"]);
-        assert!(
-            process
-                .semantic_facts
-                .iter()
-                .any(|fact| fact == "retains(value)")
-        );
+        assert!(process
+            .semantic_facts
+            .iter()
+            .any(|fact| fact == "retains(value)"));
 
         let diff = SemanticDiffV1::between(old.bundle(), new.bundle());
         let changed = diff
@@ -2778,11 +2707,9 @@ fn main() -> Result<Int, String> {
         );
         assert_eq!(report.usage.provider_calls, 2);
         assert_eq!(report.provider_call_traces.len(), 1);
-        assert!(
-            report
-                .failure()
-                .is_some_and(|error| error.message.contains("provider call budget exceeded"))
-        );
+        assert!(report
+            .failure()
+            .is_some_and(|error| error.message.contains("provider call budget exceeded")));
 
         let failure_symbol = descriptor.functions[0].symbol.clone();
         let failure_signature = descriptor.functions[0].signature.clone();
@@ -2817,11 +2744,9 @@ fn main() -> Result<Int, String> {
             report.provider_call_traces[0].result,
             Err(provider::ProviderErrorCode::InvalidArgument)
         );
-        assert!(
-            report
-                .failure()
-                .is_some_and(|error| error.message == "provider call failed (invalid_argument)")
-        );
+        assert!(report
+            .failure()
+            .is_some_and(|error| error.message == "provider call failed (invalid_argument)"));
     }
 
     #[test]
