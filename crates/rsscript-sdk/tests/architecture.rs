@@ -2054,6 +2054,21 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
             && diff.contains("review_package_dir_captured_with_features"),
         "package diff must consume review-owned evidence and take native inspection explicitly"
     );
+    let lock_path = root.join("crates/rsscript-package-review/src/lock.rs");
+    assert!(
+        lock_path.is_file()
+            && !root
+                .join("crates/rsscript-compiler/src/package/lock.rs")
+                .exists(),
+        "package lock semantics must be physically owned by the package-review boundary"
+    );
+    let lock = read(&lock_path);
+    assert!(
+        lock.contains("NativeRustPathFn")
+            && lock.contains("lock_package_dir_captured")
+            && lock.contains("rsscript_project::project_path_source"),
+        "package lock must own hashing/comparison and receive native path resolution explicitly"
+    );
     assert!(
         dependency.contains("load_package_from_manifest_source")
             && !dependency.contains("load_package_with_features("),

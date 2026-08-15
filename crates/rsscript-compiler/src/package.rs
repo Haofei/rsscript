@@ -28,12 +28,14 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::diagnostic::Diagnostic;
+#[cfg(test)]
+pub(super) use rsscript_project::relative_project_path_label as relative_path;
 pub(crate) use rsscript_project::{
     ProjectTreeLimits as TreeLimits, read_project_utf8_file_bounded as read_utf8_file_bounded,
 };
 pub(super) use rsscript_project::{
     canonical_project_path_label as canonical_path_label,
-    project_path_source as package_path_source, relative_project_path_label as relative_path,
+    project_path_source as package_path_source,
 };
 
 mod analysis {
@@ -45,7 +47,42 @@ mod dependency {
     pub(super) use rsscript_package_review::*;
 }
 mod graph;
-mod lock;
+// Legacy composition only: package lock semantics and hashing are owned by
+// `rsscript-package-review`; the compiler supplies native-wrapper callbacks.
+mod lock {
+    use std::path::Path;
+
+    use rsscript_package_model::{PackageLock, PackageLockDiff};
+
+    pub(super) use rsscript_package_review::{
+        compare_locked_packages, effective_interface_hash, package_lock_diff_reasons,
+        parse_package_lock, read_package_lock,
+    };
+    pub(super) const PACKAGE_LOCK_MAX_BYTES: u64 = rsscript_package_review::PACKAGE_LOCK_MAX_BYTES;
+
+    pub(super) fn lock_package_dir_captured(package_dir: &Path) -> Result<PackageLock, String> {
+        rsscript_package_review::lock_package_dir_captured(
+            package_dir,
+            super::native::package_native_rust_review,
+            super::native::confined_native_rust_path,
+        )
+    }
+
+    pub(super) fn lock_package_dir(package_dir: &Path) -> Result<PackageLock, String> {
+        let snapshot = super::authorization::snapshot_package_graph_inputs(package_dir)?;
+        let mut lock = lock_package_dir_captured(snapshot.root())
+            .map_err(|error| snapshot.remap_error(error))?;
+        super::authorization::remap_lock(&snapshot, &mut lock);
+        Ok(lock)
+    }
+
+    pub(super) fn diff_package_locks(
+        old_path: &Path,
+        new_path: &Path,
+    ) -> Result<PackageLockDiff, String> {
+        rsscript_package_review::diff_package_locks(old_path, new_path)
+    }
+}
 mod lock_format;
 mod metadata;
 mod native;
@@ -96,6 +133,12 @@ pub fn diff_package_dirs(old_dir: &Path, new_dir: &Path) -> Result<PackageDiff, 
         native::package_native_rust_review,
     )
 }
+pub fn lock_package_dir(package_dir: &Path) -> Result<PackageLock, String> {
+    lock::lock_package_dir(package_dir)
+}
+pub fn diff_package_locks(old_path: &Path, new_path: &Path) -> Result<PackageLockDiff, String> {
+    lock::diff_package_locks(old_path, new_path)
+}
 pub use authorization::{
     ExecutablePackageSnapshot, PreparedPackage, WorkspaceSnapshot, load_workspace_snapshot,
     load_workspace_snapshot_with_operation, prepare_executable_package,
@@ -107,12 +150,11 @@ use dependency::{
     collect_dependency_lowering_sources,
 };
 pub use graph::package_tree;
-pub use lock::{diff_package_locks, lock_package_dir};
 pub(super) use lock_format::package_lock_toml;
 pub use metadata::package_lowering_input;
 pub(crate) use native::package_native_plugin_build_dependencies;
 pub use rsscript_package_model::*;
-use source_set::{LoadedPackage, Manifest, ManifestNativeRust, PackageSource};
+use source_set::{Manifest, ManifestNativeRust, PackageSource};
 
 pub fn package_sources(package_dir: &Path) -> Result<Vec<PackageSourceFile>, String> {
     let package = source_set::load_package(package_dir)?;
@@ -172,42 +214,11 @@ pub(super) fn dedup_diagnostics(diagnostics: &mut Vec<Diagnostic>) {
     });
 }
 
-fn package_feature_may_change_boundary_risk(name: &str, values: &[String]) -> bool {
-    package_feature_token_is_boundary_risk(name)
-        || values
-            .iter()
-            .any(|value| package_feature_token_is_boundary_risk(value))
-}
-
-fn package_feature_token_is_boundary_risk(token: &str) -> bool {
-    let normalized = token.to_ascii_lowercase();
-    ["native", "unsafe", "ffi", "build", "proc", "macro", "link"]
-        .iter()
-        .any(|marker| normalized.contains(marker))
-}
-
 fn package_identity(manifest: &Manifest) -> PackageIdentity {
     PackageIdentity {
         name: manifest.package.name.clone(),
         version: manifest.package.version.clone(),
         edition: manifest.package.edition.clone(),
-    }
-}
-
-fn feature_values_label(values: &[String]) -> String {
-    if values.is_empty() {
-        "[]".to_string()
-    } else {
-        values.join(", ")
-    }
-}
-
-fn package_risk_label(risk: PackageRisk) -> &'static str {
-    match risk {
-        PackageRisk::Low => "low",
-        PackageRisk::Elevated => "elevated",
-        PackageRisk::High => "high",
-        PackageRisk::Unknown => "unknown",
     }
 }
 

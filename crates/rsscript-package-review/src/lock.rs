@@ -5,32 +5,73 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-use crate::formatter::format_source;
+use rsscript_syntax::format_source;
 
-use super::dependency::{DependencyResolutionScope, resolve_dependency_graph};
-use super::review::review_package_dir_captured_with_features;
-use super::source_set::{ManifestNativeRust, load_package_with_features};
-use super::{
-    LoadedPackage, PackageLock, PackageLockDiff, PackageLockFieldChange, PackageLockMetadata,
-    PackageLockPackage, PackageLockPackageChange, PackageReview, PackageReviewAwaitBoundary,
-    PackageReviewFileKind, PackageRisk, PackageSource, collect_regular_files,
-    package_feature_may_change_boundary_risk, package_risk_label, relative_path,
+use crate::dependency::{DependencyResolutionScope, resolve_dependency_graph};
+use crate::review::{NativeRustReviewFn, review_package_dir_captured_with_features};
+use crate::source_set::{
+    LoadedPackage, ManifestNativeRust, PackageSource, load_package_with_features,
+};
+use rsscript_package_model::{
+    PackageLock, PackageLockDiff, PackageLockFieldChange, PackageLockMetadata, PackageLockPackage,
+    PackageLockPackageChange, PackageReview, PackageReviewAwaitBoundary, PackageReviewFileKind,
+    PackageRisk,
 };
 
-pub(super) const PACKAGE_LOCK_MAX_BYTES: u64 = 16 * 1024 * 1024;
+pub const PACKAGE_LOCK_MAX_BYTES: u64 = 16 * 1024 * 1024;
 const NATIVE_HASH_MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const NATIVE_HASH_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const BINDING_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
 
-pub fn lock_package_dir(package_dir: &Path) -> Result<PackageLock, String> {
-    let snapshot = super::authorization::snapshot_package_graph_inputs(package_dir)?;
-    let mut lock =
-        lock_package_dir_captured(snapshot.root()).map_err(|error| snapshot.remap_error(error))?;
-    super::authorization::remap_lock(&snapshot, &mut lock);
-    Ok(lock)
+/// Resolve a native wrapper path within a captured package root.
+pub type NativeRustPathFn = fn(&Path, &str) -> Result<std::path::PathBuf, String>;
+
+fn feature_values_label(values: &[String]) -> String {
+    if values.is_empty() {
+        "[]".to_string()
+    } else {
+        values.join(", ")
+    }
 }
 
-pub(super) fn lock_package_dir_captured(package_dir: &Path) -> Result<PackageLock, String> {
+fn package_feature_may_change_boundary_risk(name: &str, values: &[String]) -> bool {
+    let has_marker = |token: &str| {
+        let normalized = token.to_ascii_lowercase();
+        ["native", "unsafe", "ffi", "build", "proc", "macro", "link"]
+            .iter()
+            .any(|marker| normalized.contains(marker))
+    };
+    has_marker(name) || values.iter().any(|value| has_marker(value))
+}
+
+fn package_risk_label(risk: PackageRisk) -> &'static str {
+    match risk {
+        PackageRisk::Low => "low",
+        PackageRisk::Elevated => "elevated",
+        PackageRisk::High => "high",
+        PackageRisk::Unknown => "unknown",
+    }
+}
+
+fn collect_regular_files(path: &Path, files: &mut Vec<std::path::PathBuf>) -> Result<(), String> {
+    files.extend(
+        rsscript_project::collect_project_regular_files(
+            path,
+            rsscript_project::ProjectTreeLimits::default(),
+            "native source hash",
+            |_, name| matches!(name, "target" | ".git" | ".DS_Store" | "Cargo.lock"),
+        )?
+        .into_iter()
+        .map(|file| file.path),
+    );
+    Ok(())
+}
+
+pub fn lock_package_dir_captured(
+    package_dir: &Path,
+    native_rust_review: NativeRustReviewFn,
+    native_rust_path: NativeRustPathFn,
+) -> Result<PackageLock, String> {
     let graph = resolve_dependency_graph(package_dir, DependencyResolutionScope::Development)?;
     let root = &graph.nodes[&graph.root];
     let package = load_package_with_features(&root.package_dir, Some(&root.features))?;
@@ -38,6 +79,8 @@ pub(super) fn lock_package_dir_captured(package_dir: &Path) -> Result<PackageLoc
         &root.package_dir,
         &package,
         root.features.clone(),
+        native_rust_review,
+        native_rust_path,
     )?];
     for node in graph.dependency_order() {
         let package = load_package_with_features(&node.package_dir, Some(&node.features))?;
@@ -45,6 +88,8 @@ pub(super) fn lock_package_dir_captured(package_dir: &Path) -> Result<PackageLoc
             &node.package_dir,
             &package,
             node.features.clone(),
+            native_rust_review,
+            native_rust_path,
         )?);
     }
     validate_locked_package_identities(&packages)?;
@@ -59,23 +104,29 @@ pub(super) fn lock_package_dir_captured(package_dir: &Path) -> Result<PackageLoc
     })
 }
 
-pub(super) fn lock_package_entry(
+pub fn lock_package_entry(
     package_dir: &Path,
     package: &LoadedPackage,
     features: Vec<String>,
+    native_rust_review: NativeRustReviewFn,
+    native_rust_path: NativeRustPathFn,
 ) -> Result<PackageLockPackage, String> {
-    let review = review_package_dir_captured_with_features(package_dir, Some(&features))?;
+    let review = review_package_dir_captured_with_features(
+        package_dir,
+        Some(&features),
+        native_rust_review,
+    )?;
     let native = package
         .manifest
         .native
         .as_ref()
         .and_then(|native| native.rust.as_ref());
-    let native_hash = package_native_hash(package_dir, native)?;
+    let native_hash = package_native_hash(package_dir, native, native_rust_path)?;
 
     Ok(PackageLockPackage {
         name: package.manifest.package.name.clone(),
         version: package.manifest.package.version.clone(),
-        source: super::package_path_source(package_dir),
+        source: rsscript_project::project_path_source(package_dir),
         checksum: package_checksum(package, native_hash.as_deref()),
         interface_hash: effective_interface_hash(&package.sources, &features),
         review_hash: package_review_hash(&review),
@@ -109,14 +160,14 @@ pub fn diff_package_locks(old_path: &Path, new_path: &Path) -> Result<PackageLoc
     })
 }
 
-pub(super) fn read_package_lock(path: &Path) -> Result<PackageLock, String> {
+pub fn read_package_lock(path: &Path) -> Result<PackageLock, String> {
     let source = read_bounded_utf8(path, PACKAGE_LOCK_MAX_BYTES, "package lock")?;
     parse_package_lock(&source, &path.display().to_string())
 }
 
 /// Parse a lockfile whose bounded bytes have already been captured by the
 /// project boundary. This keeps compatibility graph I/O out of the lock model.
-pub(super) fn parse_package_lock(source: &str, label: &str) -> Result<PackageLock, String> {
+pub fn parse_package_lock(source: &str, label: &str) -> Result<PackageLock, String> {
     let lock: PackageLock =
         toml::from_str(source).map_err(|error| format!("failed to parse {label}: {error}"))?;
     validate_locked_package_identities(&lock.packages)
@@ -124,7 +175,7 @@ pub(super) fn parse_package_lock(source: &str, label: &str) -> Result<PackageLoc
     Ok(lock)
 }
 
-pub(super) fn compare_locked_packages(
+pub fn compare_locked_packages(
     old_packages: &[PackageLockPackage],
     new_packages: &[PackageLockPackage],
 ) -> Vec<PackageLockPackageChange> {
@@ -334,8 +385,8 @@ fn compare_locked_package_fields(
         new.native_hash.as_deref(),
         PackageRisk::High,
     );
-    let old_features = super::feature_values_label(&old.features);
-    let new_features = super::feature_values_label(&new.features);
+    let old_features = feature_values_label(&old.features);
+    let new_features = feature_values_label(&new.features);
     push_lock_field_change(
         &mut changes,
         "features",
@@ -379,7 +430,7 @@ fn push_lock_field_change(
     }
 }
 
-pub(super) fn package_lock_diff_reasons(changes: &[PackageLockPackageChange]) -> Vec<String> {
+pub fn package_lock_diff_reasons(changes: &[PackageLockPackageChange]) -> Vec<String> {
     let mut reasons = Vec::new();
     if changes
         .iter()
@@ -426,7 +477,7 @@ fn lock_field_changed(changes: &[PackageLockPackageChange], field: &str) -> bool
         .any(|change| change.field == field)
 }
 
-pub(super) fn package_checksum(package: &LoadedPackage, native_hash: Option<&str>) -> String {
+pub fn package_checksum(package: &LoadedPackage, native_hash: Option<&str>) -> String {
     let mut input = String::new();
     input.push_str("manifest\n");
     input.push_str(&package.manifest_source);
@@ -439,7 +490,7 @@ pub(super) fn package_checksum(package: &LoadedPackage, native_hash: Option<&str
     sha256_label(input.as_bytes())
 }
 
-pub(super) fn effective_interface_hash(sources: &[PackageSource], features: &[String]) -> String {
+pub fn effective_interface_hash(sources: &[PackageSource], features: &[String]) -> String {
     let filtered = sources
         .iter()
         .filter(|source| source.kind == PackageReviewFileKind::Interface)
@@ -641,17 +692,16 @@ fn await_boundary_hash_label(boundary: PackageReviewAwaitBoundary) -> &'static s
     }
 }
 
-pub(super) fn package_native_hash(
+pub fn package_native_hash(
     package_dir: &Path,
     native: Option<&ManifestNativeRust>,
+    native_rust_path: NativeRustPathFn,
 ) -> Result<Option<String>, String> {
     let Some(native) = native.filter(|native| native.enabled) else {
         return Ok(None);
     };
-    let native_root = super::native::confined_native_rust_path(
-        package_dir,
-        native.path.as_deref().unwrap_or("native/rust"),
-    )?;
+    let native_root =
+        native_rust_path(package_dir, native.path.as_deref().unwrap_or("native/rust"))?;
     let mut input = String::new();
     input.push_str(native.path.as_deref().unwrap_or("native/rust"));
     input.push('\n');
@@ -700,7 +750,10 @@ pub(super) fn package_native_hash(
         files.sort();
         let mut hashed_bytes = 0_u64;
         for file in files {
-            input.push_str(&relative_path(package_dir, &file));
+            input.push_str(&rsscript_project::relative_project_path_label(
+                package_dir,
+                &file,
+            ));
             input.push('\n');
             let (_, hash) = hash_file_streaming(
                 &file,
@@ -715,7 +768,10 @@ pub(super) fn package_native_hash(
     }
     let binding_manifest = package_dir.join("native/bindings.rssbind.toml");
     if binding_manifest.exists() {
-        input.push_str(&relative_path(package_dir, &binding_manifest));
+        input.push_str(&rsscript_project::relative_project_path_label(
+            package_dir,
+            &binding_manifest,
+        ));
         input.push('\n');
         let mut binding_bytes = 0;
         let (_, hash) = hash_file_streaming(
