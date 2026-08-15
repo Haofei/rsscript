@@ -33,6 +33,66 @@ const PROJECT_CAPTURE_MAX_DEPTH: usize = 64;
 const PROJECT_MANIFEST_GRAPH_MAX_PACKAGES: usize = 4_096;
 const PROJECT_MANIFEST_GRAPH_MAX_BYTES: u64 = 32 * 1024 * 1024;
 
+/// Return a stable display label for a physical project path. Filesystem
+/// canonicalization belongs to the project/loader boundary, never to a
+/// frontend consumer that receives an already captured snapshot.
+pub fn canonical_project_path_label(path: &Path) -> String {
+    fs::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .display()
+        .to_string()
+}
+
+/// Normalize a host path syntactically without consulting ambient state.
+pub fn normalized_project_path_label(path: &Path) -> String {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Normal(part) => normalized.push(part),
+            Component::RootDir | Component::Prefix(_) => normalized.push(component.as_os_str()),
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        ".".to_string()
+    } else {
+        normalized.display().to_string()
+    }
+}
+
+/// Compute a slash-normalized path relative to a project root. If the two
+/// paths are spelled through different canonical prefixes, this function
+/// resolves them at the project boundary before falling back to the supplied
+/// path label.
+pub fn relative_project_path_label(base: &Path, path: &Path) -> String {
+    let relative = path
+        .strip_prefix(base)
+        .ok()
+        .map(Path::to_path_buf)
+        .or_else(|| {
+            let canonical_base = base.canonicalize().ok()?;
+            let canonical_path = path.canonicalize().ok()?;
+            canonical_path
+                .strip_prefix(canonical_base)
+                .ok()
+                .map(Path::to_path_buf)
+        });
+    relative
+        .as_deref()
+        .unwrap_or(path)
+        .display()
+        .to_string()
+        .replace('\\', "/")
+}
+
+/// Canonical source label used by compatibility package locks.
+pub fn project_path_source(path: &Path) -> String {
+    format!("path+{}", normalized_project_path_label(path))
+}
+
 /// Private, bounded filesystem capture of a package graph.
 ///
 /// The temporary directory remains owned by this value, so a compiler or

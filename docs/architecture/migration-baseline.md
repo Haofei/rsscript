@@ -783,7 +783,10 @@ an arbitrary shell executor.
     Manifest dependency discovery now parses the loader-owned
     `WorkspaceManifestV1` projection and admits only explicit local path
     dependencies into capture; version, git, and registry declarations cannot
-    silently expand filesystem input.
+    silently expand filesystem input. Compatibility package canonical path
+    labels, relative-path rendering, and lock source labels now also delegate
+    to `rsscript-project`; compiler package code no longer performs those
+    filesystem normalization operations itself.
     - [x] **S05.1a — Move bounded manifest and source-tree capture.** Project
       capture owns raw manifests, confined source traversal, and byte limits;
       compiler package assembly consumes the resulting bytes.

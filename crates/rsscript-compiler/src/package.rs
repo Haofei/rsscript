@@ -25,12 +25,15 @@
 // Compatibility package/review tooling keeps its lint debt local to this module.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use crate::diagnostic::Diagnostic;
 pub(crate) use rsscript_project::{
     ProjectTreeLimits as TreeLimits, read_project_utf8_file_bounded as read_utf8_file_bounded,
+};
+pub(super) use rsscript_project::{
+    canonical_project_path_label as canonical_path_label,
+    project_path_source as package_path_source, relative_project_path_label as relative_path,
 };
 
 mod analysis;
@@ -107,27 +110,6 @@ fn package_source_files(sources: Vec<PackageSource>) -> Vec<PackageSourceFile> {
         .collect()
 }
 
-fn relative_path(base: &Path, path: &Path) -> String {
-    let relative = path
-        .strip_prefix(base)
-        .ok()
-        .map(Path::to_path_buf)
-        .or_else(|| {
-            let canonical_base = base.canonicalize().ok()?;
-            let canonical_path = path.canonicalize().ok()?;
-            canonical_path
-                .strip_prefix(canonical_base)
-                .ok()
-                .map(Path::to_path_buf)
-        });
-    relative
-        .as_deref()
-        .unwrap_or(path)
-        .display()
-        .to_string()
-        .replace('\\', "/")
-}
-
 fn collect_regular_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
     files.extend(
         rsscript_project::collect_project_regular_files(
@@ -154,36 +136,6 @@ pub(super) fn dedup_diagnostics(diagnostics: &mut Vec<Diagnostic>) {
             diagnostic.span.length,
         ))
     });
-}
-
-fn canonical_path_label(path: &Path) -> String {
-    fs::canonicalize(path)
-        .unwrap_or_else(|_| path.to_path_buf())
-        .display()
-        .to_string()
-}
-
-fn normalized_path_label(path: &Path) -> String {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                normalized.pop();
-            }
-            Component::Normal(part) => normalized.push(part),
-            Component::RootDir | Component::Prefix(_) => normalized.push(component.as_os_str()),
-        }
-    }
-    if normalized.as_os_str().is_empty() {
-        ".".to_string()
-    } else {
-        normalized.display().to_string()
-    }
-}
-
-fn package_path_source(path: &Path) -> String {
-    format!("path+{}", normalized_path_label(path))
 }
 
 fn package_manifest_key_span(package_dir: &Path, key: &str) -> crate::diagnostic::Span {
@@ -277,6 +229,7 @@ fn package_risk_label(risk: PackageRisk) -> &'static str {
 mod preparation_limit_tests {
     use super::*;
     use rsscript_project::collect_project_regular_files as collect_bounded_regular_files;
+    use std::fs;
 
     fn test_dir(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
