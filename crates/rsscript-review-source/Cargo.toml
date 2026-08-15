@@ -1,0 +1,20 @@
+[package]
+name = "rsscript-review-source"
+version = "0.1.0"
+edition = "2024"
+description = "Optional source-level semantic review facts for RSScript"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+name = "rsscript_review_source"
+doctest = false
+
+[dependencies]
+rsscript-diagnostics = { path = "../rsscript-diagnostics" }
+rsscript-interface-catalog = { path = "../rsscript-interface-catalog" }
+rsscript-semantics = { path = "../rsscript-semantics" }
+rsscript-syntax = { path = "../rsscript-syntax" }
+rsscript-text = { path = "../rsscript-text" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use crate::diagnostic::code;
-use crate::review::{ReviewFinding, ReviewRisk, review_sources};
 use crate::syntax::ast::TypeKind;
+use rsscript_review_source::{ReviewFinding, ReviewRisk, review_sources};
 
 use super::contract::{
     collect_package_function_contracts, collect_package_type_contracts,

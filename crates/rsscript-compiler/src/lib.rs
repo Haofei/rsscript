@@ -29,8 +29,6 @@ mod lint;
 #[cfg(feature = "package")]
 mod package;
 #[cfg(feature = "package")]
-mod review;
-#[cfg(feature = "package")]
 mod runtime_abi;
 #[cfg(all(test, feature = "selfhost-parity"))]
 mod selfhost_parity;
@@ -145,7 +143,7 @@ pub mod compatibility {
         prepare_executable_package, prepare_package_for_execution, review_package_dir,
     };
     #[cfg(feature = "package")]
-    pub use crate::review::{
+    pub use rsscript_review_source::{
         ReviewFinding, ReviewFix, ReviewMap, ReviewMapCategorySummary, ReviewMapClassification,
         ReviewMapFile, ReviewMapFileRisk, ReviewMapRegion, ReviewMapSummary, ReviewRisk,
         format_review_human, format_review_json, format_review_map_human, format_review_map_json,

@@ -212,7 +212,7 @@ pub(super) fn collect_review_map_hir_facts_expr(
 }
 
 pub(super) fn noescape_call_closure_body<'a>(
-    arg: &'a crate::hir::HirCallArg,
+    arg: &'a rsscript_semantics::hir::HirCallArg,
     index: usize,
     resolution: &CallResolution,
 ) -> Option<&'a HirBlock> {
@@ -223,7 +223,7 @@ pub(super) fn noescape_call_closure_body<'a>(
 }
 
 pub(super) fn call_arg_is_noescape_param(
-    arg: &crate::hir::HirCallArg,
+    arg: &rsscript_semantics::hir::HirCallArg,
     index: usize,
     resolution: &CallResolution,
 ) -> bool {

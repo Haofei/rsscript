@@ -22,6 +22,7 @@ core = [
   "rsscript-project",
   "rsscript-review",
   "rsscript-review-core",
+  "rsscript-review-source",
   "rsscript-provider-api",
   "rsscript-provider-bindgen",
   "rsscript-provider-conformance",

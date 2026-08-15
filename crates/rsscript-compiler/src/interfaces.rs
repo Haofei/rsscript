@@ -27,9 +27,6 @@ pub(crate) use rsscript_interface_catalog::builtin_interfaces;
 #[cfg(not(test))]
 #[allow(unused_imports)]
 pub(crate) use rsscript_interface_catalog::default_interfaces;
-#[cfg(all(not(test), feature = "package"))]
-pub(crate) use rsscript_interface_catalog::standard_package_interfaces;
-
 #[cfg(all(test, feature = "package"))]
 #[allow(dead_code)]
 pub(crate) fn default_interfaces() -> impl Iterator<Item = (&'static str, &'static str)> {
@@ -40,7 +37,7 @@ pub(crate) fn default_interfaces() -> impl Iterator<Item = (&'static str, &'stat
         .copied()
 }
 
-#[cfg(all(test, feature = "package"))]
+#[cfg(all(test, feature = "selfhost-parity"))]
 pub(crate) fn standard_package_interfaces() -> impl Iterator<Item = (&'static str, &'static str)> {
     rsscript_interface_catalog::STANDARD_PACKAGE_INTERFACES
         .iter()

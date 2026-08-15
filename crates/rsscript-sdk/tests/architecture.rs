@@ -3735,7 +3735,7 @@ fn compiler_legacy_package_review_and_aot_exports_are_quarantined() {
         );
     }
     assert!(compiler.contains("pub use crate::package::{"));
-    assert!(compiler.contains("pub use crate::review::{"));
+    assert!(compiler.contains("pub use rsscript_review_source::{"));
     assert!(!compiler.contains("pub use crate::rust_lower::{"));
     assert!(compiler.contains("compile_frontend_input_to_ir"));
     assert!(
@@ -3748,6 +3748,56 @@ fn compiler_legacy_package_review_and_aot_exports_are_quarantined() {
     assert!(sdk.contains("pub use rsscript_aot_backend::{"));
     let cli_aot = read(&root.join("crates/rsscript-cli/src/cli/mod.rs"));
     assert!(cli_aot.contains("use rsscript_aot_backend::{AotLoweringInput, lower_aot_input};"));
+}
+
+#[test]
+fn source_review_facts_live_outside_the_compiler_crate() {
+    let root = workspace_root();
+    let compiler_review = root.join("crates/rsscript-compiler/src/review");
+    assert!(
+        !compiler_review.join("mod.rs").exists()
+            && !compiler_review.join("diff.rs").exists()
+            && !compiler_review.join("facts_ast.rs").exists()
+            && !compiler_review.join("facts_hir.rs").exists()
+            && !compiler_review.join("map.rs").exists(),
+        "source-level review facts must not remain under the compiler implementation"
+    );
+
+    let manifest: toml::Value = toml::from_str(&read(
+        &root.join("crates/rsscript-review-source/Cargo.toml"),
+    ))
+    .expect("source review manifest should parse");
+    let dependencies = normal_dependency_packages(&manifest);
+    for forbidden in [
+        "rsscript-compiler",
+        "rsscript-vm",
+        "rsscript-project",
+        "rsscript-provider-api",
+    ] {
+        assert!(
+            !dependencies.contains(forbidden),
+            "source review must not depend on `{forbidden}`"
+        );
+    }
+    for required in [
+        "rsscript-syntax",
+        "rsscript-semantics",
+        "rsscript-diagnostics",
+    ] {
+        assert!(
+            dependencies.contains(required),
+            "source review must consume the neutral `{required}` boundary"
+        );
+    }
+
+    let compiler_manifest: toml::Value =
+        toml::from_str(&read(&root.join("crates/rsscript-compiler/Cargo.toml")))
+            .expect("compiler manifest should parse");
+    assert_eq!(
+        compiler_manifest["dependencies"]["rsscript-review-source"]["optional"].as_bool(),
+        Some(true),
+        "source review remains an explicit legacy package compatibility dependency"
+    );
 }
 
 #[test]

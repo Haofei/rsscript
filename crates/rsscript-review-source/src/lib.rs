@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 #![allow(
     clippy::collapsible_if,
     clippy::collapsible_match,
@@ -22,7 +23,7 @@
     clippy::unnecessary_lazy_evaluations,
     clippy::useless_conversion
 )]
-// Optional legacy review rendering keeps its lint debt out of compiler Core.
+// Optional source-level review rendering keeps its lint debt out of compiler Core.
 
 //! Source-level review: the review-MAP (AST/HIR fact extraction + classification)
 //! and the semantic-DIFF (signature contracts).
@@ -35,24 +36,24 @@ mod diff;
 mod facts_ast;
 mod facts_hir;
 mod map;
-pub(crate) use map::review_map_semantic_database;
+pub use map::review_map_semantic_database;
 
-use crate::text_util::{type_arg_names, type_root_name};
+use rsscript_text::{type_arg_names, type_root_name};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::Serialize;
 
-use crate::diagnostic::{Span, code};
-use crate::hir::{
+use rsscript_diagnostics::{Span, code};
+use rsscript_interface_catalog::standard_package_interfaces;
+use rsscript_semantics::hir::{
     CallResolution, FunctionSig as HirFunctionSig, Hir, HirBindingKind, HirBlock, HirExpr, HirStmt,
     ParamEffect, ResolvedCalleeKind,
 };
-use crate::interfaces::standard_package_interfaces;
-use crate::syntax::ast::{
+use rsscript_syntax::ast::{
     Block, CallArg, Callee, DataEffect, Expr, FieldDecl, FunctionDecl, GenericBound, Item, LetKind,
     MatchPattern, Param, Program, ProtocolImpl, Stmt, TypeDecl, TypeKind, TypeRef, merge_programs,
 };
-use crate::syntax::parse_source;
+use rsscript_syntax::parse_source;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReviewFinding {
@@ -231,3 +232,59 @@ pub use diff::*;
 use facts_ast::*;
 use facts_hir::*;
 pub use map::*;
+
+#[cfg(test)]
+mod tests {
+    use super::{ReviewMapClassification, ReviewRisk, review_map_sources, review_sources};
+
+    #[test]
+    fn semantic_diff_reports_a_changed_sum_contract() {
+        let old = r#"
+sum PackageError {
+    Io(path: String)
+}
+"#;
+        let new = r#"
+sum PackageError {
+    Io(path: Path)
+}
+"#;
+
+        let findings = review_sources("old.rss", old, "new.rss", new);
+        let change = findings
+            .iter()
+            .find(|finding| finding.code == "RSR018")
+            .expect("changed sum contract should produce review evidence");
+        assert_eq!(change.risk, ReviewRisk::Api);
+        assert_eq!(change.before.as_deref(), Some("variants: Io(path: String)"));
+        assert_eq!(change.after.as_deref(), Some("variants: Io(path: Path)"));
+    }
+
+    #[test]
+    fn semantic_map_uses_resolved_interfaces_but_keeps_unknown_calls_visible() {
+        let source = r#"
+pub fn run(value: read Int) -> Int {
+    return Mystery.run(value: read value)
+}
+"#;
+
+        let map = review_map_sources(vec![("run.rss", source)]);
+        let region = map.files[0]
+            .regions
+            .iter()
+            .find(|region| region.function == "run")
+            .expect("public function should have a review-map region");
+        assert_eq!(region.classification, ReviewMapClassification::Unknown);
+        assert!(
+            region
+                .reasons
+                .iter()
+                .any(|reason| reason == "public entry point")
+                && region
+                    .reasons
+                    .iter()
+                    .any(|reason| reason.contains("Mystery.run")),
+            "unknown calls must remain review evidence: {region:?}"
+        );
+    }
+}

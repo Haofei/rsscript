@@ -1850,6 +1850,7 @@ dependencies = [
  "rsscript-operation",
  "rsscript-project",
  "rsscript-review-core",
+ "rsscript-review-source",
  "rsscript-semantics",
  "rsscript-syntax",
  "rsscript-text",
@@ -2082,6 +2083,19 @@ name = "rsscript-review-reir"
 version = "0.1.0"
 dependencies = [
  "reir",
+ "serde_json",
+]
+
+[[package]]
+name = "rsscript-review-source"
+version = "0.1.0"
+dependencies = [
+ "rsscript-diagnostics",
+ "rsscript-interface-catalog",
+ "rsscript-semantics",
+ "rsscript-syntax",
+ "rsscript-text",
+ "serde",
  "serde_json",
 ]
 

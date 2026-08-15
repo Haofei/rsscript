@@ -26,9 +26,11 @@ pub(crate) fn review_map_sources_with_interfaces(
     review_map_from_parsed_sources(parsed_sources, &hir)
 }
 
-pub(crate) fn review_map_semantic_database(
-    database: &crate::semantic::SemanticDatabase,
-) -> ReviewMap {
+/// Derives source-level review facts from an already-built semantic database.
+///
+/// This is intentionally a review-only consumer: it neither mutates semantic
+/// state nor participates in compiler validation or lowering.
+pub fn review_map_semantic_database(database: &rsscript_semantics::SemanticDatabase) -> ReviewMap {
     let parsed_sources = database
         .sources()
         .files()

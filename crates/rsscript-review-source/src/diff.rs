@@ -523,7 +523,7 @@ pub(super) fn collect_sum_type_sigs(items: &[Item]) -> BTreeMap<String, SumTypeS
         .collect()
 }
 
-pub(super) fn sum_variant_contracts(sum: &crate::syntax::ast::SumTypeDecl) -> Vec<String> {
+pub(super) fn sum_variant_contracts(sum: &rsscript_syntax::ast::SumTypeDecl) -> Vec<String> {
     sum.variants
         .iter()
         .map(|variant| {

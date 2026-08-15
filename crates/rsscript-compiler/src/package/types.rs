@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::diagnostic::{Diagnostic, Span};
-use crate::review::{ReviewFinding, ReviewMap};
+use rsscript_review_source::{ReviewFinding, ReviewMap};
 
 /// Compatibility re-export for legacy package APIs. New review consumers must
 /// import the model from `rsscript-review-core` directly.

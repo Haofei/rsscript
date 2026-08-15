@@ -1,13 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::diagnostic::{Diagnostic, code};
-use crate::review::{ReviewMap, ReviewMapClassification};
 use crate::syntax::ast::{
     ConstDecl, DataEffect, Expr, FieldDecl, FunctionDecl, GenericBound, GenericParam, Item, Param,
     ProtocolDecl, ProtocolImpl, SumTypeDecl, SumVariant, TypeAliasDecl, TypeDecl, TypeKind,
     TypeRef,
 };
 use crate::syntax::parse_source;
+use rsscript_review_source::{ReviewMap, ReviewMapClassification};
 
 use super::analysis::session_analysis;
 use super::{PackageReviewExport, PackageReviewFileKind, PackageSource};

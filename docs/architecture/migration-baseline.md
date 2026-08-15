@@ -845,8 +845,10 @@ an arbitrary shell executor.
     compiler exports that new frontend consumers can accidentally adopt. Human,
     JSON, Markdown, and lock presentation now live in the optional
     `rsscript-review` consumer crate; the compiler no longer compiles those
-    formatters. Risk calculation and captured package-review execution remain
-    legacy compiler compatibility work and keep this item open.
+    formatters. Source-level review facts and semantic diff now live in the
+    dedicated `rsscript-review-source` consumer crate. Captured package-review
+    execution and its legacy package presentation remain compiler compatibility
+    work and keep this item open.
     The provider- and review-neutral `rsscript.package_analysis.v1` model now
     lives in `rsscript-artifact`; compiler package compatibility only produces
     and re-exports that typed schema. Its JSON presentation now belongs to the
@@ -867,6 +869,12 @@ an arbitrary shell executor.
       typed facts and preserves only a compatibility re-export; the optional
       `rsscript-review` consumer owns the public review-model API. Artifact
       analysis remains deterministic and policy-neutral.
+    - [x] **S05.3b — Extract source-level review facts.** The review-MAP and
+      semantic-DIFF implementation now live in `rsscript-review-source`, which
+      consumes only syntax, semantics, diagnostics, the interface catalog, and
+      text utilities. Compiler package compatibility consumes that explicit
+      optional dependency; architecture tests reject a reverse compiler, VM,
+      project, or Provider edge.
   - [x] **S05.4 — Move Rust/AOT lowering to its experimental boundary.** The
     compiler has no AOT feature, implementation module, output-model dependency,
     or generated-Rust compatibility export. `rsscript-aot-backend` directly

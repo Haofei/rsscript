@@ -10,8 +10,8 @@ use crate::analyzer::core_interfaces;
 use crate::diagnostic::{Diagnostic, Span, code};
 use crate::hir::CallResolution;
 use crate::lint::lint_source;
-use crate::review::{ReviewMap, ReviewMapClassification, review_map_semantic_database};
 use crate::syntax::ast::{Callee, Expr, Item, TypeKind};
+use rsscript_review_source::{ReviewMap, ReviewMapClassification, review_map_semantic_database};
 
 use super::contract::{
     PackageFunctionContract, collect_package_const_contracts, collect_package_function_contracts,
