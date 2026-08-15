@@ -4,7 +4,7 @@ use std::fmt;
 use sha2::{Digest, Sha256};
 
 use crate::{Diagnostic, ValidatedProgram};
-use rsscript_semantics::CompilationSession;
+use rsscript_semantics::{CompilationSession, FrontendInputSnapshot};
 
 /// Owned output of the platform-neutral compiler boundary.
 ///
@@ -106,10 +106,30 @@ impl CompiledIr {
 }
 
 pub fn compile_source_to_ir(file: &str, source: &str) -> Result<CompiledIr, Vec<Diagnostic>> {
+    compile_frontend_input_to_ir(&FrontendInputSnapshot::single(file, source))
+}
+
+/// Compile one immutable in-memory frontend snapshot into owned compiler
+/// output.
+///
+/// This is the compiler's project boundary: callers must capture filesystem
+/// state, manifests, dependency resolution, and interface discovery before
+/// constructing the snapshot. The compiler itself only consumes these bytes
+/// and never performs path, environment, or persistence I/O.
+pub fn compile_frontend_input_to_ir(
+    input: &FrontendInputSnapshot,
+) -> Result<CompiledIr, Vec<Diagnostic>> {
     let mut session = CompilationSession::default();
-    session
-        .set_file(file, source)
-        .expect("compiler source path must be a normalized unique logical path");
+    for file in input.interfaces().files() {
+        session
+            .set_interface(file.path(), file.text())
+            .expect("frontend input snapshot contains normalized unique interface paths");
+    }
+    for file in input.sources().files() {
+        session
+            .set_file(file.path(), file.text())
+            .expect("frontend input snapshot contains normalized unique source paths");
+    }
     let validated = session.workspace_validated()?;
     Ok(compile_validated_to_ir(&validated))
 }
@@ -164,30 +184,6 @@ pub fn compile_ir_to_bytecode(
             ))
         })?;
     Ok(artifact)
-}
-
-#[cfg(feature = "package")]
-pub fn compile_package_input_to_ir(
-    input: &crate::package::PackageLoweringInput,
-) -> Result<CompiledIr, Vec<Diagnostic>> {
-    // Package compatibility remains a separate feature, but its frontend work
-    // must still enter through the semantic-owned session boundary. The
-    // session supplies the Core interface catalog; package interfaces are the
-    // only explicit additions, matching the previous `without_core` call
-    // without duplicating Core declarations in the captured input.
-    let mut session = CompilationSession::default();
-    for (path, contents) in &input.interfaces {
-        session
-            .set_interface(path, contents)
-            .expect("package lowering input contains normalized unique interface paths");
-    }
-    for (path, contents) in &input.sources {
-        session
-            .set_file(path, contents)
-            .expect("package lowering input contains normalized unique source paths");
-    }
-    let validated = session.workspace_validated()?;
-    Ok(compile_validated_to_ir(&validated))
 }
 
 fn source_hash(validated: &ValidatedProgram) -> String {

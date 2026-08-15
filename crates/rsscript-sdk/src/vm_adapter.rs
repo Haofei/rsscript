@@ -7,11 +7,10 @@
 use std::path::Path;
 
 #[cfg(any(feature = "project", feature = "compatibility"))]
-use rsscript_compiler::compatibility::{
-    compile_package_input_to_ir, prepare_package_for_execution, PackageLoweringInput,
-};
+use rsscript_compiler::compatibility::{PackageLoweringInput, prepare_package_for_execution};
 use rsscript_compiler::{
-    compile_source_to_ir, compile_validated_to_ir, CompiledIr, ValidatedProgram,
+    CompiledIr, ValidatedProgram, compile_frontend_input_to_ir, compile_source_to_ir,
+    compile_validated_to_ir,
 };
 
 use rsscript_bytecode::BytecodeArtifact;
@@ -33,7 +32,8 @@ pub fn reg_vm_compile_package(package_dir: &Path) -> Result<RegVmExecutable, Eva
 pub fn reg_vm_compile_package_input(
     input: &PackageLoweringInput,
 ) -> Result<RegVmExecutable, EvalError> {
-    let compiled = compile_package_input_to_ir(input).map_err(EvalError::Diagnostics)?;
+    let frontend = input.frontend_input();
+    let compiled = compile_frontend_input_to_ir(&frontend).map_err(EvalError::Diagnostics)?;
     emit_ir(&compiled)
 }
 

@@ -60,13 +60,13 @@ pub use rsscript_compiler::compatibility::{
     PackageReviewSummary, PackageRisk, PackageSourceFile, PackageTree, PackageTreeNode,
     PackageTreeSummary, PreparedPackage, ReviewFix, ReviewMap, ReviewMapCategorySummary,
     ReviewMapClassification, ReviewMapFile, ReviewMapFileRisk, ReviewMapRegion, ReviewMapSummary,
-    ReviewRisk, WorkspaceSnapshot, analyze_package_dir, check_package_dir, compile_ir_to_bytecode,
-    compile_package_input_to_ir, compile_source_to_ir, compile_validated_to_bytecode,
-    compile_validated_to_ir, diff_package_dirs, diff_package_locks, format_review_human,
-    format_review_json, format_review_map_human, format_review_map_json, load_workspace_snapshot,
-    load_workspace_snapshot_with_operation, lock_package_dir, package_lowering_input,
-    package_sources, package_sources_with_dependency_interfaces, package_tree,
-    prepare_executable_package, prepare_package_for_execution, review_map_sources,
+    ReviewRisk, WorkspaceSnapshot, analyze_package_dir, check_package_dir,
+    compile_frontend_input_to_ir, compile_ir_to_bytecode, compile_source_to_ir,
+    compile_validated_to_bytecode, compile_validated_to_ir, diff_package_dirs, diff_package_locks,
+    format_review_human, format_review_json, format_review_map_human, format_review_map_json,
+    load_workspace_snapshot, load_workspace_snapshot_with_operation, lock_package_dir,
+    package_lowering_input, package_sources, package_sources_with_dependency_interfaces,
+    package_tree, prepare_executable_package, prepare_package_for_execution, review_map_sources,
     review_package_dir, review_sources,
 };
 #[cfg(all(feature = "compatibility", feature = "aot-rust"))]
@@ -330,8 +330,9 @@ pub mod project {
                 if analysis.summary.errors != 0 {
                     return Err(CompileError::Diagnostics(analysis.diagnostics.clone()));
                 }
-                let compiled = compile_package_input_to_ir(snapshot.lowering_input())
-                    .map_err(CompileError::Diagnostics)?;
+                let frontend = snapshot.lowering_input().frontend_input();
+                let compiled =
+                    compile_frontend_input_to_ir(&frontend).map_err(CompileError::Diagnostics)?;
                 let artifact = compile_ir_to_bytecode(&compiled, snapshot.digest())
                     .map_err(bytecode_compile_error)?;
                 analysis.module_digest = Some(artifact.header.executable_hash.clone());

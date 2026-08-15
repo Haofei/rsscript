@@ -666,6 +666,11 @@ mechanical acceptance condition holds.
     isolated under `project::legacy::PackageCompatibility` and requires the
     explicit SDK `compatibility` feature. Compiler package
     callers that also require native/review compatibility remain to be migrated.
+    Compatibility package snapshots now project their already-captured source
+    and interface bytes into `FrontendInputSnapshot`; the compiler lowerer no
+    longer accepts or references `PackageLoweringInput`. This prevents package
+    metadata, native dependency declarations, and path state from crossing the
+    pure compiler boundary even on the opt-in legacy route.
     Manifest dependency discovery now parses the loader-owned
     `WorkspaceManifestV1` projection and admits only explicit local path
     dependencies into capture; version, git, and registry declarations cannot

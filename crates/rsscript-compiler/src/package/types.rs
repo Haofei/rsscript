@@ -102,6 +102,21 @@ pub struct PackageLoweringInput {
     pub native_dependencies: Vec<NativeRustDependency>,
 }
 
+impl PackageLoweringInput {
+    /// Project/package compatibility projection into the compiler's pure input
+    /// boundary. No filesystem state is retained by the resulting value.
+    pub fn frontend_input(&self) -> rsscript_semantics::FrontendInputSnapshot {
+        rsscript_semantics::FrontendInputSnapshot::from_sources(
+            self.sources
+                .iter()
+                .map(|(path, contents)| (path.as_str(), contents.as_str())),
+            self.interfaces
+                .iter()
+                .map(|(path, contents)| (path.as_str(), contents.as_str())),
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NativePluginBuildDependency {
     pub crate_name: String,

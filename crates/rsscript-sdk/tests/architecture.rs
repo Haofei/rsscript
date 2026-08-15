@@ -247,7 +247,9 @@ fn cargo_metadata_enforces_composition_dependency_direction() {
         "tempfile",
     ] {
         assert!(
-            !lowering_tree.lines().any(|line| line.starts_with(forbidden)),
+            !lowering_tree
+                .lines()
+                .any(|line| line.starts_with(forbidden)),
             "the provider-neutral lowering closure must not include `{forbidden}`:\n{lowering_tree}"
         );
     }
@@ -999,16 +1001,21 @@ fn syntax_model_is_owned_by_the_boundary_crate() {
     let root = workspace_root();
     assert!(root.join("crates/rsscript-syntax/src/ast.rs").is_file());
     assert!(root.join("crates/rsscript-syntax/src/lexer.rs").is_file());
-    assert!(root
-        .join("crates/rsscript-syntax/src/parser/mod.rs")
-        .is_file());
-    assert!(!root
-        .join("crates/rsscript-compiler/src/syntax/ast.rs")
-        .exists());
+    assert!(
+        root.join("crates/rsscript-syntax/src/parser/mod.rs")
+            .is_file()
+    );
+    assert!(
+        !root
+            .join("crates/rsscript-compiler/src/syntax/ast.rs")
+            .exists()
+    );
     assert!(!root.join("crates/rsscript-compiler/src/lexer.rs").exists());
-    assert!(!root
-        .join("crates/rsscript-compiler/src/syntax/parser")
-        .exists());
+    assert!(
+        !root
+            .join("crates/rsscript-compiler/src/syntax/parser")
+            .exists()
+    );
 
     let manifest: toml::Value =
         toml::from_str(&read(&root.join("crates/rsscript-syntax/Cargo.toml")))
@@ -1343,18 +1350,16 @@ fn package_analysis_schema_is_an_artifact_contract_not_compiler_implementation()
         !package_format.contains("format_package_analysis_json"),
         "review adapter must not define a second presentation for Artifact-owned analysis evidence"
     );
-    let review_manifest: toml::Value = toml::from_str(&read(
-        &root.join("crates/rsscript-review/Cargo.toml"),
-    ))
-    .expect("review adapter manifest should parse");
+    let review_manifest: toml::Value =
+        toml::from_str(&read(&root.join("crates/rsscript-review/Cargo.toml")))
+            .expect("review adapter manifest should parse");
     assert!(
         normal_dependency_packages(&review_manifest).contains("rsscript-compiler"),
         "review presentation must consume compiler evidence rather than reimplement analysis"
     );
-    let compiler_manifest: toml::Value = toml::from_str(&read(
-        &root.join("crates/rsscript-compiler/Cargo.toml"),
-    ))
-    .expect("compiler manifest should parse");
+    let compiler_manifest: toml::Value =
+        toml::from_str(&read(&root.join("crates/rsscript-compiler/Cargo.toml")))
+            .expect("compiler manifest should parse");
     assert!(
         !normal_dependency_packages(&compiler_manifest).contains("rsscript-review"),
         "compiler must not depend on optional review presentation"
@@ -1367,8 +1372,11 @@ fn reviewed_sdk_exposes_analysis_through_the_versioned_envelope() {
     let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
     assert!(sdk.contains("pub fn analysis_envelope(&self) -> &AnalysisEnvelopeV1"));
     assert!(sdk.contains("pub fn package_analysis(&self) -> Option<&PackageAnalysisV1>"));
-    assert!(sdk
-        .contains("#[cfg(feature = \"compatibility\")]\n    #[doc(hidden)]\n    pub fn analysis"));
+    assert!(
+        sdk.contains(
+            "#[cfg(feature = \"compatibility\")]\n    #[doc(hidden)]\n    pub fn analysis"
+        )
+    );
 }
 
 #[test]
@@ -1668,12 +1676,15 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
             .is_file(),
         "semantic phase types and immutable facts must be owned by semantics"
     );
-    assert!(!root
-        .join("crates/rsscript-compiler/src/semantic_types.rs")
-        .exists());
-    assert!(root
-        .join("crates/rsscript-semantics/src/hir/mod.rs")
-        .is_file());
+    assert!(
+        !root
+            .join("crates/rsscript-compiler/src/semantic_types.rs")
+            .exists()
+    );
+    assert!(
+        root.join("crates/rsscript-semantics/src/hir/mod.rs")
+            .is_file()
+    );
     assert!(
         rust_files_below(&root.join("crates/rsscript-compiler/src/hir"))
             .iter()
@@ -1874,7 +1885,9 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     assert!(semantic_declarations.contains("pub fn unknown_field_diagnostics"));
     let compiler_declarations =
         read(&root.join("crates/rsscript-compiler/src/checks/declarations/duplicate_decls.rs"));
-    assert!(compiler_declarations.contains("rsscript_semantics::duplicate_declaration_diagnostics"));
+    assert!(
+        compiler_declarations.contains("rsscript_semantics::duplicate_declaration_diagnostics")
+    );
     assert!(
         !compiler_declarations.contains("duplicate_symbols()"),
         "compiler declaration checks must consume semantic duplicate diagnostics instead of reinterpreting HIR identity facts"
@@ -1892,14 +1905,20 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         read(&root.join("crates/rsscript-compiler/src/analyzer/syntax_support.rs"));
     assert!(compiler_syntax_support.contains("rsscript_semantics::derive_syntax_diagnostics"));
     assert!(!compiler_syntax_support.contains("fn check_module_use_layout"));
-    assert!(compiler_syntax_support.contains("rsscript_semantics::declaration_surface_diagnostics"));
-    assert!(compiler_syntax_support
-        .contains("rsscript_semantics::declaration_item_surface_diagnostics"));
+    assert!(
+        compiler_syntax_support.contains("rsscript_semantics::declaration_surface_diagnostics")
+    );
+    assert!(
+        compiler_syntax_support
+            .contains("rsscript_semantics::declaration_item_surface_diagnostics")
+    );
     assert!(compiler_syntax_support.contains("rsscript_semantics::type_ref_surface_diagnostics"));
     assert!(!compiler_syntax_support.contains("fn check_unsupported_syntax_type_ref"));
     assert!(compiler_syntax_support.contains("rsscript_semantics::item_body_surface_diagnostics"));
-    assert!(compiler_syntax_support
-        .contains("rsscript_semantics::by_value_callback_parameter_diagnostic"));
+    assert!(
+        compiler_syntax_support
+            .contains("rsscript_semantics::by_value_callback_parameter_diagnostic")
+    );
     for forbidden in [
         "fn check_unsupported_syntax_block",
         "fn check_unsupported_syntax_stmt",
@@ -1923,10 +1942,14 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     assert!(!compiler_syntax_support.contains("Diagnostic::"));
     let compiler_declaration_diagnostics =
         read(&root.join("crates/rsscript-compiler/src/analyzer/diagnostics.rs"));
-    assert!(compiler_declaration_diagnostics
-        .contains("rsscript_semantics::unknown_type_name_diagnostic"));
-    assert!(compiler_declaration_diagnostics
-        .contains("rsscript_semantics::protocol_impl_mismatch_diagnostic"));
+    assert!(
+        compiler_declaration_diagnostics
+            .contains("rsscript_semantics::unknown_type_name_diagnostic")
+    );
+    assert!(
+        compiler_declaration_diagnostics
+            .contains("rsscript_semantics::protocol_impl_mismatch_diagnostic")
+    );
     assert!(!compiler_declaration_diagnostics.contains("Diagnostic::"));
     let compiler_resource_rules =
         read(&root.join("crates/rsscript-compiler/src/checks/body/resources.rs"));
@@ -1971,7 +1994,9 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     let semantic_local_flow_solver =
         read(&root.join("crates/rsscript-semantics/src/local_flow_solver.rs"));
     assert!(semantic_local_flow_solver.contains("merge_non_fallthrough"));
-    assert!(compiler_local_analysis.contains("use rsscript_semantics::LocalFlowState as BodyState"));
+    assert!(
+        compiler_local_analysis.contains("use rsscript_semantics::LocalFlowState as BodyState")
+    );
     assert!(compiler_local_analysis.contains("rsscript_semantics::local_flow_entry_states"));
     assert!(compiler_local_flow.contains("rsscript_semantics::local_flow_graph"));
     assert!(
@@ -2087,8 +2112,10 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     assert!(
         compiler_protocol_signatures.contains("rsscript_semantics::protocol_signature_mismatch")
     );
-    assert!(compiler_protocol_signatures
-        .contains("rsscript_semantics::protocol_declaration_diagnostics"));
+    assert!(
+        compiler_protocol_signatures
+            .contains("rsscript_semantics::protocol_declaration_diagnostics")
+    );
     assert!(compiler_protocol_signatures.contains("rsscript_semantics::protocol_method_names"));
     for forbidden in [
         "fn protocol_method_names",
@@ -2137,7 +2164,9 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     assert!(semantic_control_flow.contains("pub fn non_exhaustive_match_diagnostic"));
     let compiler_exhaustiveness =
         read(&root.join("crates/rsscript-compiler/src/analyzer/exhaustiveness.rs"));
-    assert!(compiler_exhaustiveness.contains("rsscript_semantics::non_exhaustive_match_diagnostic"));
+    assert!(
+        compiler_exhaustiveness.contains("rsscript_semantics::non_exhaustive_match_diagnostic")
+    );
     assert!(
         !compiler_exhaustiveness.contains("Diagnostic::"),
         "compiler must not construct non-exhaustive match diagnostics"
@@ -2243,8 +2272,10 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     assert!(semantic_closure_escape.contains("pub enum ClosureEscapeContext"));
     assert!(semantic_closure_escape.contains("pub fn noescape_escape_diagnostic"));
     assert!(semantic_closure_escape.contains("pub fn local_closure_escape_diagnostic"));
-    assert!(compiler_closure_contracts
-        .contains("rsscript_semantics::ClosureEscapeContext as NoescapeEscapeContext"));
+    assert!(
+        compiler_closure_contracts
+            .contains("rsscript_semantics::ClosureEscapeContext as NoescapeEscapeContext")
+    );
     assert!(compiler_closure_contracts.contains("rsscript_semantics::noescape_escape_diagnostic"));
     assert!(
         compiler_closure_contracts.contains("rsscript_semantics::local_closure_escape_diagnostic")
@@ -2284,10 +2315,14 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     }
     let compiler_type_compatibility =
         read(&root.join("crates/rsscript-compiler/src/checks/calls/type_compatibility.rs"));
-    assert!(compiler_type_compatibility
-        .contains("rsscript_semantics::map_literal_entry_type_mismatch_diagnostic"));
-    assert!(compiler_type_compatibility
-        .contains("rsscript_semantics::list_literal_item_type_mismatch_diagnostic"));
+    assert!(
+        compiler_type_compatibility
+            .contains("rsscript_semantics::map_literal_entry_type_mismatch_diagnostic")
+    );
+    assert!(
+        compiler_type_compatibility
+            .contains("rsscript_semantics::list_literal_item_type_mismatch_diagnostic")
+    );
     assert!(compiler_type_compatibility.contains("rsscript_semantics::type_compatible"));
     for forbidden in [
         "fn argument_type_matches",
@@ -2300,8 +2335,10 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
             "compiler must not re-own structural type compatibility rule `{forbidden}`"
         );
     }
-    assert!(compiler_type_compatibility
-        .contains("rsscript_semantics::contains_unresolved_generic_type"));
+    assert!(
+        compiler_type_compatibility
+            .contains("rsscript_semantics::contains_unresolved_generic_type")
+    );
     let compiler_assignment = read(&root.join("crates/rsscript-compiler/src/analyzer/assign.rs"));
     assert!(compiler_assignment.contains("rsscript_semantics::contains_unresolved_generic_type"));
     assert!(
@@ -2477,8 +2514,10 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         compiler_body_semantics.contains("rsscript_semantics::integer_literal_range_diagnostic")
     );
     assert!(compiler_body_semantics.contains("rsscript_semantics::char_literal_scalar_diagnostic"));
-    assert!(compiler_body_semantics
-        .contains("rsscript_semantics::match_char_literal_scalar_diagnostic"));
+    assert!(
+        compiler_body_semantics
+            .contains("rsscript_semantics::match_char_literal_scalar_diagnostic")
+    );
     for forbidden in [
         "fn check_integer_literal_range",
         "fn check_char_literal_scalar",
@@ -2507,8 +2546,10 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "compiler must not re-own for iterable diagnostics"
     );
     assert!(semantic_control_flow.contains("pub fn match_expression_arm_type_diagnostics"));
-    assert!(compiler_body_semantics
-        .contains("rsscript_semantics::match_expression_arm_type_diagnostics"));
+    assert!(
+        compiler_body_semantics
+            .contains("rsscript_semantics::match_expression_arm_type_diagnostics")
+    );
     for forbidden in [
         "fn check_match_expression_arm_types",
         "fn match_arm_value_type",
@@ -2563,7 +2604,9 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "compiler must not re-own structured match effect diagnostics"
     );
     assert!(semantic_control_flow.contains("pub fn match_guard_mutation_diagnostic"));
-    assert!(compiler_body_semantics.contains("rsscript_semantics::match_guard_mutation_diagnostic"));
+    assert!(
+        compiler_body_semantics.contains("rsscript_semantics::match_guard_mutation_diagnostic")
+    );
     assert!(
         !compiler_body_semantics.contains("match guard cannot use"),
         "compiler must not re-own match guard mutation diagnostics"
@@ -2714,8 +2757,10 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     ] {
         assert!(compiler_body_fresh.contains(delegated));
     }
-    assert!(compiler_body_semantics
-        .contains("rsscript_semantics::fresh_requires_local_binding_diagnostic"));
+    assert!(
+        compiler_body_semantics
+            .contains("rsscript_semantics::fresh_requires_local_binding_diagnostic")
+    );
     assert!(compiler_body_effects.contains("rsscript_semantics::read_view_mutation_diagnostic"));
     assert!(compiler_body_fresh.contains("rsscript_semantics::read_view_mutation_diagnostic"));
     let compiler_body_places =
@@ -2723,12 +2768,18 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     assert!(
         compiler_body_places.contains("rsscript_semantics::noescape_consumes_capture_diagnostic")
     );
-    assert!(compiler_body_closures
-        .contains("rsscript_semantics::explicit_closure_missing_capture_diagnostic"));
-    assert!(compiler_body_closures
-        .contains("rsscript_semantics::explicit_closure_unused_capture_diagnostic"));
-    assert!(compiler_body_closures
-        .contains("rsscript_semantics::explicit_closure_capture_contract_diagnostic"));
+    assert!(
+        compiler_body_closures
+            .contains("rsscript_semantics::explicit_closure_missing_capture_diagnostic")
+    );
+    assert!(
+        compiler_body_closures
+            .contains("rsscript_semantics::explicit_closure_unused_capture_diagnostic")
+    );
+    assert!(
+        compiler_body_closures
+            .contains("rsscript_semantics::explicit_closure_capture_contract_diagnostic")
+    );
     let semantic_places = read(&root.join("crates/rsscript-semantics/src/place.rs"));
     for exported in [
         "pub fn managed_field_split_conflict_diagnostic",
@@ -3071,7 +3122,6 @@ fn compiler_legacy_package_review_and_aot_exports_are_quarantined() {
         "pub use package::{",
         "pub use review::{",
         "pub use rust_lower::{",
-        "pub use compiler_output::compile_package_input_to_ir;",
     ] {
         assert!(
             !compiler.contains(legacy_root_export),
@@ -3081,7 +3131,11 @@ fn compiler_legacy_package_review_and_aot_exports_are_quarantined() {
     assert!(compiler.contains("pub use crate::package::{"));
     assert!(compiler.contains("pub use crate::review::{"));
     assert!(compiler.contains("pub use crate::rust_lower::{"));
-    assert!(compiler.contains("pub use crate::compiler_output::compile_package_input_to_ir;"));
+    assert!(compiler.contains("compile_frontend_input_to_ir"));
+    assert!(
+        !compiler.contains("compile_package_input_to_ir"),
+        "compiler lowering must accept the pure frontend snapshot rather than package compatibility input"
+    );
 
     let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
     assert!(sdk.contains("pub use rsscript_compiler::compatibility::{"));
@@ -3149,9 +3203,11 @@ fn compiler_does_not_embed_a_native_plugin_loader() {
     assert!(manifest["features"].get("native-plugin").is_none());
     let library = read(&root.join("crates/rsscript-compiler/src/lib.rs"));
     assert!(!library.contains("native_plugin"));
-    assert!(!root
-        .join("crates/rsscript-compiler/src/native_plugin/mod.rs")
-        .exists());
+    assert!(
+        !root
+            .join("crates/rsscript-compiler/src/native_plugin/mod.rs")
+            .exists()
+    );
 }
 
 #[test]
@@ -3805,14 +3861,7 @@ fn compiler_default_dependency_closure_is_host_neutral() {
         );
     }
     for dependency in [
-        "fs2",
-        "hex",
-        "libc",
-        "rustix",
-        "sha2",
-        "tempfile",
-        "toml",
-        "uuid",
+        "fs2", "hex", "libc", "rustix", "sha2", "tempfile", "toml", "uuid",
     ] {
         let specification = manifest["dependencies"][dependency]
             .as_table()
@@ -4319,10 +4368,18 @@ fn executable_backends_consume_validated_frontend_results() {
     let compiler_output = read(&root.join("crates/rsscript-compiler/src/compiler_output.rs"));
     let compile_source = function_source(&compiler_output, "pub fn compile_source_to_ir");
     assert!(
-        compile_source.contains("CompilationSession::default()")
-            && compile_source.contains("workspace_validated()")
-            && compile_source.contains("compile_validated_to_ir(&validated)"),
-        "compiler source lowering must consume a ValidatedProgram"
+        compile_source.contains("compile_frontend_input_to_ir"),
+        "single-source convenience lowering must delegate to the immutable frontend input boundary"
+    );
+    let compile_frontend = function_source(
+        &compiler_output,
+        "pub fn compile_frontend_input_to_ir",
+    );
+    assert!(
+        compile_frontend.contains("CompilationSession::default()")
+            && compile_frontend.contains("workspace_validated()")
+            && compile_frontend.contains("compile_validated_to_ir(&validated)"),
+        "compiler lowering must validate immutable frontend input before emitting owned IR"
     );
     let compile_adapter = read(&root.join("crates/rsscript-sdk/src/vm_adapter.rs"));
     let compile_validated = function_source(&compile_adapter, "pub fn reg_vm_compile_validated");
@@ -4526,9 +4583,11 @@ fn compiler_and_vm_do_not_embed_execution_authority() {
         !intrinsics.contains("authorize_intrinsic_host_access"),
         "intrinsic dispatch must be independent of runner policy"
     );
-    assert!(!root
-        .join("crates/rsscript-vm/src/reg_vm/host_adapters.rs")
-        .exists());
+    assert!(
+        !root
+            .join("crates/rsscript-vm/src/reg_vm/host_adapters.rs")
+            .exists()
+    );
 }
 
 #[test]

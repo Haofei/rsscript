@@ -75,7 +75,9 @@ pub use compiler_output::{
     BytecodeCompileError, compile_ir_to_bytecode, compile_validated_to_bytecode,
 };
 #[cfg(feature = "lowering")]
-pub use compiler_output::{CompiledIr, compile_source_to_ir, compile_validated_to_ir};
+pub use compiler_output::{
+    CompiledIr, compile_frontend_input_to_ir, compile_source_to_ir, compile_validated_to_ir,
+};
 pub use core_index::core_package_index_json;
 pub use diagnostic::{
     Diagnostic, DiagnosticExplanation, Fix, FixEdit, Severity, Span, explain_diagnostic_code,
@@ -115,14 +117,14 @@ pub use rsscript_semantics::{
 /// respective project, review, and AOT boundaries.
 #[cfg(any(feature = "package", feature = "aot-rust"))]
 pub mod compatibility {
-    #[cfg(all(feature = "lowering", feature = "package"))]
-    pub use crate::compiler_output::compile_package_input_to_ir;
     #[cfg(feature = "bytecode")]
     pub use crate::compiler_output::{
         BytecodeCompileError, compile_ir_to_bytecode, compile_validated_to_bytecode,
     };
     #[cfg(feature = "lowering")]
-    pub use crate::compiler_output::{CompiledIr, compile_source_to_ir, compile_validated_to_ir};
+    pub use crate::compiler_output::{
+        CompiledIr, compile_frontend_input_to_ir, compile_source_to_ir, compile_validated_to_ir,
+    };
     #[cfg(feature = "execution")]
     pub use crate::lower_names::lowered_symbol_name;
     #[cfg(feature = "package")]
@@ -130,23 +132,21 @@ pub mod compatibility {
         ExecutablePackageSnapshot, PackageAnalysis, PackageAnalysisAwaitSite,
         PackageAnalysisExport, PackageAnalysisExternalImport, PackageAnalysisFile,
         PackageAnalysisProducer, PackageAnalysisSummary, PackageCheck, PackageCheckLock,
-        PackageDependencyKind, PackageDiff, PackageExternalBinding,
-        PackageExternalBindingChange, PackageExternalBindingChangeKind, PackageGraphCheck,
-        PackageIdentity,
+        PackageDependencyKind, PackageDiff, PackageExternalBinding, PackageExternalBindingChange,
+        PackageExternalBindingChangeKind, PackageGraphCheck, PackageIdentity,
         PackageInterfaceChange, PackageInterfaceChangeKind, PackageLock, PackageLockDiff,
         PackageLockFieldChange, PackageLockMetadata, PackageLockPackage, PackageLockPackageChange,
         PackageLoweringInput, PackageManifestChange, PackageMetadataMismatch,
         PackageMetadataReport, PackageNativeRustAuthorDeclaration, PackageNativeRustCheck,
         PackageNativeRustReview, PackageNativeRustSemanticReview, PackageNativeRustSourceScan,
-        PackageReview, PackageReviewAwaitBoundary, PackageReviewAwaitSite,
-        PackageReviewDependency, PackageReviewExport, PackageReviewFile, PackageReviewFileKind,
-        PackageReviewMetadata, PackageReviewSummary, PackageRisk, PackageSourceFile, PackageTree,
-        PackageTreeNode, PackageTreeSummary, PreparedPackage, WorkspaceSnapshot,
-        analyze_package_dir, check_package_dir, diff_package_dirs, diff_package_locks,
-        load_workspace_snapshot, load_workspace_snapshot_with_operation, lock_package_dir,
-        package_lowering_input, package_sources,
-        package_sources_with_dependency_interfaces, package_tree, prepare_executable_package,
-        prepare_package_for_execution, review_package_dir,
+        PackageReview, PackageReviewAwaitBoundary, PackageReviewAwaitSite, PackageReviewDependency,
+        PackageReviewExport, PackageReviewFile, PackageReviewFileKind, PackageReviewMetadata,
+        PackageReviewSummary, PackageRisk, PackageSourceFile, PackageTree, PackageTreeNode,
+        PackageTreeSummary, PreparedPackage, WorkspaceSnapshot, analyze_package_dir,
+        check_package_dir, diff_package_dirs, diff_package_locks, load_workspace_snapshot,
+        load_workspace_snapshot_with_operation, lock_package_dir, package_lowering_input,
+        package_sources, package_sources_with_dependency_interfaces, package_tree,
+        prepare_executable_package, prepare_package_for_execution, review_package_dir,
     };
     #[cfg(feature = "package")]
     pub use crate::review::{
