@@ -480,6 +480,13 @@ fn migration_ready_queue() -> Result<MigrationReadyQueue, Box<dyn Error>> {
         let item = by_id
             .get(task.id.as_str())
             .ok_or_else(|| format!("migration queue task `{}` is not declared", task.id))?;
+        if migration_item_has_children(&status, &item.id) {
+            return Err(format!(
+                "migration queue task `{}` is a parent milestone; queue only independently closeable leaf items",
+                task.id
+            )
+            .into());
+        }
         if item.completed {
             return Err(format!(
                 "migration queue task `{}` is already complete; remove it from the frontier",
@@ -916,6 +923,18 @@ fn is_migration_descendant(parent: &str, candidate: &str, dotted_prefix: &str) -
         })
 }
 
+/// A queue entry is executable only when it maps to one independently
+/// closeable checklist item. Parent milestones deliberately stay out of the
+/// frontier: their children carry the bounded implementation contracts and a
+/// parent may require an additional acceptance review after they close.
+fn migration_item_has_children(status: &MigrationStatus, id: &str) -> bool {
+    let dotted_prefix = format!("{id}.");
+    status
+        .items
+        .iter()
+        .any(|candidate| is_migration_descendant(id, &candidate.id, &dotted_prefix))
+}
+
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
@@ -1329,6 +1348,17 @@ mod tests {
     }
 
     #[test]
+    fn migration_frontier_rejects_parent_milestones() {
+        let status = migration_status(
+            "- [ ] **S05.1 — Parent.**\n  - [x] **S05.1a — Completed child.**\n  - [ ] **S05.1b — Open child.**\n- [ ] **E02.2 — Leaf.**\n",
+        )
+        .expect("well-formed checklist");
+        assert!(migration_item_has_children(&status, "S05.1"));
+        assert!(!migration_item_has_children(&status, "S05.1a"));
+        assert!(!migration_item_has_children(&status, "E02.2"));
+    }
+
+    #[test]
     fn published_migration_checklist_is_machine_readable() {
         let status = migration_status(include_str!(
             "../../../docs/architecture/migration-baseline.md"
@@ -1343,7 +1373,7 @@ mod tests {
     fn published_migration_frontier_is_fail_closed_and_prioritized() {
         let queue = migration_ready_queue().expect("published frontier must be valid");
         assert_eq!(queue.schema, MIGRATION_QUEUE_SCHEMA);
-        assert!(queue.ready.iter().any(|item| item.id == "S05.1"));
+        assert!(queue.ready.iter().any(|item| item.id == "S05.1d"));
         assert!(
             queue
                 .ready
@@ -1401,7 +1431,7 @@ mod tests {
 
     #[test]
     fn published_migration_work_packet_is_bounded_and_actionable() {
-        let packet = migration_work_packet("S05.1").expect("published work packet");
+        let packet = migration_work_packet("S05.1d").expect("published work packet");
         assert_eq!(packet.schema, "rsscript.migration_work_packet.v1");
         assert_eq!(packet.state, "ready");
         assert!(!packet.scope.is_empty());

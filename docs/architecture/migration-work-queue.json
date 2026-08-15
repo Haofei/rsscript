@@ -2,7 +2,7 @@
   "schema": "rsscript.migration_queue.v1",
   "tasks": [
     {
-      "id": "S05.1",
+      "id": "S05.1d",
       "priority": 20,
       "depends_on": [],
       "scope": [
@@ -13,12 +13,13 @@
       ],
       "acceptance": [
         "Project capture owns bounded, confined manifest and source-tree reads.",
-        "Compiler package assembly consumes captured bytes and does not reimplement traversal.",
-        "The remaining legacy dependency/review/native resolver is explicitly documented until migrated."
+        "Legacy review and native compatibility resolution consume project-captured manifest bytes and do not reopen manifests.",
+        "Compiler retains only package-semantic parsing and feature selection after capture."
       ],
       "verification": [
         "cargo test -p rsscript-project --locked",
-        "cargo test -p rsscript-sdk --features project --lib --locked"
+        "cargo test -p rsscript-sdk --features compatibility --test architecture --locked",
+        "cargo test -p rsscript-sdk --features=compatibility,aot-rust,legacy-exec-ir --test static --locked"
       ]
     },
     {

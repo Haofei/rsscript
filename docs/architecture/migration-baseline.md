@@ -98,7 +98,7 @@ cargo run -p rsscript-xtask -- migration-status --open
 cargo run -p rsscript-xtask -- migration-status --require S02 --require G07
 cargo run -p rsscript-xtask -- migration-next
 cargo run -p rsscript-xtask -- migration-audit
-cargo run -p rsscript-xtask -- migration-verify S05.1
+cargo run -p rsscript-xtask -- migration-verify ITEM
 ```
 
 The first form produces the remaining work in document order (or use `--json`
@@ -778,6 +778,20 @@ an arbitrary shell executor.
     `WorkspaceManifestV1` projection and admits only explicit local path
     dependencies into capture; version, git, and registry declarations cannot
     silently expand filesystem input.
+    - [x] **S05.1a — Move bounded manifest and source-tree capture.** Project
+      capture owns raw manifests, confined source traversal, and byte limits;
+      compiler package assembly consumes the resulting bytes.
+    - [x] **S05.1b — Move compatibility graph I/O and path resolution.**
+      Captured graphs own private filesystem reads/writes, while compiler
+      compatibility uses project-owned dependency-root resolution.
+    - [x] **S05.1c — Capture dependency manifests before semantic resolution.**
+      The compiler dependency resolver consumes the bounded, deduplicated
+      `ProjectManifestGraph`, preserving legacy root spelling only for lock
+      identity.
+    - [ ] **S05.1d — Move legacy review/native manifest graph semantics.**
+      Review and native compatibility resolution consume the same captured
+      manifest graph rather than reopening manifests; compiler retains only
+      package-semantic interpretation and feature selection.
   - [ ] **S05.2 — Move Artifact persistence to an adapter.** Relocate locks,
     atomic writes, temporary files, compression, and artifact-store policy out
     of compiler. The confined lock/read/write implementation now lives in the
