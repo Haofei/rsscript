@@ -346,7 +346,13 @@ impl RegVm {
                     blocking_allowed,
                     async_allowed: false,
                 };
-                function.call_with_context(&mut context, arg_values)
+                if mut_args.is_empty() && function.is_wire_sync() {
+                    let wire_args = function.wire_args_from_native(arg_values)?;
+                    let wire_result = function.call_wire_with_context(&mut context, wire_args)?;
+                    function.wire_result_to_native(wire_result)
+                } else {
+                    function.call_with_context(&mut context, arg_values)
+                }
             })
             .map_err(EvalError::Provider)?;
 

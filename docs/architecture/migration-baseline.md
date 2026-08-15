@@ -2050,7 +2050,14 @@ an arbitrary shell executor.
     conformance harness runs the canonical wire callable through the same
     descriptor/linker/cancellation/deadline preflight; its remaining native
     entry points are explicitly namespaced under `compatibility`, so new
-    Provider authors cannot accidentally select the legacy dynamic path.
+    Provider authors cannot accidentally select the legacy dynamic path. The
+    register VM now dispatches descriptor-linked synchronous wire calls without
+    a Provider-side `NativeValue` hop when the call has no `mut` mutation
+    envelope: arguments are checked against the exact linked wire table, the
+    Provider sees `WireValue`, and only the VM's explicitly named compatibility
+    edge decodes the result into its legacy register value. Native callables,
+    `mut` envelopes, and asynchronous VM dispatch remain the open migration
+    surface for this item.
   - [x] **P06.2a — Bridge generation-safe resource handles.** Provider
       runtime handles now convert to/from the canonical numeric wire handle
       with a descriptor-supplied resource type. Linked sync wire calls prove

@@ -722,6 +722,57 @@ impl ExternalFunction {
         self.callable.call_mode()
     }
 
+    /// Whether this linked function can use the canonical synchronous wire
+    /// dispatcher. Native and asynchronous callables deliberately remain on
+    /// their explicit compatibility/scheduler paths.
+    pub(crate) const fn is_wire_sync(&self) -> bool {
+        matches!(self.callable, ProviderCallable::WireSync(_))
+    }
+
+    /// Convert legacy VM boundary values to the exact descriptor-scoped wire
+    /// signature without invoking a Provider. This is the last compatibility
+    /// edge for register values; the Provider itself receives only `WireValue`.
+    pub(crate) fn wire_args_from_native(
+        &self,
+        args: Vec<NativeValue>,
+    ) -> Result<Vec<WireValue>, ProviderError> {
+        let contract = self.contract().ok_or_else(|| {
+            ProviderError::unavailable("wire provider function requires a linked descriptor")
+        })?;
+        let signature = &contract.descriptor.signature;
+        if signature.parameters.len() != args.len() {
+            return Err(ProviderError::invalid_argument(
+                "provider wire argument count does not match its linked signature",
+            ));
+        }
+        let types = wire_type_table(
+            signature,
+            &contract.record_layouts,
+            &contract.variant_layouts,
+        )?;
+        args.into_iter()
+            .zip(&signature.parameters)
+            .map(|(value, parameter)| native_to_wire(value, &parameter.ty, &types))
+            .collect()
+    }
+
+    /// Decode a canonical wire result at the VM compatibility edge. This is
+    /// intentionally not exposed through the reviewed Provider SDK.
+    pub(crate) fn wire_result_to_native(
+        &self,
+        value: WireValue,
+    ) -> Result<NativeValue, ProviderError> {
+        let contract = self.contract().ok_or_else(|| {
+            ProviderError::unavailable("wire provider function requires a linked descriptor")
+        })?;
+        let types = wire_type_table(
+            &contract.descriptor.signature,
+            &contract.record_layouts,
+            &contract.variant_layouts,
+        )?;
+        wire_to_native(value, &contract.descriptor.signature.result, &types)
+    }
+
     fn acquire_non_reentrant_permit(
         &self,
     ) -> Result<Option<NonReentrantCallPermit>, ProviderError> {
@@ -858,6 +909,112 @@ impl ExternalFunction {
                     .details
                     .as_ref()
                     .map_or(0, rsscript_abi_model::WireValue::estimated_payload_bytes),
+            ),
+        };
+        if let Some(trace) = context.trace {
+            trace.record(ProviderCallTrace {
+                call_id: context.call_id,
+                provider_id: context.provider_id.clone(),
+                provider_version: context.provider_version.clone(),
+                symbol: context.symbol.clone(),
+                request_bytes,
+                response_bytes,
+                elapsed: started.elapsed(),
+                result: result.as_ref().map(|_| ()).map_err(|error| error.code),
+            });
+        }
+        result
+    }
+
+    /// Invoke a descriptor-linked synchronous wire Provider without routing
+    /// the Provider call itself through `NativeValue`. The register VM uses
+    /// this for non-`mut` external calls; legacy callables and mutation
+    /// envelopes retain their compatibility dispatcher until their VM value
+    /// representation is migrated.
+    pub(crate) fn call_wire_with_context(
+        &self,
+        context: &mut ProviderCallContext<'_>,
+        args: Vec<WireValue>,
+    ) -> Result<WireValue, ProviderError> {
+        let _non_reentrant_permit = self.acquire_non_reentrant_permit()?;
+        let contract = self.contract().ok_or_else(|| {
+            ProviderError::unavailable("wire provider function requires a linked descriptor")
+        })?;
+        let ProviderCallable::WireSync(callable) = &self.callable else {
+            return Err(ProviderError::unavailable(
+                "provider function does not use the synchronous wire dispatcher",
+            ));
+        };
+        context.provider_id.clone_from(&contract.provider_id);
+        context
+            .provider_version
+            .clone_from(&contract.provider_version);
+        context.symbol = contract.descriptor.symbol.as_str().to_string();
+        let request_bytes = args
+            .iter()
+            .map(WireValue::estimated_payload_bytes)
+            .sum::<usize>();
+        let started = Instant::now();
+        let result = (|| {
+            context.check_cancelled()?;
+            check_payload_budget(request_bytes, context.remaining_byte_budget, "request")?;
+            if contract.descriptor.blocking == BlockingBehavior::MayBlock
+                && !context.blocking_allowed
+            {
+                return Err(ProviderError::unavailable(format!(
+                    "blocking provider function `{}` requires a blocking execution lane",
+                    contract.descriptor.symbol
+                )));
+            }
+            if contract.descriptor.call_mode != ProviderCallMode::Sync {
+                return Err(ProviderError::unavailable(
+                    "synchronous wire dispatcher received an async Provider descriptor",
+                ));
+            }
+            let resources_before = context
+                .resources
+                .as_deref()
+                .map(ProviderResourceTable::created);
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                callable.call_with_context(context, args)
+            }))
+            .unwrap_or_else(|_| Err(provider_panic_error()));
+            if matches!(
+                contract.descriptor.cancellation,
+                CancellationBehavior::Cooperative | CancellationBehavior::AbortSafe
+            ) {
+                context.check_cancelled()?;
+            }
+            if result.is_ok()
+                && contract.descriptor.resource_cleanup
+                    == ResourceCleanupContract::RuntimeRegistered
+                && resources_before
+                    == context
+                        .resources
+                        .as_deref()
+                        .map(ProviderResourceTable::created)
+            {
+                return Err(ProviderError::internal(
+                    "runtime-registered provider call returned without registering a resource",
+                ));
+            }
+            let value = result?;
+            let response_bytes = value.estimated_payload_bytes();
+            check_payload_budget(response_bytes, context.remaining_byte_budget, "response")?;
+            check_payload_budget(
+                response_bytes,
+                context.remaining_output_budget,
+                "response output",
+            )?;
+            Ok(value)
+        })();
+        let response_bytes = match &result {
+            Ok(value) => value.estimated_payload_bytes(),
+            Err(error) => error.message.len().saturating_add(
+                error
+                    .details
+                    .as_ref()
+                    .map_or(0, WireValue::estimated_payload_bytes),
             ),
         };
         if let Some(trace) = context.trace {
@@ -1437,16 +1594,25 @@ mod provider_contract_tests {
     }
 
     #[test]
-    fn linked_scalar_wire_provider_avoids_the_native_callable_adapter() {
+    fn linked_scalar_wire_provider_dispatches_without_native_callable() {
         let function = registered_scalar_wire_function(WireInterpreterFn::new(|args| {
             assert_eq!(args, vec![WireValue::Int { value: 41 }]);
             Ok(WireValue::Int { value: 42 })
         }));
         let mut context = ProviderCallContext::default();
+        let args = function
+            .wire_args_from_native(vec![NativeValue::Int(41)])
+            .expect("descriptor-linked wire arguments");
         let result = function
-            .call_with_context(&mut context, vec![NativeValue::Int(41)])
-            .expect("linked scalar wire call");
-        assert_eq!(result, NativeValue::Int(42));
+            .call_wire_with_context(&mut context, args)
+            .expect("direct linked wire call");
+        assert_eq!(result, WireValue::Int { value: 42 });
+        assert_eq!(
+            function
+                .wire_result_to_native(result)
+                .expect("register compatibility result"),
+            NativeValue::Int(42)
+        );
     }
 
     #[test]
