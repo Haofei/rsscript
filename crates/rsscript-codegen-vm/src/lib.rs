@@ -965,6 +965,31 @@ fn lower_instruction(
                         ));
                     }
                 }
+                MirCallTarget::Dynamic { dispatch, .. } => {
+                    let dispatch = dispatch
+                        .iter()
+                        .map(|(receiver, target)| {
+                            let ty = mir.ty(*receiver).ok_or(CodegenError::InvalidMir(
+                                "dynamic dispatch references missing receiver type".to_owned(),
+                            ))?;
+                            let type_name =
+                                wire_runtime_type_name(ty).ok_or(CodegenError::InvalidMir(
+                                    "dynamic dispatch receiver has no v1 runtime identity"
+                                        .to_owned(),
+                                ))?;
+                            Ok(json!([type_name, target.index()]))
+                        })
+                        .collect::<Result<Vec<_>, CodegenError>>()?;
+                    code.push(instr(
+                        "CallDynamic",
+                        [
+                            ("dst", json!(dst)),
+                            ("dispatch", json!(dispatch)),
+                            ("args", json!(args)),
+                            ("mut_args", json!(mut_args)),
+                        ],
+                    ));
+                }
                 MirCallTarget::External(id) => {
                     let import =
                         mir.external_imports()

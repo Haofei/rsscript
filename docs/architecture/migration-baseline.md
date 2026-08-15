@@ -996,14 +996,14 @@ mechanical acceptance condition holds.
       type signatures and async builtin contracts remain fail-closed follow-up
       work; the resolved parameter effect sequence is verifier-checked now.
     - [x] **M03.4c — Fail closed for unmodelled dispatch metadata.** Generic
-      JSON decode now carries its concrete target as a verifier-checked MIR
-      `TypeId`; only the v1 encoder projects that typed operand onto its legacy
-      `CallTypedIntrinsic` string field. Argument capture,
-      Scheduler-suspending channel builtins and dynamic protocol dispatch still
-      reject direct MIR lowering rather than erasing their scheduler or dispatch
-      contracts into bytecode. The explicit migration-only executable-IR bridge
-      remains responsible for those forms until MIR introduces their typed
-      operands.
+      JSON decode carries its concrete target as a verifier-checked MIR `TypeId`;
+      only the v1 encoder projects that typed operand onto its legacy
+      `CallTypedIntrinsic` string field. Closed-world `Dyn<P>` calls now carry a
+      verifier-checked table of canonical receiver `TypeId` and resolved
+      implementation `FunctionId` pairs, with a common ownership-mode contract;
+      the encoder is the sole legacy `CallDynamic` projection. Argument capture
+      remains on the explicit migration-only executable-IR bridge until MIR owns
+      a typed closure environment.
     - [x] **M03.4d — Admit catalog-backed async builtins.** Direct catalog
       membership, rather than the legacy `is_builtin` flag alone, now determines
       whether an interface-shaped standard-library call is lowered as a

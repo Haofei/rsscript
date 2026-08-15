@@ -493,6 +493,7 @@ pub enum MirExecutionError {
     DivisionByZero,
     UnsupportedExternalCall,
     UnsupportedBuiltinCall,
+    UnsupportedDynamicDispatch,
     UnsupportedStructuredConcurrency,
     RecursionLimit,
     StepLimit,
@@ -1131,6 +1132,9 @@ impl<'a> Interpreter<'a> {
                             }
                             MirCallTarget::Builtin { .. } => {
                                 return Err(MirExecutionError::UnsupportedBuiltinCall);
+                            }
+                            MirCallTarget::Dynamic { .. } => {
+                                return Err(MirExecutionError::UnsupportedDynamicDispatch);
                             }
                         };
                         for (caller_place, callee_parameter) in writebacks {

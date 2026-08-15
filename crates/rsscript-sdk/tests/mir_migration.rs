@@ -621,6 +621,35 @@ fn main() -> Result<Int, JsonError> {
 }
 "#,
     },
+    MigrationCase {
+        name: "dynamic_protocol_dispatch",
+        capability: "closed-world runtime Dyn protocol dispatch",
+        stage: MigrationStage::DualPath,
+        source: r#"
+protocol Greeter {
+    fn greet(self: read Self) -> fresh String
+}
+
+struct English { value: Int }
+
+fn English.greet(self: read English) -> fresh String {
+    if self.value > 0 { return "hello" }
+    return "hi"
+}
+
+impl Greeter for English { greet = English.greet }
+
+fn say(who: read Dyn<Greeter>) -> fresh String {
+    return Greeter.greet(self: read who)
+}
+
+fn main() -> String {
+    local english = English(value: 1)
+    local greeter: Dyn<Greeter> = Dyn<Greeter>.from(value: take english)
+    return say(who: read greeter)
+}
+"#,
+    },
 ];
 
 /// The reference interpreter intentionally remains a small oracle for pure
@@ -670,6 +699,12 @@ const EVIDENCE_OVERRIDES: &[MigrationEvidenceOverride] = &[
             reference_interpreter_gap: "the test-only MIR interpreter does not model StringBuilder allocation or consuming finish runtime representation",
         },
     },
+    MigrationEvidenceOverride {
+        case: "dynamic_protocol_dispatch",
+        evidence: MigrationEvidence::VerifiedBytecode {
+            reference_interpreter_gap: "the test-only MIR interpreter has no Dyn protocol value representation or closed-world dispatch model",
+        },
+    },
 ];
 
 /// The migration framework keeps the remaining compatibility bridge small and
@@ -677,13 +712,12 @@ const EVIDENCE_OVERRIDES: &[MigrationEvidenceOverride] = &[
 /// execute only through `legacy-exec-ir`, and have a next typed-MIR boundary.
 /// A migration removes an entry only after adding a matching `DualPath` case
 /// above; it may not simply broaden a catch-all Unsupported fallback.
-const LEGACY_FALLBACKS: &[LegacyFallbackCase] = &[
-    LegacyFallbackCase {
-        name: "capturing_closure_value",
-        capability: "first-class capturing closure values",
-        construct: "checked HIR closure",
-        next_boundary: "typed closure environment, call target, and capture ownership MIR",
-        source: r#"
+const LEGACY_FALLBACKS: &[LegacyFallbackCase] = &[LegacyFallbackCase {
+    name: "capturing_closure_value",
+    capability: "first-class capturing closure values",
+    construct: "checked HIR closure",
+    next_boundary: "typed closure environment, call target, and capture ownership MIR",
+    source: r#"
 fn main() -> Unit {
     let offset = 1
     let add = fn(value) captures(read offset) {
@@ -692,38 +726,7 @@ fn main() -> Unit {
     return Unit
 }
 "#,
-    },
-    LegacyFallbackCase {
-        name: "dynamic_protocol_dispatch",
-        capability: "runtime Dyn protocol dispatch",
-        construct: "dynamic protocol dispatch",
-        next_boundary: "typed dynamic-dispatch call target and runtime witness MIR",
-        source: r#"
-protocol Greeter {
-    fn greet(self: read Self) -> fresh String
-}
-
-struct English { value: Int }
-
-fn English.greet(self: read English) -> fresh String {
-    if self.value > 0 { return "hello" }
-    return "hi"
-}
-
-impl Greeter for English { greet = English.greet }
-
-fn say(who: read Dyn<Greeter>) -> fresh String {
-    return Greeter.greet(self: read who)
-}
-
-fn main() -> String {
-    local english = English(value: 1)
-    local greeter: Dyn<Greeter> = Dyn<Greeter>.from(value: take english)
-    return say(who: read greeter)
-}
-"#,
-    },
-];
+}];
 
 #[test]
 fn legacy_fallbacks_are_a_checked_and_actionable_migration_ledger() {

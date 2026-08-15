@@ -23,7 +23,7 @@ use rsscript_mir::{
     PlaceId, ResourceTypeId, TaskGroupId, TaskId, TypeId, ValueId, VerifiedMir,
 };
 use rsscript_semantics::{ResolvedTypeKind, hir as checked};
-use rsscript_text::{decode_char_token, decode_string_token};
+use rsscript_text::{decode_char_token, decode_string_token, type_root_name};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MirLoweringError {
@@ -91,7 +91,7 @@ pub fn lower_executable_ir_to_mir(
         async_external_wrappers: BTreeMap::new(),
         async_builtin_wrappers: BTreeMap::new(),
         variants: BTreeMap::new(),
-        dynamic_protocol_methods: std::collections::BTreeSet::new(),
+        dynamic_protocol_methods: BTreeMap::new(),
     };
     let mut lowered = Vec::with_capacity(functions.len());
     let mut debug = Vec::with_capacity(functions.len());
@@ -161,11 +161,14 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<VerifiedMir, MirLo
             )
         })
         .collect::<BTreeMap<_, _>>();
-    // MIR does not yet encode dynamic protocol dispatch. Record only the
-    // protocol methods which are actually selected by checked call sites, so
-    // their lowering can fail closed into the explicitly gated compatibility
-    // path rather than compiling the declaration's bodyless stub as a normal
-    // function call.
+    // Construct closed-world dispatch tables before body lowering. The table
+    // carries only canonical concrete receiver `TypeId`s and resolved function
+    // identities; source protocol/method spellings never reach MIR.
+    let function_targets = functions
+        .iter()
+        .enumerate()
+        .map(|(index, (name, _, _))| (name.to_string(), FunctionId::new(index as u32)))
+        .collect::<BTreeMap<_, _>>();
     let dynamic_protocol_methods = hir
         .call_sites()
         .iter()
@@ -182,7 +185,37 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<VerifiedMir, MirLo
             | checked::CallResolution::EnumVariant
             | checked::CallResolution::Unknown => None,
         })
-        .collect();
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .map(|(protocol, method)| {
+            let dispatch = hir
+                .protocol_method_targets(&protocol, &method)
+                .into_iter()
+                .map(|(type_name, target)| {
+                    let receiver = types.intern(WireType::Named {
+                        package: None,
+                        name: type_root_name(&type_name).to_owned(),
+                        arguments: Vec::new(),
+                    });
+                    let target = function_targets
+                        .get(type_root_name(&target))
+                        .copied()
+                        .ok_or_else(|| MirLoweringError::Unsupported {
+                            function: format!("{protocol}.{method}"),
+                            construct: "dynamic protocol implementation target",
+                        })?;
+                    Ok((receiver, target))
+                })
+                .collect::<Result<Vec<_>, MirLoweringError>>()?;
+            if dispatch.is_empty() {
+                return Err(MirLoweringError::Unsupported {
+                    function: format!("{protocol}.{method}"),
+                    construct: "dynamic protocol dispatch without implementation",
+                });
+            }
+            Ok(((protocol, method), dispatch.into_boxed_slice()))
+        })
+        .collect::<Result<BTreeMap<_, _>, MirLoweringError>>()?;
     let async_external_wrappers = external_imports
         .iter()
         .enumerate()
@@ -214,11 +247,7 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<VerifiedMir, MirLo
         )?);
     }
     let targets = CallTargets {
-        functions: functions
-            .iter()
-            .enumerate()
-            .map(|(index, (name, _, _))| (name.to_string(), FunctionId::new(index as u32)))
-            .collect(),
+        functions: function_targets,
         external_imports: external_imports
             .iter()
             .enumerate()
@@ -612,7 +641,7 @@ struct CallTargets {
     async_external_wrappers: BTreeMap<String, FunctionId>,
     async_builtin_wrappers: BTreeMap<String, FunctionId>,
     variants: BTreeMap<String, VariantLayout>,
-    dynamic_protocol_methods: std::collections::BTreeSet<(String, String)>,
+    dynamic_protocol_methods: BTreeMap<(String, String), Box<[(TypeId, FunctionId)]>>,
 }
 
 /// Synthetic async functions let `async let value = Host.call()` and
@@ -856,17 +885,7 @@ impl TypeTable {
                     checked_type_to_wire(&parameter.ty, function_name).map(|ty| self.intern(ty))
                 })
                 .collect::<Result<Vec<_>, _>>()?,
-            signature
-                .params
-                .iter()
-                .map(
-                    |parameter| match parameter.effect.unwrap_or(checked::ParamEffect::Read) {
-                        checked::ParamEffect::Read => MirParameterMode::Read,
-                        checked::ParamEffect::Mut => MirParameterMode::Mut,
-                        checked::ParamEffect::Take => MirParameterMode::Take,
-                    },
-                )
-                .collect(),
+            checked_parameter_modes(signature),
             self.intern(
                 signature
                     .return_ty
@@ -903,6 +922,23 @@ impl TypeTable {
     fn into_types(self) -> Vec<WireType> {
         self.types
     }
+}
+
+/// Project checked parameter effects into the ownership modes carried by MIR.
+/// Kept beside the type table so every call target, including closed-world
+/// protocol dispatch, uses the same canonical ABI interpretation.
+fn checked_parameter_modes(signature: &checked::FunctionSig) -> Vec<MirParameterMode> {
+    signature
+        .params
+        .iter()
+        .map(
+            |parameter| match parameter.effect.unwrap_or(checked::ParamEffect::Read) {
+                checked::ParamEffect::Read => MirParameterMode::Read,
+                checked::ParamEffect::Mut => MirParameterMode::Mut,
+                checked::ParamEffect::Take => MirParameterMode::Take,
+            },
+        )
+        .collect()
 }
 
 struct LoweredFunction {
@@ -1390,20 +1426,16 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         if signature.is_builtin || is_catalog_builtin(signature) {
             return self.lower_builtin_call(callee, signature, receiver, args);
         }
-        // `MirCallTarget` deliberately has no dynamic-protocol variant yet.
-        // A protocol declaration contributes a bodyless signature stub, so
-        // lowering it as a normal `Function` would compile a `Unit` return
-        // instead of selecting the concrete implementation at runtime. Keep
-        // this capability on the explicit legacy bridge until MIR owns the
-        // dispatch table and its cancellation/resource contracts.
-        if signature.namespace.as_deref().is_some_and(|namespace| {
+        let target = if let Some(dispatch) = signature.namespace.as_deref().and_then(|namespace| {
             self.targets
                 .dynamic_protocol_methods
-                .contains(&(namespace.to_owned(), signature.name.clone()))
+                .get(&(namespace.to_owned(), signature.name.clone()))
         }) {
-            return self.unsupported("dynamic protocol dispatch");
-        }
-        let target = if signature.is_external {
+            MirCallTarget::Dynamic {
+                dispatch: dispatch.clone(),
+                parameter_modes: checked_parameter_modes(signature).into_boxed_slice(),
+            }
+        } else if signature.is_external {
             let symbol = checked_external_symbol(signature)?;
             self.targets
                 .external_imports

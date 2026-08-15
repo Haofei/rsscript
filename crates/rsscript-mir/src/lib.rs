@@ -452,12 +452,17 @@ pub enum MirInstruction {
     },
 }
 
-/// Fully resolved direct call target. Dynamic protocol dispatch deliberately
-/// has no representation until its semantic and cancellation contracts can be
-/// made explicit in MIR.
+/// Fully resolved direct call target.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MirCallTarget {
     Function(FunctionId),
+    /// Closed-world protocol dispatch. The receiver's runtime layout is matched
+    /// against a canonical `TypeId`; the selected implementation is a resolved
+    /// `FunctionId`. Neither source protocol nor method spellings reach MIR.
+    Dynamic {
+        dispatch: Box<[(TypeId, FunctionId)]>,
+        parameter_modes: Box<[MirParameterMode]>,
+    },
     /// Catalog-owned direct core-library call. The source namespace/name was
     /// resolved by semantic lowering; v1 bytecode spelling is an encoder-only
     /// compatibility projection through [`builtin_vm_name`].
@@ -2077,6 +2082,37 @@ fn verify_instruction(
                         target: *target,
                     });
                 }
+                MirCallTarget::Dynamic {
+                    dispatch,
+                    parameter_modes,
+                } => {
+                    if dispatch.is_empty() {
+                        return Err(MirValidationError::EmptyDynamicDispatch {
+                            function: function.id,
+                        });
+                    }
+                    for (receiver, target) in dispatch.iter() {
+                        if receiver.index() >= type_count {
+                            return Err(MirValidationError::InvalidDynamicDispatchType {
+                                function: function.id,
+                                ty: *receiver,
+                            });
+                        }
+                        let Some(callee) = functions.get(target.index()) else {
+                            return Err(MirValidationError::InvalidFunctionTarget {
+                                function: function.id,
+                                target: *target,
+                            });
+                        };
+                        if callee.signature.parameter_modes() != parameter_modes.as_ref() {
+                            return Err(MirValidationError::DynamicDispatchSignatureMismatch {
+                                function: function.id,
+                                target: *target,
+                            });
+                        }
+                    }
+                    parameter_modes.to_vec()
+                }
                 MirCallTarget::Builtin {
                     id,
                     parameter_modes,
@@ -2395,6 +2431,17 @@ pub enum MirValidationError {
         target: FunctionId,
     },
     InvalidFunctionTarget {
+        function: FunctionId,
+        target: FunctionId,
+    },
+    EmptyDynamicDispatch {
+        function: FunctionId,
+    },
+    InvalidDynamicDispatchType {
+        function: FunctionId,
+        ty: TypeId,
+    },
+    DynamicDispatchSignatureMismatch {
         function: FunctionId,
         target: FunctionId,
     },
@@ -3443,6 +3490,89 @@ mod tests {
                 Vec::new(),
             ),
             Err(MirValidationError::InvalidTypeLayout { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_empty_or_signature_incompatible_dynamic_dispatch_tables() {
+        let implementation = MirFunction::new(
+            FunctionId::new(0),
+            MirFunctionSignature::new(vec![TypeId::new(1)], TypeId::new(0), false),
+            1,
+            0,
+            vec![BasicBlock::new(
+                BlockId::new(0),
+                Vec::new(),
+                MirTerminator::Return(None),
+            )],
+        );
+        let caller = |parameter_modes: Box<[MirParameterMode]>,
+                      dispatch: Box<[(TypeId, FunctionId)]>| {
+            MirFunction::new(
+                FunctionId::new(1),
+                signature(),
+                0,
+                1,
+                vec![BasicBlock::new(
+                    BlockId::new(0),
+                    vec![MirInstruction::Call {
+                        destination: ValueId::new(0),
+                        target: MirCallTarget::Dynamic {
+                            dispatch,
+                            parameter_modes,
+                        },
+                        arguments: Vec::new(),
+                    }],
+                    MirTerminator::Return(Some(ValueId::new(0))),
+                )],
+            )
+        };
+        let debug = || {
+            vec![
+                MirFunctionDebug::new("implementation", vec!["self".into()]),
+                MirFunctionDebug::new("main", Vec::new()),
+            ]
+        };
+        let types = || {
+            vec![
+                WireType::Unit,
+                WireType::Named {
+                    package: None,
+                    name: "English".into(),
+                    arguments: Vec::new(),
+                },
+            ]
+        };
+
+        assert!(matches!(
+            MirModule::new(
+                types(),
+                vec![
+                    implementation.clone(),
+                    caller(
+                        vec![MirParameterMode::Read].into_boxed_slice(),
+                        Vec::new().into_boxed_slice()
+                    ),
+                ],
+                debug(),
+                Vec::new(),
+            ),
+            Err(MirValidationError::EmptyDynamicDispatch { .. })
+        ));
+        assert!(matches!(
+            MirModule::new(
+                types(),
+                vec![
+                    implementation,
+                    caller(
+                        vec![MirParameterMode::Take].into_boxed_slice(),
+                        vec![(TypeId::new(1), FunctionId::new(0))].into_boxed_slice(),
+                    ),
+                ],
+                debug(),
+                Vec::new(),
+            ),
+            Err(MirValidationError::DynamicDispatchSignatureMismatch { .. })
         ));
     }
 }
