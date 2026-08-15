@@ -2,9 +2,9 @@
   "schema": "rsscript.migration_queue.v1",
   "tasks": [
     {
-      "id": "S05.4b2b2b",
+      "id": "S05.4b2b2b2",
       "priority": 100,
-      "depends_on": ["S05.4b2b2a"],
+      "depends_on": ["S05.4b2b2b1"],
       "scope": [
         "crates/rsscript-compiler/src/rust_lower/**",
         "crates/rsscript-compiler/src/lib.rs",
@@ -15,7 +15,7 @@
         "docs/architecture/migration-baseline.md"
       ],
       "acceptance": [
-        "Coverage accounting and AST/HIR-to-Rust lowering move to the experiment-owned backend using the explicit AotLoweringInput contract.",
+        "AST/HIR-to-Rust lowering moves to the experiment-owned backend using AotLoweringInput and a neutral runtime catalog boundary.",
         "Compiler compatibility contains no AOT implementation modules after the migration.",
         "The experimental CLI path continues to produce equivalent generated-Rust package output."
       ],

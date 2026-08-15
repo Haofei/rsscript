@@ -912,6 +912,13 @@ an arbitrary shell executor.
             - [ ] **S05.4b2b2b — Move lowering implementation.** Move coverage
               and AST/HIR-to-Rust lowering after callers no longer construct its
               compiler-local argument list.
+              - [x] **S05.4b2b2b1 — Move coverage output model.** The
+                deterministic coverage report and bucket normalization contract
+                now live in `rsscript-aot-model`; compiler retains only the
+                runtime-catalog compatibility calculation.
+              - [ ] **S05.4b2b2b2 — Move AST/HIR source lowering.** Move the
+                lowerer implementation once its coverage and input contracts no
+                longer belong to compiler.
     - [ ] **S05.4c — Split runtime ABI catalog use.** Leave Core consumers with
       a neutral intrinsic catalog and move generated-Rust target discovery and
       AOT runtime validation into the experiment-owned backend.

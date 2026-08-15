@@ -4,6 +4,7 @@
 //! feature. These types are not part of the reviewed SDK surface.
 
 use rsscript_diagnostics::{Diagnostic, Severity, Span, code};
+use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GeneratedRustPackage {
@@ -38,6 +39,66 @@ pub struct RustSourceMapEntry {
 pub struct RemappedRustcDiagnostic {
     pub diagnostic: Diagnostic,
     pub mapped: bool,
+}
+
+/// One deterministic coverage partition for an experimental AOT capability.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct CoverageBucket {
+    pub all: Vec<String>,
+    pub supported: Vec<String>,
+    pub missing: Vec<String>,
+}
+
+impl CoverageBucket {
+    pub fn total(&self) -> usize {
+        self.all.len()
+    }
+
+    pub fn supported_count(&self) -> usize {
+        self.supported.len()
+    }
+
+    pub fn missing_count(&self) -> usize {
+        self.missing.len()
+    }
+}
+
+/// Experimental AOT coverage facts, intentionally separate from the Core
+/// language feature matrix.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct LowerCoverageReport {
+    pub runtime_intrinsics: CoverageBucket,
+    pub ast_statements: CoverageBucket,
+    pub ast_expressions: CoverageBucket,
+    pub function_kinds: CoverageBucket,
+}
+
+/// Builds a stable partition: every input is sorted/deduplicated, only known
+/// supported entries survive, and `missing` is the exact complement.
+pub fn coverage_bucket(
+    all: impl IntoIterator<Item = String>,
+    supported: BTreeSet<String>,
+) -> CoverageBucket {
+    let mut all = all.into_iter().collect::<Vec<_>>();
+    all.sort();
+    all.dedup();
+    let all_set = all.iter().cloned().collect::<BTreeSet<_>>();
+    let mut supported = supported
+        .into_iter()
+        .filter(|item| all_set.contains(item))
+        .collect::<Vec<_>>();
+    supported.sort();
+    let supported_set = supported.iter().cloned().collect::<BTreeSet<_>>();
+    let missing = all
+        .iter()
+        .filter(|item| !supported_set.contains(*item))
+        .cloned()
+        .collect();
+    CoverageBucket {
+        all,
+        supported,
+        missing,
+    }
 }
 
 /// Parses a serialized generated-Rust source map.
@@ -357,5 +418,18 @@ mod tests {
                 .iter()
                 .any(|cause| cause == "runtime error kind: deadline")
         );
+    }
+
+    #[test]
+    fn coverage_bucket_is_sorted_and_filters_unknown_support() {
+        let bucket = super::coverage_bucket(
+            ["b".to_string(), "a".to_string(), "a".to_string()],
+            ["a".to_string(), "missing".to_string()]
+                .into_iter()
+                .collect(),
+        );
+        assert_eq!(bucket.all, ["a", "b"]);
+        assert_eq!(bucket.supported, ["a"]);
+        assert_eq!(bucket.missing, ["b"]);
     }
 }

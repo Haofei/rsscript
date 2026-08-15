@@ -33,27 +33,8 @@ use crate::runtime_abi;
 use crate::syntax::ast::Program;
 use crate::syntax::parse_source;
 use rsscript_aot_backend::AotLoweringInput;
+use rsscript_aot_model::coverage_bucket;
 use rsscript_semantics::{CompilationSession, ValidatedProgram};
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub struct CoverageBucket {
-    pub all: Vec<String>,
-    pub supported: Vec<String>,
-    pub missing: Vec<String>,
-}
-
-impl CoverageBucket {
-    pub fn total(&self) -> usize {
-        self.all.len()
-    }
-
-    pub fn supported_count(&self) -> usize {
-        self.supported.len()
-    }
-
-    pub fn missing_count(&self) -> usize {
-        self.missing.len()
-    }
-}
 
 mod helpers;
 mod intrinsics;
@@ -69,6 +50,7 @@ mod source_map;
 mod types;
 
 pub use crate::package::NativeRustDependency;
+pub use rsscript_aot_model::LowerCoverageReport;
 pub use runtime_diagnostics::parse_runtime_diagnostics;
 pub use rustc_remap::{remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines};
 pub use source_map::parse_source_map_json;
@@ -78,14 +60,6 @@ use helpers::{
     cargo_package_name, rust_package_main, toml_string, validate_executable_declarations,
 };
 use lowerer::RustLowerer;
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub struct LowerCoverageReport {
-    pub runtime_intrinsics: CoverageBucket,
-    pub ast_statements: CoverageBucket,
-    pub ast_expressions: CoverageBucket,
-    pub function_kinds: CoverageBucket,
-}
 
 const AST_STMT_VARIANTS: &[&str] = &[
     "Let",
@@ -181,39 +155,28 @@ pub fn lower_coverage_report() -> LowerCoverageReport {
         .collect::<BTreeSet<_>>();
 
     LowerCoverageReport {
-        runtime_intrinsics: coverage_bucket_from_owned(runtime_all, runtime_supported),
-        ast_statements: coverage_bucket(AST_STMT_VARIANTS, RUST_LOWER_SUPPORTED_AST_STMT_VARIANTS),
-        ast_expressions: coverage_bucket(AST_EXPR_VARIANTS, RUST_LOWER_SUPPORTED_AST_EXPR_VARIANTS),
-        function_kinds: coverage_bucket(FUNCTION_KINDS, RUST_LOWER_SUPPORTED_FUNCTION_KINDS),
-    }
-}
-
-fn coverage_bucket(all: &[&str], supported: &[&str]) -> CoverageBucket {
-    coverage_bucket_from_owned(
-        all.iter().map(|item| (*item).to_string()).collect(),
-        supported.iter().map(|item| (*item).to_string()).collect(),
-    )
-}
-
-fn coverage_bucket_from_owned(mut all: Vec<String>, supported: BTreeSet<String>) -> CoverageBucket {
-    all.sort();
-    all.dedup();
-    let all_set = all.iter().cloned().collect::<BTreeSet<_>>();
-    let mut supported = supported
-        .into_iter()
-        .filter(|item| all_set.contains(item))
-        .collect::<Vec<_>>();
-    supported.sort();
-    let supported_set = supported.iter().cloned().collect::<BTreeSet<_>>();
-    let missing = all
-        .iter()
-        .filter(|item| !supported_set.contains(*item))
-        .cloned()
-        .collect();
-    CoverageBucket {
-        all,
-        supported,
-        missing,
+        runtime_intrinsics: coverage_bucket(runtime_all, runtime_supported),
+        ast_statements: coverage_bucket(
+            AST_STMT_VARIANTS.iter().map(|item| (*item).to_string()),
+            RUST_LOWER_SUPPORTED_AST_STMT_VARIANTS
+                .iter()
+                .map(|item| (*item).to_string())
+                .collect(),
+        ),
+        ast_expressions: coverage_bucket(
+            AST_EXPR_VARIANTS.iter().map(|item| (*item).to_string()),
+            RUST_LOWER_SUPPORTED_AST_EXPR_VARIANTS
+                .iter()
+                .map(|item| (*item).to_string())
+                .collect(),
+        ),
+        function_kinds: coverage_bucket(
+            FUNCTION_KINDS.iter().map(|item| (*item).to_string()),
+            RUST_LOWER_SUPPORTED_FUNCTION_KINDS
+                .iter()
+                .map(|item| (*item).to_string())
+                .collect(),
+        ),
     }
 }
 
