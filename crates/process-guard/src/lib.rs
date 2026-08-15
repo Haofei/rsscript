@@ -230,10 +230,10 @@ pub const fn strict_isolation_support(control: StrictIsolationControl) -> LimitS
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         return match control {
-            StrictIsolationControl::NoNewPrivileges => LimitSupport::Enforced,
-            StrictIsolationControl::UserNamespace
-            | StrictIsolationControl::MountNamespace
-            | StrictIsolationControl::NetworkNamespace
+            StrictIsolationControl::NoNewPrivileges
+            | StrictIsolationControl::UserNamespace
+            | StrictIsolationControl::MountNamespace => LimitSupport::Enforced,
+            StrictIsolationControl::NetworkNamespace
             | StrictIsolationControl::SeccompFilter
             | StrictIsolationControl::CgroupV2 => LimitSupport::Unsupported,
         };
@@ -481,24 +481,187 @@ fn configure_strict_platform(
 ) -> io::Result<()> {
     use std::os::unix::process::CommandExt;
 
-    if !requirements.requires(StrictIsolationControl::NoNewPrivileges) {
+    if !requirements.requires(StrictIsolationControl::NoNewPrivileges)
+        && !requirements.requires(StrictIsolationControl::UserNamespace)
+        && !requirements.requires(StrictIsolationControl::MountNamespace)
+    {
         return Ok(());
     }
 
-    // SAFETY: the closure invokes only `prctl` with integer arguments and
-    // obtains no locks or heap-backed state after fork. Any kernel failure is
-    // returned to `Command::spawn`, so a strict caller never receives a child
-    // that silently missed this control.
+    // SAFETY: the closure invokes only raw kernel syscalls and direct procfs
+    // descriptor writes, obtains no locks or heap-backed state after fork, and
+    // returns every failure to `Command::spawn`. A strict caller therefore
+    // never receives a child that silently missed a declared control.
     unsafe {
-        command.pre_exec(|| {
-            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0 {
-                Ok(())
-            } else {
-                Err(io::Error::last_os_error())
+        command.pre_exec(move || {
+            configure_linux_namespaces(requirements)?;
+            if requirements.requires(StrictIsolationControl::NoNewPrivileges)
+                && libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
+            {
+                return Err(io::Error::last_os_error());
             }
+            Ok(())
         });
     }
     Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn configure_linux_namespaces(requirements: StrictIsolationRequirements) -> io::Result<()> {
+    let user = requirements.requires(StrictIsolationControl::UserNamespace);
+    let mount = requirements.requires(StrictIsolationControl::MountNamespace);
+    if !user && !mount {
+        return Ok(());
+    }
+
+    let mut flags = 0;
+    if user {
+        flags |= libc::CLONE_NEWUSER;
+    }
+    if mount {
+        flags |= libc::CLONE_NEWNS;
+    }
+    // SAFETY: `flags` contains only Linux namespace flags and no pointers are
+    // passed to the kernel.
+    if unsafe { libc::unshare(flags) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if user {
+        write_current_identity_maps()?;
+    }
+    if mount {
+        make_mount_propagation_private()?;
+    }
+    Ok(())
+}
+
+/// Install a single-entry uid/gid map for the current process after entering a
+/// user namespace.  This deliberately uses raw descriptors because it runs in
+/// `pre_exec`; standard-library file APIs could acquire locks after fork.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn write_current_identity_maps() -> io::Result<()> {
+    // SAFETY: the calls have no pointer arguments and return the caller's
+    // numeric identity, which remains valid for this pre-exec sequence.
+    let uid = unsafe { libc::getuid() };
+    // SAFETY: see `getuid` above.
+    let gid = unsafe { libc::getgid() };
+
+    // Linux requires this write before an unprivileged process can create a
+    // gid map. Some kernels do not expose the file; in that case the gid-map
+    // write below is the authoritative fail-closed check.
+    match write_procfs_file(b"/proc/self/setgroups\0", b"deny\n") {
+        Ok(()) => {}
+        Err(error) if error.raw_os_error() == Some(libc::ENOENT) => {}
+        Err(error) => return Err(error),
+    }
+    write_identity_map(b"/proc/self/uid_map\0", uid as u64)?;
+    write_identity_map(b"/proc/self/gid_map\0", gid as u64)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn write_identity_map(path: &[u8], outside_id: u64) -> io::Result<()> {
+    let mut line = [0_u8; 32];
+    let mut offset = 0;
+    line[offset] = b'0';
+    offset += 1;
+    line[offset] = b' ';
+    offset += 1;
+    offset += append_decimal(&mut line[offset..], outside_id);
+    line[offset] = b' ';
+    offset += 1;
+    line[offset] = b'1';
+    offset += 1;
+    line[offset] = b'\n';
+    offset += 1;
+    write_procfs_file(path, &line[..offset])
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn append_decimal(output: &mut [u8], mut value: u64) -> usize {
+    let mut reversed = [0_u8; 20];
+    let mut length = 0;
+    loop {
+        reversed[length] = b'0' + (value % 10) as u8;
+        length += 1;
+        value /= 10;
+        if value == 0 {
+            break;
+        }
+    }
+    for index in 0..length {
+        output[index] = reversed[length - index - 1];
+    }
+    length
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn write_procfs_file(path: &[u8], bytes: &[u8]) -> io::Result<()> {
+    debug_assert_eq!(path.last(), Some(&0));
+    // SAFETY: `path` is NUL-terminated and the flags do not require a mode
+    // argument. The descriptor is owned by this function until `close`.
+    let descriptor = unsafe {
+        libc::open(
+            path.as_ptr().cast::<libc::c_char>(),
+            libc::O_WRONLY | libc::O_CLOEXEC,
+        )
+    };
+    if descriptor < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut offset = 0;
+    let result = loop {
+        // SAFETY: `offset` is bounded by `bytes.len()` and the pointer remains
+        // valid for the syscall. `write` does not retain it.
+        let written = unsafe {
+            libc::write(
+                descriptor,
+                bytes[offset..].as_ptr().cast::<libc::c_void>(),
+                bytes.len() - offset,
+            )
+        };
+        if written < 0 {
+            break Err(io::Error::last_os_error());
+        }
+        let written = written as usize;
+        if written == 0 {
+            break Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "short procfs namespace-map write",
+            ));
+        }
+        offset += written;
+        if offset == bytes.len() {
+            break Ok(());
+        }
+    };
+    // SAFETY: `descriptor` was returned by `open` above and has not been
+    // closed on any previous path.
+    let close_result = if unsafe { libc::close(descriptor) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    };
+    result.and(close_result)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn make_mount_propagation_private() -> io::Result<()> {
+    // SAFETY: the constant C string names the mount root. Null source/type/data
+    // pointers are valid for this propagation-only mount operation.
+    let result = unsafe {
+        libc::mount(
+            std::ptr::null(),
+            c"/".as_ptr(),
+            std::ptr::null(),
+            (libc::MS_REC | libc::MS_PRIVATE) as libc::c_ulong,
+            std::ptr::null(),
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
@@ -1101,7 +1264,7 @@ mod tests {
         );
         assert_eq!(
             strict_isolation_support(StrictIsolationControl::MountNamespace),
-            LimitSupport::Unsupported
+            LimitSupport::Enforced
         );
         let status = std::fs::read_to_string("/proc/self/status").expect("read process status");
         let result = verify_strict_child_context_with(requirements);
@@ -1109,6 +1272,71 @@ mod tests {
             result.is_ok(),
             parse_no_new_privileges(&status) == Some(true)
         );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn user_and_mount_namespace_adapter_is_enforced_or_fails_closed() {
+        use std::io::Read;
+        use std::process::Stdio;
+
+        let requirements = StrictIsolationRequirements::linux_runner()
+            .require(StrictIsolationControl::UserNamespace)
+            .require(StrictIsolationControl::MountNamespace);
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                "grep '^NoNewPrivs:' /proc/self/status; cat /proc/self/uid_map",
+            ])
+            .stdout(Stdio::piped());
+        match spawn_guarded_child_strict_with(
+            &mut command,
+            ProcessLimits::generated_program(),
+            requirements,
+        ) {
+            Ok(mut child) => {
+                let mut stdout = String::new();
+                child
+                    .child_mut()
+                    .stdout
+                    .take()
+                    .expect("stdout must be piped")
+                    .read_to_string(&mut stdout)
+                    .expect("read child status");
+                assert!(child.wait().expect("child should exit").success());
+                let mut lines = stdout.lines();
+                assert_eq!(lines.next(), Some("NoNewPrivs:\t1"));
+                assert!(
+                    lines
+                        .next()
+                        .is_some_and(|line| line.starts_with("         0")),
+                    "user namespace map must expose an inside uid 0 entry: {stdout:?}"
+                );
+            }
+            Err(error) => {
+                // Many hardened Linux hosts disable unprivileged user
+                // namespaces. The strict launcher must reject that kernel
+                // policy before exec rather than run a weakened child.
+                assert!(
+                    matches!(
+                        error.kind(),
+                        io::ErrorKind::PermissionDenied
+                            | io::ErrorKind::Unsupported
+                            | io::ErrorKind::Other
+                    ),
+                    "namespace setup failed with an unexpected error: {error}"
+                );
+            }
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn decimal_namespace_map_encoder_is_canonical() {
+        let mut bytes = [0; 20];
+        let length = append_decimal(&mut bytes, 4_294_967_295);
+        assert_eq!(&bytes[..length], b"4294967295");
     }
 
     #[cfg(any(target_os = "linux", target_os = "android"))]

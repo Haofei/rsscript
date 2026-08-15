@@ -2049,10 +2049,13 @@ an arbitrary shell executor.
       `Unsupported` launch error rather than advisory hardening; an in-child
       preflight failure is reported as `isolation_rejected`, separately from
       Artifact, link, and VM termination.
-    - [ ] **A09.2b — Add user and mount namespace controls.** Install the
-      optional Linux user/mount namespace adapter before runner code, detect
-      unavailable kernel policy, and fail closed whenever a future profile
-      requires it.
+    - [x] **A09.2b — Add user and mount namespace controls.** The explicit
+      `no_providers_namespaced` profile now enters Linux user/mount namespaces
+      before runner code, installs a single-entry current UID/GID mapping, and
+      makes mount propagation private. Hosts whose kernel policy rejects that
+      setup fail before `exec`; Linux coverage accepts only those installed or
+      fail-closed outcomes. This is namespace isolation only,
+      not yet a rooted filesystem policy.
     - [ ] **A09.2c — Add network namespace controls.** Install a private
       network namespace only for profiles that require it, with a capability
       check and explicit failure rather than an implied network restriction.

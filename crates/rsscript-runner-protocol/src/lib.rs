@@ -31,6 +31,10 @@ pub enum RunnerProfileV1 {
     /// Reference fail-closed profile: no external Provider is linkable.
     #[default]
     NoProviders,
+    /// Reference fail-closed profile with no Providers plus an explicitly
+    /// required Linux user/mount namespace boundary. Hosts that cannot install
+    /// those controls reject the launch before the runner parses an Artifact.
+    NoProvidersNamespaced,
     /// Reference allowlisted profile with only `host.log.emit` installed.
     ///
     /// The sink is selected by the runner host and has no filesystem, network,
@@ -61,6 +65,15 @@ impl RunnerProfileV1 {
                 version: 1,
                 descriptor_digest:
                     "sha256:59e7504d735fe8ba29a406c993312a784d338892b279c60d6bdb5670165745dd"
+                        .to_string(),
+            },
+            // sha256 of the versioned no-Provider profile descriptor plus its
+            // user/mount namespace requirement. It carries no authority data.
+            Self::NoProvidersNamespaced => RunnerProfileIdentityV1 {
+                id: "rsscript.runner.no_providers_namespaced".to_string(),
+                version: 1,
+                descriptor_digest:
+                    "sha256:75a022141b604c70f400232a509942e5b232f9a2b11a4d8f42c47b3ae797bcbb"
                         .to_string(),
             },
             // sha256 of the versioned profile descriptor containing the
@@ -490,6 +503,23 @@ mod tests {
             assert!(
                 json.get(forbidden).is_none(),
                 "profile selection must not add request-supplied {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn namespaced_profile_carries_no_provider_or_authority_input() {
+        let request =
+            RunnerRequestV1::with_profile(Vec::new(), RunnerProfileV1::NoProvidersNamespaced)
+                .expect("request");
+        let identity = request.profile.identity();
+        assert_eq!(identity.id, "rsscript.runner.no_providers_namespaced");
+        let json = serde_json::to_value(request).expect("request JSON");
+        assert_eq!(json["profile"], "no_providers_namespaced");
+        for forbidden in ["provider", "library", "credential", "authority", "root"] {
+            assert!(
+                json.get(forbidden).is_none(),
+                "profile must not inject {forbidden}"
             );
         }
     }

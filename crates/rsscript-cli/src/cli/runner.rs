@@ -8,10 +8,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
-use rss_process_guard::spawn_guarded_child_strict_with;
 use rss_process_guard::{
-    GuardedChild, ProcessLimits, StrictIsolationRequirements, verify_strict_child_context_with,
+    GuardedChild, ProcessLimits, StrictIsolationControl, StrictIsolationRequirements,
+    spawn_guarded_child_strict_with, verify_strict_child_context_with,
 };
 use rsscript_runner_protocol::{
     MAX_RESPONSE_BYTES, RunnerLimitsV1, RunnerProfileV1, RunnerRequestV1, RunnerResponseV1,
@@ -145,7 +144,7 @@ fn invoke_runner(
     #[cfg(unix)]
     command.current_dir("/");
     let limits = runner_process_limits(&request.limits);
-    let mut child = spawn_runner(&mut command, limits)
+    let mut child = spawn_runner(&mut command, limits, request.profile)
         .map_err(|error| format!("cannot create guarded runner process: {error}"))?;
     let mut stdin = child
         .child_mut()
@@ -293,17 +292,34 @@ fn format_runner_disconnect_error(
     }
 }
 
-fn spawn_runner(command: &mut Command, limits: ProcessLimits) -> io::Result<GuardedChild> {
+fn runner_isolation_requirements(profile: RunnerProfileV1) -> StrictIsolationRequirements {
+    let baseline = StrictIsolationRequirements::linux_runner();
+    match profile {
+        RunnerProfileV1::NoProvidersNamespaced => baseline
+            .require(StrictIsolationControl::UserNamespace)
+            .require(StrictIsolationControl::MountNamespace),
+        RunnerProfileV1::NoProviders | RunnerProfileV1::LogOnly => baseline,
+    }
+}
+
+fn spawn_runner(
+    command: &mut Command,
+    limits: ProcessLimits,
+    profile: RunnerProfileV1,
+) -> io::Result<GuardedChild> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
-        spawn_guarded_child_strict_with(
-            command,
-            limits,
-            StrictIsolationRequirements::linux_runner(),
-        )
+        spawn_guarded_child_strict_with(command, limits, runner_isolation_requirements(profile))
     }
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
     {
+        if profile == RunnerProfileV1::NoProvidersNamespaced {
+            return spawn_guarded_child_strict_with(
+                command,
+                limits,
+                runner_isolation_requirements(profile),
+            );
+        }
         rss_process_guard::spawn_guarded_child(command, limits)
     }
 }
@@ -330,7 +346,7 @@ fn read_bounded(
 
 pub(crate) fn runner_entrypoint() -> ExitCode {
     let response = match read_request(io::stdin().lock()) {
-        Ok((request, bundle)) => match verify_runner_execution_context() {
+        Ok((request, bundle)) => match verify_runner_execution_context(request.profile) {
             Ok(()) => execute_request(request, bundle),
             Err(error) => RunnerResponseV1::rejected(
                 request.profile,
@@ -358,8 +374,8 @@ pub(crate) fn runner_entrypoint() -> ExitCode {
 /// Artifact parsing so a direct `__runner-v1` invocation cannot silently
 /// claim the isolated execution path. Other platforms retain their existing
 /// process-tree and resource-limit guard without claiming this Linux control.
-fn verify_runner_execution_context() -> io::Result<()> {
-    verify_strict_child_context_with(StrictIsolationRequirements::linux_runner())
+fn verify_runner_execution_context(profile: RunnerProfileV1) -> io::Result<()> {
+    verify_strict_child_context_with(runner_isolation_requirements(profile))
 }
 
 fn execute_request(request: RunnerRequestV1, bundle: Vec<u8>) -> RunnerResponseV1 {
@@ -475,7 +491,9 @@ fn profiled_registry(profile: RunnerProfileV1) -> Result<ProviderRegistry, Strin
     match profile {
         // Provider implementations and all authority remain host-owned. The
         // reference profile intentionally fails closed for external imports.
-        RunnerProfileV1::NoProviders => Ok(ProviderRegistry::default()),
+        RunnerProfileV1::NoProviders | RunnerProfileV1::NoProvidersNamespaced => {
+            Ok(ProviderRegistry::default())
+        }
         // This preinstalled profile deliberately discards messages. It proves
         // exact allowlist linkage without granting filesystem, network,
         // process, credential, or ambient-environment authority to the child.
@@ -652,6 +670,15 @@ mod tests {
             RunnerTerminationV1::VerificationRejected
         );
         assert!(response.report.is_none());
+    }
+
+    #[test]
+    fn namespaced_profile_requires_kernel_controls_without_provider_authority() {
+        let requirements = runner_isolation_requirements(RunnerProfileV1::NoProvidersNamespaced);
+        assert!(requirements.requires(StrictIsolationControl::UserNamespace));
+        assert!(requirements.requires(StrictIsolationControl::MountNamespace));
+        profiled_registry(RunnerProfileV1::NoProvidersNamespaced)
+            .expect("namespaced profile must not require provider installation");
     }
 
     #[test]
