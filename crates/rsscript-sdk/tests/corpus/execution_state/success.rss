@@ -1,0 +1,8 @@
+module app
+
+use host.ops.*
+
+fn main() -> Unit {
+    open()
+    return Unit
+}

@@ -17,6 +17,9 @@ The reviewed façade additionally exports `DataEffect`, `ParameterSignature`,
 `ProviderErrorMapping`, `ResourceCleanupContract`, and `RUNTIME_ABI_VERSION`.
 Together with the existing descriptor and `WireValue` exports, this is the
 complete contract needed to register a canonical sync or async Wire Provider.
+`ProviderResource` is also part of this boundary so a canonical Provider can
+register run-owned cleanup with `ProviderCallContext` without importing a
+low-level implementation crate.
 
 This does not expose `NativeValue`, `NativeInterpreterFn`, raw VM conversion
 helpers, or a JSON escape hatch. Those stay behind explicit compatibility

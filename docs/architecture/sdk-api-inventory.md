@@ -52,7 +52,8 @@ snapshot path during migration.
 - Provider lifecycle: `ProviderRegistry`, provider descriptors, structured
   signatures, their constructor support types (`DataEffect`,
   `ParameterSignature`, `ProviderErrorMapping`, `ResourceCleanupContract`, and
-  `RUNTIME_ABI_VERSION`), `WireInterpreterFn`/`AsyncWireInterpreterFn`/
+  `RUNTIME_ABI_VERSION`, plus `ProviderResource` for run-owned cleanup),
+  `WireInterpreterFn`/`AsyncWireInterpreterFn`/
   `WireValue` for the canonical scalar plus descriptor-scoped aggregate Provider
   path (`List<T>`, tuples, `Option<T>`, and `Result<T, E>`), registration
   errors, and typed execution context contracts. This permits a Provider author

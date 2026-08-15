@@ -1,0 +1,8 @@
+module app
+
+use host.ops.*
+
+fn main() -> Int {
+    open()
+    return 1 / 0
+}

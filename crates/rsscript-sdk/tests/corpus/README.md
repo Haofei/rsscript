@@ -69,3 +69,10 @@ implementations link the same verified Bundle; and a checked-in v1 Bundle stays
 readable independently from the current writer. The runner is not involved, so
 the corpus can exercise the reviewed SDK and canonical `WireValue` contract
 without ambient host services.
+
+`execution_state/` is a data-driven execution-boundary corpus. It binds a
+single `host.ops.open` interface to a canonical Wire Provider which registers a
+runtime resource, then exercises normal completion, script failure, Provider
+failure, cancellation, deadline expiry, step exhaustion, and cleanup failure.
+Every terminal path must return an `ExecutionReport` and leave zero live
+resources; cleanup is exactly once even when cleanup itself reports an error.

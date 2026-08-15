@@ -1,0 +1,12 @@
+module app
+
+use host.ops.*
+
+fn main() -> Int {
+    open()
+    let mut value = 0
+    while value < 2000000 {
+        value = value + 1
+    }
+    return value
+}

@@ -1,0 +1,58 @@
+# Every case uses the same provider-neutral Artifact workflow. The host-only
+# switches are intentionally explicit: no source program carries a budget,
+# deadline, cancellation token, or cleanup policy.
+
+[[case]]
+name = "success"
+source = "success"
+termination = "completed"
+resources_cleaned = 1
+cleanup_failures = 0
+
+[[case]]
+name = "script_error"
+source = "script_error"
+termination = "script_error"
+resources_cleaned = 1
+cleanup_failures = 0
+
+[[case]]
+name = "provider_error"
+source = "success"
+provider_failure = true
+termination = "provider_error"
+resources_cleaned = 1
+cleanup_failures = 0
+
+[[case]]
+name = "cancelled"
+source = "loop"
+cancel_after_register = true
+termination = "cancelled"
+resources_cleaned = 1
+cleanup_failures = 0
+
+[[case]]
+name = "deadline"
+source = "loop"
+sleep_millis = 5
+deadline_millis = 1
+termination = "deadline_exceeded"
+resources_cleaned = 1
+cleanup_failures = 0
+
+[[case]]
+name = "step_budget"
+source = "loop"
+step_budget = 32
+termination = "step_budget_exceeded"
+resources_cleaned = 1
+cleanup_failures = 0
+
+[[case]]
+name = "cleanup_failure"
+source = "success"
+cleanup_failure = true
+termination = "provider_error"
+resources_cleaned = 0
+cleanup_failures = 1

@@ -398,8 +398,8 @@ pub mod provider_api {
         FunctionSignature, HostCallContext, ParameterSignature, ProviderCallContext,
         ProviderCallMode, ProviderDescriptor, ProviderError, ProviderErrorCode,
         ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor, ProviderLoadError,
-        RUNTIME_ABI_VERSION, ResourceCleanupContract, ResourceHandle, WireInterpreterFn,
-        WireProviderFuture, WireValue,
+        ProviderResource, RUNTIME_ABI_VERSION, ResourceCleanupContract, ResourceHandle,
+        WireInterpreterFn, WireProviderFuture, WireValue,
     };
 }
 

@@ -1,0 +1,3 @@
+module host.ops
+
+pub fn open() -> Unit
