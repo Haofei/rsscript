@@ -874,6 +874,10 @@ an arbitrary shell executor.
     and no longer depends on the compiler compatibility closure. Remaining
     captured package-review execution and its presentation still need to move
     to dedicated project/review/AOT crates before this item can close.
+    The captured manifest/source-set representation is now physically owned by
+    `rsscript-package-review`; compiler package compatibility retains only a
+    private forwarding module while review execution, policy, lock/check/diff,
+    and the public compatibility façade continue their staged migration.
     - [x] **S05.3a — Extract neutral risk facts and calculation.** The review
       risk lattice and its pure evidence evaluator now live in
       `rsscript-review-core`. Compiler compatibility code collects neutral

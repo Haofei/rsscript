@@ -1884,19 +1884,27 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
         !snapshot.contains("fs::"),
         "compiler graph-snapshot composition must not reopen or mutate files directly"
     );
-    let source_set = read(&root.join("crates/rsscript-compiler/src/package/source_set.rs"));
+    let source_set_path = root.join("crates/rsscript-package-review/src/source_set.rs");
+    assert!(
+        source_set_path.is_file()
+            && !root
+                .join("crates/rsscript-compiler/src/package/source_set.rs")
+                .exists(),
+        "captured package manifests and source sets must be physically owned by the package-review boundary"
+    );
+    let source_set = read(&source_set_path);
     let manifest_loader = function_source(
         &source_set,
-        "pub(super) fn load_package_manifest_with_source(",
+        "pub fn load_package_manifest_with_source(",
     );
     assert!(
         manifest_loader.contains("capture_project_manifest(package_dir, MANIFEST_MAX_BYTES)"),
-        "compiler manifest semantics must consume project-captured manifest bytes"
+        "package-review manifest semantics must consume project-captured manifest bytes"
     );
     assert!(
         !manifest_loader.contains("canonical_package_root")
             && !manifest_loader.contains("read_bounded_utf8_file"),
-        "compiler manifest semantic parsing must not reopen the project manifest"
+        "package-review manifest semantic parsing must not reopen the project manifest"
     );
     assert!(
         project.contains("pub struct ProjectSourceCapture")
@@ -1913,12 +1921,12 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
             && !source_loader.contains("canonical_package_root")
             && !source_loader.contains("collect_rsscript_files_excluding")
             && !source_loader.contains("read_bounded_utf8_file"),
-        "compiler package source assembly must consume project-captured source bytes rather than traverse directories"
+        "package-review source assembly must consume project-captured source bytes rather than traverse directories"
     );
     assert!(
         source_set.contains("capture_optional_project_utf8")
             && !source_set.contains("snapshot_manifest_source.is_file"),
-        "compiler package assembly must delegate optional snapshot-manifest probing to rsscript-project"
+        "package-review assembly must delegate optional snapshot-manifest probing to rsscript-project"
     );
     let dependency = read(&root.join("crates/rsscript-compiler/src/package/dependency.rs"));
     let native = read(&root.join("crates/rsscript-compiler/src/package/native.rs"));

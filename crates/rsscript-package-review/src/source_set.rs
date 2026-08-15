@@ -7,10 +7,10 @@ use rsscript_project::{
 };
 use serde::Deserialize;
 
-use crate::package::PackageReviewFileKind;
+use rsscript_package_model::PackageReviewFileKind;
 
 const MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
-pub(super) const SNAPSHOT_MANIFEST_SOURCE_FILE: &str = ".rsscript-snapshot-manifest";
+pub const SNAPSHOT_MANIFEST_SOURCE_FILE: &str = ".rsscript-snapshot-manifest";
 const SOURCE_FILE_MAX_BYTES: u64 = 4 * 1024 * 1024;
 const PACKAGE_SOURCE_MAX_FILES: usize = 20_000;
 const PACKAGE_SOURCE_MAX_BYTES: u64 = 512 * 1024 * 1024;
@@ -18,158 +18,158 @@ const PACKAGE_SOURCE_MAX_DEPTH: usize = 64;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Manifest {
-    pub(super) package: ManifestPackage,
+pub struct Manifest {
+    pub package: ManifestPackage,
     #[serde(default)]
-    pub(super) interfaces: ManifestPathSection,
+    pub interfaces: ManifestPathSection,
     #[serde(default)]
-    pub(super) sources: ManifestPathSection,
+    pub sources: ManifestPathSection,
     #[serde(default)]
-    pub(super) tests: ManifestPathSection,
+    pub tests: ManifestPathSection,
     #[serde(default)]
-    pub(super) dependencies: BTreeMap<String, toml::Value>,
+    pub dependencies: BTreeMap<String, toml::Value>,
     #[serde(default, rename = "dev-dependencies")]
-    pub(super) dev_dependencies: BTreeMap<String, toml::Value>,
+    pub dev_dependencies: BTreeMap<String, toml::Value>,
     #[serde(default)]
-    pub(super) dependency: Option<ManifestDependencyPolicy>,
+    pub dependency: Option<ManifestDependencyPolicy>,
     #[serde(default)]
-    pub(super) features: BTreeMap<String, Vec<String>>,
+    pub features: BTreeMap<String, Vec<String>>,
     #[serde(default)]
-    pub(super) review: Option<ManifestReview>,
+    pub review: Option<ManifestReview>,
     #[serde(default)]
-    pub(super) native: Option<ManifestNative>,
+    pub native: Option<ManifestNative>,
     #[serde(default, rename = "virtual")]
-    pub(super) virtual_package: Option<ManifestVirtual>,
+    pub virtual_package: Option<ManifestVirtual>,
     #[serde(default)]
-    pub(super) implements: BTreeMap<String, ManifestProviderImplementation>,
+    pub implements: BTreeMap<String, ManifestProviderImplementation>,
     #[serde(default)]
-    pub(super) providers: BTreeMap<String, ManifestProviderChoice>,
+    pub providers: BTreeMap<String, ManifestProviderChoice>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ManifestPackage {
-    pub(super) name: String,
-    pub(super) version: String,
-    pub(super) edition: String,
+pub struct ManifestPackage {
+    pub name: String,
+    pub version: String,
+    pub edition: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ManifestPathSection {
+pub struct ManifestPathSection {
     #[serde(default)]
-    pub(super) paths: Vec<String>,
+    pub paths: Vec<String>,
     #[serde(default)]
-    pub(super) exports: Vec<String>,
+    pub exports: Vec<String>,
     #[serde(default)]
-    pub(super) features: BTreeMap<String, ManifestFeaturePathSection>,
+    pub features: BTreeMap<String, ManifestFeaturePathSection>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ManifestFeaturePathSection {
+pub struct ManifestFeaturePathSection {
     #[serde(default)]
-    pub(super) paths: Vec<String>,
+    pub paths: Vec<String>,
     #[serde(default)]
-    pub(super) exports: Vec<String>,
+    pub exports: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ManifestDependencyPolicy {
+pub struct ManifestDependencyPolicy {
     #[serde(default)]
-    pub(super) budget: ManifestDependencyBudget,
+    pub budget: ManifestDependencyBudget,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ManifestDependencyBudget {
-    pub(super) max_direct_dependencies: Option<usize>,
-    pub(super) max_total_packages: Option<usize>,
-    pub(super) max_native_packages: Option<usize>,
-    pub(super) max_high_risk_packages: Option<usize>,
-    pub(super) max_unknown_packages: Option<usize>,
-    pub(super) max_build_execution_packages: Option<usize>,
+pub struct ManifestDependencyBudget {
+    pub max_direct_dependencies: Option<usize>,
+    pub max_total_packages: Option<usize>,
+    pub max_native_packages: Option<usize>,
+    pub max_high_risk_packages: Option<usize>,
+    pub max_unknown_packages: Option<usize>,
+    pub max_build_execution_packages: Option<usize>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ManifestReview {
+pub struct ManifestReview {
     #[serde(default)]
-    pub(super) policy: ManifestReviewPolicy,
+    pub policy: ManifestReviewPolicy,
     #[serde(default)]
-    pub(super) feature_policy: ManifestReviewFeaturePolicy,
+    pub feature_policy: ManifestReviewFeaturePolicy,
     #[serde(default)]
-    pub(super) expect: ManifestReviewExpect,
+    pub expect: ManifestReviewExpect,
     #[serde(default)]
-    pub(super) external_binding_bindings: Vec<ManifestExternalBindingBinding>,
+    pub external_binding_bindings: Vec<ManifestExternalBindingBinding>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ManifestExternalBindingBinding {
-    pub(super) symbol: String,
-    pub(super) category: String,
-    pub(super) provider: Option<String>,
-    pub(super) service: Option<String>,
-    pub(super) action: Option<String>,
-    pub(super) resource: Option<String>,
+pub struct ManifestExternalBindingBinding {
+    pub symbol: String,
+    pub category: String,
+    pub provider: Option<String>,
+    pub service: Option<String>,
+    pub action: Option<String>,
+    pub resource: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ManifestReviewPolicy {
-    pub(super) deny_unknown: Option<bool>,
-    pub(super) deny_native: Option<bool>,
-    pub(super) deny_unsafe_apis: Option<bool>,
-    pub(super) max_public_params: Option<usize>,
-    pub(super) max_nested_type_depth: Option<usize>,
-    pub(super) native_api_risk: Option<String>,
-    pub(super) build_execution_default: Option<String>,
+pub struct ManifestReviewPolicy {
+    pub deny_unknown: Option<bool>,
+    pub deny_native: Option<bool>,
+    pub deny_unsafe_apis: Option<bool>,
+    pub max_public_params: Option<usize>,
+    pub max_nested_type_depth: Option<usize>,
+    pub native_api_risk: Option<String>,
+    pub build_execution_default: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ManifestReviewFeaturePolicy {
+pub struct ManifestReviewFeaturePolicy {
     #[serde(default)]
-    pub(super) deny: Vec<String>,
+    pub deny: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ManifestReviewExpect {
-    pub(super) risk: Option<String>,
+pub struct ManifestReviewExpect {
+    pub risk: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ManifestNative {
+pub struct ManifestNative {
     #[serde(default)]
-    pub(super) rust: Option<ManifestNativeRust>,
+    pub rust: Option<ManifestNativeRust>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ManifestNativeRust {
+pub struct ManifestNativeRust {
     #[serde(default)]
-    pub(super) enabled: bool,
-    pub(super) path: Option<String>,
+    pub enabled: bool,
+    pub path: Option<String>,
     #[serde(rename = "crate")]
-    pub(super) crate_name: Option<String>,
+    pub crate_name: Option<String>,
     #[serde(default)]
-    pub(super) cargo_features: Vec<String>,
+    pub cargo_features: Vec<String>,
     #[serde(
         default = "native_default_features_enabled",
         rename = "default-features",
         alias = "default_features"
     )]
-    pub(super) default_features: bool,
+    pub default_features: bool,
     #[serde(default)]
-    pub(super) feature_map: BTreeMap<String, ManifestNativeRustFeature>,
+    pub feature_map: BTreeMap<String, ManifestNativeRustFeature>,
     #[serde(default)]
-    pub(super) policy: ManifestNativeRustPolicy,
+    pub policy: ManifestNativeRustPolicy,
     #[serde(default)]
-    pub(super) links: Vec<String>,
+    pub links: Vec<String>,
 }
 
 fn native_default_features_enabled() -> bool {
@@ -178,44 +178,44 @@ fn native_default_features_enabled() -> bool {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ManifestNativeRustFeature {
+pub struct ManifestNativeRustFeature {
     #[serde(default)]
-    pub(super) cargo_features: Vec<String>,
+    pub cargo_features: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ManifestNativeRustPolicy {
-    pub(super) build_scripts: Option<String>,
-    pub(super) proc_macros: Option<String>,
-    pub(super) native_links: Option<String>,
-    pub(super) ffi: Option<String>,
-    pub(super) rss_unsafe_apis: Option<String>,
-    pub(super) wrapper_unsafe_blocks: Option<String>,
-    pub(super) transitive_unsafe_blocks: Option<String>,
+pub struct ManifestNativeRustPolicy {
+    pub build_scripts: Option<String>,
+    pub proc_macros: Option<String>,
+    pub native_links: Option<String>,
+    pub ffi: Option<String>,
+    pub rss_unsafe_apis: Option<String>,
+    pub wrapper_unsafe_blocks: Option<String>,
+    pub transitive_unsafe_blocks: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ManifestVirtual {
+pub struct ManifestVirtual {
     #[serde(default)]
-    pub(super) has_default: bool,
-    pub(super) provider: Option<String>,
+    pub has_default: bool,
+    pub provider: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ManifestProviderImplementation {
-    pub(super) version: Option<String>,
+pub struct ManifestProviderImplementation {
+    pub version: Option<String>,
     #[serde(default)]
-    pub(super) interface_features: Vec<String>,
-    pub(super) interface_effective_hash: Option<String>,
+    pub interface_features: Vec<String>,
+    pub interface_effective_hash: Option<String>,
 }
 
 #[derive(Debug, Default)]
-pub(super) struct ManifestProviderChoice {
-    pub(super) package: Option<String>,
-    pub(super) version: Option<String>,
+pub struct ManifestProviderChoice {
+    pub package: Option<String>,
+    pub version: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for ManifestProviderChoice {
@@ -251,15 +251,15 @@ impl<'de> Deserialize<'de> for ManifestProviderChoice {
 }
 
 impl ManifestNativeRust {
-    pub(super) fn effective_build_scripts(&self) -> Option<&str> {
+    pub fn effective_build_scripts(&self) -> Option<&str> {
         self.policy.build_scripts.as_deref()
     }
 
-    pub(super) fn effective_proc_macros(&self) -> Option<&str> {
+    pub fn effective_proc_macros(&self) -> Option<&str> {
         self.policy.proc_macros.as_deref()
     }
 
-    pub(super) fn effective_unsafe_policies(&self) -> EffectiveNativeUnsafePolicies<'_> {
+    pub fn effective_unsafe_policies(&self) -> EffectiveNativeUnsafePolicies<'_> {
         EffectiveNativeUnsafePolicies {
             rss_unsafe_apis: self.policy.rss_unsafe_apis.as_deref(),
             wrapper_unsafe_blocks: self.policy.wrapper_unsafe_blocks.as_deref(),
@@ -267,24 +267,24 @@ impl ManifestNativeRust {
         }
     }
 
-    pub(super) fn effective_native_links(&self) -> Option<&str> {
+    pub fn effective_native_links(&self) -> Option<&str> {
         self.policy.native_links.as_deref()
     }
 
-    pub(super) fn effective_ffi(&self) -> Option<&str> {
+    pub fn effective_ffi(&self) -> Option<&str> {
         self.policy.ffi.as_deref()
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct EffectiveNativeUnsafePolicies<'a> {
-    pub(super) rss_unsafe_apis: Option<&'a str>,
-    pub(super) wrapper_unsafe_blocks: Option<&'a str>,
-    pub(super) transitive_unsafe_blocks: Option<&'a str>,
+pub struct EffectiveNativeUnsafePolicies<'a> {
+    pub rss_unsafe_apis: Option<&'a str>,
+    pub wrapper_unsafe_blocks: Option<&'a str>,
+    pub transitive_unsafe_blocks: Option<&'a str>,
 }
 
 impl EffectiveNativeUnsafePolicies<'_> {
-    pub(super) fn has_non_forbidden_boundary(self) -> bool {
+    pub fn has_non_forbidden_boundary(self) -> bool {
         [
             self.rss_unsafe_apis,
             self.wrapper_unsafe_blocks,
@@ -297,31 +297,31 @@ impl EffectiveNativeUnsafePolicies<'_> {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct PackageSource {
-    pub(super) path: String,
-    pub(super) relative_path: String,
-    pub(super) contents: String,
-    pub(super) kind: PackageReviewFileKind,
+pub struct PackageSource {
+    pub path: String,
+    pub relative_path: String,
+    pub contents: String,
+    pub kind: PackageReviewFileKind,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(super) struct ResolvedPackageFeatures {
-    pub(super) selected: Vec<String>,
-    pub(super) unknown: Vec<String>,
+pub struct ResolvedPackageFeatures {
+    pub selected: Vec<String>,
+    pub unknown: Vec<String>,
 }
 
-pub(super) struct LoadedPackage {
-    pub(super) manifest_path: PathBuf,
-    pub(super) manifest_source: String,
-    pub(super) manifest: Manifest,
-    pub(super) sources: Vec<PackageSource>,
+pub struct LoadedPackage {
+    pub manifest_path: PathBuf,
+    pub manifest_source: String,
+    pub manifest: Manifest,
+    pub sources: Vec<PackageSource>,
 }
 
-pub(super) fn load_package(package_dir: &Path) -> Result<LoadedPackage, String> {
+pub fn load_package(package_dir: &Path) -> Result<LoadedPackage, String> {
     load_package_with_features(package_dir, None)
 }
 
-pub(super) fn load_package_with_features(
+pub fn load_package_with_features(
     package_dir: &Path,
     selected_features: Option<&[String]>,
 ) -> Result<LoadedPackage, String> {
@@ -332,7 +332,7 @@ pub(super) fn load_package_with_features(
 /// Assemble package sources from manifest bytes already admitted by the
 /// project boundary. This performs semantic manifest parsing and constrained
 /// source capture, but it deliberately never reopens `rsspkg.toml`.
-pub(super) fn load_package_from_manifest_source(
+pub fn load_package_from_manifest_source(
     package_dir: &Path,
     physical_manifest_source: &str,
     selected_features: Option<&[String]>,
@@ -403,13 +403,11 @@ pub(super) fn load_package_from_manifest_source(
     })
 }
 
-pub(super) fn load_package_manifest(package_dir: &Path) -> Result<Manifest, String> {
+pub fn load_package_manifest(package_dir: &Path) -> Result<Manifest, String> {
     load_package_manifest_with_source(package_dir).map(|(_, manifest)| manifest)
 }
 
-pub(super) fn load_package_manifest_with_source(
-    package_dir: &Path,
-) -> Result<(String, Manifest), String> {
+pub fn load_package_manifest_with_source(package_dir: &Path) -> Result<(String, Manifest), String> {
     let captured_manifest = capture_project_manifest(package_dir, MANIFEST_MAX_BYTES)?;
     let manifest_source = captured_manifest.source().to_string();
     let manifest = parse_package_manifest_source(package_dir, &manifest_source)?;
@@ -419,7 +417,7 @@ pub(super) fn load_package_manifest_with_source(
 /// Interpret bytes already captured by the project boundary as package
 /// semantics. This deliberately performs no filesystem access; dependency
 /// graph capture supplies the exact manifest source it read.
-pub(super) fn parse_package_manifest_source(
+pub fn parse_package_manifest_source(
     package_dir: &Path,
     manifest_source: &str,
 ) -> Result<Manifest, String> {
@@ -428,12 +426,12 @@ pub(super) fn parse_package_manifest_source(
         .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))
 }
 
-pub(super) fn selected_root_package_features(manifest: &Manifest) -> Vec<String> {
+pub fn selected_root_package_features(manifest: &Manifest) -> Vec<String> {
     let requested = manifest.features.keys().cloned().collect::<Vec<_>>();
     resolve_package_features(manifest, &requested).selected
 }
 
-pub(super) fn resolve_package_features(
+pub fn resolve_package_features(
     manifest: &Manifest,
     requested_features: &[String],
 ) -> ResolvedPackageFeatures {

@@ -52,7 +52,12 @@ mod metadata;
 mod native;
 mod policy;
 mod review;
-mod source_set;
+// The legacy package compatibility façade keeps this module name only so its
+// remaining callers can migrate incrementally. Captured manifests and source
+// sets are physically owned by the independent package-review boundary.
+mod source_set {
+    pub(super) use rsscript_package_review::*;
+}
 
 const PACKAGE_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
 

@@ -1,0 +1,16 @@
+[package]
+name = "rsscript-package-review"
+version = "0.1.0"
+edition = "2024"
+description = "Captured package review inputs and compatibility execution for RSScript"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+rsscript-package-model = { path = "../rsscript-package-model" }
+rsscript-project = { path = "../rsscript-project" }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+[dev-dependencies]
+uuid = { version = "1", features = ["v4"] }

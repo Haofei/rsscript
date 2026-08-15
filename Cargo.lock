@@ -1850,6 +1850,7 @@ dependencies = [
  "rsscript-mir",
  "rsscript-operation",
  "rsscript-package-model",
+ "rsscript-package-review",
  "rsscript-project",
  "rsscript-review-core",
  "rsscript-review-source",
@@ -1947,6 +1948,17 @@ dependencies = [
  "serde_json",
  "sha2",
  "toml",
+]
+
+[[package]]
+name = "rsscript-package-review"
+version = "0.1.0"
+dependencies = [
+ "rsscript-package-model",
+ "rsscript-project",
+ "serde",
+ "toml",
+ "uuid",
 ]
 
 [[package]]
