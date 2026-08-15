@@ -79,6 +79,32 @@ fn cargo_tree(root: &Path, package: &str) -> String {
     String::from_utf8(output.stdout).expect("cargo tree output must be UTF-8")
 }
 
+fn cargo_tree_with_features(root: &Path, package: &str, features: &str) -> String {
+    let output = Command::new(env!("CARGO"))
+        .args([
+            "tree",
+            "--locked",
+            "-p",
+            package,
+            "--no-default-features",
+            "--features",
+            features,
+            "-e",
+            "normal",
+            "--prefix",
+            "none",
+        ])
+        .current_dir(root)
+        .output()
+        .expect("cargo tree should start");
+    assert!(
+        output.status.success(),
+        "cargo tree for `{package}` with `{features}` failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).expect("cargo tree output must be UTF-8")
+}
+
 fn metadata_direct_dependencies(metadata: &serde_json::Value, package: &str) -> BTreeSet<String> {
     metadata["packages"]
         .as_array()
@@ -205,6 +231,25 @@ fn cargo_metadata_enforces_composition_dependency_direction() {
                 "composition root must remain a dependency leaf; `{name}` depends on it"
             );
         }
+    }
+
+    let lowering_tree = cargo_tree_with_features(&root, "rsscript-compiler", "lowering");
+    for forbidden in [
+        "rsscript-artifact-store",
+        "rsscript-review",
+        "rsscript-vm",
+        "rsscript-workspace-loader",
+        "rss-native-abi",
+        "rss-process-guard",
+        "vm-jit",
+        "fs2",
+        "rustix",
+        "tempfile",
+    ] {
+        assert!(
+            !lowering_tree.lines().any(|line| line.starts_with(forbidden)),
+            "the provider-neutral lowering closure must not include `{forbidden}`:\n{lowering_tree}"
+        );
     }
 }
 
