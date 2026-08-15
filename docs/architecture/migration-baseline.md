@@ -564,7 +564,9 @@ mechanical acceptance condition holds.
     analysis query, while `Compiler::compile_snapshot` and its operation-aware
     form use the session-owned validated query for normal non-empty logical
     paths; only the historical empty-path in-memory compatibility case retains
-    direct analysis. Package compatibility,
+    direct analysis. The CLI `fix` workflow now follows the same session-owned
+    analysis route, preserving duplicate-interface diagnostics through its
+    explicit legacy fallback. Package compatibility,
     `--no-core` compatibility checks, and the remaining test/AOT callers are
     still explicit migration work.
 - [ ] **S04 — Make language service consume semantic queries directly.** It
