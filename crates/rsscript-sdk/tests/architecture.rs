@@ -904,6 +904,8 @@ fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
         "pub fn skip",
         "pub fn take",
         "pub fn slice",
+        "pub fn enumerate",
+        "pub fn zip",
         "pub fn deque_to_vec",
         "pub fn map_difference",
         "pub fn map_intersection",
@@ -969,6 +971,8 @@ fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
         "core_list_skip(list.borrow().iter(), count)",
         "core_list_slice(list.borrow().iter(), start, len)",
         "core_list_take(list.borrow().iter(), count)",
+        "core_list_enumerate(list.borrow().iter())",
+        "core_list_zip(left.iter(), right.iter())",
     ] {
         assert!(
             list.contains(required),

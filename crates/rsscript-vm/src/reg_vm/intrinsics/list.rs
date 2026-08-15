@@ -173,8 +173,9 @@ impl RegVm {
             }
             RegIntrinsic::ListEnumerate => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let mut values = Vec::new();
-                for (index, value) in list.borrow().iter().enumerate() {
+                let pairs = core_list_enumerate(list.borrow().iter());
+                let mut values = Vec::with_capacity(pairs.len());
+                for (index, value) in pairs {
                     values.push(self.fresh_list(TypedVec::from_values(vec![
                         VmValue::Int(index as i64),
                         VmValue::Int(expect_int_ref(&value)?),
@@ -267,10 +268,9 @@ impl RegVm {
                 let right = expect_list_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let left = left.borrow();
                 let right = right.borrow();
-                let values = left
-                    .iter()
-                    .zip(right.iter())
-                    .map(|(left, right)| TypedVec::from_values(vec![left.clone(), right.clone()]))
+                let values = core_list_zip(left.iter(), right.iter())
+                    .into_iter()
+                    .map(|(left, right)| TypedVec::from_values(vec![left, right]))
                     .collect::<Vec<_>>();
                 drop(left);
                 drop(right);

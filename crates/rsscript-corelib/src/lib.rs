@@ -82,6 +82,17 @@ pub mod collections {
         values.into_iter().skip(start).take(len).collect()
     }
 
+    pub fn enumerate<T>(values: impl IntoIterator<Item = T>) -> Vec<(usize, T)> {
+        values.into_iter().enumerate().collect()
+    }
+
+    pub fn zip<T, U>(
+        left: impl IntoIterator<Item = T>,
+        right: impl IntoIterator<Item = U>,
+    ) -> Vec<(T, U)> {
+        left.into_iter().zip(right).collect()
+    }
+
     pub fn deque_to_vec<T: Clone>(values: &VecDeque<T>) -> Vec<T> {
         values.iter().cloned().collect()
     }
@@ -381,6 +392,8 @@ mod tests {
         assert_eq!(skip([1, 2, 3], 1), vec![2, 3]);
         assert_eq!(take([1, 2, 3], 2), vec![1, 2]);
         assert_eq!(slice([1, 2, 3, 4], 1, 2), vec![2, 3]);
+        assert_eq!(enumerate([7, 8]), vec![(0, 7), (1, 8)]);
+        assert_eq!(zip([1, 2, 3], [4, 5]), vec![(1, 4), (2, 5)]);
         assert_eq!(
             deque_to_vec(&std::collections::VecDeque::from([1, 2, 3])),
             vec![1, 2, 3]

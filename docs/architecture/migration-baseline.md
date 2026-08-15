@@ -1695,14 +1695,14 @@ an arbitrary shell executor.
       byte-value/error adaptation and its existing allocation accounting. The
       `flate2` implementation dependency is no longer part of the runtime VM
       closure.
-    - [ ] **V06.2.2 — Extract collection algorithms.** Move non-primitive list,
+    - [x] **V06.2.2 — Extract collection algorithms.** Move non-primitive list,
       map, set, and deque transformations behind the same pure-library boundary
       without moving ownership-sensitive mutation primitives out of the VM.
       - [x] **V06.2.2a — Extract pure List transforms.** `List.dedup`, `reverse`,
         `skip`, `take`, and `slice` now delegate their generic order-preserving
         algorithms to `rsscript-corelib`; the VM still owns list representation,
         allocation charging, and the ownership-sensitive boundary.
-      - [ ] **V06.2.2b — Extract pure map/set/deque transforms.** Continue only
+      - [x] **V06.2.2b — Extract pure map/set/deque transforms.** Continue only
         with transformations that have no closure callback, mutable receiver, or
         resource lifecycle behavior.
         - [x] **V06.2.2b.1 — Extract set algebra and deque materialization.**
@@ -1712,10 +1712,14 @@ an arbitrary shell executor.
         - [x] **V06.2.2b.2 — Extract pure map views.** Map and set keys/values
           enumeration plus subset testing use corelib; `VmMapKey` conversion and
           result allocation remain VM responsibilities.
-      - [ ] **V06.2.2c — Evaluate remaining pure collection operations.** Move
-        only operations whose iteration and result construction can be made pure
-        without pulling VM keys, callbacks, numeric traps, or cost accounting
-        into corelib.
+      - [x] **V06.2.2c — Evaluate remaining pure collection operations.**
+        `List.enumerate` and `List.zip` now delegate their generic iteration to
+        corelib. The remaining operations intentionally stay at the VM boundary:
+        they either invoke language closures, depend on cyclic-value equality,
+        perform checked numeric arithmetic, materialize typed VM layouts, or
+        perform ownership-sensitive allocation/cost accounting. No additional
+        collection operation can cross this boundary without coupling corelib to
+        VM values or changing its execution semantics.
   - [ ] **V06.3 — Reduce VM dependencies to execution primitives.** Verify VM
     Core no longer directly depends on library implementation crates.
 - [ ] **V07 — Classify the intrinsic catalog.** Every entry is exactly one of a
