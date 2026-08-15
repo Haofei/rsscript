@@ -1689,9 +1689,13 @@ an arbitrary shell executor.
           `Set.difference`, `intersection`, `union`, and `Deque.to_list` now use
           generic core-library algorithms. The VM retains map-key conversion,
           fresh-value allocation, and all mutating deque operations.
-        - [ ] **V06.2.2b.2 — Evaluate remaining map/set transforms.** Only move
-          operations whose iteration and result construction can be made pure
-          without pulling VM keys, callbacks, or cost accounting into corelib.
+        - [x] **V06.2.2b.2 — Extract pure map views.** Map and set keys/values
+          enumeration plus subset testing use corelib; `VmMapKey` conversion and
+          result allocation remain VM responsibilities.
+      - [ ] **V06.2.2c — Evaluate remaining pure collection operations.** Move
+        only operations whose iteration and result construction can be made pure
+        without pulling VM keys, callbacks, numeric traps, or cost accounting
+        into corelib.
   - [ ] **V06.3 — Reduce VM dependencies to execution primitives.** Verify VM
     Core no longer directly depends on library implementation crates.
 - [ ] **V07 — Classify the intrinsic catalog.** Every entry is exactly one of a

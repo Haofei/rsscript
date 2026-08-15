@@ -38,8 +38,9 @@ use rsscript_corelib::{
     collections::{
         dedup as core_list_dedup, deque_to_vec as core_deque_to_vec,
         map_difference as core_map_difference, map_intersection as core_map_intersection,
-        map_union as core_map_union, reverse as core_list_reverse, skip as core_list_skip,
-        slice as core_list_slice, take as core_list_take,
+        map_is_subset as core_map_is_subset, map_keys as core_map_keys,
+        map_union as core_map_union, map_values as core_map_values, reverse as core_list_reverse,
+        skip as core_list_skip, slice as core_list_slice, take as core_list_take,
     },
     encoding::{
         base64_decode, base64_encode, hex_decode as core_hex_decode, hex_encode as core_hex_encode,

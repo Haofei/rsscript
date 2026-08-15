@@ -39,10 +39,10 @@ impl RegVm {
             RegIntrinsic::SetIsSubset => {
                 let left = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let right = expect_map_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let right = right.borrow();
-                Ok(VmValue::Bool(
-                    left.borrow().keys().all(|key| right.contains_key(key)),
-                ))
+                Ok(VmValue::Bool(core_map_is_subset(
+                    &left.borrow(),
+                    &right.borrow(),
+                )))
             }
             RegIntrinsic::SetLen => {
                 let set = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -51,10 +51,9 @@ impl RegVm {
             RegIntrinsic::SetNew => self.fresh_map(ValueMap::default()),
             RegIntrinsic::SetToList => {
                 let set = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let values = set
-                    .borrow()
-                    .keys()
-                    .map(vm_value_from_map_key)
+                let values = core_map_keys(&set.borrow())
+                    .into_iter()
+                    .map(|key| vm_value_from_map_key(&key))
                     .collect::<Vec<_>>();
                 self.fresh_list(TypedVec::from_values(values))
             }

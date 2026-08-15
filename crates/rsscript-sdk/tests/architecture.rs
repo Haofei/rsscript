@@ -905,6 +905,9 @@ fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
         "pub fn map_difference",
         "pub fn map_intersection",
         "pub fn map_union",
+        "pub fn map_is_subset",
+        "pub fn map_keys",
+        "pub fn map_values",
     ] {
         assert!(
             corelib.contains(required),
@@ -941,10 +944,22 @@ fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
         "core_map_difference(&left.borrow(), &right.borrow())",
         "core_map_intersection(&left.borrow(), &right.borrow())",
         "core_map_union(&left.borrow(), &right.borrow())",
+        "core_map_is_subset(",
+        "core_map_keys(&set.borrow())",
     ] {
         assert!(
             set.contains(required),
             "set adapter is missing `{required}`"
+        );
+    }
+    let map = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/map.rs"));
+    for required in [
+        "core_map_keys(&map.borrow())",
+        "core_map_values(&map.borrow())",
+    ] {
+        assert!(
+            map.contains(required),
+            "map adapter is missing `{required}`"
         );
     }
 }

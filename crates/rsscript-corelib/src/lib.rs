@@ -116,6 +116,18 @@ pub mod collections {
         }
         result
     }
+
+    pub fn map_is_subset<K: Eq + Hash, V>(left: &HashMap<K, V>, right: &HashMap<K, V>) -> bool {
+        left.keys().all(|key| right.contains_key(key))
+    }
+
+    pub fn map_keys<K: Clone, V>(values: &HashMap<K, V>) -> Vec<K> {
+        values.keys().cloned().collect()
+    }
+
+    pub fn map_values<K, V: Clone>(values: &HashMap<K, V>) -> Vec<V> {
+        values.values().cloned().collect()
+    }
 }
 
 #[cfg(test)]
@@ -169,5 +181,11 @@ mod tests {
             map_union(&left, &right),
             std::collections::HashMap::from([("a", 1), ("b", 2), ("c", 3)])
         );
+        assert!(map_is_subset(
+            &std::collections::HashMap::from([("a", 1)]),
+            &left
+        ));
+        assert_eq!(map_keys(&left).len(), 2);
+        assert_eq!(map_values(&left).len(), 2);
     }
 }

@@ -96,10 +96,9 @@ impl RegVm {
             }
             RegIntrinsic::MapKeys => {
                 let map = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let keys = map
-                    .borrow()
-                    .keys()
-                    .map(vm_value_from_map_key)
+                let keys = core_map_keys(&map.borrow())
+                    .into_iter()
+                    .map(|key| vm_value_from_map_key(&key))
                     .collect::<Vec<_>>();
                 self.fresh_list(TypedVec::from_values(keys))
             }
@@ -175,7 +174,7 @@ impl RegVm {
             }
             RegIntrinsic::MapValues => {
                 let map = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let values = map.borrow().values().cloned().collect::<Vec<_>>();
+                let values = core_map_values(&map.borrow());
                 self.fresh_list(TypedVec::from_values(values))
             }
             other => unreachable!("exec_map_intrinsics called with non-map intrinsic: {other:?}"),
