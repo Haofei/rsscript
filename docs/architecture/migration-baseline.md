@@ -2107,10 +2107,13 @@ an arbitrary shell executor.
     wider fixed address-space allowance; a bounded runtime reserve covers
     verifier/protocol overhead while the VM keeps its independent live-memory
     limit.
-    - [ ] **A09.3a — Add deterministic process-tree fault injection.** Drive
-      runner children through root exit, descendant escape, pipe disconnect,
-      deadline, and output-overflow scenarios; assert reaping and preserve the
-      distinction between containment failures and VM reports.
+    - [x] **A09.3a — Add deterministic process-tree fault injection.** The
+      runner parent now accepts a host-selected child-command seam for focused
+      tests, while protocol input still cannot select executable code. Tests
+      drive root exit with a background descendant, deadline with a live
+      descendant, and bounded stdout overflow through the actual guarded-child
+      path. Each asserts tree reaping and reports a containment/protocol error,
+      never a fabricated VM report.
   - [ ] **A09.4 — Fuzz protocol and runner failure paths.** Exercise framing,
     malformed messages, oversized inputs, incomplete I/O, and termination
     separation without calling it a universal sandbox. The bounded protocol now

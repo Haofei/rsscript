@@ -2,9 +2,9 @@
   "schema": "rsscript.migration_queue.v1",
   "tasks": [
     {
-      "id": "A09.3a",
+      "id": "A09.4",
       "priority": 80,
-      "depends_on": ["A09.2e"],
+      "depends_on": ["A09.3a"],
       "scope": [
         "crates/process-guard/**",
         "crates/rsscript-cli/**",
@@ -12,9 +12,9 @@
         "docs/threat-model.md"
       ],
       "acceptance": [
-        "Fault injection covers runner root exit, descendant escape, protocol disconnect, deadline, and output overflow without leaking a process tree.",
-        "Containment/protocol failures remain distinct from VM ExecutionReports.",
-        "The focused runner tests assert reaping for every injected failure path."
+        "Protocol framing and runner parent/child failure paths have coverage-guided fuzzing or an equivalent bounded corpus.",
+        "Malformed messages, incomplete I/O, oversized inputs, and termination separation remain fail-closed.",
+        "Fuzz/corpus execution never describes the runner as a universal sandbox."
       ],
       "verification": [
         "cargo test -p rss-process-guard --locked",

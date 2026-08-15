@@ -132,8 +132,30 @@ fn invoke_runner(
     let executable = std::env::current_exe()
         .map_err(|error| format!("cannot locate current rss executable: {error}"))?;
     let mut command = Command::new(executable);
+    command.arg("__runner-v1");
+    invoke_runner_with_command(
+        request,
+        bundle,
+        command,
+        MAX_RESPONSE_BYTES + 16,
+        RUNNER_STDERR_LIMIT,
+        Duration::from_millis(1000),
+    )
+}
+
+/// Run one host-selected child command through the same containment, bounded
+/// pipe, deadline, and response-decoding path as the hidden runner entrypoint.
+/// Keeping this seam independent of the executable selection makes the parent
+/// failure paths directly testable without letting protocol input choose code.
+fn invoke_runner_with_command(
+    request: &RunnerRequestV1,
+    bundle: &ArtifactBundle,
+    mut command: Command,
+    response_limit: usize,
+    stderr_limit: usize,
+    deadline_grace: Duration,
+) -> Result<RunnerResponseV1, String> {
     command
-        .arg("__runner-v1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -176,11 +198,10 @@ fn invoke_runner(
     let stdout_exceeded = Arc::clone(&output_exceeded);
     let stderr_exceeded = Arc::clone(&output_exceeded);
     let stdout_reader =
-        thread::spawn(move || read_bounded(stdout, MAX_RESPONSE_BYTES + 16, &stdout_exceeded));
-    let stderr_reader =
-        thread::spawn(move || read_bounded(stderr, RUNNER_STDERR_LIMIT, &stderr_exceeded));
+        thread::spawn(move || read_bounded(stdout, response_limit, &stdout_exceeded));
+    let stderr_reader = thread::spawn(move || read_bounded(stderr, stderr_limit, &stderr_exceeded));
     let deadline =
-        Instant::now() + Duration::from_millis(request.limits.wall_time_ms.saturating_add(1000));
+        Instant::now() + Duration::from_millis(request.limits.wall_time_ms) + deadline_grace;
     loop {
         if child
             .try_wait()
@@ -638,6 +659,13 @@ mod tests {
     use rsscript_sdk::compile::FrontendInputSnapshot;
     use std::io::Cursor;
 
+    fn runner_fault_bundle() -> ArtifactBundle {
+        Compiler
+            .compile("runner-fault.rss", "fn main() -> Unit { return Unit }\n")
+            .expect("fault-injection fixture compiles")
+            .into_bundle()
+    }
+
     #[test]
     fn request_protocol_has_no_provider_or_dynamic_library_injection_field() {
         let request = RunnerRequestV1::new(Vec::new()).expect("request");
@@ -743,6 +771,93 @@ mod tests {
         assert!(error.contains("incomplete or malformed"));
         assert!(error.contains("reaped"));
         assert!(error.contains("child diagnostics"));
+        assert!(!error.contains("ExecutionReport"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runner_root_exit_reaps_a_descendant_before_reporting_disconnect() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let marker = temp.path().join("escaped");
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            &format!(
+                "/bin/cat >/dev/null; (/bin/sleep 0.2; /usr/bin/touch '{}') & exit 0",
+                marker.display()
+            ),
+        ]);
+        let request = RunnerRequestV1::new(Vec::new()).expect("request");
+        let error = invoke_runner_with_command(
+            &request,
+            &runner_fault_bundle(),
+            command,
+            MAX_RESPONSE_BYTES + 16,
+            RUNNER_STDERR_LIMIT,
+            Duration::ZERO,
+        )
+        .expect_err("an empty successful child pipe must be a runner failure");
+        assert!(error.contains("incomplete or malformed"));
+        assert!(error.contains("reaped"));
+        std::thread::sleep(Duration::from_millis(350));
+        assert!(
+            !marker.exists(),
+            "a descendant of the disconnected runner root escaped containment"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runner_deadline_reaps_a_live_descendant_without_a_vm_report() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let marker = temp.path().join("deadline-escaped");
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            &format!(
+                "/bin/cat >/dev/null; (/bin/sleep 0.2; /usr/bin/touch '{}') & /bin/sleep 30",
+                marker.display()
+            ),
+        ]);
+        let mut request = RunnerRequestV1::new(Vec::new()).expect("request");
+        request.limits.wall_time_ms = 1;
+        let error = invoke_runner_with_command(
+            &request,
+            &runner_fault_bundle(),
+            command,
+            MAX_RESPONSE_BYTES + 16,
+            RUNNER_STDERR_LIMIT,
+            Duration::ZERO,
+        )
+        .expect_err("expired runner must be terminated and reaped");
+        assert!(error.contains("deadline exceeded"));
+        assert!(error.contains("terminated and reaped"));
+        assert!(!error.contains("ExecutionReport"));
+        std::thread::sleep(Duration::from_millis(350));
+        assert!(
+            !marker.exists(),
+            "a descendant of the expired runner escaped containment"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runner_output_overflow_terminates_and_reaps_the_child_tree() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "/bin/cat >/dev/null; printf 123456789; /bin/sleep 30"]);
+        let request = RunnerRequestV1::new(Vec::new()).expect("request");
+        let error = invoke_runner_with_command(
+            &request,
+            &runner_fault_bundle(),
+            command,
+            8,
+            8,
+            Duration::ZERO,
+        )
+        .expect_err("oversized runner output must terminate the child tree");
+        assert!(error.contains("output exceeded"));
+        assert!(error.contains("terminated process tree"));
+        assert!(error.contains("reaped root"));
         assert!(!error.contains("ExecutionReport"));
     }
 
