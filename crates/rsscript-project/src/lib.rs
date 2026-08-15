@@ -4,9 +4,11 @@
 //!
 //! This crate is the boundary between an OS-facing workspace loader and the
 //! compiler's immutable, in-memory [`FrontendInputSnapshot`]. It deliberately
-//! owns no compiler, Artifact, Provider, or VM API: callers capture once here
-//! and pass the resulting snapshot to their chosen frontend consumer.
+//! owns no compiler, Artifact Bundle construction, Provider, or VM API:
+//! callers capture once here and pass the resulting snapshot to their chosen
+//! frontend consumer.
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::path::Path;
@@ -19,7 +21,54 @@ use rsscript_workspace_loader::{
 };
 use sha2::{Digest, Sha256};
 
+pub use rsscript_artifact::PackageIdentityV1 as PackageIdentity;
 pub use rsscript_workspace_loader::WorkspaceSourceFile;
+
+/// Native dependency metadata captured as part of an immutable project graph.
+///
+/// Experimental Rust/AOT lowering may consume this model, but it does not own
+/// package identity, paths, or dependency policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeRustDependency {
+    pub crate_name: String,
+    pub path: String,
+    pub cargo_features: Vec<String>,
+    pub default_features: bool,
+    pub bindings: BTreeMap<String, String>,
+}
+
+/// Captured package input that can be projected to the compiler's pure,
+/// in-memory frontend boundary.
+///
+/// This model retains package/AOT compatibility metadata for callers that
+/// need it, while [`Self::frontend_input`] selects only source and interface
+/// bytes for semantic compilation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageLoweringInput {
+    pub package: PackageIdentity,
+    pub package_dir: String,
+    pub source_path: String,
+    pub source_relative_path: String,
+    pub source: String,
+    pub sources: Vec<(String, String)>,
+    pub interfaces: Vec<(String, String)>,
+    pub native_dependencies: Vec<NativeRustDependency>,
+}
+
+impl PackageLoweringInput {
+    /// Project/package projection into the compiler's pure input boundary. No
+    /// filesystem state is retained by the resulting value.
+    pub fn frontend_input(&self) -> FrontendInputSnapshot {
+        FrontendInputSnapshot::from_sources(
+            self.sources
+                .iter()
+                .map(|(path, contents)| (path.as_str(), contents.as_str())),
+            self.interfaces
+                .iter()
+                .map(|(path, contents)| (path.as_str(), contents.as_str())),
+        )
+    }
+}
 
 /// Immutable project input captured from one filesystem workspace.
 ///
@@ -217,14 +266,51 @@ mod tests {
             .expect("capture");
         assert!(project.content_digest().starts_with("sha256:"));
         assert!(project.frontend_digest().starts_with("sha256:"));
-        assert!(project
-            .files()
-            .iter()
-            .any(|file| file.kind == WorkspaceFileKind::Test));
+        assert!(
+            project
+                .files()
+                .iter()
+                .any(|file| file.kind == WorkspaceFileKind::Test)
+        );
         assert_eq!(project.frontend().sources().files().len(), 1);
         assert_eq!(
             project.frontend().sources().files()[0].path(),
             "root/main.rss"
         );
+    }
+
+    #[test]
+    fn captured_package_input_projects_only_compiler_frontend_bytes() {
+        let input = PackageLoweringInput {
+            package: PackageIdentity {
+                name: "fixture".into(),
+                version: "0.1.0".into(),
+                edition: "2024".into(),
+            },
+            package_dir: "/host-specific/fixture".into(),
+            source_path: "/host-specific/fixture/src/main.rss".into(),
+            source_relative_path: "src/main.rss".into(),
+            source: "fn main() -> Unit { return Unit }".into(),
+            sources: vec![(
+                "root/src/main.rss".into(),
+                "fn main() -> Unit { return Unit }".into(),
+            )],
+            interfaces: vec![(
+                "dep/api.rssi".into(),
+                "module api\npub fn log(message: read String) -> Unit".into(),
+            )],
+            native_dependencies: vec![NativeRustDependency {
+                crate_name: "fixture-native".into(),
+                path: "/host-specific/native".into(),
+                cargo_features: vec!["fast".into()],
+                default_features: false,
+                bindings: BTreeMap::new(),
+            }],
+        };
+        let frontend = input.frontend_input();
+        assert_eq!(frontend.sources().files().len(), 1);
+        assert_eq!(frontend.interfaces().files().len(), 1);
+        assert_eq!(frontend.sources().files()[0].path(), "root/src/main.rss");
+        assert_eq!(frontend.interfaces().files()[0].path(), "dep/api.rssi");
     }
 }

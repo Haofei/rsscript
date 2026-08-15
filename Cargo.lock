@@ -1815,6 +1815,7 @@ dependencies = [
  "rsscript-lowering",
  "rsscript-mir",
  "rsscript-operation",
+ "rsscript-project",
  "rsscript-provider-api",
  "rsscript-semantics",
  "rsscript-syntax",
@@ -1891,6 +1892,7 @@ dependencies = [
 name = "rsscript-project"
 version = "0.1.0"
 dependencies = [
+ "rsscript-artifact",
  "rsscript-operation",
  "rsscript-semantics",
  "rsscript-workspace-loader",

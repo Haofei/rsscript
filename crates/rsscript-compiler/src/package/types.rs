@@ -20,19 +20,10 @@ pub use rsscript_artifact::{
     PackageFileKindV1 as PackageReviewFileKind, PackageIdentityV1 as PackageIdentity,
 };
 
-/// Native package dependency metadata captured during package preparation.
-///
-/// The package boundary owns this input because it is part of the immutable
-/// package graph. Experimental Rust/AOT lowering consumes the value but does
-/// not define package identity or native dependency policy.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NativeRustDependency {
-    pub crate_name: String,
-    pub path: String,
-    pub cargo_features: Vec<String>,
-    pub default_features: bool,
-    pub bindings: BTreeMap<String, String>,
-}
+/// Project-owned immutable package capture models remain type aliases here
+/// only for the opt-in compiler compatibility API. New project/package code
+/// must import them from `rsscript-project` directly.
+pub use rsscript_project::{NativeRustDependency, PackageLoweringInput};
 
 /// Schema id for optional review output derived from package analysis and
 /// implementation metadata.
@@ -88,33 +79,6 @@ pub struct PackageReview {
     pub native_rust: Option<PackageNativeRustReview>,
     pub review_map: ReviewMap,
     pub diagnostics: Vec<Diagnostic>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PackageLoweringInput {
-    pub package: PackageIdentity,
-    pub package_dir: String,
-    pub source_path: String,
-    pub source_relative_path: String,
-    pub source: String,
-    pub sources: Vec<(String, String)>,
-    pub interfaces: Vec<(String, String)>,
-    pub native_dependencies: Vec<NativeRustDependency>,
-}
-
-impl PackageLoweringInput {
-    /// Project/package compatibility projection into the compiler's pure input
-    /// boundary. No filesystem state is retained by the resulting value.
-    pub fn frontend_input(&self) -> rsscript_semantics::FrontendInputSnapshot {
-        rsscript_semantics::FrontendInputSnapshot::from_sources(
-            self.sources
-                .iter()
-                .map(|(path, contents)| (path.as_str(), contents.as_str())),
-            self.interfaces
-                .iter()
-                .map(|(path, contents)| (path.as_str(), contents.as_str())),
-        )
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

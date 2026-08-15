@@ -6,6 +6,7 @@ description = "Typed project capture boundary for RSScript"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+rsscript-artifact = { path = "../rsscript-artifact" }
 rsscript-operation = { path = "../rsscript-operation" }
 rsscript-semantics = { path = "../rsscript-semantics" }
 rsscript-workspace-loader = { path = "../rsscript-workspace-loader" }

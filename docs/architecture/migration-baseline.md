@@ -683,7 +683,10 @@ check without inventing a second TODO source.
     and interface bytes into `FrontendInputSnapshot`; the compiler lowerer no
     longer accepts or references `PackageLoweringInput`. This prevents package
     metadata, native dependency declarations, and path state from crossing the
-    pure compiler boundary even on the opt-in legacy route.
+    pure compiler boundary even on the opt-in legacy route. `rsscript-project`
+    now physically owns `PackageLoweringInput` and `NativeRustDependency`; the
+    compiler keeps compatibility re-exports only, while experimental AOT
+    lowering consumes the project-owned capture model rather than defining it.
     Manifest dependency discovery now parses the loader-owned
     `WorkspaceManifestV1` projection and admits only explicit local path
     dependencies into capture; version, git, and registry declarations cannot

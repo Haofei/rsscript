@@ -1382,10 +1382,16 @@ fn reviewed_sdk_exposes_analysis_through_the_versioned_envelope() {
 #[test]
 fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
     let root = workspace_root();
+    let project = read(&root.join("crates/rsscript-project/src/lib.rs"));
     let package_types = read(&root.join("crates/rsscript-compiler/src/package/types.rs"));
     assert!(
-        package_types.contains("pub struct NativeRustDependency"),
-        "the package snapshot must own native dependency identity"
+        project.contains("pub struct NativeRustDependency")
+            && project.contains("pub struct PackageLoweringInput"),
+        "the project capture boundary must own native dependency and lowering-input identity"
+    );
+    assert!(
+        package_types.contains("pub use rsscript_project::{NativeRustDependency, PackageLoweringInput};"),
+        "compiler compatibility may only re-export the project-owned capture models"
     );
 
     let native_loader = read(&root.join("crates/rsscript-compiler/src/package/native.rs"));
@@ -1407,7 +1413,7 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
     let lowerer = read(&root.join("crates/rsscript-compiler/src/rust_lower/mod.rs"));
     assert!(
         lowerer.contains("pub use crate::package::NativeRustDependency;"),
-        "the Rust lowerer may retain a compatibility re-export while it consumes package input"
+        "the Rust lowerer may retain a compatibility re-export while it consumes project input"
     );
 }
 
