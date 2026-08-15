@@ -2,6 +2,29 @@
   "schema": "rsscript.migration_queue.v1",
   "tasks": [
     {
+      "id": "S03.5",
+      "priority": 10,
+      "depends_on": ["S03.4"],
+      "scope": [
+        "crates/rsscript-cli/src/cli/check.rs",
+        "crates/rsscript-cli/src/cli/fix.rs",
+        "crates/rsscript-sdk/src/lib.rs",
+        "crates/rsscript-sdk/tests/**",
+        "crates/rsscript-lowering/tests/**",
+        "docs/architecture/migration-baseline.md"
+      ],
+      "acceptance": [
+        "Normal CLI, SDK, package, and test frontend callers construct CompilationSession-owned snapshots before reading semantic facts.",
+        "Any remaining direct analyzer calls are explicit compatibility fixtures for empty or duplicate logical paths and cannot be adopted by a normal caller.",
+        "Cancellation, deadline, and diagnostic-budget behavior remains observable through the session-owned query path."
+      ],
+      "verification": [
+        "cargo test -p rsscript-semantics --locked",
+        "cargo test -p rsscript-cli --locked",
+        "cargo test -p rsscript-sdk --features compatibility --lib --locked"
+      ]
+    },
+    {
       "id": "S05.1",
       "priority": 20,
       "depends_on": [],
