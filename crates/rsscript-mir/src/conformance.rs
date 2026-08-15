@@ -35,6 +35,39 @@ pub struct MigrationCase {
     pub source: &'static str,
 }
 
+/// The executable evidence required for a migrated capability.
+///
+/// The default requirement is deliberately the strongest one: the checked-HIR
+/// MIR must agree with both the legacy VM and the small, pure MIR reference
+/// interpreter, then execute through the verified-bytecode VM.  A capability
+/// may opt out of the reference interpreter only when that interpreter does
+/// not model a required runtime primitive yet.  It still has to prove
+/// legacy/direct verified-bytecode parity, and the exception must state why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MigrationEvidence {
+    /// Compare legacy VM, pure MIR reference interpreter, and direct MIR
+    /// verified-bytecode VM output.
+    ReferenceInterpreterAndBytecode,
+    /// Compare legacy VM and direct MIR verified-bytecode VM output. The
+    /// rationale is a reviewed gap in the *test-only* reference interpreter,
+    /// not permission to route through legacy lowering.
+    VerifiedBytecode {
+        reference_interpreter_gap: &'static str,
+    },
+}
+
+/// A named exception to the default migration evidence requirement.
+///
+/// This remains a separate manifest because the overwhelmingly common case is
+/// full reference-interpreter parity. The gate rejects unused, duplicate, or
+/// unexplained exceptions so capabilities cannot silently disappear from the
+/// stronger evidence path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MigrationEvidenceOverride {
+    pub case: &'static str,
+    pub evidence: MigrationEvidence,
+}
+
 /// Structural failure in the declarative replacement corpus.
 ///
 /// The old executable-IR bridge cannot be removed based on a test that merely
@@ -60,6 +93,19 @@ pub enum MigrationGateError {
     NotDualPath {
         name: &'static str,
         stage: MigrationStage,
+    },
+    EmptyEvidenceCase,
+    UnknownEvidenceCase {
+        case: &'static str,
+    },
+    DuplicateEvidenceCase {
+        case: &'static str,
+    },
+    RedundantEvidenceOverride {
+        case: &'static str,
+    },
+    EmptyReferenceInterpreterGap {
+        case: &'static str,
     },
 }
 
@@ -92,6 +138,25 @@ impl fmt::Display for MigrationGateError {
             Self::NotDualPath { name, stage } => write!(
                 formatter,
                 "MIR migration case `{name}` is {stage:?}; replacement requires DualPath parity"
+            ),
+            Self::EmptyEvidenceCase => {
+                formatter.write_str("MIR migration evidence override has an empty case name")
+            }
+            Self::UnknownEvidenceCase { case } => write!(
+                formatter,
+                "MIR migration evidence override refers to unknown case `{case}`"
+            ),
+            Self::DuplicateEvidenceCase { case } => write!(
+                formatter,
+                "MIR migration corpus repeats evidence override for `{case}`"
+            ),
+            Self::RedundantEvidenceOverride { case } => write!(
+                formatter,
+                "MIR migration evidence override for `{case}` repeats the default requirement"
+            ),
+            Self::EmptyReferenceInterpreterGap { case } => write!(
+                formatter,
+                "MIR migration evidence override for `{case}` does not explain its reference-interpreter gap"
             ),
         }
     }
@@ -138,6 +203,67 @@ pub fn require_dual_path_parity(cases: &[MigrationCase]) -> Result<(), Migration
         }
     }
     Ok(())
+}
+
+/// Validate reviewed exceptions to the default reference-interpreter evidence.
+///
+/// Call [`migration_evidence_for`] after this gate. A case without an override
+/// always requires the full reference-interpreter plus verified-bytecode
+/// comparison. This deliberately makes a weaker test path an explicit,
+/// explained manifest change rather than an ad-hoc `if` in a test loop.
+pub fn require_declared_migration_evidence(
+    cases: &[MigrationCase],
+    overrides: &[MigrationEvidenceOverride],
+) -> Result<(), MigrationGateError> {
+    require_dual_path_parity(cases)?;
+    let names = cases.iter().map(|case| case.name).collect::<BTreeSet<_>>();
+    let mut overridden = BTreeSet::new();
+    for override_case in overrides {
+        if override_case.case.trim().is_empty() {
+            return Err(MigrationGateError::EmptyEvidenceCase);
+        }
+        if !names.contains(override_case.case) {
+            return Err(MigrationGateError::UnknownEvidenceCase {
+                case: override_case.case,
+            });
+        }
+        if !overridden.insert(override_case.case) {
+            return Err(MigrationGateError::DuplicateEvidenceCase {
+                case: override_case.case,
+            });
+        }
+        match override_case.evidence {
+            MigrationEvidence::ReferenceInterpreterAndBytecode => {
+                return Err(MigrationGateError::RedundantEvidenceOverride {
+                    case: override_case.case,
+                });
+            }
+            MigrationEvidence::VerifiedBytecode {
+                reference_interpreter_gap,
+            } if reference_interpreter_gap.trim().is_empty() => {
+                return Err(MigrationGateError::EmptyReferenceInterpreterGap {
+                    case: override_case.case,
+                });
+            }
+            MigrationEvidence::VerifiedBytecode { .. } => {}
+        }
+    }
+    Ok(())
+}
+
+/// Return the reviewed evidence requirement for a migration case.
+///
+/// The caller must first validate `overrides` with
+/// [`require_declared_migration_evidence`].
+pub fn migration_evidence_for(
+    case: &MigrationCase,
+    overrides: &[MigrationEvidenceOverride],
+) -> MigrationEvidence {
+    overrides
+        .iter()
+        .find(|override_case| override_case.case == case.name)
+        .map(|override_case| override_case.evidence)
+        .unwrap_or(MigrationEvidence::ReferenceInterpreterAndBytecode)
 }
 
 /// Scalar value model used only by the reference interpreter.
@@ -803,6 +929,56 @@ mod tests {
                 stage: MigrationStage::MirOnly,
                 ..
             })
+        ));
+    }
+
+    #[test]
+    fn evidence_exceptions_are_explicit_and_explained() {
+        const BYTECODE_ONLY: MigrationEvidenceOverride = MigrationEvidenceOverride {
+            case: "scalar",
+            evidence: MigrationEvidence::VerifiedBytecode {
+                reference_interpreter_gap: "test-only interpreter has no typed intrinsic model",
+            },
+        };
+        assert_eq!(
+            require_declared_migration_evidence(&[CASE], &[BYTECODE_ONLY]),
+            Ok(())
+        );
+        assert_eq!(
+            migration_evidence_for(&CASE, &[BYTECODE_ONLY]),
+            BYTECODE_ONLY.evidence
+        );
+        assert!(matches!(
+            require_declared_migration_evidence(
+                &[CASE],
+                &[MigrationEvidenceOverride {
+                    case: "missing",
+                    evidence: BYTECODE_ONLY.evidence,
+                }],
+            ),
+            Err(MigrationGateError::UnknownEvidenceCase { .. })
+        ));
+        assert!(matches!(
+            require_declared_migration_evidence(
+                &[CASE],
+                &[MigrationEvidenceOverride {
+                    case: CASE.name,
+                    evidence: MigrationEvidence::VerifiedBytecode {
+                        reference_interpreter_gap: "",
+                    },
+                }],
+            ),
+            Err(MigrationGateError::EmptyReferenceInterpreterGap { .. })
+        ));
+        assert!(matches!(
+            require_declared_migration_evidence(
+                &[CASE],
+                &[MigrationEvidenceOverride {
+                    case: CASE.name,
+                    evidence: MigrationEvidence::ReferenceInterpreterAndBytecode,
+                }],
+            ),
+            Err(MigrationGateError::RedundantEvidenceOverride { .. })
         ));
     }
 
