@@ -875,6 +875,17 @@ an arbitrary shell executor.
     must opt into `aot-rust` as well. Rust source lowering, source maps, runtime
     ABI helpers, and the compatibility AOT façade remain in compiler, so this
     item remains open.
+    - [x] **S05.4a — Extract the AOT output model.** Generated-Rust package,
+      source-map, and remapped-diagnostic data types now live in the
+      experiments-owned `rsscript-aot-model` crate. The compiler has only a
+      feature-gated compatibility bridge, so normal Core builds do not select
+      the AOT model closure.
+    - [ ] **S05.4b — Move the Rust lowerer and diagnostics.** Move source
+      lowering, source-map parsing, Rust diagnostic remapping, and generated
+      package publication into the experiment-owned AOT backend.
+    - [ ] **S05.4c — Split runtime ABI catalog use.** Leave Core consumers with
+      a neutral intrinsic catalog and move generated-Rust target discovery and
+      AOT runtime validation into the experiment-owned backend.
   - [ ] **S05.5 — Enforce a frontend-only compiler dependency closure.** Cargo
     metadata and `cargo tree` tests reject OS, persistence, Provider, VM, review,
     JIT, and AOT dependencies. Compiler lowering is now a dedicated feature;

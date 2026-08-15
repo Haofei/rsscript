@@ -2,20 +2,21 @@
   "schema": "rsscript.migration_queue.v1",
   "tasks": [
     {
-      "id": "S05.4",
+      "id": "S05.4b",
       "priority": 100,
-      "depends_on": ["S05.3a"],
+      "depends_on": ["S05.4a"],
       "scope": [
         "crates/rsscript-compiler/src/rust_lower/**",
-        "crates/rsscript-compiler/src/runtime_abi.rs",
         "crates/rsscript-compiler/src/lib.rs",
+        "experiments/Cargo.toml",
+        "experiments/aot-model/**",
         "experiments/aot-runtime/**",
         "docs/architecture/migration-baseline.md"
       ],
       "acceptance": [
-        "Compiler-root APIs expose no generated-Rust or AOT lowering symbols.",
-        "The experimental AOT boundary owns generated Rust, source maps, and runtime ABI helpers.",
-        "Normal compiler and CLI execution builds do not select the AOT feature closure."
+        "Source lowering, source-map parsing, Rust diagnostic remapping, and generated package publication are owned by the experiment boundary.",
+        "Compiler compatibility contains no AOT implementation modules after the migration.",
+        "The experimental CLI path continues to produce equivalent generated-Rust package output."
       ],
       "verification": [
         "cargo test -p rsscript-compiler --features aot-rust --locked",

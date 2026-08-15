@@ -419,17 +419,6 @@ dependencies = [
 
 [[package]]
 name = "getrandom"
-version = "0.2.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
-dependencies = [
- "cfg-if",
- "libc",
- "wasi",
-]
-
-[[package]]
-name = "getrandom"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
@@ -503,7 +492,7 @@ dependencies = [
  "bitmaps",
  "equivalent",
  "imbl-sized-chunks",
- "rand_core 0.9.5",
+ "rand_core",
  "rand_xoshiro",
  "version_check",
  "wide",
@@ -650,15 +639,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
-name = "ppv-lite86"
-version = "0.2.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
-dependencies = [
- "zerocopy",
-]
-
-[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -683,36 +663,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
-name = "rand"
-version = "0.8.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22f6172bdec972074665ed81ed53b71da00bfc44b65a753cfde883ec4c702a1a"
-dependencies = [
- "libc",
- "rand_chacha",
- "rand_core 0.6.4",
-]
-
-[[package]]
-name = "rand_chacha"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88"
-dependencies = [
- "ppv-lite86",
- "rand_core 0.6.4",
-]
-
-[[package]]
-name = "rand_core"
-version = "0.6.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
-dependencies = [
- "getrandom 0.2.17",
-]
-
-[[package]]
 name = "rand_core"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -724,7 +674,7 @@ version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f703f4665700daf5512dcca5f43afa6af89f09db47fb56be587f80636bda2d41"
 dependencies = [
- "rand_core 0.9.5",
+ "rand_core",
 ]
 
 [[package]]
@@ -822,6 +772,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsscript-aot-model"
+version = "0.1.0"
+dependencies = [
+ "rsscript-diagnostics",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "rsscript-aot-runtime"
 version = "0.1.0"
 dependencies = [
@@ -842,6 +801,32 @@ dependencies = [
  "static_assertions",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "rsscript-artifact"
+version = "0.1.0"
+dependencies = [
+ "rsscript-abi-model",
+ "rsscript-bytecode",
+ "rsscript-diagnostics",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "rsscript-artifact-store"
+version = "0.1.0"
+dependencies = [
+ "fs2",
+ "hex",
+ "libc",
+ "rsscript-project",
+ "rustix",
+ "sha2",
+ "tempfile",
+ "uuid",
 ]
 
 [[package]]
@@ -881,38 +866,33 @@ dependencies = [
 name = "rsscript-compiler"
 version = "0.1.0"
 dependencies = [
- "base64",
- "chrono",
- "flate2",
  "fs2",
  "hex",
- "hmac",
  "libc",
- "percent-encoding",
- "rand",
- "regex",
  "rsscript-abi-model",
+ "rsscript-artifact",
+ "rsscript-artifact-store",
  "rsscript-build-support",
+ "rsscript-bytecode",
+ "rsscript-codegen-vm",
  "rsscript-diagnostics",
  "rsscript-interface-catalog",
  "rsscript-lowering",
  "rsscript-mir",
  "rsscript-operation",
+ "rsscript-project",
  "rsscript-provider-api",
+ "rsscript-review-core",
  "rsscript-semantics",
  "rsscript-syntax",
  "rsscript-text",
  "rsscript-work-budget",
  "rustix",
- "semver",
  "serde",
  "serde_json",
- "serde_yaml_ng",
  "sha2",
- "sha3",
  "tempfile",
  "toml",
- "toml_edit",
  "uuid",
 ]
 
@@ -926,13 +906,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rsscript-exec-ir"
-version = "0.1.0"
-dependencies = [
- "rsscript-abi-model",
-]
-
-[[package]]
 name = "rsscript-interface-catalog"
 version = "0.1.0"
 
@@ -941,10 +914,10 @@ name = "rsscript-lowering"
 version = "0.1.0"
 dependencies = [
  "rsscript-abi-model",
- "rsscript-exec-ir",
  "rsscript-mir",
  "rsscript-semantics",
  "rsscript-syntax",
+ "rsscript-text",
 ]
 
 [[package]]
@@ -952,6 +925,7 @@ name = "rsscript-mir"
 version = "0.1.0"
 dependencies = [
  "rsscript-abi-model",
+ "rsscript-build-support",
 ]
 
 [[package]]
@@ -962,6 +936,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsscript-project"
+version = "0.1.0"
+dependencies = [
+ "rsscript-artifact",
+ "rsscript-operation",
+ "rsscript-semantics",
+ "rsscript-workspace-loader",
+ "rustix",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "rsscript-provider-api"
 version = "0.1.0"
 dependencies = [
@@ -969,6 +956,23 @@ dependencies = [
  "rsscript-operation",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "rsscript-review"
+version = "0.1.0"
+dependencies = [
+ "rsscript-compiler",
+ "rsscript-review-core",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
+name = "rsscript-review-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -984,6 +988,8 @@ name = "rsscript-sdk"
 version = "0.1.0"
 dependencies = [
  "rsscript-abi-model",
+ "rsscript-artifact",
+ "rsscript-artifact-store",
  "rsscript-build-support",
  "rsscript-bytecode",
  "rsscript-codegen-vm",
@@ -993,6 +999,8 @@ dependencies = [
  "rsscript-mir",
  "rsscript-operation",
  "rsscript-provider-api",
+ "rsscript-review",
+ "rsscript-semantics",
  "rsscript-vm",
  "serde",
  "serde_json",
@@ -1009,6 +1017,8 @@ dependencies = [
  "rsscript-operation",
  "rsscript-source-model",
  "rsscript-syntax",
+ "rsscript-text",
+ "rsscript-work-budget",
  "serde",
  "serde_json",
 ]
@@ -1048,7 +1058,6 @@ dependencies = [
  "rsscript-build-support",
  "rsscript-bytecode",
  "rsscript-diagnostics",
- "rsscript-exec-ir",
  "rsscript-operation",
  "rsscript-provider-api",
  "rsscript-text",
@@ -1067,6 +1076,16 @@ version = "0.1.0"
 dependencies = [
  "rsscript-operation",
  "rsscript-source-model",
+]
+
+[[package]]
+name = "rsscript-workspace-loader"
+version = "0.1.0"
+dependencies = [
+ "rsscript-operation",
+ "serde",
+ "sha2",
+ "toml",
 ]
 
 [[package]]
@@ -1283,7 +1302,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -1406,7 +1425,7 @@ version = "1.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf3923a6f5c4c6382e0b653c4117f48d631ea17f38ed86e2a828e6f7412f5239"
 dependencies = [
- "getrandom 0.4.3",
+ "getrandom",
  "js-sys",
  "wasm-bindgen",
 ]
@@ -1427,12 +1446,6 @@ dependencies = [
  "cranelift-module",
  "cranelift-native",
 ]
-
-[[package]]
-name = "wasi"
-version = "0.11.1+wasi-snapshot-preview1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
 
 [[package]]
 name = "wasm-bindgen"
@@ -1628,26 +1641,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
 dependencies = [
  "memchr",
-]
-
-[[package]]
-name = "zerocopy"
-version = "0.8.56"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "556764e583adb45a9f8d413c2a147fa7e8d821e48e12b14fd560b607998b75eb"
-dependencies = [
- "zerocopy-derive",
-]
-
-[[package]]
-name = "zerocopy-derive"
-version = "0.8.56"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2ab42fc20575779bd240faa45f94a74256f755c0fa9e89f0ede20d91d0cdfc1"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
 ]
 
 [[package]]

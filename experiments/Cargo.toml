@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "aot-model",
     "aot-runtime",
     "native-abi",
     "reir",
