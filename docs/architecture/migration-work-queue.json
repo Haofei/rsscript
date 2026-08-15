@@ -1,0 +1,86 @@
+{
+  "schema": "rsscript.migration_queue.v1",
+  "tasks": [
+    {
+      "id": "S03.3",
+      "priority": 10,
+      "depends_on": ["S03.1", "S03.2"],
+      "verification": [
+        "cargo test -p rsscript-semantics --lib --locked",
+        "cargo test -p rsscript-language-service --lib --locked"
+      ]
+    },
+    {
+      "id": "S05.1",
+      "priority": 20,
+      "depends_on": [],
+      "verification": [
+        "cargo test -p rsscript-project --locked",
+        "cargo test -p rsscript-sdk --features project --lib --locked"
+      ]
+    },
+    {
+      "id": "M01.2",
+      "priority": 30,
+      "depends_on": ["M01.1"],
+      "verification": [
+        "cargo test -p rsscript-mir --locked",
+        "cargo test -p rsscript-lowering --locked"
+      ]
+    },
+    {
+      "id": "M02.1",
+      "priority": 40,
+      "depends_on": ["M01.1"],
+      "verification": [
+        "cargo test -p rsscript-mir --locked",
+        "cargo test -p rsscript-sdk --test mir_migration --locked"
+      ]
+    },
+    {
+      "id": "P05.1",
+      "priority": 50,
+      "depends_on": ["P04"],
+      "verification": [
+        "cargo test -p rsscript-provider-bindgen --locked",
+        "cargo test -p rsscript-provider-conformance --locked"
+      ]
+    },
+    {
+      "id": "A04.1",
+      "priority": 60,
+      "depends_on": ["A04.1a"],
+      "verification": [
+        "cargo test -p rsscript-sdk --lib --locked",
+        "cargo test -p rsscript-sdk --test architecture --locked"
+      ]
+    },
+    {
+      "id": "B05.1",
+      "priority": 70,
+      "depends_on": ["B04"],
+      "verification": [
+        "cargo test -p rsscript-sdk --test compatibility --locked",
+        "cargo test -p rsscript-bytecode --locked"
+      ]
+    },
+    {
+      "id": "A09.2",
+      "priority": 80,
+      "depends_on": ["A09.1a", "A09.1b"],
+      "verification": [
+        "cargo test -p rss-process-guard --locked",
+        "cargo test -p rsscript-cli --features execution --lib --locked"
+      ]
+    },
+    {
+      "id": "E02.1",
+      "priority": 90,
+      "depends_on": ["A06", "A07"],
+      "verification": [
+        "cargo test -p embedded-report-pipeline --locked",
+        "cargo test -p rsscript-sdk --test artifact_bundle --locked"
+      ]
+    }
+  ]
+}

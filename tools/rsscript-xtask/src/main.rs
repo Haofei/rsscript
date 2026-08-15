@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 const METRICS_SCHEMA: &str = "rsscript.core_metrics.v1";
 const SLO_SCHEMA: &str = "rsscript.core_slo.v1";
 const MIGRATION_STATUS_SCHEMA: &str = "rsscript.migration_status.v1";
+const MIGRATION_QUEUE_SCHEMA: &str = "rsscript.migration_queue.v1";
 const WORKLOAD: &str = r#"
 fn main() -> Int {
     let mut index = 0
@@ -147,16 +148,183 @@ struct MigrationStatusItem {
     line: usize,
 }
 
+/// A deliberately small, curated frontier over the complete migration
+/// checklist. The Markdown checklist remains the authoritative status source;
+/// this manifest supplies only prerequisite edges and reproducible acceptance
+/// commands for the next independently mergeable slices.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MigrationQueueManifest {
+    schema: String,
+    tasks: Vec<MigrationQueueTask>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MigrationQueueTask {
+    id: String,
+    priority: u16,
+    depends_on: Vec<String>,
+    verification: Vec<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct MigrationReadyQueue {
+    schema: &'static str,
+    source: &'static str,
+    ready: Vec<MigrationReadyItem>,
+    blocked: Vec<MigrationBlockedItem>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct MigrationReadyItem {
+    id: String,
+    title: String,
+    priority: u16,
+    verification: Vec<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct MigrationBlockedItem {
+    id: String,
+    title: String,
+    priority: u16,
+    blocked_by: Vec<String>,
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let mut arguments = std::env::args().skip(1);
     match arguments.next().as_deref() {
         Some("core-metrics") => run_core_metrics(parse_arguments(arguments)?),
         Some("migration-status") => run_migration_status(parse_migration_status_arguments(arguments)?),
+        Some("migration-next") => run_migration_next(),
+        Some("migration-next-json") => run_migration_next_json(),
         _ => Err(
-            "usage:\n  cargo run -p rsscript-xtask --release -- core-metrics [--iterations N] [--output FILE] [--check SLO]\n  cargo run -p rsscript-xtask -- migration-status [--json] [--open] [--require ITEM]"
+            "usage:\n  cargo run -p rsscript-xtask --release -- core-metrics [--iterations N] [--output FILE] [--check SLO]\n  cargo run -p rsscript-xtask -- migration-status [--json] [--open] [--require ITEM]\n  cargo run -p rsscript-xtask -- migration-next\n  cargo run -p rsscript-xtask -- migration-next-json"
                 .into(),
         ),
     }
+}
+
+fn run_migration_next() -> Result<(), Box<dyn Error>> {
+    let queue = migration_ready_queue()?;
+    println!(
+        "Migration ready queue: {} ready, {} blocked ({})",
+        queue.ready.len(),
+        queue.blocked.len(),
+        workspace_root()
+            .join("docs/architecture/migration-work-queue.json")
+            .display()
+    );
+    for item in queue.ready {
+        println!(
+            "- {} — {} [priority {}]",
+            item.id, item.title, item.priority
+        );
+        for command in item.verification {
+            println!("  verify: {command}");
+        }
+    }
+    Ok(())
+}
+
+fn run_migration_next_json() -> Result<(), Box<dyn Error>> {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&migration_ready_queue()?)?
+    );
+    Ok(())
+}
+
+fn migration_ready_queue() -> Result<MigrationReadyQueue, Box<dyn Error>> {
+    let root = workspace_root();
+    let status = migration_status(&fs::read_to_string(
+        root.join("docs/architecture/migration-baseline.md"),
+    )?)?;
+    let manifest: MigrationQueueManifest = serde_json::from_slice(&fs::read(
+        root.join("docs/architecture/migration-work-queue.json"),
+    )?)?;
+    if manifest.schema != MIGRATION_QUEUE_SCHEMA {
+        return Err(format!(
+            "unsupported migration work queue schema `{}`",
+            manifest.schema
+        )
+        .into());
+    }
+
+    let by_id = status
+        .items
+        .iter()
+        .map(|item| (item.id.as_str(), item))
+        .collect::<BTreeMap<_, _>>();
+    let mut queued = std::collections::BTreeSet::new();
+    let mut ready = Vec::new();
+    let mut blocked = Vec::new();
+    for task in manifest.tasks {
+        if !queued.insert(task.id.clone()) {
+            return Err(format!("duplicate migration queue task `{}`", task.id).into());
+        }
+        let item = by_id
+            .get(task.id.as_str())
+            .ok_or_else(|| format!("migration queue task `{}` is not declared", task.id))?;
+        if item.completed {
+            return Err(format!(
+                "migration queue task `{}` is already complete; remove it from the frontier",
+                task.id
+            )
+            .into());
+        }
+        if task.verification.is_empty() {
+            return Err(format!(
+                "migration queue task `{}` must declare at least one verification command",
+                task.id
+            )
+            .into());
+        }
+        let mut blocked_by = Vec::new();
+        for dependency in task.depends_on {
+            let dependency_item = by_id.get(dependency.as_str()).ok_or_else(|| {
+                format!(
+                    "migration queue task `{}` depends on undeclared item `{dependency}`",
+                    task.id
+                )
+            })?;
+            if !dependency_item.completed {
+                blocked_by.push(dependency);
+            }
+        }
+        if blocked_by.is_empty() {
+            ready.push(MigrationReadyItem {
+                id: task.id,
+                title: item.title.clone(),
+                priority: task.priority,
+                verification: task.verification,
+            });
+        } else {
+            blocked.push(MigrationBlockedItem {
+                id: task.id,
+                title: item.title.clone(),
+                priority: task.priority,
+                blocked_by,
+            });
+        }
+    }
+    ready.sort_by(|left, right| {
+        left.priority
+            .cmp(&right.priority)
+            .then(left.id.cmp(&right.id))
+    });
+    blocked.sort_by(|left, right| {
+        left.priority
+            .cmp(&right.priority)
+            .then(left.id.cmp(&right.id))
+    });
+    Ok(MigrationReadyQueue {
+        schema: MIGRATION_QUEUE_SCHEMA,
+        source: "docs/architecture/migration-work-queue.json",
+        ready,
+        blocked,
+    })
 }
 
 fn parse_migration_status_arguments(
@@ -685,6 +853,20 @@ mod tests {
         assert!(status.items.len() > 100);
         assert!(status.items.iter().any(|item| item.id == "S02"));
         assert!(status.items.iter().any(|item| item.id == "A09"));
+    }
+
+    #[test]
+    fn published_migration_frontier_is_fail_closed_and_prioritized() {
+        let queue = migration_ready_queue().expect("published frontier must be valid");
+        assert_eq!(queue.schema, MIGRATION_QUEUE_SCHEMA);
+        assert!(queue.ready.iter().any(|item| item.id == "S03.3"));
+        assert!(
+            queue
+                .ready
+                .windows(2)
+                .all(|items| items[0].priority <= items[1].priority)
+        );
+        assert!(queue.ready.iter().all(|item| !item.verification.is_empty()));
     }
 
     #[test]

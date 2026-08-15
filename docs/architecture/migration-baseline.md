@@ -96,6 +96,7 @@ The checklist is also machine-readable through the repository tool:
 ```text
 cargo run -p rsscript-xtask -- migration-status --open
 cargo run -p rsscript-xtask -- migration-status --require S02 --require G07
+cargo run -p rsscript-xtask -- migration-next
 ```
 
 The first form produces the remaining work in document order (or use `--json`
@@ -103,6 +104,14 @@ for automation). The second form is a fail-closed gate for a named completed
 item; it exits nonzero if an item is missing or remains open. This makes each
 focused migration change set able to add an explicit, reproducible completion
 check without inventing a second TODO source.
+
+`migration-next` is a deliberately small execution frontier, declared in
+[`migration-work-queue.json`](migration-work-queue.json). It never owns
+completion state: it validates every queue entry against this checklist, reports
+only entries whose declared prerequisites are checked, and prints the focused
+verification commands for each ready slice. This keeps the full checklist as
+the single source of truth while making the next independently mergeable work
+visible without manually re-sorting every open parent milestone.
 
 ### 0. Freeze and migration guardrails
 
