@@ -615,6 +615,24 @@ impl<'a> Interpreter<'a> {
                         };
                         values[destination.index()] = Some(value);
                     }
+                    MirInstruction::MapGet {
+                        destination,
+                        map,
+                        key,
+                    } => {
+                        let key = value_at(&values, *key)?;
+                        let value = match value_at(&values, *map)? {
+                            MirValue::Map(entries) => entries
+                                .into_iter()
+                                .find_map(|(entry_key, entry_value)| {
+                                    (entry_key == key).then_some(entry_value)
+                                })
+                                .map(|value| MirValue::OptionSome(Box::new(value)))
+                                .unwrap_or(MirValue::OptionNone),
+                            _ => return Err(MirExecutionError::InvalidOperation("map base")),
+                        };
+                        values[destination.index()] = Some(value);
+                    }
                     MirInstruction::GetField {
                         destination,
                         base,

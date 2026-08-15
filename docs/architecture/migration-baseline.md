@@ -796,10 +796,13 @@ mechanical acceptance condition holds.
       JSON data while values remain resolved `ValueId`s. The dual-path corpus
       compares canonical JSON output; language records, variants, field access,
       non-list indexing, and match dispatch remain fail-closed.
-    - [x] **M02.3d — Lower resolved list indexing.** The lowerer accepts an
-      index only when checked projection facts identify its base as `List<…>`;
-      it emits `ListGet` over resolved value IDs. Map/JSON/record indexing,
-      field access, variants, and non-scalar match dispatch remain fail-closed.
+    - [x] **M02.3d — Lower resolved collection indexing.** The lowerer accepts
+      an index only when checked projection facts identify its base as
+      `List<…>` or `Map<…>`; it emits `ListGet` or `MapGet` over resolved value
+      IDs. `Map.get` also lowers directly to the same explicit option-valued
+      operation, so the special legacy intrinsic spelling cannot re-enter the
+      default path. JSON/record indexing, field mutation, variants, and
+      non-scalar match dispatch remain fail-closed.
     - [x] **M02.3e — Lower scalar match forms.** Checked literal and wildcard
       statement and expression arms lower to owned `Equal`/`Branch` CFG blocks
       with an explicit unmatched terminator; expression arms join through an
@@ -1016,6 +1019,12 @@ mechanical acceptance condition holds.
       `BuiltinId`, preserving verifier-visible task ownership and cancellation
       without creating Provider imports; the direct-vs-legacy migration corpus
       covers a capacity-one select that cancels and reaps the losing send task.
+    - [x] **M03.4g — Lower special map lookup without a legacy intrinsic.**
+      `Map.get` is represented by the explicit option-valued `MapGet` MIR
+      operation, not by source-level builtin spelling. The MIR verifier,
+      reference interpreter, and codegen all preserve the resolved map/key
+      values; the dual-path corpus compares both a hit and its `Some` match
+      projection with the legacy VM.
 - [ ] **M04 — Lower checked HIR to MIR exactly once.** Backend code cannot
   inspect syntax AST or reconstruct semantic facts. MIR verification rejects
   unresolved calls, invalid ownership state, incomplete cleanup, and malformed
@@ -1230,6 +1239,10 @@ mechanical acceptance condition holds.
       list and index value IDs to a verifier-checked v1 list read. The
       dual-path corpus proves typed list-local indexing executes identically;
       other indexing shapes remain fail-closed.
+    - [x] **V02.3h — Emit resolved map lookup.** `MapGet` maps resolved map and
+      key value IDs to the existing verifier-checked option-valued v1 map read.
+      The direct-HIR and reusable migration corpus prove `Map.get` reaches that
+      operation without the source-shaped executable-IR bridge.
   - [x] **V02.4 — Switch reviewed builds to the compiler bytecode boundary.**
     SDK source, interface, and package builds delegate checked HIR → MIR →
     `codegen-vm` Artifact emission to the compiler's VM-free `bytecode`

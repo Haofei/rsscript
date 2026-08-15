@@ -1221,6 +1221,25 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                 });
                 Ok(destination)
             }
+            checked::HirExpr::Index {
+                base,
+                index,
+                base_type,
+                ..
+            } if base_type
+                .as_ref()
+                .is_some_and(|ty| ty.root_name() == Some("Map")) =>
+            {
+                let map = self.lower_expression(base)?;
+                let key = self.lower_expression(index)?;
+                let destination = self.value();
+                self.emit(MirInstruction::MapGet {
+                    destination,
+                    map,
+                    key,
+                });
+                Ok(destination)
+            }
             checked::HirExpr::Index { .. } => self.unsupported("non-list checked HIR index"),
             checked::HirExpr::Call {
                 callee,
@@ -1568,6 +1587,20 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                 self.emit(MirInstruction::MakeOption {
                     destination,
                     value: None,
+                });
+            }
+            "get" if signature.namespace.as_deref() == Some("Map") => {
+                if receiver.is_some() || args.len() != 2 {
+                    return self.unsupported("Map.get with invalid checked call shape");
+                }
+                let mut ordered = args.iter().collect::<Vec<_>>();
+                ordered.sort_by_key(|argument| argument.evaluation_index);
+                let map = self.lower_expression(&ordered[0].value)?;
+                let key = self.lower_expression(&ordered[1].value)?;
+                self.emit(MirInstruction::MapGet {
+                    destination,
+                    map,
+                    key,
                 });
             }
             _ => {

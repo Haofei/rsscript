@@ -157,6 +157,14 @@ pub enum MirInstruction {
         list: ValueId,
         index: ValueId,
     },
+    /// Read a value from a resolved mutable map. The result remains an
+    /// `Option` so absence is explicit in the typed control-flow graph rather
+    /// than hidden in a source-level `Map.get` spelling.
+    MapGet {
+        destination: ValueId,
+        map: ValueId,
+        key: ValueId,
+    },
     /// Read a checked field from an already-resolved aggregate value. The
     /// field spelling is data for the runtime object representation; it is not
     /// a source-level callee or type identity.
@@ -1194,6 +1202,7 @@ fn instruction_definitions(instruction: &MirInstruction) -> Vec<ValueId> {
         | MirInstruction::MakeOption { destination, .. }
         | MirInstruction::UnwrapOption { destination, .. }
         | MirInstruction::ListGet { destination, .. }
+        | MirInstruction::MapGet { destination, .. }
         | MirInstruction::GetField { destination, .. }
         | MirInstruction::ListLen { destination, .. }
         | MirInstruction::ReadPlace { destination, .. }
@@ -1241,6 +1250,7 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         MirInstruction::MakeOption { value, .. } => value.iter().copied().collect(),
         MirInstruction::UnwrapOption { source, .. } => vec![*source],
         MirInstruction::ListGet { list, index, .. } => vec![*list, *index],
+        MirInstruction::MapGet { map, key, .. } => vec![*map, *key],
         MirInstruction::GetField { base, .. } => vec![*base],
         MirInstruction::ListLen { list, .. } => vec![*list],
         MirInstruction::AcquireResource { source, .. } => vec![*source],
@@ -1450,6 +1460,7 @@ fn transfer_move_state(
         | MirInstruction::MakeOption { .. }
         | MirInstruction::UnwrapOption { .. }
         | MirInstruction::ListGet { .. }
+        | MirInstruction::MapGet { .. }
         | MirInstruction::GetField { .. }
         | MirInstruction::ListLen { .. }
         | MirInstruction::Binary { .. }
@@ -1515,6 +1526,7 @@ fn verify_instruction(
         | MirInstruction::MakeObject { destination, .. }
         | MirInstruction::MakeResult { destination, .. }
         | MirInstruction::ListGet { destination, .. }
+        | MirInstruction::MapGet { destination, .. }
         | MirInstruction::GetField { destination, .. }
         | MirInstruction::ListLen { destination, .. } => define(*destination, defined),
         MirInstruction::MakeStruct { destination, .. }
