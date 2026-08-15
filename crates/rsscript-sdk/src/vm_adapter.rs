@@ -66,43 +66,15 @@ pub fn reg_vm_compile_mir(
 }
 
 fn emit_ir(compiled: &CompiledIr) -> Result<RegVmExecutable, EvalError> {
-    match compiled.checked_hir_mir() {
-        Ok(mir) => match emit_mir(
-            &mir,
-            compiled.source_hash(),
-            compiled.interface_catalog_digest(),
-        ) {
-            Ok(executable) => Ok(executable),
-            Err(rsscript_codegen_vm::CodegenError::Unsupported(_)) => {
-                emit_legacy_executable_ir(compiled)
-            }
-            Err(error) => Err(EvalError::Runtime(error.to_string())),
-        },
-        Err(rsscript_lowering::MirLoweringError::Unsupported { .. }) => {
-            emit_legacy_executable_ir(compiled)
-        }
-        Err(error) => Err(EvalError::Runtime(error.to_string())),
-    }
-}
-
-/// Explicit migration-only bridge for checked-HIR constructs that do not yet
-/// have a CFG MIR representation. A direct-HIR failure other than `Unsupported`
-/// is never hidden by this compatibility encoder.
-#[cfg(feature = "legacy-exec-ir")]
-fn emit_legacy_executable_ir(compiled: &CompiledIr) -> Result<RegVmExecutable, EvalError> {
-    rsscript_vm::compile_executable_ir(
-        compiled.legacy_executable(),
+    let mir = compiled
+        .checked_hir_mir()
+        .map_err(|error| EvalError::Runtime(error.to_string()))?;
+    emit_mir(
+        &mir,
         compiled.source_hash(),
         compiled.interface_catalog_digest(),
     )
-}
-
-#[cfg(not(feature = "legacy-exec-ir"))]
-fn emit_legacy_executable_ir(_: &CompiledIr) -> Result<RegVmExecutable, EvalError> {
-    Err(EvalError::Runtime(
-        "the checked program requires a legacy executable-IR operation; migrate it to MIR or enable the explicit `legacy-exec-ir` compatibility feature"
-            .to_string(),
-    ))
+    .map_err(|error| EvalError::Runtime(error.to_string()))
 }
 
 /// Build a provider-neutral Artifact from compiler output without first
@@ -116,50 +88,16 @@ pub(crate) fn emit_compiled_artifact(
     compiled: &CompiledIr,
     snapshot_digest: &str,
 ) -> Result<BytecodeArtifact, EvalError> {
-    match compiled.checked_hir_mir() {
-        Ok(mir) => match emit_mir_artifact(
-            &mir,
-            compiled.source_hash(),
-            compiled.interface_catalog_digest(),
-            snapshot_digest,
-        ) {
-            Ok(artifact) => Ok(artifact),
-            Err(rsscript_codegen_vm::CodegenError::Unsupported(_)) => {
-                emit_legacy_compiled_artifact(compiled, snapshot_digest)
-            }
-            Err(error) => Err(EvalError::Runtime(error.to_string())),
-        },
-        Err(rsscript_lowering::MirLoweringError::Unsupported { .. }) => {
-            emit_legacy_compiled_artifact(compiled, snapshot_digest)
-        }
-        Err(error) => Err(EvalError::Runtime(error.to_string())),
-    }
-}
-
-/// Explicit migration-only Artifact path for unsupported checked-HIR forms.
-/// Its use is confined to the SDK compatibility adapter and remains behind
-/// the VM's `legacy-exec-ir` feature.
-#[cfg(feature = "legacy-exec-ir")]
-fn emit_legacy_compiled_artifact(
-    compiled: &CompiledIr,
-    snapshot_digest: &str,
-) -> Result<BytecodeArtifact, EvalError> {
-    let mut executable = rsscript_vm::compile_executable_ir(
-        compiled.legacy_executable(),
+    let mir = compiled
+        .checked_hir_mir()
+        .map_err(|error| EvalError::Runtime(error.to_string()))?;
+    emit_mir_artifact(
+        &mir,
         compiled.source_hash(),
         compiled.interface_catalog_digest(),
-    )?;
-    executable.bind_snapshot_digest(snapshot_digest)?;
-    let bytes = executable.to_bytecode()?;
-    BytecodeArtifact::from_bytes(&bytes).map_err(|error| EvalError::Runtime(error.to_string()))
-}
-
-#[cfg(not(feature = "legacy-exec-ir"))]
-fn emit_legacy_compiled_artifact(_: &CompiledIr, _: &str) -> Result<BytecodeArtifact, EvalError> {
-    Err(EvalError::Runtime(
-        "the checked program requires a legacy executable-IR operation; migrate it to MIR or enable the explicit `legacy-exec-ir` compatibility feature"
-            .to_string(),
-    ))
+        snapshot_digest,
+    )
+    .map_err(|error| EvalError::Runtime(error.to_string()))
 }
 
 fn emit_mir(

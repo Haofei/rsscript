@@ -3960,16 +3960,17 @@ fn checked_hir_mir_is_the_default_compiler_and_sdk_path() {
 
     let adapter = read(&root.join("crates/rsscript-sdk/src/vm_adapter.rs"));
     let emit = function_source(&adapter, "fn emit_ir(compiled: &CompiledIr)");
-    assert!(emit.contains("compiled.checked_hir_mir()"));
-    assert!(emit.contains("MirLoweringError::Unsupported"));
-    assert!(emit.contains("emit_legacy_executable_ir(compiled)"));
+    assert!(emit.contains("checked_hir_mir()"));
+    assert!(!emit.contains("emit_legacy_executable_ir"));
+    assert!(!adapter.contains("emit_legacy_compiled_artifact"));
     assert!(
-        !emit.contains("compiled.mir()"),
-        "SDK execution must make the direct-MIR/legacy boundary explicit"
+        emit.contains("emit_mir(") && !emit.contains("compile_executable_ir"),
+        "SDK execution must use only verified MIR bytecode emission"
     );
     let artifact = function_source(&adapter, "pub(crate) fn emit_compiled_artifact(");
-    assert!(artifact.contains("compiled.checked_hir_mir()"));
-    assert!(artifact.contains("emit_legacy_compiled_artifact(compiled, snapshot_digest)"));
+    assert!(artifact.contains("checked_hir_mir()"));
+    assert!(artifact.contains("emit_mir_artifact("));
+    assert!(!artifact.contains("emit_legacy_compiled_artifact"));
 }
 
 #[test]
