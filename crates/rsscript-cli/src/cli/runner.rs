@@ -29,6 +29,10 @@ use rsscript_sdk::{
 use super::{is_package_directory, read_cli_source};
 
 const RUNNER_STDERR_LIMIT: usize = 1024 * 1024;
+/// Rust process/runtime overhead reserved in addition to the VM's explicitly
+/// requested live-value budget. This covers Artifact decoding, stack space and
+/// protocol framing; it is a containment allowance, not script heap budget.
+const RUNNER_PROCESS_OVERHEAD_BYTES: u64 = 256 * 1024 * 1024;
 
 pub(crate) fn run_isolated(path: &str, program_args: &[&str], json: bool) -> ExitCode {
     let bundle = match build_bundle(path) {
@@ -136,12 +140,7 @@ fn invoke_runner(
     // filesystem isolation claim.
     #[cfg(unix)]
     command.current_dir("/");
-    let limits = ProcessLimits {
-        cpu_seconds: request.limits.wall_time_ms.div_ceil(1000).saturating_add(5),
-        address_space_bytes: 1024 * 1024 * 1024,
-        open_files: 64,
-        file_size_bytes: 2 * 1024 * 1024,
-    };
+    let limits = runner_process_limits(&request.limits);
     let mut child = spawn_runner(&mut command, limits)
         .map_err(|error| format!("cannot create guarded runner process: {error}"))?;
     let mut stdin = child
@@ -422,6 +421,26 @@ fn runner_limits(limits: &RunnerLimitsV1) -> RunLimits {
         )))
 }
 
+/// Derive OS-enforced child limits from the same bounded request that becomes
+/// VM limits. The two are deliberately not equal: VM live memory counts
+/// script-managed values, while a process address-space limit also needs room
+/// for the executable, verifier, stack, and framing buffers. Keeping this
+/// derivation next to the protocol adapter makes a future profile unable to
+/// silently widen the process boundary beyond its approved request.
+fn runner_process_limits(limits: &RunnerLimitsV1) -> ProcessLimits {
+    let live_memory = u64::try_from(limits.live_memory_limit).unwrap_or(u64::MAX);
+    ProcessLimits {
+        // RLIMIT_CPU is second-granularity and does not replace the parent
+        // monotonic deadline. The small grace window gives the child time to
+        // serialize a bounded report, while the parent still kills/reaps the
+        // whole guarded tree on deadline.
+        cpu_seconds: limits.wall_time_ms.div_ceil(1000).saturating_add(5),
+        address_space_bytes: live_memory.saturating_add(RUNNER_PROCESS_OVERHEAD_BYTES),
+        open_files: 64,
+        file_size_bytes: 2 * 1024 * 1024,
+    }
+}
+
 fn profiled_registry(profile: RunnerProfileV1) -> ProviderRegistry {
     match profile {
         // Provider implementations and all authority remain host-owned. The
@@ -480,6 +499,34 @@ mod tests {
         assert!(!json.contains("provider_path"));
         assert!(!json.contains("library"));
         assert!(!json.contains("path"));
+    }
+
+    #[test]
+    fn child_process_limits_are_derived_from_the_approved_runner_budget() {
+        let defaults = RunnerLimitsV1::default();
+        let process = runner_process_limits(&defaults);
+        assert_eq!(
+            process.address_space_bytes,
+            (defaults.live_memory_limit as u64).saturating_add(RUNNER_PROCESS_OVERHEAD_BYTES),
+            "the runner must not retain a wider fixed process address space"
+        );
+        assert_eq!(
+            process.cpu_seconds,
+            defaults.wall_time_ms.div_ceil(1000).saturating_add(5)
+        );
+
+        let restricted = RunnerLimitsV1 {
+            wall_time_ms: 1_001,
+            live_memory_limit: 8 * 1024 * 1024,
+            ..defaults
+        };
+        let restricted_process = runner_process_limits(&restricted);
+        assert_eq!(restricted_process.cpu_seconds, 7);
+        assert_eq!(
+            restricted_process.address_space_bytes,
+            RUNNER_PROCESS_OVERHEAD_BYTES + 8 * 1024 * 1024
+        );
+        assert!(restricted_process.address_space_bytes < process.address_space_bytes);
     }
 
     #[test]

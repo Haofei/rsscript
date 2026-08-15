@@ -1626,7 +1626,11 @@ mechanical acceptance condition holds.
     terminate the guarded process tree, reap the root, and join both readers;
     a successful child exit with an incomplete response frame is now reported as
     a reaped runner/protocol failure rather than a script report, with focused
-    disconnect-path coverage. Process-tree fault injection remains open.
+    disconnect-path coverage. The parent now derives the child CPU and address
+    space ceilings from the approved runner request rather than retaining a
+    wider fixed address-space allowance; a bounded runtime reserve covers
+    verifier/protocol overhead while the VM keeps its independent live-memory
+    limit. Process-tree fault injection remains open.
   - [ ] **A09.4 — Fuzz protocol and runner failure paths.** Exercise framing,
     malformed messages, oversized inputs, incomplete I/O, and termination
     separation without calling it a universal sandbox. The bounded protocol now
