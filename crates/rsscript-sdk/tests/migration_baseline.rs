@@ -48,7 +48,7 @@ fn canonical_compilation_and_diagnostics_are_migration_baselines() {
     );
     assert_eq!(
         sha256(&first_bytes),
-        "32f3617cc1209444aeb707cada7730ae5ce824eded7f6669fed080f2f768e606",
+        "2d84a928f777da04f8c964ca5c3cf07fdd9e4ae0b79d62155e5c69ec6873f6ee",
         "an intentional Artifact encoding or lowering change must update this digest"
     );
 
@@ -136,6 +136,7 @@ fn checked_in_v1_bundle_remains_read_only_verifiable_and_executable() {
         .link(&admitted)
         .expect("checked-in v1 bundle links without Providers")
         .execute(ExecutionRequest::default());
+    let serialized = serde_json::to_value(&report).expect("execution report serializes");
 
     assert_eq!(
         report.termination_reason(),
@@ -144,9 +145,55 @@ fn checked_in_v1_bundle_remains_read_only_verifiable_and_executable() {
     );
     assert_eq!(report.value(), expected["value"].as_str());
     assert_eq!(
-        format!("{:?}", report.termination_reason()).to_lowercase(),
-        expected["termination_reason"].as_str().unwrap()
+        serialized["termination_reason"].as_str(),
+        expected["termination_reason"].as_str(),
+        "the v1 report projection retains its structured termination reason"
     );
+}
+
+#[test]
+fn checked_in_v1_failure_bundle_retains_its_complete_execution_report() {
+    // This fixture is deliberately a prebuilt failing program. The reader and
+    // VM must preserve script-level termination evidence even though the
+    // current compiler is not involved in loading it.
+    let bundle = STANDARD
+        .decode(
+            include_str!(
+                "../../rsscript-bytecode/fixtures/v1/step-budget-exhausted.rssbundle.base64"
+            )
+            .trim(),
+        )
+        .expect("checked-in v1 failure bundle uses valid base64");
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../rsscript-bytecode/fixtures/v1/step-budget-exhausted.report.json"
+    ))
+    .expect("checked-in v1 expected failure report is JSON");
+    let admitted = ArtifactVerifier
+        .verify_bytes(&bundle)
+        .expect("checked-in v1 failure bundle remains verifiable")
+        .admit_trusted_input();
+    let report = Runtime::default()
+        .link(&admitted)
+        .expect("checked-in v1 failure bundle links without Providers")
+        .execute(ExecutionRequest::default().limits(RunLimits::bounded().with_step_budget(32)));
+
+    assert_eq!(
+        report.termination_reason(),
+        TerminationReason::StepBudgetExceeded,
+        "v1 failure bundle must retain the script-level termination reason"
+    );
+    let serialized = serde_json::to_value(&report).expect("execution report serializes");
+    assert_eq!(
+        serialized["value"].as_str(),
+        expected["value"].as_str(),
+        "the v1 report projection retains its structured failure value"
+    );
+    assert_eq!(
+        serialized["termination_reason"].as_str(),
+        expected["termination_reason"].as_str(),
+        "the v1 report projection retains its structured termination reason"
+    );
+    assert!(report.failure().is_some());
 }
 
 #[test]

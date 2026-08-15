@@ -1,0 +1,10 @@
+// Immutable source companion for the v1 budget-exhaustion compatibility
+// bundle. The checked-in Bundle is intentionally executed without rebuilding
+// this source.
+fn main() -> Int {
+    let mut value = 0
+    while true {
+        value = value + 1
+    }
+    return value
+}

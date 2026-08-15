@@ -1567,13 +1567,15 @@ visible without manually re-sorting every open parent milestone.
   - [ ] **B05 — Preserve a versioned compatibility corpus.** Keep read-only v1
   fixtures, malformed v1/v2 inputs, N-1 schema fixtures, deterministic
   cross-platform bytes, and explicit unknown-version/section fail-closed tests.
-  - [ ] **B05.1 — Check in read-only v1 bundles and expected reports.** Retain
-    loaders after v2 becomes the writer.
+  - [x] **B05.1 — Check in read-only v1 bundles and expected reports.** Retain
+    loaders after v2 becomes the writer. The compatibility suite loads static
+    success and step-budget-exhausted v1 Bundles through the public reader and
+    compares their checked-in report projections without recompiling source.
     - [x] **B05.1a — Execute a checked-in v1 reference bundle.** The SDK
       compatibility suite decodes a static v1 bundle rather than regenerating
       it, verifies it through the ordinary public reader, links it without
       Providers, and compares its completed execution result with a checked-in
-      expected report. Additional v1 package and failure fixtures remain open.
+      expected report.
   - [ ] **B05.2 — Add malformed and compatibility fixture suites.** Cover every
     section, table, opcode, version, and size boundary.
     - [x] **B05.2a — Preserve a static malformed v1 boundary case.** A

@@ -47,15 +47,6 @@
       ]
     },
     {
-      "id": "B05.1",
-      "priority": 70,
-      "depends_on": ["B04"],
-      "verification": [
-        "cargo test -p rsscript-sdk --test compatibility --locked",
-        "cargo test -p rsscript-bytecode --locked"
-      ]
-    },
-    {
       "id": "A09.2",
       "priority": 80,
       "depends_on": ["A09.1a", "A09.1b"],
