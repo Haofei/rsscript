@@ -21,7 +21,6 @@ rsscript-interface-catalog = { path = "../rsscript-interface-catalog" }
 rsscript-lowering = { path = "../rsscript-lowering", default-features = false, optional = true }
 rsscript-mir = { path = "../rsscript-mir", optional = true }
 rsscript-operation = { path = "../rsscript-operation" }
-rsscript-provider-api = { path = "../rsscript-provider-api", optional = true }
 rsscript-project = { path = "../rsscript-project", optional = true }
 rsscript-review-core = { path = "../rsscript-review-core", optional = true }
 rsscript-semantics = { path = "../rsscript-semantics" }
@@ -47,7 +46,6 @@ default = []
 lowering = [
     "dep:rsscript-lowering",
     "dep:rsscript-mir",
-    "dep:rsscript-provider-api",
     "dep:sha2",
 ]
 # Emit provider-neutral bytecode from checked MIR without linking the VM. This
@@ -77,9 +75,6 @@ package = [
 # package-analysis commands must remain able to inspect a project without
 # compiling the old IR closure.
 legacy-exec-ir = ["package", "rsscript-lowering/legacy-exec-ir"]
-# Historical execution consumers need both lowering and package compatibility
-# APIs. Reviewed SDK execution selects only `lowering`.
-execution = ["legacy-exec-ir"]
 language-service = []
 # The RSS-written frontend is a research parity harness.  Keep it out of Core
 # test builds; the dedicated self-host workflow opts in explicitly.

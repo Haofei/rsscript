@@ -13,7 +13,8 @@ use crate::lexer::{TokenKind, lex};
 use crate::vm_adapter::reg_vm_compile_sources;
 use crate::syntax::ast::{Expr, Item, Stmt};
 use crate::syntax::parse_source_raw;
-use crate::{RegVmExecutable, Severity, analyze_source, review_package_dir};
+use crate::compatibility::review_package_dir;
+use crate::{RegVmExecutable, Severity, analyze_source};
 
 /// One token in the canonical dump. `len` is a Unicode-scalar span length,
 /// matching the Rust lexer spans and the RSS scanner's `String.chars` cursor.

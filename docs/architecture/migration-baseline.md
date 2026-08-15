@@ -914,16 +914,18 @@ an arbitrary shell executor.
       now use only neutral intrinsic identity and managed-handle facts. The
       experiment-owned backend generates Rust targets from the same catalog and
       owns AOT runtime source validation.
-  - [ ] **S05.5 — Enforce a frontend-only compiler dependency closure.** Cargo
+  - [x] **S05.5 — Enforce a frontend-only compiler dependency closure.** Cargo
     metadata and `cargo tree` tests reject OS, persistence, Provider, VM, review,
     JIT, and AOT dependencies. Compiler lowering is now a dedicated feature;
     filesystem/package/persistence dependencies are optional behind the separate
     `package` feature, while reviewed SDK `execution` selects lowering but not
-    package capture. The frontend still has a compatibility `execution` feature
-    and build-script catalog inputs, so the complete dependency-closure
-    acceptance condition remains open. Unused REIR/review/fuzz/schema dev
-    dependencies have been removed; the legacy VM is now an optional dependency
-    selected only by the explicit `selfhost-parity` research feature. Normal
+    package capture. The broad compiler `execution` feature has been deleted:
+    legacy source-shaped IR consumers must name `legacy-exec-ir`, and the
+    legacy VM remains an optional dependency selected only by the explicit
+    `selfhost-parity` research feature. The lowering closure no longer declares
+    the Provider runtime API, and its Cargo-metadata tree rejects Provider,
+    AOT, VM, review, persistence, and OS adapters. Unused REIR/review/fuzz/schema
+    dev dependencies have been removed. Normal
     CLI `execution` no longer selects the compiler `package` closure: build,
     run, diff, and package check capture the immutable project snapshot through
     the SDK loader path. The remaining legacy directory review/inspection path
@@ -932,9 +934,9 @@ an arbitrary shell executor.
     compiler's reviewed default feature closure and rejects bytecode, VM,
     Provider, workspace-loader, artifact-store, filesystem-locking, process,
     and JIT adapters. It also checks that the compiler default feature set
-    remains empty. Compatibility package/AOT implementations still live
-    physically under compiler, so the full migration acceptance condition
-    remains open.
+    remains empty. Compatibility package/review implementations are a separate
+    S05.3 physical-ownership migration; they are not selected by the reviewed
+    frontend or lowering closures.
 
 ### 2. Typed CFG MIR
 

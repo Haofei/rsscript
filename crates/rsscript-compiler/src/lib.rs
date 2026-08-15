@@ -19,14 +19,14 @@ mod editor_grammar;
 mod formatter;
 mod generate;
 mod hir;
-#[cfg(all(test, feature = "execution", feature = "selfhost-parity"))]
+#[cfg(all(test, feature = "legacy-exec-ir", feature = "selfhost-parity"))]
 mod interface_metadata;
 mod interfaces;
 mod lexer {
     pub(crate) use rsscript_syntax::lexer::*;
 }
 mod lint;
-#[cfg(feature = "execution")]
+#[cfg(feature = "legacy-exec-ir")]
 mod lower_names;
 #[cfg(feature = "package")]
 mod package;
@@ -34,7 +34,7 @@ mod package;
 mod review;
 #[cfg(feature = "package")]
 mod runtime_abi;
-#[cfg(all(test, feature = "execution", feature = "selfhost-parity"))]
+#[cfg(all(test, feature = "legacy-exec-ir", feature = "selfhost-parity"))]
 mod selfhost_parity;
 mod semantic;
 mod symbols;
@@ -46,7 +46,7 @@ mod text_util {
     #[allow(unused_imports)]
     pub(crate) use rsscript_text::*;
 }
-#[cfg(all(test, feature = "execution", feature = "selfhost-parity"))]
+#[cfg(all(test, feature = "legacy-exec-ir", feature = "selfhost-parity"))]
 mod vm_adapter {
     use rsscript_vm::{EvalError, RegVmExecutable};
 
@@ -65,7 +65,7 @@ mod vm_adapter {
     }
 }
 
-#[cfg(all(test, feature = "execution", feature = "selfhost-parity"))]
+#[cfg(all(test, feature = "legacy-exec-ir", feature = "selfhost-parity"))]
 use rsscript_vm::RegVmExecutable;
 
 #[cfg(feature = "bytecode")]
@@ -90,7 +90,7 @@ pub use generate::{
     TypeRef, prefix_status, valid_continuations,
 };
 pub use lint::lint_source;
-#[cfg(feature = "execution")]
+#[cfg(feature = "legacy-exec-ir")]
 pub use lower_names::lowered_symbol_name;
 pub use rsscript_semantics::{
     analyze_frontend_input_snapshot_with_operation, analyze_source, analyze_source_result,
@@ -122,7 +122,7 @@ pub mod compatibility {
     pub use crate::compiler_output::{
         CompiledIr, compile_frontend_input_to_ir, compile_source_to_ir, compile_validated_to_ir,
     };
-    #[cfg(feature = "execution")]
+    #[cfg(feature = "legacy-exec-ir")]
     pub use crate::lower_names::lowered_symbol_name;
     #[cfg(feature = "package")]
     pub use crate::package::{
@@ -152,10 +152,10 @@ pub mod compatibility {
         format_review_human, format_review_json, format_review_map_human, format_review_map_json,
         review_map_sources, review_sources,
     };
-    #[cfg(feature = "execution")]
+    #[cfg(feature = "legacy-exec-ir")]
     pub use crate::symbols::{SymbolInventoryEntry, symbol_inventory};
 }
-#[cfg(feature = "execution")]
+#[cfg(feature = "legacy-exec-ir")]
 pub use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationId};
 pub use semantic::{
     AnalysisResult, FrontendCompletion, FrontendInputSnapshot, FrontendStopReason,
@@ -165,5 +165,5 @@ pub use symbols::{
     Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
     document_symbols, symbol_index,
 };
-#[cfg(feature = "execution")]
+#[cfg(feature = "legacy-exec-ir")]
 pub use symbols::{SymbolInventoryEntry, symbol_inventory};

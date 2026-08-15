@@ -1850,7 +1850,6 @@ dependencies = [
  "rsscript-mir",
  "rsscript-operation",
  "rsscript-project",
- "rsscript-provider-api",
  "rsscript-review-core",
  "rsscript-semantics",
  "rsscript-syntax",

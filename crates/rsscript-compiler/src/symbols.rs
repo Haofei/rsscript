@@ -10,7 +10,7 @@ pub use rsscript_semantics::{
 
 /// Source-qualified declaration identity paired with the backend lowering name.
 #[derive(Debug, Clone)]
-#[cfg(feature = "execution")]
+#[cfg(feature = "legacy-exec-ir")]
 pub struct SymbolInventoryEntry {
     pub module: String,
     pub qualname: String,
@@ -21,7 +21,7 @@ pub struct SymbolInventoryEntry {
 
 /// Build the execution-only source inventory. Editor-facing symbol indexing is
 /// deliberately delegated to `rsscript-semantics` above.
-#[cfg(feature = "execution")]
+#[cfg(feature = "legacy-exec-ir")]
 pub fn symbol_inventory(file: &str, source: &str) -> Vec<SymbolInventoryEntry> {
     let module = std::path::Path::new(file)
         .file_stem()
@@ -54,7 +54,7 @@ pub fn symbol_inventory(file: &str, source: &str) -> Vec<SymbolInventoryEntry> {
     entries
 }
 
-#[cfg(all(test, feature = "execution"))]
+#[cfg(all(test, feature = "legacy-exec-ir"))]
 mod tests {
     use super::*;
 

@@ -1,26 +1,4 @@
 {
   "schema": "rsscript.migration_queue.v1",
-  "tasks": [
-    {
-      "id": "S05.5",
-      "priority": 100,
-      "depends_on": ["S05.4"],
-      "scope": [
-        "crates/rsscript-compiler/Cargo.toml",
-        "crates/rsscript-compiler/src/lib.rs",
-        "crates/rsscript-sdk/tests/architecture.rs",
-        "Cargo.toml",
-        "docs/architecture/workspace-tiers.toml",
-        "docs/architecture/migration-baseline.md"
-      ],
-      "acceptance": [
-        "Compiler default and reviewed lowering closures remain frontend-only and exclude AOT, VM, Provider, review, persistence, and OS adapters.",
-        "Every non-frontend compiler dependency is feature-gated behind an explicit compatibility or research boundary.",
-        "Architecture checks derive the closure from Cargo metadata rather than source-string intent."
-      ],
-      "verification": [
-        "cargo test -p rsscript-sdk --test architecture --features compatibility --locked"
-      ]
-    }
-  ]
+  "tasks": []
 }

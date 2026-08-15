@@ -236,6 +236,7 @@ fn cargo_metadata_enforces_composition_dependency_direction() {
     let lowering_tree = cargo_tree_with_features(&root, "rsscript-compiler", "lowering");
     for forbidden in [
         "rsscript-artifact-store",
+        "rsscript-provider-api",
         "rsscript-review",
         "rsscript-vm",
         "rsscript-workspace-loader",
@@ -375,7 +376,7 @@ fn selfhost_parity_is_an_explicit_research_feature_not_a_release_gate() {
         "self-host test modules must be gated at their compilation boundary"
     );
     assert!(
-        selfhost_workflow.contains("--features execution,selfhost-parity"),
+        selfhost_workflow.contains("--features legacy-exec-ir,selfhost-parity"),
         "the dedicated Research workflow must opt in explicitly"
     );
     assert!(
@@ -1631,15 +1632,9 @@ fn rust_aot_lowering_is_explicitly_feature_gated() {
     let manifest: toml::Value =
         toml::from_str(&read(&root.join("crates/rsscript-compiler/Cargo.toml")))
             .expect("compiler manifest should parse");
-    let execution = manifest["features"]["execution"]
-        .as_array()
-        .expect("compiler execution feature should be declared")
-        .iter()
-        .filter_map(toml::Value::as_str)
-        .collect::<BTreeSet<_>>();
     assert!(
-        !execution.contains("aot-rust"),
-        "ordinary execution must not select the experimental Rust/AOT lowerer"
+        manifest["features"].get("execution").is_none(),
+        "the compiler must not retain a broad execution compatibility feature"
     );
     assert!(
         manifest["features"].get("aot-rust").is_none(),
@@ -1648,7 +1643,7 @@ fn rust_aot_lowering_is_explicitly_feature_gated() {
 
     let compiler = read(&root.join("crates/rsscript-compiler/src/lib.rs"));
     assert!(!compiler.contains("mod rust_lower;"));
-    assert!(compiler.contains("#[cfg(feature = \"execution\")]\nmod lower_names;"));
+    assert!(compiler.contains("#[cfg(feature = \"legacy-exec-ir\")]\nmod lower_names;"));
 
     let symbols = read(&root.join("crates/rsscript-compiler/src/symbols.rs"));
     assert!(symbols.contains("crate::lower_names::lowered_symbol_name"));
@@ -1678,6 +1673,7 @@ fn rust_aot_lowering_is_explicitly_feature_gated() {
     assert!(sdk_aot.contains("execution"));
     assert!(sdk_aot.contains("dep:rsscript-aot-backend"));
     assert!(!sdk_aot.contains("rsscript_compiler/aot-rust"));
+    assert!(!sdk_aot.contains("rsscript_compiler/legacy-exec-ir"));
     let sdk_compatibility = sdk["features"]["compatibility"]
         .as_array()
         .expect("SDK compatibility feature should be declared")
@@ -3489,7 +3485,13 @@ fn lsp_dependency_closure_selects_frontend_only() {
             "language-service compiler dependency must not select `{forbidden}`"
         );
     }
-    for dependency in ["rsscript-lowering", "rsscript-provider-api"] {
+    assert!(
+        compiler_manifest["dependencies"]
+            .get("rsscript-provider-api")
+            .is_none(),
+        "the frontend compiler must not declare the provider runtime API"
+    );
+    for dependency in ["rsscript-lowering"] {
         assert_eq!(
             compiler_manifest["dependencies"][dependency]["optional"].as_bool(),
             Some(true),
@@ -4066,13 +4068,10 @@ fn compiler_default_dependency_closure_is_host_neutral() {
         .iter()
         .filter_map(toml::Value::as_str)
         .collect::<BTreeSet<_>>();
-    let execution = manifest["features"]["execution"]
-        .as_array()
-        .expect("compiler execution compatibility feature should be declared")
-        .iter()
-        .filter_map(toml::Value::as_str)
-        .collect::<BTreeSet<_>>();
-    assert!(execution.contains("legacy-exec-ir"));
+    assert!(
+        manifest["features"].get("execution").is_none(),
+        "compiler compatibility must name legacy executable IR explicitly"
+    );
     let legacy_exec = manifest["features"]["legacy-exec-ir"]
         .as_array()
         .expect("compiler legacy executable-IR feature should be declared")
@@ -4103,12 +4102,7 @@ fn compiler_default_dependency_closure_is_host_neutral() {
             "bytecode feature must explicitly select `{dependency}`"
         );
     }
-    for dependency in [
-        "rsscript-lowering",
-        "rsscript-mir",
-        "rsscript-provider-api",
-        "sha2",
-    ] {
+    for dependency in ["rsscript-lowering", "rsscript-mir", "sha2"] {
         let feature = format!("dep:{dependency}");
         assert!(
             lowering.contains(feature.as_str()),

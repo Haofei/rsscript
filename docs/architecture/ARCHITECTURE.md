@@ -68,7 +68,8 @@ without widening the compiler dependency closure. The
 `LanguageService` itself consumes explicit document revisions, rejects stale
 updates, caches diagnostics by document plus interface revision, and accepts
 cancellation, monotonic deadlines, and diagnostic budgets. It depends on the
-frontend-only compiler API and never enables execution features.
+frontend-only compiler API and never enables lowering or legacy execution-IR
+features.
 
 ## Runtime boundary
 

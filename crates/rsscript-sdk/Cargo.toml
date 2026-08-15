@@ -42,7 +42,7 @@ project = [
     "execution",
     "dep:rsscript-project",
 ]
-aot-rust = ["execution", "rsscript_compiler/execution", "dep:rsscript-aot-backend"]
+aot-rust = ["execution", "dep:rsscript-aot-backend"]
 # Transitional source-shaped executable IR remains available only to the
 # migration corpus and legacy API surface. Reviewed execution consumes MIR
 # bytecode through the verifier and does not select this feature.
