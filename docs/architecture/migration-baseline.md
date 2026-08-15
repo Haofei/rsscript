@@ -648,17 +648,21 @@ an arbitrary shell executor.
     the session API; direct analyzer construction becomes private. This is a
     parent milestone: its remaining work is split below so a superficial caller
     migration cannot change the historical standard-prelude semantics.
-  - [ ] **S03.5a — Model the standard prelude as a session policy.** Add an
+  - [x] **S03.5a — Model the standard prelude as a session policy.** Add an
     explicit session policy with exact parity to legacy
     `FullWithStandardPackages` analysis. It must reject incompatible explicit
     interface injection rather than silently substituting a different Core
     interface set, and operation-aware queries must preserve that policy on
-    cold and cached paths. Prove parity with the compatibility corpus before
-    changing any ordinary SDK or test caller.
-  - [ ] **S03.5b — Migrate ordinary SDK and test callers.** Once S03.5a is
+    cold and cached paths. `WithStandardPackages` now dispatches directly to
+    the legacy standard-package analyzer flavor for both one-source and
+    workspace queries, while rejecting caller-supplied interfaces. A closure
+    inference regression and a nested path-dependency capture conflict exposed
+    by the compatibility corpus were corrected before the corpus was accepted.
+  - [ ] **S03.5b — Migrate ordinary SDK and test callers.** With S03.5a
     complete, route normal non-empty, unique logical paths through the matching
-    session policy. Preserve cancellation, deadlines, and diagnostic budgets;
-    keep direct analyzer construction only in an explicit compatibility fixture.
+    `WithStandardPackages` session policy. Preserve cancellation, deadlines,
+    and diagnostic budgets; keep direct analyzer construction only in an
+    explicit compatibility fixture.
   - [ ] **S03.5c — Quarantine the exceptional legacy fixtures.** Document and
     isolate empty-path and duplicate-interface cases whose asserted historical
     diagnostics cannot be represented by the normal session input model. Those

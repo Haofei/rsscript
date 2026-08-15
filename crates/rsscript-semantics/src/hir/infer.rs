@@ -120,8 +120,15 @@ pub fn infer_hir_expr_type(
                 .unwrap_or_else(|| ResolvedType::named("?", []));
             Some(ResolvedType::named("List", [item_type]))
         }
-        Expr::Closure { .. } => infer_arg_expr_type(hir, expr, value_types),
-        Expr::Unknown(_) => None,
+        // An unannotated closure's `Fn` shape is contextual: its parameter
+        // types and ownership qualifier come from a declared binding or call
+        // contract. `infer_arg_expr_type` deliberately has a conservative
+        // noescape fallback for argument checking, but that fallback must not
+        // become the type of a `let` binding. Doing so turns an ordinary
+        // explicit closure into a permanently noescape value and rejects valid
+        // stored/returned callbacks. HIR lowering still records an explicit
+        // contextual contract on `HirExpr::Closure` where one exists.
+        Expr::Closure { .. } | Expr::Unknown(_) => None,
     }
 }
 

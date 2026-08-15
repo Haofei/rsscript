@@ -2,24 +2,23 @@
   "schema": "rsscript.migration_queue.v1",
   "tasks": [
     {
-      "id": "S03.5a",
+      "id": "S03.5b",
       "priority": 10,
       "depends_on": ["S03.4"],
       "scope": [
-        "crates/rsscript-semantics/src/analyzer.rs",
         "crates/rsscript-semantics/src/database.rs",
         "crates/rsscript-sdk/src/lib.rs",
         "crates/rsscript-sdk/tests/**",
         "docs/architecture/migration-baseline.md"
       ],
       "acceptance": [
-        "CompilationSession has an explicit standard-prelude policy with exact legacy FullWithStandardPackages analysis semantics.",
-        "That policy rejects explicit interface injection rather than silently selecting a different interface set.",
-        "Cold and cached operation-aware session queries match the legacy standard-prelude corpus."
+        "Normal SDK and test callers use CompilationSession::with_standard_packages for ordinary single-source inputs.",
+        "Cold and cached operation-aware session queries preserve legacy FullWithStandardPackages diagnostics.",
+        "Direct analyzer calls remain only in named exceptional compatibility fixtures."
       ],
       "verification": [
         "cargo test -p rsscript-semantics --locked",
-        "cargo test -p rsscript-sdk --features 'compatibility aot-rust legacy-exec-ir' --test static --locked"
+        "cargo test -p rsscript-sdk --features=compatibility,aot-rust,legacy-exec-ir --test static --locked"
       ]
     },
     {

@@ -821,10 +821,42 @@ pub fn capture_project_graph(
     set_private_directory_permissions(&packages_root)?;
 
     let mut paths = Vec::with_capacity(roots.len());
+    // Package graphs commonly contain path dependencies beneath the root
+    // package (for example `root/deps/helper`). Copying both roots to their
+    // absolute mirrored destinations would try to create the helper's files a
+    // second time inside the already-copied root. Reuse the parent capture for
+    // nested roots instead: the graph still has an exact mapping for each
+    // original package root, but every source byte is captured once.
+    let mut captured_roots = Vec::<(PathBuf, PathBuf)>::with_capacity(roots.len());
     for (original, root) in roots {
         check_capture_operation(operation)?;
-        let destination = mirrored_capture_path(&packages_root, &root)?;
-        copy_project_directory(&root, &destination, &excluded, operation)?;
+        let destination = captured_roots
+            .iter()
+            .filter_map(|(ancestor, captured)| {
+                root.strip_prefix(ancestor)
+                    .ok()
+                    .filter(|relative| !relative.as_os_str().is_empty())
+                    .map(|relative| (ancestor, captured, relative))
+            })
+            .max_by_key(|(ancestor, _, _)| ancestor.as_os_str().len())
+            .map(|(_, captured, relative)| captured.join(relative));
+        let destination = match destination {
+            Some(destination) => {
+                if !destination.is_dir() {
+                    return Err(format!(
+                        "nested project graph root was excluded or missing from its parent capture: {}",
+                        root.display()
+                    ));
+                }
+                destination
+            }
+            None => {
+                let destination = mirrored_capture_path(&packages_root, &root)?;
+                copy_project_directory(&root, &destination, &excluded, operation)?;
+                destination
+            }
+        };
+        captured_roots.push((root.clone(), destination.clone()));
         paths.push((original, destination));
     }
     Ok(CapturedProjectGraph {
@@ -2176,6 +2208,48 @@ mod tests {
             selected
                 .remap_error(format!("failed under {}", selected.root().display()))
                 .contains(&package.display().to_string())
+        );
+    }
+
+    #[test]
+    fn project_graph_capture_reuses_parent_snapshot_for_nested_roots() {
+        let directory = tempfile::tempdir().expect("workspace");
+        let root = directory.path().join("root");
+        let dependency = root.join("deps/helper");
+        std::fs::create_dir_all(dependency.join("interface")).expect("dependency directories");
+        std::fs::write(root.join("rsspkg.toml"), "[package]\nname = 'root'\n")
+            .expect("root manifest");
+        std::fs::write(
+            dependency.join("rsspkg.toml"),
+            "[package]\nname = 'helper'\n",
+        )
+        .expect("dependency manifest");
+        std::fs::write(
+            dependency.join("interface/lib.rssi"),
+            "pub fn Helper.value() -> Int\n",
+        )
+        .expect("dependency interface");
+
+        let graph = capture_project_graph(
+            [dependency.clone(), root.clone()],
+            std::iter::empty::<&str>(),
+            None,
+        )
+        .expect("nested package roots should share one private capture");
+        let captured_root = graph.captured_path(&root).expect("root mapping");
+        let captured_dependency = graph
+            .captured_path(&dependency)
+            .expect("dependency mapping");
+        assert_eq!(captured_dependency, captured_root.join("deps/helper"));
+        assert_eq!(
+            graph
+                .read_captured_utf8(&dependency, Path::new("interface/lib.rssi"), 1024)
+                .expect("nested dependency contents"),
+            "pub fn Helper.value() -> Int\n"
+        );
+        assert_eq!(
+            graph.original_path(&captured_dependency.join("interface/lib.rssi")),
+            Some(dependency.join("interface/lib.rssi"))
         );
     }
 
