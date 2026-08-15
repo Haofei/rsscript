@@ -11,15 +11,6 @@
       ]
     },
     {
-      "id": "A04.1",
-      "priority": 60,
-      "depends_on": ["A04.1a"],
-      "verification": [
-        "cargo test -p rsscript-sdk --lib --locked",
-        "cargo test -p rsscript-sdk --test architecture --locked"
-      ]
-    },
-    {
       "id": "A09.2",
       "priority": 80,
       "depends_on": ["A09.1a", "A09.1b"],

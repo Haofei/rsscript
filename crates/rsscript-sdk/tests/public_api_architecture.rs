@@ -133,6 +133,34 @@ fn snapshot_value<'a>(snapshot: &'a str, module: &str) -> Option<&'a str> {
     })
 }
 
+/// Return the balanced body of a simple top-level Rust item. The reviewed SDK
+/// keeps phase-state structs deliberately small, so a lightweight structural
+/// guard makes their public construction boundary visible in normal CI without
+/// adding a separate compile-fail fixture crate.
+fn item_body<'a>(source: &'a str, declaration: &str) -> &'a str {
+    let start = source
+        .find(declaration)
+        .unwrap_or_else(|| panic!("reviewed item `{declaration}` is missing"));
+    let open = source[start..]
+        .find('{')
+        .map(|offset| start + offset)
+        .unwrap_or_else(|| panic!("reviewed item `{declaration}` has no body"));
+    let mut depth = 0usize;
+    for (offset, character) in source[open..].char_indices() {
+        match character {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &source[open + 1..open + offset];
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("reviewed item `{declaration}` has an unclosed body");
+}
+
 #[test]
 fn versioned_facade_is_deleted() {
     let source = library_source();
@@ -325,6 +353,58 @@ fn reviewed_execution_report_has_one_terminal_outcome() {
         assert!(
             !report.contains(legacy_phase_field),
             "reviewed report must derive terminal evidence from ExecutionOutcome, not expose `{legacy_phase_field}`"
+        );
+    }
+}
+
+#[test]
+fn reviewed_artifact_phases_have_private_non_optional_state_and_one_way_transitions() {
+    let source = library_source();
+    for (declaration, required_field) in [
+        ("pub struct BuiltArtifact", "bundle: ArtifactBundle"),
+        ("pub struct VerifiedArtifact", "bundle: ArtifactBundle"),
+        ("pub struct AdmittedArtifact", "artifact: VerifiedArtifact"),
+        (
+            "pub struct LinkedArtifact<'artifact>",
+            "artifact: &'artifact AdmittedArtifact",
+        ),
+    ] {
+        let body = item_body(&source, declaration);
+        assert!(
+            body.contains(required_field),
+            "{declaration} must retain its required phase state `{required_field}`"
+        );
+        assert!(
+            !body.contains("pub "),
+            "{declaration} must not expose fields that let callers forge or mutate a phase"
+        );
+        assert!(
+            !body.contains("Option<"),
+            "{declaration} must not encode a different artifact phase as optional state"
+        );
+    }
+
+    let built = item_body(&source, "pub struct BuiltArtifact");
+    assert!(
+        !built.contains("VerifiedArtifact") && !built.contains("AdmittedArtifact"),
+        "the built phase must not carry later phase representations"
+    );
+    let verified = item_body(&source, "pub struct VerifiedArtifact");
+    assert!(
+        !verified.contains("AdmittedArtifact") && !verified.contains("LinkedArtifact"),
+        "the verified phase must not carry admission or linking state"
+    );
+
+    for required_transition in [
+        "pub fn verify(&self, built: BuiltArtifact) -> Result<VerifiedArtifact, VerifyError>",
+        "pub fn admit<P: ArtifactAdmissionPolicy>(",
+        "pub fn admit_trusted_input(self) -> AdmittedArtifact",
+        "artifact: &'artifact AdmittedArtifact",
+        "pub fn execute(&self, request: ExecutionRequest) -> ExecutionReport",
+    ] {
+        assert!(
+            source.contains(required_transition),
+            "reviewed SDK phase transition is missing: `{required_transition}`"
         );
     }
 }

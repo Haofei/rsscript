@@ -1858,8 +1858,12 @@ an arbitrary shell executor.
     admitted phase exclusively. The explicitly named trusted-input shortcut is
     available for host-controlled channels, while the isolated runner records
     its fixed profile identity as admission evidence.
-  - [ ] **A04.1 — Audit all public phase types.** Replace optional phase fields
-    and cross-phase enums with built/verified/linked/report-specific types.
+  - [x] **A04.1 — Audit all public phase types.** The reviewed built, verified,
+    admitted, and linked Artifact types each have private, required backing
+    state and only their valid one-way transition methods. `ExecutionReport`
+    exposes one mutually exclusive outcome, while Bundle analysis is a closed
+    source/package variant; architecture tests reject public fields or optional
+    cross-phase state from returning.
     - [x] **A04.1b — Make Bundle analysis evidence a closed variant.**
       `AnalysisEnvelopeV1` now has explicit `Source` and `Package` variants;
       an envelope cannot contain neither or both typed evidence models. The
