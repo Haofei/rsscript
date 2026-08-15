@@ -25,8 +25,6 @@
 // Experimental Rust AOT lowering keeps its lint debt local to this backend.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
-use std::io;
 use std::path::Path;
 
 use crate::diagnostic::Diagnostic;
@@ -34,6 +32,9 @@ use crate::interfaces::{default_interfaces, standard_package_interfaces};
 use crate::runtime_abi;
 use crate::syntax::ast::Program;
 use crate::syntax::parse_source;
+use rsscript_artifact_store::{
+    GeneratedRustPackageFiles, write_generated_rust_package as write_generated_rust_files,
+};
 use rsscript_semantics::{CompilationSession, ValidatedProgram};
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct CoverageBucket {
@@ -395,43 +396,15 @@ pub fn write_generated_rust_package(
     out_dir: &Path,
     package: &GeneratedRustPackage,
 ) -> Result<(), String> {
-    let src_dir = out_dir.join("src");
-    fs::create_dir_all(&src_dir)
-        .map_err(|error| format!("failed to create {}: {error}", src_dir.display()))?;
-    write_if_changed(&out_dir.join("Cargo.toml"), &package.cargo_toml)?;
-    write_if_changed(&src_dir.join("lib.rs"), &package.lib_rs)?;
-    if let Some(main_rs) = &package.main_rs {
-        write_if_changed(&src_dir.join("main.rs"), main_rs)?;
-    } else {
-        remove_if_exists(&src_dir.join("main.rs"))?;
-    }
-    write_if_changed(
-        &out_dir.join("rsscript-source-map.json"),
-        &package.source_map_json,
-    )?;
-    Ok(())
-}
-
-fn write_if_changed(path: &Path, contents: &str) -> Result<(), String> {
-    match fs::read_to_string(path) {
-        Ok(existing) if existing == contents => return Ok(()),
-        Ok(_) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(format!("failed to read {}: {error}", path.display()));
-        }
-    }
-    fs::write(path, contents)
-        .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
-    Ok(())
-}
-
-fn remove_if_exists(path: &Path) -> Result<(), String> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!("failed to remove {}: {error}", path.display())),
-    }
+    write_generated_rust_files(
+        out_dir,
+        GeneratedRustPackageFiles {
+            cargo_toml: &package.cargo_toml,
+            lib_rs: &package.lib_rs,
+            main_rs: package.main_rs.as_deref(),
+            source_map_json: &package.source_map_json,
+        },
+    )
 }
 
 pub fn lower_program_to_rust(program: &Program) -> String {

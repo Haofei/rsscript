@@ -822,6 +822,15 @@ an arbitrary shell executor.
       persistence.** Keep compiler compatibility responsible only for deciding
       artifact contents; move filesystem publication and cache ownership behind
       explicit adapter APIs.
+      - [x] **S05.2c1 — Extract generated Rust package publication.** The
+        experimental AOT lowerer now passes generated file contents to
+        `rsscript-artifact-store`; confined creation, atomic replace,
+        unchanged-file preservation, and stale-main removal no longer live in
+        compiler code.
+      - [ ] **S05.2c2 — Extract generated lockfile publication.** Move native
+        Cargo.lock generation and any remaining compatibility lockfile writes
+        behind explicit artifact-store APIs, leaving compiler code to decide
+        only the generated lock contents.
   - [ ] **S05.3 — Move review, risk, and package presentation out of compiler.**
     Keep neutral analysis facts; make review formatting and policy adapters
     optional consumers. Package persistence, review/risk, and generated-Rust

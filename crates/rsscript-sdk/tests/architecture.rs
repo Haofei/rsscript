@@ -1323,6 +1323,13 @@ fn artifact_persistence_is_an_execution_only_adapter() {
     assert!(adapter.contains("pub fn publish("));
     assert!(adapter.contains("pub fn regular_tree_digest("));
     assert!(adapter.contains("pub fn seal_regular_tree_read_only("));
+    let rust_lower = read(&root.join("crates/rsscript-compiler/src/rust_lower/mod.rs"));
+    assert!(rust_lower.contains("GeneratedRustPackageFiles"));
+    assert!(rust_lower.contains("write_generated_rust_files("));
+    assert!(!rust_lower.contains("fn write_if_changed("));
+    assert!(!rust_lower.contains("fn remove_if_exists("));
+    assert!(adapter.contains("pub struct GeneratedRustPackageFiles"));
+    assert!(adapter.contains("pub fn write_generated_rust_package("));
 }
 
 #[test]

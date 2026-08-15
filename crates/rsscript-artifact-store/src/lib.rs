@@ -83,6 +83,18 @@ pub struct ArtifactStore {
 }
 
 impl ArtifactStore {
+    /// Create a package-owned artifact root when it does not already exist,
+    /// then open the confined locked writer.
+    pub fn create(package_root: &Path) -> Result<Self, String> {
+        fs::create_dir_all(package_root).map_err(|error| {
+            format!(
+                "failed to create package artifact root {}: {error}",
+                package_root.display()
+            )
+        })?;
+        Self::open(package_root)
+    }
+
     pub fn open(package_root: &Path) -> Result<Self, String> {
         let root = canonical_checked_root(package_root, "package artifact store")?;
         let metadata = fs::symlink_metadata(&root)
@@ -235,6 +247,89 @@ impl ArtifactStore {
         }
     }
 
+    /// Atomically publish a file only when its bytes differ from the existing
+    /// regular file. The boolean reports whether a write occurred.
+    pub fn write_atomic_if_changed(
+        &self,
+        relative: impl AsRef<Path>,
+        contents: &[u8],
+        label: &str,
+    ) -> Result<bool, String> {
+        let relative = checked_relative(relative.as_ref(), label)?;
+        let destination = self.root.join(relative);
+        match fs::symlink_metadata(&destination) {
+            Ok(metadata) if is_link_like(&metadata) || !metadata.is_file() => {
+                return Err(format!(
+                    "{label} destination must be a regular file, not a symlink or reparse point: {}",
+                    destination.display()
+                ));
+            }
+            Ok(_) => {
+                if self.read(relative, label)? == contents {
+                    return Ok(false);
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "failed to inspect {label} destination {}: {error}",
+                    destination.display()
+                ));
+            }
+        }
+        self.write_atomic(relative, contents, label)?;
+        Ok(true)
+    }
+
+    /// Remove an optional regular artifact without following a symlink at the
+    /// destination. Missing files are treated as already removed.
+    pub fn remove_regular_file(
+        &self,
+        relative: impl AsRef<Path>,
+        label: &str,
+    ) -> Result<(), String> {
+        let relative = checked_relative(relative.as_ref(), label)?;
+        #[cfg(unix)]
+        {
+            use rustix::fs::{AtFlags, FileType, unlinkat};
+
+            let (parent, name) = open_unix_parent(&self.root_dir, relative, label)?;
+            match rustix::fs::statat(&parent, &name, AtFlags::SYMLINK_NOFOLLOW) {
+                Ok(stat) if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile => {
+                    return Err(format!(
+                        "{label} destination must be a regular file, not a symlink"
+                    ));
+                }
+                Ok(_) => {
+                    unlinkat(&parent, &name, AtFlags::empty())
+                        .map_err(|error| format!("failed to remove {label}: {error}"))?;
+                    rustix::fs::fsync(&parent)
+                        .map_err(|error| format!("failed to sync {label} directory: {error}"))?;
+                }
+                Err(error) if error == rustix::io::Errno::NOENT => {}
+                Err(error) => return Err(format!("failed to inspect {label}: {error}")),
+            }
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        {
+            let destination = self.checked_portable_path(relative, label, true)?;
+            match fs::symlink_metadata(&destination) {
+                Ok(metadata) if is_link_like(&metadata) || !metadata.is_file() => {
+                    return Err(format!(
+                        "{label} destination must be a regular file, not a symlink or reparse point: {}",
+                        destination.display()
+                    ));
+                }
+                Ok(_) => fs::remove_file(&destination)
+                    .map_err(|error| format!("failed to remove {label}: {error}"))?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(format!("failed to inspect {label}: {error}")),
+            }
+            Ok(())
+        }
+    }
+
     #[cfg(unix)]
     fn write_atomic_unix(
         &self,
@@ -376,6 +471,48 @@ impl ArtifactStore {
         }
         result
     }
+}
+
+/// The generated files that comprise one experimental Rust AOT package. The
+/// compiler owns their contents; this adapter owns safe publication.
+#[derive(Debug, Clone, Copy)]
+pub struct GeneratedRustPackageFiles<'a> {
+    pub cargo_toml: &'a str,
+    pub lib_rs: &'a str,
+    pub main_rs: Option<&'a str>,
+    pub source_map_json: &'a str,
+}
+
+/// Persist generated Rust package files with confined, atomic writes. Reused
+/// files preserve their modification time so downstream Cargo caches do not
+/// rebuild solely because RSScript ran again.
+pub fn write_generated_rust_package(
+    out_dir: &Path,
+    package: GeneratedRustPackageFiles<'_>,
+) -> Result<(), String> {
+    let store = ArtifactStore::create(out_dir)?;
+    store.create_directory_all("src", "generated Rust source directory")?;
+    store.write_atomic_if_changed(
+        "Cargo.toml",
+        package.cargo_toml.as_bytes(),
+        "generated Cargo.toml",
+    )?;
+    store.write_atomic_if_changed(
+        "src/lib.rs",
+        package.lib_rs.as_bytes(),
+        "generated Rust library",
+    )?;
+    if let Some(main_rs) = package.main_rs {
+        store.write_atomic_if_changed("src/main.rs", main_rs.as_bytes(), "generated Rust main")?;
+    } else {
+        store.remove_regular_file("src/main.rs", "generated Rust main")?;
+    }
+    store.write_atomic_if_changed(
+        "rsscript-source-map.json",
+        package.source_map_json.as_bytes(),
+        "generated Rust source map",
+    )?;
+    Ok(())
 }
 
 /// Atomically replace a regular artifact below `package_root` without following
@@ -1283,6 +1420,38 @@ mod tests {
             }
         }
         make_writable(&root);
+        fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn generated_rust_package_writer_is_atomic_and_removes_stale_main() {
+        let root = test_dir("generated-rust");
+        write_generated_rust_package(
+            &root,
+            GeneratedRustPackageFiles {
+                cargo_toml: "[package]\nname = 'fixture'\n",
+                lib_rs: "pub fn lib() {}\n",
+                main_rs: Some("fn main() {}\n"),
+                source_map_json: "[]\n",
+            },
+        )
+        .expect("generated package should write");
+        assert_eq!(
+            fs::read_to_string(root.join("src/main.rs")).expect("generated main"),
+            "fn main() {}\n"
+        );
+
+        write_generated_rust_package(
+            &root,
+            GeneratedRustPackageFiles {
+                cargo_toml: "[package]\nname = 'fixture'\n",
+                lib_rs: "pub fn lib() {}\n",
+                main_rs: None,
+                source_map_json: "[]\n",
+            },
+        )
+        .expect("generated package should update");
+        assert!(!root.join("src/main.rs").exists());
         fs::remove_dir_all(root).expect("fixture cleanup");
     }
 }
