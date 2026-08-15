@@ -32,6 +32,7 @@ use crate::interfaces::{default_interfaces, standard_package_interfaces};
 use crate::runtime_abi;
 use crate::syntax::ast::Program;
 use crate::syntax::parse_source;
+use rsscript_aot_backend::AotLoweringInput;
 use rsscript_semantics::{CompilationSession, ValidatedProgram};
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct CoverageBucket {
@@ -289,10 +290,24 @@ pub fn lower_sources_to_rust_package_with_options(
     interfaces: &[(String, String)],
     native_dependencies: &[NativeRustDependency],
 ) -> Result<GeneratedRustPackage, Vec<Diagnostic>> {
-    let validated = validated_session_sources(sources, interfaces)?;
+    lower_aot_input(&AotLoweringInput {
+        sources: sources.to_vec(),
+        package_name: package_name.to_string(),
+        runtime_path: runtime_path.to_string(),
+        interfaces: interfaces.to_vec(),
+        native_dependencies: native_dependencies.to_vec(),
+    })
+}
+
+/// Compatibility lowering bridge. The experiment-owned input model ensures
+/// callers do not couple generated-Rust lowering to compiler-local package
+/// state while the implementation migrates out of this crate.
+pub fn lower_aot_input(input: &AotLoweringInput) -> Result<GeneratedRustPackage, Vec<Diagnostic>> {
+    let validated = validated_session_sources(&input.sources, &input.interfaces)?;
     let database = validated.database();
     let program = database.program();
-    let external_bindings = native_dependencies
+    let external_bindings = input
+        .native_dependencies
         .iter()
         .flat_map(|dependency| dependency.bindings.iter())
         .map(|(symbol, target)| (symbol.clone(), target.clone()))
@@ -302,8 +317,9 @@ pub fn lower_sources_to_rust_package_with_options(
         return Err(lowering_diagnostics);
     }
     let lowered = lower_validated_program_to_rust_with_map(database, external_bindings);
-    let package_name = cargo_package_name(package_name);
-    let native_dependency_toml = native_dependencies
+    let package_name = cargo_package_name(&input.package_name);
+    let native_dependency_toml = input
+        .native_dependencies
         .iter()
         .map(|dependency| {
             let feature_toml = if dependency.cargo_features.is_empty() {
@@ -339,7 +355,7 @@ pub fn lower_sources_to_rust_package_with_options(
     // profile gets a light opt-level for runnable-but-quick debug builds.
     let cargo_toml = format!(
         "[package]\nname = \"{package_name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n\n[profile.release]\noverflow-checks = true\ncodegen-units = 256\nlto = false\nincremental = true\n\n[profile.dev]\nopt-level = 1\nincremental = true\ncodegen-units = 256\n\n[dependencies]\nrsscript-runtime = {{ package = \"rsscript-aot-runtime\", path = \"{}\" }}\n{serde_dependency_toml}{native_dependency_toml}",
-        toml_string(runtime_path),
+        toml_string(&input.runtime_path),
     );
     let main_rs = rust_package_main(&program, &package_name);
     let source_map_json =

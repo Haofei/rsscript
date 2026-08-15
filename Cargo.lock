@@ -1730,6 +1730,7 @@ version = "0.1.0"
 dependencies = [
  "rsscript-aot-model",
  "rsscript-artifact-store",
+ "rsscript-project",
  "tempfile",
 ]
 
@@ -1798,6 +1799,7 @@ version = "0.1.0"
 dependencies = [
  "hex",
  "rss-process-guard",
+ "rsscript-aot-backend",
  "rsscript-compiler",
  "rsscript-diagnostics",
  "rsscript-provider-log",

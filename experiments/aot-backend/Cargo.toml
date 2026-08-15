@@ -13,6 +13,7 @@ doctest = false
 [dependencies]
 rsscript-aot-model = { path = "../aot-model" }
 rsscript-artifact-store = { path = "../../crates/rsscript-artifact-store" }
+rsscript-project = { path = "../../crates/rsscript-project" }
 
 [dev-dependencies]
 tempfile = "3"

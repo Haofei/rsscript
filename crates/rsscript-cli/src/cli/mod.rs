@@ -8,10 +8,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 #[cfg(all(feature = "execution", feature = "aot-rust"))]
-use rsscript_compiler::compatibility::{
-    lower_source_to_rust_package, lower_sources_to_rust_package_with_options,
-    prepare_package_for_execution,
-};
+use rsscript_aot_backend::AotLoweringInput;
+#[cfg(all(feature = "execution", feature = "aot-rust"))]
+use rsscript_compiler::compatibility::{lower_aot_input, prepare_package_for_execution};
 #[cfg(all(feature = "execution", feature = "aot-rust"))]
 use rsscript_compiler::{Diagnostic, format_diagnostics_human, format_diagnostics_json};
 #[cfg(all(feature = "execution", feature = "aot-rust"))]
@@ -192,13 +191,13 @@ pub(crate) fn lower_cli_input_to_rust_package(
             eprintln!("{error}");
             ExitCode::from(2)
         })?;
-        return lower_sources_to_rust_package_with_options(
-            &input.sources,
-            &input.package.name,
-            &runtime_path,
-            &input.interfaces,
-            &input.native_dependencies,
-        )
+        return lower_aot_input(&AotLoweringInput {
+            sources: input.sources,
+            package_name: input.package.name,
+            runtime_path,
+            interfaces: input.interfaces,
+            native_dependencies: input.native_dependencies,
+        })
         .map_err(|diagnostics| {
             print_diagnostics(json, &diagnostics);
             ExitCode::from(1)
@@ -210,12 +209,16 @@ pub(crate) fn lower_cli_input_to_rust_package(
         ExitCode::from(2)
     })?;
     let package_name = generated_package_name(path);
-    lower_source_to_rust_package(path, &source, &package_name, &runtime_path).map_err(
-        |diagnostics| {
-            print_diagnostics(json, &diagnostics);
-            ExitCode::from(1)
-        },
-    )
+    lower_aot_input(&AotLoweringInput::single_file(
+        path,
+        source,
+        package_name,
+        runtime_path,
+    ))
+    .map_err(|diagnostics| {
+        print_diagnostics(json, &diagnostics);
+        ExitCode::from(1)
+    })
 }
 
 #[cfg(all(feature = "execution", feature = "aot-rust"))]

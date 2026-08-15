@@ -904,6 +904,14 @@ an arbitrary shell executor.
           - [ ] **S05.4b2b2 — Move the source lowerer.** Move the remaining
             source lowering and coverage implementation after the backend input
             contract no longer exposes compiler-private structures.
+            - [x] **S05.4b2b2a — Define the AOT lowering input contract.** The
+              experiment-owned `AotLoweringInput` now owns source bytes,
+              interfaces, package name, runtime path, and captured native
+              dependency metadata; the experimental CLI constructs it before
+              invoking the compiler compatibility bridge.
+            - [ ] **S05.4b2b2b — Move lowering implementation.** Move coverage
+              and AST/HIR-to-Rust lowering after callers no longer construct its
+              compiler-local argument list.
     - [ ] **S05.4c — Split runtime ABI catalog use.** Leave Core consumers with
       a neutral intrinsic catalog and move generated-Rust target discovery and
       AOT runtime validation into the experiment-owned backend.

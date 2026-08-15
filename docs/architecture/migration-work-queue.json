@@ -2,9 +2,9 @@
   "schema": "rsscript.migration_queue.v1",
   "tasks": [
     {
-      "id": "S05.4b2b2",
+      "id": "S05.4b2b2b",
       "priority": 100,
-      "depends_on": ["S05.4b2b1"],
+      "depends_on": ["S05.4b2b2a"],
       "scope": [
         "crates/rsscript-compiler/src/rust_lower/**",
         "crates/rsscript-compiler/src/lib.rs",
@@ -15,13 +15,14 @@
         "docs/architecture/migration-baseline.md"
       ],
       "acceptance": [
-        "The remaining source lowerer and coverage accounting move to the experiment-owned backend behind an explicit input contract.",
+        "Coverage accounting and AST/HIR-to-Rust lowering move to the experiment-owned backend using the explicit AotLoweringInput contract.",
         "Compiler compatibility contains no AOT implementation modules after the migration.",
         "The experimental CLI path continues to produce equivalent generated-Rust package output."
       ],
       "verification": [
         "cargo test -p rsscript-compiler --features aot-rust --locked",
-        "cargo test --manifest-path experiments/Cargo.toml -p rsscript-aot-model --locked"
+        "cargo test -p rsscript-cli --features aot-rust --locked",
+        "cargo test --manifest-path experiments/Cargo.toml -p rsscript-aot-backend --locked"
       ]
     }
   ]

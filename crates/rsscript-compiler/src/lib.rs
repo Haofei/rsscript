@@ -158,12 +158,13 @@ pub mod compatibility {
     #[cfg(feature = "aot-rust")]
     pub use crate::rust_lower::{
         GeneratedRustPackage, LowerCoverageReport, LoweredRust, NativeRustDependency,
-        RemappedRustcDiagnostic, RustSourceMapEntry, lower_coverage_report, lower_program_to_rust,
-        lower_program_to_rust_with_map, lower_source_to_rust, lower_source_to_rust_package,
-        lower_source_to_rust_package_with_interfaces, lower_source_to_rust_with_map,
-        lower_sources_to_rust_package_with_interfaces, lower_sources_to_rust_package_with_options,
-        parse_runtime_diagnostics, parse_source_map_json, remap_rustc_diagnostic_json,
-        remap_rustc_diagnostic_json_lines, write_generated_rust_package,
+        RemappedRustcDiagnostic, RustSourceMapEntry, lower_aot_input, lower_coverage_report,
+        lower_program_to_rust, lower_program_to_rust_with_map, lower_source_to_rust,
+        lower_source_to_rust_package, lower_source_to_rust_package_with_interfaces,
+        lower_source_to_rust_with_map, lower_sources_to_rust_package_with_interfaces,
+        lower_sources_to_rust_package_with_options, parse_runtime_diagnostics,
+        parse_source_map_json, remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines,
+        write_generated_rust_package,
     };
     #[cfg(feature = "execution")]
     pub use crate::symbols::{SymbolInventoryEntry, symbol_inventory};
