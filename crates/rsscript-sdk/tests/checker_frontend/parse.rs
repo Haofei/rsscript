@@ -105,6 +105,33 @@ fn main() -> Unit {
 }
 
 #[test]
+fn checker_substitutes_explicit_generic_callback_parameter_types() {
+    let source = r#"
+fn main() -> Unit {
+    match Option.filter<Int>(value: read Some(1), predicate: |item| {
+        return item > 3
+    }) {
+        Some(value) => {
+            Output.write(message: read String.from_int(value: value))
+        }
+        None => {
+            Output.write(message: read "none")
+        }
+    }
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("generic-callback-parameter.rss", source);
+
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0210"),
+        "explicit generic arguments must apply to callback parameter expressions: {diagnostics:?}"
+    );
+}
+
+#[test]
 fn lint_warns_on_public_signature_complexity() {
     let source = r#"
 

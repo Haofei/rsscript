@@ -20,10 +20,13 @@ pub fn contains_unresolved_generic_type(type_name: &str, facts: &UnresolvedGener
     if facts.active_generic_names.contains(root) {
         return true;
     }
-    if facts.declared_type_names.contains(root) {
-        return false;
-    }
-    (root.len() == 1 && root.chars().all(|character| character.is_ascii_uppercase()))
+    // A declared generic container (for example `Channel<T>`) is not itself
+    // an unresolved type, but its arguments can still be unresolved. Do not
+    // return early for the declared root or an inferred `T` escapes type
+    // checking through `fresh Channel<T>`.
+    (!facts.declared_type_names.contains(root)
+        && root.len() == 1
+        && root.chars().all(|character| character.is_ascii_uppercase()))
         || type_name
             .trim()
             .strip_prefix("fresh ")
@@ -461,6 +464,13 @@ mod tests {
             &facts
         ));
         assert!(!contains_unresolved_generic_type("Widget", &facts));
+        assert!(contains_unresolved_generic_type(
+            "fresh Channel<T>",
+            &UnresolvedGenericFacts {
+                declared_type_names: HashSet::from(["Channel".to_owned()]),
+                active_generic_names: HashSet::from(["T".to_owned()]),
+            }
+        ));
         assert!(contains_unresolved_generic_type(
             "List<U>",
             &UnresolvedGenericFacts::default()

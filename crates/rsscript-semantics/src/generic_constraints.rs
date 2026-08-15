@@ -61,7 +61,11 @@ fn substitute_type_params_bounded(
         let params = rendered_function_parameter_types(type_name)
             .into_iter()
             .map(|parameter| {
-                substitute_type_params_bounded(budget, parameter, substitutions, depth + 1)
+                let (effect, parameter) = rendered_function_parameter_effect(parameter);
+                Ok(format!(
+                    "{effect}{}",
+                    substitute_type_params_bounded(budget, parameter, substitutions, depth + 1)?
+                ))
             })
             .collect::<Result<Vec<_>, _>>()?
             .join(", ");
@@ -109,6 +113,21 @@ fn rendered_function_parameter_types(type_name: &str) -> Vec<&str> {
         return Vec::new();
     }
     split_rendered_type_arguments(parameters)
+}
+
+/// Function parameter effects are part of a rendered type signature, but the
+/// generic identifier follows the effect keyword. Keep the effect intact while
+/// substituting the actual type (`read T` -> `read Int`), otherwise callback
+/// checking sees the original generic variable after an explicit call-site
+/// substitution.
+fn rendered_function_parameter_effect(parameter: &str) -> (&str, &str) {
+    let parameter = parameter.trim();
+    for effect in ["read ", "mut ", "take "] {
+        if let Some(ty) = parameter.strip_prefix(effect) {
+            return (effect, ty.trim());
+        }
+    }
+    ("", parameter)
 }
 
 fn split_rendered_type_arguments(value: &str) -> Vec<&str> {
@@ -725,6 +744,17 @@ fn make<T: Managed>() -> fresh T
         assert_eq!(
             substitute_type_params(&UnlimitedBudget, "fresh T", &substitutions),
             Ok("fresh Int".to_owned())
+        );
+        assert_eq!(
+            substitute_type_params(
+                &UnlimitedBudget,
+                "noescape Fn(read T, mut List<E>, take Result<T, E>) -> Bool",
+                &substitutions,
+            ),
+            Ok(
+                "noescape Fn(read Int, mut List<String>, take Result<Int, String>) -> Bool"
+                    .to_owned()
+            )
         );
     }
 }

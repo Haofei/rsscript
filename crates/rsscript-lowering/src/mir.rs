@@ -90,6 +90,7 @@ pub fn lower_executable_ir_to_mir(
             .collect(),
         async_external_wrappers: BTreeMap::new(),
         variants: BTreeMap::new(),
+        dynamic_protocol_methods: std::collections::BTreeSet::new(),
     };
     let mut lowered = Vec::with_capacity(functions.len());
     let mut debug = Vec::with_capacity(functions.len());
@@ -158,6 +159,28 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<VerifiedMir, MirLo
             )
         })
         .collect::<BTreeMap<_, _>>();
+    // MIR does not yet encode dynamic protocol dispatch. Record only the
+    // protocol methods which are actually selected by checked call sites, so
+    // their lowering can fail closed into the explicitly gated compatibility
+    // path rather than compiling the declaration's bodyless stub as a normal
+    // function call.
+    let dynamic_protocol_methods = hir
+        .call_sites()
+        .iter()
+        .filter_map(|call| match &call.resolution {
+            checked::CallResolution::Resolved { signature, .. } => signature
+                .namespace
+                .as_deref()
+                .filter(|namespace| {
+                    !hir.protocol_method_targets(namespace, &signature.name)
+                        .is_empty()
+                })
+                .map(|namespace| (namespace.to_owned(), signature.name.clone())),
+            checked::CallResolution::Ambiguous { .. }
+            | checked::CallResolution::EnumVariant
+            | checked::CallResolution::Unknown => None,
+        })
+        .collect();
     let async_external_wrappers = external_imports
         .iter()
         .enumerate()
@@ -197,6 +220,7 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<VerifiedMir, MirLo
             .map(|wrapper| (wrapper.symbol.as_str().to_owned(), wrapper.id))
             .collect(),
         variants,
+        dynamic_protocol_methods,
     };
     let mut lowered = Vec::with_capacity(functions.len());
     let mut debug = Vec::with_capacity(functions.len());
@@ -431,6 +455,7 @@ struct CallTargets {
     external_imports: BTreeMap<String, rsscript_mir::ExternalSymbolId>,
     async_external_wrappers: BTreeMap<String, FunctionId>,
     variants: BTreeMap<String, VariantLayout>,
+    dynamic_protocol_methods: std::collections::BTreeSet<(String, String)>,
 }
 
 /// Synthetic async functions let `async let value = Host.call()` and
@@ -1066,6 +1091,9 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         args: &[checked::HirCallArg],
         resolution: &checked::CallResolution,
     ) -> Result<ValueId, MirLoweringError> {
+        if callee_requires_legacy_builtin_metadata(callee) {
+            return self.unsupported("typed builtin metadata");
+        }
         if matches!(resolution, checked::CallResolution::EnumVariant) {
             if receiver.is_some() {
                 return self.unsupported("checked HIR receiver enum-variant call");
@@ -1088,6 +1116,19 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         }
         if signature.is_builtin {
             return self.lower_builtin_call(signature, receiver, args);
+        }
+        // `MirCallTarget` deliberately has no dynamic-protocol variant yet.
+        // A protocol declaration contributes a bodyless signature stub, so
+        // lowering it as a normal `Function` would compile a `Unit` return
+        // instead of selecting the concrete implementation at runtime. Keep
+        // this capability on the explicit legacy bridge until MIR owns the
+        // dispatch table and its cancellation/resource contracts.
+        if signature.namespace.as_deref().is_some_and(|namespace| {
+            self.targets
+                .dynamic_protocol_methods
+                .contains(&(namespace.to_owned(), signature.name.clone()))
+        }) {
+            return self.unsupported("dynamic protocol dispatch");
         }
         let target = if signature.is_external {
             let symbol = checked_external_symbol(signature)?;
@@ -1229,6 +1270,14 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         receiver: Option<&checked::HirCallReceiver>,
         args: &[checked::HirCallArg],
     ) -> Result<ValueId, MirLoweringError> {
+        // These builtins carry generic result/payload metadata or scheduler
+        // protocol state that the current owned `BuiltinId` target cannot
+        // represent structurally. Do not erase that information into an
+        // untyped v1 intrinsic: the explicit compatibility path retains it
+        // until MIR gains a typed builtin-instantiation/protocol operand.
+        if requires_legacy_builtin_metadata(signature) {
+            return self.unsupported("typed builtin metadata");
+        }
         let destination = self.value();
         match signature.name.as_str() {
             "Ok" | "Err" => {
@@ -2344,6 +2393,45 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             construct,
         })
     }
+}
+
+fn requires_legacy_builtin_metadata(signature: &checked::FunctionSig) -> bool {
+    let namespace = signature
+        .namespace
+        .as_deref()
+        .map(|namespace| namespace.split('<').next().unwrap_or(namespace).trim());
+    matches!(
+        (namespace, signature.name.as_str()),
+        (Some("Json"), "decode" | "decode_text")
+            | (Some("Channel"), _)
+            | (Some("Sender"), _)
+            | (Some("Receiver"), _)
+            | (Some("CancellationSource"), _)
+            | (Some("CancellationToken"), _)
+    )
+}
+
+fn callee_requires_legacy_builtin_metadata(callee: &rsscript_syntax::ast::Callee) -> bool {
+    let (namespace, name) = match callee {
+        rsscript_syntax::ast::Callee::Qualified { namespace, name } => {
+            (namespace.as_str(), name.as_str())
+        }
+        rsscript_syntax::ast::Callee::Name(name) => name.rsplit_once('.').unwrap_or_default(),
+        rsscript_syntax::ast::Callee::ReceiverCall { .. } => return false,
+    };
+    matches!(
+        (
+            namespace.split('<').next().unwrap_or(namespace).trim(),
+            name.split('<').next().unwrap_or(name).trim(),
+        ),
+        ("Json", "decode" | "decode_text")
+            | ("Arguments", _)
+            | ("Channel", _)
+            | ("Sender", _)
+            | ("Receiver", _)
+            | ("CancellationSource", _)
+            | ("CancellationToken", _)
+    )
 }
 
 struct BlockDraft {

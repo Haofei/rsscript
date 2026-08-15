@@ -668,13 +668,30 @@ impl CompilationSession {
             .iter()
             .map(|file| (file.path(), file.text()))
             .collect::<Vec<_>>();
-        let analysis = Arc::new(match operation {
-            Some(operation) => crate::analyze_sources_with_interfaces_result_with_operation(
+        // A session owns one immutable workspace input, but a one-source
+        // workspace must retain the historical single-document semantic path.
+        // That path carries source-local protocol and generic facts which are
+        // not yet represented by the package merge query. Selecting it here
+        // preserves semantics without letting callers bypass the session's
+        // revision, cancellation, or cache boundary.
+        let analysis = Arc::new(match (sources.as_slice(), operation) {
+            ([(path, source)], Some(operation)) => {
+                crate::analyze_source_with_interfaces_result_with_operation(
+                    path,
+                    source,
+                    &interfaces,
+                    operation,
+                )
+            }
+            ([(path, source)], None) => {
+                crate::analyze_source_with_interfaces_result(path, source, &interfaces)
+            }
+            (_, Some(operation)) => crate::analyze_sources_with_interfaces_result_with_operation(
                 &sources,
                 &interfaces,
                 operation,
             ),
-            None => crate::analyze_sources_with_interfaces_result(&sources, &interfaces),
+            (_, None) => crate::analyze_sources_with_interfaces_result(&sources, &interfaces),
         });
         if let Some(operation) = operation {
             operation.check()?;

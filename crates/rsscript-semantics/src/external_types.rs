@@ -106,6 +106,11 @@ fn check_type_ref(
             generic_params,
             visible_protocols,
         ));
+        // `Dyn<Protocol>` is a special type form: its sole argument names a
+        // protocol, not an ordinary value type. Rechecking that argument as a
+        // normal type would emit a contradictory `unknown type` diagnostic
+        // after the protocol-visibility check accepted it.
+        return;
     } else if !hir.has_type_alias(&ty.name) && !known_type_ref(hir, ty, generic_params) {
         diagnostics.push(unknown_type_name(ty));
     }
@@ -230,5 +235,17 @@ mod tests {
         assert_eq!(diagnostic.code, code::UNKNOWN_TYPE);
         assert_eq!(diagnostic.label, "unknown type");
         assert_eq!(diagnostic.fixes[0].kind, "declare_or_import_type");
+    }
+
+    #[test]
+    fn dyn_protocol_argument_is_not_rechecked_as_an_ordinary_type() {
+        let program = rsscript_syntax::parse_source(
+            "dyn-protocol.rss",
+            "protocol Greeter { fn greet(self: read Self) -> String }\nfn f(x: Dyn<Greeter>) -> Unit { return Unit }",
+        );
+        let hir = Hir::from_syntax(&program);
+        let diagnostics =
+            unknown_type_diagnostics(&hir, &program, &HashSet::from(["Greeter".to_string()]));
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
 }

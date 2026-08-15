@@ -538,6 +538,10 @@ mechanical acceptance condition holds.
     second analyzer cache. The complete analyzer and check
     implementation now live in `rsscript-semantics`; `rsscript-compiler` only
     re-exports the frontend entry points for package/AOT compatibility callers.
+    A one-source workspace deliberately selects the same source-local semantic
+    query as the historical single-document API, while still using the session
+    cache and operation boundary; this preserves protocol and generic facts
+    until the package merge query owns them without a compatibility branch.
     Resolve/type and dependency-precise semantic-diagnostic invalidation remain
     open.
   - [ ] **S03.4 — Thread cancellation and deadlines through every query.** Add
@@ -950,6 +954,12 @@ mechanical acceptance condition holds.
       both qualified and receiver `String.to_uppercase` calls. Typed/generic
       type signatures and async builtin contracts remain fail-closed follow-up
       work; the resolved parameter effect sequence is verifier-checked now.
+    - [x] **M03.4c — Fail closed for unmodelled dispatch metadata.** Generic
+      JSON decode, argument capture, channel/cancellation builtins, and dynamic
+      protocol dispatch now reject direct MIR lowering rather than erasing
+      their typed or scheduler contract into v1 bytecode. The explicit
+      migration-only executable-IR bridge remains responsible for those forms
+      until MIR introduces typed instantiation and protocol-dispatch operands.
 - [ ] **M04 — Lower checked HIR to MIR exactly once.** Backend code cannot
   inspect syntax AST or reconstruct semantic facts. MIR verification rejects
   unresolved calls, invalid ownership state, incomplete cleanup, and malformed

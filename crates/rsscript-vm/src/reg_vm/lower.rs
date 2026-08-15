@@ -1169,6 +1169,42 @@ impl RegLowerer<'_> {
         let dst = self.temp();
         match callee {
             Callee::Name(name) => {
+                // Namespace isolation can canonicalize an imported intrinsic
+                // as one dotted name instead of a `Callee::Qualified` node.
+                // Resolve that representation through the same generated
+                // catalog before treating it as a host/native function. In
+                // particular, channel operations are VM intrinsics, never
+                // implicit Provider calls.
+                let named_intrinsic = type_root_name(name)
+                    .rsplit_once('.')
+                    .and_then(|(namespace, method)| qualified_intrinsic(namespace, method));
+                if let Some(intrinsic) = named_intrinsic {
+                    match intrinsic {
+                        RegIntrinsic::JsonDecode | RegIntrinsic::JsonDecodeText => {
+                            let type_arg = type_arg_names(name)
+                                .and_then(|args| args.first().copied())
+                                .ok_or_else(|| {
+                                    EvalError::Runtime(format!(
+                                        "reg VM {name} requires a concrete type argument."
+                                    ))
+                                })?;
+                            self.emit(RegInstr::CallTypedIntrinsic {
+                                dst,
+                                intrinsic,
+                                type_arg: type_root_name(type_arg).to_string(),
+                                args: arg_regs,
+                            });
+                        }
+                        _ => {
+                            self.emit(RegInstr::CallIntrinsic {
+                                dst,
+                                intrinsic,
+                                args: arg_regs,
+                            });
+                        }
+                    }
+                    return Ok(dst);
+                }
                 // A bare name that resolves to a LOCAL BINDING (and is not a
                 // known free function) is a first-class closure value being
                 // called: `let f = r.fxn; f(7)`. Calling it dispatches through
