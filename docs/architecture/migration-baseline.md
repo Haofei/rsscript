@@ -97,6 +97,7 @@ The checklist is also machine-readable through the repository tool:
 cargo run -p rsscript-xtask -- migration-status --open
 cargo run -p rsscript-xtask -- migration-status --require S02 --require G07
 cargo run -p rsscript-xtask -- migration-next
+cargo run -p rsscript-xtask -- migration-verify S05.1
 ```
 
 The first form produces the remaining work in document order (or use `--json`
@@ -112,6 +113,14 @@ only entries whose declared prerequisites are checked, and prints the focused
 verification commands for each ready slice. This keeps the full checklist as
 the single source of truth while making the next independently mergeable work
 visible without manually re-sorting every open parent milestone.
+
+`migration-verify ITEM` runs the curated Cargo acceptance commands for one
+ready frontier item. It rejects blocked, unknown, and completed items, and it
+cannot change checklist state; a task is still checked only after its stated
+mechanical acceptance condition has been met. Add `--dry-run` to inspect the
+exact commands without executing them. The queue permits only `cargo test` and
+`cargo run` commands, so its declarative metadata cannot turn this helper into
+an arbitrary shell executor.
 
 ### 0. Freeze and migration guardrails
 

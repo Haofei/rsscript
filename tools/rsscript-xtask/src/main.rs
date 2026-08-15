@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 use std::time::Instant;
 
 use rsscript_provider_api::CancellationToken;
@@ -131,6 +132,12 @@ struct MigrationStatusArguments {
     required_items: Vec<String>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct MigrationVerifyArguments {
+    item_id: String,
+    dry_run: bool,
+}
+
 #[derive(Debug, Serialize, PartialEq, Eq)]
 struct MigrationStatus {
     schema: &'static str,
@@ -199,11 +206,84 @@ fn main() -> Result<(), Box<dyn Error>> {
         Some("migration-status") => run_migration_status(parse_migration_status_arguments(arguments)?),
         Some("migration-next") => run_migration_next(),
         Some("migration-next-json") => run_migration_next_json(),
+        Some("migration-verify") => run_migration_verify(parse_migration_verify_arguments(arguments)?),
         _ => Err(
-            "usage:\n  cargo run -p rsscript-xtask --release -- core-metrics [--iterations N] [--output FILE] [--check SLO]\n  cargo run -p rsscript-xtask -- migration-status [--json] [--open] [--require ITEM]\n  cargo run -p rsscript-xtask -- migration-next\n  cargo run -p rsscript-xtask -- migration-next-json"
+            "usage:\n  cargo run -p rsscript-xtask --release -- core-metrics [--iterations N] [--output FILE] [--check SLO]\n  cargo run -p rsscript-xtask -- migration-status [--json] [--open] [--require ITEM]\n  cargo run -p rsscript-xtask -- migration-next\n  cargo run -p rsscript-xtask -- migration-next-json\n  cargo run -p rsscript-xtask -- migration-verify ITEM [--dry-run]"
                 .into(),
         ),
     }
+}
+
+/// Executes the curated acceptance commands for one ready migration slice.
+///
+/// The queue remains deliberately declarative: this command cannot mark an
+/// item complete or edit the checklist. It only removes the repeated manual
+/// work of finding the exact focused test set, and fails before running when a
+/// prerequisite is still open.
+fn run_migration_verify(arguments: MigrationVerifyArguments) -> Result<(), Box<dyn Error>> {
+    let queue = migration_ready_queue()?;
+    let item = queue
+        .ready
+        .iter()
+        .find(|item| item.id == arguments.item_id)
+        .ok_or_else(|| {
+            if let Some(blocked) = queue
+                .blocked
+                .iter()
+                .find(|item| item.id == arguments.item_id)
+            {
+                format!(
+                    "migration item `{}` is blocked by {}; run `migration-next` for the ready frontier",
+                    arguments.item_id,
+                    blocked.blocked_by.join(", ")
+                )
+            } else {
+                format!(
+                    "migration item `{}` is not a ready queued item; run `migration-next` for the ready frontier",
+                    arguments.item_id
+                )
+            }
+        })?;
+
+    println!(
+        "Migration verification: {} — {} ({} command{})",
+        item.id,
+        item.title,
+        item.verification.len(),
+        if item.verification.len() == 1 {
+            ""
+        } else {
+            "s"
+        }
+    );
+    for command in &item.verification {
+        let cargo_arguments = parse_verification_command(command)?;
+        if arguments.dry_run {
+            println!("[dry-run] {command}");
+            continue;
+        }
+        println!("[verify] {command}");
+        let status = Command::new("cargo")
+            .args(&cargo_arguments)
+            .current_dir(workspace_root())
+            .status()?;
+        if !status.success() {
+            return Err(format!(
+                "migration verification for `{}` failed: `{command}` exited with {status}",
+                item.id
+            )
+            .into());
+        }
+    }
+    if arguments.dry_run {
+        println!("Dry run complete; no verification commands were executed.");
+    } else {
+        println!(
+            "Migration verification passed for `{}`. Update the checklist only when the item’s mechanical acceptance condition is also satisfied.",
+            item.id
+        );
+    }
+    Ok(())
 }
 
 fn run_migration_next() -> Result<(), Box<dyn Error>> {
@@ -281,6 +361,9 @@ fn migration_ready_queue() -> Result<MigrationReadyQueue, Box<dyn Error>> {
             )
             .into());
         }
+        for command in &task.verification {
+            parse_verification_command(command)?;
+        }
         let mut blocked_by = Vec::new();
         for dependency in task.depends_on {
             let dependency_item = by_id.get(dependency.as_str()).ok_or_else(|| {
@@ -327,6 +410,45 @@ fn migration_ready_queue() -> Result<MigrationReadyQueue, Box<dyn Error>> {
     })
 }
 
+/// The frontier intentionally stores only focused Cargo test/run commands.
+/// Keeping this parser narrow prevents a JSON task entry from silently
+/// becoming an arbitrary shell program and makes the reported command exactly
+/// the command that is executed by `migration-verify`.
+fn parse_verification_command(command: &str) -> Result<Vec<String>, Box<dyn Error>> {
+    let arguments = command
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let Some((program, rest)) = arguments.split_first() else {
+        return Err("migration verification command cannot be empty".into());
+    };
+    if program != "cargo" {
+        return Err(format!(
+            "migration verification command must start with `cargo`, found `{program}`"
+        )
+        .into());
+    }
+    let Some(subcommand) = rest.first() else {
+        return Err("migration verification command must include a Cargo subcommand".into());
+    };
+    if !matches!(subcommand.as_str(), "test" | "run") {
+        return Err(format!(
+            "migration verification command must use `cargo test` or `cargo run`, found `cargo {subcommand}`"
+        )
+        .into());
+    }
+    if arguments.iter().any(|argument| {
+        argument
+            .contains(|character: char| matches!(character, ';' | '|' | '&' | '`' | '\n' | '\r'))
+    }) {
+        return Err(format!(
+            "migration verification command contains unsupported shell syntax: `{command}`"
+        )
+        .into());
+    }
+    Ok(rest.to_vec())
+}
+
 fn parse_migration_status_arguments(
     mut arguments: impl Iterator<Item = String>,
 ) -> Result<MigrationStatusArguments, Box<dyn Error>> {
@@ -348,6 +470,22 @@ fn parse_migration_status_arguments(
         }
     }
     Ok(parsed)
+}
+
+fn parse_migration_verify_arguments(
+    mut arguments: impl Iterator<Item = String>,
+) -> Result<MigrationVerifyArguments, Box<dyn Error>> {
+    let item_id = arguments
+        .next()
+        .ok_or("migration-verify requires a migration item ID")?;
+    let mut dry_run = false;
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--dry-run" => dry_run = true,
+            _ => return Err(format!("unknown migration-verify argument: {argument}").into()),
+        }
+    }
+    Ok(MigrationVerifyArguments { item_id, dry_run })
 }
 
 fn run_migration_status(arguments: MigrationStatusArguments) -> Result<(), Box<dyn Error>> {
@@ -859,7 +997,7 @@ mod tests {
     fn published_migration_frontier_is_fail_closed_and_prioritized() {
         let queue = migration_ready_queue().expect("published frontier must be valid");
         assert_eq!(queue.schema, MIGRATION_QUEUE_SCHEMA);
-        assert!(queue.ready.iter().any(|item| item.id == "S03.3"));
+        assert!(queue.ready.iter().any(|item| item.id == "S05.1"));
         assert!(
             queue
                 .ready
@@ -867,6 +1005,33 @@ mod tests {
                 .all(|items| items[0].priority <= items[1].priority)
         );
         assert!(queue.ready.iter().all(|item| !item.verification.is_empty()));
+    }
+
+    #[test]
+    fn migration_verify_arguments_require_one_item_id() {
+        assert_eq!(
+            parse_migration_verify_arguments(["S05.1".into(), "--dry-run".into()].into_iter())
+                .expect("valid migration verify invocation"),
+            MigrationVerifyArguments {
+                item_id: "S05.1".into(),
+                dry_run: true,
+            }
+        );
+        let error = parse_migration_verify_arguments(std::iter::empty())
+            .expect_err("an item ID is required");
+        assert!(error.to_string().contains("requires a migration item ID"));
+    }
+
+    #[test]
+    fn migration_verification_commands_are_narrow_cargo_invocations() {
+        assert_eq!(
+            parse_verification_command("cargo test -p rsscript-sdk --locked")
+                .expect("Cargo test command"),
+            vec!["test", "-p", "rsscript-sdk", "--locked"]
+        );
+        for command in ["", "echo test", "cargo clean", "cargo test; rm -rf test"] {
+            assert!(parse_verification_command(command).is_err(), "{command}");
+        }
     }
 
     #[test]
