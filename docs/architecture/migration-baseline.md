@@ -2461,10 +2461,17 @@ an arbitrary shell executor.
   numbered ADR. The checked-in template requires problem, non-goals,
   compatibility, migration, verifier/security impact, and Provider/backend
   impact; ADR 0001 records the initial typed Provider wire-value decision.
-- [ ] **E05 — Add opt-in deterministic Provider record/replay.** This remains P2
-  until Core boundaries are stable and must define replayability, normalization,
-  redaction, external-state dependence, and persistence rules without claiming
-  a security proof.
+- [x] **E05 — Add opt-in deterministic Provider record/replay.** The
+  `rsscript-provider-api` now supplies explicit synchronous and asynchronous
+  canonical-wire wrappers. Their in-memory tape records the external symbol,
+  semantic signature hash, exact normalized `WireValue` request, and structured
+  result; replay fails closed on order, symbol/signature, or request drift and
+  never falls back to the real Provider. A usable contract must explicitly
+  declare deterministic replayability, canonical wire normalization, no
+  redaction, no external-state dependency, and in-memory-only persistence.
+  Tapes deliberately have no serialization API: hosts that require persistence
+  or redaction must own and audit an additional transport. This is regression
+  and diagnostic evidence only, not a security or authorization proof.
 
 ### Explicitly deferred
 

@@ -33,10 +33,11 @@ called until this preflight succeeds.
 2. Build one `ProviderFunctionDescriptor` per symbol. Fill every behavioral
    field truthfully; `MayBlock` work must not be described as non-blocking, and
    cancellation/cleanup promises are part of the provider contract.
-3. Return a `BTreeMap<ExternalSymbol, ProviderFunction<NativeInterpreterFn>>`
-   for synchronous entries or `ProviderFunction<AsyncInterpreterFn>` for
+3. Return a `BTreeMap<ExternalSymbol, ProviderFunction<WireInterpreterFn>>`
+   for synchronous entries or `ProviderFunction<AsyncWireInterpreterFn>` for
    asynchronous entries, containing exactly the declared symbols and the same
-   semantic signatures.
+   semantic signatures. `NativeInterpreterFn` and `AsyncInterpreterFn` exist
+   only in the explicit `compatibility` adapter for legacy VM/native callers.
 4. Register descriptor and implementations at the host composition root.
 5. Call `Runtime::link`, then execute the resulting `LinkedArtifact` with an
    `ExecutionRequest`.
@@ -61,10 +62,10 @@ The descriptor fields are:
 | `error_mapping` | Versioned structured host-to-RSScript error mapping |
 
 Provider callables return `ProviderError { code, message, retryable, details }`.
-Synchronous functions may use `NativeInterpreterFn::new_contextual` to receive
-a borrowed `ProviderCallContext`. Asynchronous functions use
-`AsyncInterpreterFn::new` and receive an owned `AsyncProviderCallContext` that
-is safe to retain across suspension. Both contexts carry the monotonic
+Synchronous functions use `WireInterpreterFn::new_contextual` to receive a
+borrowed `ProviderCallContext`; asynchronous functions use
+`AsyncWireInterpreterFn::new` and receive an owned `AsyncProviderCallContext`
+that is safe to retain across suspension. Both contexts carry the monotonic
 deadline, cancellation token, call id, remaining byte/output budgets, host-call context,
 trace sink, and VM-owned resource registry. Providers should check cancellation
 around potentially blocking or long-running work; the runtime checks it before
@@ -95,6 +96,28 @@ Provider-specific and are intentionally excluded.
 Use `rsscript-provider-api` for the safe value and descriptor types. Dynamic
 library or native-plugin ABI concerns belong in a separate adapter and must not
 leak into the provider contract.
+
+## Deterministic record/replay
+
+`replayable_wire_callable` and `replayable_async_wire_callable` are opt-in
+test/debug wrappers for a Provider explicitly declared as deterministic. A
+recorded tape checks the external symbol, semantic signature hash, and exact
+canonical `WireValue` request sequence; replay never falls back to the real
+Provider after a mismatch.
+
+The reference tape is deliberately **in-memory only** and has no serialization
+API. It accepts only the strict contract:
+
+- deterministic replayability;
+- canonical wire-value normalization;
+- no value redaction (metadata-only recordings cannot be replayed);
+- no declared external-state dependency; and
+- in-memory retention.
+
+Hosts that need persistence, redaction, or a model of external state must build
+and audit an explicit transport on top of tape entries. Record/replay is useful
+for deterministic regression tests and diagnostics; it is neither an
+authorization decision nor a security proof.
 
 ## Conformance checklist
 

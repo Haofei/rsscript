@@ -398,8 +398,11 @@ pub mod provider_api {
         FunctionSignature, HostCallContext, ParameterSignature, ProviderCallContext,
         ProviderCallMode, ProviderDescriptor, ProviderError, ProviderErrorCode,
         ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor, ProviderLoadError,
-        ProviderResource, RUNTIME_ABI_VERSION, ResourceCleanupContract, ResourceHandle,
-        WireInterpreterFn, WireProviderFuture, WireValue,
+        ProviderReplayContract, ProviderReplayEntry, ProviderReplayMode,
+        ProviderReplayNormalization, ProviderReplayPersistence, ProviderReplayRedaction,
+        ProviderReplayTape, ProviderReplayability, ProviderResource, RUNTIME_ABI_VERSION,
+        ResourceCleanupContract, ResourceHandle, WireInterpreterFn, WireProviderFuture, WireValue,
+        replayable_async_wire_callable, replayable_wire_callable,
     };
 }
 

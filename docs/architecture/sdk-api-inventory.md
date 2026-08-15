@@ -58,7 +58,10 @@ snapshot path during migration.
   path (`List<T>`, tuples, `Option<T>`, and `Result<T, E>`), registration
   errors, and typed execution context contracts. This permits a Provider author
   to construct and register a complete descriptor solely through the reviewed
-  SDK façade.
+  SDK façade. Opt-in replay contracts, tapes, entries, modes, and synchronous/
+  asynchronous wire-callable wrappers provide in-memory deterministic
+  test/diagnostic replay only; they neither persist values nor establish an
+  authorization or security decision.
   Legacy `NativeInterpreterFn`/`NativeValue` are not re-exported from this
   reviewed façade; compatibility adapters must opt into the SDK
   `compatibility` surface or depend directly on the low-level Provider crate.

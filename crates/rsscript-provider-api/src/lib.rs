@@ -721,6 +721,296 @@ impl From<WireHostFn> for WireInterpreterFn {
     }
 }
 
+/// Whether a Provider operation may be replayed from a captured result.
+///
+/// Record/replay is opt-in diagnostic and test infrastructure. It neither
+/// grants a Provider authority nor proves that an execution is safe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderReplayability {
+    Never,
+    Deterministic,
+}
+
+/// The only request/response normalization accepted by the reference tape.
+///
+/// `WireValue` already carries canonical numeric type identity, so this avoids
+/// reintroducing JSON or stringly typed normalizers into the replay contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderReplayNormalization {
+    CanonicalWireValueV1,
+}
+
+/// Controls whether a tape may retain call values.
+///
+/// Metadata-only recording intentionally cannot be replayed: a replayable
+/// tape must have exact request and result values to fail closed on drift.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderReplayRedaction {
+    None,
+    MetadataOnly,
+}
+
+/// Declares whether a call result depends on state outside its wire request.
+///
+/// The reference replayer only accepts `None`. Hosts may still record
+/// metadata for a declared dependency, but must provide their own explicit
+/// environment model before treating it as reproducible.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum ProviderExternalState {
+    None,
+    Declared { description: String },
+}
+
+/// Retention rule for replay evidence.
+///
+/// The reference implementation stores values in memory only. It does not
+/// serialize or persist a tape so that a caller cannot accidentally turn
+/// potentially sensitive Provider inputs into an on-disk artifact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderReplayPersistence {
+    InMemoryOnly,
+    HostManaged,
+}
+
+/// Explicit contract required before a canonical wire Provider can be wrapped
+/// for deterministic record/replay.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderReplayContract {
+    pub replayability: ProviderReplayability,
+    pub normalization: ProviderReplayNormalization,
+    pub redaction: ProviderReplayRedaction,
+    pub external_state: ProviderExternalState,
+    pub persistence: ProviderReplayPersistence,
+}
+
+impl ProviderReplayContract {
+    /// The strict, usable reference contract: deterministic calls with no
+    /// external state, canonical values, and no persistence.
+    pub const fn deterministic_in_memory() -> Self {
+        Self {
+            replayability: ProviderReplayability::Deterministic,
+            normalization: ProviderReplayNormalization::CanonicalWireValueV1,
+            redaction: ProviderReplayRedaction::None,
+            external_state: ProviderExternalState::None,
+            persistence: ProviderReplayPersistence::InMemoryOnly,
+        }
+    }
+
+    fn validate_for_value_replay(&self) -> Result<(), ProviderError> {
+        if self.replayability != ProviderReplayability::Deterministic {
+            return Err(ProviderError::invalid_argument(
+                "Provider replay requires an explicit deterministic contract",
+            ));
+        }
+        if self.redaction != ProviderReplayRedaction::None {
+            return Err(ProviderError::invalid_argument(
+                "metadata-redacted Provider recordings cannot be replayed",
+            ));
+        }
+        if self.external_state != ProviderExternalState::None {
+            return Err(ProviderError::invalid_argument(
+                "Provider calls with declared external state cannot use the reference replayer",
+            ));
+        }
+        if self.persistence != ProviderReplayPersistence::InMemoryOnly {
+            return Err(ProviderError::invalid_argument(
+                "the reference Provider replay tape is in-memory only",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Select whether a replay wrapper invokes a real Provider or consumes an
+/// already-recorded canonical call sequence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderReplayMode {
+    Record,
+    Replay,
+}
+
+/// One canonical Provider request/result pair captured by an in-memory tape.
+///
+/// Tapes intentionally have no `Serialize` implementation. A host that needs
+/// persistence must build a separately reviewed, redacted transport instead
+/// of accidentally serializing raw Provider arguments and results.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderReplayEntry {
+    pub sequence: u64,
+    pub symbol: ExternalSymbol,
+    pub signature_hash: SignatureHash,
+    pub request: Vec<WireValue>,
+    pub result: Result<WireValue, ProviderError>,
+}
+
+#[derive(Default)]
+struct ProviderReplayTapeState {
+    entries: Vec<ProviderReplayEntry>,
+    replay_cursor: usize,
+}
+
+/// Cloneable, in-memory-only canonical Provider replay tape.
+#[derive(Clone, Default)]
+pub struct ProviderReplayTape {
+    inner: Arc<Mutex<ProviderReplayTapeState>>,
+}
+
+impl ProviderReplayTape {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Snapshot entries for assertions or an explicitly host-owned export.
+    pub fn entries(&self) -> Result<Vec<ProviderReplayEntry>, ProviderError> {
+        self.with_state(|state| Ok(state.entries.clone()))
+    }
+
+    /// Start replaying this tape from its first call. Recording never advances
+    /// the cursor, so the same tape can be recorded then replayed directly.
+    pub fn rewind(&self) -> Result<(), ProviderError> {
+        self.with_state(|state| {
+            state.replay_cursor = 0;
+            Ok(())
+        })
+    }
+
+    fn record(
+        &self,
+        symbol: ExternalSymbol,
+        signature_hash: SignatureHash,
+        request: Vec<WireValue>,
+        result: Result<WireValue, ProviderError>,
+    ) -> Result<(), ProviderError> {
+        self.with_state(|state| {
+            let sequence = u64::try_from(state.entries.len()).map_err(|_| {
+                ProviderError::resource_exhausted("Provider replay tape exceeds sequence range")
+            })?;
+            state.entries.push(ProviderReplayEntry {
+                sequence,
+                symbol,
+                signature_hash,
+                request,
+                result,
+            });
+            Ok(())
+        })
+    }
+
+    fn replay_next(
+        &self,
+        symbol: &ExternalSymbol,
+        signature_hash: SignatureHash,
+        request: &[WireValue],
+    ) -> Result<Result<WireValue, ProviderError>, ProviderError> {
+        self.with_state(|state| {
+            let Some(entry) = state.entries.get(state.replay_cursor) else {
+                return Err(ProviderError::unavailable(
+                    "Provider replay tape has no remaining recorded call",
+                ));
+            };
+            if entry.symbol != *symbol || entry.signature_hash != signature_hash {
+                return Err(ProviderError::invalid_argument(
+                    "Provider replay call does not match the recorded symbol or signature",
+                ));
+            }
+            if entry.request != request {
+                return Err(ProviderError::invalid_argument(
+                    "Provider replay call arguments do not match the recorded canonical request",
+                ));
+            }
+            state.replay_cursor = state.replay_cursor.saturating_add(1);
+            Ok(entry.result.clone())
+        })
+    }
+
+    fn with_state<T>(
+        &self,
+        action: impl FnOnce(&mut ProviderReplayTapeState) -> Result<T, ProviderError>,
+    ) -> Result<T, ProviderError> {
+        let mut state = self
+            .inner
+            .lock()
+            .map_err(|_| ProviderError::internal("Provider replay tape lock poisoned"))?;
+        action(&mut state)
+    }
+}
+
+/// Wrap a canonical synchronous Provider callable with explicit deterministic
+/// record or replay behavior.
+///
+/// The wrapper records or checks the linked external symbol, semantic
+/// signature hash, and exact canonical arguments. It never falls back to the
+/// real Provider after a replay mismatch. Use only around a descriptor that
+/// will subsequently be registered through the normal fail-closed registry.
+pub fn replayable_wire_callable(
+    descriptor: &ProviderFunctionDescriptor,
+    callable: WireInterpreterFn,
+    tape: ProviderReplayTape,
+    mode: ProviderReplayMode,
+    contract: ProviderReplayContract,
+) -> Result<WireInterpreterFn, ProviderError> {
+    contract.validate_for_value_replay()?;
+    let symbol = descriptor.symbol.clone();
+    let signature_hash = descriptor.signature.hash();
+    Ok(match mode {
+        ProviderReplayMode::Record => WireInterpreterFn::new_contextual(move |context, request| {
+            let result = callable.call_with_context(context, request.clone());
+            tape.record(
+                symbol.clone(),
+                signature_hash.clone(),
+                request,
+                result.clone(),
+            )?;
+            result
+        }),
+        ProviderReplayMode::Replay => WireInterpreterFn::new_contextual(move |_, request| {
+            tape.replay_next(&symbol, signature_hash.clone(), &request)?
+        }),
+    })
+}
+
+/// Wrap a canonical asynchronous Provider callable with the same strict
+/// in-memory record/replay contract as [`replayable_wire_callable`].
+///
+/// Replay does not invoke the original future and never falls back after a
+/// mismatch. Runtime cancellation and deadline observation remain owned by
+/// the normal asynchronous Provider dispatcher.
+pub fn replayable_async_wire_callable(
+    descriptor: &ProviderFunctionDescriptor,
+    callable: AsyncWireInterpreterFn,
+    tape: ProviderReplayTape,
+    mode: ProviderReplayMode,
+    contract: ProviderReplayContract,
+) -> Result<AsyncWireInterpreterFn, ProviderError> {
+    contract.validate_for_value_replay()?;
+    let symbol = descriptor.symbol.clone();
+    let signature_hash = descriptor.signature.hash();
+    Ok(match mode {
+        ProviderReplayMode::Record => AsyncWireInterpreterFn::new(move |context, request| {
+            let future = callable.call(context, request.clone());
+            let tape = tape.clone();
+            let symbol = symbol.clone();
+            let signature_hash = signature_hash.clone();
+            async move {
+                let result = future.await;
+                tape.record(symbol, signature_hash, request, result.clone())?;
+                result
+            }
+        }),
+        ProviderReplayMode::Replay => AsyncWireInterpreterFn::new(move |_, request| {
+            let tape = tape.clone();
+            let symbol = symbol.clone();
+            let signature_hash = signature_hash.clone();
+            async move { tape.replay_next(&symbol, signature_hash, &request)? }
+        }),
+    })
+}
+
 /// Cloneable provider callable used by the runtime registry.
 #[cfg(feature = "compatibility")]
 type ContextualProviderFn = dyn for<'a> Fn(&mut ProviderCallContext<'a>, Vec<NativeValue>) -> Result<NativeValue, ProviderError>
@@ -1268,6 +1558,7 @@ mod tests {
     use proptest::prelude::*;
     use rsscript_abi_model::{DataEffect, ParameterSignature};
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::task::{Context, Poll, Waker};
 
     fn signature(effect: DataEffect) -> FunctionSignature {
         FunctionSignature {
@@ -1302,6 +1593,28 @@ mod tests {
                 error_mapping: ProviderErrorMapping::StructuredV1,
             }],
         }
+    }
+
+    fn async_context() -> AsyncProviderCallContext {
+        AsyncProviderCallContext {
+            cancellation: None,
+            deadline: None,
+            remaining_byte_budget: None,
+            remaining_output_budget: None,
+            call_id: OperationId(0),
+            provider_id: String::new(),
+            provider_version: String::new(),
+            symbol: String::new(),
+            host_context: Arc::new(HostCallContext::default()),
+            trace: None,
+            resources: None,
+        }
+    }
+
+    fn poll_wire_future(future: &mut WireProviderFuture) -> Poll<Result<WireValue, ProviderError>> {
+        let waker = Waker::noop();
+        let mut context = Context::from_waker(waker);
+        future.as_mut().poll(&mut context)
     }
 
     #[test]
@@ -1449,6 +1762,170 @@ mod tests {
             .expect_err("cancelled wire call must not enter Provider code");
         assert_eq!(error.code, ProviderErrorCode::Cancelled);
         assert!(!called.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn deterministic_wire_replay_uses_exact_canonical_calls_without_reinvoking_provider() {
+        let symbol = ExternalSymbol::new("host.test.identity").unwrap();
+        let descriptor = descriptor(&symbol, signature(DataEffect::Read));
+        let function = descriptor.functions.first().expect("one function");
+        let calls = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let calls_by_provider = Arc::clone(&calls);
+        let tape = ProviderReplayTape::new();
+        let recorded = replayable_wire_callable(
+            function,
+            WireInterpreterFn::new(move |values| {
+                calls_by_provider.fetch_add(1, Ordering::SeqCst);
+                Ok(values.into_iter().next().expect("one argument"))
+            }),
+            tape.clone(),
+            ProviderReplayMode::Record,
+            ProviderReplayContract::deterministic_in_memory(),
+        )
+        .expect("deterministic contract is accepted");
+        let request = vec![WireValue::Int { value: 41 }];
+        assert_eq!(
+            recorded
+                .call_with_context(&mut ProviderCallContext::default(), request.clone())
+                .unwrap(),
+            WireValue::Int { value: 41 }
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(tape.entries().unwrap().len(), 1);
+
+        let replayed = replayable_wire_callable(
+            function,
+            WireInterpreterFn::new(|_| -> Result<WireValue, ProviderError> {
+                panic!("a replayed call must not invoke the real Provider")
+            }),
+            tape,
+            ProviderReplayMode::Replay,
+            ProviderReplayContract::deterministic_in_memory(),
+        )
+        .expect("replay contract is accepted");
+        assert_eq!(
+            replayed
+                .call_with_context(&mut ProviderCallContext::default(), request)
+                .unwrap(),
+            WireValue::Int { value: 41 }
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn deterministic_wire_replay_fails_closed_for_drift_and_non_replayable_contracts() {
+        let symbol = ExternalSymbol::new("host.test.identity").unwrap();
+        let descriptor = descriptor(&symbol, signature(DataEffect::Read));
+        let function = descriptor.functions.first().expect("one function");
+        let tape = ProviderReplayTape::new();
+        let recorded = replayable_wire_callable(
+            function,
+            WireInterpreterFn::new(|values| {
+                Ok(values.into_iter().next().unwrap_or(WireValue::Unit))
+            }),
+            tape.clone(),
+            ProviderReplayMode::Record,
+            ProviderReplayContract::deterministic_in_memory(),
+        )
+        .unwrap();
+        recorded
+            .call_with_context(
+                &mut ProviderCallContext::default(),
+                vec![WireValue::Int { value: 7 }],
+            )
+            .unwrap();
+        let replayed = replayable_wire_callable(
+            function,
+            WireInterpreterFn::new(|_| Ok(WireValue::Unit)),
+            tape.clone(),
+            ProviderReplayMode::Replay,
+            ProviderReplayContract::deterministic_in_memory(),
+        )
+        .unwrap();
+        let mismatch = replayed
+            .call_with_context(
+                &mut ProviderCallContext::default(),
+                vec![WireValue::Int { value: 8 }],
+            )
+            .expect_err("argument drift must not fall through to the Provider");
+        assert_eq!(mismatch.code, ProviderErrorCode::InvalidArgument);
+        // A rejected mismatch cannot consume the recorded call.
+        assert_eq!(
+            replayed
+                .call_with_context(
+                    &mut ProviderCallContext::default(),
+                    vec![WireValue::Int { value: 7 }],
+                )
+                .unwrap(),
+            WireValue::Int { value: 7 }
+        );
+
+        let non_replayable = ProviderReplayContract {
+            replayability: ProviderReplayability::Never,
+            ..ProviderReplayContract::deterministic_in_memory()
+        };
+        let error = match replayable_wire_callable(
+            function,
+            WireInterpreterFn::new(|_| Ok(WireValue::Unit)),
+            tape,
+            ProviderReplayMode::Record,
+            non_replayable,
+        ) {
+            Ok(_) => panic!("providers must explicitly opt into deterministic replay"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, ProviderErrorCode::InvalidArgument);
+    }
+
+    #[test]
+    fn deterministic_async_wire_replay_skips_the_real_future() {
+        let symbol = ExternalSymbol::new("host.test.identity").unwrap();
+        let mut descriptor = descriptor(&symbol, signature(DataEffect::Read));
+        descriptor.functions[0].call_mode = ProviderCallMode::Async;
+        descriptor.functions[0].signature.asynchronous = true;
+        let function = descriptor.functions.first().expect("one function");
+        let calls = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let calls_by_provider = Arc::clone(&calls);
+        let tape = ProviderReplayTape::new();
+        let recorded = replayable_async_wire_callable(
+            function,
+            AsyncWireInterpreterFn::new(move |_, values| {
+                let calls = Arc::clone(&calls_by_provider);
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(values.into_iter().next().expect("one argument"))
+                }
+            }),
+            tape.clone(),
+            ProviderReplayMode::Record,
+            ProviderReplayContract::deterministic_in_memory(),
+        )
+        .unwrap();
+        let mut recorded_future =
+            recorded.call(async_context(), vec![WireValue::Int { value: 17 }]);
+        assert_eq!(
+            poll_wire_future(&mut recorded_future),
+            Poll::Ready(Ok(WireValue::Int { value: 17 }))
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        let replayed = replayable_async_wire_callable(
+            function,
+            AsyncWireInterpreterFn::new(|_, _| async move {
+                panic!("a replayed async call must not invoke the real Provider")
+            }),
+            tape,
+            ProviderReplayMode::Replay,
+            ProviderReplayContract::deterministic_in_memory(),
+        )
+        .unwrap();
+        let mut replayed_future =
+            replayed.call(async_context(), vec![WireValue::Int { value: 17 }]);
+        assert_eq!(
+            poll_wire_future(&mut replayed_future),
+            Poll::Ready(Ok(WireValue::Int { value: 17 }))
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]
