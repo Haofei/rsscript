@@ -312,8 +312,8 @@ pub(super) fn review_package_dir_captured_with_features(
     });
 
     Ok(PackageReview {
-        schema: super::types::PACKAGE_REVIEW_SCHEMA.to_string(),
-        producer: super::types::ArtifactProducer::current(),
+        schema: super::PACKAGE_REVIEW_SCHEMA.to_string(),
+        producer: super::ArtifactProducer::current(),
         package: super::package_identity(manifest),
         manifest_path: package.manifest_path.display().to_string(),
         risk,

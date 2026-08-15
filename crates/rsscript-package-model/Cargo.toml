@@ -1,0 +1,22 @@
+[package]
+name = "rsscript-package-model"
+version = "0.1.0"
+edition = "2024"
+description = "Versioned package review and compatibility data models for RSScript"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+rsscript-artifact = { path = "../rsscript-artifact" }
+rsscript-diagnostics = { path = "../rsscript-diagnostics" }
+rsscript-project = { path = "../rsscript-project" }
+rsscript-review-core = { path = "../rsscript-review-core" }
+rsscript-review-source = { path = "../rsscript-review-source" }
+serde = { version = "1", features = ["derive"] }
+
+[build-dependencies]
+rsscript-build-support = { path = "../rsscript-build-support" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+toml = "0.8"

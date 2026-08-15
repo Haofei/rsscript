@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::diagnostic::{Diagnostic, Span};
+use rsscript_diagnostics::{Diagnostic, Span};
 use rsscript_review_source::{ReviewFinding, ReviewMap};
 
 /// Compatibility re-export for legacy package APIs. New review consumers must
@@ -86,7 +86,7 @@ pub struct PackageReview {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct NativePluginBuildDependency {
+pub struct NativePluginBuildDependency {
     pub crate_name: String,
     pub path: String,
     pub cargo_features: Vec<String>,
@@ -167,7 +167,7 @@ pub struct PackageExternalBindingChange {
     pub change: PackageExternalBindingChangeKind,
     pub category: String,
     pub binding_symbol: String,
-    pub risk: crate::package::types::PackageRisk,
+    pub risk: PackageRisk,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -427,7 +427,7 @@ pub struct PackageExternalBinding {
     pub binding_symbol: String,
     pub category: String,
     /// Default risk of `category` from the canonical taxonomy (unknown -> high).
-    pub risk: crate::package::types::PackageRisk,
+    pub risk: PackageRisk,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

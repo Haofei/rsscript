@@ -82,7 +82,7 @@ pub fn diff_package_dirs(old_dir: &Path, new_dir: &Path) -> Result<PackageDiff, 
     }
     for change in &external_binding_changes {
         if change.change == PackageExternalBindingChangeKind::Added
-            && change.risk == crate::package::types::PackageRisk::High
+            && change.risk == rsscript_package_model::PackageRisk::High
         {
             reasons.push(format!(
                 "new high-risk external_binding `{}` via {}",
@@ -123,13 +123,13 @@ pub fn diff_package_dirs(old_dir: &Path, new_dir: &Path) -> Result<PackageDiff, 
 /// Distinct external_bindings (by category + binding symbol) added or removed between
 /// two package versions, high-risk first.
 fn diff_package_external_bindings(
-    old: &[crate::package::types::PackageExternalBinding],
-    new: &[crate::package::types::PackageExternalBinding],
+    old: &[rsscript_package_model::PackageExternalBinding],
+    new: &[rsscript_package_model::PackageExternalBinding],
 ) -> Vec<PackageExternalBindingChange> {
     use std::collections::BTreeMap;
     fn distinct(
-        external_bindings: &[crate::package::types::PackageExternalBinding],
-    ) -> BTreeMap<(String, String), crate::package::types::PackageRisk> {
+        external_bindings: &[rsscript_package_model::PackageExternalBinding],
+    ) -> BTreeMap<(String, String), rsscript_package_model::PackageRisk> {
         let mut map = BTreeMap::new();
         for external_binding in external_bindings {
             map.entry((
@@ -163,11 +163,11 @@ fn diff_package_external_bindings(
             });
         }
     }
-    let rank = |risk: crate::package::types::PackageRisk| match risk {
-        crate::package::types::PackageRisk::High => 0u8,
-        crate::package::types::PackageRisk::Elevated => 1,
-        crate::package::types::PackageRisk::Low => 2,
-        crate::package::types::PackageRisk::Unknown => 3,
+    let rank = |risk: rsscript_package_model::PackageRisk| match risk {
+        rsscript_package_model::PackageRisk::High => 0u8,
+        rsscript_package_model::PackageRisk::Elevated => 1,
+        rsscript_package_model::PackageRisk::Low => 2,
+        rsscript_package_model::PackageRisk::Unknown => 3,
     };
     changes.sort_by(|a, b| {
         rank(a.risk)
@@ -739,8 +739,7 @@ fn manifest_change(
 #[cfg(test)]
 mod external_binding_diff_tests {
     use super::*;
-    use crate::package::types::PackageExternalBinding;
-    use crate::package::types::PackageRisk;
+    use rsscript_package_model::{PackageExternalBinding, PackageRisk};
 
     fn cap(binding: &str, category: &str, risk: PackageRisk) -> PackageExternalBinding {
         PackageExternalBinding {

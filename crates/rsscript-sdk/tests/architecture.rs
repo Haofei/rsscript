@@ -1706,7 +1706,7 @@ fn semantic_diff_is_an_artifact_contract_not_sdk_implementation() {
 fn package_analysis_schema_is_an_artifact_contract_not_compiler_implementation() {
     let root = workspace_root();
     let artifact = read(&root.join("crates/rsscript-artifact/src/lib.rs"));
-    let package_types = read(&root.join("crates/rsscript-compiler/src/package/types.rs"));
+    let package_types = read(&root.join("crates/rsscript-package-model/src/lib.rs"));
 
     for contract_type in [
         "PackageAnalysisV1",
@@ -1760,9 +1760,22 @@ fn package_analysis_schema_is_an_artifact_contract_not_compiler_implementation()
     let review_manifest: toml::Value =
         toml::from_str(&read(&root.join("crates/rsscript-review/Cargo.toml")))
             .expect("review adapter manifest should parse");
+    let review_dependencies = normal_dependency_packages(&review_manifest);
     assert!(
-        normal_dependency_packages(&review_manifest).contains("rsscript-compiler"),
-        "review presentation must consume compiler evidence rather than reimplement analysis"
+        review_dependencies.contains("rsscript-package-model"),
+        "review presentation must consume the compiler-independent package evidence model"
+    );
+    assert!(
+        !review_dependencies.contains("rsscript-compiler"),
+        "review presentation must not pull the compiler compatibility closure"
+    );
+    assert!(
+        root.join("crates/rsscript-package-model/src/lib.rs")
+            .is_file()
+            && !root
+                .join("crates/rsscript-compiler/src/package/types.rs")
+                .exists(),
+        "package review types must be physically owned by rsscript-package-model"
     );
     let compiler_manifest: toml::Value =
         toml::from_str(&read(&root.join("crates/rsscript-compiler/Cargo.toml")))
@@ -1790,7 +1803,7 @@ fn reviewed_sdk_exposes_analysis_through_the_versioned_envelope() {
 fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
     let root = workspace_root();
     let project = read(&root.join("crates/rsscript-project/src/lib.rs"));
-    let package_types = read(&root.join("crates/rsscript-compiler/src/package/types.rs"));
+    let package_types = read(&root.join("crates/rsscript-package-model/src/lib.rs"));
     assert!(
         project.contains("pub struct NativeRustDependency")
             && project.contains("pub struct PackageLoweringInput"),
@@ -5483,7 +5496,7 @@ fn workspace_analysis_does_not_flow_through_optional_review() {
         .next()
         .expect("production authorization source");
     let analysis = read(&root.join("crates/rsscript-compiler/src/package/analysis.rs"));
-    let types = read(&root.join("crates/rsscript-compiler/src/package/types.rs"));
+    let types = read(&root.join("crates/rsscript-package-model/src/lib.rs"));
 
     assert!(authorization.contains("analyze_package_dir_captured"));
     assert!(!authorization.contains("review_package_dir_captured_with_features"));

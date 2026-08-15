@@ -1849,6 +1849,7 @@ dependencies = [
  "rsscript-lowering",
  "rsscript-mir",
  "rsscript-operation",
+ "rsscript-package-model",
  "rsscript-project",
  "rsscript-review-core",
  "rsscript-review-source",
@@ -1930,6 +1931,22 @@ name = "rsscript-operation"
 version = "0.1.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "rsscript-package-model"
+version = "0.1.0"
+dependencies = [
+ "rsscript-artifact",
+ "rsscript-build-support",
+ "rsscript-diagnostics",
+ "rsscript-project",
+ "rsscript-review-core",
+ "rsscript-review-source",
+ "serde",
+ "serde_json",
+ "sha2",
+ "toml",
 ]
 
 [[package]]
@@ -2066,8 +2083,9 @@ dependencies = [
 name = "rsscript-review"
 version = "0.1.0"
 dependencies = [
- "rsscript-compiler",
+ "rsscript-package-model",
  "rsscript-review-core",
+ "rsscript-review-source",
  "serde_json",
  "toml",
 ]

@@ -863,8 +863,11 @@ an arbitrary shell executor.
     boundary. The remaining package-to-IR compiler entry point is also no
     longer a compiler-root export: it is reachable only through the explicit
     `compatibility` namespace.
-    Their implementations and package types still need to move to dedicated
-    project/review/AOT crates before this item can close.
+    The shared legacy package review/check/diff/lock model is now physically
+    owned by `rsscript-package-model`; `rsscript-review` consumes that model
+    and no longer depends on the compiler compatibility closure. Remaining
+    captured package-review execution and its presentation still need to move
+    to dedicated project/review/AOT crates before this item can close.
     - [x] **S05.3a — Extract neutral risk facts and calculation.** The review
       risk lattice and its pure evidence evaluator now live in
       `rsscript-review-core`. Compiler compatibility code collects neutral

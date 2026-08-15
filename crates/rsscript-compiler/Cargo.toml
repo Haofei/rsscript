@@ -21,6 +21,7 @@ rsscript-interface-catalog = { path = "../rsscript-interface-catalog" }
 rsscript-lowering = { path = "../rsscript-lowering", default-features = false, optional = true }
 rsscript-mir = { path = "../rsscript-mir", optional = true }
 rsscript-operation = { path = "../rsscript-operation" }
+rsscript-package-model = { path = "../rsscript-package-model", optional = true }
 rsscript-project = { path = "../rsscript-project", optional = true }
 rsscript-review-core = { path = "../rsscript-review-core", optional = true }
 rsscript-review-source = { path = "../rsscript-review-source", optional = true }
@@ -65,6 +66,7 @@ package = [
     "dep:libc",
     "dep:rustix",
     "dep:rsscript-project",
+    "dep:rsscript-package-model",
     "dep:rsscript-review-core",
     "dep:rsscript-review-source",
     "dep:sha2",

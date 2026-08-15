@@ -50,7 +50,6 @@ mod native;
 mod policy;
 mod review;
 mod source_set;
-mod types;
 
 const PACKAGE_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
 
@@ -75,8 +74,8 @@ pub use metadata::package_lowering_input;
 pub(crate) use native::package_native_plugin_build_dependencies;
 use native::{manifest_native_enabled, manifest_native_unsafe_boundary};
 pub use review::review_package_dir;
+pub use rsscript_package_model::*;
 use source_set::{LoadedPackage, Manifest, ManifestNativeRust, PackageSource};
-pub use types::*;
 
 pub fn package_sources(package_dir: &Path) -> Result<Vec<PackageSourceFile>, String> {
     let package = source_set::load_package(package_dir)?;

@@ -19,6 +19,7 @@ core = [
   "rsscript-lowering",
   "rsscript-mir",
   "rsscript-operation",
+  "rsscript-package-model",
   "rsscript-project",
   "rsscript-review",
   "rsscript-review-core",

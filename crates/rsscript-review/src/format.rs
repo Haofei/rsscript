@@ -1,10 +1,10 @@
-use rsscript_compiler::compatibility::{
+use rsscript_package_model::{
     PackageCheck, PackageDependencyKind, PackageDiff, PackageLock, PackageLockDiff,
     PackageMetadataReport, PackageReview, PackageReviewAwaitBoundary, PackageReviewAwaitSite,
     PackageReviewDependency, PackageReviewExport, PackageTree, PackageTreeNode,
-    format_review_human,
 };
 use rsscript_review_core::PackageRisk;
+use rsscript_review_source::format_review_human;
 
 fn package_risk_label(risk: PackageRisk) -> &'static str {
     match risk {
@@ -218,7 +218,7 @@ pub fn format_package_review_markdown(review: &PackageReview) -> String {
 /// Distinct external_bindings the package requires, ranked high-risk first, so a
 /// reviewer sees the powers (and any unrecognized ones) at a glance.
 fn format_package_review_external_bindings_human(
-    external_bindings: &[rsscript_compiler::compatibility::PackageExternalBinding],
+    external_bindings: &[rsscript_package_model::PackageExternalBinding],
 ) -> String {
     if external_bindings.is_empty() {
         return String::new();
@@ -455,8 +455,8 @@ pub fn format_package_diff_human(diff: &PackageDiff) -> String {
         output.push_str("external_binding changes:\n");
         for change in &diff.external_binding_changes {
             let sign = match change.change {
-                rsscript_compiler::compatibility::PackageExternalBindingChangeKind::Added => "+",
-                rsscript_compiler::compatibility::PackageExternalBindingChangeKind::Removed => "-",
+                rsscript_package_model::PackageExternalBindingChangeKind::Added => "+",
+                rsscript_package_model::PackageExternalBindingChangeKind::Removed => "-",
             };
             let risk = match change.risk {
                 PackageRisk::High => "high",
