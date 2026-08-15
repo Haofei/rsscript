@@ -36,26 +36,6 @@ wire_id!(WireImportId);
 wire_id!(WireRegister);
 wire_id!(WireInstructionOffset);
 
-/// Numeric instruction opcode. Its layout is owned by the one
-/// [`INSTRUCTION_SCHEMA_V2`] table; future codecs encode the tag as this `u8`
-/// rather than a source-language opcode name.
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WireOpcodeV2 {
-    LoadConstant = 1,
-    Move = 2,
-    AddInt = 3,
-    Call = 4,
-    CallExternal = 5,
-    Jump = 6,
-    JumpIfTrue = 7,
-    Return = 8,
-    ResourceDrop = 9,
-    Spawn = 10,
-    Await = 11,
-    Cancel = 12,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperandKindV2 {
     Register,
@@ -94,70 +74,48 @@ const REGISTER_TARGET: &[OperandKindV2] =
 const TARGET: &[OperandKindV2] = &[OperandKindV2::InstructionTarget];
 const REGISTER: &[OperandKindV2] = &[OperandKindV2::Register];
 
-/// Single source of truth for v2 opcode tags, operand arity, operand identity
-/// classes, and generated reference documentation.
-pub const INSTRUCTION_SCHEMA_V2: &[InstructionSchemaV2] = &[
-    InstructionSchemaV2 {
-        opcode: WireOpcodeV2::LoadConstant,
-        name: "load_constant",
-        operands: REGISTER_CONSTANT,
-    },
-    InstructionSchemaV2 {
-        opcode: WireOpcodeV2::Move,
-        name: "move",
-        operands: REGISTER_REGISTER,
-    },
-    InstructionSchemaV2 {
-        opcode: WireOpcodeV2::AddInt,
-        name: "add_int",
-        operands: THREE_REGISTERS,
-    },
-    InstructionSchemaV2 {
-        opcode: WireOpcodeV2::Call,
-        name: "call",
-        operands: REGISTER_FUNCTION_CONSTANT,
-    },
-    InstructionSchemaV2 {
-        opcode: WireOpcodeV2::CallExternal,
-        name: "call_external",
-        operands: REGISTER_IMPORT_CONSTANT,
-    },
-    InstructionSchemaV2 {
-        opcode: WireOpcodeV2::Jump,
-        name: "jump",
-        operands: TARGET,
-    },
-    InstructionSchemaV2 {
-        opcode: WireOpcodeV2::JumpIfTrue,
-        name: "jump_if_true",
-        operands: REGISTER_TARGET,
-    },
-    InstructionSchemaV2 {
-        opcode: WireOpcodeV2::Return,
-        name: "return",
-        operands: REGISTER,
-    },
-    InstructionSchemaV2 {
-        opcode: WireOpcodeV2::ResourceDrop,
-        name: "resource_drop",
-        operands: REGISTER,
-    },
-    InstructionSchemaV2 {
-        opcode: WireOpcodeV2::Spawn,
-        name: "spawn",
-        operands: REGISTER_FUNCTION_CONSTANT,
-    },
-    InstructionSchemaV2 {
-        opcode: WireOpcodeV2::Await,
-        name: "await",
-        operands: REGISTER_REGISTER,
-    },
-    InstructionSchemaV2 {
-        opcode: WireOpcodeV2::Cancel,
-        name: "cancel",
-        operands: REGISTER,
-    },
-];
+// The ISA declaration intentionally generates both the public numeric enum and
+// the verifier/codec schema. Adding an opcode anywhere else is impossible:
+// raw decode, operand arity, operand identity checks, and generated reference
+// documentation all consume the one expanded table below.
+macro_rules! define_instruction_schema_v2 {
+    ($( $variant:ident = $tag:literal => $name:literal : $operands:expr ),+ $(,)?) => {
+        /// Numeric instruction opcode. Its layout is owned by the one
+        /// [`INSTRUCTION_SCHEMA_V2`] table; future codecs encode the tag as
+        /// this `u8` rather than a source-language opcode name.
+        #[repr(u8)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum WireOpcodeV2 {
+            $( $variant = $tag, )+
+        }
+
+        /// Single source of truth for v2 opcode tags, operand arity, operand
+        /// identity classes, encoder/decode lookup, and generated reference
+        /// documentation.
+        pub const INSTRUCTION_SCHEMA_V2: &[InstructionSchemaV2] = &[
+            $( InstructionSchemaV2 {
+                opcode: WireOpcodeV2::$variant,
+                name: $name,
+                operands: $operands,
+            }, )+
+        ];
+    };
+}
+
+define_instruction_schema_v2!(
+    LoadConstant = 1 => "load_constant": REGISTER_CONSTANT,
+    Move = 2 => "move": REGISTER_REGISTER,
+    AddInt = 3 => "add_int": THREE_REGISTERS,
+    Call = 4 => "call": REGISTER_FUNCTION_CONSTANT,
+    CallExternal = 5 => "call_external": REGISTER_IMPORT_CONSTANT,
+    Jump = 6 => "jump": TARGET,
+    JumpIfTrue = 7 => "jump_if_true": REGISTER_TARGET,
+    Return = 8 => "return": REGISTER,
+    ResourceDrop = 9 => "resource_drop": REGISTER,
+    Spawn = 10 => "spawn": REGISTER_FUNCTION_CONSTANT,
+    Await = 11 => "await": REGISTER_REGISTER,
+    Cancel = 12 => "cancel": REGISTER,
+);
 
 /// Render the checked-in opcode schema for Artifact/ISA documentation. Keeping
 /// this derived from the same table used by codec and validation prevents prose

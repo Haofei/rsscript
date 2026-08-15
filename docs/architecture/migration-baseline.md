@@ -1796,11 +1796,13 @@ an arbitrary shell executor.
   decoder, operand validation, documentation, and fuzz seeds; string field maps
   and `serde_json::Value` verification are removed.
   - [x] **B03.1 — Make v2 opcode schema the single source of truth.** One
-    `INSTRUCTION_SCHEMA_V2` table now owns numeric tags, names, operand classes,
-    and arity; it drives raw decode lookup, structural operand validation, and
+    macro declaration now generates `WireOpcodeV2` and the
+    `INSTRUCTION_SCHEMA_V2` table with numeric tags, names, operand classes, and
+    arity; it drives raw decode lookup, structural operand validation, and
     generated Markdown reference output. A bounded arbitrary-byte property
-    corpus proves the v2 decoder cannot panic; explicit seed files and Artifact
-    integration remain follow-up work.
+    corpus plus the `bytecode_v2` fuzz target and canonical checked-in seed
+    prove the v2 decoder cannot panic; deployed Artifact v2 integration remains
+    follow-up work.
   - [x] **B03.2 — Verify v2 instruction-CFG register data flow.** The typed
     verifier computes per-instruction predecessor intersections, rejects reads
     not defined on every reachable path, and rejects fallthrough past a function

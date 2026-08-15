@@ -115,3 +115,10 @@ cargo +nightly fuzz run <target> artifacts/<target>/crash-<hash>
 ```
 
 [cargo-fuzz]: https://github.com/rust-fuzz/cargo-fuzz
+`bytecode_v2` fuzzes the typed numeric v2 executable payload decoder. It starts
+from the checked-in canonical seed in `corpus/bytecode_v2/` and asserts every
+accepted payload round-trips byte-for-byte:
+
+```text
+cargo +nightly fuzz run bytecode_v2
+```

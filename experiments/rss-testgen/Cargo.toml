@@ -16,9 +16,10 @@ path = "src/bin/repro.rs"
 [dependencies]
 # Test generation exercises legacy VM/AOT differential helpers. Those helpers
 # are intentionally outside the reviewed embedding façade, so the experiment
-# must opt into the compatibility surface explicitly rather than widening the
-# default SDK API.
-rsscript-sdk = { path = "../../crates/rsscript-sdk", features = ["compatibility"] }
+# must opt into both explicit compatibility boundaries rather than widening the
+# default SDK API. `properties` calls the experimental Rust lowerer directly,
+# so this feature selection is part of the experiment's own contract.
+rsscript-sdk = { path = "../../crates/rsscript-sdk", features = ["compatibility", "aot-rust"] }
 
 [features]
 # Pull the native (Cranelift) tier into the in-process backend set so the
