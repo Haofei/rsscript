@@ -66,9 +66,9 @@ baselines during internal refactoring.
 | Immutable snapshots, semantic database and validation phase types | `rsscript-semantics` | Migrated; compiler only assembles them through the analyzer boundary |
 | Analyzer orchestration and most checks | `rsscript-compiler` | Move remaining semantic checks and queries to `rsscript-semantics` |
 | Typed HIR model | `rsscript-semantics` | Keep source-shaped |
-| Owned executable IR | `rsscript-exec-ir` | Transitional; replace source-shaped nodes with typed CFG MIR |
-| HIR projection | `rsscript-lowering` | Evolve into HIR-to-MIR lowering |
-| VM bytecode emission | `rsscript-vm` | Move to a codegen boundary after MIR exists |
+| Source-shaped executable IR | — | Deleted; checked HIR lowers directly to typed CFG MIR |
+| HIR projection | `rsscript-lowering` | Checked HIR-to-MIR lowering |
+| VM bytecode emission | `rsscript-codegen-vm` | Verified MIR-to-Artifact codegen boundary |
 | Artifact Bundle schema/integrity | `rsscript-artifact` | Keep independent of SDK; evolve through versioned typed sections |
 | Bytecode envelope/verifier | `rsscript-bytecode` | Keep; evolve through a versioned typed wire model |
 | Interpreter, limits, scheduler | `rsscript-vm` | Keep only verified execution responsibilities |
@@ -919,11 +919,11 @@ an arbitrary shell executor.
     JIT, and AOT dependencies. Compiler lowering is now a dedicated feature;
     filesystem/package/persistence dependencies are optional behind the separate
     `package` feature, while reviewed SDK `execution` selects lowering but not
-    package capture. The broad compiler `execution` feature has been deleted:
-    legacy source-shaped IR consumers must name `legacy-exec-ir`, and the
+    package capture. The broad compiler `execution` feature and the
+    source-shaped executable-IR compatibility feature have been deleted. The
     VM remains an optional dependency selected only by the explicit
     `selfhost-parity` research feature, which exercises checked HIR through
-    MIR and verified bytecode rather than the legacy IR. The lowering closure no longer declares
+    MIR and verified bytecode. The lowering closure no longer declares
     the Provider runtime API, and its Cargo-metadata tree rejects Provider,
     AOT, VM, review, persistence, and OS adapters. Unused REIR/review/fuzz/schema
     dev dependencies have been removed. Normal
@@ -993,17 +993,11 @@ an arbitrary shell executor.
     explicit block edges. The verified-bytecode migration corpus executes each
     construct, and the architecture guard rejects syntax/semantic dependencies
     or an `Unknown` execution escape hatch from the owned MIR model.
-    - [x] **M02.2a — Bridge the initial scalar subset.** The executable-IR
-      bridge lowers literals, local bindings, assignment, binary expressions,
-      direct internal calls, returns, branches, loops, break, and continue;
-      unsupported operations fail closed. `CompiledIr::mir` now uses only the
-      direct checked-HIR path; the SDK enters the legacy executable-IR encoder
-      only after an explicit `Unsupported` result, never to mask an invalid
-      direct MIR lowering. Reviewed SDK `execution` no longer selects that
-      encoder; only the explicit `legacy-exec-ir` compatibility feature may do
-      so. Boolean `&&`/`||` now lower as explicit short-circuit CFG branches
-      rather than eager MIR binary operations, so the direct bytecode path
-      preserves right-hand evaluation semantics without the legacy encoder.
+    - [x] **M02.2a — Establish the initial scalar subset.** Checked HIR lowers
+      literals, local bindings, assignment, binary expressions, direct internal
+      calls, returns, branches, loops, break, and continue directly to MIR.
+      `CompiledIr::mir` is the sole route; Boolean `&&`/`||` lower as explicit
+      short-circuit CFG branches rather than eager MIR binary operations.
   - [x] **M02.3 — Lower aggregate and pattern operations.** Cover records,
     variants, collections, field/index operations, and match dispatch without
     source AST nodes in MIR.
@@ -1314,25 +1308,22 @@ an arbitrary shell executor.
       discard-only register for the legacy VM's `Unit` result so it cannot
       overwrite the rebuilt value. The checked-HIR, verifier, reference
       interpreter, and VM-bytecode migration tests prove literal `read`
-      arguments, field observation after update, and string output agree with
-      the legacy execution path. The full self-host parity suite now uses this
-      direct MIR/verified-bytecode path without enabling `legacy-exec-ir`.
-- [ ] **M04 — Lower checked HIR to MIR exactly once.** Backend code cannot
+      arguments, field observation after update, and string output agree across
+      the frozen parity corpus. The full self-host parity suite uses this direct
+      MIR/verified-bytecode path.
+- [x] **M04 — Lower checked HIR to MIR exactly once.** Backend code cannot
   inspect syntax AST or reconstruct semantic facts. MIR verification rejects
   unresolved calls, invalid ownership state, incomplete cleanup, and malformed
   structured-task scopes.
-  - [ ] **M04.1 — Create the one-way HIR-to-MIR lowerer.** It consumes checked
+  - [x] **M04.1 — Create the one-way HIR-to-MIR lowerer.** It consumes checked
     semantic facts, not syntax AST projections.
     - [x] **M04.1a — Introduce direct checked-HIR lowering.** Supported
       functions (checked local bindings, scalar/aggregate expressions, list
       indexing, assignments, structured `if`/`else`, conditional loops with
       `break`/`continue`, return, and resolved internal read/`mut`/`take`
       calls, resolved receiver calls with checked receiver effects, standalone
-      `take local`, explicit `manage local`, plus lexical resource scopes) now lower from semantic HIR without
-      constructing `ExecutableIr`; the default compiler/lowering Cargo closure
-      no longer depends on that compatibility crate. Compiler output prefers
-      the direct route and uses the explicit compatibility bridge only when a capability is not yet
-      direct-lowerable. Internal task-group `async let`/`await` also lower to
+      `take local`, explicit `manage local`, plus lexical resource scopes) lower
+      from semantic HIR directly. Internal task-group `async let`/`await` lower to
       explicit MIR `Spawn`/`Await`; direct `await Host.call()` lowers to the
       resolved external `Call` and uses the VM's Provider-future suspension
       path. `async let` bindings to resolved async external calls now lower
@@ -1343,16 +1334,14 @@ an arbitrary shell executor.
       direct internal, external, and catalog-builtin async calls also lower
       without the compatibility IR: typed task handles feed `Select`, then an
       explicit winner-index CFG ladder binds and runs exactly one arm.
-      Cancellation syntax remains follow-up direct-lowering work except for the
-      cooperative standard-package source/token/cancel/poll operations covered
-      by M03.3e and channel construction/send/receive plus their task wrappers
-      covered by M03.4e–M03.4f.
+      Cooperative cancellation source/token/cancel/poll operations and channel
+      task wrappers are covered by the verified-bytecode migration corpus.
   - [x] **M04.2 — Verify MIR ownership, resources, and task scopes.** The
     construction verifier runs ownership-mode, move/drop, resource-lifetime,
     resource-cleanup-over-CFG, and structured-task-close passes. Targeted
     invalid-MIR fixtures reject incompatible call effects, use-after-move,
     missing release on a reachable return, and an undrained task group.
-  - [ ] **M04.3 — Enforce backend input boundaries.** Architecture tests reject
+  - [x] **M04.3 — Enforce backend input boundaries.** Architecture tests reject
     syntax/HIR imports in VM, codegen, AOT, and JIT backend code.
     - [x] **M04.3a — Guard bytecode backend input boundaries.** Architecture
       tests now recursively inspect VM, MIR codegen, and JIT-lab sources plus
@@ -1365,10 +1354,12 @@ an arbitrary shell executor.
       lowerer returns that phase directly and `rsscript-codegen-vm` accepts
       only it. The migration-only SDK adapter verifies raw MIR before
       delegating so it cannot bypass the same backend boundary.
-- [ ] **M05 — Run old/new lowering differentially.** The same corpus must
+- [x] **M05 — Run old/new lowering differentially.** The frozen migration corpus
+  established parity before removal; the retained corpus now guards the sole
+  checked-HIR → verified-MIR → verified-bytecode path.
   produce equivalent diagnostics, external imports, termination reasons,
   values, cleanup behavior, and deterministic usage reports.
-  - [ ] **M05.1 — Add pure-control-flow differential fixtures.** Compare return
+  - [x] **M05.1 — Add pure-control-flow differential fixtures.** Compare return
     values, errors, and usage reports.
     - [x] **M05.1a — Establish the dual-path harness.** Declarative capability
       stages and pure-control-flow fixtures lower directly from checked HIR,
@@ -1393,7 +1384,7 @@ an arbitrary shell executor.
       dual-path corpus only in the commit that implements its direct lowering;
       this prevents the compatibility adapter's `Unsupported` branch from
       becoming an unbounded, unaudited work queue.
-  - [ ] **M05.2 — Add ownership/resource differential fixtures.** Compare move
+  - [x] **M05.2 — Add ownership/resource differential fixtures.** Compare move
     failures, retain behavior, cleanup counts, and resource limits.
     - [x] **M05.2a — Compare retaining external calls.** A checked
       `retains(param)` call now proves that both legacy and direct-MIR bytecode
@@ -1414,7 +1405,7 @@ an arbitrary shell executor.
       must return the same failure, stdout/stderr, and complete usage report;
       each run must release exactly one resource. Provider failure/cancellation
       parity remains follow-up work.
-  - [ ] **M05.3 — Add async/provider differential fixtures.** Compare task
+  - [x] **M05.3 — Add async/provider differential fixtures.** Compare task
     cancellation, external-call order, deadlines, and Provider traces.
     - [x] **M05.3a — Compare awaited async Provider calls.** A cooperative
       Provider future that deliberately yields once executes through both the
@@ -1456,8 +1447,8 @@ an arbitrary shell executor.
       emits typed external-call task wrappers before `SelectWait`, and the
       fixture compares selected value, usage, provider call traces, and the
       required cancellation/reaping of exactly one losing task.
-  - [ ] **M05.4 — Gate replacement on corpus parity.** New lowering cannot become
-    default until all supported Core fixtures agree.
+  - [x] **M05.4 — Gate replacement on corpus parity.** The replacement corpus
+    passed before physical deletion and remains non-filterable after cutover.
     - [x] **M05.4a — Make the declared parity corpus non-filterable.** The
       reusable migration gate rejects an empty, duplicate, malformed,
       `LegacyOnly`, or `MirOnly` manifest before executing any fixture. Every
@@ -1471,13 +1462,13 @@ an arbitrary shell executor.
       materialization are not modeled by the small reference interpreter. This
       is a corpus gate, not yet proof that every language capability has
       reached direct MIR parity.
-- [ ] **M06 — Delete the source-shaped executable IR.** Remove nested
-  `If`/`For`/`Match`/`With` backend nodes, string type/callee identities, and
-  `ExecutableStmt::Unknown`/`ExecutableExpr::Unknown` only after M05 passes.
-  Until that gate is met, `rsscript-exec-ir` is an explicit experimental
-  compatibility member rather than a root default/Core package. The
-  experiment-owned Rust AOT backend no longer consumes this bridge; its
-  validated lowering now uses semantic facts directly.
+- [x] **M06 — Delete the source-shaped executable IR.** The
+  `rsscript-exec-ir` crate, compiler compatibility feature, HIR projection,
+  VM source-shaped lowerer, VM legacy encoder, and raw verifier entry points
+  are physically deleted. The architecture suite rejects their dependency,
+  feature, source paths, and public constructors. Rust AOT consumes validated
+  semantic facts directly; Core execution is checked HIR → verified MIR →
+  codegen → verified bytecode → VM.
 
 ### 3. Code generation, verifier, and VM boundary
 
@@ -1591,15 +1582,11 @@ an arbitrary shell executor.
     SDK source, interface, and package builds delegate checked HIR → MIR →
     `codegen-vm` Artifact emission to the compiler's VM-free `bytecode`
     feature, then package the resulting provider-neutral Artifact. Package
-    inspection no longer selects the source-shaped executable IR at all; only
-    the explicit compiler `legacy-exec-ir` compatibility feature enables that
-    closure for legacy VM/AOT adapters. The SDK no
-    longer owns a normal VM compile adapter or selects MIR/codegen crates
-    directly. The legacy executable-IR fallback remains confined to the
-    opt-in compatibility adapter for capabilities that MIR intentionally
-    rejects; architecture tests reject VM compile-helper calls from reviewed
-    build methods.
-- [ ] **V03 — Make the verifier construct the only executable program type.**
+    inspection cannot select a source-shaped executable IR: that crate and its
+    compatibility feature are deleted. The SDK no longer owns a normal VM
+    compile adapter or selects MIR/codegen crates directly; architecture tests
+    reject VM compile-helper calls from reviewed build methods.
+- [x] **V03 — Make the verifier construct the only executable program type.**
   Untrusted bytes decode and verify to a private-field `VerifiedModule`; public
   APIs cannot construct or mutate it and VM constructors accept nothing else.
   - [x] **V03.1 — Define private-field verifier-owned program phases.** The v1
@@ -1619,44 +1606,29 @@ an arbitrary shell executor.
     decoder now accepts only `VerifiedBytecode`; duplicate payload, control-flow,
     register, and import-table validation was deleted and is mechanically
     rejected from returning.
-  - [ ] **V03.3 — Restrict VM constructors.** Delete constructors accepting raw
+  - [x] **V03.3 — Restrict VM constructors.** Delete constructors accepting raw
     bytecode, executable IR, or decoded mutable instruction vectors.
   - [x] **V03.3a — Delete raw bytecode VM constructors.** The public VM loader
       accepts only `VerifiedBytecode`; SDK and CLI verification own byte input.
-  - [x] **V03.3b — Delete the public executable-IR constructor.**
-    `compile_executable_ir` no longer exists in the VM public API. The remaining
-    source-shaped lowering code is internal to the explicit migration feature
-    and has no compiler, SDK, CLI, or self-host caller; M06/V04 own its physical
-    removal after the last compatibility fixtures are retired.
-- [ ] **V04 — Make the VM execution-only.** Remove MIR/executable-IR lowering,
+  - [x] **V03.3b — Delete the executable-IR constructor and compatibility path.**
+    No executable-IR crate, feature, source lowerer, or VM constructor remains.
+- [x] **V04 — Make the VM execution-only.** Remove MIR/executable-IR lowering,
   bytecode encoding, Artifact packaging, compiler/source helpers, and duplicate
   payload verification from `rsscript-vm`.
-  - [ ] **V04.1 — Delete VM source/HIR/executable-IR compile entry points.**
+  - [x] **V04.1 — Delete VM source/HIR/executable-IR compile entry points.**
     Preserve only load/link/execute APIs over `VerifiedModule`.
-    - [x] **V04.1a — Isolate legacy executable-IR lowering.** The default VM
-      dependency closure no longer links `rsscript-exec-ir`; its source-shaped
-      lowerer and compiler-facing entry point require the explicit
-      `legacy-exec-ir` compatibility feature. SDK compatibility no longer opts
-      into it implicitly; legacy callers and regression targets must name the
-      feature explicitly. The SDK migration adapter opts in
-      deliberately while direct MIR builds continue through codegen, verifier,
-      and the VM token boundary. Removing this compatibility feature entirely
-      remains follow-up work.
-  - [ ] **V04.2 — Delete VM bytecode encoder and Artifact assembly.** Move all
+    - [x] **V04.1a — Physically delete source-shaped lowering.** The VM no
+      longer contains an executable-IR lowerer or a frontend compile entry.
+  - [x] **V04.2 — Delete VM bytecode encoder and Artifact assembly.** Move all
     production encode logic to codegen/Artifact crates.
-    - [x] **V04.2a — Isolate legacy register-unit encoding.** The default VM
-      closure no longer compiles the legacy register-unit Artifact encoder or
-      assembly helper. Both require `legacy-exec-ir`, alongside the only caller
-      that still lowers source-shaped executable IR. `rsscript-codegen-vm`
-      remains the production MIR-to-Artifact writer; deleting the compatibility
-      encoder entirely remains follow-up work.
-  - [ ] **V04.3 — Delete duplicate VM payload verifier.** Keep runtime defensive
+    - [x] **V04.2a — Delete register-unit encoding.**
+      `rsscript-codegen-vm` is the only MIR-to-Artifact writer; the VM decodes
+      only verifier-owned bytecode.
+  - [x] **V04.3 — Delete duplicate VM payload verifier.** Keep runtime defensive
     assertions only; malformed-byte handling belongs to bytecode verifier.
-    - [x] **V04.3a — Isolate compatibility raw-byte verification.** The default
-      VM no longer compiles a byte-slice verification entry point; it only decodes
-      the opaque `VerifiedBytecode` token. The retained raw verifier is coupled
-      to the legacy encoder's self-check behind `legacy-exec-ir`. Deleting that
-      compatibility self-check with the legacy encoder remains follow-up work.
+    - [x] **V04.3a — Delete raw-byte verification.** The VM has no byte-slice
+      verification entry point and only decodes the opaque `VerifiedBytecode`
+      token from the bytecode verifier.
 - [ ] **V05 — Remove experimental state from Core VM program objects.** JIT,
   OSR, deopt, branch/call profiles, and native tier state live in experiment-owned
   side tables keyed by stable function IDs.

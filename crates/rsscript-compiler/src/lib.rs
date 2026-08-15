@@ -26,8 +26,6 @@ mod lexer {
     pub(crate) use rsscript_syntax::lexer::*;
 }
 mod lint;
-#[cfg(feature = "legacy-exec-ir")]
-mod lower_names;
 #[cfg(feature = "package")]
 mod package;
 #[cfg(feature = "package")]
@@ -57,11 +55,9 @@ mod vm_adapter {
         let validated = crate::analyzer::validate_sources_with_interfaces(sources, &interfaces)
             .map_err(EvalError::Diagnostics)?;
         let snapshot_digest = format!("sha256:{}", "0".repeat(64));
-        let artifact = crate::compiler_output::compile_validated_to_bytecode(
-            &validated,
-            &snapshot_digest,
-        )
-        .map_err(|error| EvalError::Runtime(error.to_string()))?;
+        let artifact =
+            crate::compiler_output::compile_validated_to_bytecode(&validated, &snapshot_digest)
+                .map_err(|error| EvalError::Runtime(error.to_string()))?;
         let bytes = artifact
             .to_bytes()
             .map_err(|error| EvalError::Runtime(error.to_string()))?;
@@ -97,8 +93,6 @@ pub use generate::{
     TypeRef, prefix_status, valid_continuations,
 };
 pub use lint::lint_source;
-#[cfg(feature = "legacy-exec-ir")]
-pub use lower_names::lowered_symbol_name;
 pub use rsscript_semantics::{
     analyze_frontend_input_snapshot_with_operation, analyze_source, analyze_source_result,
     analyze_source_result_with_operation, analyze_source_with_core, analyze_source_with_interfaces,
@@ -129,8 +123,6 @@ pub mod compatibility {
     pub use crate::compiler_output::{
         CompiledIr, compile_frontend_input_to_ir, compile_source_to_ir, compile_validated_to_ir,
     };
-    #[cfg(feature = "legacy-exec-ir")]
-    pub use crate::lower_names::lowered_symbol_name;
     #[cfg(feature = "package")]
     pub use crate::package::{
         ExecutablePackageSnapshot, PackageAnalysis, PackageAnalysisAwaitSite,
@@ -159,11 +151,7 @@ pub mod compatibility {
         format_review_human, format_review_json, format_review_map_human, format_review_map_json,
         review_map_sources, review_sources,
     };
-    #[cfg(feature = "legacy-exec-ir")]
-    pub use crate::symbols::{SymbolInventoryEntry, symbol_inventory};
 }
-#[cfg(feature = "legacy-exec-ir")]
-pub use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationId};
 pub use semantic::{
     AnalysisResult, FrontendCompletion, FrontendInputSnapshot, FrontendStopReason,
     SemanticDatabase, SourceFileSnapshot, SourceSnapshot, ValidatedProgram,
@@ -172,5 +160,3 @@ pub use symbols::{
     Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
     document_symbols, symbol_index,
 };
-#[cfg(feature = "legacy-exec-ir")]
-pub use symbols::{SymbolInventoryEntry, symbol_inventory};

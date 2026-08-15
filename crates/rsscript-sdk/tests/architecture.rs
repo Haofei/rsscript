@@ -1643,10 +1643,9 @@ fn rust_aot_lowering_is_explicitly_feature_gated() {
 
     let compiler = read(&root.join("crates/rsscript-compiler/src/lib.rs"));
     assert!(!compiler.contains("mod rust_lower;"));
-    assert!(compiler.contains("#[cfg(feature = \"legacy-exec-ir\")]\nmod lower_names;"));
+    assert!(!compiler.contains("legacy-exec-ir"));
 
     let symbols = read(&root.join("crates/rsscript-compiler/src/symbols.rs"));
-    assert!(symbols.contains("crate::lower_names::lowered_symbol_name"));
     assert!(
         !symbols.contains("crate::rust_lower::"),
         "execution metadata must not require compiling the Rust/AOT lowerer"
@@ -1673,7 +1672,7 @@ fn rust_aot_lowering_is_explicitly_feature_gated() {
     assert!(sdk_aot.contains("execution"));
     assert!(sdk_aot.contains("dep:rsscript-aot-backend"));
     assert!(!sdk_aot.contains("rsscript_compiler/aot-rust"));
-    assert!(!sdk_aot.contains("rsscript_compiler/legacy-exec-ir"));
+    assert!(!sdk_aot.contains("legacy-exec-ir"));
     let aot_backend: toml::Value =
         toml::from_str(&read(&root.join("experiments/aot-backend/Cargo.toml")))
             .expect("experimental AOT backend manifest should parse");
@@ -1694,9 +1693,8 @@ fn rust_aot_lowering_is_explicitly_feature_gated() {
         "compatibility must not implicitly select the experimental Rust AOT backend"
     );
     assert!(
-        !sdk_compatibility.contains("legacy-exec-ir")
-            && !sdk_compatibility.contains("rsscript_compiler/legacy-exec-ir"),
-        "compatibility must not implicitly select the transitional executable IR"
+        !sdk_compatibility.contains("legacy-exec-ir"),
+        "compatibility must not restore a deleted executable IR path"
     );
 
     let cli: toml::Value = toml::from_str(&read(&root.join("crates/rsscript-cli/Cargo.toml")))
@@ -1724,8 +1722,8 @@ fn rust_aot_lowering_is_explicitly_feature_gated() {
     assert!(cli_package_inspect.contains("execution"));
     assert!(cli_package_inspect.contains("rsscript-compiler/package"));
     assert!(
-        !cli_package_inspect.contains("rsscript-compiler/legacy-exec-ir"),
-        "package inspection must not opt into the legacy executable IR"
+        !cli_package_inspect.contains("legacy-exec-ir"),
+        "package inspection must not restore the deleted executable IR"
     );
     let cli_aot = cli["features"]["aot-rust"]
         .as_array()
@@ -3585,7 +3583,6 @@ fn vm_core_consumes_owned_ir_not_frontend_internals() {
         "bytecode.rs",
         "calls.rs",
         "exec.rs",
-        "lower.rs",
         "model.rs",
         "scheduler.rs",
     ] {
@@ -3606,11 +3603,7 @@ fn vm_core_consumes_owned_ir_not_frontend_internals() {
     let vm_manifest: toml::Value =
         toml::from_str(&read(&workspace.join("crates/rsscript-vm/Cargo.toml"))).unwrap();
     let vm_dependencies = dependency_packages(&vm_manifest);
-    for required in [
-        "rsscript-bytecode",
-        "rsscript-exec-ir",
-        "rsscript-provider-api",
-    ] {
+    for required in ["rsscript-bytecode", "rsscript-provider-api"] {
         assert!(
             vm_dependencies.contains(required),
             "VM must depend on `{required}`"
@@ -3629,14 +3622,6 @@ fn vm_core_consumes_owned_ir_not_frontend_internals() {
             "VM must not depend on frontend package `{forbidden}`"
         );
     }
-
-    let ir_manifest: toml::Value =
-        toml::from_str(&read(&workspace.join("crates/rsscript-exec-ir/Cargo.toml"))).unwrap();
-    assert_eq!(
-        dependency_packages(&ir_manifest),
-        BTreeSet::from(["rsscript-abi-model".to_string()]),
-        "owned executable IR must remain independent of frontend and runtime crates"
-    );
 }
 
 #[test]
@@ -3817,122 +3802,44 @@ fn mir_codegen_is_a_vm_independent_verified_bytecode_boundary() {
 }
 
 #[test]
-fn legacy_executable_ir_lowering_is_an_explicit_vm_compatibility_feature() {
+fn source_shaped_executable_ir_is_physically_deleted() {
     let root = workspace_root();
     let manifest: toml::Value = toml::from_str(&read(&root.join("crates/rsscript-vm/Cargo.toml")))
         .expect("VM manifest should parse");
-    let exec_ir = manifest["dependencies"]["rsscript-exec-ir"]
-        .as_table()
-        .expect("legacy executable IR dependency should be declared as a table");
     assert_eq!(
-        exec_ir.get("optional").and_then(toml::Value::as_bool),
-        Some(true),
-        "the default VM closure must not link source-shaped executable IR"
+        manifest["dependencies"].get("rsscript-exec-ir"),
+        None,
+        "the execution-only VM must not retain the source-shaped IR dependency"
     );
-    let legacy_feature = manifest["features"]["legacy-exec-ir"]
-        .as_array()
-        .expect("legacy executable IR feature should be declared");
-    assert!(
-        legacy_feature
-            .iter()
-            .any(|entry| entry.as_str() == Some("dep:rsscript-exec-ir")),
-        "only the explicit compatibility feature may activate executable-IR lowering"
-    );
+    assert!(manifest["features"].get("legacy-exec-ir").is_none());
 
     let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));
-    assert!(
-        !vm.contains("pub fn compile_executable_ir")
-            && vm.contains("#[cfg(feature = \"legacy-exec-ir\")]\nmod lower;"),
-        "the VM must not expose a public source-shaped executable-IR constructor; retained compatibility lowering is internal only"
-    );
+    assert!(!vm.contains("legacy-exec-ir") && !vm.contains("rsscript_exec_ir"));
     let bytecode = read(&root.join("crates/rsscript-vm/src/reg_vm/bytecode.rs"));
-    assert!(
-        bytecode.contains("#[cfg(feature = \"legacy-exec-ir\")]\npub(super) fn encode_and_verify")
-            && bytecode.contains(
-                "#[cfg(feature = \"legacy-exec-ir\")]\npub(super) fn encode_and_verify_with_imports"
-            )
-            && bytecode
-                .contains("#[cfg(feature = \"legacy-exec-ir\")]\npub(super) fn verify_bytes"),
-        "legacy register-unit Artifact encoding and raw-byte verification must not enter the default VM closure"
-    );
+    assert!(!bytecode.contains("encode_and_verify") && !bytecode.contains("verify_bytes("));
 
-    let sdk_manifest: toml::Value =
-        toml::from_str(&read(&root.join("crates/rsscript-sdk/Cargo.toml")))
-            .expect("SDK manifest should parse");
-    let execution = sdk_manifest["features"]["execution"]
-        .as_array()
-        .expect("SDK execution feature should be declared");
-    assert!(
-        execution
-            .iter()
-            .all(|entry| entry.as_str() != Some("rsscript-vm/legacy-exec-ir")),
-        "reviewed SDK execution must not select legacy lowering"
-    );
-    assert!(
-        sdk_manifest["features"].get("legacy-exec-ir").is_none(),
-        "the SDK must not expose a source-shaped executable-IR compatibility feature"
-    );
-    let compatibility = sdk_manifest["features"]["compatibility"]
-        .as_array()
-        .expect("SDK compatibility feature should be declared");
-    assert!(
-        compatibility
-            .iter()
-            .all(|entry| entry.as_str() != Some("legacy-exec-ir")),
-        "SDK compatibility must not restore source-shaped executable-IR APIs"
-    );
+    assert!(!root.join("crates/rsscript-exec-ir").exists());
+    assert!(!root.join("crates/rsscript-vm/src/reg_vm/lower.rs").exists());
 }
 
 #[test]
-fn default_compiler_lowering_excludes_the_legacy_executable_ir_crate() {
+fn compiler_lowering_has_no_source_shaped_ir_compatibility_path() {
     let root = workspace_root();
     let lowering: toml::Value =
         toml::from_str(&read(&root.join("crates/rsscript-lowering/Cargo.toml")))
             .expect("lowering manifest should parse");
-    assert_eq!(
-        lowering["dependencies"]["rsscript-exec-ir"]["optional"].as_bool(),
-        Some(true),
-        "source-shaped executable IR must be optional in the lowering crate"
-    );
     assert!(
-        lowering["features"]["default"]
-            .as_array()
-            .is_some_and(Vec::is_empty),
-        "direct checked-HIR MIR lowering must be the lowering crate default"
-    );
-    assert!(
-        lowering["features"]["legacy-exec-ir"]
-            .as_array()
-            .is_some_and(|items| items
-                .iter()
-                .any(|item| item.as_str() == Some("dep:rsscript-exec-ir"))),
-        "only the explicit lowering compatibility feature may enable executable IR"
+        lowering["dependencies"].get("rsscript-exec-ir").is_none()
+            && lowering
+                .get("features")
+                .is_none_or(|features| features.get("legacy-exec-ir").is_none()),
+        "the lowering boundary must have no source-shaped compatibility closure"
     );
 
     let compiler: toml::Value =
         toml::from_str(&read(&root.join("crates/rsscript-compiler/Cargo.toml")))
             .expect("compiler manifest should parse");
-    assert_eq!(
-        compiler["dependencies"]["rsscript-lowering"]["default-features"].as_bool(),
-        Some(false),
-        "compiler must not inherit the lowering compatibility default"
-    );
-    assert!(
-        !compiler["features"]["package"]
-            .as_array()
-            .is_some_and(|items| items
-                .iter()
-                .any(|item| item.as_str() == Some("rsscript-lowering/legacy-exec-ir"))),
-        "package inspection must not enable source-shaped executable IR"
-    );
-    assert!(
-        compiler["features"]["legacy-exec-ir"]
-            .as_array()
-            .is_some_and(|items| items
-                .iter()
-                .any(|item| item.as_str() == Some("rsscript-lowering/legacy-exec-ir"))),
-        "only the explicit compiler legacy feature may enable executable-IR lowering"
-    );
+    assert!(compiler["features"].get("legacy-exec-ir").is_none());
 }
 
 #[test]
@@ -3945,8 +3852,10 @@ fn checked_hir_mir_is_the_default_compiler_and_sdk_path() {
         !mir.contains("lower_executable_ir_to_mir"),
         "the default compiler MIR query must not retry the legacy executable-IR bridge"
     );
-    assert!(compiler_output.contains("pub fn legacy_executable("));
-    assert!(compiler_output.contains("pub fn into_legacy_executable("));
+    assert!(
+        !compiler_output.contains("ExecutableIr") && !compiler_output.contains("legacy_executable"),
+        "compiler output must expose only checked HIR and verified MIR"
+    );
 
     let adapter = read(&root.join("crates/rsscript-sdk/src/vm_adapter.rs"));
     let emit = function_source(&adapter, "fn emit_ir(compiled: &CompiledIr)");
@@ -4067,18 +3976,8 @@ fn compiler_default_dependency_closure_is_host_neutral() {
         .iter()
         .filter_map(toml::Value::as_str)
         .collect::<BTreeSet<_>>();
-    assert!(
-        manifest["features"].get("execution").is_none(),
-        "compiler compatibility must name legacy executable IR explicitly"
-    );
-    let legacy_exec = manifest["features"]["legacy-exec-ir"]
-        .as_array()
-        .expect("compiler legacy executable-IR feature should be declared")
-        .iter()
-        .filter_map(toml::Value::as_str)
-        .collect::<BTreeSet<_>>();
-    assert!(legacy_exec.contains("package"));
-    assert!(legacy_exec.contains("rsscript-lowering/legacy-exec-ir"));
+    assert!(manifest["features"].get("execution").is_none());
+    assert!(manifest["features"].get("legacy-exec-ir").is_none());
     let selfhost = manifest["features"]["selfhost-parity"]
         .as_array()
         .expect("compiler self-host feature should be declared")
@@ -4088,11 +3987,10 @@ fn compiler_default_dependency_closure_is_host_neutral() {
     assert!(selfhost.contains("dep:rsscript-vm"));
     assert!(selfhost.contains("package"));
     assert!(
-        !selfhost.contains("legacy-exec-ir")
-            && manifest["dependencies"]["rsscript-vm"]
-                .get("features")
-                .is_none(),
-        "self-host parity must enter the VM only through verified bytecode, never the legacy executable-IR feature"
+        manifest["dependencies"]["rsscript-vm"]
+            .get("features")
+            .is_none(),
+        "self-host parity must enter the VM only through verified bytecode"
     );
     assert!(package.contains("bytecode"));
     let bytecode = manifest["features"]["bytecode"]
@@ -4553,9 +4451,9 @@ fn bytecode_language_compatibility_is_not_inferred_from_compiler_version() {
         "language compatibility must not be derived from compiler provenance"
     );
 
-    let emitter = read(&root.join("crates/rsscript-vm/src/reg_vm/bytecode.rs"));
+    let emitter = read(&root.join("crates/rsscript-codegen-vm/src/lib.rs"));
     assert!(emitter.contains("LANGUAGE_SEMANTICS_VERSION"));
-    assert!(emitter.contains("env!(\"CARGO_PKG_VERSION\")"));
+    assert!(emitter.contains("compiler_provenance"));
     assert!(verifier.contains("BYTECODE_CONTAINER_FORMAT_VERSION"));
 
     let analysis = read(&root.join("crates/rsscript-compiler/src/package/analysis.rs"));
@@ -4643,7 +4541,6 @@ fn executable_backends_consume_validated_frontend_results() {
     );
     let vm_sources = [
         read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs")),
-        read(&root.join("crates/rsscript-vm/src/reg_vm/lower.rs")),
         read(&root.join("crates/rsscript-vm/src/reg_vm/model.rs")),
         read(&root.join("crates/rsscript-vm/src/reg_vm/bytecode.rs")),
     ]
@@ -4654,9 +4551,10 @@ fn executable_backends_consume_validated_frontend_results() {
             "VM instruction lowering must not consume frontend representation `{forbidden}`"
         );
     }
-    let executable_ir = read(&root.join("crates/rsscript-exec-ir/src/lib.rs"));
-    assert!(executable_ir.contains("program: ExecutableProgram"));
-    assert!(!executable_ir.contains("pub fn typed_hir"));
+    assert!(
+        !root.join("crates/rsscript-exec-ir").exists(),
+        "validated frontend results must flow through MIR, not a source-shaped executable crate"
+    );
 
     let rust_lower = read(&root.join("experiments/aot-backend/src/rust_lower/mod.rs"));
     let lower_source = function_source(&rust_lower, "pub fn lower_source_to_rust_with_map");

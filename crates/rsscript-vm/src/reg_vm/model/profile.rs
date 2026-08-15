@@ -361,27 +361,3 @@ pub(crate) fn closure_captures_all_scalar(closure: &VmClosure) -> bool {
         scalar(c)
     })
 }
-
-#[cfg(feature = "legacy-exec-ir")]
-pub(crate) fn scalar_param_type_needs_no_deep_copy(type_name: &str) -> bool {
-    matches!(
-        type_name,
-        "Bool"
-            | "Byte"
-            | "Char"
-            | "Float"
-            | "Float32"
-            | "Float64"
-            | "Int"
-            | "Int8"
-            | "Int16"
-            | "Int32"
-            | "Int64"
-            | "UInt"
-            | "UInt8"
-            | "UInt16"
-            | "UInt32"
-            | "UInt64"
-            | "Unit"
-    )
-}

@@ -48,13 +48,11 @@ VM emitter; neither side depends back on the composition layer.
 complete/incomplete analysis state, and the error-free `ValidatedProgram`
 transition. The compiler analyzer is currently the sole integration point that
 assembles those facts while the remaining semantic passes migrate.
-`rsscript-exec-ir` owns the complete, lifetime-independent backend input, while
-`rsscript-lowering` contains only the validated-HIR projection into that model.
+`rsscript-lowering` owns the single validated-HIR to MIR transition.
 `rsscript-mir` owns the frontend-free typed CFG model and its structural
-verifier. During the migration, `rsscript-lowering` projects the supported
-pure-control-flow subset of owned executable IR into MIR. Resource, async, and
-dynamic/provider call operations fail closed until they have explicit MIR
-instructions.
+verifier. Resource, async, and dynamic/provider operations are explicit MIR
+instructions; source-shaped executable IR was retired after the parity corpus
+passed.
 The optional `rsscript-mir/conformance` feature is a test-only reference
 interpreter: dual-path fixtures compare it with the legacy VM before a
 capability can advance to MIR-only execution.
@@ -75,9 +73,9 @@ features.
 
 The independent `rsscript-vm` crate owns values, managed handles, resource slots,
 scheduling, cancellation, execution limits, bytecode dispatch, and external-call
-dispatch. It accepts an owned `rsscript_exec_ir::ExecutableIr`, produces and
-verifies the bytecode artifact, and cannot observe frontend databases or syntax
-nodes. `CallExternal` records a symbol and arguments.
+dispatch. `rsscript-codegen-vm` produces Artifacts from verifier-owned MIR; the
+VM accepts only verifier-owned bytecode and cannot observe frontend databases or
+syntax nodes. `CallExternal` records a symbol and arguments.
 `ExternalFunctionRegistry` resolves the symbol at execution time.
 
 Provider selection is runtime state and cannot change a compiled artifact.

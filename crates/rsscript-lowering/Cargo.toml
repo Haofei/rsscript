@@ -10,14 +10,7 @@ doctest = false
 
 [dependencies]
 rsscript-abi-model = { path = "../rsscript-abi-model" }
-rsscript-exec-ir = { path = "../rsscript-exec-ir", optional = true }
 rsscript-mir = { path = "../rsscript-mir" }
 rsscript-semantics = { path = "../rsscript-semantics" }
 rsscript-syntax = { path = "../rsscript-syntax" }
 rsscript-text = { path = "../rsscript-text" }
-
-[features]
-# The source-shaped executable bridge is a migration compatibility boundary.
-# Direct checked-HIR to MIR lowering is the default closure.
-default = []
-legacy-exec-ir = ["dep:rsscript-exec-ir"]

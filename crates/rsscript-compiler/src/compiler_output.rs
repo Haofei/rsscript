@@ -14,10 +14,8 @@ use rsscript_semantics::{CompilationSession, FrontendInputSnapshot};
 /// integration, analyzer, or test harness without linking an execution engine.
 #[derive(Debug, Clone)]
 pub struct CompiledIr {
-    #[cfg(feature = "legacy-exec-ir")]
-    executable: rsscript_lowering::ExecutableIr,
-    /// Immutable checked semantic input retained only through the migration so
-    /// the preferred MIR path can avoid the source-shaped compatibility IR.
+    /// Immutable checked semantic input from which every supported backend
+    /// derives the verifier-owned typed CFG MIR.
     checked_hir: rsscript_semantics::hir::Hir,
     source_hash: String,
     interface_catalog_digest: String,
@@ -66,38 +64,6 @@ impl CompiledIr {
         rsscript_lowering::lower_checked_hir_to_mir(&self.checked_hir)
     }
 
-    /// Transitional source-shaped compatibility representation.
-    ///
-    /// New backends must call [`Self::mir`] and consume only checked-HIR MIR.
-    /// This value remains available solely for the explicitly gated legacy VM
-    /// fallback while unsupported MIR constructs are being migrated.
-    #[cfg(feature = "legacy-exec-ir")]
-    #[doc(hidden)]
-    pub fn legacy_executable(&self) -> &rsscript_lowering::ExecutableIr {
-        &self.executable
-    }
-
-    /// Consume the transitional source-shaped compatibility representation.
-    #[cfg(feature = "legacy-exec-ir")]
-    #[doc(hidden)]
-    pub fn into_legacy_executable(self) -> rsscript_lowering::ExecutableIr {
-        self.executable
-    }
-
-    #[cfg(feature = "legacy-exec-ir")]
-    #[deprecated(note = "use `mir` for new backends; this is legacy executable-IR compatibility")]
-    #[doc(hidden)]
-    pub fn executable(&self) -> &rsscript_lowering::ExecutableIr {
-        self.legacy_executable()
-    }
-
-    #[cfg(feature = "legacy-exec-ir")]
-    #[deprecated(note = "use `mir` for new backends; this is legacy executable-IR compatibility")]
-    #[doc(hidden)]
-    pub fn into_executable(self) -> rsscript_lowering::ExecutableIr {
-        self.into_legacy_executable()
-    }
-
     pub fn source_hash(&self) -> &str {
         &self.source_hash
     }
@@ -139,8 +105,6 @@ pub fn compile_frontend_input_to_ir(
 pub fn compile_validated_to_ir(validated: &ValidatedProgram) -> CompiledIr {
     let checked_hir = validated.database().hir().clone();
     CompiledIr {
-        #[cfg(feature = "legacy-exec-ir")]
-        executable: rsscript_lowering::lower_validated_hir(&checked_hir),
         checked_hir,
         source_hash: source_hash(validated),
         interface_catalog_digest: crate::interfaces::interface_catalog_digest(),

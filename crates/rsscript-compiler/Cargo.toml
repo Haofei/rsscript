@@ -70,11 +70,6 @@ package = [
     "dep:toml",
     "dep:uuid",
 ]
-# The source-shaped executable representation is narrower than package
-# inspection/capture. Only legacy VM and AOT adapters need it; review and
-# package-analysis commands must remain able to inspect a project without
-# compiling the old IR closure.
-legacy-exec-ir = ["package", "rsscript-lowering/legacy-exec-ir"]
 language-service = []
 # The RSS-written frontend is a research parity harness.  Keep it out of Core
 # test builds; the dedicated self-host workflow opts in explicitly.

@@ -59,10 +59,6 @@ integrations = [
 ]
 
 experimental = [
-  # Transitional source-shaped IR retained only for explicit MIR differential
-  # compatibility. It remains a workspace member until M06 deletion, but is
-  # deliberately outside the default Core build/test closure.
-  "rsscript-exec-ir",
 ]
 
 research = [

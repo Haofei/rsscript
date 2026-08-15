@@ -26,8 +26,6 @@
 
 use std::cell::RefCell;
 use std::cmp::Ordering;
-#[cfg(feature = "legacy-exec-ir")]
-use std::collections::BTreeSet;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -52,46 +50,21 @@ use crate::eval_types::{
 };
 #[cfg(feature = "native-jit")]
 use crate::text_util::string_pad_len;
-#[cfg(feature = "legacy-exec-ir")]
-use crate::text_util::{decode_char_token, decode_string_token};
 use crate::text_util::{
     string_format, string_pad, string_slice_range, type_arg_names, type_root_name,
 };
 #[cfg(feature = "native-jit")]
 use crate::vm_value::clone_value_map_preserving_capacity;
-#[cfg(feature = "legacy-exec-ir")]
-use crate::vm_value::intern_layout;
 use crate::vm_value::{
     TypeLayout, TypedVec, ValueMap, VmClosure, VmMapKey, VmNative, VmStruct, VmValue,
 };
 use rsscript_abi_model::BinaryOp;
-#[cfg(feature = "legacy-exec-ir")]
-use rsscript_exec_ir::{
-    Callee, ExecutableBlock as HirBlock, ExecutableCallArg as HirCallArg,
-    ExecutableCallReceiver as HirCallReceiver, ExecutableExpr as HirExpr,
-    ExecutableMatchArm as HirMatchArm, ExecutableProgram as Hir, ExecutableStmt as HirStmt,
-    ExecutableTypeKind as HirTypeKind, MatchFieldPattern, MatchLiteral, MatchPattern, ParamEffect,
-};
-
-/// Intern the layout for a struct/variant whose canonical field order is given by
-/// `fields` (slot order). Used at lowering time so `MakeStruct`/`MakeVariant` carry
-/// a precomputed `Rc<TypeLayout>` and never re-hash per construction (V2.0).
-#[cfg(feature = "legacy-exec-ir")]
-fn intern_struct_layout(name: &str, fields: &[(String, Reg)]) -> Rc<TypeLayout> {
-    let field_names: Vec<Rc<str>> = fields
-        .iter()
-        .map(|(name, _)| Rc::from(name.as_str()))
-        .collect();
-    intern_layout(Rc::from(name), field_names)
-}
 
 mod bytecode;
 mod calls;
 mod exec;
 mod execution_plan;
 mod intrinsics;
-#[cfg(feature = "legacy-exec-ir")]
-mod lower;
 mod model;
 #[cfg(feature = "native-jit")]
 mod native;
@@ -106,8 +79,6 @@ mod value_access;
 mod value_convert;
 mod value_ops;
 use execution_plan::*;
-#[cfg(feature = "legacy-exec-ir")]
-pub(crate) use lower::*;
 pub(crate) use model::*;
 #[cfg(feature = "native-jit")]
 use native::*;
@@ -519,30 +490,6 @@ enum CombinatorKind {
     ResultMap,
     ResultAndThen,
     ResultUnwrapOr,
-}
-
-/// Argument positions of a closure call site that carry a `mut` effect marker
-/// (`f(read u, mut ctx)`), so a `CallClosure` can write the mutated values back
-/// to the caller after the closure body runs. The call-site effect is the
-/// `HirExpr::Effect { ParamEffect::Mut, .. }` wrapper the checker already
-/// type-checked against the stored `Fn`'s declared `mut` parameter — the same
-/// information `CallKnown`/`CallExternal` recover from the callee signature, but
-/// for a first-class closure value the effect lives on the call-site argument.
-#[cfg(feature = "legacy-exec-ir")]
-fn call_arg_mut_positions(args: &[HirCallArg]) -> Vec<usize> {
-    args.iter()
-        .enumerate()
-        .filter(|(_, arg)| {
-            matches!(
-                &arg.value,
-                HirExpr::Effect {
-                    effect: ParamEffect::Mut,
-                    ..
-                }
-            )
-        })
-        .map(|(index, _)| index)
-        .collect()
 }
 
 /// Outcome of executing a single "pure" instruction via the shared
@@ -1340,97 +1287,6 @@ impl RegVmExecutable {
             provider_call_traces: vm.provider_trace.snapshot(),
         })
     }
-}
-
-/// The static type of an HIR expression, for the closure-identity gate. `None`
-/// (unknown) is treated conservatively (observable) by callers. Mirrors the
-/// analyzer's `hir_expr_type_name`; kept local so the gate has no cross-module
-/// dependency. A `Closure` literal operand has no `type_name`, so it returns
-/// `None` and is (correctly) treated as observable.
-#[cfg(feature = "legacy-exec-ir")]
-fn reg_expr_type_name(expr: &HirExpr) -> Option<&str> {
-    match expr {
-        HirExpr::Ident { type_name, .. }
-        | HirExpr::Call { type_name, .. }
-        | HirExpr::Effect { type_name, .. }
-        | HirExpr::Manage { type_name, .. }
-        | HirExpr::Spawn { type_name, .. }
-        | HirExpr::Await { type_name, .. }
-        | HirExpr::Try { type_name, .. }
-        | HirExpr::Match { type_name, .. }
-        | HirExpr::MapLiteral { type_name, .. } => type_name.as_deref(),
-        HirExpr::Field { access, .. } => access.type_name.as_deref(),
-        HirExpr::Number { value, .. } => Some(if value.contains('.') { "Float" } else { "Int" }),
-        HirExpr::String { .. } => Some("String"),
-        HirExpr::Char { .. } => Some("Char"),
-        HirExpr::ObjectLiteral { type_name, .. } | HirExpr::ArrayLiteral { type_name, .. } => {
-            type_name.as_deref()
-        }
-        HirExpr::Binary { .. }
-        | HirExpr::Index { .. }
-        | HirExpr::Closure { .. }
-        | HirExpr::Unknown => None,
-    }
-}
-
-/// Conservatively decide whether a static type *might* be, or transitively
-/// contain, a `Fn`/closure value. Returns `true` (observable) whenever it cannot
-/// *prove* the type is closure-free. Soundness rests on these facts:
-///   * A function type is always spelled with the substring `"Fn("` (e.g.
-///     `Fn(Int) -> Int`, `noescape Fn(...)`), and generic instantiations print
-///     their argument types, so `List<Fn(...)>`, `Option<Fn(...)>`, `Map<K, Fn>`
-///     etc. all contain that substring — one substring test catches every type
-///     whose *spelling* exposes a function type.
-///   * A named user struct/sum can hide a function field behind its name; we
-///     resolve it via `types` and recurse through `fields_ordered` (with a
-///     visited set to terminate on recursive types). A generic struct field
-///     instantiated to a function type is rejected by the equality checker
-///     (Fn is not `Eq`) and, where the instantiation is visible, is spelled with
-///     `"Fn("`; an uninstantiated type parameter (`"T"`) is unresolved and so
-///     falls through to the conservative `true`.
-///   * Anything unresolved/unknown → `true`.
-#[cfg(feature = "legacy-exec-ir")]
-fn type_name_may_contain_fn(type_name: &str, hir: &Hir) -> bool {
-    fn go(name: &str, hir: &Hir, visited: &mut Vec<String>) -> bool {
-        let name = name.trim();
-        // Any spelled function type anywhere in the (possibly generic) type.
-        if name.contains("Fn(") {
-            return true;
-        }
-        // Scalars and known closure-free builtins: provably closure-free.
-        match type_name_root(name) {
-            "Int" | "Float" | "Bool" | "Char" | "String" | "Bytes" | "Unit" | "Json"
-            | "JsonLiteral" => return false,
-            _ => {}
-        }
-        // A resolved user type: recurse into its fields. The `Fn(` test above
-        // already covered any generic argument spelled in `name`.
-        if let Some(info) = hir.type_info(type_name_root(name)) {
-            if visited.iter().any(|seen| seen == &info.name) {
-                return false; // already being inspected on this path
-            }
-            visited.push(info.name.clone());
-            let result = info
-                .fields_ordered
-                .iter()
-                .any(|field| go(&field.type_name, hir, visited));
-            visited.pop();
-            return result;
-        }
-        // Unresolved / unknown type: conservatively assume it may contain a Fn.
-        true
-    }
-    go(type_name, hir, &mut Vec::new())
-}
-
-/// The leading identifier of a (possibly generic) type spelling, e.g. the `List`
-/// of `List<Fn(Int) -> Int>` or the bare name otherwise. Used only to classify
-/// scalars and to look named user types up in the `types` table.
-#[cfg(feature = "legacy-exec-ir")]
-fn type_name_root(type_name: &str) -> &str {
-    let name = type_name.trim();
-    let end = name.find(['<', '(', ' ']).unwrap_or(name.len());
-    name[..end].trim()
 }
 
 /// One activation record on the explicit call stack. The interpreter is
@@ -6659,17 +6515,6 @@ fn intrinsic_arg<'a>(
         .ok_or_else(|| EvalError::Runtime(format!("reg VM missing argument {index}.")))
 }
 
-#[cfg(feature = "legacy-exec-ir")]
-fn int_compare_op(op: BinaryOp) -> Option<RegIntCompare> {
-    match op {
-        BinaryOp::Less => Some(RegIntCompare::Less),
-        BinaryOp::LessEqual => Some(RegIntCompare::LessEqual),
-        BinaryOp::Greater => Some(RegIntCompare::Greater),
-        BinaryOp::GreaterEqual => Some(RegIntCompare::GreaterEqual),
-        _ => None,
-    }
-}
-
 fn eval_int_compare(op: RegIntCompare, lhs: i64, rhs: i64) -> bool {
     match op {
         RegIntCompare::Less => lhs < rhs,
@@ -6770,26 +6615,5 @@ fn as_task_handle(value: &VmValue) -> Option<TaskId> {
     match value {
         VmValue::Native(native) if native.type_name.as_ref() == "Task" => Some(native.id as TaskId),
         _ => None,
-    }
-}
-
-/// Strip the `await`/`?`/effect wrappers off a `select` arm operation down to the
-/// underlying call to spawn, reporting whether a `?` was present (so the arm body
-/// can re-apply it to the winning result).
-#[cfg(feature = "legacy-exec-ir")]
-fn peel_select_operation(operation: &HirExpr) -> (&HirExpr, bool) {
-    let mut current = operation;
-    let mut has_try = false;
-    loop {
-        match current {
-            HirExpr::Try { value, .. } => {
-                has_try = true;
-                current = value;
-            }
-            HirExpr::Await { value, .. } | HirExpr::Effect { value, .. } => {
-                current = value;
-            }
-            other => return (other, has_try),
-        }
     }
 }

@@ -229,35 +229,30 @@ impl LanguageService {
             deadline: request.deadline,
             ..OperationContext::default()
         };
-        // A workspace request is an aggregation boundary, not a second broad
-        // semantic query.  Each document query is owned by
-        // `CompilationSession` and keyed by the exact source/interface import
-        // closure it observes.  Calling the old whole-workspace diagnostic
-        // query here would make an unrelated document edit invalidate every
-        // editor diagnostic request again.
+        // A workspace request must validate the one complete immutable source
+        // and interface snapshot. Per-document diagnostics remain
+        // dependency-precise below, but package diagnostics need declarations
+        // from the package and captured path dependencies even when a source
+        // file has no explicit `use` edge to the interface that declares a
+        // type or external function.
         let before = self.frontend.stats();
-        let mut diagnostics = Vec::new();
+        let mut diagnostics = self
+            .frontend
+            .semantic_workspace_diagnostics_with_operation(&operation)
+            .map_err(LanguageServiceError::from)?
+            .to_vec();
         for path in self.documents.keys().cloned().collect::<Vec<_>>() {
             check_request(request)?;
-            diagnostics.extend(
-                self.semantic_document_diagnostics(&path, &operation, false)?
-                    .iter()
-                    .cloned(),
-            );
             diagnostics.extend(
                 self.lint_with_operation(&path, &operation)
                     .map_err(LanguageServiceError::from)?,
             );
         }
         let after = self.frontend.stats();
-        if after.semantic_document_diagnostic_cache_misses
-            > before.semantic_document_diagnostic_cache_misses
-        {
+        if after.workspace_diagnostic_cache_misses > before.workspace_diagnostic_cache_misses {
             self.cache_misses += 1;
             self.record_miss(QueryKind::Diagnostics);
-        } else if after.semantic_document_diagnostic_cache_hits
-            > before.semantic_document_diagnostic_cache_hits
-        {
+        } else if after.workspace_diagnostic_cache_hits > before.workspace_diagnostic_cache_hits {
             self.cache_hits += 1;
             self.record_hit(QueryKind::Diagnostics);
         }
@@ -671,7 +666,7 @@ mod tests {
     }
 
     #[test]
-    fn workspace_diagnostics_compose_dependency_precise_document_queries() {
+    fn workspace_diagnostics_use_the_session_owned_workspace_query() {
         let mut service = service();
         service.set_file(
             "host.rssi",
@@ -712,7 +707,7 @@ mod tests {
     }
 
     #[test]
-    fn unrelated_workspace_edits_reuse_other_document_semantic_queries() {
+    fn unrelated_workspace_edits_invalidate_the_complete_workspace_query() {
         let mut service = service();
         service.set_file(
             "host.rssi",
@@ -735,11 +730,13 @@ mod tests {
 
         assert!(service.workspace_diagnostics().is_empty());
         let first = service.frontend.stats();
-        assert_eq!(first.semantic_document_diagnostic_cache_misses, 3);
+        assert_eq!(first.workspace_diagnostic_cache_misses, 1);
 
-        // Only `other` needs a fresh document query.  `main` retains its
-        // cached resolve/type/HIR result because its visible contract closure
-        // still consists solely of `host`.
+        // Package diagnostics intentionally come from the complete immutable
+        // workspace snapshot: unimported declarations can still participate
+        // in package validation. A change to `other` therefore creates a new
+        // workspace query, while one-document editor requests remain
+        // dependency-precise in `diagnostics_with`.
         service.set_file(
             "other.rssi",
             2,
@@ -748,8 +745,7 @@ mod tests {
         );
         assert!(service.workspace_diagnostics().is_empty());
         let second = service.frontend.stats();
-        assert_eq!(second.semantic_document_diagnostic_cache_misses, 4);
-        assert_eq!(second.semantic_document_diagnostic_cache_hits, 2);
+        assert_eq!(second.workspace_diagnostic_cache_misses, 2);
     }
 
     #[test]

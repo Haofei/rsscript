@@ -1874,13 +1874,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rsscript-exec-ir"
-version = "0.1.0"
-dependencies = [
- "rsscript-abi-model",
-]
-
-[[package]]
 name = "rsscript-interface-catalog"
 version = "0.1.0"
 
@@ -1899,7 +1892,6 @@ name = "rsscript-lowering"
 version = "0.1.0"
 dependencies = [
  "rsscript-abi-model",
- "rsscript-exec-ir",
  "rsscript-mir",
  "rsscript-semantics",
  "rsscript-syntax",
@@ -2171,7 +2163,6 @@ dependencies = [
  "rsscript-build-support",
  "rsscript-bytecode",
  "rsscript-diagnostics",
- "rsscript-exec-ir",
  "rsscript-operation",
  "rsscript-provider-api",
  "rsscript-text",
