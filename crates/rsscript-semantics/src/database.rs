@@ -413,6 +413,7 @@ struct SemanticDocumentCacheKey {
     role: SessionFileRole,
     file_id: FileId,
     revision: SourceRevision,
+    visible_sources: Vec<(FileId, SourceRevision)>,
     visible_interfaces: Vec<(FileId, SourceRevision)>,
 }
 
@@ -427,6 +428,7 @@ struct SemanticDocumentInput {
     key: SemanticDocumentCacheKey,
     path: Arc<str>,
     text: Arc<str>,
+    sources: Vec<SourceFileSnapshot>,
     interfaces: Vec<SourceFileSnapshot>,
 }
 
@@ -506,11 +508,37 @@ impl WorkspaceModuleGraph {
         current_path: &str,
         root_imports: impl IntoIterator<Item = String>,
     ) -> BTreeSet<String> {
+        self.visible_paths(current_path, root_imports, true)
+    }
+
+    /// Find source files reachable from one source document's parsed imports.
+    ///
+    /// Source imports participate in the same namespace resolver as interface
+    /// imports, so an editor query must analyze their closure rather than
+    /// silently type-checking the current file against only host interfaces.
+    pub fn visible_source_paths(
+        &self,
+        current_path: &str,
+        root_imports: impl IntoIterator<Item = String>,
+    ) -> BTreeSet<String> {
+        self.visible_paths(current_path, root_imports, false)
+    }
+
+    fn visible_paths(
+        &self,
+        current_path: &str,
+        root_imports: impl IntoIterator<Item = String>,
+        is_interface: bool,
+    ) -> BTreeSet<String> {
         let mut imports = root_imports.into_iter().collect::<BTreeSet<_>>();
         let mut visible = BTreeSet::new();
         loop {
             let mut changed = false;
-            for node in self.nodes.iter().filter(|node| node.is_interface) {
+            for node in self
+                .nodes
+                .iter()
+                .filter(|node| node.is_interface == is_interface)
+            {
                 if node.path() == current_path {
                     continue;
                 }
@@ -1444,10 +1472,17 @@ impl CompilationSession {
     }
 
     fn invalidate_semantic_document_cache_for_source(&mut self, file_id: FileId) {
+        let retains_source = |key: &SemanticDocumentCacheKey| {
+            !(key.role == SessionFileRole::Source && key.file_id == file_id)
+                && !key
+                    .visible_sources
+                    .iter()
+                    .any(|(dependency_id, _)| *dependency_id == file_id)
+        };
         self.semantic_document_analysis_cache
-            .retain(|key, _| key.role != SessionFileRole::Source || key.file_id != file_id);
+            .retain(|key, _| retains_source(key));
         self.semantic_document_diagnostic_cache
-            .retain(|key, _| key.role != SessionFileRole::Source || key.file_id != file_id);
+            .retain(|key, _| retains_source(key));
     }
 
     fn invalidate_semantic_document_cache_for_interface(&mut self, file_id: FileId) {
@@ -1525,6 +1560,23 @@ impl CompilationSession {
         .map(|node| node.imports().to_vec())
         .unwrap_or_default();
         let visible_paths = graph.visible_interface_paths(file.path(), root_imports);
+        let source_paths = if role == SessionFileRole::Source {
+            let root_imports = graph
+                .source(file.path())
+                .map(|node| node.imports().to_vec())
+                .unwrap_or_default();
+            graph.visible_source_paths(file.path(), root_imports)
+        } else {
+            BTreeSet::new()
+        };
+        let sources = self
+            .source_snapshot()
+            .files()
+            .iter()
+            .filter(|candidate| candidate.path() != file.path())
+            .filter(|candidate| source_paths.contains(candidate.path()))
+            .cloned()
+            .collect::<Vec<_>>();
         let interfaces = self
             .interface_snapshot()
             .files()
@@ -1538,6 +1590,10 @@ impl CompilationSession {
                 role,
                 file_id: file.file_id(),
                 revision: file.revision(),
+                visible_sources: sources
+                    .iter()
+                    .map(|dependency| (dependency.file_id(), dependency.revision()))
+                    .collect(),
                 visible_interfaces: interfaces
                     .iter()
                     .map(|dependency| (dependency.file_id(), dependency.revision()))
@@ -1545,6 +1601,7 @@ impl CompilationSession {
             },
             path: Arc::clone(&file.path),
             text: Arc::clone(&file.text),
+            sources,
             interfaces,
         })
     }
@@ -1566,12 +1623,30 @@ impl CompilationSession {
             .iter()
             .map(|dependency| (dependency.path(), dependency.text()))
             .collect::<Vec<_>>();
-        let analysis = Arc::new(crate::analyze_source_with_interfaces_result_with_operation(
-            input.path.as_ref(),
-            input.text.as_ref(),
-            &interface_slices,
-            operation,
-        ));
+        let analysis = if input.sources.is_empty() {
+            Arc::new(crate::analyze_source_with_interfaces_result_with_operation(
+                input.path.as_ref(),
+                input.text.as_ref(),
+                &interface_slices,
+                operation,
+            ))
+        } else {
+            let mut source_slices = Vec::with_capacity(input.sources.len().saturating_add(1));
+            source_slices.push((input.path.as_ref(), input.text.as_ref()));
+            source_slices.extend(
+                input
+                    .sources
+                    .iter()
+                    .map(|dependency| (dependency.path(), dependency.text())),
+            );
+            Arc::new(
+                crate::analyze_sources_with_interfaces_result_with_operation(
+                    &source_slices,
+                    &interface_slices,
+                    operation,
+                ),
+            )
+        };
         operation.check()?;
         self.semantic_document_analysis_cache_misses = self
             .semantic_document_analysis_cache_misses
@@ -2351,6 +2426,66 @@ fn main() -> Int {
             .any(|diagnostic| diagnostic.severity.is_error()));
         assert_eq!(session.stats().semantic_document_analysis_cache_misses, 2);
         assert_eq!(session.stats().semantic_document_analysis_cache_hits, 2);
+    }
+
+    #[test]
+    fn document_semantic_analysis_tracks_imported_source_revisions() {
+        let mut session = CompilationSession::default();
+        session
+            .set_file(
+                "main.rss",
+                "module app\nuse lib.value\nfn main() -> Int { return value() }\n",
+            )
+            .unwrap();
+        session
+            .set_file("lib.rss", "module lib\nfn value() -> Int { return 1 }\n")
+            .unwrap();
+        session
+            .set_file(
+                "other.rss",
+                "module other\nfn ignored() -> Int { return 1 }\n",
+            )
+            .unwrap();
+        let operation = OperationContext::default();
+
+        let first = session
+            .semantic_analysis_file_with_operation("main.rss", &operation)
+            .unwrap()
+            .expect("source exists");
+        assert!(first.diagnostics().is_empty());
+        assert!(first.database().hir().function_body("lib__value").is_some());
+
+        // Unrelated source edits retain the imported-source closure and its
+        // cached resolve/type/HIR facts.
+        session
+            .set_file(
+                "other.rss",
+                "module other\nfn ignored() -> Int { return 2 }\n",
+            )
+            .unwrap();
+        let unrelated = session
+            .semantic_analysis_file_with_operation("main.rss", &operation)
+            .unwrap()
+            .expect("source exists");
+        assert!(Arc::ptr_eq(&first, &unrelated));
+
+        // A source module selected through `use` must invalidate the consumer
+        // and produce diagnostics from the updated cross-source contract.
+        session
+            .set_file(
+                "lib.rss",
+                "module lib\nfn value() -> String { return \"changed\" }\n",
+            )
+            .unwrap();
+        let changed = session
+            .semantic_analysis_file_with_operation("main.rss", &operation)
+            .unwrap()
+            .expect("source exists");
+        assert!(!Arc::ptr_eq(&first, &changed));
+        assert!(changed
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.severity.is_error()));
     }
 
     #[test]

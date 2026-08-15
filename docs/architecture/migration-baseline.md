@@ -546,11 +546,12 @@ visible without manually re-sorting every open parent milestone.
     transitive interface-dependent-path facts, so editor clients no longer
     retain a second dependency graph. Namespace isolation, including
     source/interface graph partitioning, is semantic-owned and the session now
-    caches document-level resolve/type/HIR results with the same exact visible
-    interface closure as document diagnostics, so unrelated interface edits
-    reuse the complete semantic result. The aggregate workspace analysis still
-    invalidates on every changed source/interface revision and remains the
-    outstanding query-splitting work. The session also caches an interface-aware
+    caches document-level resolve/type/HIR results with the exact visible source
+    and interface closure used by document diagnostics, so unrelated source or
+    interface edits reuse the complete semantic result while imported source
+    revisions invalidate their consumers. The aggregate workspace analysis
+    still invalidates on every changed source/interface revision and remains
+    the outstanding query-splitting work. The session also caches an interface-aware
     workspace HIR after that canonical rewrite. The
     declaration/signature `SemanticTypeFacts` owned by that HIR now also have a
     revision-invalidated workspace query with cancellation/deadline handling.

@@ -674,6 +674,61 @@ mod tests {
     }
 
     #[test]
+    fn imported_source_edits_invalidate_document_semantics_without_unrelated_churn() {
+        let mut service = service();
+        service.set_file(
+            "main.rss",
+            1,
+            DocumentKind::Source,
+            "module app\nuse lib.value\nfn main() -> Int { return value() }\n",
+        );
+        service.set_file(
+            "lib.rss",
+            1,
+            DocumentKind::Source,
+            "module lib\nfn value() -> Int { return 1 }\n",
+        );
+        service.set_file(
+            "other.rss",
+            1,
+            DocumentKind::Source,
+            "module other\nfn ignored() -> Int { return 1 }\n",
+        );
+        let initial = service.diagnostics("main.rss");
+        assert!(
+            initial
+                .iter()
+                .all(|diagnostic| diagnostic.severity != Severity::Error),
+            "imported source should resolve through the session query: {initial:?}"
+        );
+
+        service.set_file(
+            "other.rss",
+            2,
+            DocumentKind::Source,
+            "module other\nfn ignored() -> Int { return 2 }\n",
+        );
+        service.diagnostics("main.rss");
+        assert_eq!(service.query_stats(QueryKind::Diagnostics).misses, 1);
+        assert_eq!(service.query_stats(QueryKind::Diagnostics).hits, 1);
+
+        service.set_file(
+            "lib.rss",
+            2,
+            DocumentKind::Source,
+            "module lib\nfn value() -> String { return \"changed\" }\n",
+        );
+        let changed = service.diagnostics("main.rss");
+        assert!(
+            changed
+                .iter()
+                .any(|diagnostic| diagnostic.severity == Severity::Error),
+            "a changed imported source contract must recheck its consumer: {changed:?}"
+        );
+        assert_eq!(service.query_stats(QueryKind::Diagnostics).misses, 2);
+    }
+
+    #[test]
     fn interface_edit_invalidates_semantics_but_reuses_local_queries() {
         let mut service = service();
         service.set_file(
