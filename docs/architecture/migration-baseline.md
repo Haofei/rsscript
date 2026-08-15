@@ -1905,7 +1905,10 @@ mechanical acceptance condition holds.
       `examples/structured-async-pipeline` now proves the verified,
       provider-neutral `task_group` / `async let` / `await` execution path and
       bounded `ExecutionReport`, including a second, host-cancelled run of the
-      same linked Artifact. Resource cleanup, Provider
+      same linked Artifact. The identical source also completes through the
+      default isolated `rss run` path under the fail-closed `no_providers`
+      profile, proving child re-verification/link/report framing independently
+      of the in-process embedding test. Resource cleanup, Provider
       replacement, isolated-runner fixtures, and failure-report snapshots still
       need to be added before E02.2 can close.
 - [ ] **E03 — Establish compatibility and conformance corpora.** Add source to

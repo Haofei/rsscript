@@ -21,6 +21,15 @@ Run from the repository root:
 cargo run -p structured-async-pipeline
 ```
 
+The same source also runs through the product-default isolated runner. This
+does not inject any Provider—the program has no external imports—but it proves
+the Artifact is built, re-verified in a child process, linked under the
+fail-closed `no_providers` profile, and reported through the runner protocol:
+
+```text
+cargo run -p rsscript-cli --bin rss --features execution -- run examples/structured-async-pipeline/script/main.rss
+```
+
 The example's unit test runs both the successful and pre-cancelled execution
 paths, so the report assertions are part of the workspace regression suite:
 
@@ -30,6 +39,6 @@ cargo test -p structured-async-pipeline
 
 For a Provider injection example, see
 [`embedded-report-pipeline`](../embedded-report-pipeline/README.md). This
-example deliberately uses the trusted in-process SDK path. It does not claim
-process isolation or sandboxing; untrusted inputs must use the reference
-runner and OS-level controls.
+example's Rust embedding code deliberately uses the trusted in-process SDK
+path. Neither route claims a universal sandbox: untrusted inputs require the
+reference runner plus host-selected OS-level controls.
