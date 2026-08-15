@@ -172,6 +172,32 @@ pub enum MirInstruction {
         destination: ValueId,
         map: PlaceId,
     },
+    /// Insert a key/value pair into a resolved mutable map in place. The
+    /// mutable map place and the independently evaluated key/value operands
+    /// make the update and its ownership boundary explicit to verification and
+    /// code generation.
+    MapInsert {
+        destination: ValueId,
+        map: PlaceId,
+        key: ValueId,
+        value: ValueId,
+    },
+    /// Insert a key/value pair into a resolved mutable map and return the
+    /// previous value as an `Option`. This remains separate from `MapInsert`
+    /// because its result contract is observable in typed control flow.
+    MapInsertOld {
+        destination: ValueId,
+        map: PlaceId,
+        key: ValueId,
+        value: ValueId,
+    },
+    /// Remove a key from a resolved mutable map and return the removed value
+    /// as an `Option`.
+    MapRemove {
+        destination: ValueId,
+        map: PlaceId,
+        key: ValueId,
+    },
     /// Read a checked field from an already-resolved aggregate value. The
     /// field spelling is data for the runtime object representation; it is not
     /// a source-level callee or type identity.
@@ -1211,6 +1237,9 @@ fn instruction_definitions(instruction: &MirInstruction) -> Vec<ValueId> {
         | MirInstruction::ListGet { destination, .. }
         | MirInstruction::MapGet { destination, .. }
         | MirInstruction::MapClear { destination, .. }
+        | MirInstruction::MapInsert { destination, .. }
+        | MirInstruction::MapInsertOld { destination, .. }
+        | MirInstruction::MapRemove { destination, .. }
         | MirInstruction::GetField { destination, .. }
         | MirInstruction::ListLen { destination, .. }
         | MirInstruction::ReadPlace { destination, .. }
@@ -1259,6 +1288,9 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         MirInstruction::UnwrapOption { source, .. } => vec![*source],
         MirInstruction::ListGet { list, index, .. } => vec![*list, *index],
         MirInstruction::MapGet { map, key, .. } => vec![*map, *key],
+        MirInstruction::MapInsert { key, value, .. }
+        | MirInstruction::MapInsertOld { key, value, .. } => vec![*key, *value],
+        MirInstruction::MapRemove { key, .. } => vec![*key],
         MirInstruction::GetField { base, .. } => vec![*base],
         MirInstruction::ListLen { list, .. } => vec![*list],
         MirInstruction::AcquireResource { source, .. } => vec![*source],
@@ -1429,6 +1461,9 @@ fn transfer_move_state(
             Ok(())
         }
         MirInstruction::MapClear { map, .. } => check_live(*map, moved_places),
+        MirInstruction::MapInsert { map, .. }
+        | MirInstruction::MapInsertOld { map, .. }
+        | MirInstruction::MapRemove { map, .. } => check_live(*map, moved_places),
         MirInstruction::Call { arguments, .. } => {
             for argument in arguments {
                 match argument {
@@ -1562,6 +1597,34 @@ fn verify_instruction(
         MirInstruction::MapClear { destination, map } => {
             check_live_place(*map, moved_places)?;
             define(*destination, defined)
+        }
+        MirInstruction::MapInsert {
+            destination,
+            map,
+            key,
+            value,
+        }
+        | MirInstruction::MapInsertOld {
+            destination,
+            map,
+            key,
+            value,
+        } => {
+            check_live_place(*map, moved_places)?;
+            define(*destination, defined)?;
+            used.push(*key);
+            used.push(*value);
+            Ok(())
+        }
+        MirInstruction::MapRemove {
+            destination,
+            map,
+            key,
+        } => {
+            check_live_place(*map, moved_places)?;
+            define(*destination, defined)?;
+            used.push(*key);
+            Ok(())
         }
         MirInstruction::ReadPlace { destination, place } => {
             check_live_place(*place, moved_places)?;

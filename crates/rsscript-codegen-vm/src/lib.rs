@@ -454,6 +454,46 @@ fn lower_instruction(
                 ("map", json!(place_reg(*map))),
             ],
         )),
+        MirInstruction::MapInsert {
+            destination,
+            map,
+            key,
+            value,
+        } => code.push(instr(
+            "MapInsert",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("map", json!(place_reg(*map))),
+                ("key", json!(value_reg(function, *key))),
+                ("value", json!(value_reg(function, *value))),
+            ],
+        )),
+        MirInstruction::MapInsertOld {
+            destination,
+            map,
+            key,
+            value,
+        } => code.push(instr(
+            "MapInsertOld",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("map", json!(place_reg(*map))),
+                ("key", json!(value_reg(function, *key))),
+                ("value", json!(value_reg(function, *value))),
+            ],
+        )),
+        MirInstruction::MapRemove {
+            destination,
+            map,
+            key,
+        } => code.push(instr(
+            "MapRemove",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("map", json!(place_reg(*map))),
+                ("key", json!(value_reg(function, *key))),
+            ],
+        )),
         MirInstruction::GetField {
             destination,
             base,

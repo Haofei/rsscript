@@ -1031,6 +1031,13 @@ mechanical acceptance condition holds.
       emits the established verifier-checked v1 operation. The direct and
       dual-path corpus proves the map is mutated in place and that later
       catalog calls observe the cleared state.
+    - [x] **M03.4i — Lower special mutable-map updates without legacy
+      intrinsics.** `Map.insert`, `Map.insert_old`, and `Map.remove` become
+      dedicated MIR operations over an explicit mutable `PlaceId`; the two
+      insertion forms retain checked `read` local key/value inputs explicitly
+      after the update. The direct/legacy/reference corpus proves insert,
+      previous-value replacement, removal, and option-result control flow
+      without reconstructing `mut` or `retains` from source spelling.
 - [ ] **M04 — Lower checked HIR to MIR exactly once.** Backend code cannot
   inspect syntax AST or reconstruct semantic facts. MIR verification rejects
   unresolved calls, invalid ownership state, incomplete cleanup, and malformed
@@ -1253,6 +1260,11 @@ mechanical acceptance condition holds.
       verifier-checked mutable `PlaceId` to the existing v1 map clear operation.
       No backend has to rediscover a source `mut` qualifier; direct bytecode
       parity proves subsequent reads observe the same mutation as the legacy VM.
+    - [x] **V02.3j — Emit resolved mutable-map updates.** `MapInsert`,
+      `MapInsertOld`, and `MapRemove` map their explicit mutable map place and
+      value operands to the verifier-checked v1 map update instructions. The
+      direct migration corpus checks the same results, streams, usage, and
+      retention facts against the legacy path.
   - [x] **V02.4 — Switch reviewed builds to the compiler bytecode boundary.**
     SDK source, interface, and package builds delegate checked HIR → MIR →
     `codegen-vm` Artifact emission to the compiler's VM-free `bytecode`

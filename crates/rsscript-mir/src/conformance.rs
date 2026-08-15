@@ -646,6 +646,86 @@ impl<'a> Interpreter<'a> {
                         entries.clear();
                         values[destination.index()] = Some(MirValue::Unit);
                     }
+                    MirInstruction::MapInsert {
+                        destination,
+                        map,
+                        key,
+                        value,
+                    } => {
+                        let key = value_at(&values, *key)?;
+                        let value = value_at(&values, *value)?;
+                        let entries = match places[map.index()].as_mut() {
+                            Some(MirValue::Map(entries)) => entries,
+                            Some(_) => {
+                                return Err(MirExecutionError::InvalidOperation("map base"));
+                            }
+                            None => {
+                                return Err(MirExecutionError::UninitializedPlace(map.index()));
+                            }
+                        };
+                        if let Some((_, existing)) =
+                            entries.iter_mut().find(|(entry_key, _)| *entry_key == key)
+                        {
+                            *existing = value;
+                        } else {
+                            entries.push((key, value));
+                        }
+                        values[destination.index()] = Some(MirValue::Unit);
+                    }
+                    MirInstruction::MapInsertOld {
+                        destination,
+                        map,
+                        key,
+                        value,
+                    } => {
+                        let key = value_at(&values, *key)?;
+                        let value = value_at(&values, *value)?;
+                        let entries = match places[map.index()].as_mut() {
+                            Some(MirValue::Map(entries)) => entries,
+                            Some(_) => {
+                                return Err(MirExecutionError::InvalidOperation("map base"));
+                            }
+                            None => {
+                                return Err(MirExecutionError::UninitializedPlace(map.index()));
+                            }
+                        };
+                        let old = if let Some((_, existing)) =
+                            entries.iter_mut().find(|(entry_key, _)| *entry_key == key)
+                        {
+                            Some(std::mem::replace(existing, value))
+                        } else {
+                            entries.push((key, value));
+                            None
+                        };
+                        values[destination.index()] = Some(
+                            old.map(|value| MirValue::OptionSome(Box::new(value)))
+                                .unwrap_or(MirValue::OptionNone),
+                        );
+                    }
+                    MirInstruction::MapRemove {
+                        destination,
+                        map,
+                        key,
+                    } => {
+                        let key = value_at(&values, *key)?;
+                        let entries = match places[map.index()].as_mut() {
+                            Some(MirValue::Map(entries)) => entries,
+                            Some(_) => {
+                                return Err(MirExecutionError::InvalidOperation("map base"));
+                            }
+                            None => {
+                                return Err(MirExecutionError::UninitializedPlace(map.index()));
+                            }
+                        };
+                        let old = entries
+                            .iter()
+                            .position(|(entry_key, _)| *entry_key == key)
+                            .map(|index| entries.remove(index).1);
+                        values[destination.index()] = Some(
+                            old.map(|value| MirValue::OptionSome(Box::new(value)))
+                                .unwrap_or(MirValue::OptionNone),
+                        );
+                    }
                     MirInstruction::GetField {
                         destination,
                         base,

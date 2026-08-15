@@ -1610,6 +1610,60 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                 let map = self.lower_mutable_builtin_place(&args[0].value)?;
                 self.emit(MirInstruction::MapClear { destination, map });
             }
+            "insert" if signature.namespace.as_deref() == Some("Map") => {
+                if receiver.is_some() || args.len() != 3 {
+                    return self.unsupported("Map.insert with invalid checked call shape");
+                }
+                let mut ordered = args.iter().collect::<Vec<_>>();
+                ordered.sort_by_key(|argument| argument.evaluation_index);
+                let map = self.lower_mutable_builtin_place(&ordered[0].value)?;
+                let (key, retained_key) = self.lower_retained_builtin_value(&ordered[1].value)?;
+                let (value, retained_value) =
+                    self.lower_retained_builtin_value(&ordered[2].value)?;
+                self.emit(MirInstruction::MapInsert {
+                    destination,
+                    map,
+                    key,
+                    value,
+                });
+                for place in [retained_key, retained_value].into_iter().flatten() {
+                    self.emit(MirInstruction::Retain { place });
+                }
+            }
+            "insert_old" if signature.namespace.as_deref() == Some("Map") => {
+                if receiver.is_some() || args.len() != 3 {
+                    return self.unsupported("Map.insert_old with invalid checked call shape");
+                }
+                let mut ordered = args.iter().collect::<Vec<_>>();
+                ordered.sort_by_key(|argument| argument.evaluation_index);
+                let map = self.lower_mutable_builtin_place(&ordered[0].value)?;
+                let (key, retained_key) = self.lower_retained_builtin_value(&ordered[1].value)?;
+                let (value, retained_value) =
+                    self.lower_retained_builtin_value(&ordered[2].value)?;
+                self.emit(MirInstruction::MapInsertOld {
+                    destination,
+                    map,
+                    key,
+                    value,
+                });
+                for place in [retained_key, retained_value].into_iter().flatten() {
+                    self.emit(MirInstruction::Retain { place });
+                }
+            }
+            "remove" if signature.namespace.as_deref() == Some("Map") => {
+                if receiver.is_some() || args.len() != 2 {
+                    return self.unsupported("Map.remove with invalid checked call shape");
+                }
+                let mut ordered = args.iter().collect::<Vec<_>>();
+                ordered.sort_by_key(|argument| argument.evaluation_index);
+                let map = self.lower_mutable_builtin_place(&ordered[0].value)?;
+                let key = self.lower_expression(&ordered[1].value)?;
+                self.emit(MirInstruction::MapRemove {
+                    destination,
+                    map,
+                    key,
+                });
+            }
             _ => {
                 let Some(namespace) = signature.namespace.as_deref() else {
                     return self.unsupported("builtin checked HIR call without namespace");
@@ -1807,6 +1861,31 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             return self.unsupported("mutating builtin argument on non-local value");
         };
         self.lookup_place(name)
+    }
+
+    /// Materialize a value that the resolved builtin retains and preserve the
+    /// semantic retention fact when the caller supplied a `read local`.
+    ///
+    /// The resulting runtime operand is still a normal `ValueId`; the
+    /// separate `Retain` makes the ownership contract visible to the MIR
+    /// verifier instead of leaving it encoded only in the `.rssi` signature.
+    fn lower_retained_builtin_value(
+        &mut self,
+        argument: &checked::HirExpr,
+    ) -> Result<(ValueId, Option<PlaceId>), MirLoweringError> {
+        let retained_place = match argument {
+            checked::HirExpr::Effect {
+                effect: checked::ParamEffect::Read,
+                value,
+                ..
+            } => match value.as_ref() {
+                checked::HirExpr::Ident { name, .. } => Some(self.lookup_place(name)?),
+                _ => None,
+            },
+            _ => None,
+        };
+        let value = self.lower_expression(argument)?;
+        Ok((value, retained_place))
     }
 
     /// `manage local` consumes the local graph and creates a stable managed

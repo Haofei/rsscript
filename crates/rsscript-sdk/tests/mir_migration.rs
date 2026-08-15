@@ -228,6 +228,54 @@ fn main() -> Bool {
 "#,
     },
     MigrationCase {
+        name: "map_insert",
+        capability: "resolved mutable-map insertion with retention",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn main() -> Int {
+    let mut table: Map<Int, Int> = {1 => 42}
+    let key = 2
+    let value = 7
+    Map.insert<Int, Int>(map: mut table, key: read key, value: read value)
+    match Map.get<Int, Int>(map: read table, key: read key) {
+        Some(found) => { return found }
+        None => { return 0 }
+    }
+}
+"#,
+    },
+    MigrationCase {
+        name: "map_insert_old",
+        capability: "resolved mutable-map insertion with previous value",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn main() -> Int {
+    let mut table: Map<Int, Int> = {1 => 42}
+    let key = 1
+    let value = 7
+    match Map.insert_old<Int, Int>(map: mut table, key: read key, value: read value) {
+        Some(previous) => { return previous }
+        None => { return 0 }
+    }
+}
+"#,
+    },
+    MigrationCase {
+        name: "map_remove",
+        capability: "resolved mutable-map removal",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn main() -> Int {
+    let mut table: Map<Int, Int> = {1 => 42}
+    let key = 1
+    match Map.remove<Int, Int>(map: mut table, key: read key) {
+        Some(previous) => { return previous }
+        None => { return 0 }
+    }
+}
+"#,
+    },
+    MigrationCase {
         name: "json_object_literal",
         capability: "JSON object literals",
         stage: MigrationStage::DualPath,
@@ -606,6 +654,80 @@ fn main() -> Bool {
     let legacy = reg_vm_eval_source_main("direct-hir-map-clear.rss", source)
         .expect("legacy Map.clear path executes");
     assert_eq!(legacy.value, "true");
+    assert_eq!(direct.value, legacy.value);
+    assert_eq!(direct.stdout, legacy.stdout);
+    assert_eq!(direct.stderr, legacy.stderr);
+    assert_eq!(direct.usage, legacy.usage);
+}
+
+#[test]
+fn direct_checked_hir_map_mutations_preserve_retention_and_option_contracts() {
+    let source = r#"
+fn main() -> Int {
+    let mut table: Map<Int, Int> = {1 => 42}
+    let key = 1
+    let replacement = 7
+    Map.insert<Int, Int>(map: mut table, key: read key, value: read replacement)
+    match Map.insert_old<Int, Int>(map: mut table, key: read key, value: read replacement) {
+        Some(previous) => {
+            if previous != 7 {
+                return 0
+            }
+        }
+        None => { return 0 }
+    }
+    match Map.remove<Int, Int>(map: mut table, key: read key) {
+        Some(removed) => { return removed }
+        None => { return 0 }
+    }
+}
+"#;
+    let compiled = compile_source_to_ir("direct-hir-map-mutations.rss", source)
+        .expect("Map mutation fixture compiles");
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("Map mutations should lower directly from checked HIR");
+    let instructions = mir
+        .functions()
+        .iter()
+        .flat_map(|function| function.blocks())
+        .flat_map(|block| block.instructions())
+        .collect::<Vec<_>>();
+    assert!(
+        instructions
+            .iter()
+            .any(|instruction| matches!(instruction, MirInstruction::MapInsert { .. })),
+        "direct MIR must preserve Map.insert as an explicit mutable-place operation"
+    );
+    assert!(
+        instructions
+            .iter()
+            .any(|instruction| matches!(instruction, MirInstruction::MapInsertOld { .. })),
+        "direct MIR must preserve Map.insert_old as an explicit option-valued operation"
+    );
+    assert!(
+        instructions
+            .iter()
+            .any(|instruction| matches!(instruction, MirInstruction::MapRemove { .. })),
+        "direct MIR must preserve Map.remove as an explicit option-valued operation"
+    );
+    assert!(
+        instructions
+            .iter()
+            .any(|instruction| matches!(instruction, MirInstruction::Retain { .. })),
+        "Map insertion must retain read-local key/value arguments explicitly"
+    );
+    let direct = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("Map mutation MIR emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("Map mutation bytecode executes");
+    let legacy = reg_vm_eval_source_main("direct-hir-map-mutations.rss", source)
+        .expect("legacy Map mutation path executes");
+    assert_eq!(legacy.value, "7");
     assert_eq!(direct.value, legacy.value);
     assert_eq!(direct.stdout, legacy.stdout);
     assert_eq!(direct.stderr, legacy.stderr);
