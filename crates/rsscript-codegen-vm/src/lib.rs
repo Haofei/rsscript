@@ -84,6 +84,7 @@ fn bytecode_error(error: BytecodeError) -> CodegenError {
 fn wire_unit(mir: &MirModule) -> Result<Value, CodegenError> {
     let mut ids = BTreeMap::new();
     let mut native_signatures = BTreeMap::new();
+    let mut types = BTreeMap::new();
     let mut functions = Vec::new();
     for function in mir.functions() {
         let name = function_name(mir, function)?.to_owned();
@@ -99,11 +100,30 @@ fn wire_unit(mir: &MirModule) -> Result<Value, CodegenError> {
         );
         functions.push(wire_function(mir, function)?);
     }
+    for layout in mir.type_layouts() {
+        if types
+            .insert(
+                layout.name().to_owned(),
+                json!({
+                    "name": layout.name(),
+                    "fields": layout.fields().iter().map(|(name, ty)| {
+                        let ty = mir.ty(*ty).expect("validated MIR type layout field");
+                        json!({ "name": name, "type_name": legacy_signature_type(ty) })
+                    }).collect::<Vec<_>>(),
+                }),
+            )
+            .is_some()
+        {
+            return Err(CodegenError::InvalidMir(
+                "MIR contains duplicate runtime type-layout name".to_owned(),
+            ));
+        }
+    }
     Ok(json!({
         "functions": functions,
         "function_ids": ids,
         "resource_drop_functions": BTreeMap::<String, usize>::new(),
-        "types": BTreeMap::<String, Value>::new(),
+        "types": types,
         "native_signatures": native_signatures,
         "closure_identity_observable": false,
     }))
@@ -612,18 +632,43 @@ fn lower_instruction(
                         ("mut_args", json!(mut_args)),
                     ],
                 )),
-                MirCallTarget::Builtin { id, .. } => {
+                MirCallTarget::Builtin {
+                    id, type_arguments, ..
+                } => {
                     let intrinsic = builtin_vm_name(*id).ok_or(CodegenError::InvalidMir(
                         "builtin call references missing catalog identity".to_owned(),
                     ))?;
-                    code.push(instr(
-                        "CallIntrinsic",
-                        [
-                            ("dst", json!(dst)),
-                            ("intrinsic", json!(intrinsic)),
-                            ("args", json!(args)),
-                        ],
-                    ));
+                    if type_arguments.is_empty() {
+                        code.push(instr(
+                            "CallIntrinsic",
+                            [
+                                ("dst", json!(dst)),
+                                ("intrinsic", json!(intrinsic)),
+                                ("args", json!(args)),
+                            ],
+                        ));
+                    } else if type_arguments.len() == 1 {
+                        let ty = mir.ty(type_arguments[0]).ok_or(CodegenError::InvalidMir(
+                            "builtin call references missing type argument".to_owned(),
+                        ))?;
+                        let type_arg =
+                            wire_runtime_type_name(ty).ok_or(CodegenError::InvalidMir(
+                                "builtin call type argument has no v1 runtime identity".to_owned(),
+                            ))?;
+                        code.push(instr(
+                            "CallTypedIntrinsic",
+                            [
+                                ("dst", json!(dst)),
+                                ("intrinsic", json!(intrinsic)),
+                                ("type_arg", json!(type_arg)),
+                                ("args", json!(args)),
+                            ],
+                        ));
+                    } else {
+                        return Err(CodegenError::InvalidMir(
+                            "v1 typed intrinsic supports exactly one type argument".to_owned(),
+                        ));
+                    }
                 }
                 MirCallTarget::External(id) => {
                     let import =
@@ -647,6 +692,30 @@ fn lower_instruction(
         MirInstruction::Discard { .. } => {}
     };
     Ok(())
+}
+
+/// The v1 register VM accepts one legacy typed-intrinsic string. It is an
+/// encoder-only projection of the already-verified `WireType`; source callee
+/// spellings never reach this boundary.
+fn wire_runtime_type_name(ty: &rsscript_abi_model::WireType) -> Option<String> {
+    match ty {
+        rsscript_abi_model::WireType::Unit => Some("Unit".to_owned()),
+        rsscript_abi_model::WireType::Bool => Some("Bool".to_owned()),
+        rsscript_abi_model::WireType::Int { .. } => Some("Int".to_owned()),
+        rsscript_abi_model::WireType::Float { .. } => Some("Float".to_owned()),
+        rsscript_abi_model::WireType::String => Some("String".to_owned()),
+        rsscript_abi_model::WireType::Char => Some("Char".to_owned()),
+        rsscript_abi_model::WireType::Bytes => Some("Bytes".to_owned()),
+        rsscript_abi_model::WireType::Named { name, .. }
+        | rsscript_abi_model::WireType::Resource { name }
+        | rsscript_abi_model::WireType::Handle { name } => Some(name.clone()),
+        rsscript_abi_model::WireType::Qualified { value, .. } => wire_runtime_type_name(value),
+        rsscript_abi_model::WireType::List { .. }
+        | rsscript_abi_model::WireType::Map { .. }
+        | rsscript_abi_model::WireType::Option { .. }
+        | rsscript_abi_model::WireType::Result { .. }
+        | rsscript_abi_model::WireType::Tuple { .. } => None,
+    }
 }
 
 fn lower_terminator(

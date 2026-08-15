@@ -288,6 +288,13 @@ pub enum MirCallTarget {
     Builtin {
         id: BuiltinId,
         parameter_modes: Box<[MirParameterMode]>,
+        /// Concrete type arguments required by a catalog-owned builtin.
+        ///
+        /// The values are module-local `TypeId`s rather than source spellings,
+        /// so generic runtime contracts remain verifier-visible even while the
+        /// v1 bytecode encoder still projects a small typed-intrinsic subset
+        /// onto its legacy string operand.
+        type_arguments: Box<[TypeId]>,
     },
     External(ExternalSymbolId),
 }
@@ -599,9 +606,42 @@ impl MirExternalImport {
     }
 }
 
+/// Runtime layout evidence for a named value type. The executable type table
+/// owns the canonical `TypeId`; this side table carries only the ordered field
+/// shape needed by type-directed builtins and the v1 VM value representation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MirTypeLayout {
+    ty: TypeId,
+    name: String,
+    fields: Vec<(String, TypeId)>,
+}
+
+impl MirTypeLayout {
+    pub fn new(ty: TypeId, name: impl Into<String>, fields: Vec<(String, TypeId)>) -> Self {
+        Self {
+            ty,
+            name: name.into(),
+            fields,
+        }
+    }
+
+    pub fn ty(&self) -> TypeId {
+        self.ty
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn fields(&self) -> &[(String, TypeId)] {
+        &self.fields
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct MirModule {
     types: Vec<WireType>,
+    type_layouts: Vec<MirTypeLayout>,
     functions: Vec<MirFunction>,
     function_debug: Vec<MirFunctionDebug>,
     external_imports: Vec<MirExternalImport>,
@@ -656,6 +696,28 @@ impl MirModule {
     ) -> Result<Self, MirValidationError> {
         let module = Self {
             types,
+            type_layouts: Vec::new(),
+            functions,
+            function_debug,
+            external_imports,
+        };
+        module.verify()?;
+        Ok(module)
+    }
+
+    /// Construct a module with explicit runtime type layouts. Lowerers use
+    /// this when a typed builtin must inspect a named record at execution;
+    /// ordinary scalar modules retain the smaller [`new`](Self::new) path.
+    pub fn with_type_layouts(
+        types: Vec<WireType>,
+        type_layouts: Vec<MirTypeLayout>,
+        functions: Vec<MirFunction>,
+        function_debug: Vec<MirFunctionDebug>,
+        external_imports: Vec<MirExternalImport>,
+    ) -> Result<Self, MirValidationError> {
+        let module = Self {
+            types,
+            type_layouts,
             functions,
             function_debug,
             external_imports,
@@ -679,6 +741,10 @@ impl MirModule {
         &self.types
     }
 
+    pub fn type_layouts(&self) -> &[MirTypeLayout] {
+        &self.type_layouts
+    }
+
     pub fn ty(&self, id: TypeId) -> Option<&WireType> {
         self.types.get(id.index())
     }
@@ -696,6 +762,7 @@ impl MirModule {
     }
 
     pub fn verify(&self) -> Result<(), MirValidationError> {
+        verify_type_layouts(&self.types, &self.type_layouts)?;
         if self.functions.len() != self.function_debug.len() {
             return Err(MirValidationError::FunctionDebugCount {
                 functions: self.functions.len(),
@@ -730,6 +797,43 @@ impl MirModule {
         }
         Ok(())
     }
+}
+
+fn verify_type_layouts(
+    types: &[WireType],
+    layouts: &[MirTypeLayout],
+) -> Result<(), MirValidationError> {
+    let mut names = BTreeSet::new();
+    let mut layout_types = BTreeSet::new();
+    for layout in layouts {
+        if layout.name.is_empty() || !names.insert(layout.name.clone()) {
+            return Err(MirValidationError::InvalidTypeLayout {
+                ty: layout.ty,
+                name: layout.name.clone(),
+            });
+        }
+        if !layout_types.insert(layout.ty)
+            || !matches!(
+                types.get(layout.ty.index()),
+                Some(WireType::Named { name, .. }) if name == &layout.name
+            )
+        {
+            return Err(MirValidationError::InvalidTypeLayout {
+                ty: layout.ty,
+                name: layout.name.clone(),
+            });
+        }
+        let mut fields = BTreeSet::new();
+        for (name, ty) in &layout.fields {
+            if name.is_empty() || !fields.insert(name) || ty.index() >= types.len() {
+                return Err(MirValidationError::InvalidTypeLayout {
+                    ty: layout.ty,
+                    name: layout.name.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 fn verify_resource_types(
@@ -992,6 +1096,7 @@ fn verify_function(
                 &mut defined,
                 &mut used,
                 &mut block_moved_places,
+                type_count,
                 functions,
                 external_imports,
             )?;
@@ -1368,6 +1473,7 @@ fn verify_instruction(
     defined: &mut BTreeSet<ValueId>,
     used: &mut Vec<ValueId>,
     moved_places: &mut BTreeSet<PlaceId>,
+    type_count: usize,
     functions: &[MirFunction],
     external_imports: &[MirExternalImport],
 ) -> Result<(), MirValidationError> {
@@ -1519,6 +1625,7 @@ fn verify_instruction(
                 MirCallTarget::Builtin {
                     id,
                     parameter_modes,
+                    type_arguments,
                 } if builtin_vm_name(*id).is_some() => parameter_modes.to_vec(),
                 MirCallTarget::Builtin { id, .. } => {
                     return Err(MirValidationError::InvalidBuiltinTarget {
@@ -1545,6 +1652,32 @@ fn verify_instruction(
                     });
                 }
             };
+            if let MirCallTarget::Builtin {
+                id, type_arguments, ..
+            } = target
+            {
+                let expected_type_arguments = match builtin_vm_name(*id) {
+                    Some("JsonDecode" | "JsonDecodeText") => 1,
+                    Some(_) => 0,
+                    None => unreachable!("builtin target was validated above"),
+                };
+                if type_arguments.len() != expected_type_arguments {
+                    return Err(MirValidationError::BuiltinTypeArgumentArity {
+                        function: function.id,
+                        target: *id,
+                        expected: expected_type_arguments,
+                        actual: type_arguments.len(),
+                    });
+                }
+                for ty in type_arguments {
+                    if ty.index() >= type_count {
+                        return Err(MirValidationError::InvalidBuiltinTypeArgument {
+                            function: function.id,
+                            ty: *ty,
+                        });
+                    }
+                }
+            }
             if arguments.len() != expected_modes.len() {
                 return Err(MirValidationError::CallArityMismatch {
                     function: function.id,
@@ -1817,6 +1950,20 @@ pub enum MirValidationError {
     InvalidBuiltinTarget {
         function: FunctionId,
         target: BuiltinId,
+    },
+    InvalidBuiltinTypeArgument {
+        function: FunctionId,
+        ty: TypeId,
+    },
+    BuiltinTypeArgumentArity {
+        function: FunctionId,
+        target: BuiltinId,
+        expected: usize,
+        actual: usize,
+    },
+    InvalidTypeLayout {
+        ty: TypeId,
+        name: String,
     },
     CallArityMismatch {
         function: FunctionId,
@@ -2787,6 +2934,60 @@ mod tests {
         assert!(matches!(
             MirModule::new(vec![WireType::Unit], vec![function], debug(), Vec::new()),
             Err(MirValidationError::InvalidRecordType { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_invalid_builtin_type_metadata_and_runtime_layouts() {
+        let decode = builtin_id("Json", "decode").expect("JSON decode is catalog-owned");
+        let function = MirFunction::new(
+            FunctionId::new(0),
+            signature(),
+            0,
+            1,
+            vec![BasicBlock::new(
+                BlockId::new(0),
+                vec![MirInstruction::Call {
+                    destination: ValueId::new(0),
+                    target: MirCallTarget::Builtin {
+                        id: decode,
+                        parameter_modes: vec![MirParameterMode::Read].into_boxed_slice(),
+                        type_arguments: vec![TypeId::new(0), TypeId::new(0)].into_boxed_slice(),
+                    },
+                    arguments: Vec::new(),
+                }],
+                MirTerminator::Return(Some(ValueId::new(0))),
+            )],
+        );
+        assert!(matches!(
+            MirModule::new(vec![WireType::Unit], vec![function], debug(), Vec::new()),
+            Err(MirValidationError::BuiltinTypeArgumentArity { .. })
+        ));
+
+        let function = MirFunction::new(
+            FunctionId::new(0),
+            signature(),
+            0,
+            0,
+            vec![BasicBlock::new(
+                BlockId::new(0),
+                Vec::new(),
+                MirTerminator::Return(None),
+            )],
+        );
+        assert!(matches!(
+            MirModule::with_type_layouts(
+                vec![WireType::Named {
+                    package: None,
+                    name: "Actual".into(),
+                    arguments: Vec::new(),
+                }],
+                vec![MirTypeLayout::new(TypeId::new(0), "Wrong", Vec::new())],
+                vec![function],
+                debug(),
+                Vec::new(),
+            ),
+            Err(MirValidationError::InvalidTypeLayout { .. })
         ));
     }
 }

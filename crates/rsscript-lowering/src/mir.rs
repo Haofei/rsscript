@@ -19,8 +19,8 @@ use rsscript_exec_ir::{
 use rsscript_mir::{
     BasicBlock, BlockId, FunctionId, MirBinaryOp, MirCallArgument, MirCallTarget,
     MirExternalImport, MirFunction, MirFunctionDebug, MirFunctionSignature, MirInstruction,
-    MirLiteral, MirModule, MirParameterMode, MirSourceLocation, MirTerminator, PlaceId,
-    ResourceTypeId, TaskGroupId, TaskId, TypeId, ValueId, VerifiedMir,
+    MirLiteral, MirModule, MirParameterMode, MirSourceLocation, MirTerminator, MirTypeLayout,
+    PlaceId, ResourceTypeId, TaskGroupId, TaskId, TypeId, ValueId, VerifiedMir,
 };
 use rsscript_semantics::{ResolvedTypeKind, hir as checked};
 use rsscript_text::{decode_char_token, decode_string_token};
@@ -255,7 +255,37 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<VerifiedMir, MirLo
             )
         })
         .collect();
-    Ok(MirModule::new(types.into_types(), lowered, debug, imports)?.into_verified()?)
+    let type_layouts = hir
+        .types()
+        .filter(|info| {
+            matches!(
+                info.kind,
+                checked::HirTypeKind::Struct
+                    | checked::HirTypeKind::Class
+                    | checked::HirTypeKind::Resource
+            )
+        })
+        .map(|info| {
+            let ty = types.intern(WireType::Named {
+                package: None,
+                name: info.name.clone(),
+                arguments: Vec::new(),
+            });
+            let fields = info
+                .fields_ordered
+                .iter()
+                .map(|field| {
+                    checked_type_to_wire(&field.ty, &info.name)
+                        .map(|ty| (field.name.clone(), types.intern(ty)))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(MirTypeLayout::new(ty, info.name.clone(), fields))
+        })
+        .collect::<Result<Vec<_>, MirLoweringError>>()?;
+    Ok(
+        MirModule::with_type_layouts(types.into_types(), type_layouts, lowered, debug, imports)?
+            .into_verified()?,
+    )
 }
 
 /// External async imports need a synthetic task function only when they must
@@ -1091,9 +1121,6 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         args: &[checked::HirCallArg],
         resolution: &checked::CallResolution,
     ) -> Result<ValueId, MirLoweringError> {
-        if callee_requires_legacy_builtin_metadata(callee) {
-            return self.unsupported("typed builtin metadata");
-        }
         if matches!(resolution, checked::CallResolution::EnumVariant) {
             if receiver.is_some() {
                 return self.unsupported("checked HIR receiver enum-variant call");
@@ -1115,7 +1142,7 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             return self.unsupported("non-record checked HIR constructor");
         }
         if signature.is_builtin {
-            return self.lower_builtin_call(signature, receiver, args);
+            return self.lower_builtin_call(callee, signature, receiver, args);
         }
         // `MirCallTarget` deliberately has no dynamic-protocol variant yet.
         // A protocol declaration contributes a bodyless signature stub, so
@@ -1266,6 +1293,7 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
     /// to rediscover a source-level builtin name.
     fn lower_builtin_call(
         &mut self,
+        callee: &rsscript_syntax::ast::Callee,
         signature: &checked::FunctionSig,
         receiver: Option<&checked::HirCallReceiver>,
         args: &[checked::HirCallArg],
@@ -1275,7 +1303,7 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         // represent structurally. Do not erase that information into an
         // untyped v1 intrinsic: the explicit compatibility path retains it
         // until MIR gains a typed builtin-instantiation/protocol operand.
-        if requires_legacy_builtin_metadata(signature) {
+        if requires_legacy_builtin_metadata(signature) && !is_json_decode_builtin(signature) {
             return self.unsupported("typed builtin metadata");
         }
         let destination = self.value();
@@ -1326,6 +1354,11 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                 let Some(builtin) = rsscript_mir::builtin_id(namespace, &signature.name) else {
                     return self.unsupported("unsupported checked HIR builtin call");
                 };
+                let type_arguments = if is_json_decode_builtin(signature) {
+                    self.json_decode_type_arguments(callee)?
+                } else {
+                    Vec::new()
+                };
                 let mut ordered = args.iter().collect::<Vec<_>>();
                 ordered.sort_by_key(|argument| argument.evaluation_index);
                 let mut arguments =
@@ -1352,12 +1385,35 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                                 Some(checked::ParamEffect::Take) => MirParameterMode::Take,
                             })
                             .collect(),
+                        type_arguments: type_arguments.into_boxed_slice(),
                     },
                     arguments,
                 });
             }
         }
         Ok(destination)
+    }
+
+    /// JSON decode has a semantic type argument which changes the VM's
+    /// decoding contract. Preserve it as a typed MIR operand instead of
+    /// letting the compatibility executable IR recover it from the callee
+    /// spelling at backend time. The checked HIR still carries this spelling
+    /// during the transition; it is converted to canonical `WireType` before
+    /// it enters MIR.
+    fn json_decode_type_arguments(
+        &mut self,
+        callee: &rsscript_syntax::ast::Callee,
+    ) -> Result<Vec<TypeId>, MirLoweringError> {
+        let type_argument = callee_type_arguments(callee)
+            .and_then(|arguments| arguments.first().copied())
+            .ok_or_else(|| MirLoweringError::Unsupported {
+                function: self.function_name.to_owned(),
+                construct: "JSON decode without concrete type argument",
+            })?;
+        if callee_type_arguments(callee).is_some_and(|arguments| arguments.len() != 1) {
+            return self.unsupported("JSON decode with invalid type argument arity");
+        }
+        Ok(vec![self.types.intern(WireType::parse(type_argument))])
     }
 
     fn lower_enum_variant_call(
@@ -2411,27 +2467,20 @@ fn requires_legacy_builtin_metadata(signature: &checked::FunctionSig) -> bool {
     )
 }
 
-fn callee_requires_legacy_builtin_metadata(callee: &rsscript_syntax::ast::Callee) -> bool {
-    let (namespace, name) = match callee {
-        rsscript_syntax::ast::Callee::Qualified { namespace, name } => {
-            (namespace.as_str(), name.as_str())
-        }
-        rsscript_syntax::ast::Callee::Name(name) => name.rsplit_once('.').unwrap_or_default(),
-        rsscript_syntax::ast::Callee::ReceiverCall { .. } => return false,
-    };
+fn is_json_decode_builtin(signature: &checked::FunctionSig) -> bool {
     matches!(
-        (
-            namespace.split('<').next().unwrap_or(namespace).trim(),
-            name.split('<').next().unwrap_or(name).trim(),
-        ),
-        ("Json", "decode" | "decode_text")
-            | ("Arguments", _)
-            | ("Channel", _)
-            | ("Sender", _)
-            | ("Receiver", _)
-            | ("CancellationSource", _)
-            | ("CancellationToken", _)
+        (signature.namespace.as_deref(), signature.name.as_str()),
+        (Some("Json"), "decode" | "decode_text")
     )
+}
+
+fn callee_type_arguments(callee: &rsscript_syntax::ast::Callee) -> Option<Vec<&str>> {
+    let spelling = match callee {
+        rsscript_syntax::ast::Callee::Name(name) => name.as_str(),
+        rsscript_syntax::ast::Callee::Qualified { name, .. } => name.as_str(),
+        rsscript_syntax::ast::Callee::ReceiverCall { .. } => return None,
+    };
+    rsscript_text::type_arg_names(spelling)
 }
 
 struct BlockDraft {

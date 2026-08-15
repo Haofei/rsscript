@@ -14,6 +14,7 @@ default = []
 # must use `compile`, `artifact`, `provider_api`, `runtime`, `report`, and
 # `operation` instead.
 compatibility = [
+    "execution",
     "rsscript_compiler/package",
     "dep:rsscript-artifact-store",
     "dep:rsscript-bytecode",

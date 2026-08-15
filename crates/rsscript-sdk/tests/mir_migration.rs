@@ -568,6 +568,52 @@ fn main() -> String {
 }
 
 #[test]
+fn direct_checked_hir_json_decode_preserves_typed_builtin_metadata() {
+    let source = r#"
+struct Decoded derives(JsonDecode) { count: Int }
+
+fn main() -> Result<Int, JsonError> {
+    let decoded = Json.decode_text<Decoded>(text: read "{\"count\":42}")?
+    return Ok(decoded.count)
+}
+"#;
+    let compiled = compile_source_to_ir("direct-hir-json-decode.rss", source)
+        .expect("typed JSON decode fixture compiles");
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("typed JSON decode should not require executable IR");
+    assert!(
+        mir.functions()[0]
+            .blocks()
+            .iter()
+            .flat_map(|block| block.instructions())
+            .any(|instruction| matches!(
+                instruction,
+                MirInstruction::Call {
+                    target: MirCallTarget::Builtin { type_arguments, .. },
+                    ..
+                } if type_arguments.len() == 1
+            )),
+        "MIR must carry the JSON decode target type as a typed operand"
+    );
+    let output = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("typed JSON decode MIR emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("typed JSON decode bytecode executes");
+    let legacy = reg_vm_eval_source_main("direct-hir-json-decode.rss", source)
+        .expect("legacy JSON decode bytecode executes");
+    assert_eq!(output.value, "Ok { value: 42 }");
+    assert_eq!(
+        output.value, legacy.value,
+        "the direct typed-MIR path must retain legacy JSON decode behavior"
+    );
+}
+
+#[test]
 fn direct_checked_hir_variant_construction_reaches_verified_bytecode() {
     let source = r#"
 sum ResultValue {

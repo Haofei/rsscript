@@ -974,11 +974,14 @@ mechanical acceptance condition holds.
       type signatures and async builtin contracts remain fail-closed follow-up
       work; the resolved parameter effect sequence is verifier-checked now.
     - [x] **M03.4c — Fail closed for unmodelled dispatch metadata.** Generic
-      JSON decode, argument capture, channel/cancellation builtins, and dynamic
-      protocol dispatch now reject direct MIR lowering rather than erasing
-      their typed or scheduler contract into v1 bytecode. The explicit
-      migration-only executable-IR bridge remains responsible for those forms
-      until MIR introduces typed instantiation and protocol-dispatch operands.
+      JSON decode now carries its concrete target as a verifier-checked MIR
+      `TypeId`; only the v1 encoder projects that typed operand onto its legacy
+      `CallTypedIntrinsic` string field. Argument capture,
+      channel/cancellation builtins, and dynamic protocol dispatch still reject
+      direct MIR lowering rather than erasing their scheduler or dispatch
+      contracts into bytecode. The explicit migration-only executable-IR bridge
+      remains responsible for those forms until MIR introduces their typed
+      operands.
 - [ ] **M04 — Lower checked HIR to MIR exactly once.** Backend code cannot
   inspect syntax AST or reconstruct semantic facts. MIR verification rejects
   unresolved calls, invalid ownership state, incomplete cleanup, and malformed
