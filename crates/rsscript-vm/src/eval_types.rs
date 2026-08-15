@@ -341,6 +341,31 @@ fn native_to_wire(
     }
 }
 
+/// Convert a completed legacy-VM value into the canonical result value used by
+/// the reviewed embedding report.
+///
+/// This is deliberately narrower than the Provider-call adapter above: a
+/// completed program has one declared result type but no linked external
+/// descriptor from which named record/variant layouts could be recovered.
+/// Scalars, aggregates, `Option`, `Result`, and declared resources therefore
+/// retain their canonical numeric identities; named values fail closed instead
+/// of fabricating string identities in [`WireValue`].  The Artifact-wide type
+/// table will eventually make those remaining layouts available to this path.
+pub(crate) fn native_result_to_wire(
+    value: NativeValue,
+    result: &WireType,
+) -> Result<WireValue, ProviderError> {
+    let signature = FunctionSignature {
+        parameters: Vec::new(),
+        result: result.clone(),
+        asynchronous: false,
+    };
+    let types = WireCallTypeTable::for_signature(&signature).map_err(|_| {
+        ProviderError::internal("program result wire type table exceeds supported identities")
+    })?;
+    native_to_wire(value, result, &types)
+}
+
 fn wire_to_native(
     value: WireValue,
     expected: &WireType,
@@ -1196,6 +1221,10 @@ pub struct EvalExecutionReport {
     pub usage: ExecutionUsage,
     pub value: Option<String>,
     pub display_value: Option<String>,
+    /// Canonical result value for the declared program result type when the
+    /// legacy v1 Artifact carries enough layout information to derive it.
+    /// Absent values are deliberately not replaced with dynamic identifiers.
+    pub wire_value: Option<WireValue>,
     pub native_value: Option<NativeValue>,
     pub stdout: String,
     pub stderr: String,

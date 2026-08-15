@@ -334,6 +334,10 @@ fn reviewed_execution_report_hides_legacy_native_value_behind_compatibility() {
         report.contains("legacy_native_value: Option<serde_json::Value>"),
         "the v1 JSON compatibility projection must stay private to the reviewed SDK"
     );
+    assert!(
+        source.contains("wire_value: Option<provider::WireValue>"),
+        "reviewed execution results must expose the canonical typed wire projection"
+    );
 }
 
 #[test]

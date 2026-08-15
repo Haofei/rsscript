@@ -31,6 +31,7 @@ use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 
+use rsscript_abi_model::{WireType, WireValue};
 use rsscript_corelib::{
     collections::{
         dedup as core_list_dedup, deque_to_vec as core_deque_to_vec,
@@ -563,6 +564,23 @@ impl RegVmExecutable {
 
     pub fn bytecode_artifact(&self) -> &rsscript_bytecode::BytecodeArtifact {
         &self.artifact
+    }
+
+    /// Return the canonical result value for `main` when its v1 declaration
+    /// contains enough structural type information to do so.  This is an
+    /// explicit compatibility bridge: named record/variant layouts are not
+    /// present in the v1 function signature and therefore return `None`
+    /// instead of leaking a dynamic stringly typed value through the reviewed
+    /// SDK report.
+    fn main_result_wire_value(&self, value: NativeValue) -> Option<WireValue> {
+        let result = self
+            .unit
+            .native_signatures
+            .get("main")?
+            .return_type
+            .as_deref()
+            .map(WireType::parse)?;
+        crate::eval_types::native_result_to_wire(value, &result).ok()
     }
 
     fn prepare_vm(
@@ -1252,11 +1270,16 @@ impl RegVmExecutable {
         match result {
             Ok(value) => {
                 let display_value = value.display();
+                let native_value = value.native_value();
+                let wire_value = native_value
+                    .clone()
+                    .and_then(|value| self.main_result_wire_value(value));
                 Ok(EvalExecutionReport {
                     usage,
                     value: Some(display_value.clone()),
                     display_value: Some(display_value),
-                    native_value: value.native_value(),
+                    wire_value,
+                    native_value,
                     stdout,
                     stderr,
                     provider_call_traces,
@@ -1267,6 +1290,7 @@ impl RegVmExecutable {
                 usage,
                 value: None,
                 display_value: None,
+                wire_value: None,
                 native_value: None,
                 stdout,
                 stderr,

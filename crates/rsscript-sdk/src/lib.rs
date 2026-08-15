@@ -1491,7 +1491,7 @@ impl LinkedArtifact<'_> {
         let outcome = match output.failure.map(RuntimeError::from_execution) {
             Some(failure) => ExecutionOutcome::Failed(failure),
             None => ExecutionOutcome::Completed {
-                value: output.value.unwrap_or_default(),
+                wire_value: output.wire_value,
                 display_value: output.display_value.unwrap_or_default(),
             },
         };
@@ -1669,7 +1669,10 @@ pub struct ProviderFunctionTelemetry {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExecutionOutcome {
     Completed {
-        value: String,
+        /// Canonical result value. A legacy v1 Artifact without enough named
+        /// type-layout information yields `None` rather than exposing a
+        /// stringly/dynamic compatibility value through the reviewed SDK.
+        wire_value: Option<provider::WireValue>,
         display_value: String,
     },
     Failed(RuntimeError),
@@ -1684,11 +1687,21 @@ impl ExecutionOutcome {
         }
     }
 
-    pub fn value(&self) -> Option<&str> {
+    /// Canonical completed result, when the Artifact can prove its structural
+    /// wire layout. New embedders should use this instead of parsing display
+    /// text.
+    pub const fn wire_value(&self) -> Option<&provider::WireValue> {
         match self {
-            Self::Completed { value, .. } => Some(value),
+            Self::Completed { wire_value, .. } => wire_value.as_ref(),
             Self::Failed(_) => None,
         }
+    }
+
+    /// Human-readable v1 compatibility projection of a completed result.
+    /// This is not a typed ABI value; use [`Self::wire_value`] for new host
+    /// integrations.
+    pub fn value(&self) -> Option<&str> {
+        self.display_value()
     }
 
     pub fn display_value(&self) -> Option<&str> {
@@ -1745,6 +1758,12 @@ impl ExecutionReport {
 
     pub fn value(&self) -> Option<&str> {
         self.outcome.value()
+    }
+
+    /// Canonical completed result value. See [`ExecutionOutcome::wire_value`]
+    /// for the intentional `None` behaviour of v1 named aggregate results.
+    pub const fn wire_value(&self) -> Option<&provider::WireValue> {
+        self.outcome.wire_value()
     }
 
     pub fn display_value(&self) -> Option<&str> {
@@ -2525,11 +2544,12 @@ mod tests {
         assert!(matches!(
             report.outcome(),
             ExecutionOutcome::Completed {
-                value,
+                wire_value,
                 display_value,
-            } if value == "Unit" && display_value == "Unit"
+            } if wire_value == &Some(provider::WireValue::Unit) && display_value == "Unit"
         ));
         assert_eq!(report.value(), Some("Unit"));
+        assert_eq!(report.wire_value(), Some(&provider::WireValue::Unit));
         assert_eq!(report.termination_reason(), TerminationReason::Completed);
         assert_eq!(report.artifact_digest, loaded.module_digest());
         assert!(report.usage.steps_consumed > 0);
@@ -2544,6 +2564,28 @@ mod tests {
         );
         assert!(!RunLimits::bounded().blocking_provider_calls_allowed());
         assert!(RunLimits::unbounded_for_trusted_host().blocking_provider_calls_allowed());
+    }
+
+    #[test]
+    fn stable_facade_exposes_scalar_results_as_canonical_wire_values() {
+        let built = Compiler
+            .compile("main.rss", "fn main() -> Int { return 42 }")
+            .expect("compile scalar result");
+        let admitted = ArtifactVerifier
+            .verify(built)
+            .expect("verify scalar result")
+            .admit_trusted_input();
+        let report = Runtime::default()
+            .link(&admitted)
+            .expect("link scalar result")
+            .execute(ExecutionRequest::default());
+
+        assert_eq!(
+            report.wire_value(),
+            Some(&provider::WireValue::Int { value: 42 })
+        );
+        assert_eq!(report.value(), Some("42"));
+        assert_eq!(report.display_value(), Some("42"));
     }
 
     #[test]

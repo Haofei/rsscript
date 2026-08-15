@@ -2041,7 +2041,12 @@ an arbitrary shell executor.
     by accident. Canonical `ProviderError.details` now uses `WireValue` as
     well, so structured error metadata no longer reintroduces
     `serde_json::Value` as an implicit Provider ABI escape hatch; JSON remains
-    an explicitly named extension codec. The VM migration remains open.
+    an explicitly named extension codec. The reviewed `ExecutionOutcome` now
+    exposes a canonical `WireValue` result when the declared v1 result
+    signature contains enough structural layout to derive one; unsupported
+    named aggregate layouts remain `None` rather than fabricating dynamic
+    string identity. The v1 JSON report and VM compatibility projection remain
+    until an Artifact-wide typed result table completes the VM migration.
 - [x] **P07 — Remove policy-shaped authority from Core ABI.** `HostCallContext`
   carries host-defined labels to Provider calls without Core interpreting an
   authorization policy. The runtime reports required symbols; provider profiles
