@@ -68,15 +68,18 @@ pub use rsscript_compiler::compatibility::{
     review_package_dir, review_sources,
 };
 #[cfg(all(feature = "compatibility", feature = "aot-rust"))]
-pub use rsscript_compiler::compatibility::{
+pub use rsscript_aot_backend::{
     GeneratedRustPackage, LowerCoverageReport, LoweredRust, NativeRustDependency,
-    RemappedRustcDiagnostic, SymbolInventoryEntry, lower_coverage_report, lower_program_to_rust,
+    RemappedRustcDiagnostic, RustSourceMapEntry, lower_coverage_report, lower_program_to_rust,
     lower_program_to_rust_with_map, lower_source_to_rust, lower_source_to_rust_package,
     lower_source_to_rust_package_with_interfaces, lower_source_to_rust_with_map,
     lower_sources_to_rust_package_with_interfaces, lower_sources_to_rust_package_with_options,
-    lowered_symbol_name, parse_runtime_diagnostics, parse_source_map_json,
-    remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines, symbol_inventory,
-    write_generated_rust_package,
+    parse_runtime_diagnostics, parse_source_map_json, remap_rustc_diagnostic_json,
+    remap_rustc_diagnostic_json_lines, write_generated_rust_package,
+};
+#[cfg(all(feature = "compatibility", feature = "aot-rust"))]
+pub use rsscript_compiler::compatibility::{
+    SymbolInventoryEntry, lowered_symbol_name, symbol_inventory,
 };
 #[cfg(feature = "execution")]
 #[cfg(not(feature = "compatibility"))]

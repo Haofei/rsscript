@@ -1,5 +1,3 @@
-use super::*;
-
 use crate::syntax::ast::Callee;
 use crate::text_util::type_root_name;
 
@@ -7,7 +5,7 @@ pub(super) fn runtime_intrinsic_target(callee: &Callee) -> Option<&'static str> 
     let Callee::Qualified { namespace, name } = callee else {
         return None;
     };
-    rsscript_aot_backend::runtime_intrinsic_target(type_root_name(namespace), type_root_name(name))
+    crate::runtime_intrinsic_target(type_root_name(namespace), type_root_name(name))
 }
 
 pub(super) fn runtime_intrinsic_wants_managed_handle_arg(
@@ -20,8 +18,11 @@ pub(super) fn runtime_intrinsic_wants_managed_handle_arg(
     let Some(arg_name) = arg_name else {
         return false;
     };
-    runtime_abi::lookup_runtime_intrinsic(type_root_name(namespace), type_root_name(name))
-        .is_some_and(|intrinsic| intrinsic.managed_handle_args.contains(&arg_name))
+    crate::runtime_intrinsic_managed_handle_arg(
+        type_root_name(namespace),
+        type_root_name(name),
+        arg_name,
+    )
 }
 
 /// The RSS surface treats scalar collection keys and values as ordinary values,

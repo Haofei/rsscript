@@ -31,6 +31,7 @@ pub(crate) use rsscript_interface_catalog::default_interfaces;
 pub(crate) use rsscript_interface_catalog::standard_package_interfaces;
 
 #[cfg(all(test, feature = "package"))]
+#[allow(dead_code)]
 pub(crate) fn default_interfaces() -> impl Iterator<Item = (&'static str, &'static str)> {
     rsscript_interface_catalog::CORE_INTERFACES
         .iter()

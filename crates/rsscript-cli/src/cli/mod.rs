@@ -8,9 +8,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 #[cfg(all(feature = "execution", feature = "aot-rust"))]
-use rsscript_aot_backend::AotLoweringInput;
+use rsscript_aot_backend::{AotLoweringInput, lower_aot_input};
 #[cfg(all(feature = "execution", feature = "aot-rust"))]
-use rsscript_compiler::compatibility::{lower_aot_input, prepare_package_for_execution};
+use rsscript_compiler::compatibility::prepare_package_for_execution;
 #[cfg(all(feature = "execution", feature = "aot-rust"))]
 use rsscript_compiler::{Diagnostic, format_diagnostics_human, format_diagnostics_json};
 #[cfg(all(feature = "execution", feature = "aot-rust"))]
@@ -184,7 +184,7 @@ pub(crate) fn lower_cli_input_to_rust_package(
     path: &str,
     runtime_path: &Path,
     json: bool,
-) -> Result<rsscript_compiler::compatibility::GeneratedRustPackage, ExitCode> {
+) -> Result<rsscript_aot_backend::GeneratedRustPackage, ExitCode> {
     let runtime_path = runtime_path.display().to_string();
     if is_package_directory(path) {
         let input = package_execution_lowering_input(Path::new(path)).map_err(|error| {

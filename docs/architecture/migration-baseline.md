@@ -862,63 +862,54 @@ an arbitrary shell executor.
       typed facts and preserves only a compatibility re-export; the optional
       `rsscript-review` consumer owns the public review-model API. Artifact
       analysis remains deterministic and policy-neutral.
-  - [ ] **S05.4 — Move Rust/AOT lowering to its experimental boundary.** Compiler
-    reviewed top-level APIs no longer expose generated Rust or native lowering
-    APIs. Native package dependency identity now belongs to the package snapshot,
-    and the Rust lowerer only consumes and temporarily re-exports it through
-    `compatibility`. Rust lowering is now selected only by the explicit
-    `aot-rust` feature rather than ordinary compiler execution. The CLI mirrors
-    this separation: its normal `execution` feature builds only the reference
-    VM/isolated runner, while generated-Rust execution and its help text require
-    an explicit `aot-rust` feature. SDK `compatibility` no longer implicitly
-    selects AOT or exposes generated-Rust/source-map APIs; compatibility users
-    must opt into `aot-rust` as well. Rust source lowering, source maps, runtime
-    ABI helpers, and the compatibility AOT façade remain in compiler, so this
-    item remains open.
+  - [x] **S05.4 — Move Rust/AOT lowering to its experimental boundary.** The
+    compiler has no AOT feature, implementation module, output-model dependency,
+    or generated-Rust compatibility export. `rsscript-aot-backend` directly
+    consumes syntax, semantics, lowering, diagnostics, text, and the interface
+    catalog; it remains outside the root workspace. CLI and the opt-in SDK
+    compatibility feature select that experiment explicitly. The normal
+    compiler/SDK execution path remains VM/Artifact-only.
     - [x] **S05.4a — Extract the AOT output model.** Generated-Rust package,
       source-map, and remapped-diagnostic data types now live in the
-      experiments-owned `rsscript-aot-model` crate. The compiler has only a
-      feature-gated compatibility bridge, so normal Core builds do not select
-      the AOT model closure.
-    - [ ] **S05.4b — Move the Rust lowerer and diagnostics.** Move source
+      experiments-owned `rsscript-aot-model` crate. The compiler no longer
+      depends on the AOT model closure.
+    - [x] **S05.4b — Move the Rust lowerer and diagnostics.** Source
       lowering, source-map parsing, Rust diagnostic remapping, and generated
       package publication into the experiment-owned AOT backend.
       - [x] **S05.4b1 — Move source-map wire utilities.** Source-map JSON
         parsing and Rust diagnostic remapping now belong to `rsscript-aot-model`;
-        compiler compatibility preserves the experimental API only as a
-        forwarding bridge.
-      - [ ] **S05.4b2 — Move lowering and publication.** Move the remaining
+        compiler no longer owns a forwarding bridge.
+      - [x] **S05.4b2 — Move lowering and publication.** The remaining
         AST/HIR-to-Rust lowerer and generated package writer to the experimental
         backend, leaving compiler with no AOT implementation modules.
         - [x] **S05.4b2a — Move generated package publication.** The
           experiment-owned `rsscript-aot-backend` now safely publishes generated
-          Rust packages through the confined artifact store; compiler keeps only
-          a forwarding compatibility function.
-        - [ ] **S05.4b2b — Move AST/HIR-to-Rust lowering.** Move the remaining
+          Rust packages through the confined artifact store.
+        - [x] **S05.4b2b — Move AST/HIR-to-Rust lowering.** The source
           source lowerer, coverage accounting, and lowerer implementation out
           of compiler after its input boundary is explicit.
           - [x] **S05.4b2b1 — Move runtime diagnostic parsing.** The
             generated-program stderr parser now belongs to `rsscript-aot-model`;
-            compiler keeps only a forwarding bridge and preserves structured
-            warning/error/runtime-kind diagnostics.
-          - [ ] **S05.4b2b2 — Move the source lowerer.** Move the remaining
+            the experiment preserves structured warning/error/runtime-kind diagnostics.
+          - [x] **S05.4b2b2 — Move the source lowerer.** The remaining
             source lowering and coverage implementation after the backend input
             contract no longer exposes compiler-private structures.
             - [x] **S05.4b2b2a — Define the AOT lowering input contract.** The
               experiment-owned `AotLoweringInput` now owns source bytes,
               interfaces, package name, runtime path, and captured native
-              dependency metadata; the experimental CLI constructs it before
-              invoking the compiler compatibility bridge.
-            - [ ] **S05.4b2b2b — Move lowering implementation.** Move coverage
+              dependency metadata; the experimental CLI passes it directly to
+              the experiment-owned lowerer.
+            - [x] **S05.4b2b2b — Move lowering implementation.** Coverage
               and AST/HIR-to-Rust lowering after callers no longer construct its
               compiler-local argument list.
               - [x] **S05.4b2b2b1 — Move coverage output model.** The
                 deterministic coverage report and bucket normalization contract
-                now live in `rsscript-aot-model`; compiler retains only the
-                runtime-catalog compatibility calculation.
-              - [ ] **S05.4b2b2b2 — Move AST/HIR source lowering.** Move the
-                lowerer implementation once its coverage and input contracts no
-                longer belong to compiler.
+                now live in `rsscript-aot-model`; runtime support discovery is
+                experiment-owned.
+              - [x] **S05.4b2b2b2 — Move AST/HIR source lowering.** The full
+                lowerer now lives in `experiments/aot-backend`, consumes the
+                immutable semantic validation boundary directly, and has no
+                compiler implementation-module dependency.
     - [x] **S05.4c — Split runtime ABI catalog use.** Core compiler consumers
       now use only neutral intrinsic identity and managed-handle facts. The
       experiment-owned backend generates Rust targets from the same catalog and

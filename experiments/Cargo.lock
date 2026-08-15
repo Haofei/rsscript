@@ -778,7 +778,14 @@ dependencies = [
  "rsscript-aot-model",
  "rsscript-artifact-store",
  "rsscript-build-support",
+ "rsscript-diagnostics",
+ "rsscript-interface-catalog",
+ "rsscript-lowering",
  "rsscript-project",
+ "rsscript-semantics",
+ "rsscript-syntax",
+ "rsscript-text",
+ "serde_json",
  "tempfile",
 ]
 
@@ -917,6 +924,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsscript-exec-ir"
+version = "0.1.0"
+dependencies = [
+ "rsscript-abi-model",
+]
+
+[[package]]
 name = "rsscript-interface-catalog"
 version = "0.1.0"
 
@@ -925,6 +939,7 @@ name = "rsscript-lowering"
 version = "0.1.0"
 dependencies = [
  "rsscript-abi-model",
+ "rsscript-exec-ir",
  "rsscript-mir",
  "rsscript-semantics",
  "rsscript-syntax",

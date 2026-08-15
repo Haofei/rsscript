@@ -2,11 +2,54 @@
 
 use std::path::Path;
 
-use rsscript_aot_model::GeneratedRustPackage;
+pub use rsscript_aot_model::{
+    GeneratedRustPackage, LowerCoverageReport, LoweredRust, RemappedRustcDiagnostic,
+    RustSourceMapEntry,
+};
 use rsscript_artifact_store::{
     GeneratedRustPackageFiles, write_generated_rust_package as write_generated_rust_files,
 };
-use rsscript_project::NativeRustDependency;
+pub use rsscript_project::NativeRustDependency;
+
+// The experimental lowerer consumes frontend crates directly. These small
+// private facades preserve its historical internal module names while making
+// the dependency direction explicit: Core compiler no longer owns this code.
+mod diagnostic {
+    pub(crate) use rsscript_diagnostics::*;
+}
+mod hir {
+    pub(crate) use rsscript_semantics::hir::*;
+}
+mod interfaces {
+    pub(crate) use rsscript_interface_catalog::{
+        builtin_interfaces, default_interfaces, standard_package_interfaces,
+    };
+}
+mod package {
+    pub use rsscript_project::NativeRustDependency;
+}
+mod semantic {
+    pub(crate) use rsscript_semantics::*;
+}
+mod syntax {
+    pub(crate) use rsscript_semantics::isolate_module_namespaces;
+    pub(crate) use rsscript_syntax::*;
+}
+mod text_util {
+    pub(crate) use rsscript_text::*;
+}
+
+mod lower_names;
+mod rust_lower;
+
+pub use rust_lower::{
+    lower_aot_input, lower_coverage_report, lower_program_to_rust,
+    lower_program_to_rust_with_map, lower_source_to_rust, lower_source_to_rust_package,
+    lower_source_to_rust_package_with_interfaces, lower_source_to_rust_with_map,
+    lower_sources_to_rust_package_with_interfaces, lower_sources_to_rust_package_with_options,
+    parse_runtime_diagnostics, parse_source_map_json, remap_rustc_diagnostic_json,
+    remap_rustc_diagnostic_json_lines,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct AotRuntimeIntrinsic {
@@ -24,6 +67,19 @@ pub fn runtime_intrinsic_target(namespace: &str, name: &str) -> Option<&'static 
         .iter()
         .find(|intrinsic| intrinsic.namespace == namespace && intrinsic.name == name)
         .map(|intrinsic| intrinsic.rust_target)
+}
+
+/// Whether a generated-Rust runtime intrinsic requires a managed handle at a
+/// named argument. The catalog currently has no such runtime entries, but the
+/// query belongs to the AOT boundary so future backend-specific ABI details do
+/// not leak back into the Core compiler.
+pub(crate) fn runtime_intrinsic_managed_handle_arg(
+    namespace: &str,
+    name: &str,
+    argument: &str,
+) -> bool {
+    let _ = (namespace, name, argument);
+    false
 }
 
 /// All runtime-backed signatures understood by this AOT backend.

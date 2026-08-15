@@ -588,7 +588,7 @@ pub fn fail_fixture_expected_code_set() -> BTreeSet<String> {
 }
 
 pub fn source_map_summary(
-    entries: &[rsscript_compiler::compatibility::RustSourceMapEntry],
+    entries: &[rsscript_sdk::RustSourceMapEntry],
 ) -> String {
     entries
         .iter()

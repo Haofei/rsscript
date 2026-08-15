@@ -4,5 +4,5 @@
 //! internal paths while the remaining lowerer implementation migrates.
 
 pub use rsscript_aot_model::{
-    GeneratedRustPackage, LoweredRust, RemappedRustcDiagnostic, RustSourceMapEntry,
+    GeneratedRustPackage, LoweredRust, RustSourceMapEntry,
 };

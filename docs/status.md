@@ -17,8 +17,9 @@ The platform-neutral language cut is active:
   snapshots now derive analysis directly from captured semantic inputs instead
   of converting a risk-oriented package review.
 
-The `rsscript-compiler` implementation contains analyzer orchestration, package
-tooling, and the optional Rust AOT projection. The reference VM is physically
+The `rsscript-compiler` implementation contains analyzer orchestration and
+package tooling; the optional Rust AOT projection is physically owned by
+`experiments/aot-backend`. The reference VM is physically
 owned by `rsscript-vm`, consumes the frontend-independent owned model from
 `rsscript-exec-ir`, and has no Cargo dependency on compiler, syntax, semantics,
 or HIR lowering crates. `rsscript-lowering` is now the one-way projection from

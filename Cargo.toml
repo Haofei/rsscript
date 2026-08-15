@@ -51,6 +51,8 @@ members = [
 # Native package source remains a test fixture, but its Rust bridge is no
 # longer a workspace member.
 exclude = [
+    "experiments/aot-backend",
+    "experiments/aot-model",
     "experiments/aot-runtime",
     "experiments/native-abi",
     "experiments/reir",

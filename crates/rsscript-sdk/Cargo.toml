@@ -42,7 +42,7 @@ project = [
     "execution",
     "dep:rsscript-project",
 ]
-aot-rust = ["execution", "rsscript_compiler/aot-rust"]
+aot-rust = ["execution", "rsscript_compiler/execution", "dep:rsscript-aot-backend"]
 # Transitional source-shaped executable IR remains available only to the
 # migration corpus and legacy API surface. Reviewed execution consumes MIR
 # bytecode through the verifier and does not select this feature.
@@ -56,6 +56,7 @@ native-jit = ["compatibility", "rsscript-vm/native-jit"]
 [dependencies]
 rsscript-abi-model = { path = "../rsscript-abi-model", optional = true }
 rsscript-artifact = { path = "../rsscript-artifact", optional = true }
+rsscript-aot-backend = { path = "../../experiments/aot-backend", optional = true }
 rsscript-artifact-store = { path = "../rsscript-artifact-store", optional = true }
 rsscript_compiler = { package = "rsscript-compiler", path = "../rsscript-compiler", default-features = false, features = ["language-service"] }
 rsscript-operation = { path = "../rsscript-operation" }

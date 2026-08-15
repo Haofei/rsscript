@@ -12,8 +12,6 @@ doctest = false
 
 [dependencies]
 rsscript-abi-model = { path = "../rsscript-abi-model" }
-rsscript-aot-backend = { path = "../../experiments/aot-backend", optional = true }
-rsscript-aot-model = { path = "../../experiments/aot-model", optional = true }
 rsscript-artifact = { path = "../rsscript-artifact", optional = true }
 rsscript-artifact-store = { path = "../rsscript-artifact-store", optional = true }
 rsscript-bytecode = { path = "../rsscript-bytecode", optional = true }
@@ -82,13 +80,6 @@ legacy-exec-ir = ["package", "rsscript-lowering/legacy-exec-ir"]
 # Historical execution consumers need both lowering and package compatibility
 # APIs. Reviewed SDK execution selects only `lowering`.
 execution = ["legacy-exec-ir"]
-# Rust source emission is an Experimental AOT backend. Keep it out of the
-# ordinary execution closure; callers must explicitly select it.
-aot-rust = [
-    "execution",
-    "dep:rsscript-aot-backend",
-    "dep:rsscript-aot-model",
-]
 language-service = []
 # The RSS-written frontend is a research parity harness.  Keep it out of Core
 # test builds; the dedicated self-host workflow opts in explicitly.

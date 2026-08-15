@@ -1731,8 +1731,14 @@ dependencies = [
  "rsscript-aot-model",
  "rsscript-artifact-store",
  "rsscript-build-support",
+ "rsscript-diagnostics",
+ "rsscript-interface-catalog",
+ "rsscript-lowering",
  "rsscript-project",
- "tempfile",
+ "rsscript-semantics",
+ "rsscript-syntax",
+ "rsscript-text",
+ "serde_json",
 ]
 
 [[package]]
@@ -1833,8 +1839,6 @@ dependencies = [
  "hex",
  "libc",
  "rsscript-abi-model",
- "rsscript-aot-backend",
- "rsscript-aot-model",
  "rsscript-artifact",
  "rsscript-artifact-store",
  "rsscript-build-support",
@@ -2092,6 +2096,7 @@ dependencies = [
  "proptest",
  "reir",
  "rsscript-abi-model",
+ "rsscript-aot-backend",
  "rsscript-artifact",
  "rsscript-artifact-store",
  "rsscript-build-support",

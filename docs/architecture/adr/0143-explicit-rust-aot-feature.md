@@ -1,4 +1,4 @@
-# ADR 0143: Rust/AOT lowering is an explicit compiler feature
+# ADR 0143: Rust/AOT lowering is an explicit experimental-backend feature
 
 - Status: Accepted
 - Date: 2026-08-14
@@ -12,23 +12,23 @@ ordinary execution dependency and API path.
 
 ## Decision and non-goals
 
-Rust source emission is selected by `rsscript-compiler/aot-rust`, which extends
-but is not selected by `execution`. The SDK mirrors that distinction with an
-explicit `aot-rust` feature; its legacy `compatibility` feature opts in so the
-migration corpus retains its current APIs. The CLI's execution composition also
-opts in because its legacy `--aot` workflow still exposes Rust emission.
+Rust source emission is selected only by `rsscript-aot-backend`, an excluded
+member of the separate `experiments/` workspace. The compiler has no
+`aot-rust` feature and owns no generated-Rust implementation modules. The SDK
+and CLI mirror that distinction with explicit `aot-rust` features that depend
+on the experimental backend directly; the SDK re-export exists only under its
+compatibility feature for the migration corpus.
 
-Backend symbol-name projection moves to `lower_names`, an execution-neutral
-module used by both symbol inventory and AOT lowering. This decision does not
-move the lowerer to a separate experimental workspace or remove its legacy
-public compatibility façade.
+Core keeps the public symbol-inventory projection. The experimental backend
+owns Rust-specific name pins, source lowering, source maps, runtime target
+mapping, diagnostics, and generated-package publication.
 
 ## Compatibility and migration
 
-Existing compatibility and CLI builds retain generated-Rust APIs. New SDK
-embedders using only `execution` do not compile or receive those APIs unless
-they explicitly select `aot-rust`. No language, Artifact, bytecode, Provider,
-or persisted package contract changes.
+Existing compatibility and CLI builds retain generated-Rust APIs through the
+experimental backend. New SDK embedders using only `execution` do not compile
+or receive those APIs unless they explicitly select `aot-rust`. No language,
+Artifact, bytecode, Provider, or persisted package contract changes.
 
 ## Verifier and security impact
 
@@ -38,12 +38,13 @@ Provider authority.
 
 ## Provider and backend impact
 
-The Rust/AOT backend consumes the shared name projection and package-native
-dependency model. Providers and the VM remain independent of the AOT feature.
+The Rust/AOT backend consumes syntax, semantics, lowering, diagnostics, text,
+the interface catalog, and the project-native dependency model directly.
+Providers, the VM, and compiler remain independent of the AOT feature.
 
 ## Evidence
 
-Architecture tests assert that ordinary execution does not select `aot-rust`,
-that the lowerer is feature-gated, and that symbol inventory does not reference
-the lowerer. Compiler, SDK, and CLI feature-matrix checks compile all supported
-feature selections.
+Architecture tests assert that compiler has no AOT feature or lowerer module,
+that the root workspace excludes the backend, and that SDK/CLI opt into the
+backend directly. Compiler, SDK, CLI, and backend parity checks compile the
+supported feature selections.

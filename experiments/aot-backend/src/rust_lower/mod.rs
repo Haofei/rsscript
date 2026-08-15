@@ -25,14 +25,12 @@
 // Experimental Rust AOT lowering keeps its lint debt local to this backend.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
 
 use crate::diagnostic::Diagnostic;
 use crate::interfaces::{default_interfaces, standard_package_interfaces};
-use crate::runtime_abi;
 use crate::syntax::ast::Program;
 use crate::syntax::parse_source;
-use rsscript_aot_backend::AotLoweringInput;
+use crate::AotLoweringInput;
 use rsscript_aot_model::coverage_bucket;
 use rsscript_semantics::{CompilationSession, ValidatedProgram};
 
@@ -54,7 +52,7 @@ pub use rsscript_aot_model::LowerCoverageReport;
 pub use runtime_diagnostics::parse_runtime_diagnostics;
 pub use rustc_remap::{remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines};
 pub use source_map::parse_source_map_json;
-pub use types::{GeneratedRustPackage, LoweredRust, RemappedRustcDiagnostic, RustSourceMapEntry};
+pub use types::{GeneratedRustPackage, LoweredRust};
 
 use helpers::{
     cargo_package_name, rust_package_main, toml_string, validate_executable_declarations,
@@ -149,8 +147,8 @@ const FUNCTION_KINDS: &[&str] = &["sync", "async", "native"];
 const RUST_LOWER_SUPPORTED_FUNCTION_KINDS: &[&str] = &["sync", "async", "native"];
 
 pub fn lower_coverage_report() -> LowerCoverageReport {
-    let runtime_all = rsscript_aot_backend::runtime_intrinsic_signatures();
-    let runtime_supported = rsscript_aot_backend::default_runtime_intrinsic_supported_signatures()
+    let runtime_all = crate::runtime_intrinsic_signatures();
+    let runtime_supported = crate::default_runtime_intrinsic_supported_signatures()
         .expect("experiment-owned AOT runtime should be readable")
         .into_iter()
         .collect::<BTreeSet<_>>();
@@ -369,13 +367,6 @@ fn program_uses_serde_derives(program: &crate::syntax::ast::Program) -> bool {
     })
 }
 
-pub fn write_generated_rust_package(
-    out_dir: &Path,
-    package: &GeneratedRustPackage,
-) -> Result<(), String> {
-    rsscript_aot_backend::write_generated_rust_package(out_dir, package)
-}
-
 pub fn lower_program_to_rust(program: &Program) -> String {
     lower_program_to_rust_with_map(program).rust_source
 }
@@ -423,7 +414,7 @@ mod tests {
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{GeneratedRustPackage, write_generated_rust_package};
+    use super::GeneratedRustPackage;
 
     #[test]
     fn validated_lowering_uses_structural_generic_signature_facts() {
@@ -457,7 +448,8 @@ fn main() -> Int {
             source_map_json: "[]\n".to_string(),
         };
 
-        write_generated_rust_package(&out_dir, &package).expect("initial write should succeed");
+        crate::write_generated_rust_package(&out_dir, &package)
+            .expect("initial write should succeed");
         let lib_rs = out_dir.join("src/lib.rs");
         let mut permissions = fs::metadata(&lib_rs)
             .expect("lib.rs metadata should exist")
@@ -465,7 +457,7 @@ fn main() -> Int {
         permissions.set_readonly(true);
         fs::set_permissions(&lib_rs, permissions).expect("lib.rs should become readonly");
 
-        write_generated_rust_package(&out_dir, &package)
+        crate::write_generated_rust_package(&out_dir, &package)
             .expect("unchanged readonly lib.rs should not be rewritten");
 
         let mut permissions = fs::metadata(&lib_rs)

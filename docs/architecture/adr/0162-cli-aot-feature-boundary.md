@@ -15,7 +15,7 @@ backend appear alongside the normal execution workflow.
 Keep `rsscript-cli/execution` limited to the SDK, project adapter, process
 guard, runner protocol, reference VM, and isolated runner. Add
 `rsscript-cli/aot-rust` as an explicit extension that enables
-`rsscript-compiler/aot-rust`. Generated-Rust helpers, cache management,
+`rsscript-aot-backend` directly. Generated-Rust helpers, cache management,
 subprocess build logic, and AOT usage text compile only with that feature.
 
 An ordinary CLI build rejects `rss run --aot` with an explicit feature error.

@@ -31,7 +31,6 @@ execution = [
 package-inspect = ["execution", "rsscript-compiler/package"]
 aot-rust = [
     "package-inspect",
-    "rsscript-compiler/aot-rust",
     "dep:rsscript-aot-backend",
 ]
 host-tools = ["execution"]

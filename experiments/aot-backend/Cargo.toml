@@ -13,7 +13,14 @@ doctest = false
 [dependencies]
 rsscript-aot-model = { path = "../aot-model" }
 rsscript-artifact-store = { path = "../../crates/rsscript-artifact-store" }
+rsscript-diagnostics = { path = "../../crates/rsscript-diagnostics" }
+rsscript-interface-catalog = { path = "../../crates/rsscript-interface-catalog" }
+rsscript-lowering = { path = "../../crates/rsscript-lowering", features = ["legacy-exec-ir"] }
 rsscript-project = { path = "../../crates/rsscript-project" }
+rsscript-semantics = { path = "../../crates/rsscript-semantics" }
+rsscript-syntax = { path = "../../crates/rsscript-syntax" }
+rsscript-text = { path = "../../crates/rsscript-text" }
+serde_json = { version = "1", features = ["preserve_order"] }
 
 [dev-dependencies]
 tempfile = "3"

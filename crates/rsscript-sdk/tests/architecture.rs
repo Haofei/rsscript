@@ -397,6 +397,8 @@ fn root_workspace_excludes_experimental_packages() {
         .collect::<BTreeSet<_>>();
 
     for experimental in [
+        "rsscript-aot-backend",
+        "rsscript-aot-model",
         "rsscript-aot-runtime",
         "rss-native-abi",
         "reir",
@@ -1323,11 +1325,11 @@ fn artifact_persistence_is_an_execution_only_adapter() {
     assert!(adapter.contains("pub fn publish("));
     assert!(adapter.contains("pub fn regular_tree_digest("));
     assert!(adapter.contains("pub fn seal_regular_tree_read_only("));
-    let rust_lower = read(&root.join("crates/rsscript-compiler/src/rust_lower/mod.rs"));
-    assert!(rust_lower.contains("GeneratedRustPackageFiles"));
-    assert!(rust_lower.contains("write_generated_rust_files("));
-    assert!(!rust_lower.contains("fn write_if_changed("));
-    assert!(!rust_lower.contains("fn remove_if_exists("));
+    let aot_backend = read(&root.join("experiments/aot-backend/src/lib.rs"));
+    assert!(aot_backend.contains("GeneratedRustPackageFiles"));
+    assert!(aot_backend.contains("write_generated_rust_files("));
+    assert!(!aot_backend.contains("fn write_if_changed("));
+    assert!(!aot_backend.contains("fn remove_if_exists("));
     assert!(adapter.contains("pub struct GeneratedRustPackageFiles"));
     assert!(adapter.contains("pub fn write_generated_rust_package("));
     let native = read(&root.join("crates/rsscript-compiler/src/package/native.rs"));
@@ -1484,13 +1486,13 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
         "package loading must not depend on the experimental Rust lowerer"
     );
 
-    let lower_types = read(&root.join("crates/rsscript-compiler/src/rust_lower/types.rs"));
+    let lower_types = read(&root.join("experiments/aot-backend/src/rust_lower/types.rs"));
     assert!(
         !lower_types.contains("pub struct NativeRustDependency"),
         "the experimental Rust lowerer must not define package dependency identity"
     );
 
-    let lowerer = read(&root.join("crates/rsscript-compiler/src/rust_lower/mod.rs"));
+    let lowerer = read(&root.join("experiments/aot-backend/src/rust_lower/mod.rs"));
     assert!(
         lowerer.contains("pub use crate::package::NativeRustDependency;"),
         "the Rust lowerer may retain a compatibility re-export while it consumes project input"
@@ -1639,20 +1641,13 @@ fn rust_aot_lowering_is_explicitly_feature_gated() {
         !execution.contains("aot-rust"),
         "ordinary execution must not select the experimental Rust/AOT lowerer"
     );
-    let aot = manifest["features"]["aot-rust"]
-        .as_array()
-        .expect("compiler aot-rust feature should be declared")
-        .iter()
-        .filter_map(toml::Value::as_str)
-        .collect::<BTreeSet<_>>();
-    assert_eq!(
-        aot,
-        BTreeSet::from(["execution"]),
-        "Rust/AOT lowering must be an explicit extension of execution"
+    assert!(
+        manifest["features"].get("aot-rust").is_none(),
+        "Core compiler must not expose the experimental Rust/AOT feature"
     );
 
     let compiler = read(&root.join("crates/rsscript-compiler/src/lib.rs"));
-    assert!(compiler.contains("#[cfg(feature = \"aot-rust\")]\nmod rust_lower;"));
+    assert!(!compiler.contains("mod rust_lower;"));
     assert!(compiler.contains("#[cfg(feature = \"execution\")]\nmod lower_names;"));
 
     let symbols = read(&root.join("crates/rsscript-compiler/src/symbols.rs"));
@@ -1681,7 +1676,8 @@ fn rust_aot_lowering_is_explicitly_feature_gated() {
         .filter_map(toml::Value::as_str)
         .collect::<BTreeSet<_>>();
     assert!(sdk_aot.contains("execution"));
-    assert!(sdk_aot.contains("rsscript_compiler/aot-rust"));
+    assert!(sdk_aot.contains("dep:rsscript-aot-backend"));
+    assert!(!sdk_aot.contains("rsscript_compiler/aot-rust"));
     let sdk_compatibility = sdk["features"]["compatibility"]
         .as_array()
         .expect("SDK compatibility feature should be declared")
@@ -1733,7 +1729,8 @@ fn rust_aot_lowering_is_explicitly_feature_gated() {
         .filter_map(toml::Value::as_str)
         .collect::<BTreeSet<_>>();
     assert!(cli_aot.contains("package-inspect"));
-    assert!(cli_aot.contains("rsscript-compiler/aot-rust"));
+    assert!(cli_aot.contains("dep:rsscript-aot-backend"));
+    assert!(!cli_aot.contains("rsscript-compiler/aot-rust"));
 
     let run_command = read(&root.join("crates/rsscript-cli/src/cli/run_cmd.rs"));
     assert!(
@@ -3388,7 +3385,7 @@ fn compiler_legacy_package_review_and_aot_exports_are_quarantined() {
     }
     assert!(compiler.contains("pub use crate::package::{"));
     assert!(compiler.contains("pub use crate::review::{"));
-    assert!(compiler.contains("pub use crate::rust_lower::{"));
+    assert!(!compiler.contains("pub use crate::rust_lower::{"));
     assert!(compiler.contains("compile_frontend_input_to_ir"));
     assert!(
         !compiler.contains("compile_package_input_to_ir"),
@@ -3397,8 +3394,9 @@ fn compiler_legacy_package_review_and_aot_exports_are_quarantined() {
 
     let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
     assert!(sdk.contains("pub use rsscript_compiler::compatibility::{"));
+    assert!(sdk.contains("pub use rsscript_aot_backend::{"));
     let cli_aot = read(&root.join("crates/rsscript-cli/src/cli/mod.rs"));
-    assert!(cli_aot.contains("use rsscript_compiler::compatibility::{"));
+    assert!(cli_aot.contains("use rsscript_aot_backend::{AotLoweringInput, lower_aot_input};"));
 }
 
 #[test]
@@ -3545,7 +3543,6 @@ fn embedding_facade_exposes_only_product_level_objects() {
     for forbidden in [
         "JitPlan",
         "RegInstr",
-        "RustSourceMapEntry",
         "ReviewFinding",
         "reir",
     ] {
@@ -4660,7 +4657,7 @@ fn executable_backends_consume_validated_frontend_results() {
     assert!(executable_ir.contains("program: ExecutableProgram"));
     assert!(!executable_ir.contains("pub fn typed_hir"));
 
-    let rust_lower = read(&root.join("crates/rsscript-compiler/src/rust_lower/mod.rs"));
+    let rust_lower = read(&root.join("experiments/aot-backend/src/rust_lower/mod.rs"));
     let lower_source = function_source(&rust_lower, "pub fn lower_source_to_rust_with_map");
     assert!(
         lower_source.contains("validated_session_sources")
@@ -4668,7 +4665,7 @@ fn executable_backends_consume_validated_frontend_results() {
         "Rust source lowering must consume a ValidatedProgram"
     );
 
-    let helpers = read(&root.join("crates/rsscript-compiler/src/rust_lower/helpers.rs"));
+    let helpers = read(&root.join("experiments/aot-backend/src/rust_lower/helpers.rs"));
     assert!(
         !helpers.contains("parse_source"),
         "lowering declaration projections must reuse parsed semantic inputs"
@@ -4995,7 +4992,7 @@ fn vm_core_does_not_embed_time_logging_or_os_intrinsics() {
 #[test]
 fn rust_aot_lowering_does_not_restore_removed_host_abi_types() {
     let root = workspace_root();
-    let lowering_root = root.join("crates/rsscript-compiler/src/rust_lower");
+    let lowering_root = root.join("experiments/aot-backend/src/rust_lower");
     let forbidden = [
         "rsscript_runtime::File",
         "rsscript_runtime::Http",
@@ -5091,8 +5088,8 @@ fn high_risk_state_machines_keep_dedicated_module_owners() {
         "crates/rsscript-vm/src/reg_vm/tier/admission.rs",
         "crates/rsscript-vm/src/reg_vm/tier/call_scratch.rs",
         "crates/rsscript-vm/src/reg_vm/tier/recursion.rs",
-        "crates/rsscript-compiler/src/rust_lower/helpers/executable_declarations.rs",
-        "crates/rsscript-compiler/src/rust_lower/helpers/semantic_projection.rs",
+        "experiments/aot-backend/src/rust_lower/helpers/executable_declarations.rs",
+        "experiments/aot-backend/src/rust_lower/helpers/semantic_projection.rs",
         "experiments/aot-runtime/src/json.rs",
         "experiments/vm-jit/src/analysis.rs",
         "experiments/vm-jit/src/executable_memory.rs",

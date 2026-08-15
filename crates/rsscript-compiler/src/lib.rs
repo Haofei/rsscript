@@ -32,10 +32,8 @@ mod lower_names;
 mod package;
 #[cfg(feature = "package")]
 mod review;
-#[cfg(any(feature = "package", feature = "aot-rust"))]
+#[cfg(feature = "package")]
 mod runtime_abi;
-#[cfg(feature = "aot-rust")]
-mod rust_lower;
 #[cfg(all(test, feature = "execution", feature = "selfhost-parity"))]
 mod selfhost_parity;
 mod semantic;
@@ -108,14 +106,13 @@ pub use rsscript_semantics::{
     validate_sources_with_interfaces_without_core,
 };
 
-/// Explicit migration-only APIs for package persistence, review presentation,
-/// and Rust AOT emission.
+/// Explicit migration-only APIs for package persistence and review presentation.
 ///
 /// The reviewed compiler surface is source/interface analysis and provider-neutral
 /// lowering. These historical APIs remain available only to compatibility
 /// adapters and experimental tooling while their implementations move to their
 /// respective project, review, and AOT boundaries.
-#[cfg(any(feature = "package", feature = "aot-rust"))]
+#[cfg(feature = "package")]
 pub mod compatibility {
     #[cfg(feature = "bytecode")]
     pub use crate::compiler_output::{
@@ -154,17 +151,6 @@ pub mod compatibility {
         ReviewMapFile, ReviewMapFileRisk, ReviewMapRegion, ReviewMapSummary, ReviewRisk,
         format_review_human, format_review_json, format_review_map_human, format_review_map_json,
         review_map_sources, review_sources,
-    };
-    #[cfg(feature = "aot-rust")]
-    pub use crate::rust_lower::{
-        GeneratedRustPackage, LowerCoverageReport, LoweredRust, NativeRustDependency,
-        RemappedRustcDiagnostic, RustSourceMapEntry, lower_aot_input, lower_coverage_report,
-        lower_program_to_rust, lower_program_to_rust_with_map, lower_source_to_rust,
-        lower_source_to_rust_package, lower_source_to_rust_package_with_interfaces,
-        lower_source_to_rust_with_map, lower_sources_to_rust_package_with_interfaces,
-        lower_sources_to_rust_package_with_options, parse_runtime_diagnostics,
-        parse_source_map_json, remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines,
-        write_generated_rust_package,
     };
     #[cfg(feature = "execution")]
     pub use crate::symbols::{SymbolInventoryEntry, symbol_inventory};

@@ -57,40 +57,12 @@ pub(crate) fn rust_function_ident(name: &str) -> String {
     rust_ident(&joined)
 }
 
-#[cfg(feature = "aot-rust")]
-pub(crate) fn rust_qualified_function_ident(namespace: &str, name: &str) -> String {
-    let source_name = format!("{namespace}.{}", type_root_name(name));
-    if let Some(pinned) = lower_name_override(&source_name) {
-        return pinned;
-    }
-    namespace
-        .split('.')
-        .chain(std::iter::once(type_root_name(name)))
-        .map(rust_path_segment)
-        .collect::<Vec<_>>()
-        .join("_")
-}
-
-#[cfg(feature = "aot-rust")]
-pub(crate) fn rust_path_segment(segment: &str) -> String {
-    if let Some((head, tail)) = segment.split_once("::<") {
-        format!("{}::<{tail}", rust_ident(head))
-    } else {
-        rust_ident(segment)
-    }
-}
-
 pub(crate) fn rust_ident(name: &str) -> String {
     if crate::text_util::is_rust_keyword(name) {
         format!("r#{name}")
     } else {
         name.to_string()
     }
-}
-
-#[cfg(feature = "aot-rust")]
-fn type_root_name(name: &str) -> &str {
-    crate::text_util::type_root_name(name)
 }
 
 #[cfg(test)]
