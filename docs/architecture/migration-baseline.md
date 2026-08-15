@@ -1066,6 +1066,13 @@ mechanical acceptance condition holds.
       replacement, option removal, and cleanup of the mutable map. Its named
       reference-interpreter exception is explicit because the small oracle does
       not model `SortedMap` runtime representation.
+    - [x] **M03.4n — Lower special mutable ordered-set updates without legacy
+      intrinsics.** `SortedSet.insert`, `remove`, and `clear` now carry an
+      explicit mutable `PlaceId`; insertion retains checked `read` local values
+      and preserves the VM's boolean membership results. The direct/legacy
+      bytecode fixture covers duplicate detection, removal, and clear. Its
+      reference-interpreter exception is explicit because the small oracle does
+      not model `SortedSet` runtime representation.
 - [ ] **M04 — Lower checked HIR to MIR exactly once.** Backend code cannot
   inspect syntax AST or reconstruct semantic facts. MIR verification rejects
   unresolved calls, invalid ownership state, incomplete cleanup, and malformed
@@ -1323,6 +1330,11 @@ mechanical acceptance condition holds.
       verifier-checked v1 instructions. Direct parity checks cover replacement,
       option results, and key/value retention facts without source-shaped
       executable-IR recovery.
+    - [x] **V02.3o — Emit resolved mutable ordered-set updates.**
+      `SortedSetClear`, `SortedSetInsert`, and `SortedSetRemove` map explicit
+      mutable ordered-set places and resolved values to their existing
+      verifier-checked v1 instructions. Direct parity checks cover membership
+      results and retention facts without executable-IR recovery.
   - [x] **V02.4 — Switch reviewed builds to the compiler bytecode boundary.**
     SDK source, interface, and package builds delegate checked HIR → MIR →
     `codegen-vm` Artifact emission to the compiler's VM-free `bytecode`

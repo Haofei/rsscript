@@ -562,6 +562,28 @@ fn main() -> Int {
 "#,
     },
     MigrationCase {
+        name: "sorted_set_mutations",
+        capability: "resolved mutable ordered-set updates with retention",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn main() -> Int {
+    let mut values = SortedSet.new<Int>()
+    let value = 7
+    if SortedSet.insert<Int>(set: mut values, value: read value) == false {
+        return 0
+    }
+    if SortedSet.insert<Int>(set: mut values, value: read value) {
+        return 0
+    }
+    if SortedSet.remove<Int>(set: mut values, value: read value) == false {
+        return 0
+    }
+    SortedSet.clear<Int>(set: mut values)
+    return 1
+}
+"#,
+    },
+    MigrationCase {
         name: "typed_json_decode",
         capability: "typed JSON decode builtins and record layouts",
         stage: MigrationStage::DualPath,
@@ -603,6 +625,12 @@ const EVIDENCE_OVERRIDES: &[MigrationEvidenceOverride] = &[
         case: "sorted_map_mutations",
         evidence: MigrationEvidence::VerifiedBytecode {
             reference_interpreter_gap: "the test-only MIR interpreter does not model SortedMap.new or ordered-map runtime representation",
+        },
+    },
+    MigrationEvidenceOverride {
+        case: "sorted_set_mutations",
+        evidence: MigrationEvidence::VerifiedBytecode {
+            reference_interpreter_gap: "the test-only MIR interpreter does not model SortedSet.new or ordered-set runtime representation",
         },
     },
 ];
@@ -1223,6 +1251,72 @@ fn main() -> Int {
     let legacy = reg_vm_eval_source_main("direct-hir-sorted-map-mutations.rss", source)
         .expect("legacy SortedMap mutation path executes");
     assert_eq!(legacy.value, "7");
+    assert_eq!(direct.value, legacy.value);
+    assert_eq!(direct.stdout, legacy.stdout);
+    assert_eq!(direct.stderr, legacy.stderr);
+    assert_eq!(direct.usage, legacy.usage);
+}
+
+#[test]
+fn direct_checked_hir_sorted_set_mutations_preserve_retention_and_boolean_contracts() {
+    let source = r#"
+fn main() -> Int {
+    let mut values = SortedSet.new<Int>()
+    let value = 7
+    if SortedSet.insert<Int>(set: mut values, value: read value) == false {
+        return 0
+    }
+    if SortedSet.insert<Int>(set: mut values, value: read value) {
+        return 0
+    }
+    if SortedSet.remove<Int>(set: mut values, value: read value) == false {
+        return 0
+    }
+    SortedSet.clear<Int>(set: mut values)
+    return 1
+}
+"#;
+    let compiled = compile_source_to_ir("direct-hir-sorted-set-mutations.rss", source)
+        .expect("SortedSet mutation fixture compiles");
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("SortedSet mutations should lower directly from checked HIR");
+    let instructions = mir
+        .functions()
+        .iter()
+        .flat_map(|function| function.blocks())
+        .flat_map(|block| block.instructions())
+        .collect::<Vec<_>>();
+    for expected in ["SortedSetInsert", "SortedSetRemove", "SortedSetClear"] {
+        assert!(
+            instructions
+                .iter()
+                .any(|instruction| match (expected, instruction) {
+                    ("SortedSetInsert", MirInstruction::SortedSetInsert { .. })
+                    | ("SortedSetRemove", MirInstruction::SortedSetRemove { .. })
+                    | ("SortedSetClear", MirInstruction::SortedSetClear { .. }) => true,
+                    _ => false,
+                }),
+            "direct MIR must preserve {expected} as an explicit mutable-place operation"
+        );
+    }
+    assert!(
+        instructions
+            .iter()
+            .any(|instruction| matches!(instruction, MirInstruction::Retain { .. })),
+        "SortedSet insertion must retain a read-local value explicitly"
+    );
+    let direct = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("SortedSet mutation MIR emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("SortedSet mutation bytecode executes");
+    let legacy = reg_vm_eval_source_main("direct-hir-sorted-set-mutations.rss", source)
+        .expect("legacy SortedSet mutation path executes");
+    assert_eq!(legacy.value, "1");
     assert_eq!(direct.value, legacy.value);
     assert_eq!(direct.stdout, legacy.stdout);
     assert_eq!(direct.stderr, legacy.stderr);

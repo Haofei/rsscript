@@ -880,7 +880,10 @@ impl<'a> Interpreter<'a> {
                     | MirInstruction::DequePushFront { .. }
                     | MirInstruction::SortedMapClear { .. }
                     | MirInstruction::SortedMapInsert { .. }
-                    | MirInstruction::SortedMapRemove { .. } => {
+                    | MirInstruction::SortedMapRemove { .. }
+                    | MirInstruction::SortedSetClear { .. }
+                    | MirInstruction::SortedSetInsert { .. }
+                    | MirInstruction::SortedSetRemove { .. } => {
                         return Err(MirExecutionError::UnsupportedBuiltinCall);
                     }
                     MirInstruction::MapGet {

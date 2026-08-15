@@ -608,6 +608,37 @@ fn lower_instruction(
                 ("key", json!(value_reg(function, *key))),
             ],
         )),
+        MirInstruction::SortedSetClear { destination, set } => code.push(instr(
+            "SortedSetClear",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("set", json!(place_reg(*set))),
+            ],
+        )),
+        MirInstruction::SortedSetInsert {
+            destination,
+            set,
+            value,
+        } => code.push(instr(
+            "SortedSetInsert",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("set", json!(place_reg(*set))),
+                ("value", json!(value_reg(function, *value))),
+            ],
+        )),
+        MirInstruction::SortedSetRemove {
+            destination,
+            set,
+            value,
+        } => code.push(instr(
+            "SortedSetRemove",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("set", json!(place_reg(*set))),
+                ("value", json!(value_reg(function, *value))),
+            ],
+        )),
         MirInstruction::MapGet {
             destination,
             map,
