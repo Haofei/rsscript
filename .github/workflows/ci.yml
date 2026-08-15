@@ -86,3 +86,10 @@ jobs:
           cargo test --locked -p rsscript-compiler --lib package::authorization
           cargo test --locked -p rsscript-provider-api
           cargo test --locked -p rsscript-bytecode
+
+      # This checked-in digest covers both deterministic Artifact Bundle bytes
+      # and the analysis/provenance bound to the same immutable snapshot. Run
+      # it on every supported Core platform rather than treating Linux-only
+      # reproducibility as a cross-platform claim.
+      - name: Cross-platform Artifact determinism
+        run: cargo test --locked -p rsscript-sdk --test migration_baseline --features compatibility canonical_compilation_and_diagnostics_are_migration_baselines

@@ -1832,8 +1832,11 @@ an arbitrary shell executor.
       checked-in trailing-byte mutation is applied to the read-only reference
       bundle and must be rejected at the bundle boundary before verification or
       execution. Per-section/table/opcode/version/size fixtures remain open.
-  - [ ] **B05.3 — Test deterministic bytes across supported platforms.** Compare
-    bundle and analysis bytes from identical snapshots.
+  - [x] **B05.3 — Test deterministic bytes across supported platforms.** The
+    checked-in canonical compilation baseline compares repeated Bundle bytes
+    and their analysis/provenance digest from one immutable snapshot. It now
+    runs in the Linux Core gate and the macOS/Windows Core-platform matrix, so
+    every supported platform must match the same declared digest.
 
 ### 5. Provider contract and authoring SDK
 
