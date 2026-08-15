@@ -23,6 +23,7 @@ execution = [
     "rsscript-sdk/project",
     "dep:rss-process-guard",
     "dep:rsscript-runner-protocol",
+    "dep:rsscript-provider-log",
 ]
 # Legacy package review/inspection is an explicit compatibility boundary. The
 # normal artifact build, check, and runner path uses the SDK project loader and
@@ -41,6 +42,7 @@ rsscript-syntax = { path = "../rsscript-syntax" }
 rsscript-sdk = { path = "../rsscript-sdk", optional = true, default-features = false }
 rss-process-guard = { path = "../process-guard", optional = true }
 rsscript-runner-protocol = { path = "../rsscript-runner-protocol", optional = true }
+rsscript-provider-log = { path = "../../providers/log", optional = true }
 hex = "0.4"
 serde_json = "1"
 sha2 = "0.10"

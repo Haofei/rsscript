@@ -360,7 +360,13 @@ fn execute_request(request: RunnerRequestV1, bundle: Vec<u8>) -> RunnerResponseV
             );
         }
     };
-    let runtime = Runtime::new(profiled_registry(profile));
+    let registry = match profiled_registry(profile) {
+        Ok(registry) => registry,
+        Err(error) => {
+            return RunnerResponseV1::rejected(profile, RunnerTerminationV1::HostFailure, error);
+        }
+    };
+    let runtime = Runtime::new(registry);
     let linked = match runtime.link(&admitted) {
         Ok(linked) => linked,
         Err(error) => {
@@ -441,11 +447,24 @@ fn runner_process_limits(limits: &RunnerLimitsV1) -> ProcessLimits {
     }
 }
 
-fn profiled_registry(profile: RunnerProfileV1) -> ProviderRegistry {
+fn profiled_registry(profile: RunnerProfileV1) -> Result<ProviderRegistry, String> {
     match profile {
         // Provider implementations and all authority remain host-owned. The
         // reference profile intentionally fails closed for external imports.
-        RunnerProfileV1::NoProviders => ProviderRegistry::default(),
+        RunnerProfileV1::NoProviders => Ok(ProviderRegistry::default()),
+        // This preinstalled profile deliberately discards messages. It proves
+        // exact allowlist linkage without granting filesystem, network,
+        // process, credential, or ambient-environment authority to the child.
+        RunnerProfileV1::LogOnly => {
+            let mut registry = ProviderRegistry::default();
+            registry
+                .register(
+                    &rsscript_provider_log::descriptor(),
+                    rsscript_provider_log::functions(|_| Ok(())),
+                )
+                .map_err(|error| format!("cannot install log-only runner profile: {error}"))?;
+            Ok(registry)
+        }
     }
 }
 
@@ -489,6 +508,7 @@ fn finish_report(report: serde_json::Value, json: bool) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rsscript_sdk::compile::FrontendInputSnapshot;
     use std::io::Cursor;
 
     #[test]
@@ -608,5 +628,56 @@ mod tests {
             RunnerTerminationV1::VerificationRejected
         );
         assert!(response.report.is_none());
+    }
+
+    #[test]
+    fn log_only_profile_links_its_preinstalled_provider_and_no_providers_rejects_it() {
+        let input = FrontendInputSnapshot::from_sources(
+            [(
+                "main.rss",
+                r#"
+module runner.profile
+
+use host.log.*
+
+fn main() -> Unit {
+    emit(message: read "runner profile")
+    return Unit
+}
+"#,
+            )],
+            [(
+                "host-log.rssi",
+                include_str!("../../../../providers/log/interface/lib.rssi"),
+            )],
+        );
+        let bundle = Compiler
+            .compile_snapshot(&input)
+            .expect("log program must build")
+            .into_bundle()
+            .to_bytes()
+            .expect("bundle bytes");
+
+        let rejected = execute_request(
+            RunnerRequestV1::new(Vec::new()).expect("request"),
+            bundle.clone(),
+        );
+        assert_eq!(
+            rejected.runner_termination,
+            RunnerTerminationV1::LinkRejected
+        );
+        assert!(rejected.report.is_none());
+
+        let accepted = execute_request(
+            RunnerRequestV1::with_profile(Vec::new(), RunnerProfileV1::LogOnly).expect("request"),
+            bundle,
+        );
+        assert_eq!(accepted.runner_termination, RunnerTerminationV1::Completed);
+        let report = accepted.report.expect("completed runner report");
+        assert_eq!(report["termination_reason"], "completed");
+        assert_eq!(
+            report["provider_call_traces"].as_array().map(Vec::len),
+            Some(1)
+        );
     }
 }

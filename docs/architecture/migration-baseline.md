@@ -1851,6 +1851,15 @@ mechanical acceptance condition holds.
       runner response now returns a non-secret profile ID/version/descriptor
       digest that the parent checks against its requested profile before it
       accepts a report.
+    - [x] **A09.1b — Prove a non-empty preinstalled allowlist.** The protocol
+      now carries a `log_only` profile whose fixed runner registry installs only
+      `host.log.emit` with a host-owned discard sink. The same Artifact is
+      rejected by `no_providers` before execution and completes under
+      `log_only`, proving profile selection changes only a preinstalled
+      allowlist—not request-supplied Provider code, roots, endpoints,
+      credentials, or authority. Filesystem/network-backed profiles remain
+      follow-up work because their roots/endpoints require explicit host
+      configuration and Linux isolation support.
   - [ ] **A09.2 — Add Linux isolation adapters.** Implement optional namespace,
     syscall, filesystem, network, and cgroup controls with capability detection
     and fail-closed profile requirements. The strict Linux/Android child path

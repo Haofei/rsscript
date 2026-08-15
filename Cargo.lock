@@ -1776,6 +1776,7 @@ dependencies = [
  "rss-process-guard",
  "rsscript-compiler",
  "rsscript-diagnostics",
+ "rsscript-provider-log",
  "rsscript-runner-protocol",
  "rsscript-sdk",
  "rsscript-semantics",

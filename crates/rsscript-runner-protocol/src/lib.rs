@@ -31,6 +31,13 @@ pub enum RunnerProfileV1 {
     /// Reference fail-closed profile: no external Provider is linkable.
     #[default]
     NoProviders,
+    /// Reference allowlisted profile with only `host.log.emit` installed.
+    ///
+    /// The sink is selected by the runner host and has no filesystem, network,
+    /// process, credential, or ambient-environment authority. This profile
+    /// exists to exercise a non-empty, preinstalled Provider allowlist without
+    /// allowing a request to inject Provider code or configuration.
+    LogOnly,
 }
 
 /// Stable, non-secret identity of the host-selected runner profile.
@@ -54,6 +61,16 @@ impl RunnerProfileV1 {
                 version: 1,
                 descriptor_digest:
                     "sha256:59e7504d735fe8ba29a406c993312a784d338892b279c60d6bdb5670165745dd"
+                        .to_string(),
+            },
+            // sha256 of the versioned profile descriptor containing the
+            // `rsscript.log` / `host.log.emit` read-String-to-Unit contract.
+            // It is a profile identity, not a request-supplied authority.
+            Self::LogOnly => RunnerProfileIdentityV1 {
+                id: "rsscript.runner.log_only".to_string(),
+                version: 1,
+                descriptor_digest:
+                    "sha256:532783c81dcde5137cdae02a8f5a77cfd579f1f216b97feb80b78a2df30b4ac0"
                         .to_string(),
             },
         }
@@ -102,10 +119,20 @@ pub struct RunnerRequestV1 {
 
 impl RunnerRequestV1 {
     pub fn new(args: Vec<String>) -> Result<Self, ProtocolError> {
+        Self::with_profile(args, RunnerProfileV1::default())
+    }
+
+    /// Construct a request for one compile-time known, host-selected profile.
+    /// The profile enum intentionally cannot carry Provider libraries,
+    /// credentials, roots, endpoints, or other authority-bearing inputs.
+    pub fn with_profile(
+        args: Vec<String>,
+        profile: RunnerProfileV1,
+    ) -> Result<Self, ProtocolError> {
         validate_args(&args)?;
         Ok(Self {
             schema: RUNNER_REQUEST_SCHEMA.to_string(),
-            profile: RunnerProfileV1::default(),
+            profile,
             args,
             limits: RunnerLimitsV1::default(),
             metadata_only_trace: true,
@@ -435,6 +462,30 @@ mod tests {
             assert!(
                 json.get(forbidden).is_none(),
                 "protocol must not inject {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn log_only_profile_is_a_distinct_preinstalled_allowlist() {
+        let request =
+            RunnerRequestV1::with_profile(Vec::new(), RunnerProfileV1::LogOnly).expect("request");
+        assert_eq!(request.profile, RunnerProfileV1::LogOnly);
+        let identity = request.profile.identity();
+        assert_eq!(identity.id, "rsscript.runner.log_only");
+        assert_ne!(identity, RunnerProfileV1::NoProviders.identity());
+        let json = serde_json::to_value(request).expect("request JSON");
+        for forbidden in [
+            "provider",
+            "library",
+            "credential",
+            "authority",
+            "root",
+            "endpoint",
+        ] {
+            assert!(
+                json.get(forbidden).is_none(),
+                "profile selection must not add request-supplied {forbidden}"
             );
         }
     }
