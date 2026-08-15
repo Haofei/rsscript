@@ -1,9 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
-use std::io::Read;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
-use rsscript_project::capture_project_manifest;
+use rsscript_project::{
+    ProjectSourceCapture, ProjectSourceCaptureLimits, capture_project_manifest,
+    capture_project_utf8,
+};
 use serde::Deserialize;
 
 use crate::package::PackageReviewFileKind;
@@ -332,13 +333,12 @@ pub(super) fn load_package_with_features(
         .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))?;
     let snapshot_manifest_source = package_root.join(SNAPSHOT_MANIFEST_SOURCE_FILE);
     let manifest_source = if snapshot_manifest_source.is_file() {
-        read_bounded_utf8_file(
-            &package_root,
-            &snapshot_manifest_source,
+        capture_project_utf8(
+            package_dir,
+            SNAPSHOT_MANIFEST_SOURCE_FILE,
             MANIFEST_MAX_BYTES,
             "package snapshot manifest identity",
         )?
-        .0
     } else {
         physical_manifest_source
     };
@@ -352,35 +352,43 @@ pub(super) fn load_package_with_features(
     let excluded_feature_interface_roots = all_interface_feature_paths(&manifest);
     let source_roots = default_paths(&manifest.sources.paths, "src");
     let test_roots = manifest.tests.paths.clone();
-    let mut budget = SourceBudget::default();
+    let mut capture = ProjectSourceCapture::new(
+        package_dir,
+        ProjectSourceCaptureLimits {
+            max_files: PACKAGE_SOURCE_MAX_FILES,
+            max_total_bytes: PACKAGE_SOURCE_MAX_BYTES,
+            max_file_bytes: SOURCE_FILE_MAX_BYTES,
+            max_depth: PACKAGE_SOURCE_MAX_DEPTH,
+        },
+    )?;
     let mut sources = Vec::new();
     sources.extend(read_package_sources_excluding(
         package_dir,
         &base_interface_roots,
         &excluded_feature_interface_roots,
         PackageReviewFileKind::Interface,
-        &mut budget,
+        &mut capture,
     )?);
     sources.extend(read_package_sources_excluding(
         package_dir,
         &selected_feature_interface_roots,
         &[],
         PackageReviewFileKind::Interface,
-        &mut budget,
+        &mut capture,
     )?);
     sources.extend(read_package_sources_excluding(
         package_dir,
         &source_roots,
         &[],
         PackageReviewFileKind::Source,
-        &mut budget,
+        &mut capture,
     )?);
     sources.extend(read_package_sources_excluding(
         package_dir,
         &test_roots,
         &[],
         PackageReviewFileKind::Test,
-        &mut budget,
+        &mut capture,
     )?);
     sources.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(LoadedPackage {
@@ -490,226 +498,27 @@ fn read_package_sources_excluding(
     roots: &[String],
     excluded_roots: &[String],
     kind: PackageReviewFileKind,
-    budget: &mut SourceBudget,
+    capture: &mut ProjectSourceCapture,
 ) -> Result<Vec<PackageSource>, String> {
-    let mut sources = Vec::new();
-    let package_root = canonical_package_root(package_dir)?;
-    let excluded_roots = excluded_roots
-        .iter()
-        .map(|root| confined_manifest_path(package_dir, &package_root, root, "source root"))
-        .collect::<Result<Vec<_>, _>>()?;
-    for root in roots {
-        let root_path = confined_manifest_path(package_dir, &package_root, root, "source root")?;
-        if !root_path.exists() {
-            continue;
-        }
-        let mut files = Vec::new();
-        collect_rsscript_files_excluding(&root_path, &excluded_roots, &mut files, 0, budget)?;
-        files.sort();
-        for file in files {
-            let (contents, bytes) = read_bounded_utf8_file(
-                &package_root,
-                &file,
-                SOURCE_FILE_MAX_BYTES,
-                "package source",
-            )?;
-            budget.add_file(bytes, &file)?;
-            let relative_path = super::relative_path(&package_root, &file);
-            let display_path = package_dir.join(&relative_path).display().to_string();
-            sources.push(PackageSource {
-                path: display_path,
+    capture
+        .capture(roots, excluded_roots)?
+        .into_iter()
+        .map(|source| {
+            let relative_path = source.relative_path().to_string();
+            Ok(PackageSource {
+                path: package_dir.join(&relative_path).display().to_string(),
                 relative_path,
-                contents,
+                contents: source.contents().to_string(),
                 kind,
-            });
-        }
-    }
-    Ok(sources)
-}
-
-pub(super) fn canonical_package_root(package_dir: &Path) -> Result<PathBuf, String> {
-    package_dir.canonicalize().map_err(|error| {
-        format!(
-            "failed to canonicalize package root {}: {error}",
-            package_dir.display()
-        )
-    })
-}
-
-pub(super) fn validate_manifest_relative_path(value: &str, label: &str) -> Result<(), String> {
-    let path = Path::new(value);
-    if path.is_absolute() {
-        return Err(format!(
-            "{label} `{value}` must be relative to the package root."
-        ));
-    }
-    if path
-        .components()
-        .any(|component| matches!(component, Component::ParentDir))
-    {
-        return Err(format!(
-            "{label} `{value}` must not escape the package root with `..`."
-        ));
-    }
-    Ok(())
-}
-
-pub(super) fn confined_manifest_path(
-    _package_dir: &Path,
-    package_root: &Path,
-    value: &str,
-    label: &str,
-) -> Result<PathBuf, String> {
-    validate_manifest_relative_path(value, label)?;
-    let path = package_root.join(value);
-    if !path.exists() {
-        return Ok(path);
-    }
-    let canonical = path
-        .canonicalize()
-        .map_err(|error| format!("failed to canonicalize {label} `{value}`: {error}"))?;
-    canonical.strip_prefix(package_root).map_err(|_| {
-        format!(
-            "{label} `{value}` resolves outside package root {}.",
-            package_root.display()
-        )
-    })?;
-    let mut current = package_root.to_path_buf();
-    for component in Path::new(value).components() {
-        let Component::Normal(component) = component else {
-            continue;
-        };
-        current.push(component);
-        super::package_path_metadata(&current, label)?;
-    }
-    Ok(path)
-}
-
-fn collect_rsscript_files_excluding(
-    path: &Path,
-    excluded_roots: &[PathBuf],
-    files: &mut Vec<PathBuf>,
-    depth: usize,
-    budget: &mut SourceBudget,
-) -> Result<(), String> {
-    budget.check_depth(depth, path)?;
-    if excluded_roots.iter().any(|root| path == root) {
-        return Ok(());
-    }
-    let metadata = super::package_path_metadata(path, "package source tree")?;
-    if metadata.is_file() {
-        if super::is_rsscript_source_path(path) {
-            files.push(path.to_path_buf());
-        }
-        return Ok(());
-    }
-    if !metadata.is_dir() {
-        return Err(format!(
-            "package source tree only accepts regular files or directories: {}",
-            path.display()
-        ));
-    }
-    let entries = fs::read_dir(path)
-        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
-    for entry in entries {
-        let entry = entry
-            .map_err(|error| format!("failed to read entry in {}: {error}", path.display()))?;
-        // `file_type()` does NOT follow symlinks (unlike `Path::is_dir`/`is_file`).
-        // Reject symlinked entries so a package cannot point review/lock/metadata
-        // at files outside its own root (symlink escape).
-        let path = entry.path();
-        let metadata = super::package_path_metadata(&path, "package source tree")?;
-        let file_type = metadata.file_type();
-        if file_type.is_dir() {
-            collect_rsscript_files_excluding(&path, excluded_roots, files, depth + 1, budget)?;
-        } else if file_type.is_file() && super::is_rsscript_source_path(&path) {
-            files.push(path);
-        }
-    }
-    Ok(())
-}
-
-#[derive(Debug, Default)]
-struct SourceBudget {
-    files: usize,
-    bytes: u64,
-}
-
-impl SourceBudget {
-    fn check_depth(&self, depth: usize, path: &Path) -> Result<(), String> {
-        if depth > PACKAGE_SOURCE_MAX_DEPTH {
-            return Err(format!(
-                "package source tree exceeded depth limit of {PACKAGE_SOURCE_MAX_DEPTH} at {}",
-                path.display()
-            ));
-        }
-        Ok(())
-    }
-
-    fn add_file(&mut self, size: u64, path: &Path) -> Result<(), String> {
-        if size > SOURCE_FILE_MAX_BYTES {
-            return Err(format!(
-                "package source {} exceeded per-file byte limit of {SOURCE_FILE_MAX_BYTES}",
-                path.display()
-            ));
-        }
-        self.files = self.files.saturating_add(1);
-        if self.files > PACKAGE_SOURCE_MAX_FILES {
-            return Err(format!(
-                "package source tree exceeded file limit of {PACKAGE_SOURCE_MAX_FILES}"
-            ));
-        }
-        self.bytes = self
-            .bytes
-            .checked_add(size)
-            .ok_or_else(|| "package source byte accounting overflowed".to_string())?;
-        if self.bytes > PACKAGE_SOURCE_MAX_BYTES {
-            return Err(format!(
-                "package source tree exceeded total byte limit of {PACKAGE_SOURCE_MAX_BYTES}"
-            ));
-        }
-        Ok(())
-    }
-}
-
-fn read_bounded_utf8_file(
-    package_root: &Path,
-    path: &Path,
-    max_bytes: u64,
-    label: &str,
-) -> Result<(String, u64), String> {
-    let (file, metadata) = super::open_regular_file_within_root(package_root, path, label)?;
-    if metadata.len() > max_bytes {
-        if label == "package source" {
-            return Err(format!(
-                "{label} {} exceeded per-file byte limit of {max_bytes}",
-                path.display()
-            ));
-        }
-        return Err(format!(
-            "{label} {} exceeded byte limit of {max_bytes}",
-            path.display()
-        ));
-    }
-    let mut bytes = Vec::with_capacity(metadata.len().min(max_bytes) as usize);
-    file.take(max_bytes + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
-    if bytes.len() as u64 > max_bytes {
-        return Err(format!(
-            "{label} {} exceeded byte limit of {max_bytes}",
-            path.display()
-        ));
-    }
-    let actual = bytes.len() as u64;
-    String::from_utf8(bytes)
-        .map(|contents| (contents, actual))
-        .map_err(|error| format!("failed to read {} as UTF-8: {error}", path.display()))
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn fixture(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(

@@ -91,6 +91,192 @@ pub fn capture_project_manifest(
     Ok(ProjectManifestSnapshot { root, source })
 }
 
+/// Capture one bounded, project-relative UTF-8 file without following links.
+///
+/// This is intentionally a narrow project-boundary primitive for immutable
+/// snapshot metadata. Package-specific interpretation remains with the caller.
+pub fn capture_project_utf8(
+    package_dir: &Path,
+    relative_path: &str,
+    max_bytes: u64,
+    label: &str,
+) -> Result<String, String> {
+    let root = canonical_capture_root(package_dir)?;
+    let path = confined_project_path(&root, relative_path, label)?;
+    read_regular_utf8_within_root(&root, &path, max_bytes, label).map(|(source, _)| source)
+}
+
+/// Bounds for project-owned RSScript source capture. The compiler selects
+/// semantic source roots, while this boundary owns traversal and file I/O.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectSourceCaptureLimits {
+    pub max_files: usize,
+    pub max_total_bytes: u64,
+    pub max_file_bytes: u64,
+    pub max_depth: usize,
+}
+
+/// A source file captured from an explicitly selected project-relative root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectSourceFile {
+    relative_path: String,
+    contents: String,
+}
+
+impl ProjectSourceFile {
+    pub fn relative_path(&self) -> &str {
+        &self.relative_path
+    }
+
+    pub fn contents(&self) -> &str {
+        &self.contents
+    }
+}
+
+/// Stateful project source capture shared by multiple source-root selections.
+///
+/// One package manifest can select base, feature, source, and test roots. The
+/// aggregate budget is intentionally retained across calls so a caller cannot
+/// reset limits simply by splitting its manifest into more sections.
+#[derive(Debug)]
+pub struct ProjectSourceCapture {
+    root: PathBuf,
+    limits: ProjectSourceCaptureLimits,
+    files: usize,
+    bytes: u64,
+}
+
+impl ProjectSourceCapture {
+    pub fn new(package_dir: &Path, limits: ProjectSourceCaptureLimits) -> Result<Self, String> {
+        Ok(Self {
+            root: canonical_capture_root(package_dir)?,
+            limits,
+            files: 0,
+            bytes: 0,
+        })
+    }
+
+    /// Capture `.rss` and `.rssi` files beneath the selected roots, excluding
+    /// any exact project-relative roots from traversal. All supplied roots are
+    /// manifest data and must remain confined beneath the package root.
+    pub fn capture(
+        &mut self,
+        roots: &[String],
+        excluded_roots: &[String],
+    ) -> Result<Vec<ProjectSourceFile>, String> {
+        let excluded = excluded_roots
+            .iter()
+            .map(|value| confined_project_path(&self.root, value, "source root"))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut output = Vec::new();
+        for value in roots {
+            let root = confined_project_path(&self.root, value, "source root")?;
+            if !root.exists() {
+                continue;
+            }
+            let mut paths = Vec::new();
+            self.collect_paths(&root, &excluded, 0, &mut paths)?;
+            paths.sort();
+            for path in paths {
+                let (contents, bytes) = read_regular_utf8_within_root(
+                    &self.root,
+                    &path,
+                    self.limits.max_file_bytes,
+                    "project source",
+                )?;
+                self.add_file(bytes, &path)?;
+                let relative = path.strip_prefix(&self.root).map_err(|_| {
+                    format!(
+                        "captured project source escaped package root {}: {}",
+                        self.root.display(),
+                        path.display()
+                    )
+                })?;
+                output.push(ProjectSourceFile {
+                    relative_path: relative.display().to_string().replace('\\', "/"),
+                    contents,
+                });
+            }
+        }
+        Ok(output)
+    }
+
+    fn collect_paths(
+        &self,
+        path: &Path,
+        excluded: &[PathBuf],
+        depth: usize,
+        output: &mut Vec<PathBuf>,
+    ) -> Result<(), String> {
+        if depth > self.limits.max_depth {
+            return Err(format!(
+                "project source tree exceeded depth limit of {} at {}",
+                self.limits.max_depth,
+                path.display()
+            ));
+        }
+        if excluded.iter().any(|excluded| path == excluded) {
+            return Ok(());
+        }
+        let metadata = project_path_metadata(path, "project source tree")?;
+        if metadata.is_file() {
+            if is_rsscript_source_path(path) {
+                output.push(path.to_path_buf());
+            }
+            return Ok(());
+        }
+        if !metadata.is_dir() {
+            return Err(format!(
+                "project source tree only accepts regular files or directories: {}",
+                path.display()
+            ));
+        }
+        let mut entries = fs::read_dir(path)
+            .map_err(|error| format!("failed to read {}: {error}", path.display()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("failed to read entry in {}: {error}", path.display()))?;
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let entry_path = entry.path();
+            let metadata = project_path_metadata(&entry_path, "project source tree")?;
+            if metadata.is_dir() {
+                self.collect_paths(&entry_path, excluded, depth + 1, output)?;
+            } else if metadata.is_file() && is_rsscript_source_path(&entry_path) {
+                output.push(entry_path);
+            }
+        }
+        Ok(())
+    }
+
+    fn add_file(&mut self, bytes: u64, path: &Path) -> Result<(), String> {
+        if bytes > self.limits.max_file_bytes {
+            return Err(format!(
+                "project source {} exceeded per-file byte limit of {}",
+                path.display(),
+                self.limits.max_file_bytes
+            ));
+        }
+        self.files = self.files.saturating_add(1);
+        if self.files > self.limits.max_files {
+            return Err(format!(
+                "project source tree exceeded file limit of {}",
+                self.limits.max_files
+            ));
+        }
+        self.bytes = self
+            .bytes
+            .checked_add(bytes)
+            .ok_or_else(|| "project source byte accounting overflowed".to_string())?;
+        if self.bytes > self.limits.max_total_bytes {
+            return Err(format!(
+                "project source tree exceeded total byte limit of {}",
+                self.limits.max_total_bytes
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl CapturedProjectGraph {
     pub fn root(&self) -> &Path {
         &self.root
@@ -636,6 +822,176 @@ fn read_regular_utf8_no_follow(path: &Path, max_bytes: u64, label: &str) -> Resu
             path.display()
         )
     })
+}
+
+fn confined_project_path(root: &Path, value: &str, label: &str) -> Result<PathBuf, String> {
+    let relative = Path::new(value);
+    if relative.is_absolute() {
+        return Err(format!(
+            "{label} `{value}` must be relative to the package root."
+        ));
+    }
+    if relative
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(format!(
+            "{label} `{value}` must not escape the package root with `..`."
+        ));
+    }
+
+    let path = root.join(relative);
+    if !path.exists() {
+        return Ok(path);
+    }
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| format!("failed to canonicalize {label} `{value}`: {error}"))?;
+    canonical.strip_prefix(root).map_err(|_| {
+        format!(
+            "{label} `{value}` resolves outside package root {}.",
+            root.display()
+        )
+    })?;
+
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        let Component::Normal(component) = component else {
+            continue;
+        };
+        current.push(component);
+        project_path_metadata(&current, label)?;
+    }
+    Ok(path)
+}
+
+fn project_path_metadata(path: &Path, label: &str) -> Result<fs::Metadata, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect {label} {}: {error}", path.display()))?;
+    if is_link_like(&metadata) {
+        return Err(format!(
+            "{label} contains a symlink or reparse point: {}",
+            path.display()
+        ));
+    }
+    Ok(metadata)
+}
+
+fn is_rsscript_source_path(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|extension| extension.to_str()),
+        Some("rss") | Some("rssi")
+    )
+}
+
+fn read_regular_utf8_within_root(
+    root: &Path,
+    path: &Path,
+    max_bytes: u64,
+    label: &str,
+) -> Result<(String, u64), String> {
+    let relative = path.strip_prefix(root).map_err(|_| {
+        format!(
+            "{label} path escapes package root {}: {}",
+            root.display(),
+            path.display()
+        )
+    })?;
+    if relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(format!(
+            "{label} path must contain only normal components: {}",
+            path.display()
+        ));
+    }
+
+    #[cfg(unix)]
+    let mut file = {
+        use rustix::fs::{Mode, OFlags};
+
+        let root_descriptor = rustix::fs::open(
+            root,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|error| {
+            format!(
+                "failed to open package root {} without following links: {error}",
+                root.display()
+            )
+        })?;
+        let mut parent = File::from(root_descriptor);
+        let components = relative
+            .components()
+            .filter_map(|component| match component {
+                Component::Normal(component) => Some(component),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for (index, component) in components.iter().enumerate() {
+            let mut flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+            if index + 1 < components.len() {
+                flags |= OFlags::DIRECTORY;
+            }
+            let descriptor = rustix::fs::openat(&parent, *component, flags, Mode::empty())
+                .map_err(|error| {
+                    format!(
+                        "failed to open {label} {} without following links: {error}",
+                        path.display()
+                    )
+                })?;
+            parent = File::from(descriptor);
+        }
+        parent
+    };
+    #[cfg(not(unix))]
+    let mut file = {
+        project_path_metadata(path, label)?;
+        OpenOptions::new()
+            .read(true)
+            .open(path)
+            .map_err(|error| format!("failed to open {label} {}: {error}", path.display()))?
+    };
+
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("failed to inspect {label} {}: {error}", path.display()))?;
+    if is_link_like(&metadata) || !metadata.is_file() {
+        return Err(format!(
+            "{label} must be a regular non-link file: {}",
+            path.display()
+        ));
+    }
+    if metadata.len() > max_bytes {
+        return Err(format!(
+            "{label} {} exceeded per-file byte limit of {max_bytes}",
+            path.display()
+        ));
+    }
+    let capacity = usize::try_from(metadata.len().min(max_bytes)).unwrap_or(usize::MAX);
+    let mut bytes = Vec::with_capacity(capacity);
+    Read::by_ref(&mut file)
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("failed to read {label} {}: {error}", path.display()))?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(format!(
+            "{label} {} exceeded per-file byte limit of {max_bytes}",
+            path.display()
+        ));
+    }
+    let actual = bytes.len() as u64;
+    String::from_utf8(bytes)
+        .map(|contents| (contents, actual))
+        .map_err(|error| {
+            format!(
+                "failed to read {label} {} as UTF-8: {error}",
+                path.display()
+            )
+        })
 }
 
 fn mirrored_capture_path(root: &Path, source: &Path) -> Result<PathBuf, String> {
@@ -1210,6 +1566,43 @@ mod tests {
         std::fs::write(&outside, "[package]\nname = \"outside\"\n").expect("outside manifest");
         symlink(&outside, directory.path().join("rsspkg.toml")).expect("manifest link");
         assert!(capture_project_manifest(directory.path(), 1024).is_err());
+    }
+
+    #[test]
+    fn project_source_capture_is_confined_bounded_and_excludes_manifest_roots() {
+        let directory = tempfile::tempdir().expect("workspace");
+        std::fs::create_dir_all(directory.path().join("src/ignored")).expect("source tree");
+        std::fs::write(
+            directory.path().join("src/main.rss"),
+            "fn main() -> Unit { return Unit }\n",
+        )
+        .expect("source");
+        std::fs::write(directory.path().join("src/api.rssi"), "module api\n").expect("interface");
+        std::fs::write(directory.path().join("src/ignored/hidden.rss"), "hidden")
+            .expect("excluded source");
+        std::fs::write(directory.path().join("src/readme.txt"), "ignored").expect("non-source");
+
+        let mut capture = ProjectSourceCapture::new(
+            directory.path(),
+            ProjectSourceCaptureLimits {
+                max_files: 2,
+                max_total_bytes: 1024,
+                max_file_bytes: 1024,
+                max_depth: 8,
+            },
+        )
+        .expect("capture boundary");
+        let files = capture
+            .capture(&["src".to_string()], &["src/ignored".to_string()])
+            .expect("bounded capture");
+        assert_eq!(
+            files
+                .iter()
+                .map(|file| file.relative_path())
+                .collect::<Vec<_>>(),
+            vec!["src/api.rssi", "src/main.rss"]
+        );
+        assert!(capture.capture(&["../outside".to_string()], &[]).is_err());
     }
 
     #[test]

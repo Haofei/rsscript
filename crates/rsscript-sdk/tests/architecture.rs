@@ -1487,6 +1487,20 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
             && !manifest_loader.contains("read_bounded_utf8_file"),
         "compiler manifest semantic parsing must not reopen the project manifest"
     );
+    assert!(
+        project.contains("pub struct ProjectSourceCapture")
+            && project.contains("pub struct ProjectSourceCaptureLimits")
+            && project.contains("pub fn capture_project_utf8"),
+        "project must own bounded source-tree traversal and captured snapshot metadata reads"
+    );
+    let source_loader = function_source(&source_set, "fn read_package_sources_excluding(");
+    assert!(
+        source_loader.contains(".capture(roots, excluded_roots)")
+            && !source_loader.contains("canonical_package_root")
+            && !source_loader.contains("collect_rsscript_files_excluding")
+            && !source_loader.contains("read_bounded_utf8_file"),
+        "compiler package source assembly must consume project-captured source bytes rather than traverse directories"
+    );
 }
 
 #[test]

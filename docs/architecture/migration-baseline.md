@@ -740,7 +740,12 @@ an arbitrary shell executor.
     reusable without widening the pure compiler input API. Raw root-manifest
     capture is likewise project-owned: `ProjectManifestSnapshot` performs
     bounded no-follow reads while compiler retains only package-schema parsing
-    and feature/dependency semantics.
+    and feature/dependency semantics. Compatibility package source traversal
+    now follows the same rule: `ProjectSourceCapture` owns confined manifest
+    paths, deterministic `.rss`/`.rssi` traversal, aggregate limits, and
+    no-follow file reads; compiler only assigns captured files their semantic
+    source kind. The remaining S05.1 work is typed dependency discovery and
+    removal of the legacy review/native package resolver from the compiler.
     Manifest dependency discovery now parses the loader-owned
     `WorkspaceManifestV1` projection and admits only explicit local path
     dependencies into capture; version, git, and registry declarations cannot

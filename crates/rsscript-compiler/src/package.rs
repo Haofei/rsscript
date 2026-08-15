@@ -655,12 +655,6 @@ fn package_path_source(path: &Path) -> String {
     format!("path+{}", normalized_path_label(path))
 }
 
-fn is_rsscript_source_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| matches!(extension, "rss" | "rssi"))
-}
-
 fn package_manifest_key_span(package_dir: &Path, key: &str) -> crate::diagnostic::Span {
     let path = package_dir.join("rsspkg.toml");
     let file = path.display().to_string();
