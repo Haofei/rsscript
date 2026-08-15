@@ -1505,6 +1505,11 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
             && !source_loader.contains("read_bounded_utf8_file"),
         "compiler package source assembly must consume project-captured source bytes rather than traverse directories"
     );
+    assert!(
+        source_set.contains("capture_optional_project_utf8")
+            && !source_set.contains("snapshot_manifest_source.is_file"),
+        "compiler package assembly must delegate optional snapshot-manifest probing to rsscript-project"
+    );
     let dependency = read(&root.join("crates/rsscript-compiler/src/package/dependency.rs"));
     let native = read(&root.join("crates/rsscript-compiler/src/package/native.rs"));
     for resolver in [&dependency, &native] {
@@ -1534,6 +1539,21 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
             && !native.contains("load_package_manifest")
             && !native.contains("load_package_with_features"),
         "native dependency resolution must consume project-captured manifests rather than reopen packages"
+    );
+    let review = read(&root.join("crates/rsscript-compiler/src/package/review.rs"));
+    assert!(
+        review.contains("capture_project_manifest_graph")
+            && review.contains("load_package_from_manifest_source")
+            && review.contains("collect_dependency_interface_sources_from_manifest_graph")
+            && review.contains("package_feature_resolution_diagnostics_from_manifest_graph")
+            && !review.contains("load_package(")
+            && !review.contains("load_package_with_features("),
+        "review package assembly must share project-captured manifest bytes with dependency semantics"
+    );
+    assert!(
+        dependency.contains("load_package_from_manifest_source")
+            && !dependency.contains("load_package_with_features("),
+        "dependency source assembly must use manifests already captured for its resolved graph"
     );
     let package_module = read(&root.join("crates/rsscript-compiler/src/package.rs"));
     assert!(

@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use rsscript_project::{ProjectManifestGraphLimits, capture_project_manifest_graph};
+
 use crate::analyzer::core_interfaces;
 use crate::diagnostic::{Diagnostic, Span, code};
 use crate::hir::CallResolution;
@@ -19,14 +21,16 @@ use super::native::{
     native_binding_interface_sources, package_external_bindings,
     package_native_binding_diagnostics, package_native_rust_review,
 };
-use super::source_set::{Manifest, PackageSource, load_package, load_package_with_features};
+use super::source_set::{Manifest, PackageSource, load_package_from_manifest_source};
 use super::{
     PackageDependencyKind, PackageExternalBinding, PackageNativeRustReview,
     PackageProviderImplementation, PackageReview, PackageReviewAwaitBoundary,
     PackageReviewAwaitSite, PackageReviewDependency, PackageReviewFile, PackageReviewFileKind,
-    PackageReviewSummary, PackageRisk, PackageVirtual, collect_dependency_interface_sources,
-    collect_dependency_interface_sources_for_tests, dedup_diagnostics, package_dependency_spec,
-    package_feature_may_change_boundary_risk, package_feature_resolution_diagnostics,
+    PackageReviewSummary, PackageRisk, PackageVirtual,
+    collect_dependency_interface_sources_for_tests_from_manifest_graph,
+    collect_dependency_interface_sources_from_manifest_graph, dedup_diagnostics,
+    package_dependency_spec, package_feature_may_change_boundary_risk,
+    package_feature_resolution_diagnostics_from_manifest_graph,
 };
 
 use super::analysis::session_analysis;
@@ -44,15 +48,25 @@ pub(super) fn review_package_dir_captured_with_features(
     package_dir: &Path,
     selected_features: Option<&[String]>,
 ) -> Result<PackageReview, String> {
-    let package = match selected_features {
-        Some(features) => load_package_with_features(package_dir, Some(features))?,
-        None => load_package(package_dir)?,
-    };
+    let manifest_graph =
+        capture_project_manifest_graph(package_dir, ProjectManifestGraphLimits::default())?;
+    let manifest_source = manifest_graph.manifest_source(package_dir).ok_or_else(|| {
+        format!(
+            "project manifest graph omitted review package root {}",
+            package_dir.display()
+        )
+    })?;
+    let package =
+        load_package_from_manifest_source(package_dir, manifest_source, selected_features)?;
     let manifest = &package.manifest;
     let sources = &package.sources;
-    let dependency_interfaces = collect_dependency_interface_sources(package_dir, manifest)?;
+    let dependency_interfaces =
+        collect_dependency_interface_sources_from_manifest_graph(package_dir, &manifest_graph)?;
     let test_dependency_interfaces =
-        collect_dependency_interface_sources_for_tests(package_dir, manifest)?;
+        collect_dependency_interface_sources_for_tests_from_manifest_graph(
+            package_dir,
+            &manifest_graph,
+        )?;
     let external_bindings = package_external_bindings(package_dir)?;
     let native_binding_interfaces = native_binding_interface_sources(sources, &external_bindings);
 
@@ -105,9 +119,10 @@ pub(super) fn review_package_dir_captured_with_features(
     let interface_diagnostic_exports =
         package_interface_diagnostic_exports(sources, &interface_frontend_diagnostics);
     let mut diagnostics = package_interface_environment_diagnostics(&combined_interfaces);
-    diagnostics.extend(package_feature_resolution_diagnostics(
+    diagnostics.extend(package_feature_resolution_diagnostics_from_manifest_graph(
         package_dir,
         manifest,
+        &manifest_graph,
     )?);
     diagnostics.extend(package_provider_implementation_diagnostics(
         package_dir,

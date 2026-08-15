@@ -769,9 +769,8 @@ an arbitrary shell executor.
     exclusions. Local path-dependency root resolution and manifest-presence
     checks now belong to `rsscript-project`; compiler dependency and native
     compatibility resolvers consume that boundary rather than joining or
-    probing dependency directories themselves. The remaining S05.1 work is
-    migration of legacy review/native graph semantics from compiler. The
-    compiler dependency graph now also consumes a bounded, deduplicated
+    probing dependency directories themselves. The compiler dependency graph
+    now also consumes a bounded, deduplicated
     `ProjectManifestGraph` of already-captured manifest bytes; it keeps only
     package-semantic parsing and feature selection.
     Manifest dependency discovery now parses the loader-owned
@@ -792,9 +791,12 @@ an arbitrary shell executor.
       and plugin-build resolution consume the same captured manifest graph
       rather than reopening dependency manifests; compiler retains only
       package-semantic interpretation and feature selection.
-    - [ ] **S05.1e — Move legacy review manifest semantics.** Review/check
+    - [x] **S05.1e — Move legacy review manifest semantics.** Review/check
       package assembly consumes captured root-manifest bytes and shares the
       graph with dependency resolution rather than reopening `rsspkg.toml`.
+      The parent remains open for its independent private-snapshot and
+      authorization-path acceptance review; checked child work never completes
+      that milestone automatically.
   - [ ] **S05.2 — Move Artifact persistence to an adapter.** Relocate locks,
     atomic writes, temporary files, compression, and artifact-store policy out
     of compiler. The confined lock/read/write implementation now lives in the

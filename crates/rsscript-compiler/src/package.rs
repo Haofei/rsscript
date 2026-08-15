@@ -65,8 +65,9 @@ pub use authorization::{
 pub use check::check_package_dir;
 use dependency::{
     PackageDependencySpec, collect_dependency_interface_sources,
-    collect_dependency_interface_sources_for_tests, collect_dependency_lowering_sources,
-    package_dependency_spec, package_feature_resolution_diagnostics,
+    collect_dependency_interface_sources_for_tests_from_manifest_graph,
+    collect_dependency_interface_sources_from_manifest_graph, collect_dependency_lowering_sources,
+    package_dependency_spec, package_feature_resolution_diagnostics_from_manifest_graph,
 };
 pub use diff::diff_package_dirs;
 pub use graph::package_tree;

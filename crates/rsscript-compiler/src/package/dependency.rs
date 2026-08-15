@@ -2,13 +2,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use rsscript_project::{
-    ProjectManifestGraphLimits, capture_project_manifest_graph, resolve_project_path_dependency,
+    ProjectManifestGraph, ProjectManifestGraphLimits, capture_project_manifest_graph,
+    resolve_project_path_dependency,
 };
 
 use crate::diagnostic::{Diagnostic, code};
 
 use super::source_set::{
-    Manifest, ManifestReviewFeaturePolicy, PackageSource, load_package_with_features,
+    Manifest, ManifestReviewFeaturePolicy, PackageSource, load_package_from_manifest_source,
     parse_package_manifest_source, resolve_package_features,
 };
 use super::{PackageReviewFileKind, canonical_path_label, toml_value_label};
@@ -59,6 +60,17 @@ pub(super) fn resolve_dependency_graph(
 ) -> Result<ResolvedDependencyGraph, String> {
     let captured =
         capture_project_manifest_graph(package_dir, ProjectManifestGraphLimits::default())?;
+    resolve_dependency_graph_from_manifest_graph(package_dir, scope, &captured)
+}
+
+/// Resolve package semantics from one project-captured manifest graph. The
+/// graph owns discovery and manifest bytes; this layer only interprets package
+/// fields, feature selections, and dependency relationships.
+fn resolve_dependency_graph_from_manifest_graph(
+    package_dir: &Path,
+    scope: DependencyResolutionScope,
+    captured: &ProjectManifestGraph,
+) -> Result<ResolvedDependencyGraph, String> {
     // Keep the caller's root spelling for legacy package/lock identity. The
     // project graph has already canonicalized it for capture safety and the
     // source map below uses that canonical label for lookup.
@@ -245,7 +257,20 @@ pub(super) fn collect_dependency_interface_sources(
     package_dir: &Path,
     _manifest: &Manifest,
 ) -> Result<Vec<PackageSource>, String> {
-    let graph = resolve_dependency_graph(package_dir, DependencyResolutionScope::Production)?;
+    let captured =
+        capture_project_manifest_graph(package_dir, ProjectManifestGraphLimits::default())?;
+    collect_dependency_interface_sources_from_manifest_graph(package_dir, &captured)
+}
+
+pub(super) fn collect_dependency_interface_sources_from_manifest_graph(
+    package_dir: &Path,
+    captured: &ProjectManifestGraph,
+) -> Result<Vec<PackageSource>, String> {
+    let graph = resolve_dependency_graph_from_manifest_graph(
+        package_dir,
+        DependencyResolutionScope::Production,
+        captured,
+    )?;
     let mut sources = Vec::new();
     collect_resolved_sources(
         &graph,
@@ -261,7 +286,20 @@ pub(super) fn collect_dependency_interface_sources_for_tests(
     package_dir: &Path,
     _manifest: &Manifest,
 ) -> Result<Vec<PackageSource>, String> {
-    let graph = resolve_dependency_graph(package_dir, DependencyResolutionScope::Development)?;
+    let captured =
+        capture_project_manifest_graph(package_dir, ProjectManifestGraphLimits::default())?;
+    collect_dependency_interface_sources_for_tests_from_manifest_graph(package_dir, &captured)
+}
+
+pub(super) fn collect_dependency_interface_sources_for_tests_from_manifest_graph(
+    package_dir: &Path,
+    captured: &ProjectManifestGraph,
+) -> Result<Vec<PackageSource>, String> {
+    let graph = resolve_dependency_graph_from_manifest_graph(
+        package_dir,
+        DependencyResolutionScope::Development,
+        captured,
+    )?;
     let mut sources = Vec::new();
     collect_resolved_sources(
         &graph,
@@ -277,7 +315,20 @@ pub(super) fn collect_dependency_lowering_sources(
     package_dir: &Path,
     _manifest: &Manifest,
 ) -> Result<Vec<PackageSource>, String> {
-    let graph = resolve_dependency_graph(package_dir, DependencyResolutionScope::Production)?;
+    let captured =
+        capture_project_manifest_graph(package_dir, ProjectManifestGraphLimits::default())?;
+    collect_dependency_lowering_sources_from_manifest_graph(package_dir, &captured)
+}
+
+pub(super) fn collect_dependency_lowering_sources_from_manifest_graph(
+    package_dir: &Path,
+    captured: &ProjectManifestGraph,
+) -> Result<Vec<PackageSource>, String> {
+    let graph = resolve_dependency_graph_from_manifest_graph(
+        package_dir,
+        DependencyResolutionScope::Production,
+        captured,
+    )?;
     let mut sources = Vec::new();
     collect_resolved_sources(&graph, PackageReviewFileKind::Source, true, &mut sources)?;
     sources.sort_by(|left, right| left.path.cmp(&right.path));
@@ -300,7 +351,11 @@ fn collect_resolved_sources(
         if !included.contains(&canonical) {
             continue;
         }
-        let package = load_package_with_features(&node.package_dir, Some(&node.features))?;
+        let package = load_package_from_manifest_source(
+            &node.package_dir,
+            &node.manifest_source,
+            Some(&node.features),
+        )?;
         sources.extend(
             package
                 .sources
@@ -333,7 +388,21 @@ pub(super) fn package_feature_resolution_diagnostics(
     package_dir: &Path,
     manifest: &Manifest,
 ) -> Result<Vec<Diagnostic>, String> {
-    let graph = resolve_dependency_graph(package_dir, DependencyResolutionScope::Development)?;
+    let captured =
+        capture_project_manifest_graph(package_dir, ProjectManifestGraphLimits::default())?;
+    package_feature_resolution_diagnostics_from_manifest_graph(package_dir, manifest, &captured)
+}
+
+pub(super) fn package_feature_resolution_diagnostics_from_manifest_graph(
+    package_dir: &Path,
+    manifest: &Manifest,
+    captured: &ProjectManifestGraph,
+) -> Result<Vec<Diagnostic>, String> {
+    let graph = resolve_dependency_graph_from_manifest_graph(
+        package_dir,
+        DependencyResolutionScope::Development,
+        captured,
+    )?;
     let mut diagnostics = Vec::new();
     let feature_policy = manifest
         .review

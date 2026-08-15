@@ -339,6 +339,34 @@ pub fn capture_project_utf8(
     read_regular_utf8_within_root(&root, &path, max_bytes, label).map(|(source, _)| source)
 }
 
+/// Capture an optional bounded project-relative UTF-8 file without making a
+/// compiler consumer probe the filesystem itself.
+///
+/// A missing file is represented as `Ok(None)`; every present path receives
+/// the same confinement and no-follow checks as [`capture_project_utf8`].
+pub fn capture_optional_project_utf8(
+    package_dir: &Path,
+    relative_path: &str,
+    max_bytes: u64,
+    label: &str,
+) -> Result<Option<String>, String> {
+    let root = canonical_capture_root(package_dir)?;
+    let path = confined_project_path(&root, relative_path, label)?;
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if is_link_like(&metadata) => Err(format!(
+            "{label} rejects symlinks or reparse points: {}",
+            path.display()
+        )),
+        Ok(_) => read_regular_utf8_within_root(&root, &path, max_bytes, label)
+            .map(|(source, _)| Some(source)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!(
+            "failed to inspect {label} {}: {error}",
+            path.display()
+        )),
+    }
+}
+
 /// Bounds for project-owned RSScript source capture. The compiler selects
 /// semantic source roots, while this boundary owns traversal and file I/O.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2339,6 +2367,22 @@ mod tests {
         )
         .expect_err("aggregate manifest budget must be enforced");
         assert!(error.contains("total manifest byte limit"), "{error}");
+    }
+
+    #[test]
+    fn optional_project_utf8_returns_none_for_missing_and_reads_confined_file() {
+        let directory = tempfile::tempdir().expect("workspace");
+        assert_eq!(
+            capture_optional_project_utf8(directory.path(), "identity", 1024, "identity")
+                .expect("missing optional file"),
+            None
+        );
+        std::fs::write(directory.path().join("identity"), "captured").expect("identity file");
+        assert_eq!(
+            capture_optional_project_utf8(directory.path(), "identity", 1024, "identity")
+                .expect("captured optional file"),
+            Some("captured".to_string())
+        );
     }
 
     #[test]

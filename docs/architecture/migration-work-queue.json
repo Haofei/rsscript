@@ -2,27 +2,6 @@
   "schema": "rsscript.migration_queue.v1",
   "tasks": [
     {
-      "id": "S05.1e",
-      "priority": 20,
-      "depends_on": [],
-      "scope": [
-        "crates/rsscript-project/**",
-        "crates/rsscript-compiler/src/package/**",
-        "crates/rsscript-sdk/tests/architecture.rs",
-        "docs/architecture/migration-baseline.md"
-      ],
-      "acceptance": [
-        "Project capture owns bounded, confined manifest and source-tree reads.",
-        "Legacy review/check package assembly consumes project-captured root-manifest bytes and does not reopen rsspkg.toml.",
-        "Review dependency resolution shares the captured manifest graph, while compiler retains only package-semantic parsing and feature selection."
-      ],
-      "verification": [
-        "cargo test -p rsscript-project --locked",
-        "cargo test -p rsscript-sdk --features compatibility --test architecture --locked",
-        "cargo test -p rsscript-sdk --features=compatibility,aot-rust,legacy-exec-ir --test static --locked"
-      ]
-    },
-    {
       "id": "A09.2",
       "priority": 80,
       "depends_on": ["A09.1a", "A09.1b"],

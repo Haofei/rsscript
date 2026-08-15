@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use rsscript_project::{
-    ProjectSourceCapture, ProjectSourceCaptureLimits, capture_project_manifest,
-    capture_project_utf8,
+    ProjectSourceCapture, ProjectSourceCaptureLimits, capture_optional_project_utf8,
+    capture_project_manifest,
 };
 use serde::Deserialize;
 
@@ -326,22 +326,26 @@ pub(super) fn load_package_with_features(
     selected_features: Option<&[String]>,
 ) -> Result<LoadedPackage, String> {
     let captured_manifest = capture_project_manifest(package_dir, MANIFEST_MAX_BYTES)?;
-    let package_root = captured_manifest.root().to_path_buf();
+    load_package_from_manifest_source(package_dir, captured_manifest.source(), selected_features)
+}
+
+/// Assemble package sources from manifest bytes already admitted by the
+/// project boundary. This performs semantic manifest parsing and constrained
+/// source capture, but it deliberately never reopens `rsspkg.toml`.
+pub(super) fn load_package_from_manifest_source(
+    package_dir: &Path,
+    physical_manifest_source: &str,
+    selected_features: Option<&[String]>,
+) -> Result<LoadedPackage, String> {
     let manifest_path = package_dir.join("rsspkg.toml");
-    let physical_manifest_source = captured_manifest.source().to_string();
-    let manifest: Manifest = toml::from_str(&physical_manifest_source)
-        .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))?;
-    let snapshot_manifest_source = package_root.join(SNAPSHOT_MANIFEST_SOURCE_FILE);
-    let manifest_source = if snapshot_manifest_source.is_file() {
-        capture_project_utf8(
-            package_dir,
-            SNAPSHOT_MANIFEST_SOURCE_FILE,
-            MANIFEST_MAX_BYTES,
-            "package snapshot manifest identity",
-        )?
-    } else {
-        physical_manifest_source
-    };
+    let manifest = parse_package_manifest_source(package_dir, physical_manifest_source)?;
+    let manifest_source = capture_optional_project_utf8(
+        package_dir,
+        SNAPSHOT_MANIFEST_SOURCE_FILE,
+        MANIFEST_MAX_BYTES,
+        "package snapshot manifest identity",
+    )?
+    .unwrap_or_else(|| physical_manifest_source.to_string());
 
     let selected_features = selected_features
         .map(|features| resolve_package_features(&manifest, features).selected)
