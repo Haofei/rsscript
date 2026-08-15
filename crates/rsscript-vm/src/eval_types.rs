@@ -13,13 +13,15 @@ pub use rsscript_abi_model::{
     WireValue,
 };
 pub use rsscript_provider_api::{
-    AsyncInterpreterFn, AsyncProviderCallContext, AsyncWireInterpreterFn, BlockingBehavior,
-    CancellationBehavior, HostCallContext, NativeInterpreterFn, NativeValue, ProviderCallContext,
-    ProviderCallMode, ProviderCallTrace, ProviderCallable, ProviderDescriptor, ProviderError,
-    ProviderErrorCode, ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor,
-    ProviderFuture, ProviderInvocationContract, ProviderLoadError, ProviderResource,
-    ProviderResourceRegistry, ProviderResourceTable, ProviderTraceSink, ResolvedProviderFunction,
-    ResourceCleanupContract, ResourceHandle, WireInterpreterFn, WireProviderFuture,
+    AsyncInterpreterFn, AsyncProviderCallContext, AsyncWireInterpreterFn,
+    AsyncWireMutationInterpreterFn, BlockingBehavior, CancellationBehavior, HostCallContext,
+    NativeInterpreterFn, NativeValue, ProviderCallContext, ProviderCallMode, ProviderCallTrace,
+    ProviderCallable, ProviderDescriptor, ProviderError, ProviderErrorCode, ProviderErrorMapping,
+    ProviderFunction, ProviderFunctionDescriptor, ProviderFuture, ProviderInvocationContract,
+    ProviderLoadError, ProviderResource, ProviderResourceRegistry, ProviderResourceTable,
+    ProviderTraceSink, ResolvedProviderFunction, ResourceCleanupContract, ResourceHandle,
+    WireInterpreterFn, WireMutationInterpreterFn, WireMutationProviderFuture, WireMutationResult,
+    WireProviderFuture,
 };
 
 #[derive(Default)]
@@ -62,6 +64,11 @@ struct PanicContainedWireProviderFuture {
     inner: WireProviderFuture,
 }
 
+/// The mutation equivalent of [`PanicContainedWireProviderFuture`].
+struct PanicContainedWireMutationProviderFuture {
+    inner: WireMutationProviderFuture,
+}
+
 impl PanicContainedWireProviderFuture {
     fn new(inner: WireProviderFuture) -> Self {
         Self { inner }
@@ -70,6 +77,24 @@ impl PanicContainedWireProviderFuture {
 
 impl Future for PanicContainedWireProviderFuture {
     type Output = Result<WireValue, ProviderError>;
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        match catch_unwind(AssertUnwindSafe(|| this.inner.as_mut().poll(context))) {
+            Ok(result) => result,
+            Err(_) => Poll::Ready(Err(provider_panic_error())),
+        }
+    }
+}
+
+impl PanicContainedWireMutationProviderFuture {
+    fn new(inner: WireMutationProviderFuture) -> Self {
+        Self { inner }
+    }
+}
+
+impl Future for PanicContainedWireMutationProviderFuture {
+    type Output = Result<WireMutationResult, ProviderError>;
 
     fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
@@ -729,11 +754,24 @@ impl ExternalFunction {
         matches!(self.callable, ProviderCallable::WireSync(_))
     }
 
+    /// Whether this linked function uses the canonical synchronous mutation
+    /// dispatcher. A wire mutation result carries explicit write-back values;
+    /// it is never encoded as a dynamic list envelope for the Provider.
+    pub(crate) const fn is_wire_sync_mut(&self) -> bool {
+        matches!(self.callable, ProviderCallable::WireSyncMut(_))
+    }
+
     /// Whether this linked function can use the canonical asynchronous wire
     /// dispatcher. The register VM keeps the scheduler boundary explicit, but
     /// the Provider callable itself receives and returns only `WireValue`.
     pub(crate) const fn is_wire_async(&self) -> bool {
         matches!(self.callable, ProviderCallable::WireAsync(_))
+    }
+
+    /// Whether this linked function uses the canonical asynchronous mutation
+    /// dispatcher with explicit canonical write-back values.
+    pub(crate) const fn is_wire_async_mut(&self) -> bool {
+        matches!(self.callable, ProviderCallable::WireAsyncMut(_))
     }
 
     /// Convert legacy VM boundary values to the exact descriptor-scoped wire
@@ -778,6 +816,52 @@ impl ExternalFunction {
             &contract.variant_layouts,
         )?;
         wire_to_native(value, &contract.descriptor.signature.result, &types)
+    }
+
+    /// Validate a canonical mutation result against the exact linked signature
+    /// and convert it into the register VM's temporary compatibility envelope.
+    /// No Provider code sees or constructs that envelope.
+    pub(crate) fn wire_mutation_result_to_native_envelope(
+        &self,
+        value: WireMutationResult,
+    ) -> Result<NativeValue, ProviderError> {
+        let contract = self.contract().ok_or_else(|| {
+            ProviderError::unavailable("wire provider function requires a linked descriptor")
+        })?;
+        let types = wire_type_table(
+            &contract.descriptor.signature,
+            &contract.record_layouts,
+            &contract.variant_layouts,
+        )?;
+        let mutation_types = contract
+            .descriptor
+            .signature
+            .parameters
+            .iter()
+            .filter(|parameter| parameter.effect == rsscript_abi_model::DataEffect::Mut)
+            .map(|parameter| &parameter.ty)
+            .collect::<Vec<_>>();
+        let expected_mutations = mutation_types.len();
+        if expected_mutations == 0 {
+            return Err(ProviderError::invalid_argument(
+                "wire mutation callable is linked to a signature without mut parameters",
+            ));
+        }
+        if value.mutated.len() != expected_mutations {
+            return Err(ProviderError::invalid_argument(
+                "wire mutation result does not contain every linked mut parameter",
+            ));
+        }
+        let mut envelope = Vec::with_capacity(expected_mutations.saturating_add(1));
+        envelope.push(wire_to_native(
+            value.result,
+            &contract.descriptor.signature.result,
+            &types,
+        )?);
+        for (mutated, expected) in value.mutated.into_iter().zip(mutation_types) {
+            envelope.push(wire_to_native(mutated, expected, &types)?);
+        }
+        Ok(NativeValue::List(envelope))
     }
 
     fn acquire_non_reentrant_permit(
@@ -868,11 +952,17 @@ impl ExternalFunction {
                     let result = callable.call_with_context(context, wire_args)?;
                     wire_to_native(result, &signature.result, &types)
                 }
+                ProviderCallable::WireSyncMut(_) => Err(ProviderError::unavailable(
+                    "wire mutation provider function requires the VM mutation dispatcher",
+                )),
                 ProviderCallable::Async(_) => Err(ProviderError::unavailable(
                     "async provider function requires the VM async dispatcher",
                 )),
                 ProviderCallable::WireAsync(_) => Err(ProviderError::unavailable(
                     "async wire provider function requires the VM async dispatcher",
+                )),
+                ProviderCallable::WireAsyncMut(_) => Err(ProviderError::unavailable(
+                    "async wire mutation provider function requires the VM async mutation dispatcher",
                 )),
             }))
             .unwrap_or_else(|_| Err(provider_panic_error()));
@@ -1039,6 +1129,141 @@ impl ExternalFunction {
         result
     }
 
+    /// Invoke a descriptor-linked synchronous wire Provider with explicit
+    /// mutation write-back values. The Provider ABI stays canonical; only the
+    /// old register VM decodes the checked result after this call returns.
+    pub(crate) fn call_wire_mut_with_context(
+        &self,
+        context: &mut ProviderCallContext<'_>,
+        args: Vec<WireValue>,
+    ) -> Result<WireMutationResult, ProviderError> {
+        let _non_reentrant_permit = self.acquire_non_reentrant_permit()?;
+        let contract = self.contract().ok_or_else(|| {
+            ProviderError::unavailable("wire provider function requires a linked descriptor")
+        })?;
+        let ProviderCallable::WireSyncMut(callable) = &self.callable else {
+            return Err(ProviderError::unavailable(
+                "provider function does not use the synchronous wire mutation dispatcher",
+            ));
+        };
+        context.provider_id.clone_from(&contract.provider_id);
+        context
+            .provider_version
+            .clone_from(&contract.provider_version);
+        context.symbol = contract.descriptor.symbol.as_str().to_string();
+        let request_bytes = args
+            .iter()
+            .map(WireValue::estimated_payload_bytes)
+            .sum::<usize>();
+        let started = Instant::now();
+        let result = (|| {
+            context.check_cancelled()?;
+            check_payload_budget(request_bytes, context.remaining_byte_budget, "request")?;
+            if contract.descriptor.blocking == BlockingBehavior::MayBlock
+                && !context.blocking_allowed
+            {
+                return Err(ProviderError::unavailable(format!(
+                    "blocking provider function `{}` requires a blocking execution lane",
+                    contract.descriptor.symbol
+                )));
+            }
+            if contract.descriptor.call_mode != ProviderCallMode::Sync {
+                return Err(ProviderError::unavailable(
+                    "synchronous wire mutation dispatcher received an async Provider descriptor",
+                ));
+            }
+            let expected_mutations = contract
+                .descriptor
+                .signature
+                .parameters
+                .iter()
+                .filter(|parameter| parameter.effect == rsscript_abi_model::DataEffect::Mut)
+                .count();
+            if expected_mutations == 0 {
+                return Err(ProviderError::invalid_argument(
+                    "wire mutation callable is linked to a signature without mut parameters",
+                ));
+            }
+            let resources_before = context
+                .resources
+                .as_deref()
+                .map(ProviderResourceTable::created);
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                callable.call_with_context(context, args)
+            }))
+            .unwrap_or_else(|_| Err(provider_panic_error()));
+            if matches!(
+                contract.descriptor.cancellation,
+                CancellationBehavior::Cooperative | CancellationBehavior::AbortSafe
+            ) {
+                context.check_cancelled()?;
+            }
+            if result.is_ok()
+                && contract.descriptor.resource_cleanup
+                    == ResourceCleanupContract::RuntimeRegistered
+                && resources_before
+                    == context
+                        .resources
+                        .as_deref()
+                        .map(ProviderResourceTable::created)
+            {
+                return Err(ProviderError::internal(
+                    "runtime-registered provider call returned without registering a resource",
+                ));
+            }
+            let value = result?;
+            if value.mutated.len() != expected_mutations {
+                return Err(ProviderError::invalid_argument(
+                    "wire mutation result does not contain every linked mut parameter",
+                ));
+            }
+            let response_bytes = value
+                .mutated
+                .iter()
+                .map(WireValue::estimated_payload_bytes)
+                .fold(
+                    value.result.estimated_payload_bytes(),
+                    usize::saturating_add,
+                );
+            check_payload_budget(response_bytes, context.remaining_byte_budget, "response")?;
+            check_payload_budget(
+                response_bytes,
+                context.remaining_output_budget,
+                "response output",
+            )?;
+            Ok(value)
+        })();
+        let response_bytes = match &result {
+            Ok(value) => value
+                .mutated
+                .iter()
+                .map(WireValue::estimated_payload_bytes)
+                .fold(
+                    value.result.estimated_payload_bytes(),
+                    usize::saturating_add,
+                ),
+            Err(error) => error.message.len().saturating_add(
+                error
+                    .details
+                    .as_ref()
+                    .map_or(0, WireValue::estimated_payload_bytes),
+            ),
+        };
+        if let Some(trace) = context.trace {
+            trace.record(ProviderCallTrace {
+                call_id: context.call_id,
+                provider_id: context.provider_id.clone(),
+                provider_version: context.provider_version.clone(),
+                symbol: context.symbol.clone(),
+                request_bytes,
+                response_bytes,
+                elapsed: started.elapsed(),
+                result: result.as_ref().map(|_| ()).map_err(|error| error.code),
+            });
+        }
+        result
+    }
+
     pub fn start_async(
         &self,
         mut context: AsyncProviderCallContext,
@@ -1063,7 +1288,16 @@ impl ExternalFunction {
         let callable = match &self.callable {
             ProviderCallable::Async(callable) => AsyncProviderCallable::Native(callable.clone()),
             ProviderCallable::WireAsync(callable) => AsyncProviderCallable::Wire(callable.clone()),
-            ProviderCallable::Sync(_) | ProviderCallable::WireSync(_) => {
+            ProviderCallable::WireAsyncMut(_) => {
+                return Box::pin(async {
+                    Err(ProviderError::unavailable(
+                        "async wire mutation provider function requires the VM async mutation dispatcher",
+                    ))
+                });
+            }
+            ProviderCallable::Sync(_)
+            | ProviderCallable::WireSync(_)
+            | ProviderCallable::WireSyncMut(_) => {
                 return Box::pin(async {
                     Err(ProviderError::unavailable(
                         "sync provider function cannot enter the async dispatcher",
@@ -1217,7 +1451,9 @@ impl ExternalFunction {
             ProviderCallable::WireAsync(callable) => callable.clone(),
             ProviderCallable::Async(_)
             | ProviderCallable::Sync(_)
-            | ProviderCallable::WireSync(_) => {
+            | ProviderCallable::WireSync(_)
+            | ProviderCallable::WireSyncMut(_)
+            | ProviderCallable::WireAsyncMut(_) => {
                 return Box::pin(async {
                     Err(ProviderError::unavailable(
                         "non-wire async Provider cannot enter the wire async dispatcher",
@@ -1293,6 +1529,168 @@ impl ExternalFunction {
             .await;
             let response_bytes = match &result {
                 Ok(value) => value.estimated_payload_bytes(),
+                Err(error) => error.message.len().saturating_add(
+                    error
+                        .details
+                        .as_ref()
+                        .map_or(0, WireValue::estimated_payload_bytes),
+                ),
+            };
+            if let Some(trace) = trace {
+                trace.record(ProviderCallTrace {
+                    call_id: trace_context.call_id,
+                    provider_id: trace_context.provider_id.clone(),
+                    provider_version: trace_context.provider_version.clone(),
+                    symbol: trace_context.symbol.clone(),
+                    request_bytes,
+                    response_bytes,
+                    elapsed: started.elapsed(),
+                    result: result.as_ref().map(|_| ()).map_err(|error| error.code),
+                });
+            }
+            result
+        })
+    }
+
+    /// Start an asynchronous canonical wire mutation Provider. The scheduler
+    /// receives explicit wire write-backs and only the register VM's legacy
+    /// boundary later materializes its temporary mutation envelope.
+    pub(crate) fn start_wire_mut_async(
+        &self,
+        mut context: AsyncProviderCallContext,
+        args: Vec<WireValue>,
+    ) -> WireMutationProviderFuture {
+        let non_reentrant_permit = match self.acquire_non_reentrant_permit() {
+            Ok(permit) => permit,
+            Err(error) => return Box::pin(async move { Err(error) }),
+        };
+        let Some(contract) = self.contract.clone() else {
+            return Box::pin(async {
+                Err(ProviderError::unavailable(
+                    "async wire mutation provider function requires a linked descriptor",
+                ))
+            });
+        };
+        context.provider_id.clone_from(&contract.provider_id);
+        context
+            .provider_version
+            .clone_from(&contract.provider_version);
+        context.symbol = contract.descriptor.symbol.as_str().to_string();
+        let callable = match &self.callable {
+            ProviderCallable::WireAsyncMut(callable) => callable.clone(),
+            ProviderCallable::Async(_)
+            | ProviderCallable::Sync(_)
+            | ProviderCallable::WireSync(_)
+            | ProviderCallable::WireSyncMut(_)
+            | ProviderCallable::WireAsync(_) => {
+                return Box::pin(async {
+                    Err(ProviderError::unavailable(
+                        "non-wire-mutation async Provider cannot enter the wire mutation dispatcher",
+                    ))
+                });
+            }
+        };
+        let expected_mutations = contract
+            .descriptor
+            .signature
+            .parameters
+            .iter()
+            .filter(|parameter| parameter.effect == rsscript_abi_model::DataEffect::Mut)
+            .count();
+        if expected_mutations == 0 {
+            return Box::pin(async {
+                Err(ProviderError::invalid_argument(
+                    "wire mutation callable is linked to a signature without mut parameters",
+                ))
+            });
+        }
+        let request_bytes = args
+            .iter()
+            .map(WireValue::estimated_payload_bytes)
+            .sum::<usize>();
+        let trace = context.trace.clone();
+        let trace_context = context.clone();
+        let resources_before = context
+            .resources
+            .as_ref()
+            .and_then(|resources| resources.snapshot().ok())
+            .map(|usage| usage.created);
+        let started = Instant::now();
+        Box::pin(async move {
+            let _non_reentrant_permit = non_reentrant_permit;
+            let result = async {
+                context.check_cancelled()?;
+                check_payload_budget(request_bytes, context.remaining_byte_budget, "request")?;
+                if contract.descriptor.call_mode != ProviderCallMode::Async {
+                    return Err(ProviderError::unavailable(
+                        "async wire mutation callable has a synchronous Provider descriptor",
+                    ));
+                }
+                if contract.descriptor.blocking == BlockingBehavior::MayBlock {
+                    return Err(ProviderError::unavailable(
+                        "blocking work must not run inside an async Provider future",
+                    ));
+                }
+                let result = match catch_unwind(AssertUnwindSafe(|| callable.call(context, args))) {
+                    Ok(future) => PanicContainedWireMutationProviderFuture::new(future).await,
+                    Err(_) => Err(provider_panic_error()),
+                };
+                if matches!(
+                    contract.descriptor.cancellation,
+                    CancellationBehavior::Cooperative | CancellationBehavior::AbortSafe
+                ) {
+                    trace_context.check_cancelled()?;
+                }
+                if result.is_ok()
+                    && contract.descriptor.resource_cleanup
+                        == ResourceCleanupContract::RuntimeRegistered
+                    && resources_before
+                        == trace_context
+                            .resources
+                            .as_ref()
+                            .and_then(|resources| resources.snapshot().ok())
+                            .map(|usage| usage.created)
+                {
+                    return Err(ProviderError::internal(
+                        "runtime-registered provider call returned without registering a resource",
+                    ));
+                }
+                let value = result?;
+                if value.mutated.len() != expected_mutations {
+                    return Err(ProviderError::invalid_argument(
+                        "wire mutation result does not contain every linked mut parameter",
+                    ));
+                }
+                let response_bytes = value
+                    .mutated
+                    .iter()
+                    .map(WireValue::estimated_payload_bytes)
+                    .fold(
+                        value.result.estimated_payload_bytes(),
+                        usize::saturating_add,
+                    );
+                check_payload_budget(
+                    response_bytes,
+                    trace_context.remaining_byte_budget,
+                    "response",
+                )?;
+                check_payload_budget(
+                    response_bytes,
+                    trace_context.remaining_output_budget,
+                    "response output",
+                )?;
+                Ok(value)
+            }
+            .await;
+            let response_bytes = match &result {
+                Ok(value) => value
+                    .mutated
+                    .iter()
+                    .map(WireValue::estimated_payload_bytes)
+                    .fold(
+                        value.result.estimated_payload_bytes(),
+                        usize::saturating_add,
+                    ),
                 Err(error) => error.message.len().saturating_add(
                     error
                         .details
@@ -1398,6 +1796,11 @@ impl From<ExternalFunction> for NativeInterpreterFn {
                     "wire Provider callable cannot be converted to the legacy sync adapter",
                 ))
             }),
+            ProviderCallable::WireSyncMut(_) => NativeInterpreterFn::new(|_| {
+                Err(ProviderError::unavailable(
+                    "wire mutation Provider callable cannot be converted to the legacy sync adapter",
+                ))
+            }),
             ProviderCallable::Async(_) => NativeInterpreterFn::new(|_| {
                 Err(ProviderError::unavailable(
                     "async Provider callable cannot be converted to a sync callable",
@@ -1406,6 +1809,11 @@ impl From<ExternalFunction> for NativeInterpreterFn {
             ProviderCallable::WireAsync(_) => NativeInterpreterFn::new(|_| {
                 Err(ProviderError::unavailable(
                     "async wire Provider callable cannot be converted to a sync callable",
+                ))
+            }),
+            ProviderCallable::WireAsyncMut(_) => NativeInterpreterFn::new(|_| {
+                Err(ProviderError::unavailable(
+                    "async wire mutation Provider callable cannot be converted to a sync callable",
                 ))
             }),
         }

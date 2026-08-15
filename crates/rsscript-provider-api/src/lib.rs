@@ -721,6 +721,66 @@ impl From<WireHostFn> for WireInterpreterFn {
     }
 }
 
+/// Canonical result of a Provider call with one or more `mut` parameters.
+///
+/// The values in `mutated` appear in the declaration order of the signature's
+/// `mut` parameters. Keeping this distinct from a normal `WireValue` avoids
+/// the legacy dynamic `List[result, mutated…]` envelope at the Provider ABI.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WireMutationResult {
+    pub result: WireValue,
+    pub mutated: Vec<WireValue>,
+}
+
+type ContextualWireMutationProviderFn = dyn for<'a> Fn(
+        &mut ProviderCallContext<'a>,
+        Vec<WireValue>,
+    ) -> Result<WireMutationResult, ProviderError>
+    + Send
+    + Sync;
+
+/// Canonical synchronous Provider callable for signatures with `mut`
+/// parameters. New Provider implementations use this instead of constructing
+/// a dynamic compatibility mutation envelope.
+#[derive(Clone)]
+pub struct WireMutationInterpreterFn {
+    inner: Arc<ContextualWireMutationProviderFn>,
+}
+
+impl WireMutationInterpreterFn {
+    pub fn new(
+        function: impl Fn(Vec<WireValue>) -> Result<WireMutationResult, ProviderError>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        Self::new_contextual(move |_, args| function(args))
+    }
+
+    pub fn new_contextual(
+        function: impl for<'a> Fn(
+            &mut ProviderCallContext<'a>,
+            Vec<WireValue>,
+        ) -> Result<WireMutationResult, ProviderError>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        Self {
+            inner: Arc::new(function),
+        }
+    }
+
+    pub fn call_with_context(
+        &self,
+        context: &mut ProviderCallContext<'_>,
+        args: Vec<WireValue>,
+    ) -> Result<WireMutationResult, ProviderError> {
+        context.check_cancelled()?;
+        (self.inner)(context, args)
+    }
+}
+
 /// Whether a Provider operation may be replayed from a captured result.
 ///
 /// Record/replay is opt-in diagnostic and test infrastructure. It neither
@@ -1082,6 +1142,11 @@ pub type ProviderFuture =
 pub type WireProviderFuture =
     Pin<Box<dyn Future<Output = Result<WireValue, ProviderError>> + Send + 'static>>;
 
+/// Canonical asynchronous Provider mutation result. It keeps mutation
+/// write-back structurally separate from an ordinary async wire result.
+pub type WireMutationProviderFuture =
+    Pin<Box<dyn Future<Output = Result<WireMutationResult, ProviderError>> + Send + 'static>>;
+
 #[cfg(feature = "compatibility")]
 type AsyncContextualProviderFn =
     dyn Fn(AsyncProviderCallContext, Vec<NativeValue>) -> ProviderFuture + Send + Sync;
@@ -1142,16 +1207,52 @@ impl AsyncWireInterpreterFn {
     }
 }
 
+type AsyncContextualWireMutationProviderFn =
+    dyn Fn(AsyncProviderCallContext, Vec<WireValue>) -> WireMutationProviderFuture + Send + Sync;
+
+/// Canonical asynchronous Provider callable for signatures with `mut`
+/// parameters. The completed value contains explicit canonical write-backs.
+#[derive(Clone)]
+pub struct AsyncWireMutationInterpreterFn {
+    inner: Arc<AsyncContextualWireMutationProviderFn>,
+}
+
+impl AsyncWireMutationInterpreterFn {
+    pub fn new<F, Fut>(function: F) -> Self
+    where
+        F: Fn(AsyncProviderCallContext, Vec<WireValue>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<WireMutationResult, ProviderError>> + Send + 'static,
+    {
+        Self {
+            inner: Arc::new(move |context, args| Box::pin(function(context, args))),
+        }
+    }
+
+    pub fn call(
+        &self,
+        context: AsyncProviderCallContext,
+        args: Vec<WireValue>,
+    ) -> WireMutationProviderFuture {
+        (self.inner)(context, args)
+    }
+}
+
 #[derive(Clone)]
 pub enum ProviderCallable {
     #[cfg(feature = "compatibility")]
     Sync(NativeInterpreterFn),
     /// Canonical typed wire callable for descriptor-linked synchronous calls.
     WireSync(WireInterpreterFn),
+    /// Canonical typed wire callable for synchronous signatures with `mut`
+    /// parameters. Its result carries explicit write-back values.
+    WireSyncMut(WireMutationInterpreterFn),
     #[cfg(feature = "compatibility")]
     Async(AsyncInterpreterFn),
     /// Canonical typed wire callable for descriptor-linked asynchronous calls.
     WireAsync(AsyncWireInterpreterFn),
+    /// Canonical typed wire callable for asynchronous signatures with `mut`
+    /// parameters and explicit write-back values.
+    WireAsyncMut(AsyncWireMutationInterpreterFn),
 }
 
 impl ProviderCallable {
@@ -1160,9 +1261,11 @@ impl ProviderCallable {
             #[cfg(feature = "compatibility")]
             Self::Sync(_) => ProviderCallMode::Sync,
             Self::WireSync(_) => ProviderCallMode::Sync,
+            Self::WireSyncMut(_) => ProviderCallMode::Sync,
             #[cfg(feature = "compatibility")]
             Self::Async(_) => ProviderCallMode::Async,
             Self::WireAsync(_) => ProviderCallMode::Async,
+            Self::WireAsyncMut(_) => ProviderCallMode::Async,
         }
     }
 }
@@ -1187,9 +1290,21 @@ impl From<AsyncWireInterpreterFn> for ProviderCallable {
     }
 }
 
+impl From<AsyncWireMutationInterpreterFn> for ProviderCallable {
+    fn from(value: AsyncWireMutationInterpreterFn) -> Self {
+        Self::WireAsyncMut(value)
+    }
+}
+
 impl From<WireInterpreterFn> for ProviderCallable {
     fn from(value: WireInterpreterFn) -> Self {
         Self::WireSync(value)
+    }
+}
+
+impl From<WireMutationInterpreterFn> for ProviderCallable {
+    fn from(value: WireMutationInterpreterFn) -> Self {
+        Self::WireSyncMut(value)
     }
 }
 

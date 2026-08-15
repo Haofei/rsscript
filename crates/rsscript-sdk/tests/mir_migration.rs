@@ -21,7 +21,10 @@ use rsscript_mir::{
     MirFunctionDebug, MirFunctionSignature, MirInstruction, MirLiteral, MirModule,
     MirParameterMode, MirTerminator, TaskGroupId, TaskId, TypeId, ValueId,
 };
-use rsscript_sdk::provider_api::AsyncWireInterpreterFn;
+use rsscript_sdk::provider_api::{
+    AsyncWireInterpreterFn, AsyncWireMutationInterpreterFn, WireMutationInterpreterFn,
+    WireMutationResult,
+};
 use rsscript_sdk::{
     AsyncInterpreterFn, BlockingBehavior, CancellationBehavior, CancellationToken, Compiler,
     EvalError, ExternalFunction, ExternalFunctionRegistry, ExternalSymbol, FunctionSignature,
@@ -2847,6 +2850,180 @@ fn direct_checked_hir_awaited_external_provider_matches_legacy_vm() {
     assert_eq!(legacy.usage.provider_calls, direct.usage.provider_calls);
     assert_eq!(legacy.usage, direct.usage);
     assert_matching_provider_trace(&legacy.provider_call_traces, &direct.provider_call_traces);
+}
+
+#[test]
+fn direct_checked_hir_mut_external_provider_uses_wire_writeback() {
+    let source = r#"
+fn main() -> Int {
+    local value = 41
+    Host.bump(value: mut value)
+    return value
+}
+"#;
+    let interface = "pub fn Host.bump(value: mut Int) -> Unit\n";
+    let validated = analyze_source_with_interfaces_result(
+        "direct-hir-wire-mut-provider.rss",
+        source,
+        &[("host-mut.rssi", interface)],
+    )
+    .into_validated()
+    .expect("mut external fixture should validate");
+    let compiled = compile_validated_to_ir(&validated);
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("mut external call should lower directly to MIR");
+
+    let symbol = ExternalSymbol::new("Host.bump").expect("valid test symbol");
+    let signature = FunctionSignature {
+        parameters: vec![rsscript_abi_model::ParameterSignature {
+            name: "value".into(),
+            effect: rsscript_abi_model::DataEffect::Mut,
+            ty: "Int".into(),
+            retained: false,
+        }],
+        result: "Unit".into(),
+        asynchronous: false,
+    };
+    let descriptor = ProviderDescriptor {
+        provider_id: "test.direct-wire-mut".into(),
+        provider_version: "1.0.0".into(),
+        supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+        record_layouts: Vec::new(),
+        variant_layouts: Vec::new(),
+        functions: vec![ProviderFunctionDescriptor {
+            symbol: symbol.clone(),
+            signature: signature.clone(),
+            entry: "bump".into(),
+            call_mode: ProviderCallMode::Sync,
+            blocking: BlockingBehavior::NonBlocking,
+            cancellation: CancellationBehavior::Cooperative,
+            thread_safe: true,
+            reentrant: true,
+            resource_cleanup: ResourceCleanupContract::None,
+            error_mapping: ProviderErrorMapping::StructuredV1,
+        }],
+    };
+    let callable = WireMutationInterpreterFn::new(|values| {
+        assert_eq!(values, vec![WireValue::Int { value: 41 }]);
+        Ok(WireMutationResult {
+            result: WireValue::Unit,
+            mutated: vec![WireValue::Int { value: 42 }],
+        })
+    });
+    let mut registry = ExternalFunctionRegistry::new();
+    registry
+        .register_provider(
+            &descriptor,
+            BTreeMap::from([(
+                symbol,
+                ProviderFunction {
+                    signature,
+                    callable,
+                },
+            )]),
+        )
+        .expect("wire mutation Provider registration should succeed");
+    let output = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("direct mut external MIR emits verified bytecode")
+    .eval_main_with_args_and_external_bindings(
+        std::iter::empty::<String>(),
+        registry.into_bindings(),
+    )
+    .expect("wire mutation Provider should execute");
+    assert_eq!(output.value, "42");
+    assert_eq!(output.usage.provider_calls, 1);
+}
+
+#[test]
+fn direct_checked_hir_async_mut_external_provider_uses_wire_writeback() {
+    let source = r#"
+async fn main() -> Int {
+    local value = 41
+    await Host.bump(value: mut value)
+    return value
+}
+"#;
+    let interface = "pub async fn Host.bump(value: mut Int) -> Unit\n";
+    let validated = analyze_source_with_interfaces_result(
+        "direct-hir-async-wire-mut-provider.rss",
+        source,
+        &[("host-async-mut.rssi", interface)],
+    )
+    .into_validated()
+    .expect("async mut external fixture should validate");
+    let compiled = compile_validated_to_ir(&validated);
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("async mut external call should lower directly to MIR");
+
+    let symbol = ExternalSymbol::new("Host.bump").expect("valid test symbol");
+    let signature = FunctionSignature {
+        parameters: vec![rsscript_abi_model::ParameterSignature {
+            name: "value".into(),
+            effect: rsscript_abi_model::DataEffect::Mut,
+            ty: "Int".into(),
+            retained: false,
+        }],
+        result: "Unit".into(),
+        asynchronous: true,
+    };
+    let descriptor = ProviderDescriptor {
+        provider_id: "test.direct-async-wire-mut".into(),
+        provider_version: "1.0.0".into(),
+        supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+        record_layouts: Vec::new(),
+        variant_layouts: Vec::new(),
+        functions: vec![ProviderFunctionDescriptor {
+            symbol: symbol.clone(),
+            signature: signature.clone(),
+            entry: "bump".into(),
+            call_mode: ProviderCallMode::Async,
+            blocking: BlockingBehavior::NonBlocking,
+            cancellation: CancellationBehavior::Cooperative,
+            thread_safe: true,
+            reentrant: true,
+            resource_cleanup: ResourceCleanupContract::None,
+            error_mapping: ProviderErrorMapping::StructuredV1,
+        }],
+    };
+    let callable = AsyncWireMutationInterpreterFn::new(|_, values| async move {
+        assert_eq!(values, vec![WireValue::Int { value: 41 }]);
+        Ok(WireMutationResult {
+            result: WireValue::Unit,
+            mutated: vec![WireValue::Int { value: 42 }],
+        })
+    });
+    let mut registry = ExternalFunctionRegistry::new();
+    registry
+        .register_provider(
+            &descriptor,
+            BTreeMap::from([(
+                symbol,
+                ProviderFunction {
+                    signature,
+                    callable,
+                },
+            )]),
+        )
+        .expect("async wire mutation Provider registration should succeed");
+    let output = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("direct async mut external MIR emits verified bytecode")
+    .eval_main_with_args_and_external_bindings(
+        std::iter::empty::<String>(),
+        registry.into_bindings(),
+    )
+    .expect("async wire mutation Provider should execute");
+    assert_eq!(output.value, "42");
+    assert_eq!(output.usage.provider_calls, 1);
 }
 
 #[test]

@@ -71,7 +71,7 @@ use self::calls::PureClosurePlan;
 use crate::eval_types::{
     AsyncProviderCallContext, EvalError, EvalExecutionReport, EvalOutput, ExternalFunction,
     NativeValue, ProviderCallContext, ProviderCallMode, ProviderError, ProviderFuture,
-    ProviderResourceRegistry, WireProviderFuture,
+    ProviderResourceRegistry, WireMutationProviderFuture, WireMutationResult, WireProviderFuture,
 };
 #[cfg(feature = "native-jit")]
 use crate::text_util::string_pad_len;
@@ -1446,6 +1446,14 @@ enum Wait {
     WireProvider {
         future: WireProviderFuture,
         result: Option<Result<WireValue, ProviderError>>,
+        key: String,
+        mutation_targets: Vec<usize>,
+    },
+    /// An asynchronous canonical wire Provider call with explicit mutation
+    /// write-backs. The scheduler never stores a dynamic mutation envelope.
+    WireMutationProvider {
+        future: WireMutationProviderFuture,
+        result: Option<Result<WireMutationResult, ProviderError>>,
         key: String,
         mutation_targets: Vec<usize>,
     },

@@ -33,11 +33,14 @@ called until this preflight succeeds.
 2. Build one `ProviderFunctionDescriptor` per symbol. Fill every behavioral
    field truthfully; `MayBlock` work must not be described as non-blocking, and
    cancellation/cleanup promises are part of the provider contract.
-3. Return a `BTreeMap<ExternalSymbol, ProviderFunction<WireInterpreterFn>>`
-   for synchronous entries or `ProviderFunction<AsyncWireInterpreterFn>` for
-   asynchronous entries, containing exactly the declared symbols and the same
-   semantic signatures. `NativeInterpreterFn` and `AsyncInterpreterFn` exist
-   only in the explicit `compatibility` adapter for legacy VM/native callers.
+3. Return a `BTreeMap<ExternalSymbol, ProviderFunction<...>>` containing
+   exactly the declared symbols and the same semantic signatures. Use
+   `WireInterpreterFn` / `AsyncWireInterpreterFn` when no parameter is `mut`;
+   use `WireMutationInterpreterFn` / `AsyncWireMutationInterpreterFn` when a
+   `mut` parameter needs a result plus its checked write-backs. These canonical
+   callables receive and return `WireValue` directly. `NativeInterpreterFn`
+   and `AsyncInterpreterFn` exist only in the explicit `compatibility` adapter
+   for legacy VM/native callers.
 4. Register descriptor and implementations at the host composition root.
 5. Call `Runtime::link`, then execute the resulting `LinkedArtifact` with an
    `ExecutionRequest`.

@@ -213,9 +213,22 @@ fn render_mock_support(output: &mut String, functions: &[InterfaceFunction]) {
             function.symbol.as_str()
         );
         let signature = render_signature(&function.signature);
-        let callable = if function.signature.asynchronous {
+        let has_mutation = function
+            .signature
+            .parameters
+            .iter()
+            .any(|parameter| parameter.effect == rsscript_abi_model::DataEffect::Mut);
+        let callable = if function.signature.asynchronous && has_mutation {
+            format!(
+                "rsscript_provider_api::ProviderCallable::WireAsyncMut(rsscript_provider_api::AsyncWireMutationInterpreterFn::new({{ let calls = std::sync::Arc::clone(&self.calls); move |_context, args| {{ let calls = std::sync::Arc::clone(&calls); async move {{ calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(MockCall {{ symbol: {symbol}, args }}); Err(rsscript_provider_api::ProviderError::unavailable(\"generated mock has no configured response\")) }} }} }}))"
+            )
+        } else if function.signature.asynchronous {
             format!(
                 "rsscript_provider_api::ProviderCallable::WireAsync(rsscript_provider_api::AsyncWireInterpreterFn::new({{ let calls = std::sync::Arc::clone(&self.calls); move |_context, args| {{ let calls = std::sync::Arc::clone(&calls); async move {{ calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(MockCall {{ symbol: {symbol}, args }}); Err(rsscript_provider_api::ProviderError::unavailable(\"generated mock has no configured response\")) }} }} }}))"
+            )
+        } else if has_mutation {
+            format!(
+                "rsscript_provider_api::ProviderCallable::WireSyncMut(rsscript_provider_api::WireMutationInterpreterFn::new_contextual({{ let calls = std::sync::Arc::clone(&self.calls); move |_context, args| {{ calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(MockCall {{ symbol: {symbol}, args }}); Err(rsscript_provider_api::ProviderError::unavailable(\"generated mock has no configured response\")) }} }}))"
             )
         } else {
             format!(
@@ -1121,5 +1134,28 @@ mod tests {
         assert!(rust.contains("DataEffect::Take"));
         assert!(rust.contains("retained: true"));
         assert!(rust.contains("ProviderCallable::WireAsync"));
+    }
+
+    #[test]
+    fn generated_mocks_preserve_mutation_shape_in_wire_dispatch() {
+        let descriptor = InterfaceDescriptorV1::from_interface_source(
+            "state.rssi",
+            "module host.state\n\npub fn bump(value: mut Int) -> Unit\npub async fn bump_later(value: mut Int) -> Unit\n",
+        )
+        .unwrap();
+        let rust = ProviderInterface::from_descriptor(descriptor)
+            .unwrap()
+            .render_rust(&RustProviderOptions {
+                provider_id: "rsscript.state",
+                blocking: GeneratedBlocking::NonBlocking,
+                cancellation: GeneratedCancellation::Cooperative,
+                thread_safe: true,
+                reentrant: true,
+                cleanup: GeneratedCleanup::None,
+            });
+        assert!(rust.contains("ProviderCallable::WireSyncMut"));
+        assert!(rust.contains("WireMutationInterpreterFn"));
+        assert!(rust.contains("ProviderCallable::WireAsyncMut"));
+        assert!(rust.contains("AsyncWireMutationInterpreterFn"));
     }
 }

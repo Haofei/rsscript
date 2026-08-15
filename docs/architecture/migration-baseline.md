@@ -2018,7 +2018,7 @@ an arbitrary shell executor.
     the legacy dynamic callable. The same fail-closed registry path rejects
     missing, undeclared, or signature-mismatched symbols for real and generated
     mock Providers.
-- [ ] **P06 — Tighten the canonical wire value model.** Replace JSON, string
+- [x] **P06 — Tighten the canonical wire value model.** Replace JSON, string
   type/field identity, and generic `Native { type_name, id }` escape hatches
   with typed records, variants, lists, resources, and generation-safe handles;
   JSON becomes an explicitly declared extension codec.
@@ -2026,7 +2026,7 @@ an arbitrary shell executor.
     `rsscript-abi-model` owns positional `WireValue` records/variants plus
     numeric type/field/variant/resource identities and generation-safe resource
     handles; canonical values contain no free-form type or field-name identity.
-  - [ ] **P06.2 — Implement the compatibility adapter.** Convert legacy
+  - [x] **P06.2 — Implement the compatibility adapter.** Convert legacy
     `NativeValue` at generated boundaries while Core contracts use wire values.
     A parallel `WireInterpreterFn` now carries canonical `WireValue` arguments
     through the same cancellation/deadline context as the legacy callable;
@@ -2068,8 +2068,13 @@ an arbitrary shell executor.
     route now covers descriptor-linked `AsyncWireInterpreterFn`: its scheduler
     future carries `WireValue` end-to-end, preserves the normal cancellation,
     deadline, resource, non-reentrancy, budget, and trace gates, and decodes
-    only after completion at the VM register boundary. Native callables and
-    `mut` mutation envelopes remain the open migration surface for this item.
+    only after completion at the VM register boundary. Descriptor-linked `mut`
+    calls now use `WireMutationInterpreterFn` and
+    `AsyncWireMutationInterpreterFn`: the Provider returns an explicit
+    canonical result plus ordered write-backs, and the VM validates both before
+    its named legacy register edge. Generated mocks select the same sync/async
+    mutation callables. Legacy Native callables remain explicit
+    compatibility-only adapters; they are no longer a canonical Core contract.
   - [x] **P06.2a — Bridge generation-safe resource handles.** Provider
       runtime handles now convert to/from the canonical numeric wire handle
       with a descriptor-supplied resource type. Linked sync wire calls prove

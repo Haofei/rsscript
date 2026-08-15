@@ -394,15 +394,16 @@ pub mod artifact {
 pub mod provider_api {
     pub use super::ProviderRegistry;
     pub use rsscript_provider_api::{
-        AsyncWireInterpreterFn, BlockingBehavior, CancellationBehavior, DataEffect, ExternalSymbol,
-        FunctionSignature, HostCallContext, ParameterSignature, ProviderCallContext,
-        ProviderCallMode, ProviderDescriptor, ProviderError, ProviderErrorCode,
-        ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor, ProviderLoadError,
-        ProviderReplayContract, ProviderReplayEntry, ProviderReplayMode,
-        ProviderReplayNormalization, ProviderReplayPersistence, ProviderReplayRedaction,
-        ProviderReplayTape, ProviderReplayability, ProviderResource, RUNTIME_ABI_VERSION,
-        ResourceCleanupContract, ResourceHandle, WireInterpreterFn, WireProviderFuture, WireValue,
-        replayable_async_wire_callable, replayable_wire_callable,
+        AsyncWireInterpreterFn, AsyncWireMutationInterpreterFn, BlockingBehavior,
+        CancellationBehavior, DataEffect, ExternalSymbol, FunctionSignature, HostCallContext,
+        ParameterSignature, ProviderCallContext, ProviderCallMode, ProviderDescriptor,
+        ProviderError, ProviderErrorCode, ProviderErrorMapping, ProviderFunction,
+        ProviderFunctionDescriptor, ProviderLoadError, ProviderReplayContract, ProviderReplayEntry,
+        ProviderReplayMode, ProviderReplayNormalization, ProviderReplayPersistence,
+        ProviderReplayRedaction, ProviderReplayTape, ProviderReplayability, ProviderResource,
+        RUNTIME_ABI_VERSION, ResourceCleanupContract, ResourceHandle, WireInterpreterFn,
+        WireMutationInterpreterFn, WireMutationProviderFuture, WireMutationResult,
+        WireProviderFuture, WireValue, replayable_async_wire_callable, replayable_wire_callable,
     };
 }
 

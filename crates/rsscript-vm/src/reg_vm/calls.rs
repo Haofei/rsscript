@@ -350,6 +350,11 @@ impl RegVm {
                     let wire_args = function.wire_args_from_native(arg_values)?;
                     let wire_result = function.call_wire_with_context(&mut context, wire_args)?;
                     function.wire_result_to_native(wire_result)
+                } else if !mut_args.is_empty() && function.is_wire_sync_mut() {
+                    let wire_args = function.wire_args_from_native(arg_values)?;
+                    let wire_result =
+                        function.call_wire_mut_with_context(&mut context, wire_args)?;
+                    function.wire_mutation_result_to_native_envelope(wire_result)
                 } else {
                     function.call_with_context(&mut context, arg_values)
                 }
@@ -418,6 +423,17 @@ impl RegVm {
                 .map_err(EvalError::Provider)?;
             return Ok(Wait::WireProvider {
                 future: function.start_wire_async(context, wire_args),
+                result: None,
+                key: key.to_string(),
+                mutation_targets,
+            });
+        }
+        if !mut_args.is_empty() && function.is_wire_async_mut() {
+            let wire_args = function
+                .wire_args_from_native(arg_values)
+                .map_err(EvalError::Provider)?;
+            return Ok(Wait::WireMutationProvider {
+                future: function.start_wire_mut_async(context, wire_args),
                 result: None,
                 key: key.to_string(),
                 mutation_targets,
