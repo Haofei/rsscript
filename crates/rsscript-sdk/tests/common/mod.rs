@@ -19,6 +19,7 @@ use rsscript_sdk::{
     lower_source_to_rust_package_with_interfaces, reg_vm_compile_validated,
     write_generated_rust_package,
 };
+use rsscript_semantics::CompilationSession;
 
 pub const FULL_BACKEND_PARITY_ENV: &str = "RSSCRIPT_FULL_BACKEND_PARITY";
 
@@ -134,7 +135,7 @@ pub fn compile_vm_source_with_interfaces(
 ) -> Result<RegVmExecutable, EvalError> {
     let mut interfaces = TEST_HOST_INTERFACES.to_vec();
     interfaces.extend_from_slice(extra_interfaces);
-    let validated = analyze_source_with_interfaces_result(file, source, &interfaces)
+    let validated = session_analysis_with_interfaces(file, source, &interfaces)
         .into_validated()
         .map_err(EvalError::Diagnostics)?;
     reg_vm_compile_validated(&validated)
@@ -258,7 +259,7 @@ pub fn lower_test_source_to_rust_package(
 /// Error-severity diagnostic codes (sorted, unique) the checker reports for a
 /// single-file program.
 pub fn error_codes(file: &str, source: &str) -> Vec<String> {
-    let mut codes = analyze_source_with_interfaces_result(file, source, TEST_HOST_INTERFACES)
+    let mut codes = session_analysis_with_interfaces(file, source, TEST_HOST_INTERFACES)
         .diagnostics()
         .iter()
         .filter(|diagnostic| diagnostic.severity == Severity::Error)
@@ -267,6 +268,39 @@ pub fn error_codes(file: &str, source: &str) -> Vec<String> {
     codes.sort();
     codes.dedup();
     codes
+}
+
+/// Route ordinary compatibility-corpus inputs through the same immutable
+/// session query used by the reviewed SDK and language service. A duplicate or
+/// empty logical path cannot be represented by the session store without
+/// changing its long-standing diagnostic behavior, so the legacy analyzer is
+/// retained only for that explicitly detected compatibility input.
+fn session_analysis_with_interfaces(
+    file: &str,
+    source: &str,
+    interfaces: &[(&str, &str)],
+) -> rsscript_sdk::AnalysisResult {
+    let unique_interface_paths = interfaces
+        .iter()
+        .map(|(path, _)| *path)
+        .collect::<BTreeSet<_>>();
+    let has_legacy_path = file.is_empty()
+        || interfaces.iter().any(|(path, _)| path.is_empty())
+        || unique_interface_paths.len() != interfaces.len();
+    if has_legacy_path {
+        return analyze_source_with_interfaces_result(file, source, interfaces);
+    }
+
+    let mut session = CompilationSession::default();
+    session
+        .set_file(file, source)
+        .expect("corpus source path must be a valid session path");
+    for (path, contents) in interfaces {
+        session
+            .set_interface(*path, *contents)
+            .expect("corpus interface path must be a valid session path");
+    }
+    (*session.workspace_analysis()).clone()
 }
 
 /// Lower a single-file program to Rust, build, and run it, returning

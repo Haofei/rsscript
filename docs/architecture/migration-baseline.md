@@ -563,7 +563,11 @@ mechanical acceptance condition holds.
     closure no longer includes the compiler compatibility facade. The default
     core-aware single-file `check` path now also captures its source and explicit
     interfaces in `CompilationSession` before reading the cached complete
-    analysis query. The reviewed SDK snapshot check APIs use that same cached
+    analysis query. The shared compatibility-corpus VM and diagnostic helpers
+    now also construct a session for ordinary non-empty, unique logical paths;
+    only empty or duplicate interface paths retain their explicit legacy
+    analyzer route because that route intentionally asserts historical
+    diagnostic behavior. The reviewed SDK snapshot check APIs use that same cached
     analysis query under every SDK feature combination, while
     `Compiler::compile_snapshot` and its operation-aware form use the
     session-owned validated query for normal non-empty logical paths; only the
