@@ -70,7 +70,7 @@
       "depends_on": ["A09.1a", "A09.1b"],
       "verification": [
         "cargo test -p rss-process-guard --locked",
-        "cargo test -p rsscript-cli --features execution --lib --locked"
+        "cargo test -p rsscript-cli --features execution --locked"
       ]
     },
     {

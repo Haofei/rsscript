@@ -1908,7 +1908,9 @@ visible without manually re-sorting every open parent milestone.
   - [ ] **A09.2 — Add Linux isolation adapters.** Implement optional namespace,
     syscall, filesystem, network, and cgroup controls with capability detection
     and fail-closed profile requirements. The strict Linux/Android child path
-    now installs kernel `no_new_privs` before runner code begins; namespace,
+    now installs kernel `no_new_privs` before runner code begins, and the
+    hidden runner entrypoint rechecks that kernel status before parsing an
+    Artifact so a direct child invocation fails closed. Namespace,
     syscall-filter, filesystem, network, and cgroup adapters remain open.
   - [ ] **A09.3 — Complete parent-side containment.** Cover process-tree kill,
     deadline, stdout/stderr/report limits, abnormal exits, and child disconnects.

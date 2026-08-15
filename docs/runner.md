@@ -11,7 +11,9 @@ length-prefixed protocol. The child:
 2. re-verifies the complete Artifact Bundle;
 3. links only Providers installed by its local profile;
 4. applies VM budgets and a monotonic deadline;
-5. returns `rsscript.runner_response.v1` containing the host-selected profile
+5. on Linux/Android, checks that the strict child launch installed kernel
+   `no_new_privs` before it parses the Artifact;
+6. returns `rsscript.runner_response.v1` containing the host-selected profile
    identity plus the normal
    `rsscript.execution_report.v1`.
 

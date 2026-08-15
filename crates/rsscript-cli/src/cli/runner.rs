@@ -322,7 +322,14 @@ fn read_bounded(
 
 pub(crate) fn runner_entrypoint() -> ExitCode {
     let response = match read_request(io::stdin().lock()) {
-        Ok((request, bundle)) => execute_request(request, bundle),
+        Ok((request, bundle)) => match verify_runner_execution_context() {
+            Ok(()) => execute_request(request, bundle),
+            Err(error) => RunnerResponseV1::rejected(
+                request.profile,
+                RunnerTerminationV1::HostFailure,
+                format!("runner isolation preflight failed: {error}"),
+            ),
+        },
         Err(error) => RunnerResponseV1::rejected(
             RunnerProfileV1::NoProviders,
             RunnerTerminationV1::ProtocolRejected,
@@ -336,6 +343,15 @@ pub(crate) fn runner_entrypoint() -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+/// The Linux/Android parent launches the hidden runner through the strict
+/// process guard. Recheck that kernel-owned condition inside the child before
+/// Artifact parsing so a direct `__runner-v1` invocation cannot silently
+/// claim the isolated execution path. Other platforms retain their existing
+/// process-tree and resource-limit guard without claiming this Linux control.
+fn verify_runner_execution_context() -> io::Result<()> {
+    rss_process_guard::verify_strict_child_context()
 }
 
 fn execute_request(request: RunnerRequestV1, bundle: Vec<u8>) -> RunnerResponseV1 {

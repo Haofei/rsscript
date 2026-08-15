@@ -260,6 +260,42 @@ pub fn spawn_guarded_child_strict(
     spawn_guarded_child(command, limits)
 }
 
+/// Verify that a Linux/Android child is running with the strict privilege
+/// transition guard installed by [`spawn_guarded_child_strict`].
+///
+/// The parent-side `pre_exec` call is necessary but not sufficient evidence
+/// for a runner entrypoint: this query lets the child fail closed before it
+/// parses an Artifact when it was launched outside the guarded path. Other
+/// platforms return success because the strict launcher does not claim an
+/// equivalent kernel control there.
+pub fn verify_strict_child_context() -> io::Result<()> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        let status = std::fs::read_to_string("/proc/self/status")?;
+        if parse_no_new_privileges(&status) == Some(true) {
+            return Ok(());
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "strict child context requires Linux no_new_privs=1",
+        ));
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn parse_no_new_privileges(status: &str) -> Option<bool> {
+    status.lines().find_map(|line| {
+        let value = line.strip_prefix("NoNewPrivs:")?.trim();
+        match value {
+            "0" => Some(false),
+            "1" => Some(true),
+            _ => None,
+        }
+    })
+}
+
 /// Add strict-only process controls before the ordinary resource-limit setup.
 ///
 /// Linux `no_new_privs` is deliberately attached in the child's `pre_exec`
@@ -842,5 +878,17 @@ mod tests {
             .expect("read child status");
         assert!(child.wait().expect("child should exit").success());
         assert_eq!(stdout.trim(), "NoNewPrivs:\t1");
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn strict_context_parser_accepts_only_the_kernel_enabled_value() {
+        assert_eq!(
+            parse_no_new_privileges("Name:\trss\nNoNewPrivs:\t1\n"),
+            Some(true)
+        );
+        assert_eq!(parse_no_new_privileges("NoNewPrivs:\t0\n"), Some(false));
+        assert_eq!(parse_no_new_privileges("NoNewPrivs:\t2\n"), None);
+        assert_eq!(parse_no_new_privileges("Name:\trss\n"), None);
     }
 }
