@@ -86,9 +86,11 @@ not part of this inventory.
 
 The Core architecture suite verifies this inventory and scans the explicit SDK
 exports. [`sdk-api-snapshot.v1.toml`](sdk-api-snapshot.v1.toml) records a
-SHA-256 snapshot of each reviewed façade module's normalized `pub use` surface;
-CI rejects additions, removals, and reexports that are not accompanied by an
-intentional inventory and snapshot update. CI runs that suite for the default
+SHA-256 snapshot of each reviewed façade module's normalized `pub use` surface.
+The normalization treats a façade export as a set: whitespace, declaration
+order, and flat brace-group member order cannot turn a `rustfmt` run into a
+spurious public-API change. CI rejects additions, removals, and reexports that
+are not accompanied by an intentional inventory and snapshot update. CI runs that suite for the default
 product path and for `execution`; the native JIT suite is maintained in the
 experiments workflow. Before a public API promise is made, this source-level
 snapshot will be complemented by a generated semver baseline.

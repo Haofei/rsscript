@@ -8,14 +8,24 @@ language semantics that are independent of host services:
 3. two `async let` children are owned by one `task_group` and consumed exactly
    once through `await`;
 4. the host applies bounded execution limits and receives an
-   `ExecutionReport`, including its termination reason and usage; and
-5. no Provider is registered, proving that structured async itself is a core
+   `ExecutionReport`, including its termination reason and usage;
+5. the *same linked Artifact* is run again with a host-owned cancellation
+   token, producing a complete `Cancelled` report without executing a Provider;
+   and
+6. no Provider is registered, proving that structured async itself is a core
    language/runtime concern rather than an ambient host capability.
 
 Run from the repository root:
 
 ```text
 cargo run -p structured-async-pipeline
+```
+
+The example's unit test runs both the successful and pre-cancelled execution
+paths, so the report assertions are part of the workspace regression suite:
+
+```text
+cargo test -p structured-async-pipeline
 ```
 
 For a Provider injection example, see

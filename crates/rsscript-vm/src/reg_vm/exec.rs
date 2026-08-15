@@ -167,12 +167,16 @@ impl RegVm {
     /// {}`) from hanging the host: it returns a clean error instead.
     ///
     /// It is also the host-level *preemption* hook. When `limits.cancel` is
-    /// `Some`, every `CANCEL_POLL_INTERVAL` steps we load the ambient
-    /// `AtomicBool` (`Relaxed` — we only need eventual visibility, not ordering)
-    /// and, if set, abort the eval with `EvalError::Runtime("evaluation
-    /// cancelled")`. The throttle keeps both the off path (no atomic touched at
-    /// all) and the on path (one relaxed load per 1024 instructions) cheap, so a
-    /// tight loop stays fast while still being interruptible by a watchdog.
+    /// `Some`, the first instruction and then every `CANCEL_POLL_INTERVAL`
+    /// steps load the ambient `AtomicBool` (`Relaxed` — we only need eventual
+    /// visibility, not ordering) and, if set, abort the eval with
+    /// `EvalError::Runtime("evaluation cancelled")`. Checking the first
+    /// instruction is required for a pre-cancelled host request: a small
+    /// Artifact must not complete successfully merely because it executes fewer
+    /// than one polling interval. The throttle keeps both the off path (no
+    /// atomic touched at all) and the steady on path (one relaxed load per 1024
+    /// instructions) cheap, so a tight loop stays fast while still being
+    /// interruptible by a watchdog.
     ///
     /// Limitation: this stops the *entire* evaluation. Preemptively cancelling a
     /// single *sibling* task stuck in a tight loop — so a `select`/`task_group`
@@ -193,7 +197,7 @@ impl RegVm {
                 format!("step budget exceeded ({limit} instructions)"),
             ));
         }
-        if self.steps.is_multiple_of(CANCEL_POLL_INTERVAL)
+        if (self.steps == 1 || self.steps.is_multiple_of(CANCEL_POLL_INTERVAL))
             && let Some(flag) = self.limits.cancel.as_ref()
             && flag.is_cancelled()
         {

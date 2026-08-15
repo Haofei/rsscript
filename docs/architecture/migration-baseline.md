@@ -1885,7 +1885,8 @@ mechanical acceptance condition holds.
     - [~] **E02.2.1 — Add the Provider-free structured-async baseline.**
       `examples/structured-async-pipeline` now proves the verified,
       provider-neutral `task_group` / `async let` / `await` execution path and
-      bounded `ExecutionReport`. Cancellation, resource cleanup, Provider
+      bounded `ExecutionReport`, including a second, host-cancelled run of the
+      same linked Artifact. Resource cleanup, Provider
       replacement, isolated-runner fixtures, and failure-report snapshots still
       need to be added before E02.2 can close.
 - [ ] **E03 — Establish compatibility and conformance corpora.** Add source to

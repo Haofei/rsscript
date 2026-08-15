@@ -9,9 +9,15 @@ pub use rsscript_compiler::syntax;
 use rsscript_compiler::*;
 #[cfg(feature = "compatibility")]
 pub use rsscript_compiler::{
-    analyze_source, analyze_source_result, analyze_source_result_with_operation,
-    analyze_source_with_core, analyze_source_with_interfaces,
-    analyze_source_with_interfaces_result, analyze_source_with_interfaces_result_with_operation,
+    AnalysisResult, CommitBehavior, Completion, CompletionKind, ContinuationOptions, Continuations,
+    Definition, Diagnostic, DiagnosticExplanation, Effect, ExpectedType, Fix, FixEdit,
+    FrontendCompletion, FrontendInputSnapshot, FrontendStopReason, GenerateContext, LiteralClass,
+    PrefixStatus, Reference, RssDocumentSymbol, SemanticDatabase, Severity, SourceFileSnapshot,
+    SourceSnapshot, Span, SymbolCompleteness, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
+    TextRange, TypeRef, VSCODE_GRAMMAR_PATH, ValidatedProgram, analyze_source,
+    analyze_source_result, analyze_source_result_with_operation, analyze_source_with_core,
+    analyze_source_with_interfaces, analyze_source_with_interfaces_result,
+    analyze_source_with_interfaces_result_with_operation,
     analyze_source_with_interfaces_without_core, analyze_source_without_core,
     analyze_sources_with_interfaces, analyze_sources_with_interfaces_result,
     analyze_sources_with_interfaces_result_with_operation,
@@ -23,65 +29,61 @@ pub use rsscript_compiler::{
     standard_package_interfaces, symbol_index, valid_continuations, validate_source,
     validate_source_with_operation, validate_sources_with_interfaces,
     validate_sources_with_interfaces_with_operation, validate_sources_with_interfaces_without_core,
-    vscode_tmlanguage_json, AnalysisResult, CommitBehavior, Completion, CompletionKind,
-    ContinuationOptions, Continuations, Definition, Diagnostic, DiagnosticExplanation, Effect,
-    ExpectedType, Fix, FixEdit, FrontendCompletion, FrontendInputSnapshot, FrontendStopReason,
-    GenerateContext, LiteralClass, PrefixStatus, Reference, RssDocumentSymbol, SemanticDatabase,
-    Severity, SourceFileSnapshot, SourceSnapshot, Span, SymbolCompleteness, SymbolIndex,
-    SymbolInfo, SymbolKind, SymbolLookup, TextRange, TypeRef, ValidatedProgram,
-    VSCODE_GRAMMAR_PATH,
+    vscode_tmlanguage_json,
 };
 
 #[cfg(feature = "compatibility")]
-pub use rsscript_artifact_store::{write_package_artifact_atomic, ArtifactStore};
+pub use rsscript_artifact_store::{ArtifactStore, write_package_artifact_atomic};
 #[cfg(feature = "execution")]
 #[cfg(not(feature = "compatibility"))]
 #[allow(unused_imports)]
 use rsscript_bytecode::*;
 #[cfg(feature = "compatibility")]
 pub use rsscript_bytecode::{
-    decode_executable_payload, encode_executable_payload, BytecodeArtifact, BytecodeCompatibility,
-    BytecodeError, BytecodeErrorCode, BytecodeHeader, BytecodeLimits, BytecodeVerifier,
-    VerificationContext, VerifiedBytecode, BYTECODE_CONTAINER_FORMAT_VERSION, BYTECODE_ISA_VERSION,
-    BYTECODE_MAGIC, BYTECODE_SCHEMA, LANGUAGE_SEMANTICS_VERSION, SUPPORTED_LANGUAGE_SEMANTICS,
+    BYTECODE_CONTAINER_FORMAT_VERSION, BYTECODE_ISA_VERSION, BYTECODE_MAGIC, BYTECODE_SCHEMA,
+    BytecodeArtifact, BytecodeCompatibility, BytecodeError, BytecodeErrorCode, BytecodeHeader,
+    BytecodeLimits, BytecodeVerifier, LANGUAGE_SEMANTICS_VERSION, SUPPORTED_LANGUAGE_SEMANTICS,
+    VerificationContext, VerifiedBytecode, decode_executable_payload, encode_executable_payload,
 };
 #[cfg(feature = "compatibility")]
 pub use rsscript_compiler::compatibility::{
-    analyze_package_dir, check_package_dir, compile_ir_to_bytecode, compile_package_input_to_ir,
-    compile_source_to_ir, compile_validated_to_bytecode, compile_validated_to_ir,
-    diff_package_dirs, diff_package_locks, format_review_human, format_review_json,
-    format_review_map_human, format_review_map_json, load_workspace_snapshot,
-    load_workspace_snapshot_with_operation,
-    lock_package_dir, package_lowering_input, package_sources,
-    package_sources_with_dependency_interfaces, package_tree, prepare_executable_package,
-    prepare_package_for_execution, review_map_sources, review_package_dir, review_sources,
-    CompiledIr, ExecutablePackageSnapshot,
-    PackageAnalysis, PackageAnalysisAwaitSite, PackageAnalysisExport,
-    PackageAnalysisExternalImport, PackageAnalysisFile, PackageAnalysisProducer,
-    PackageAnalysisSummary, PackageCheck, PackageCheckLock, PackageDependencyKind, PackageDiff,
-    PackageGraphCheck, PackageIdentity, PackageInterfaceChange, PackageInterfaceChangeKind,
-    PackageLock, PackageLockDiff, PackageLockFieldChange, PackageLockMetadata, PackageLockPackage,
-    PackageLockPackageChange, PackageLoweringInput, PackageManifestChange, PackageMetadataMismatch,
-    PackageMetadataReport, PackageNativeRustAuthorDeclaration, PackageNativeRustCheck,
-    PackageNativeRustReview, PackageNativeRustSemanticReview, PackageNativeRustSourceScan,
-    PackageReview, PackageReviewExport, PackageReviewFile, PackageReviewFileKind,
-    PackageReviewMetadata, PackageReviewSummary, PackageRisk, PackageSourceFile, PackageTree,
-    PackageTreeNode, PackageTreeSummary, PreparedPackage, ReviewFix,
-    ReviewMap, ReviewMapCategorySummary, ReviewMapClassification, ReviewMapFile, ReviewMapFileRisk,
-    ReviewMapRegion, ReviewMapSummary, ReviewRisk, WorkspaceSnapshot,
+    CompiledIr, ExecutablePackageSnapshot, PackageAnalysis, PackageAnalysisAwaitSite,
+    PackageAnalysisExport, PackageAnalysisExternalImport, PackageAnalysisFile,
+    PackageAnalysisProducer, PackageAnalysisSummary, PackageCheck, PackageCheckLock,
+    PackageDependencyKind, PackageDiff, PackageGraphCheck, PackageIdentity, PackageInterfaceChange,
+    PackageInterfaceChangeKind, PackageLock, PackageLockDiff, PackageLockFieldChange,
+    PackageLockMetadata, PackageLockPackage, PackageLockPackageChange, PackageLoweringInput,
+    PackageManifestChange, PackageMetadataMismatch, PackageMetadataReport,
+    PackageNativeRustAuthorDeclaration, PackageNativeRustCheck, PackageNativeRustReview,
+    PackageNativeRustSemanticReview, PackageNativeRustSourceScan, PackageReview,
+    PackageReviewExport, PackageReviewFile, PackageReviewFileKind, PackageReviewMetadata,
+    PackageReviewSummary, PackageRisk, PackageSourceFile, PackageTree, PackageTreeNode,
+    PackageTreeSummary, PreparedPackage, ReviewFix, ReviewMap, ReviewMapCategorySummary,
+    ReviewMapClassification, ReviewMapFile, ReviewMapFileRisk, ReviewMapRegion, ReviewMapSummary,
+    ReviewRisk, WorkspaceSnapshot, analyze_package_dir, check_package_dir, compile_ir_to_bytecode,
+    compile_package_input_to_ir, compile_source_to_ir, compile_validated_to_bytecode,
+    compile_validated_to_ir, diff_package_dirs, diff_package_locks, format_review_human,
+    format_review_json, format_review_map_human, format_review_map_json, load_workspace_snapshot,
+    load_workspace_snapshot_with_operation, lock_package_dir, package_lowering_input,
+    package_sources, package_sources_with_dependency_interfaces, package_tree,
+    prepare_executable_package, prepare_package_for_execution, review_map_sources,
+    review_package_dir, review_sources,
 };
 #[cfg(all(feature = "compatibility", feature = "aot-rust"))]
 pub use rsscript_compiler::compatibility::{
     GeneratedRustPackage, LowerCoverageReport, LoweredRust, NativeRustDependency,
     RemappedRustcDiagnostic, SymbolInventoryEntry, lower_coverage_report, lower_program_to_rust,
-    lower_program_to_rust_with_map,
-    lower_source_to_rust, lower_source_to_rust_package,
+    lower_program_to_rust_with_map, lower_source_to_rust, lower_source_to_rust_package,
     lower_source_to_rust_package_with_interfaces, lower_source_to_rust_with_map,
     lower_sources_to_rust_package_with_interfaces, lower_sources_to_rust_package_with_options,
     lowered_symbol_name, parse_runtime_diagnostics, parse_source_map_json,
     remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines, symbol_inventory,
     write_generated_rust_package,
 };
+#[cfg(feature = "execution")]
+#[cfg(not(feature = "compatibility"))]
+#[allow(unused_imports)]
+use rsscript_compiler::*;
 #[cfg(feature = "compatibility")]
 pub use rsscript_review::{
     format_package_check_human, format_package_check_json, format_package_diff_human,
@@ -90,43 +92,38 @@ pub use rsscript_review::{
     format_package_metadata_json, format_package_review_human, format_package_review_json,
     format_package_review_markdown, format_package_tree_human, format_package_tree_json,
 };
-#[cfg(feature = "execution")]
-#[cfg(not(feature = "compatibility"))]
-#[allow(unused_imports)]
-use rsscript_compiler::*;
 #[cfg(feature = "native-jit")]
 pub use rsscript_vm::NativeStats;
+#[cfg(all(feature = "compatibility", feature = "legacy-exec-ir"))]
+pub use rsscript_vm::compile_executable_ir;
 #[cfg(feature = "execution")]
 #[cfg(not(feature = "compatibility"))]
 #[allow(unused_imports)]
 use rsscript_vm::*;
 #[cfg(feature = "compatibility")]
 pub use rsscript_vm::{
-    AsyncInterpreterFn, AsyncProviderCallContext, BlockingBehavior,
-    CancellationBehavior, CoverageBucket, EvalError, EvalExecutionReport, EvalOutput,
-    ExecutionFailureKind, ExecutionUsage, ExternalFunction, ExternalFunctionRegistry,
-    ExternalImport, ExternalSymbol, FunctionSignature, HostCallContext, NativeInterpreterFn,
-    NativeValue, ProviderCallContext, ProviderCallMode, ProviderCallTrace, ProviderCallable,
-    ProviderDescriptor, ProviderError, ProviderErrorCode, ProviderErrorMapping, ProviderFunction,
-    ProviderFunctionDescriptor, ProviderFuture, ProviderInvocationContract, ProviderLoadError,
-    ProviderResource, ProviderResourceRegistry, ProviderResourceTable, ProviderTraceSink,
-    RegVmExecutable, ResolvedProviderFunction, ResourceCleanupContract, ResourceHandle,
-    SignatureHash, VmLimits,
+    AsyncInterpreterFn, AsyncProviderCallContext, BlockingBehavior, CancellationBehavior,
+    CoverageBucket, EvalError, EvalExecutionReport, EvalOutput, ExecutionFailureKind,
+    ExecutionUsage, ExternalFunction, ExternalFunctionRegistry, ExternalImport, ExternalSymbol,
+    FunctionSignature, HostCallContext, NativeInterpreterFn, NativeValue, ProviderCallContext,
+    ProviderCallMode, ProviderCallTrace, ProviderCallable, ProviderDescriptor, ProviderError,
+    ProviderErrorCode, ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor,
+    ProviderFuture, ProviderInvocationContract, ProviderLoadError, ProviderResource,
+    ProviderResourceRegistry, ProviderResourceTable, ProviderTraceSink, RegVmExecutable,
+    ResolvedProviderFunction, ResourceCleanupContract, ResourceHandle, SignatureHash, VmLimits,
 };
-#[cfg(all(feature = "compatibility", feature = "legacy-exec-ir"))]
-pub use rsscript_vm::compile_executable_ir;
 #[cfg(feature = "compatibility")]
 #[allow(dead_code)]
 mod vm_adapter;
 #[cfg(feature = "execution")]
 pub use rsscript_artifact::{
-    AnalysisEnvelopeV1, AnalysisSchemaV1, ArtifactBundle, ArtifactBundleError, ArtifactIdentityV1,
-    AwaitFactV1, BuildProvenanceV1, CallEdgeFactV1, ChangedFactV1, CountChangeV1, DiagnosticFactV1,
-    ExportFactV1, ExternalCallFactV1, ExternalContractFactV1, FactSetDiffV1,
-    FunctionParameterFactV1, InterfaceRequirementV1, PackageAnalysisV1, ResourceLifetimeFactV1,
-    ResourceTransferFactV1, SemanticDiffV1, SourceAnalysisV1, TaskGroupFactV1,
-    ARTIFACT_BUNDLE_MAGIC, ARTIFACT_BUNDLE_SCHEMA, PACKAGE_ANALYSIS_SCHEMA, SEMANTIC_DIFF_SCHEMA,
-    SOURCE_ANALYSIS_SCHEMA,
+    ARTIFACT_BUNDLE_MAGIC, ARTIFACT_BUNDLE_SCHEMA, AnalysisEnvelopeV1, AnalysisSchemaV1,
+    ArtifactBundle, ArtifactBundleError, ArtifactIdentityV1, AwaitFactV1, BuildProvenanceV1,
+    CallEdgeFactV1, ChangedFactV1, CountChangeV1, DiagnosticFactV1, ExportFactV1,
+    ExternalCallFactV1, ExternalContractFactV1, FactSetDiffV1, FunctionParameterFactV1,
+    InterfaceRequirementV1, PACKAGE_ANALYSIS_SCHEMA, PackageAnalysisV1, ResourceLifetimeFactV1,
+    ResourceTransferFactV1, SEMANTIC_DIFF_SCHEMA, SOURCE_ANALYSIS_SCHEMA, SemanticDiffV1,
+    SourceAnalysisV1, TaskGroupFactV1,
 };
 use rsscript_semantics::CompilationSession;
 #[cfg(feature = "execution")]
@@ -163,12 +160,12 @@ pub use vm_adapter::{
 /// Runtime and Provider types are deliberately excluded.
 pub mod language {
     pub use rsscript_compiler::{
+        Definition, Diagnostic, DiagnosticExplanation, Reference, RssDocumentSymbol, Severity,
+        Span, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
         analyze_source_result_with_operation, analyze_source_with_core,
         analyze_source_with_interfaces, analyze_source_with_interfaces_result_with_operation,
         analyze_sources_with_interfaces, analyze_sources_with_interfaces_result_with_operation,
         document_symbols, explain_diagnostic_code, format_source, lint_source, symbol_index,
-        Definition, Diagnostic, DiagnosticExplanation, Reference, RssDocumentSymbol, Severity,
-        Span, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
     };
 }
 
@@ -383,16 +380,15 @@ pub mod operation {
 /// Reviewed Artifact construction and verification entry points.
 pub mod artifact {
     pub use super::{
-        AdmissionError, AdmittedArtifact, AnalysisEnvelopeV1, AnalysisSchemaV1, ArtifactAdmission,
-        ArtifactAdmissionPolicy, ArtifactBundle, ArtifactBundleError, ArtifactVerifier,
-        BuildProvenanceV1, BuiltArtifact, InterfaceRequirementV1, PackageAnalysisV1,
+        ARTIFACT_BUNDLE_MAGIC, ARTIFACT_BUNDLE_SCHEMA, AdmissionError, AdmittedArtifact,
+        AnalysisEnvelopeV1, AnalysisSchemaV1, ArtifactAdmission, ArtifactAdmissionPolicy,
+        ArtifactBundle, ArtifactBundleError, ArtifactVerifier, BuildProvenanceV1, BuiltArtifact,
+        InterfaceRequirementV1, PACKAGE_ANALYSIS_SCHEMA, PackageAnalysisV1, SOURCE_ANALYSIS_SCHEMA,
         SourceAnalysisV1, TrustedInputAdmission, VerifiedArtifact, VerifyError,
-        ARTIFACT_BUNDLE_MAGIC, ARTIFACT_BUNDLE_SCHEMA, PACKAGE_ANALYSIS_SCHEMA,
-        SOURCE_ANALYSIS_SCHEMA,
     };
     pub use rsscript_bytecode::{
-        BytecodeArtifact, BytecodeHeader, BytecodeVerifier, BYTECODE_CONTAINER_FORMAT_VERSION,
-        BYTECODE_ISA_VERSION, BYTECODE_MAGIC, BYTECODE_SCHEMA,
+        BYTECODE_CONTAINER_FORMAT_VERSION, BYTECODE_ISA_VERSION, BYTECODE_MAGIC, BYTECODE_SCHEMA,
+        BytecodeArtifact, BytecodeHeader, BytecodeVerifier,
     };
 }
 
@@ -419,8 +415,8 @@ pub mod runtime {
 /// Reviewed machine-readable execution-report types.
 pub mod report {
     pub use super::{
-        ExecutionOutcome, ExecutionReport, ExecutionTelemetry, ProviderFunctionTelemetry,
-        RuntimeError, TerminationReason, EXECUTION_REPORT_SCHEMA,
+        EXECUTION_REPORT_SCHEMA, ExecutionOutcome, ExecutionReport, ExecutionTelemetry,
+        ProviderFunctionTelemetry, RuntimeError, TerminationReason,
     };
 }
 
@@ -429,7 +425,7 @@ pub mod report {
 pub mod analysis {
     pub use super::{
         CallEdgeFactV1, ExternalContractFactV1, FunctionParameterFactV1, ResourceLifetimeFactV1,
-        ResourceTransferFactV1, SemanticDiffV1, TaskGroupFactV1, SEMANTIC_DIFF_SCHEMA,
+        ResourceTransferFactV1, SEMANTIC_DIFF_SCHEMA, SemanticDiffV1, TaskGroupFactV1,
     };
 }
 #[cfg(not(feature = "compatibility"))]
@@ -2005,9 +2001,9 @@ mod tests {
         BlockingBehavior, CancellationBehavior, DataEffect, ExternalSymbol, FunctionSignature,
         ParameterSignature, ProviderCallMode, ProviderFunctionDescriptor, RUNTIME_ABI_VERSION,
     };
+    use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
-    use std::sync::Arc;
 
     fn admitted(built: BuiltArtifact) -> AdmittedArtifact {
         ArtifactVerifier
@@ -2153,18 +2149,22 @@ mod tests {
                 .all(|file| !file.logical_path.starts_with('/')),
             "compiler-facing snapshot identity must not contain host-absolute paths"
         );
-        assert!(captured
-            .frontend()
-            .sources()
-            .files()
-            .iter()
-            .any(|file| file.path() == "root/src/main.rss"));
-        assert!(captured
-            .frontend()
-            .interfaces()
-            .files()
-            .iter()
-            .any(|file| file.path() == "root/interfaces/host.rssi"));
+        assert!(
+            captured
+                .frontend()
+                .sources()
+                .files()
+                .iter()
+                .any(|file| file.path() == "root/src/main.rss")
+        );
+        assert!(
+            captured
+                .frontend()
+                .interfaces()
+                .files()
+                .iter()
+                .any(|file| file.path() == "root/interfaces/host.rssi")
+        );
         let built = project
             .build_captured(&captured)
             .expect("pure compiler accepts the loader-captured input");
@@ -2307,29 +2307,35 @@ mod tests {
         let analysis = new
             .source_analysis()
             .expect("source build carries typed source analysis");
-        assert!(analysis
-            .call_edges
-            .iter()
-            .any(|edge| edge.caller == "main" && edge.callee == "helper"));
-        assert!(analysis
-            .call_edges
-            .iter()
-            .any(|edge| edge.caller == "helper" && edge.callee == "Host.value"));
+        assert!(
+            analysis
+                .call_edges
+                .iter()
+                .any(|edge| edge.caller == "main" && edge.callee == "helper")
+        );
+        assert!(
+            analysis
+                .call_edges
+                .iter()
+                .any(|edge| edge.caller == "helper" && edge.callee == "Host.value")
+        );
         assert_eq!(analysis.external_calls.len(), 1);
         assert_eq!(analysis.external_calls[0].function, "helper");
         assert_eq!(analysis.external_calls[0].symbol, "Host.value");
 
         let diff = SemanticDiffV1::between(old.bundle(), new.bundle());
-        assert!(diff
-            .call_edges
-            .added
-            .iter()
-            .any(|edge| edge.caller == "helper" && edge.callee == "Host.value"));
-        assert!(diff
-            .external_calls
-            .added
-            .iter()
-            .any(|call| call.function == "helper" && call.symbol == "Host.value"));
+        assert!(
+            diff.call_edges
+                .added
+                .iter()
+                .any(|edge| edge.caller == "helper" && edge.callee == "Host.value")
+        );
+        assert!(
+            diff.external_calls
+                .added
+                .iter()
+                .any(|call| call.function == "helper" && call.symbol == "Host.value")
+        );
     }
 
     #[test]
@@ -2367,10 +2373,12 @@ fn main() -> Unit { return Unit }
         assert_eq!(process.parameters[0].effect, "read");
         assert!(process.parameters[0].retained);
         assert_eq!(process.retained_params, ["value"]);
-        assert!(process
-            .semantic_facts
-            .iter()
-            .any(|fact| fact == "retains(value)"));
+        assert!(
+            process
+                .semantic_facts
+                .iter()
+                .any(|fact| fact == "retains(value)")
+        );
 
         let diff = SemanticDiffV1::between(old.bundle(), new.bundle());
         let changed = diff
@@ -2461,6 +2469,29 @@ fn main() -> Result<Int, String> {
         ));
         assert!(report.telemetry.cancellation_latency_ns.is_some());
         assert!(report.telemetry.execution_duration_ns > 0);
+    }
+
+    #[test]
+    fn pre_cancelled_short_artifact_never_reaches_successful_completion() {
+        // A cancellation check only at the steady-state poll interval would
+        // incorrectly let a small Artifact finish before the first poll. This
+        // is the public SDK regression for the VM's first-instruction gate.
+        let package = admitted(
+            Compiler
+                .compile("short-cancel.rss", "fn main() -> Unit { return Unit }")
+                .expect("compile"),
+        );
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let report = Runtime::default().link(&package).expect("link").execute(
+            ExecutionRequest::default()
+                .limits(RunLimits::bounded().with_cancellation(cancellation)),
+        );
+
+        assert_eq!(report.termination_reason(), TerminationReason::Cancelled);
+        assert!(report.failure().is_some());
+        assert!(report.value().is_none());
+        assert_eq!(report.usage.steps_consumed, 1);
     }
 
     #[test]
@@ -2718,9 +2749,11 @@ fn main() -> Result<Int, String> {
         );
         assert_eq!(report.usage.provider_calls, 2);
         assert_eq!(report.provider_call_traces.len(), 1);
-        assert!(report
-            .failure()
-            .is_some_and(|error| error.message.contains("provider call budget exceeded")));
+        assert!(
+            report
+                .failure()
+                .is_some_and(|error| error.message.contains("provider call budget exceeded"))
+        );
 
         let failure_symbol = descriptor.functions[0].symbol.clone();
         let failure_signature = descriptor.functions[0].signature.clone();
@@ -2755,9 +2788,11 @@ fn main() -> Result<Int, String> {
             report.provider_call_traces[0].result,
             Err(provider::ProviderErrorCode::InvalidArgument)
         );
-        assert!(report
-            .failure()
-            .is_some_and(|error| error.message == "provider call failed (invalid_argument)"));
+        assert!(
+            report
+                .failure()
+                .is_some_and(|error| error.message == "provider call failed (invalid_argument)")
+        );
     }
 
     #[test]

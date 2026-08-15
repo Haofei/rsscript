@@ -71,15 +71,52 @@ fn normalized_public_uses(source: &str, module: &str) -> String {
         let end = statement
             .find(';')
             .unwrap_or_else(|| panic!("public use in `{module}` is not terminated"));
-        statements.push(
-            statement[..=end]
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" "),
-        );
+        statements.push(normalize_public_use(&statement[..=end]));
         rest = &statement[end + 1..];
     }
+    // `pub use` declaration order does not change the public API either.
+    statements.sort();
     format!("{}\n", statements.join("\n"))
+}
+
+/// Canonicalize source spelling without treating rustfmt's import ordering as
+/// an API change. A façade export is a set of paths: whitespace, declaration
+/// order, and the order of one brace group's members have no semver meaning.
+///
+/// The reviewed façade intentionally restricts itself to simple `pub use`
+/// declarations, so this small parser is both bounded and more transparent
+/// than hashing the full module text. A future nested import should fail the
+/// snapshot review rather than silently acquire a different interpretation.
+fn normalize_public_use(statement: &str) -> String {
+    let statement = statement.split_whitespace().collect::<Vec<_>>().join(" ");
+    let Some(open) = statement.find('{') else {
+        return statement;
+    };
+    let close = statement
+        .rfind('}')
+        .expect("brace-group public use must close");
+    assert_eq!(
+        statement.matches('{').count(),
+        1,
+        "reviewed façade import groups must stay flat"
+    );
+    assert_eq!(
+        statement.matches('}').count(),
+        1,
+        "reviewed façade import groups must stay flat"
+    );
+    let mut members = statement[open + 1..close]
+        .split(',')
+        .map(str::trim)
+        .filter(|member| !member.is_empty())
+        .collect::<Vec<_>>();
+    members.sort_unstable();
+    format!(
+        "{}{{{}}}{}",
+        &statement[..open],
+        members.join(","),
+        &statement[close + 1..]
+    )
 }
 
 fn snapshot_digest(source: &str, module: &str) -> String {
@@ -211,15 +248,20 @@ fn reviewed_facade_exports_match_the_checked_api_snapshot() {
         "report",
         "analysis",
     ];
+    let mut mismatches = Vec::new();
     for module in modules {
         let expected = snapshot_value(&snapshot, module)
             .unwrap_or_else(|| panic!("SDK API snapshot is missing façade module `{module}`"));
         let actual = snapshot_digest(&source, module);
-        assert_eq!(
-            actual, expected,
-            "reviewed façade `{module}` changed; update sdk-api-inventory.md and the checked snapshot deliberately"
-        );
+        if actual != expected {
+            mismatches.push(format!("{module} = \"{actual}\" (expected \"{expected}\")"));
+        }
     }
+    assert!(
+        mismatches.is_empty(),
+        "reviewed façade exports changed; update sdk-api-inventory.md and the checked snapshot deliberately:\n{}",
+        mismatches.join("\n")
+    );
 }
 
 #[test]
