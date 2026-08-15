@@ -413,6 +413,7 @@ fn local_analysis_indexes_resource_escape_facts_by_with_span() {
                                 params: Vec::new(),
                                 captures: Vec::new(),
                                 explicit: false,
+                                ty: None,
                                 body: HirBlock {
                                     statements: vec![HirStmt::Expr(HirExpr::Ident {
                                         name: "file".to_string(),
@@ -612,6 +613,7 @@ fn local_analysis_indexes_managed_closure_uses_by_statement_span() {
                         params: Vec::new(),
                         captures: Vec::new(),
                         explicit: false,
+                        ty: None,
                         body: HirBlock {
                             statements: vec![HirStmt::Expr(HirExpr::Ident {
                                 name: "image".to_string(),

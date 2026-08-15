@@ -1520,6 +1520,8 @@ impl ValidatedProgram {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hir::{HirExpr, HirStmt};
+    use crate::validate_sources_with_interfaces;
     use rsscript_operation::{CancellationToken, MonotonicDeadline};
     use std::time::{Duration, Instant};
 
@@ -1545,6 +1547,39 @@ mod tests {
         assert_eq!(input.interfaces().files()[0].path(), "host.rssi");
         assert_eq!(input.sources().files()[0].file_id(), FileId::new(0));
         assert_eq!(input.interfaces().files()[0].file_id(), FileId::new(0));
+    }
+
+    #[test]
+    fn checked_hir_retains_structural_closure_contracts() {
+        let validated = validate_sources_with_interfaces(
+            &[(
+                "closure-contract.rss",
+                r#"
+fn main() -> Unit {
+    let increment = || { return 1 }
+    return Unit
+}
+"#,
+            )],
+            &[],
+        )
+        .expect("annotated closure source validates");
+        let body = validated
+            .database()
+            .hir()
+            .function_body("main")
+            .expect("main HIR body exists");
+        let block = body.block.as_ref().expect("main body is lowered");
+        let HirStmt::Let {
+            value: Some(HirExpr::Closure { ty: Some(ty), .. }),
+            ..
+        } = &block.statements[0]
+        else {
+            panic!("closure must retain its structural Fn contract")
+        };
+
+        assert!(ty.is_function());
+        assert_eq!(ty.to_string(), "noescape Fn() -> Int");
     }
 
     #[test]

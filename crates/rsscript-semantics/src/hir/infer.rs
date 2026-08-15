@@ -120,7 +120,8 @@ pub fn infer_hir_expr_type(
                 .unwrap_or_else(|| ResolvedType::named("?", []));
             Some(ResolvedType::named("List", [item_type]))
         }
-        Expr::Closure { .. } | Expr::Unknown(_) => None,
+        Expr::Closure { .. } => infer_arg_expr_type(hir, expr, value_types),
+        Expr::Unknown(_) => None,
     }
 }
 
@@ -323,7 +324,7 @@ pub(super) fn infer_closure_return_type(
     Some(ResolvedType::named("Unit", []))
 }
 
-fn infer_arg_expr_type(
+pub(super) fn infer_arg_expr_type(
     hir: &Hir,
     expr: &Expr,
     value_types: &HirValueTypes,

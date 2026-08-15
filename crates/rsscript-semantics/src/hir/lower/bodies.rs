@@ -1,6 +1,7 @@
 //! Syntax-to-HIR body, statement, expression, and call lowering.
 
 use super::*;
+use crate::hir::infer::infer_arg_expr_type;
 
 pub(super) fn build_function_bodies(facts: &BodyFacts) -> HashMap<String, HirFunctionBody> {
     let mut bodies = HashMap::<String, HirFunctionBody>::new();
@@ -403,10 +404,13 @@ pub(super) fn lower_hir_stmt(
             let ty = declared_type_name
                 .clone()
                 .or_else(|| value_type_name.clone());
-            let value = stmt
+            let mut value = stmt
                 .value
                 .as_ref()
                 .map(|value| lower_hir_expr(hir, function_name, value, value_types));
+            if let (Some(value), Some(ty)) = (value.as_mut(), ty.as_ref()) {
+                attach_contextual_closure_type(value, ty);
+            }
             if let Some(ty) = &ty {
                 value_types.insert(stmt.name.clone(), ty.clone());
             }
@@ -579,6 +583,17 @@ pub(super) fn lower_hir_stmt(
     }
 }
 
+/// A declared `Fn` type is stronger than the local inference fallback used for
+/// an unannotated closure. Preserve it on the checked expression so backend
+/// lowering receives one structural ABI fact for construction and local calls.
+fn attach_contextual_closure_type(value: &mut HirExpr, ty: &ResolvedType) {
+    if let HirExpr::Closure { ty: closure_ty, .. } = value
+        && ty.is_function()
+    {
+        *closure_ty = Some(ty.clone());
+    }
+}
+
 pub(super) fn lower_hir_expr(
     hir: &Hir,
     function_name: &str,
@@ -746,6 +761,7 @@ pub(super) fn lower_hir_expr(
             span,
         } => {
             let mut closure_types = value_types.clone();
+            let ty = infer_arg_expr_type(hir, expr, value_types);
             HirExpr::Closure {
                 params: params.clone(),
                 captures: captures
@@ -757,6 +773,7 @@ pub(super) fn lower_hir_expr(
                     })
                     .collect(),
                 explicit: *explicit,
+                ty,
                 body: lower_hir_block(hir, function_name, body, &mut closure_types),
                 span: span.clone(),
             }

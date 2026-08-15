@@ -438,6 +438,9 @@ pub enum HirExpr {
         params: Vec<String>,
         captures: Vec<HirClosureCapture>,
         explicit: bool,
+        /// Inferred or contextual structural `Fn` contract for executable
+        /// lowering. This avoids reparsing source spelling at backend edges.
+        ty: Option<ResolvedType>,
         body: HirBlock,
         span: Span,
     },
