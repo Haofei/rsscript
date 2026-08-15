@@ -1052,6 +1052,13 @@ mechanical acceptance condition holds.
       fixture covers insertion, duplicate detection, removal, and clear. The
       small reference interpreter does not model the hash-set runtime, so its
       named evidence exception cannot bypass direct/legacy bytecode parity.
+    - [x] **M03.4l — Lower special mutable-deque updates without legacy
+      intrinsics.** `Deque.push_front`, `push_back`, `pop_front`, `pop_back`,
+      and `clear` become dedicated MIR operations over a mutable `PlaceId`;
+      push operations retain checked `read` local values explicitly. The
+      direct/legacy bytecode fixture proves front/back ordering and option
+      results. Its reference-interpreter exception is explicit because the
+      oracle does not model `Deque` runtime representation.
 - [ ] **M04 — Lower checked HIR to MIR exactly once.** Backend code cannot
   inspect syntax AST or reconstruct semantic facts. MIR verification rejects
   unresolved calls, invalid ownership state, incomplete cleanup, and malformed
@@ -1289,6 +1296,11 @@ mechanical acceptance condition holds.
       `SetInsert`, and `SetRemove` map explicit mutable set places and values
       to the corresponding verifier-checked v1 instructions. The migration
       fixture proves boolean outcomes and retention against the legacy VM.
+    - [x] **V02.3m — Emit resolved mutable-deque updates.** `DequeClear`,
+      `DequePopBack`, `DequePopFront`, `DequePushBack`, and `DequePushFront`
+      map explicit mutable deque places and values to verifier-checked v1
+      instructions. Direct parity checks cover ordered mutations, option
+      results, and retention facts.
   - [x] **V02.4 — Switch reviewed builds to the compiler bytecode boundary.**
     SDK source, interface, and package builds delegate checked HIR → MIR →
     `codegen-vm` Artifact emission to the compiler's VM-free `bytecode`

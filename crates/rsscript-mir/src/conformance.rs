@@ -745,6 +745,13 @@ impl<'a> Interpreter<'a> {
                     | MirInstruction::SetRemove { .. } => {
                         return Err(MirExecutionError::UnsupportedBuiltinCall);
                     }
+                    MirInstruction::DequeClear { .. }
+                    | MirInstruction::DequePopBack { .. }
+                    | MirInstruction::DequePopFront { .. }
+                    | MirInstruction::DequePushBack { .. }
+                    | MirInstruction::DequePushFront { .. } => {
+                        return Err(MirExecutionError::UnsupportedBuiltinCall);
+                    }
                     MirInstruction::MapGet {
                         destination,
                         map,

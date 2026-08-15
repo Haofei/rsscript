@@ -530,6 +530,51 @@ fn lower_instruction(
                 ("value", json!(value_reg(function, *value))),
             ],
         )),
+        MirInstruction::DequeClear { destination, deque } => code.push(instr(
+            "DequeClear",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("deque", json!(place_reg(*deque))),
+            ],
+        )),
+        MirInstruction::DequePopBack { destination, deque } => code.push(instr(
+            "DequePopBack",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("deque", json!(place_reg(*deque))),
+            ],
+        )),
+        MirInstruction::DequePopFront { destination, deque } => code.push(instr(
+            "DequePopFront",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("deque", json!(place_reg(*deque))),
+            ],
+        )),
+        MirInstruction::DequePushBack {
+            destination,
+            deque,
+            value,
+        } => code.push(instr(
+            "DequePushBack",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("deque", json!(place_reg(*deque))),
+                ("value", json!(value_reg(function, *value))),
+            ],
+        )),
+        MirInstruction::DequePushFront {
+            destination,
+            deque,
+            value,
+        } => code.push(instr(
+            "DequePushFront",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("deque", json!(place_reg(*deque))),
+                ("value", json!(value_reg(function, *value))),
+            ],
+        )),
         MirInstruction::MapGet {
             destination,
             map,

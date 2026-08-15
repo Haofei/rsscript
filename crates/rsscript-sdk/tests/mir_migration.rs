@@ -516,6 +516,30 @@ fn main() -> Int {
 "#,
     },
     MigrationCase {
+        name: "deque_mutations",
+        capability: "resolved mutable-deque updates with retention and option results",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn main() -> Int {
+    let mut values = Deque.new<Int>()
+    let front = 1
+    let back = 2
+    Deque.push_back<Int>(deque: mut values, value: read back)
+    Deque.push_front<Int>(deque: mut values, value: read front)
+    let first = match Deque.pop_front<Int>(deque: mut values) {
+        Some(value) => { value }
+        None => { return 0 }
+    }
+    let last = match Deque.pop_back<Int>(deque: mut values) {
+        Some(value) => { value }
+        None => { return 0 }
+    }
+    Deque.clear<Int>(deque: mut values)
+    return first + last
+}
+"#,
+    },
+    MigrationCase {
         name: "typed_json_decode",
         capability: "typed JSON decode builtins and record layouts",
         stage: MigrationStage::DualPath,
@@ -545,6 +569,12 @@ const EVIDENCE_OVERRIDES: &[MigrationEvidenceOverride] = &[
         case: "set_mutations",
         evidence: MigrationEvidence::VerifiedBytecode {
             reference_interpreter_gap: "the test-only MIR interpreter does not model Set.new or hashable set runtime representation",
+        },
+    },
+    MigrationEvidenceOverride {
+        case: "deque_mutations",
+        evidence: MigrationEvidence::VerifiedBytecode {
+            reference_interpreter_gap: "the test-only MIR interpreter does not model Deque.new or deque runtime representation",
         },
     },
 ];
@@ -937,6 +967,82 @@ fn main() -> Int {
     let legacy = reg_vm_eval_source_main("direct-hir-set-mutations.rss", source)
         .expect("legacy Set mutation path executes");
     assert_eq!(legacy.value, "1");
+    assert_eq!(direct.value, legacy.value);
+    assert_eq!(direct.stdout, legacy.stdout);
+    assert_eq!(direct.stderr, legacy.stderr);
+    assert_eq!(direct.usage, legacy.usage);
+}
+
+#[test]
+fn direct_checked_hir_deque_mutations_preserve_retention_and_option_contracts() {
+    let source = r#"
+fn main() -> Int {
+    let mut values = Deque.new<Int>()
+    let front = 1
+    let back = 2
+    Deque.push_back<Int>(deque: mut values, value: read back)
+    Deque.push_front<Int>(deque: mut values, value: read front)
+    let first = match Deque.pop_front<Int>(deque: mut values) {
+        Some(value) => { value }
+        None => { return 0 }
+    }
+    let last = match Deque.pop_back<Int>(deque: mut values) {
+        Some(value) => { value }
+        None => { return 0 }
+    }
+    Deque.clear<Int>(deque: mut values)
+    return first + last
+}
+"#;
+    let compiled = compile_source_to_ir("direct-hir-deque-mutations.rss", source)
+        .expect("Deque mutation fixture compiles");
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("Deque mutations should lower directly from checked HIR");
+    let instructions = mir
+        .functions()
+        .iter()
+        .flat_map(|function| function.blocks())
+        .flat_map(|block| block.instructions())
+        .collect::<Vec<_>>();
+    for expected in [
+        "DequePushBack",
+        "DequePushFront",
+        "DequePopFront",
+        "DequePopBack",
+        "DequeClear",
+    ] {
+        assert!(
+            instructions
+                .iter()
+                .any(|instruction| match (expected, instruction) {
+                    ("DequePushBack", MirInstruction::DequePushBack { .. })
+                    | ("DequePushFront", MirInstruction::DequePushFront { .. })
+                    | ("DequePopFront", MirInstruction::DequePopFront { .. })
+                    | ("DequePopBack", MirInstruction::DequePopBack { .. })
+                    | ("DequeClear", MirInstruction::DequeClear { .. }) => true,
+                    _ => false,
+                }),
+            "direct MIR must preserve {expected} as an explicit mutable-place operation"
+        );
+    }
+    assert!(
+        instructions
+            .iter()
+            .any(|instruction| matches!(instruction, MirInstruction::Retain { .. })),
+        "Deque push operations must retain read-local values explicitly"
+    );
+    let direct = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("Deque mutation MIR emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("Deque mutation bytecode executes");
+    let legacy = reg_vm_eval_source_main("direct-hir-deque-mutations.rss", source)
+        .expect("legacy Deque mutation path executes");
+    assert_eq!(legacy.value, "3");
     assert_eq!(direct.value, legacy.value);
     assert_eq!(direct.stdout, legacy.stdout);
     assert_eq!(direct.stderr, legacy.stderr);

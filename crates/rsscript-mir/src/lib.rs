@@ -213,6 +213,33 @@ pub enum MirInstruction {
         set: PlaceId,
         value: ValueId,
     },
+    /// Clear a resolved mutable deque place.
+    DequeClear {
+        destination: ValueId,
+        deque: PlaceId,
+    },
+    /// Pop the back value from a resolved mutable deque place as an `Option`.
+    DequePopBack {
+        destination: ValueId,
+        deque: PlaceId,
+    },
+    /// Pop the front value from a resolved mutable deque place as an `Option`.
+    DequePopFront {
+        destination: ValueId,
+        deque: PlaceId,
+    },
+    /// Push a value at the back of a resolved mutable deque place.
+    DequePushBack {
+        destination: ValueId,
+        deque: PlaceId,
+        value: ValueId,
+    },
+    /// Push a value at the front of a resolved mutable deque place.
+    DequePushFront {
+        destination: ValueId,
+        deque: PlaceId,
+        value: ValueId,
+    },
     /// Read a value from a resolved mutable map. The result remains an
     /// `Option` so absence is explicit in the typed control-flow graph rather
     /// than hidden in a source-level `Map.get` spelling.
@@ -1300,6 +1327,11 @@ fn instruction_definitions(instruction: &MirInstruction) -> Vec<ValueId> {
         | MirInstruction::SetClear { destination, .. }
         | MirInstruction::SetInsert { destination, .. }
         | MirInstruction::SetRemove { destination, .. }
+        | MirInstruction::DequeClear { destination, .. }
+        | MirInstruction::DequePopBack { destination, .. }
+        | MirInstruction::DequePopFront { destination, .. }
+        | MirInstruction::DequePushBack { destination, .. }
+        | MirInstruction::DequePushFront { destination, .. }
         | MirInstruction::MapGet { destination, .. }
         | MirInstruction::MapClear { destination, .. }
         | MirInstruction::MapInsert { destination, .. }
@@ -1361,6 +1393,8 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         MirInstruction::SetInsert { value, .. } | MirInstruction::SetRemove { value, .. } => {
             vec![*value]
         }
+        MirInstruction::DequePushBack { value, .. }
+        | MirInstruction::DequePushFront { value, .. } => vec![*value],
         MirInstruction::MapGet { map, key, .. } => vec![*map, *key],
         MirInstruction::MapInsert { key, value, .. }
         | MirInstruction::MapInsertOld { key, value, .. } => vec![*key, *value],
@@ -1402,7 +1436,10 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         | MirInstruction::MapClear { .. }
         | MirInstruction::ListClear { .. }
         | MirInstruction::ListPop { .. }
-        | MirInstruction::SetClear { .. } => Vec::new(),
+        | MirInstruction::SetClear { .. }
+        | MirInstruction::DequeClear { .. }
+        | MirInstruction::DequePopBack { .. }
+        | MirInstruction::DequePopFront { .. } => Vec::new(),
         MirInstruction::TryResult { source, .. } => vec![*source],
     }
 }
@@ -1547,6 +1584,11 @@ fn transfer_move_state(
         MirInstruction::SetClear { set, .. }
         | MirInstruction::SetInsert { set, .. }
         | MirInstruction::SetRemove { set, .. } => check_live(*set, moved_places),
+        MirInstruction::DequeClear { deque, .. }
+        | MirInstruction::DequePopBack { deque, .. }
+        | MirInstruction::DequePopFront { deque, .. }
+        | MirInstruction::DequePushBack { deque, .. }
+        | MirInstruction::DequePushFront { deque, .. } => check_live(*deque, moved_places),
         MirInstruction::MapInsert { map, .. }
         | MirInstruction::MapInsertOld { map, .. }
         | MirInstruction::MapRemove { map, .. } => check_live(*map, moved_places),
@@ -1742,6 +1784,27 @@ fn verify_instruction(
             value,
         } => {
             check_live_place(*set, moved_places)?;
+            define(*destination, defined)?;
+            used.push(*value);
+            Ok(())
+        }
+        MirInstruction::DequeClear { destination, deque }
+        | MirInstruction::DequePopBack { destination, deque }
+        | MirInstruction::DequePopFront { destination, deque } => {
+            check_live_place(*deque, moved_places)?;
+            define(*destination, defined)
+        }
+        MirInstruction::DequePushBack {
+            destination,
+            deque,
+            value,
+        }
+        | MirInstruction::DequePushFront {
+            destination,
+            deque,
+            value,
+        } => {
+            check_live_place(*deque, moved_places)?;
             define(*destination, defined)?;
             used.push(*value);
             Ok(())
