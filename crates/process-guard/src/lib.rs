@@ -5,6 +5,8 @@
 
 use std::io;
 use std::process::{Child, Command, ExitStatus};
+#[cfg(any(target_os = "linux", target_os = "android"))]
+use std::{fs::File, os::fd::AsRawFd, path::Path};
 #[cfg(windows)]
 use std::{fs::File, path::Path};
 
@@ -243,6 +245,187 @@ pub const fn strict_isolation_support(control: StrictIsolationControl) -> LimitS
     {
         let _ = control;
         LimitSupport::Unsupported
+    }
+}
+
+/// Access granted beneath a host-selected filesystem root by the Linux
+/// Landlock adapter. This is an execution-host control; it is not a language
+/// capability or a request-supplied policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilesystemRootAccess {
+    ReadOnly,
+    ReadWrite,
+}
+
+/// Install a fail-closed Landlock allowlist for the current process.
+///
+/// This is intentionally called after the runner executable and its dynamic
+/// libraries are loaded but before the Artifact is decoded. Only `root` is
+/// granted filesystem access; inherited stdin/stdout/stderr descriptors remain
+/// usable. Linux Landlock ABI v5 is required so rename/link, truncate, and
+/// device-ioctl operations are handled as well as ordinary reads and writes.
+/// Unsupported kernels, disabled LSMs, or invalid host roots return an error.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub fn restrict_current_process_to_root(
+    root: &Path,
+    access: FilesystemRootAccess,
+) -> io::Result<()> {
+    const LANDLOCK_RULE_PATH_BENEATH: libc::c_int = 1;
+    const LANDLOCK_ACCESS_FS_EXECUTE: u64 = 1 << 0;
+    const LANDLOCK_ACCESS_FS_WRITE_FILE: u64 = 1 << 1;
+    const LANDLOCK_ACCESS_FS_READ_FILE: u64 = 1 << 2;
+    const LANDLOCK_ACCESS_FS_READ_DIR: u64 = 1 << 3;
+    const LANDLOCK_ACCESS_FS_REMOVE_DIR: u64 = 1 << 4;
+    const LANDLOCK_ACCESS_FS_REMOVE_FILE: u64 = 1 << 5;
+    const LANDLOCK_ACCESS_FS_MAKE_CHAR: u64 = 1 << 6;
+    const LANDLOCK_ACCESS_FS_MAKE_DIR: u64 = 1 << 7;
+    const LANDLOCK_ACCESS_FS_MAKE_REG: u64 = 1 << 8;
+    const LANDLOCK_ACCESS_FS_MAKE_SOCK: u64 = 1 << 9;
+    const LANDLOCK_ACCESS_FS_MAKE_FIFO: u64 = 1 << 10;
+    const LANDLOCK_ACCESS_FS_MAKE_BLOCK: u64 = 1 << 11;
+    const LANDLOCK_ACCESS_FS_MAKE_SYM: u64 = 1 << 12;
+    const LANDLOCK_ACCESS_FS_REFER: u64 = 1 << 13;
+    const LANDLOCK_ACCESS_FS_TRUNCATE: u64 = 1 << 14;
+    const LANDLOCK_ACCESS_FS_IOCTL_DEV: u64 = 1 << 15;
+    const HANDLED: u64 = LANDLOCK_ACCESS_FS_EXECUTE
+        | LANDLOCK_ACCESS_FS_WRITE_FILE
+        | LANDLOCK_ACCESS_FS_READ_FILE
+        | LANDLOCK_ACCESS_FS_READ_DIR
+        | LANDLOCK_ACCESS_FS_REMOVE_DIR
+        | LANDLOCK_ACCESS_FS_REMOVE_FILE
+        | LANDLOCK_ACCESS_FS_MAKE_CHAR
+        | LANDLOCK_ACCESS_FS_MAKE_DIR
+        | LANDLOCK_ACCESS_FS_MAKE_REG
+        | LANDLOCK_ACCESS_FS_MAKE_SOCK
+        | LANDLOCK_ACCESS_FS_MAKE_FIFO
+        | LANDLOCK_ACCESS_FS_MAKE_BLOCK
+        | LANDLOCK_ACCESS_FS_MAKE_SYM
+        | LANDLOCK_ACCESS_FS_REFER
+        | LANDLOCK_ACCESS_FS_TRUNCATE
+        | LANDLOCK_ACCESS_FS_IOCTL_DEV;
+    let allowed = match access {
+        FilesystemRootAccess::ReadOnly => {
+            LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR
+        }
+        FilesystemRootAccess::ReadWrite => HANDLED,
+    };
+
+    let abi = landlock_create_ruleset_version()?;
+    if abi < 5 {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!("Landlock ABI v5 is required for complete filesystem mediation, found v{abi}"),
+        ));
+    }
+    let no_new_privileges = unsafe { libc::prctl(libc::PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) };
+    if no_new_privileges != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Landlock filesystem restriction requires no_new_privs=1",
+        ));
+    }
+
+    let root = File::open(root)?;
+    let ruleset = LandlockRulesetAttr {
+        handled_access_fs: HANDLED,
+        handled_access_net: 0,
+        scoped: 0,
+    };
+    let ruleset_fd = landlock_syscall(
+        libc::SYS_landlock_create_ruleset,
+        (&raw const ruleset).cast::<libc::c_void>() as usize,
+        std::mem::size_of::<LandlockRulesetAttr>(),
+        0,
+        0,
+    )?;
+    let rule = LandlockPathBeneathAttr {
+        allowed_access: allowed,
+        parent_fd: root.as_raw_fd(),
+        reserved: 0,
+    };
+    let add_result = landlock_syscall(
+        libc::SYS_landlock_add_rule,
+        ruleset_fd as usize,
+        LANDLOCK_RULE_PATH_BENEATH as usize,
+        (&raw const rule).cast::<libc::c_void>() as usize,
+        0,
+    );
+    if let Err(error) = add_result {
+        let _ = close_raw_fd(ruleset_fd);
+        return Err(error);
+    }
+    let restrict_result = landlock_syscall(
+        libc::SYS_landlock_restrict_self,
+        ruleset_fd as usize,
+        0,
+        0,
+        0,
+    );
+    let close_result = close_raw_fd(ruleset_fd);
+    restrict_result.and(close_result)
+}
+
+/// Non-Linux hosts do not silently claim the Linux filesystem boundary.
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+pub fn restrict_current_process_to_root(
+    _root: &std::path::Path,
+    _access: FilesystemRootAccess,
+) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "Landlock filesystem restriction is available only on Linux/Android",
+    ))
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[repr(C)]
+struct LandlockRulesetAttr {
+    handled_access_fs: u64,
+    handled_access_net: u64,
+    scoped: u64,
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[repr(C)]
+struct LandlockPathBeneathAttr {
+    allowed_access: u64,
+    parent_fd: libc::c_int,
+    reserved: u32,
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn landlock_create_ruleset_version() -> io::Result<i64> {
+    landlock_syscall(libc::SYS_landlock_create_ruleset, 0, 0, 1, 0)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn landlock_syscall(
+    number: libc::c_long,
+    first: usize,
+    second: usize,
+    third: usize,
+    fourth: usize,
+) -> io::Result<i64> {
+    // SAFETY: each caller supplies the exact kernel UAPI argument layout and
+    // retains every pointed-to value for the duration of this syscall.
+    let result = unsafe { libc::syscall(number, first, second, third, fourth) };
+    if result < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(result)
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn close_raw_fd(descriptor: i64) -> io::Result<()> {
+    let descriptor = libc::c_int::try_from(descriptor)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Landlock fd out of range"))?;
+    // SAFETY: the descriptor is returned by landlock_create_ruleset and closed
+    // exactly once by its owning call path.
+    if unsafe { libc::close(descriptor) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
     }
 }
 
@@ -1357,6 +1540,64 @@ mod tests {
         let mut bytes = [0; 20];
         let length = append_decimal(&mut bytes, 4_294_967_295);
         assert_eq!(&bytes[..length], b"4294967295");
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn rooted_filesystem_adapter_is_enforced_or_fails_closed() {
+        const ROOT: &str = "RSSCRIPT_LANDLOCK_ROOT";
+        const OUTSIDE: &str = "RSSCRIPT_LANDLOCK_OUTSIDE";
+        if let (Some(root), Some(outside)) = (std::env::var_os(ROOT), std::env::var_os(OUTSIDE)) {
+            // SAFETY: the helper is a fresh test process and installs the same
+            // irreversible kernel prerequisite that the strict runner launcher
+            // applies before its child begins execution.
+            assert_eq!(
+                unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) },
+                0
+            );
+            match restrict_current_process_to_root(Path::new(&root), FilesystemRootAccess::ReadOnly)
+            {
+                Ok(()) => {
+                    assert!(File::open(Path::new(&root).join("allowed.txt")).is_ok());
+                    assert!(File::open(outside).is_err());
+                    return;
+                }
+                Err(error) if error.kind() == io::ErrorKind::Unsupported => {
+                    eprintln!("Landlock unavailable: {error}");
+                    std::process::exit(77);
+                }
+                Err(error) => panic!("Landlock restriction must install or fail closed: {error}"),
+            }
+        }
+
+        let root = tempfile::tempdir().expect("root tempdir");
+        let outside = tempfile::NamedTempFile::new().expect("outside temp file");
+        std::fs::write(root.path().join("allowed.txt"), "allowed").expect("root fixture");
+        std::fs::write(outside.path(), "outside").expect("outside fixture");
+        let output = Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "tests::rooted_filesystem_adapter_is_enforced_or_fails_closed",
+            ])
+            .env(ROOT, root.path())
+            .env(OUTSIDE, outside.path())
+            .output()
+            .expect("run isolated Landlock test child");
+        match output.status.code() {
+            Some(0) => {}
+            Some(77) => {
+                assert!(
+                    String::from_utf8_lossy(&output.stderr).contains("Landlock unavailable"),
+                    "unsupported Landlock result must be explicit"
+                );
+            }
+            _ => panic!(
+                "Landlock child failed: status={}, stdout={}, stderr={}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        }
     }
 
     #[cfg(any(target_os = "linux", target_os = "android"))]

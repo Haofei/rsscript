@@ -2066,10 +2066,15 @@ an arbitrary shell executor.
     - [ ] **A09.2d — Add filesystem and syscall controls.** Add rooted
       filesystem and seccomp adapters whose required rules are installed before
       Artifact parsing; keep unavailable controls fail-closed.
-      - [ ] **A09.2d.a — Add the rooted filesystem adapter.** Install a Linux
-        filesystem restriction before Artifact parsing for profiles that declare
-        a host-owned root; reject unsupported kernel policy rather than falling
-        back to the ambient filesystem.
+      - [x] **A09.2d.a — Add the rooted filesystem adapter.** The explicit
+        `no_providers_filesystem_isolated` profile receives an empty temporary
+        root created only by the parent; the protocol has no root/path field.
+        The child installs a Landlock ABI-v5 read-only allowlist after loading
+        runner code but before Artifact decoding. Unsupported kernels, disabled
+        LSMs, missing roots, or failed rules reject the run instead of falling
+        back to the ambient filesystem. This establishes the host-rooted
+        adapter; a future filesystem Provider profile must still define its
+        own host-owned root and allowed operations.
       - [ ] **A09.2d.b — Add the syscall filter adapter.** Install the profile's
         minimal seccomp policy before Artifact parsing, including an explicit
         compatibility/fail-closed decision for unavailable kernels.

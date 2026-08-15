@@ -9,8 +9,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use rss_process_guard::{
-    GuardedChild, ProcessLimits, StrictIsolationControl, StrictIsolationRequirements,
-    spawn_guarded_child_strict_with, verify_strict_child_context_with,
+    FilesystemRootAccess, GuardedChild, ProcessLimits, StrictIsolationControl,
+    StrictIsolationRequirements, restrict_current_process_to_root, spawn_guarded_child_strict_with,
+    verify_strict_child_context_with,
 };
 use rsscript_runner_protocol::{
     MAX_RESPONSE_BYTES, RunnerLimitsV1, RunnerProfileV1, RunnerRequestV1, RunnerResponseV1,
@@ -36,6 +37,7 @@ const RUNNER_STDERR_LIMIT: usize = 1024 * 1024;
 /// requested live-value budget. This covers Artifact decoding, stack space and
 /// protocol framing; it is a containment allowance, not script heap budget.
 const RUNNER_PROCESS_OVERHEAD_BYTES: u64 = 256 * 1024 * 1024;
+const RUNNER_FILESYSTEM_ROOT_ENV: &str = "RSSCRIPT_RUNNER_FILESYSTEM_ROOT";
 
 pub(crate) fn run_isolated(path: &str, program_args: &[&str], json: bool) -> ExitCode {
     let bundle = match build_bundle(path) {
@@ -136,6 +138,10 @@ fn invoke_runner(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env_clear();
+    let filesystem_root = runner_filesystem_root(request.profile)?;
+    if let Some(root) = &filesystem_root {
+        command.env(RUNNER_FILESYSTEM_ROOT_ENV, root.path());
+    }
     // The runner receives all executable input through stdin and an absolute
     // current executable path. It therefore has no reason to inherit the
     // caller's working directory, which may expose project-relative files to
@@ -302,7 +308,24 @@ fn runner_isolation_requirements(profile: RunnerProfileV1) -> StrictIsolationReq
         RunnerProfileV1::NoProvidersNamespaced => baseline
             .require(StrictIsolationControl::UserNamespace)
             .require(StrictIsolationControl::MountNamespace),
-        RunnerProfileV1::NoProviders | RunnerProfileV1::LogOnly => baseline,
+        RunnerProfileV1::NoProviders
+        | RunnerProfileV1::NoProvidersFilesystemIsolated
+        | RunnerProfileV1::LogOnly => baseline,
+    }
+}
+
+/// Materialize the root only in the parent and pass it through the cleared,
+/// internal child environment. The runner protocol itself deliberately has no
+/// filesystem-root field, so a request cannot select or widen this authority.
+fn runner_filesystem_root(profile: RunnerProfileV1) -> Result<Option<tempfile::TempDir>, String> {
+    if profile == RunnerProfileV1::NoProvidersFilesystemIsolated {
+        tempfile::Builder::new()
+            .prefix("rsscript-runner-empty-root-")
+            .tempdir()
+            .map(Some)
+            .map_err(|error| format!("cannot create host-owned runner filesystem root: {error}"))
+    } else {
+        Ok(None)
     }
 }
 
@@ -354,7 +377,14 @@ fn read_bounded(
 pub(crate) fn runner_entrypoint() -> ExitCode {
     let response = match read_request(io::stdin().lock()) {
         Ok((request, bundle)) => match verify_runner_execution_context(request.profile) {
-            Ok(()) => execute_request(request, bundle),
+            Ok(()) => match install_runner_filesystem_restriction(request.profile) {
+                Ok(()) => execute_request(request, bundle),
+                Err(error) => RunnerResponseV1::rejected(
+                    request.profile,
+                    RunnerTerminationV1::IsolationRejected,
+                    format!("runner filesystem isolation preflight failed: {error}"),
+                ),
+            },
             Err(error) => RunnerResponseV1::rejected(
                 request.profile,
                 RunnerTerminationV1::IsolationRejected,
@@ -383,6 +413,23 @@ pub(crate) fn runner_entrypoint() -> ExitCode {
 /// process-tree and resource-limit guard without claiming this Linux control.
 fn verify_runner_execution_context(profile: RunnerProfileV1) -> io::Result<()> {
     verify_strict_child_context_with(runner_isolation_requirements(profile))
+}
+
+/// Install host-owned filesystem restrictions after the runner binary is
+/// loaded, but before the Artifact bytes are decoded or verified. Landlock is
+/// deliberately fail-closed: a missing root, unsupported kernel, or denied
+/// adapter becomes an isolation rejection instead of ambient filesystem access.
+fn install_runner_filesystem_restriction(profile: RunnerProfileV1) -> io::Result<()> {
+    if profile != RunnerProfileV1::NoProvidersFilesystemIsolated {
+        return Ok(());
+    }
+    let root = std::env::var_os(RUNNER_FILESYSTEM_ROOT_ENV).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "host-owned runner filesystem root is missing",
+        )
+    })?;
+    restrict_current_process_to_root(Path::new(&root), FilesystemRootAccess::ReadOnly)
 }
 
 fn execute_request(request: RunnerRequestV1, bundle: Vec<u8>) -> RunnerResponseV1 {
@@ -500,7 +547,8 @@ fn profiled_registry(profile: RunnerProfileV1) -> Result<ProviderRegistry, Strin
         // reference profile intentionally fails closed for external imports.
         RunnerProfileV1::NoProviders
         | RunnerProfileV1::NoProvidersNamespaced
-        | RunnerProfileV1::NoProvidersNetworkIsolated => Ok(ProviderRegistry::default()),
+        | RunnerProfileV1::NoProvidersNetworkIsolated
+        | RunnerProfileV1::NoProvidersFilesystemIsolated => Ok(ProviderRegistry::default()),
         // This preinstalled profile deliberately discards messages. It proves
         // exact allowlist linkage without granting filesystem, network,
         // process, credential, or ambient-environment authority to the child.
@@ -695,6 +743,25 @@ mod tests {
         assert!(requirements.requires(StrictIsolationControl::UserNamespace));
         assert!(requirements.requires(StrictIsolationControl::MountNamespace));
         assert!(requirements.requires(StrictIsolationControl::NetworkNamespace));
+    }
+
+    #[test]
+    fn filesystem_profile_uses_a_parent_owned_empty_root() {
+        let root = runner_filesystem_root(RunnerProfileV1::NoProvidersFilesystemIsolated)
+            .expect("host root")
+            .expect("filesystem profile must receive a root");
+        assert!(root.path().is_dir());
+        assert!(
+            std::fs::read_dir(root.path())
+                .expect("empty root listing")
+                .next()
+                .is_none()
+        );
+        assert!(
+            runner_filesystem_root(RunnerProfileV1::NoProviders)
+                .expect("ordinary profile root")
+                .is_none()
+        );
     }
 
     #[test]
