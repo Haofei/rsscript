@@ -1357,8 +1357,11 @@ mechanical acceptance condition holds.
     public, canonical PascalCase Rust struct for every descriptor record and
     uses that type in generated trait parameters/results. Record field names
     and structural field types come from the same descriptor layout used by
-    the positional wire adapter; self-recursive fields are boxed. Variants
-    remain follow-up work.
+    the positional wire adapter. A descriptor-derived by-value layout graph
+    boxes every cycle edge across records, sums, tuples, options, and results,
+    including mutual recursion; list/map elements remain naturally indirect.
+    Public sums likewise generate canonical typed Rust enums from their
+    descriptor-owned layouts.
   - [x] **P05.2 — Generate sync and async Provider traits.** Method signatures
     reflect descriptor parameters, results, effects, and async shape. Bindgen
     emits Rust `async fn` methods and matching `ProviderCallMode::Async` from

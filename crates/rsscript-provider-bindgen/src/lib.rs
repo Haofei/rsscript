@@ -105,11 +105,19 @@ impl ProviderInterface {
 
     pub fn render_rust(&self, options: &RustProviderOptions<'_>) -> String {
         let mut output = String::from("// @generated from .rssi; do not edit.\n");
+        let recursion = GeneratedTypeRecursion::new(&self.record_layouts, &self.sums);
         for resource in &self.resources {
             render_resource_wrapper(&mut output, resource);
         }
         for record in &self.record_layouts {
-            render_record_wrapper(&mut output, record, &self.resources, &self.record_layouts);
+            render_record_wrapper(
+                &mut output,
+                record,
+                &self.resources,
+                &self.record_layouts,
+                &self.sums,
+                &recursion,
+            );
         }
         for sum in &self.sums {
             render_sum_wrapper(
@@ -118,6 +126,7 @@ impl ProviderInterface {
                 &self.resources,
                 &self.record_layouts,
                 &self.sums,
+                &recursion,
             );
         }
         output.push_str("pub trait GeneratedProviderContract {\n");
@@ -231,11 +240,124 @@ fn render_resource_wrapper(output: &mut String, resource: &InterfaceDescriptorRe
     ));
 }
 
+/// Descriptor-derived recursive-layout graph for generated Rust types.
+///
+/// `Vec`-backed lists/maps are already indirect, while a direct field, tuple,
+/// `Option`, or `Result` embeds its child by value. A field is boxed exactly
+/// when one of those by-value edges closes a cycle. This keeps generated
+/// records/sums type-safe without bindgen reparsing source syntax or guessing
+/// based on Rust type spelling.
+struct GeneratedTypeRecursion {
+    nodes: Vec<WireType>,
+    edges: Vec<Vec<usize>>,
+}
+
+impl GeneratedTypeRecursion {
+    fn new(records: &[WireRecordLayout], sums: &[InterfaceDescriptorSumV1]) -> Self {
+        let mut nodes = records
+            .iter()
+            .map(|record| record.ty.clone())
+            .chain(sums.iter().map(|sum| WireType::from(sum.name.clone())))
+            .collect::<Vec<_>>();
+        nodes.sort();
+        nodes.dedup();
+
+        let edges = nodes
+            .iter()
+            .map(|node| {
+                let mut references = Vec::new();
+                if let Some(record) = records.iter().find(|record| record.ty == *node) {
+                    for field in &record.fields {
+                        embedded_named_types(&field.ty, &nodes, &mut references);
+                    }
+                }
+                if let Some(sum) = sums.iter().find(|sum| sum_type_matches(node, &sum.name)) {
+                    for variant in &sum.variants {
+                        for field in &variant.fields {
+                            embedded_named_types(&field.ty, &nodes, &mut references);
+                        }
+                    }
+                }
+                references.sort_unstable();
+                references.dedup();
+                references
+            })
+            .collect();
+        Self { nodes, edges }
+    }
+
+    fn requires_indirection(&self, owner: &WireType, field: &WireType) -> bool {
+        let Some(owner) = self.nodes.iter().position(|node| node == owner) else {
+            return false;
+        };
+        let mut references = Vec::new();
+        embedded_named_types(field, &self.nodes, &mut references);
+        references
+            .into_iter()
+            .any(|reference| self.reaches(reference, owner, &mut vec![false; self.nodes.len()]))
+    }
+
+    fn reaches(&self, from: usize, target: usize, visited: &mut [bool]) -> bool {
+        if from == target {
+            return true;
+        }
+        if visited[from] {
+            return false;
+        }
+        visited[from] = true;
+        self.edges[from]
+            .iter()
+            .copied()
+            .any(|next| self.reaches(next, target, visited))
+    }
+}
+
+/// Collect generated named types embedded by value in `ty`. Containers with
+/// their own heap indirection (`List` and `Map`) stop the search; all other
+/// aggregate forms remain by-value and can participate in an infinite-size
+/// Rust cycle.
+fn embedded_named_types(ty: &WireType, nodes: &[WireType], output: &mut Vec<usize>) {
+    match ty {
+        WireType::Named { .. } => {
+            if let Some(index) = nodes.iter().position(|node| node == ty) {
+                output.push(index);
+            }
+        }
+        WireType::Option { value } | WireType::Qualified { value, .. } => {
+            embedded_named_types(value, nodes, output);
+        }
+        WireType::Result { ok, error } => {
+            embedded_named_types(ok, nodes, output);
+            embedded_named_types(error, nodes, output);
+        }
+        WireType::Tuple { elements } => {
+            for element in elements {
+                embedded_named_types(element, nodes, output);
+            }
+        }
+        // Generated Rust maps/lists are `Vec`, so their elements are already
+        // behind an allocation and cannot make the enclosing type infinite.
+        WireType::List { .. }
+        | WireType::Map { .. }
+        | WireType::Unit
+        | WireType::Bool
+        | WireType::Int { .. }
+        | WireType::Float { .. }
+        | WireType::String
+        | WireType::Char
+        | WireType::Bytes
+        | WireType::Resource { .. }
+        | WireType::Handle { .. } => {}
+    }
+}
+
 fn render_record_wrapper(
     output: &mut String,
     record: &WireRecordLayout,
     resources: &[InterfaceDescriptorResourceV1],
     records: &[WireRecordLayout],
+    sums: &[InterfaceDescriptorSumV1],
+    recursion: &GeneratedTypeRecursion,
 ) {
     let type_name = record_wrapper_name(&record.ty).expect("record layouts have named identities");
     output.push_str(&format!(
@@ -243,10 +365,11 @@ fn render_record_wrapper(
         wire_type_source(&record.ty),
     ));
     for field in &record.fields {
-        let ty = if field.ty == record.ty {
-            format!("Box<{type_name}>")
+        let ty = render_rust_type(&field.ty, resources, records, sums);
+        let ty = if recursion.requires_indirection(&record.ty, &field.ty) {
+            format!("Box<{ty}>")
         } else {
-            render_rust_type(&field.ty, resources, records, &[])
+            ty
         };
         output.push_str(&format!(
             "    pub {}: {},\n",
@@ -365,6 +488,7 @@ fn render_sum_wrapper(
     resources: &[InterfaceDescriptorResourceV1],
     records: &[WireRecordLayout],
     sums: &[InterfaceDescriptorSumV1],
+    recursion: &GeneratedTypeRecursion,
 ) {
     let type_name = sum_wrapper_name(&sum.name);
     output.push_str(&format!(
@@ -379,10 +503,12 @@ fn render_sum_wrapper(
         } else {
             output.push_str(&format!("    {variant_name} {{\n"));
             for field in &variant.fields {
-                let ty = if sum_type_matches(&field.ty, &sum.name) {
-                    format!("Box<{type_name}>")
+                let ty = render_rust_type(&field.ty, resources, records, sums);
+                let owner = WireType::from(sum.name.clone());
+                let ty = if recursion.requires_indirection(&owner, &field.ty) {
+                    format!("Box<{ty}>")
                 } else {
-                    render_rust_type(&field.ty, resources, records, sums)
+                    ty
                 };
                 output.push_str(&format!(
                     "        {}: {},\n",
@@ -868,6 +994,47 @@ mod tests {
                 cleanup: GeneratedCleanup::None,
             });
         assert!(generated.contains("next: Box<HostTreeTree>"));
+    }
+
+    #[test]
+    fn generated_mutually_recursive_sums_box_the_cycle_edges() {
+        let descriptor = InterfaceDescriptorV1::from_interface_source(
+            "mutual.rssi",
+            "module host.mutual\n\npub sum Left { ToRight(value: Right) }\npub sum Right { ToLeft(value: Left) }\npub fn root() -> Left\n",
+        )
+        .unwrap();
+        let generated = ProviderInterface::from_descriptor(descriptor)
+            .unwrap()
+            .render_rust(&RustProviderOptions {
+                provider_id: "rsscript.mutual",
+                blocking: GeneratedBlocking::NonBlocking,
+                cancellation: GeneratedCancellation::NotApplicable,
+                thread_safe: true,
+                reentrant: true,
+                cleanup: GeneratedCleanup::None,
+            });
+        assert!(generated.contains("value: Box<HostMutualRight>"));
+        assert!(generated.contains("value: Box<HostMutualLeft>"));
+    }
+
+    #[test]
+    fn generated_indirect_sum_cycles_box_the_enclosing_value_field() {
+        let descriptor = InterfaceDescriptorV1::from_interface_source(
+            "optional.rssi",
+            "module host.optional\n\npub sum Node { Next(value: Option<Node>) }\npub fn root() -> Node\n",
+        )
+        .unwrap();
+        let generated = ProviderInterface::from_descriptor(descriptor)
+            .unwrap()
+            .render_rust(&RustProviderOptions {
+                provider_id: "rsscript.optional",
+                blocking: GeneratedBlocking::NonBlocking,
+                cancellation: GeneratedCancellation::NotApplicable,
+                thread_safe: true,
+                reentrant: true,
+                cleanup: GeneratedCleanup::None,
+            });
+        assert!(generated.contains("value: Box<Option<HostOptionalNode>>"));
     }
 
     #[test]
