@@ -665,13 +665,15 @@ fn main() -> Unit {
     },
     MigrationCase {
         name: "capturing_closure_call",
-        capability: "first-class closure invocation",
+        capability: "typed first-class capturing closure invocation",
         stage: MigrationStage::DualPath,
         source: r#"
-fn main() -> Unit {
-    let signal = || { return Unit }
-    signal()
-    return Unit
+fn main() -> Int {
+    let offset = 40
+    let add: Fn(Int) -> Int = fn(value) captures(read offset) {
+        return value + offset
+    }
+    return add(2)
 }
 "#,
     },
@@ -1479,10 +1481,12 @@ fn supported_sdk_builds_use_the_mir_codegen_artifact() {
 #[test]
 fn direct_checked_hir_closure_call_emits_typed_call_closure() {
     let source = r#"
-fn main() -> Unit {
-    let signal = || { return Unit }
-    signal()
-    return Unit
+fn main() -> Int {
+    let offset = 40
+    let add: Fn(Int) -> Int = fn(value) captures(read offset) {
+        return value + offset
+    }
+    return add(2)
 }
 "#;
     let compiled = compile_source_to_ir("direct-hir-closure-call.rss", source)
@@ -1490,13 +1494,28 @@ fn main() -> Unit {
     let mir = compiled
         .checked_hir_mir()
         .expect("local closure call lowers directly from checked HIR");
-    assert!(
-        mir.functions()
-            .iter()
-            .flat_map(|function| function.blocks())
-            .flat_map(|block| block.instructions())
-            .any(|instruction| matches!(instruction, MirInstruction::CallClosure { .. })),
-        "the direct path must preserve local closure invocation as typed CallClosure"
+    let (parameter_types, parameter_modes) = mir
+        .functions()
+        .iter()
+        .flat_map(|function| function.blocks())
+        .flat_map(|block| block.instructions())
+        .find_map(|instruction| match instruction {
+            MirInstruction::CallClosure {
+                parameter_types,
+                parameter_modes,
+                ..
+            } => Some((parameter_types, parameter_modes)),
+            _ => None,
+        })
+        .expect("the direct path must preserve local closure invocation as typed CallClosure");
+    assert_eq!(parameter_modes.as_ref(), &[MirParameterMode::Read]);
+    assert_eq!(
+        mir.types()[parameter_types[0].index()],
+        WireType::Int {
+            bits: 64,
+            signed: true,
+        },
+        "the callback ABI must retain the declared structural Int parameter rather than ?"
     );
     reg_vm_compile_mir(
         &mir,

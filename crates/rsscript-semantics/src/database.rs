@@ -1550,14 +1550,17 @@ mod tests {
     }
 
     #[test]
-    fn checked_hir_retains_structural_closure_contracts() {
+    fn checked_hir_retains_declared_closure_contracts() {
         let validated = validate_sources_with_interfaces(
             &[(
                 "closure-contract.rss",
                 r#"
-fn main() -> Unit {
-    let increment = || { return 1 }
-    return Unit
+fn main() -> Int {
+    let offset = 40
+    let add: Fn(Int) -> Int = fn(value) captures(read offset) {
+        return value + offset
+    }
+    return add(2)
 }
 "#,
             )],
@@ -1573,13 +1576,13 @@ fn main() -> Unit {
         let HirStmt::Let {
             value: Some(HirExpr::Closure { ty: Some(ty), .. }),
             ..
-        } = &block.statements[0]
+        } = &block.statements[1]
         else {
             panic!("closure must retain its structural Fn contract")
         };
 
         assert!(ty.is_function());
-        assert_eq!(ty.to_string(), "noescape Fn() -> Int");
+        assert_eq!(ty.to_string(), "Fn(read Int) -> Int");
     }
 
     #[test]

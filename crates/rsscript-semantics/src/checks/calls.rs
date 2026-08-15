@@ -325,6 +325,18 @@ fn check_binding_type(
     }
     let resolved_expected = analyzer.expand_type_alias(expected);
     let resolved_actual = analyzer.expand_type_alias(actual);
+    // A closure literal gets its parameter and return facts from the declared
+    // binding contract. Its local fallback inference intentionally uses `?`
+    // parameter placeholders, so comparing that fallback text to `Fn(T) -> R`
+    // would reject a well-typed stored callback before the callback checker has
+    // a chance to validate its body. Keep the declared structural contract as
+    // the single fact and validate the closure with the same rules used for a
+    // closure supplied to a typed function parameter.
+    if is_fn_type(&resolved_expected)
+        && check_fn_closure_contract(analyzer, "binding", name, &resolved_expected, &[], value)
+    {
+        return;
+    }
     if json_value_accepts_literal(&resolved_expected, value) {
         return;
     }
