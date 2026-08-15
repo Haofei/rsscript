@@ -890,6 +890,13 @@ an arbitrary shell executor.
       - [ ] **S05.4b2 — Move lowering and publication.** Move the remaining
         AST/HIR-to-Rust lowerer and generated package writer to the experimental
         backend, leaving compiler with no AOT implementation modules.
+        - [x] **S05.4b2a — Move generated package publication.** The
+          experiment-owned `rsscript-aot-backend` now safely publishes generated
+          Rust packages through the confined artifact store; compiler keeps only
+          a forwarding compatibility function.
+        - [ ] **S05.4b2b — Move AST/HIR-to-Rust lowering.** Move the remaining
+          source lowerer, coverage accounting, and lowerer implementation out
+          of compiler after its input boundary is explicit.
     - [ ] **S05.4c — Split runtime ABI catalog use.** Leave Core consumers with
       a neutral intrinsic catalog and move generated-Rust target discovery and
       AOT runtime validation into the experiment-owned backend.

@@ -32,9 +32,6 @@ use crate::interfaces::{default_interfaces, standard_package_interfaces};
 use crate::runtime_abi;
 use crate::syntax::ast::Program;
 use crate::syntax::parse_source;
-use rsscript_artifact_store::{
-    GeneratedRustPackageFiles, write_generated_rust_package as write_generated_rust_files,
-};
 use rsscript_semantics::{CompilationSession, ValidatedProgram};
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct CoverageBucket {
@@ -396,15 +393,7 @@ pub fn write_generated_rust_package(
     out_dir: &Path,
     package: &GeneratedRustPackage,
 ) -> Result<(), String> {
-    write_generated_rust_files(
-        out_dir,
-        GeneratedRustPackageFiles {
-            cargo_toml: &package.cargo_toml,
-            lib_rs: &package.lib_rs,
-            main_rs: package.main_rs.as_deref(),
-            source_map_json: &package.source_map_json,
-        },
-    )
+    rsscript_aot_backend::write_generated_rust_package(out_dir, package)
 }
 
 pub fn lower_program_to_rust(program: &Program) -> String {

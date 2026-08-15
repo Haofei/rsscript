@@ -1,0 +1,18 @@
+[package]
+name = "rsscript-aot-backend"
+version = "0.1.0"
+edition = "2024"
+description = "Experimental Rust/AOT backend utilities for RSScript"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+name = "rsscript_aot_backend"
+doctest = false
+
+[dependencies]
+rsscript-aot-model = { path = "../aot-model" }
+rsscript-artifact-store = { path = "../../crates/rsscript-artifact-store" }
+
+[dev-dependencies]
+tempfile = "3"

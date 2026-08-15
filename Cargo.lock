@@ -1725,6 +1725,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsscript-aot-backend"
+version = "0.1.0"
+dependencies = [
+ "rsscript-aot-model",
+ "rsscript-artifact-store",
+ "tempfile",
+]
+
+[[package]]
 name = "rsscript-aot-model"
 version = "0.1.0"
 dependencies = [
@@ -1821,6 +1830,7 @@ dependencies = [
  "hex",
  "libc",
  "rsscript-abi-model",
+ "rsscript-aot-backend",
  "rsscript-aot-model",
  "rsscript-artifact",
  "rsscript-artifact-store",
