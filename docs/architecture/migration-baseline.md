@@ -1980,7 +1980,11 @@ an arbitrary shell executor.
     and named sum subset now also works through `AsyncWireInterpreterFn`,
     including typed resource-handle round trips. Async resource registration,
     cleanup, and cancellation remain separate run-owned lifecycle conformance
-    work; a raw handle conversion never grants lifecycle ownership.
+    work; a raw handle conversion never grants lifecycle ownership. The shared
+    conformance harness runs the canonical wire callable through the same
+    descriptor/linker/cancellation/deadline preflight; its remaining native
+    entry points are explicitly namespaced under `compatibility`, so new
+    Provider authors cannot accidentally select the legacy dynamic path.
   - [x] **P06.2a — Bridge generation-safe resource handles.** Provider
       runtime handles now convert to/from the canonical numeric wire handle
       with a descriptor-supplied resource type. Linked sync wire calls prove
