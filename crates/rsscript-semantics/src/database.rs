@@ -318,6 +318,7 @@ pub struct CompilationSession {
     workspace_hir_cache: Option<Arc<Hir>>,
     workspace_type_cache: Option<Arc<SemanticTypeFacts>>,
     workspace_analysis_cache: Option<Arc<AnalysisResult>>,
+    syntax_diagnostic_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<[Diagnostic]>>,
     module_header_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<ModuleHeader>>,
     workspace_module_graph_cache: Option<Arc<WorkspaceModuleGraph>>,
     workspace_diagnostic_cache: Option<Arc<[Diagnostic]>>,
@@ -530,6 +531,7 @@ impl CompilationSession {
         if update.changed {
             self.invalidate_parse_cache(SessionFileRole::Source, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Source, update.file_id);
+            self.invalidate_syntax_diagnostic_cache(SessionFileRole::Source, update.file_id);
             self.workspace_hir_cache = None;
             self.workspace_type_cache = None;
             self.workspace_analysis_cache = None;
@@ -545,6 +547,7 @@ impl CompilationSession {
         if let Some(update) = update {
             self.invalidate_parse_cache(SessionFileRole::Source, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Source, update.file_id);
+            self.invalidate_syntax_diagnostic_cache(SessionFileRole::Source, update.file_id);
             self.workspace_hir_cache = None;
             self.workspace_type_cache = None;
             self.workspace_analysis_cache = None;
@@ -564,6 +567,7 @@ impl CompilationSession {
         if update.changed {
             self.invalidate_parse_cache(SessionFileRole::Interface, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Interface, update.file_id);
+            self.invalidate_syntax_diagnostic_cache(SessionFileRole::Interface, update.file_id);
             self.workspace_hir_cache = None;
             self.workspace_type_cache = None;
             self.workspace_analysis_cache = None;
@@ -579,6 +583,7 @@ impl CompilationSession {
         if let Some(update) = update {
             self.invalidate_parse_cache(SessionFileRole::Interface, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Interface, update.file_id);
+            self.invalidate_syntax_diagnostic_cache(SessionFileRole::Interface, update.file_id);
             self.workspace_hir_cache = None;
             self.workspace_type_cache = None;
             self.workspace_analysis_cache = None;
@@ -838,6 +843,30 @@ impl CompilationSession {
         let program = self.parse_file(path);
         operation.check()?;
         Ok(program)
+    }
+
+    /// Return syntax-only diagnostics for one source-file revision. This is a
+    /// session-owned query for formatter/editor preflight: it shares stable
+    /// file identity and invalidation with parse/HIR queries, but deliberately
+    /// does not pull in workspace resolution or builtin interfaces.
+    pub fn syntax_diagnostics_file(&mut self, path: &str) -> Option<Arc<[Diagnostic]>> {
+        let snapshot = self.source_snapshot();
+        let file = snapshot.files().iter().find(|file| file.path() == path)?;
+        self.syntax_diagnostics_snapshot_file(SessionFileRole::Source, file)
+    }
+
+    /// Operation-aware syntax-diagnostics query. A cached result cannot escape
+    /// after cancellation or deadline expiry, matching the other session
+    /// query boundaries.
+    pub fn syntax_diagnostics_file_with_operation(
+        &mut self,
+        path: &str,
+        operation: &OperationContext,
+    ) -> Result<Option<Arc<[Diagnostic]>>, OperationAbort> {
+        operation.check()?;
+        let diagnostics = self.syntax_diagnostics_file(path);
+        operation.check()?;
+        Ok(diagnostics)
     }
 
     /// Parse one interface revision through the same cache. File IDs are
@@ -1161,6 +1190,26 @@ impl CompilationSession {
     fn invalidate_hir_cache(&mut self, role: SessionFileRole, file_id: FileId) {
         self.hir_cache
             .retain(|(cached_role, cached_id, _), _| *cached_role != role || *cached_id != file_id);
+    }
+
+    fn invalidate_syntax_diagnostic_cache(&mut self, role: SessionFileRole, file_id: FileId) {
+        self.syntax_diagnostic_cache
+            .retain(|(cached_role, cached_id, _), _| *cached_role != role || *cached_id != file_id);
+    }
+
+    fn syntax_diagnostics_snapshot_file(
+        &mut self,
+        role: SessionFileRole,
+        file: &SourceFileSnapshot,
+    ) -> Option<Arc<[Diagnostic]>> {
+        let key = (role, file.file_id(), file.revision());
+        if let Some(diagnostics) = self.syntax_diagnostic_cache.get(&key) {
+            return Some(Arc::clone(diagnostics));
+        }
+        let diagnostics = Arc::from(crate::analyze_syntax_source(file.path(), file.text()));
+        self.syntax_diagnostic_cache
+            .insert(key, Arc::clone(&diagnostics));
+        Some(diagnostics)
     }
 
     fn module_header_snapshot_file(
@@ -1524,6 +1573,49 @@ mod tests {
         assert!(!Arc::ptr_eq(&first, &replacement));
         session.remove_file("main.rss");
         assert!(session.parse_file("main.rss").is_none());
+    }
+
+    #[test]
+    fn compilation_session_caches_syntax_diagnostics_by_revision() {
+        let mut session = CompilationSession::default();
+        session
+            .set_file("main.rss", "fn main() -> Unit { return Unit }")
+            .unwrap();
+
+        let first = session
+            .syntax_diagnostics_file("main.rss")
+            .expect("source exists");
+        let second = session
+            .syntax_diagnostics_file("main.rss")
+            .expect("cached source exists");
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(first.is_empty());
+
+        session
+            .set_file("main.rss", "fn main( { return Unit }")
+            .unwrap();
+        let replacement = session
+            .syntax_diagnostics_file("main.rss")
+            .expect("replacement source exists");
+        assert!(!Arc::ptr_eq(&first, &replacement));
+        assert!(
+            replacement
+                .iter()
+                .any(|diagnostic| diagnostic.severity.is_error())
+        );
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        assert_eq!(
+            session.syntax_diagnostics_file_with_operation(
+                "main.rss",
+                &OperationContext {
+                    cancellation: Some(cancellation),
+                    ..OperationContext::default()
+                },
+            ),
+            Err(OperationAbort::Cancelled)
+        );
     }
 
     #[test]

@@ -523,8 +523,11 @@ mechanical acceptance condition holds.
     caches an interface-aware workspace HIR after that canonical rewrite. The
     declaration/signature `SemanticTypeFacts` owned by that HIR now also have a
     revision-invalidated workspace query with cancellation/deadline handling.
-    Complete workspace diagnostics also use a session-owned, immutable
-    source/interface snapshot cache with revision invalidation. Their explicit
+    Syntax-only formatter/editor diagnostics are likewise cached by
+    role/file/revision in the session-owned source store, including replacement
+    invalidation and cancellation/deadline checks. Complete workspace diagnostics
+    also use a session-owned, immutable source/interface snapshot cache with
+    revision invalidation. Their explicit
     `CompilationSession::semantic_workspace_diagnostics_with_operation` query
     now lives in `rsscript-semantics`, so the language service is only a client
     of the session query and cannot select or define a competing callback
@@ -555,10 +558,10 @@ mechanical acceptance condition holds.
     migrated.
   - [ ] **S03.5 — Migrate CLI/package/test callers.** All frontend consumers use
     the session API; direct analyzer construction becomes private. The normal
-    CLI `check`, `fix`, and `fmt` commands now consume semantics, syntax, and
-    diagnostics directly, so the default `rsscript-cli` dependency closure no
-    longer includes the compiler compatibility facade. The default core-aware
-    single-file `check` path now also captures its source and explicit
+    CLI `check`, `fix`, and `fmt` commands now consume session-owned semantics,
+    syntax, and diagnostics directly, so the default `rsscript-cli` dependency
+    closure no longer includes the compiler compatibility facade. The default
+    core-aware single-file `check` path now also captures its source and explicit
     interfaces in `CompilationSession` before reading the cached complete
     analysis query. The reviewed SDK snapshot check APIs use that same cached
     analysis query, while `Compiler::compile_snapshot` and its operation-aware
