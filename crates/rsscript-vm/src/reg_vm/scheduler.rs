@@ -254,6 +254,30 @@ impl RegVm {
         }
     }
 
+    /// Close a child task's lifetime without treating cancellation as a
+    /// successful completion. A task is only externally cancellable while it
+    /// is parked or queued; the current task cannot remove itself while its
+    /// frames are swapped into the VM. Run-owned Provider resources are not
+    /// stored in a task slot, so they retain their existing exact-once
+    /// finalization at the enclosing execution boundary.
+    pub(super) fn cancel_task(&mut self, task: TaskId) -> Result<(), EvalError> {
+        if task == self.current_task {
+            return Err(EvalError::Runtime(
+                "reg VM task cannot cancel itself while it is running.".to_string(),
+            ));
+        }
+        let Some(slot) = self.tasks.remove(&task) else {
+            return Err(EvalError::Runtime(
+                "reg VM cannot cancel an unknown or already-reaped task.".to_string(),
+            ));
+        };
+        if slot.done.is_none() {
+            self.tasks_cancelled = self.tasks_cancelled.saturating_add(1);
+            self.tasks_live = self.tasks_live.saturating_sub(1);
+        }
+        Ok(())
+    }
+
     /// Produce the result of `tid`'s satisfied wait and re-queue it.
     pub(super) fn resolve_wait(&mut self, tid: TaskId) -> Result<(), EvalError> {
         let wait = self
@@ -384,5 +408,80 @@ impl RegVm {
         self.channels
             .get(&sender.channel_id)
             .is_some_and(|state| !state.receiver_closed && state.queue.len() >= state.capacity)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cancellation_unit() -> Rc<RegUnit> {
+        let main = RegFunction {
+            name: "main".to_string(),
+            params: 0,
+            captures: 0,
+            regs: 2,
+            local_regs: HashMap::new(),
+            code: vec![
+                RegInstr::SpawnTask {
+                    dst: 0,
+                    function: 1,
+                    args: vec![],
+                },
+                RegInstr::CancelTask { src: 0 },
+                RegInstr::LoadUnit { dst: 1 },
+                RegInstr::Return { src: 1 },
+            ],
+        };
+        let worker = RegFunction {
+            name: "worker".to_string(),
+            params: 0,
+            captures: 0,
+            regs: 1,
+            local_regs: HashMap::new(),
+            code: vec![
+                RegInstr::LoadInt { dst: 0, value: 7 },
+                RegInstr::Return { src: 0 },
+            ],
+        };
+        Rc::new(RegUnit {
+            functions: vec![Rc::new(main), Rc::new(worker)],
+            function_ids: HashMap::from([("main".to_string(), 0)]),
+            resource_drop_functions: HashMap::new(),
+            types: HashMap::new(),
+            native_signatures: HashMap::new(),
+            closure_identity_observable: false,
+        })
+    }
+
+    #[test]
+    fn explicit_cancel_reaps_a_child_without_marking_it_completed() {
+        let mut vm = RegVm::new(
+            cancellation_unit(),
+            "sha256:test-cancel".to_string(),
+            vec![],
+            HashMap::new(),
+        );
+
+        assert!(matches!(vm.run_program("main"), Ok(VmValue::Unit)));
+        let usage = vm.usage();
+        assert_eq!(usage.tasks_created, 2);
+        assert_eq!(usage.tasks_completed, 1, "only main completed");
+        assert_eq!(usage.tasks_cancelled, 1);
+        assert_eq!(usage.tasks_live_at_return, 0);
+    }
+
+    #[test]
+    fn explicit_cancel_rejects_an_unknown_handle() {
+        let mut vm = RegVm::new(
+            cancellation_unit(),
+            "sha256:test-cancel".to_string(),
+            vec![],
+            HashMap::new(),
+        );
+        assert!(matches!(
+            vm.cancel_task(99),
+            Err(EvalError::Runtime(message)) if message.contains("unknown or already-reaped")
+        ));
     }
 }

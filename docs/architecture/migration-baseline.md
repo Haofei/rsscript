@@ -1209,6 +1209,14 @@ an arbitrary shell executor.
       `BuiltinId` operations rather than synthetic Provider imports. The direct
       HIR → MIR → verified-bytecode path preserves the same cooperative state,
       streams, and usage as the legacy VM.
+    - [x] **M03.3f — Emit explicit child-task cancellation.** A verified
+      `MirInstruction::Cancel` now emits `CancelTask` rather than failing in
+      codegen. The v1 verifier treats its task handle as a defined input, and
+      the VM reaps a live child exactly once without misclassifying it as a
+      completion; run-owned Provider resources still use the existing
+      execution-boundary finalizer. Source-level cancellation syntax remains
+      deliberately closed while its resource/cancellation scope contract is
+      completed.
   - [ ] **M03.4 — Add resolved builtin and external-call instructions.** Include
     signature/effect/retention identity and no unresolved callee text.
     - [x] **M03.4a — Execute resolved external calls through MIR bytecode.** A
@@ -1513,9 +1521,10 @@ an arbitrary shell executor.
       emits `ResourceDrop`, with the ordinary bytecode verifier covering the
       resulting Artifact. Async scheduling, builtins, and non-normal cleanup
       remain follow-up work.
-    - [x] **V02.3b — Emit direct spawn/await task bytecode.** MIR task IDs map
+    - [x] **V02.3b — Emit direct spawn/await/cancel task bytecode.** MIR task IDs map
       to dedicated registers and direct async functions emit `SpawnTask` and
-      `AwaitJoin`; lexical group join emits `JoinTasks`. The ordinary verifier
+      `AwaitJoin`; explicit typed child cancellation emits `CancelTask`; lexical
+      group join emits `JoinTasks`. The ordinary verifier
       validates task-handle definitions and call shapes, and the migration suite
       executes spawned, awaited, and drained children in the VM. Awaited async
       external calls use the existing verifier-checked `CallExternal`, whose VM

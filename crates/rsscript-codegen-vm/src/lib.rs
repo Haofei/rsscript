@@ -876,9 +876,10 @@ fn lower_instruction(
                 ),
             ],
         )),
-        MirInstruction::Cancel { .. } => {
-            return Err(CodegenError::Unsupported("task cancellation"));
-        }
+        MirInstruction::Cancel { task } => code.push(instr(
+            "CancelTask",
+            [("src", json!(task_reg(function, *task)))],
+        )),
         MirInstruction::Join { group } => code.push(instr(
             "JoinTasks",
             [(
@@ -1692,6 +1693,81 @@ mod tests {
         BytecodeVerifier::default()
             .verify(&artifact.to_bytes().expect("encode task bytecode"))
             .expect("verify task bytecode");
+    }
+
+    #[test]
+    fn cancelled_child_mir_emits_verifiable_task_bytecode() {
+        let int = WireType::Int {
+            bits: 64,
+            signed: true,
+        };
+        let module = MirModule::new(
+            vec![int],
+            vec![
+                MirFunction::new(
+                    FunctionId::new(0),
+                    MirFunctionSignature::new(vec![], TypeId::new(0), false),
+                    0,
+                    0,
+                    vec![BasicBlock::new(
+                        BlockId::new(0),
+                        vec![
+                            MirInstruction::Spawn {
+                                task: TaskId::new(0),
+                                group: TaskGroupId::new(0),
+                                target: FunctionId::new(1),
+                                arguments: vec![],
+                            },
+                            MirInstruction::Cancel {
+                                task: TaskId::new(0),
+                            },
+                        ],
+                        MirTerminator::Return(None),
+                    )],
+                ),
+                MirFunction::new(
+                    FunctionId::new(1),
+                    MirFunctionSignature::new(vec![], TypeId::new(0), true),
+                    0,
+                    1,
+                    vec![BasicBlock::new(
+                        BlockId::new(0),
+                        vec![MirInstruction::LoadLiteral {
+                            destination: ValueId::new(0),
+                            value: MirLiteral::Int(7),
+                        }],
+                        MirTerminator::Return(Some(ValueId::new(0))),
+                    )],
+                ),
+            ],
+            vec![
+                MirFunctionDebug::new("main", vec![]),
+                MirFunctionDebug::new("worker", vec![]),
+            ],
+            vec![],
+        )
+        .expect("cancel MIR verifies");
+        let module = module.into_verified().expect("cancel MIR must verify");
+        let artifact = emit_artifact(
+            &module,
+            &format!("sha256:{}", "a".repeat(64)),
+            &format!("sha256:{}", "b".repeat(64)),
+            "0.1.0",
+        )
+        .expect("emit cancellation bytecode");
+        let payload: serde_json::Value =
+            rsscript_bytecode::decode_executable_payload(&artifact.payload)
+                .expect("decode cancellation payload");
+        assert!(
+            payload["functions"][0]["code"]
+                .as_array()
+                .expect("cancellation code")
+                .iter()
+                .any(|instruction| instruction.get("CancelTask").is_some())
+        );
+        BytecodeVerifier::default()
+            .verify(&artifact.to_bytes().expect("encode cancellation bytecode"))
+            .expect("verify cancellation bytecode");
     }
 
     #[test]

@@ -461,6 +461,13 @@ pub(crate) enum RegInstr {
         dst: Reg,
         src: Reg,
     },
+    /// Stop one still-live child task and discard its eventual result. This is
+    /// deliberately distinct from `JoinTasks`: cancellation closes the task
+    /// lifetime immediately, while run-owned Provider resources remain under
+    /// the VM's exact-once finalizer.
+    CancelTask {
+        src: Reg,
+    },
     /// Wait for every still-live child task named by `handles`. Unlike
     /// repeated `AwaitJoin`, group join discards child values and resumes the
     /// parent only after the entire lexical set has completed.

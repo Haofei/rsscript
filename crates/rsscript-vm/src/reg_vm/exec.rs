@@ -1769,6 +1769,15 @@ impl RegVm {
                                 None => self.set_reg(base + *dst, value),
                             }
                         }
+                        RegInstr::CancelTask { src } => {
+                            let value = self.reg(base + *src).clone();
+                            let task = as_task_handle(&value).ok_or_else(|| {
+                                EvalError::Runtime(
+                                    "reg VM cancel operand did not produce a task.".to_string(),
+                                )
+                            })?;
+                            self.cancel_task(task)?;
+                        }
                         RegInstr::JoinTasks { handles } => {
                             let mut tasks = handles
                                 .iter()
