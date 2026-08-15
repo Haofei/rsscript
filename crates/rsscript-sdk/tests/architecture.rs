@@ -1476,6 +1476,11 @@ fn rust_aot_lowering_is_explicitly_feature_gated() {
         !sdk_compatibility.contains("aot-rust"),
         "compatibility must not implicitly select the experimental Rust AOT backend"
     );
+    assert!(
+        !sdk_compatibility.contains("legacy-exec-ir")
+            && !sdk_compatibility.contains("rsscript_compiler/legacy-exec-ir"),
+        "compatibility must not implicitly select the transitional executable IR"
+    );
 
     let cli: toml::Value = toml::from_str(&read(&root.join("crates/rsscript-cli/Cargo.toml")))
         .expect("CLI manifest should parse");
@@ -3566,8 +3571,8 @@ fn legacy_executable_ir_lowering_is_an_explicit_vm_compatibility_feature() {
     assert!(
         compatibility
             .iter()
-            .any(|entry| entry.as_str() == Some("legacy-exec-ir")),
-        "legacy root APIs must opt into the explicit compatibility feature"
+            .all(|entry| entry.as_str() != Some("legacy-exec-ir")),
+        "legacy root APIs must require the explicit legacy-exec-ir feature in addition to compatibility"
     );
 }
 

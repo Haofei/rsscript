@@ -14,13 +14,16 @@ default = []
 # must use `compile`, `artifact`, `provider_api`, `runtime`, `report`, and
 # `operation` instead.
 compatibility = [
-    "legacy-exec-ir",
-    "rsscript_compiler/legacy-exec-ir",
+    "rsscript_compiler/package",
     "dep:rsscript-artifact-store",
+    "dep:rsscript-bytecode",
     "dep:rsscript-codegen-vm",
+    "dep:rsscript-interface-catalog",
     "dep:rsscript-lowering",
     "dep:rsscript-mir",
+    "dep:rsscript-provider-api",
     "dep:rsscript-review",
+    "dep:rsscript-vm",
 ]
 execution = [
     "dep:rsscript-abi-model",
@@ -87,7 +90,7 @@ toml = "0.8"
 [[test]]
 name = "static"
 path = "tests/static.rs"
-required-features = ["compatibility", "aot-rust"]
+required-features = ["compatibility", "aot-rust", "legacy-exec-ir"]
 
 [[test]]
 name = "architecture"

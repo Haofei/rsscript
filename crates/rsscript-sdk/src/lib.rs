@@ -102,7 +102,7 @@ pub use rsscript_vm::NativeStats;
 use rsscript_vm::*;
 #[cfg(feature = "compatibility")]
 pub use rsscript_vm::{
-    compile_executable_ir, AsyncInterpreterFn, AsyncProviderCallContext, BlockingBehavior,
+    AsyncInterpreterFn, AsyncProviderCallContext, BlockingBehavior,
     CancellationBehavior, CoverageBucket, EvalError, EvalExecutionReport, EvalOutput,
     ExecutionFailureKind, ExecutionUsage, ExternalFunction, ExternalFunctionRegistry,
     ExternalImport, ExternalSymbol, FunctionSignature, HostCallContext, NativeInterpreterFn,
@@ -113,6 +113,8 @@ pub use rsscript_vm::{
     RegVmExecutable, ResolvedProviderFunction, ResourceCleanupContract, ResourceHandle,
     SignatureHash, VmLimits,
 };
+#[cfg(all(feature = "compatibility", feature = "legacy-exec-ir"))]
+pub use rsscript_vm::compile_executable_ir;
 #[cfg(feature = "compatibility")]
 #[allow(dead_code)]
 mod vm_adapter;

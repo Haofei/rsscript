@@ -1222,7 +1222,9 @@ mechanical acceptance condition holds.
     - [x] **V04.1a — Isolate legacy executable-IR lowering.** The default VM
       dependency closure no longer links `rsscript-exec-ir`; its source-shaped
       lowerer and compiler-facing entry point require the explicit
-      `legacy-exec-ir` compatibility feature. The SDK migration adapter opts in
+      `legacy-exec-ir` compatibility feature. SDK compatibility no longer opts
+      into it implicitly; legacy callers and regression targets must name the
+      feature explicitly. The SDK migration adapter opts in
       deliberately while direct MIR builds continue through codegen, verifier,
       and the VM token boundary. Removing this compatibility feature entirely
       remains follow-up work.
