@@ -1955,7 +1955,15 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
             && !source_set.contains("snapshot_manifest_source.is_file"),
         "package-review assembly must delegate optional snapshot-manifest probing to rsscript-project"
     );
-    let dependency = read(&root.join("crates/rsscript-compiler/src/package/dependency.rs"));
+    let dependency_path = root.join("crates/rsscript-package-review/src/dependency.rs");
+    assert!(
+        dependency_path.is_file()
+            && !root
+                .join("crates/rsscript-compiler/src/package/dependency.rs")
+                .exists(),
+        "package dependency semantics must be physically owned by the package-review boundary"
+    );
+    let dependency = read(&dependency_path);
     let native = read(&root.join("crates/rsscript-compiler/src/package/native.rs"));
     for resolver in [&dependency, &native] {
         assert!(
@@ -1964,20 +1972,20 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
         );
         assert!(
             !resolver.contains("package_dir.join(path)"),
-            "compiler package compatibility must not reimplement path-dependency joining"
+            "package compatibility must not reimplement path-dependency joining"
         );
         assert!(
             !resolver.contains("dependency_dir.join(\"rsspkg.toml\").exists()"),
-            "compiler package compatibility must not probe dependency manifests directly"
+            "package compatibility must not probe dependency manifests directly"
         );
     }
     assert!(
         dependency.contains("capture_project_manifest_graph"),
-        "compiler dependency semantics must consume project-captured manifest bytes"
+        "package-review dependency semantics must consume project-captured manifest bytes"
     );
     assert!(
         !dependency.contains("load_package_manifest_with_source"),
-        "compiler dependency discovery must not reopen manifests after project capture"
+        "package-review dependency discovery must not reopen manifests after project capture"
     );
     assert!(
         native.contains("capture_project_manifest_graph")

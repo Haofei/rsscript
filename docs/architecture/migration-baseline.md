@@ -875,14 +875,15 @@ an arbitrary shell executor.
     captured package-review execution and its presentation still need to move
     to dedicated project/review/AOT crates before this item can close.
     The captured manifest/source-set representation and package contract
-    extractor, neutral resource/task execution-fact collection, and await-site
-    collector are now physically owned by `rsscript-package-review`; its
-    extractor directly uses the semantic `CompilationSession` and syntax
-    boundary, while async classification uses a read-only table generated from
-    the shared intrinsic catalog rather than compiler `runtime_abi`. Compiler
-    package compatibility retains only private forwarding modules while review
-    execution, policy, lock/check/diff, and the public compatibility façade
-    continue their staged migration.
+    extractor, neutral resource/task execution-fact collection, await-site
+    collector, and dependency/feature resolver are now physically owned by
+    `rsscript-package-review`; its extractor directly uses the semantic
+    `CompilationSession` and syntax boundary, while async classification uses a
+    read-only table generated from the shared intrinsic catalog rather than
+    compiler `runtime_abi`. Dependency diagnostics also use project-owned
+    bounded manifest reads. Compiler package compatibility retains only private
+    forwarding modules while review execution, policy, lock/check/diff, and
+    the public compatibility façade continue their staged migration.
     - [x] **S05.3a — Extract neutral risk facts and calculation.** The review
       risk lattice and its pure evidence evaluator now live in
       `rsscript-review-core`. Compiler compatibility code collects neutral

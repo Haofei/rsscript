@@ -24,6 +24,9 @@ dependency.
 The await collector receives a read-only runtime-intrinsic identity table
 generated from the shared catalog. That removes the last production use of the
 compiler-local `runtime_abi` module without coupling review evidence to the VM.
+The dependency resolver likewise consumes project-captured manifest graphs and
+uses bounded project reads for diagnostic spans; it no longer lives in the
+compiler package module.
 
 The compiler's opt-in `package` compatibility feature has a private forwarding
 module during the staged migration so existing authorization, native, lock, and

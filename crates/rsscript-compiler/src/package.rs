@@ -50,7 +50,9 @@ mod check;
 mod contract {
     pub(super) use rsscript_package_review::*;
 }
-mod dependency;
+mod dependency {
+    pub(super) use rsscript_package_review::*;
+}
 mod diff;
 mod graph;
 mod lock;
@@ -175,10 +177,6 @@ fn package_manifest_key_span(package_dir: &Path, key: &str) -> crate::diagnostic
         column: 1,
         length: key.len().max(1),
     }
-}
-
-fn package_dependency_span(package_dir: &Path, dependency: &str) -> crate::diagnostic::Span {
-    package_manifest_key_span(package_dir, dependency)
 }
 
 fn collect_package_feature_boundary_reasons(

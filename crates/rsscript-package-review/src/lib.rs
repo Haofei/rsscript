@@ -7,12 +7,14 @@
 
 mod await_facts;
 mod contract;
+mod dependency;
 mod execution_facts;
 mod runtime_catalog;
 mod source_set;
 
 pub use await_facts::*;
 pub use contract::*;
+pub use dependency::*;
 pub use execution_facts::*;
 pub use source_set::*;
 

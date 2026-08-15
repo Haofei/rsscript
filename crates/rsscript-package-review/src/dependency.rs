@@ -3,58 +3,91 @@ use std::path::{Path, PathBuf};
 
 use rsscript_project::{
     ProjectManifestGraph, ProjectManifestGraphLimits, capture_project_manifest_graph,
-    resolve_project_path_dependency,
+    read_project_utf8_file_bounded, resolve_project_path_dependency,
 };
 
-use crate::diagnostic::{Diagnostic, code};
+use rsscript_diagnostics::{Diagnostic, Span, code};
 
-use super::source_set::{
+use crate::{
     Manifest, ManifestReviewFeaturePolicy, PackageSource, load_package_from_manifest_source,
-    parse_package_manifest_source, resolve_package_features,
+    parse_package_manifest_source, resolve_package_features, selected_root_package_features,
 };
-use super::{PackageReviewFileKind, canonical_path_label, toml_value_label};
+use rsscript_package_model::{PackageDependencyKind, PackageReviewFileKind};
+pub use rsscript_project::canonical_project_path_label as canonical_path_label;
+
+const PACKAGE_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
+
+fn package_dependency_span(package_dir: &Path, dependency: &str) -> Span {
+    let path = package_dir.join("rsspkg.toml");
+    let source = read_project_utf8_file_bounded(
+        &path,
+        PACKAGE_MANIFEST_MAX_BYTES,
+        "package dependency diagnostic read",
+    )
+    .unwrap_or_default();
+    for (index, line) in source.lines().enumerate() {
+        if let Some(column) = line.find(dependency) {
+            return Span {
+                file: path.display().to_string(),
+                line: index + 1,
+                column: column + 1,
+                length: dependency.len().max(1),
+            };
+        }
+    }
+    Span {
+        file: path.display().to_string(),
+        line: 1,
+        column: 1,
+        length: dependency.len().max(1),
+    }
+}
+
+fn toml_value_label(value: &toml::Value) -> String {
+    value.to_string()
+}
 
 #[derive(Debug, Clone)]
-pub(super) struct PackageDependencySpec {
-    pub(super) name: String,
-    pub(super) requirement: Option<String>,
-    pub(super) path: Option<String>,
-    pub(super) git: Option<String>,
-    pub(super) features: Vec<String>,
-    pub(super) compile_only: bool,
-    pub(super) test_only: bool,
-    pub(super) platform_provided: bool,
+pub struct PackageDependencySpec {
+    pub name: String,
+    pub requirement: Option<String>,
+    pub path: Option<String>,
+    pub git: Option<String>,
+    pub features: Vec<String>,
+    pub compile_only: bool,
+    pub test_only: bool,
+    pub platform_provided: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DependencyResolutionScope {
+pub enum DependencyResolutionScope {
     Production,
     Development,
 }
 
 #[derive(Debug)]
-pub(super) struct ResolvedDependencyGraph {
-    pub(super) root: String,
-    pub(super) nodes: BTreeMap<String, ResolvedDependencyNode>,
+pub struct ResolvedDependencyGraph {
+    pub root: String,
+    pub nodes: BTreeMap<String, ResolvedDependencyNode>,
 }
 
 #[derive(Debug)]
-pub(super) struct ResolvedDependencyNode {
-    pub(super) package_dir: PathBuf,
-    pub(super) manifest_source: String,
-    pub(super) manifest: Manifest,
-    pub(super) features: Vec<String>,
-    pub(super) dependencies: Vec<ResolvedDependencyEdge>,
+pub struct ResolvedDependencyNode {
+    pub package_dir: PathBuf,
+    pub manifest_source: String,
+    pub manifest: Manifest,
+    pub features: Vec<String>,
+    pub dependencies: Vec<ResolvedDependencyEdge>,
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct ResolvedDependencyEdge {
-    pub(super) spec: PackageDependencySpec,
-    pub(super) kind: super::PackageDependencyKind,
-    pub(super) target: Option<String>,
+pub struct ResolvedDependencyEdge {
+    pub spec: PackageDependencySpec,
+    pub kind: PackageDependencyKind,
+    pub target: Option<String>,
 }
 
-pub(super) fn resolve_dependency_graph(
+pub fn resolve_dependency_graph(
     package_dir: &Path,
     scope: DependencyResolutionScope,
 ) -> Result<ResolvedDependencyGraph, String> {
@@ -90,7 +123,7 @@ fn resolve_dependency_graph_from_manifest_graph(
         .get(&root)
         .ok_or_else(|| format!("captured project manifest graph omitted root {root}"))?;
     let root_manifest = parse_package_manifest_source(&root_path, root_source)?;
-    let root_features = super::source_set::selected_root_package_features(&root_manifest);
+    let root_features = selected_root_package_features(&root_manifest);
     let mut graph = ResolvedDependencyGraph {
         root: root.clone(),
         nodes: BTreeMap::new(),
@@ -170,7 +203,7 @@ fn resolve_dependency_node(
         .map(|(name, value)| {
             (
                 package_dependency_spec(name, value),
-                super::PackageDependencyKind::Normal,
+                PackageDependencyKind::Normal,
             )
         })
         .collect::<Vec<_>>();
@@ -178,7 +211,7 @@ fn resolve_dependency_node(
         declared.extend(manifest.dev_dependencies.iter().map(|(name, value)| {
             (
                 package_dependency_spec(name, value),
-                super::PackageDependencyKind::Dev,
+                PackageDependencyKind::Dev,
             )
         }));
     }
@@ -225,7 +258,7 @@ fn resolved_node_label(graph: &ResolvedDependencyGraph, key: &str) -> String {
 }
 
 impl ResolvedDependencyGraph {
-    pub(super) fn dependency_order(&self) -> Vec<&ResolvedDependencyNode> {
+    pub fn dependency_order(&self) -> Vec<&ResolvedDependencyNode> {
         let mut seen = BTreeSet::new();
         let mut ordered = Vec::new();
         self.collect_dependency_order(&self.root, &mut seen, &mut ordered);
@@ -253,7 +286,7 @@ impl ResolvedDependencyGraph {
     }
 }
 
-pub(super) fn collect_dependency_interface_sources(
+pub fn collect_dependency_interface_sources(
     package_dir: &Path,
     _manifest: &Manifest,
 ) -> Result<Vec<PackageSource>, String> {
@@ -262,7 +295,7 @@ pub(super) fn collect_dependency_interface_sources(
     collect_dependency_interface_sources_from_manifest_graph(package_dir, &captured)
 }
 
-pub(super) fn collect_dependency_interface_sources_from_manifest_graph(
+pub fn collect_dependency_interface_sources_from_manifest_graph(
     package_dir: &Path,
     captured: &ProjectManifestGraph,
 ) -> Result<Vec<PackageSource>, String> {
@@ -282,7 +315,7 @@ pub(super) fn collect_dependency_interface_sources_from_manifest_graph(
     Ok(sources)
 }
 
-pub(super) fn collect_dependency_interface_sources_for_tests(
+pub fn collect_dependency_interface_sources_for_tests(
     package_dir: &Path,
     _manifest: &Manifest,
 ) -> Result<Vec<PackageSource>, String> {
@@ -291,7 +324,7 @@ pub(super) fn collect_dependency_interface_sources_for_tests(
     collect_dependency_interface_sources_for_tests_from_manifest_graph(package_dir, &captured)
 }
 
-pub(super) fn collect_dependency_interface_sources_for_tests_from_manifest_graph(
+pub fn collect_dependency_interface_sources_for_tests_from_manifest_graph(
     package_dir: &Path,
     captured: &ProjectManifestGraph,
 ) -> Result<Vec<PackageSource>, String> {
@@ -311,7 +344,7 @@ pub(super) fn collect_dependency_interface_sources_for_tests_from_manifest_graph
     Ok(sources)
 }
 
-pub(super) fn collect_dependency_lowering_sources(
+pub fn collect_dependency_lowering_sources(
     package_dir: &Path,
     _manifest: &Manifest,
 ) -> Result<Vec<PackageSource>, String> {
@@ -320,7 +353,7 @@ pub(super) fn collect_dependency_lowering_sources(
     collect_dependency_lowering_sources_from_manifest_graph(package_dir, &captured)
 }
 
-pub(super) fn collect_dependency_lowering_sources_from_manifest_graph(
+pub fn collect_dependency_lowering_sources_from_manifest_graph(
     package_dir: &Path,
     captured: &ProjectManifestGraph,
 ) -> Result<Vec<PackageSource>, String> {
@@ -384,7 +417,7 @@ fn lowering_reachable_nodes(graph: &ResolvedDependencyGraph) -> BTreeSet<String>
     reachable
 }
 
-pub(super) fn package_feature_resolution_diagnostics(
+pub fn package_feature_resolution_diagnostics(
     package_dir: &Path,
     manifest: &Manifest,
 ) -> Result<Vec<Diagnostic>, String> {
@@ -393,7 +426,7 @@ pub(super) fn package_feature_resolution_diagnostics(
     package_feature_resolution_diagnostics_from_manifest_graph(package_dir, manifest, &captured)
 }
 
-pub(super) fn package_feature_resolution_diagnostics_from_manifest_graph(
+pub fn package_feature_resolution_diagnostics_from_manifest_graph(
     package_dir: &Path,
     manifest: &Manifest,
     captured: &ProjectManifestGraph,
@@ -487,7 +520,7 @@ fn package_dependency_unknown_key_diagnostics(
             Diagnostic::error(
                 code::PACKAGE_REVIEW_POLICY_VIOLATION,
                 format!("dependency `{dependency}` has unknown key `{key}`."),
-                super::package_dependency_span(package_dir, dependency),
+                package_dependency_span(package_dir, dependency),
                 "unknown dependency key",
             )
             .with_cause("Package dependency metadata is review-critical and unknown keys cannot be ignored.")
@@ -508,7 +541,7 @@ fn package_unsupported_dependency_source_diagnostic(
     Diagnostic::error(
         code::PACKAGE_UNSUPPORTED_DEPENDENCY_SOURCE,
         format!("dependency `{dependency}` uses unsupported package source `{source}`."),
-        super::package_dependency_span(package_dir, dependency),
+        package_dependency_span(package_dir, dependency),
         "unsupported dependency source",
     )
     .with_cause("Git dependencies are not part of the v0.6 accepted dependency-source grammar.")
@@ -545,7 +578,7 @@ fn package_unknown_feature_diagnostic(
     Diagnostic::error(
         code::PACKAGE_FEATURE_RESOLUTION,
         format!("dependency `{dependency}` selects unknown package feature `{feature}`."),
-        super::package_dependency_span(package_dir, dependency),
+        package_dependency_span(package_dir, dependency),
         "unknown package feature",
     )
     .with_cause("Selected dependency features must be declared by the dependency package.")
@@ -564,7 +597,7 @@ fn package_denied_feature_diagnostic(
     Diagnostic::error(
         code::PACKAGE_REVIEW_POLICY_VIOLATION,
         format!("dependency `{dependency}` selects denied package feature `{feature}`."),
-        super::package_dependency_span(package_dir, dependency),
+        package_dependency_span(package_dir, dependency),
         "denied package feature",
     )
     .with_cause("Selected dependency features must satisfy `[review.feature_policy]`.")
@@ -577,7 +610,7 @@ fn package_denied_feature_diagnostic(
     )
 }
 
-pub(super) fn package_dependency_spec(name: &str, value: &toml::Value) -> PackageDependencySpec {
+pub fn package_dependency_spec(name: &str, value: &toml::Value) -> PackageDependencySpec {
     if let Some(requirement) = value.as_str() {
         return PackageDependencySpec {
             name: name.to_string(),
@@ -648,7 +681,8 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{DependencyResolutionScope, canonical_path_label, resolve_dependency_graph};
+    use super::{DependencyResolutionScope, resolve_dependency_graph};
+    use crate::canonical_path_label;
 
     struct TestPackages(PathBuf);
 
