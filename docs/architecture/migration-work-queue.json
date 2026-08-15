@@ -2,20 +2,21 @@
   "schema": "rsscript.migration_queue.v1",
   "tasks": [
     {
-      "id": "V06.1",
+      "id": "V06.2",
       "priority": 10,
-      "depends_on": ["V05"],
+      "depends_on": ["V06.1"],
       "scope": [
         "crates/rsscript-vm/**",
-        "crates/rsscript-vm/**",
-        "crates/rsscript-abi-model/**",
-        "crates/rsscript-interface-catalog/**",
+        "crates/rsscript-build-support/**",
+        "crates/rsscript-mir/**",
+        "crates/rsscript-codegen-vm/**",
+        "stdlib/**",
         "docs/architecture/migration-baseline.md"
       ],
       "acceptance": [
-        "A versioned builtin registry declares stable `BuiltinId`, signature, determinism, cost, and catalog digest facts.",
-        "The register VM dispatches catalog-owned deterministic builtins through that contract without treating them as Provider calls.",
-        "Registry validation rejects duplicate IDs, mismatched signatures, and missing catalog entries."
+        "Encoding and collection library families execute through the versioned builtin registry while preserving VM conformance results.",
+        "The moved families expose no new VM opcode or Provider surface.",
+        "The registry has no unmarked implementation-only entries for moved families."
       ],
       "verification": [
         "cargo test -p rsscript-vm --offline",

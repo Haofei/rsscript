@@ -122,6 +122,61 @@ struct IntrinsicBinding {
     lowering: IntrinsicLowering,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum BuiltinDeterminismKind {
+    Deterministic,
+    ExecutionState,
+}
+
+impl BuiltinDeterminismKind {
+    fn generated_name(self) -> &'static str {
+        match self {
+            Self::Deterministic => "BuiltinDeterminism::Deterministic",
+            Self::ExecutionState => "BuiltinDeterminism::ExecutionState",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BuiltinCostKind {
+    Constant,
+    InputDependent,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BuiltinSignatureSource {
+    Interface,
+    Internal,
+}
+
+impl BuiltinSignatureSource {
+    fn generated_name(self) -> &'static str {
+        match self {
+            Self::Interface => "BuiltinSignatureSource::Interface",
+            Self::Internal => "BuiltinSignatureSource::Internal",
+        }
+    }
+}
+
+struct BuiltinRegistryEntry<'a> {
+    id: usize,
+    binding: &'a IntrinsicBinding,
+    vm_name: &'a str,
+    signature: String,
+    signature_source: BuiltinSignatureSource,
+    determinism: BuiltinDeterminismKind,
+    cost: BuiltinCostKind,
+}
+
+impl BuiltinCostKind {
+    fn generated_name(self) -> &'static str {
+        match self {
+            Self::Constant => "BuiltinCost::Constant",
+            Self::InputDependent => "BuiltinCost::InputDependent",
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum IntrinsicLowering {
@@ -457,6 +512,50 @@ pub fn write_mir_builtin_catalog() -> Result<(), String> {
         .iter()
         .filter(|binding| binding.lowering == IntrinsicLowering::Direct)
         .collect::<Vec<_>>();
+    let workspace_root = workspace_root(&manifest_dir)?;
+    let signatures = collect_interface_function_signatures(&workspace_root)?;
+    let registry_entries = direct
+        .iter()
+        .enumerate()
+        .map(|(index, binding)| {
+            let symbol = format!("{}.{}", binding.namespace, binding.name);
+            let (signature, signature_source) = signatures
+                .get(&symbol)
+                .cloned()
+                .map(|signature| (signature, BuiltinSignatureSource::Interface))
+                // Some direct bindings are VM primitives used to implement
+                // source-level library operations, rather than public .rssi
+                // entry points. Keep those explicit and auditable until V06.2
+                // moves the library families behind the registry.
+                .unwrap_or_else(|| {
+                    (
+                        format!(
+                            "internal builtin {symbol} via {}",
+                            binding
+                                .vm_id
+                                .as_deref()
+                                .expect("validated direct intrinsic must have a VM id")
+                        ),
+                        BuiltinSignatureSource::Internal,
+                    )
+                });
+            let vm_name = binding
+                .vm_id
+                .as_deref()
+                .expect("validated direct intrinsic must have a VM id");
+            let determinism = builtin_determinism(binding);
+            let cost = builtin_cost(binding);
+            Ok(BuiltinRegistryEntry {
+                id: index,
+                binding,
+                vm_name,
+                signature,
+                signature_source,
+                determinism,
+                cost,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
     let lookup_arms = direct
         .iter()
         .enumerate()
@@ -468,20 +567,39 @@ pub fn write_mir_builtin_catalog() -> Result<(), String> {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let vm_name_arms = direct
+    let descriptor_entries = registry_entries
         .iter()
-        .enumerate()
-        .map(|(index, binding)| {
-            let vm_id = binding
-                .vm_id
-                .as_deref()
-                .expect("validated direct intrinsic must have a VM id");
-            format!("        {index} => Some({vm_id:?}),")
+        .map(|entry| {
+            format!(
+                "    BuiltinDescriptor {{ id: BuiltinId::new({}), namespace: {:?}, name: {:?}, vm_name: {:?}, signature: {:?}, signature_source: {}, determinism: {}, cost: {} }},",
+                entry.id,
+                entry.binding.namespace,
+                entry.binding.name,
+                entry.vm_name,
+                entry.signature,
+                entry.signature_source.generated_name(),
+                entry.determinism.generated_name(),
+                entry.cost.generated_name(),
+            )
         })
         .collect::<Vec<_>>()
         .join("\n");
+    let registry_digest = builtin_registry_digest(&registry_entries);
+    let vm_name_arms = registry_entries
+        .iter()
+        .map(|entry| format!("        {} => Some({:?}),", entry.id, entry.vm_name))
+        .collect::<Vec<_>>()
+        .join("\n");
     let generated = format!(
-        r#"/// Resolve a catalog-owned direct builtin without retaining its source spelling in MIR.
+        r#"/// Versioned contract for catalog-owned deterministic core-library calls.
+pub const BUILTIN_REGISTRY_SCHEMA: &str = "rsscript.builtin_registry.v1";
+/// SHA-256 over the canonical ordered contract entries in this registry.
+pub const BUILTIN_REGISTRY_DIGEST: &str = "{registry_digest}";
+pub const BUILTIN_REGISTRY: &[BuiltinDescriptor] = &[
+{descriptor_entries}
+];
+
+/// Resolve a catalog-owned direct builtin without retaining its source spelling in MIR.
 pub fn builtin_id(namespace: &str, name: &str) -> Option<BuiltinId> {{
     match (namespace, name) {{
 {lookup_arms}
@@ -496,12 +614,135 @@ pub fn builtin_vm_name(id: BuiltinId) -> Option<&'static str> {{
         _ => None,
     }}
 }}
+
+/// Return the complete versioned contract for a builtin identity.
+pub fn builtin_descriptor(id: BuiltinId) -> Option<&'static BuiltinDescriptor> {{
+    BUILTIN_REGISTRY.get(id.index())
+}}
 "#
     );
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("out dir"));
     fs::write(out_dir.join("rss-mir-builtin-catalog.rs"), generated)
         .map_err(|error| format!("MIR builtin catalog should be written: {error}"))?;
     Ok(())
+}
+
+fn builtin_registry_digest(entries: &[BuiltinRegistryEntry<'_>]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"rsscript.builtin_registry.v1\0");
+    for entry in entries {
+        for field in [
+            entry.id.to_string(),
+            entry.binding.namespace.clone(),
+            entry.binding.name.clone(),
+            entry.vm_name.to_owned(),
+            entry.signature.clone(),
+            entry.signature_source.generated_name().to_owned(),
+            entry.determinism.generated_name().to_owned(),
+            entry.cost.generated_name().to_owned(),
+        ] {
+            hasher.update(field.as_bytes());
+            hasher.update([0]);
+        }
+    }
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn builtin_determinism(binding: &IntrinsicBinding) -> BuiltinDeterminismKind {
+    match binding.namespace.as_str() {
+        "CancellationSource" | "CancellationToken" | "Channel" | "ChannelError" | "Receiver"
+        | "Sender" | "Stream" => BuiltinDeterminismKind::ExecutionState,
+        _ => BuiltinDeterminismKind::Deterministic,
+    }
+}
+
+fn builtin_cost(binding: &IntrinsicBinding) -> BuiltinCostKind {
+    match binding.name.as_str() {
+        "is_empty" | "is_nan" | "is_finite" | "is_infinite" | "year" | "month" | "day" | "hour"
+        | "minute" | "second" | "weekday" | "token" | "sender" | "receiver" => {
+            BuiltinCostKind::Constant
+        }
+        _ => BuiltinCostKind::InputDependent,
+    }
+}
+
+fn collect_interface_function_signatures(root: &Path) -> Result<BTreeMap<String, String>, String> {
+    let mut files = Vec::new();
+    collect_files_with_extension(&root.join("stdlib"), "rssi", &mut files)?;
+    collect_files_with_extension(&root.join("packages"), "rssi", &mut files)?;
+    files.sort();
+
+    let mut signatures = BTreeMap::new();
+    for path in files {
+        let source = fs::read_to_string(&path)
+            .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+        for (symbol, signature) in interface_function_signatures(&source) {
+            register_interface_signature(&mut signatures, symbol, signature)?;
+        }
+    }
+    Ok(signatures)
+}
+
+fn register_interface_signature(
+    signatures: &mut BTreeMap<String, String>,
+    symbol: String,
+    signature: String,
+) -> Result<(), String> {
+    if let Some(existing) = signatures.get(&symbol) {
+        if existing == &signature {
+            return Err(format!(
+                "duplicate standard interface declaration for {symbol}"
+            ));
+        }
+        return Err(format!(
+            "mismatched standard interface signature for {symbol}: `{existing}` versus `{signature}`"
+        ));
+    }
+    signatures.insert(symbol, signature);
+    Ok(())
+}
+
+fn interface_function_signatures(source: &str) -> Vec<(String, String)> {
+    let lines = source.lines().collect::<Vec<_>>();
+    let mut declarations = Vec::new();
+    let mut index = 0;
+    while index < lines.len() {
+        let line = lines[index].trim();
+        if !line.starts_with("pub fn ") {
+            index += 1;
+            continue;
+        }
+
+        let mut declaration = Vec::new();
+        while index < lines.len() {
+            let line = lines[index].trim();
+            if line.is_empty() {
+                break;
+            }
+            declaration.push(line);
+            index += 1;
+        }
+        let canonical = declaration.join(" ");
+        let Some(after_fn) = canonical.strip_prefix("pub fn ") else {
+            continue;
+        };
+        let Some(open_paren) = after_fn.find('(') else {
+            continue;
+        };
+        let symbol_with_generics = after_fn[..open_paren].trim();
+        let symbol = symbol_with_generics
+            .split_once('<')
+            .map(|(name, _)| name)
+            .unwrap_or(symbol_with_generics)
+            .to_owned();
+        declarations.push((symbol, canonical));
+        index += 1;
+    }
+    declarations
 }
 
 fn validate_intrinsic_catalog(catalog: &IntrinsicCatalog) -> Result<(), String> {
@@ -875,4 +1116,85 @@ fn relative_path(root: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn direct_binding(namespace: &str, name: &str, vm_id: &str) -> IntrinsicBinding {
+        IntrinsicBinding {
+            namespace: namespace.to_owned(),
+            name: name.to_owned(),
+            vm_id: Some(vm_id.to_owned()),
+            runtime_target: None,
+            lowering: IntrinsicLowering::Direct,
+        }
+    }
+
+    #[test]
+    fn intrinsic_catalog_rejects_duplicate_or_missing_direct_entries() {
+        let duplicate = IntrinsicCatalog {
+            schema: 1,
+            intrinsic: vec![IntrinsicId {
+                id: "StringLen".to_owned(),
+                derived_from: None,
+            }],
+            binding: vec![
+                direct_binding("String", "len", "StringLen"),
+                direct_binding("String", "len", "StringLen"),
+            ],
+        };
+        assert!(
+            validate_intrinsic_catalog(&duplicate)
+                .expect_err("duplicate binding must fail")
+                .contains("duplicate binding String.len")
+        );
+
+        let missing = IntrinsicCatalog {
+            schema: 1,
+            intrinsic: Vec::new(),
+            binding: vec![direct_binding("String", "len", "StringLen")],
+        };
+        assert!(
+            validate_intrinsic_catalog(&missing)
+                .expect_err("direct binding without catalog ID must fail")
+                .contains("refers to unknown VM id StringLen")
+        );
+    }
+
+    #[test]
+    fn interface_signature_parser_is_canonical_and_keeps_qualifiers() {
+        let signatures = interface_function_signatures(
+            "pub fn List.append<T>(\n    target: mut List<T>,\n    values: take List<T>,\n) -> Unit\nretains(target)\n\n",
+        );
+        assert_eq!(
+            signatures,
+            vec![(
+                "List.append".to_owned(),
+                "pub fn List.append<T>( target: mut List<T>, values: take List<T>, ) -> Unit retains(target)"
+                    .to_owned(),
+            )]
+        );
+    }
+
+    #[test]
+    fn interface_registry_rejects_mismatched_canonical_signatures() {
+        let mut signatures = BTreeMap::new();
+        register_interface_signature(
+            &mut signatures,
+            "String.len".to_owned(),
+            "pub fn String.len(value: String) -> Int".to_owned(),
+        )
+        .expect("first declaration is accepted");
+        assert!(
+            register_interface_signature(
+                &mut signatures,
+                "String.len".to_owned(),
+                "pub fn String.len(value: String) -> Bool".to_owned(),
+            )
+            .expect_err("same symbol with a different signature must fail")
+            .contains("mismatched standard interface signature for String.len")
+        );
+    }
 }

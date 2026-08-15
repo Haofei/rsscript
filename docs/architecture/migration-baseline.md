@@ -1657,8 +1657,15 @@ an arbitrary shell executor.
   dispatch, and external calls. JSON/YAML, regex, compression, encoding, hashes,
   date utilities, and collection algorithms move behind a versioned builtin
   registry or Core library runtime.
-  - [ ] **V06.1 — Define the builtin registry contract.** Include `BuiltinId`,
-    signature, determinism, cost, and version/digest information.
+  - [x] **V06.1 — Define the builtin registry contract.** The generated
+    `rsscript.builtin_registry.v1` contract now owns stable `BuiltinId`, source
+    symbol, v1 VM spelling, canonical `.rssi` signature when public (or an
+    explicit internal-primitive marker), determinism, coarse cost class, and a
+    SHA-256 digest. MIR validation and VM bytecode generation consume the
+    descriptor rather than independently resolving source spellings; the VM
+    continues to charge builtin calls separately from Provider calls. Catalog
+    tests reject duplicate bindings and unknown direct IDs, and interface
+    discovery rejects duplicate public declarations.
   - [ ] **V06.2 — Move pure library families incrementally.** Start with encoding
     and collection helpers, then JSON/YAML, regex, compression, hashes, and date
     utilities while preserving differential results.

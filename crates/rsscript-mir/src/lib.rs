@@ -44,6 +44,46 @@ mir_id!(ResourceTypeId);
 mir_id!(TaskId);
 mir_id!(TaskGroupId);
 
+/// Whether a deterministic core-library builtin depends solely on its explicit
+/// arguments or on the current execution state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinDeterminism {
+    Deterministic,
+    ExecutionState,
+}
+
+/// Coarse static cost class for a builtin call. Detailed cost accounting stays
+/// with the VM until a future registry schema can express input-size formulas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinCost {
+    Constant,
+    InputDependent,
+}
+
+/// Origin of the canonical signature carried by a builtin registry entry.
+/// Public library calls use their `.rssi` declaration; implementation-only VM
+/// primitives remain explicitly marked until their library family is moved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinSignatureSource {
+    Interface,
+    Internal,
+}
+
+/// Versioned contract for a catalog-owned builtin. This is the shared source
+/// of identity, ABI spelling, determinism and coarse cost metadata for MIR
+/// validation and bytecode code generation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BuiltinDescriptor {
+    pub id: BuiltinId,
+    pub namespace: &'static str,
+    pub name: &'static str,
+    pub vm_name: &'static str,
+    pub signature: &'static str,
+    pub signature_source: BuiltinSignatureSource,
+    pub determinism: BuiltinDeterminism,
+    pub cost: BuiltinCost,
+}
+
 include!(concat!(env!("OUT_DIR"), "/rss-mir-builtin-catalog.rs"));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -501,7 +541,7 @@ pub enum MirCallTarget {
     },
     /// Catalog-owned direct core-library call. The source namespace/name was
     /// resolved by semantic lowering; v1 bytecode spelling is an encoder-only
-    /// compatibility projection through [`builtin_vm_name`].
+    /// compatibility projection through [`builtin_descriptor`].
     Builtin {
         id: BuiltinId,
         parameter_modes: Box<[MirParameterMode]>,
@@ -2350,7 +2390,7 @@ fn verify_instruction(
                     id,
                     parameter_modes,
                     type_arguments,
-                } if builtin_vm_name(*id).is_some() => parameter_modes.to_vec(),
+                } if builtin_descriptor(*id).is_some() => parameter_modes.to_vec(),
                 MirCallTarget::Builtin { id, .. } => {
                     return Err(MirValidationError::InvalidBuiltinTarget {
                         function: function.id,
@@ -2380,8 +2420,12 @@ fn verify_instruction(
                 id, type_arguments, ..
             } = target
             {
-                let expected_type_arguments = match builtin_vm_name(*id) {
-                    Some("JsonDecode" | "JsonDecodeText") => 1,
+                let expected_type_arguments = match builtin_descriptor(*id) {
+                    Some(descriptor)
+                        if matches!(descriptor.vm_name, "JsonDecode" | "JsonDecodeText") =>
+                    {
+                        1
+                    }
                     Some(_) => 0,
                     None => unreachable!("builtin target was validated above"),
                 };
@@ -2904,6 +2948,40 @@ mod tests {
             TypeId::new(0),
             false,
         )
+    }
+
+    #[test]
+    fn builtin_registry_exposes_a_versioned_contract() {
+        let id = builtin_id("String", "len").expect("String.len is catalog-owned");
+        let descriptor = builtin_descriptor(id).expect("catalog identity has a descriptor");
+
+        assert_eq!(BUILTIN_REGISTRY_SCHEMA, "rsscript.builtin_registry.v1");
+        assert_eq!(BUILTIN_REGISTRY_DIGEST.len(), 64);
+        assert_eq!(descriptor.id, id);
+        assert_eq!(descriptor.namespace, "String");
+        assert_eq!(descriptor.name, "len");
+        assert_eq!(descriptor.vm_name, "StringLen");
+        assert_eq!(
+            descriptor.signature,
+            "pub fn String.len(value: String) -> Int"
+        );
+        assert_eq!(
+            descriptor.signature_source,
+            BuiltinSignatureSource::Interface
+        );
+        assert_eq!(descriptor.determinism, BuiltinDeterminism::Deterministic);
+        assert_eq!(descriptor.cost, BuiltinCost::InputDependent);
+
+        let internal = builtin_descriptor(
+            builtin_id("Clone", "clone").expect("internal primitive is catalog-owned"),
+        )
+        .expect("internal primitive has an explicit descriptor");
+        assert_eq!(internal.signature_source, BuiltinSignatureSource::Internal);
+        assert!(
+            internal
+                .signature
+                .starts_with("internal builtin Clone.clone via ")
+        );
     }
 
     #[test]

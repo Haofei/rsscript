@@ -838,6 +838,37 @@ fn default_vm_layout_excludes_native_jit_feedback_and_dependencies() {
 }
 
 #[test]
+fn builtin_registry_is_versioned_and_keeps_library_calls_out_of_provider_dispatch() {
+    let root = workspace_root();
+    let build_support = read(&root.join("crates/rsscript-build-support/src/lib.rs"));
+    let mir = read(&root.join("crates/rsscript-mir/src/lib.rs"));
+    let codegen = read(&root.join("crates/rsscript-codegen-vm/src/lib.rs"));
+    let intrinsics = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/mod.rs"));
+    let calls = read(&root.join("crates/rsscript-vm/src/reg_vm/calls.rs"));
+
+    for required in [
+        "BUILTIN_REGISTRY_SCHEMA",
+        "BUILTIN_REGISTRY_DIGEST",
+        "struct BuiltinDescriptor",
+        "enum BuiltinDeterminism",
+        "enum BuiltinCost",
+        "enum BuiltinSignatureSource",
+        "pub fn builtin_descriptor",
+    ] {
+        assert!(
+            mir.contains(required) || build_support.contains(required),
+            "versioned builtin registry is missing `{required}`"
+        );
+    }
+    assert!(build_support.contains("collect_interface_function_signatures"));
+    assert!(build_support.contains("duplicate standard interface declaration"));
+    assert!(build_support.contains("intrinsic catalog contains duplicate binding"));
+    assert!(codegen.contains("builtin_descriptor(*id)"));
+    assert!(intrinsics.contains("self.charge_intrinsic_call()?"));
+    assert!(calls.contains("self.charge_provider_call()?"));
+}
+
+#[test]
 fn register_vm_execution_policy_is_snapshotted_before_running() {
     let root = workspace_root();
     let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));

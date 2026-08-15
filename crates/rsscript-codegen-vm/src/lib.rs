@@ -16,7 +16,7 @@ use rsscript_bytecode::{BytecodeArtifact, BytecodeError, LANGUAGE_SEMANTICS_VERS
 use rsscript_mir::{
     BlockId, MirBinaryOp, MirCallArgument, MirCallTarget, MirFunction, MirInstruction, MirLiteral,
     MirModule, MirParameterMode, MirTerminator, PlaceId, TaskId, ValueId, VerifiedMir,
-    builtin_vm_name,
+    builtin_descriptor,
 };
 use serde_json::{Map, Value, json};
 
@@ -954,9 +954,11 @@ fn lower_instruction(
                 MirCallTarget::Builtin {
                     id, type_arguments, ..
                 } => {
-                    let intrinsic = builtin_vm_name(*id).ok_or(CodegenError::InvalidMir(
-                        "builtin call references missing catalog identity".to_owned(),
-                    ))?;
+                    let intrinsic = builtin_descriptor(*id)
+                        .ok_or(CodegenError::InvalidMir(
+                            "builtin call references missing registry identity".to_owned(),
+                        ))?
+                        .vm_name;
                     if type_arguments.is_empty() {
                         code.push(instr(
                             "CallIntrinsic",
