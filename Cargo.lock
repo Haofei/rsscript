@@ -1871,8 +1871,11 @@ dependencies = [
  "base64",
  "chrono",
  "hex",
+ "hmac",
  "percent-encoding",
  "regex",
+ "sha2",
+ "sha3",
 ]
 
 [[package]]
@@ -2164,7 +2167,6 @@ name = "rsscript-vm"
 version = "0.1.0"
 dependencies = [
  "flate2",
- "hmac",
  "rsscript-abi-model",
  "rsscript-build-support",
  "rsscript-bytecode",
@@ -2177,7 +2179,6 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "sha2",
- "sha3",
  "toml",
  "vm-jit",
 ]

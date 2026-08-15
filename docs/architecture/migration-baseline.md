@@ -1684,6 +1684,12 @@ an arbitrary shell executor.
       `rsscript-corelib::date`. Wall-clock acquisition remains absent from the
       library and must still arrive through a time Provider; `chrono` is no
       longer a direct VM dependency.
+    - [x] **V06.2.1d — Extract deterministic cryptographic transforms.** SHA-256,
+      SHA3-224, SHA3-256, SHAKE128, and HMAC-SHA256 now use
+      `rsscript-corelib::crypto`. The VM retains argument adaptation and output
+      accounting only; `sha2`, `sha3`, and `hmac` are no longer direct runtime
+      VM dependencies. Key acquisition remains an explicit Provider or host
+      concern, not a Core-library capability.
     - [ ] **V06.2.2 — Extract collection algorithms.** Move non-primitive list,
       map, set, and deque transformations behind the same pure-library boundary
       without moving ownership-sensitive mutation primitives out of the VM.

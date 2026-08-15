@@ -375,19 +375,19 @@ impl RegVm {
             }
             RegIntrinsic::HashSha256Bytes => {
                 let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::string(sha256_digest(value)))
+                Ok(VmValue::string(core_sha256_hex(value)))
             }
             RegIntrinsic::HashSha256String => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::string(sha256_digest(value.as_bytes())))
+                Ok(VmValue::string(core_sha256_hex(value.as_bytes())))
             }
             RegIntrinsic::HashSha3_224Bytes => {
                 let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Bytes(Rc::new(sha3_224_digest(value))))
+                Ok(VmValue::Bytes(Rc::new(core_sha3_224(value))))
             }
             RegIntrinsic::HashSha3_256Bytes => {
                 let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Bytes(Rc::new(sha3_256_digest(value))))
+                Ok(VmValue::Bytes(Rc::new(core_sha3_256(value))))
             }
             RegIntrinsic::HashShake128Bytes => {
                 let value = match intrinsic_arg(&self.stack, base, args, 0)? {
@@ -412,17 +412,17 @@ impl RegVm {
                     )));
                 }
                 self.account_bytes(out_len)?;
-                Ok(VmValue::Bytes(Rc::new(shake128_digest(&value, out_len))))
+                Ok(VmValue::Bytes(Rc::new(core_shake128(&value, out_len))))
             }
             RegIntrinsic::HmacSha256Bytes => {
                 let key = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(VmValue::string(hmac_sha256_digest(key, value)))
+                Ok(VmValue::string(core_hmac_sha256_hex(key, value)))
             }
             RegIntrinsic::HmacSha256String => {
                 let key = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(VmValue::string(hmac_sha256_digest(
+                Ok(VmValue::string(core_hmac_sha256_hex(
                     key.as_bytes(),
                     value.as_bytes(),
                 )))

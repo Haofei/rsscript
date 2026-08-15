@@ -216,39 +216,6 @@ pub(super) fn expect_usize_ref(value: &VmValue) -> Result<usize, EvalError> {
     })
 }
 
-pub(super) fn sha256_digest(value: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    Digest::update(&mut hasher, value);
-    format!("{:x}", hasher.finalize())
-}
-
-pub(super) fn sha3_224_digest(value: &[u8]) -> Vec<u8> {
-    let mut hasher = Sha3_224::new();
-    Update::update(&mut hasher, value);
-    hasher.finalize().to_vec()
-}
-
-pub(super) fn sha3_256_digest(value: &[u8]) -> Vec<u8> {
-    let mut hasher = Sha3_256::new();
-    Update::update(&mut hasher, value);
-    hasher.finalize().to_vec()
-}
-
-pub(super) fn shake128_digest(value: &[u8], out_len: usize) -> Vec<u8> {
-    let mut hasher = Shake128::default();
-    Update::update(&mut hasher, value);
-    let mut reader = hasher.finalize_xof();
-    let mut out = vec![0u8; out_len];
-    XofReader::read(&mut reader, &mut out);
-    out
-}
-
-pub(super) fn hmac_sha256_digest(key: &[u8], value: &[u8]) -> String {
-    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");
-    Mac::update(&mut mac, value);
-    format!("{:x}", mac.finalize().into_bytes())
-}
-
 /// Insert `value` into an already-sorted `Vec` via binary search, keeping it
 /// sorted (`Ok(false)` if an equal element is present). O(log n) search + O(n)
 /// shift — no clone and no full re-sort, unlike rebuilding the whole backing.

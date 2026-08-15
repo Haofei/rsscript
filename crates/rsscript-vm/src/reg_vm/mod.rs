@@ -32,7 +32,6 @@ use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 
 use flate2::read::GzDecoder;
-use hmac::{Hmac, Mac};
 use rsscript_corelib::{
     collections::{
         dedup as core_list_dedup, deque_to_vec as core_deque_to_vec,
@@ -40,6 +39,10 @@ use rsscript_corelib::{
         map_is_subset as core_map_is_subset, map_keys as core_map_keys,
         map_union as core_map_union, map_values as core_map_values, reverse as core_list_reverse,
         skip as core_list_skip, slice as core_list_slice, take as core_list_take,
+    },
+    crypto::{
+        hmac_sha256_hex as core_hmac_sha256_hex, sha3_224 as core_sha3_224,
+        sha3_256 as core_sha3_256, sha256_hex as core_sha256_hex, shake128 as core_shake128,
     },
     date::{
         add_days as core_date_add_days, add_ms as core_date_add_ms, day as core_date_day,
@@ -56,11 +59,6 @@ use rsscript_corelib::{
         url_decode_component, url_encode_component,
     },
     regex::CompiledRegex,
-};
-use sha2::{Digest, Sha256};
-use sha3::{
-    Sha3_224, Sha3_256, Shake128,
-    digest::{ExtendableOutput, Update, XofReader},
 };
 
 use self::calls::PureClosurePlan;

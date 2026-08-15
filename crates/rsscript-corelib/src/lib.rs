@@ -292,9 +292,53 @@ pub mod date {
     }
 }
 
+/// Deterministic digest functions. These consume explicit input only; entropy
+/// and key acquisition remain separate host capabilities.
+pub mod crypto {
+    use hmac::{Hmac, Mac};
+    use sha2::{Digest, Sha256};
+    use sha3::{
+        Sha3_224, Sha3_256, Shake128,
+        digest::{ExtendableOutput, Update, XofReader},
+    };
+
+    pub fn sha256_hex(value: &[u8]) -> String {
+        let mut hasher = Sha256::new();
+        Digest::update(&mut hasher, value);
+        format!("{:x}", hasher.finalize())
+    }
+
+    pub fn sha3_224(value: &[u8]) -> Vec<u8> {
+        let mut hasher = Sha3_224::new();
+        Update::update(&mut hasher, value);
+        hasher.finalize().to_vec()
+    }
+
+    pub fn sha3_256(value: &[u8]) -> Vec<u8> {
+        let mut hasher = Sha3_256::new();
+        Update::update(&mut hasher, value);
+        hasher.finalize().to_vec()
+    }
+
+    pub fn shake128(value: &[u8], out_len: usize) -> Vec<u8> {
+        let mut hasher = Shake128::default();
+        Update::update(&mut hasher, value);
+        let mut reader = hasher.finalize_xof();
+        let mut out = vec![0u8; out_len];
+        XofReader::read(&mut reader, &mut out);
+        out
+    }
+
+    pub fn hmac_sha256_hex(key: &[u8], value: &[u8]) -> String {
+        let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");
+        Mac::update(&mut mac, value);
+        format!("{:x}", mac.finalize().into_bytes())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{collections::*, date, encoding::*, regex::CompiledRegex};
+    use super::{collections::*, crypto, date, encoding::*, regex::CompiledRegex};
 
     #[test]
     fn encoding_algorithms_are_deterministic_and_round_trip() {
@@ -379,5 +423,20 @@ mod tests {
         assert!(date::is_leap_year(2024));
         assert_eq!(date::days_in_month(2024, 2), 29);
         assert_eq!(date::weekday(epoch), 4);
+    }
+
+    #[test]
+    fn digest_algorithms_match_stable_test_vectors() {
+        assert_eq!(
+            crypto::sha256_hex(b"rsscript"),
+            "e92c4828dba081bc0d3df48e7b834799a51a0ee7479c2ca89622bbe5a1dcb864"
+        );
+        assert_eq!(crypto::sha3_224(b"rsscript").len(), 28);
+        assert_eq!(crypto::sha3_256(b"rsscript").len(), 32);
+        assert_eq!(crypto::shake128(b"rsscript", 17).len(), 17);
+        assert_eq!(
+            crypto::hmac_sha256_hex(b"key", b"rsscript"),
+            "b8eea96b9c160cf61f841cac85540ab416eb5d58ebd4ade171ff9da3c7884927"
+        );
     }
 }

@@ -917,6 +917,11 @@ fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
         "pub fn format_iso",
         "pub fn parse_iso",
         "pub fn start_of_day",
+        "pub fn sha256_hex",
+        "pub fn sha3_224",
+        "pub fn sha3_256",
+        "pub fn shake128",
+        "pub fn hmac_sha256_hex",
     ] {
         assert!(
             corelib.contains(required),
@@ -924,15 +929,22 @@ fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
         );
     }
     assert!(vm_manifest.contains("rsscript-corelib"));
+    let vm_runtime_dependencies = vm_manifest
+        .split("[build-dependencies]")
+        .next()
+        .expect("VM manifest has a package dependency section");
     for removed in [
         "base64 =",
         "hex =",
         "percent-encoding =",
         "regex =",
         "chrono =",
+        "sha2 =",
+        "sha3 =",
+        "hmac =",
     ] {
         assert!(
-            !vm_manifest.contains(removed),
+            !vm_runtime_dependencies.contains(removed),
             "VM manifest must not directly own encoding implementation dependency `{removed}`"
         );
     }
@@ -940,6 +952,8 @@ fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
     assert!(vm.contains("encoding::{"));
     assert!(vm.contains("collections::{"));
     assert!(intrinsics.contains("base64_decode(text)"));
+    assert!(intrinsics.contains("core_sha256_hex(value)"));
+    assert!(intrinsics.contains("core_hmac_sha256_hex(key, value)"));
     assert!(hex.contains("core_hex_decode(text)"));
     assert!(url.contains("url_decode_component(value)"));
     assert!(regex.contains("CompiledRegex::compile(pattern)"));
