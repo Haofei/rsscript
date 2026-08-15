@@ -1443,6 +1443,27 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
             && !authorization.contains("set_package_snapshot_permissions"),
         "compiler authorization must not reintroduce private graph-directory or recursive-copy implementation"
     );
+    for required in [
+        "pub fn read_captured_utf8",
+        "pub fn replace_captured_utf8",
+        "pub fn create_captured_utf8",
+    ] {
+        assert!(
+            project.contains(required),
+            "project capture must own private graph file I/O `{required}`"
+        );
+    }
+    let snapshot = function_source(&authorization, "fn snapshot_package_graph_inputs_inner(");
+    assert!(
+        authorization.contains("captured.read_captured_utf8")
+            && authorization.contains("captured.replace_captured_utf8")
+            && authorization.contains("captured.create_captured_utf8"),
+        "compiler compatibility may compute graph semantics, but private capture reads and writes must pass through rsscript-project"
+    );
+    assert!(
+        !snapshot.contains("fs::"),
+        "compiler graph-snapshot composition must not reopen or mutate files directly"
+    );
 }
 
 #[test]

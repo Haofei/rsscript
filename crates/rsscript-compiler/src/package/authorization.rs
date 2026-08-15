@@ -482,24 +482,19 @@ fn snapshot_package_graph_inputs_inner(
         );
     }
 
-    for (key, node) in &graph.nodes {
+    for (_key, node) in &graph.nodes {
         check_operation(operation)?;
-        let destination = &destinations[key];
-        validate_captured_manifest(node, destination)?;
-        fs::write(
-            destination.join(super::source_set::SNAPSHOT_MANIFEST_SOURCE_FILE),
+        validate_captured_manifest(&captured, node)?;
+        captured.create_captured_utf8(
+            &node.package_dir,
+            Path::new(super::source_set::SNAPSHOT_MANIFEST_SOURCE_FILE),
             &node.manifest_source,
-        )
-        .map_err(|error| {
-            format!(
-                "failed to preserve original manifest identity for {}: {error}",
-                node.package_dir.display()
-            )
-        })?;
+            super::PACKAGE_MANIFEST_MAX_BYTES,
+        )?;
     }
-    rewrite_snapshot_manifests(&graph, &destinations)?;
+    rewrite_snapshot_manifests(&graph, &captured, &destinations)?;
     check_operation(operation)?;
-    rewrite_snapshot_locks(&graph, &destinations)?;
+    rewrite_snapshot_locks(&graph, &captured, &destinations)?;
     check_operation(operation)?;
 
     let root = destinations
@@ -510,12 +505,14 @@ fn snapshot_package_graph_inputs_inner(
 }
 
 fn validate_captured_manifest(
+    captured: &CapturedProjectGraph,
     node: &super::dependency::ResolvedDependencyNode,
-    destination: &Path,
 ) -> Result<(), String> {
-    let manifest_path = destination.join("rsspkg.toml");
-    let captured_source = fs::read_to_string(&manifest_path)
-        .map_err(|error| format!("failed to read {}: {error}", manifest_path.display()))?;
+    let captured_source = captured.read_captured_utf8(
+        &node.package_dir,
+        Path::new("rsspkg.toml"),
+        super::PACKAGE_MANIFEST_MAX_BYTES,
+    )?;
     if captured_source != node.manifest_source {
         return Err(format!(
             "package manifest changed while the content snapshot was captured: {}",
@@ -527,6 +524,7 @@ fn validate_captured_manifest(
 
 fn rewrite_snapshot_manifests(
     graph: &super::dependency::ResolvedDependencyGraph,
+    captured: &CapturedProjectGraph,
     destinations: &BTreeMap<String, PathBuf>,
 ) -> Result<(), String> {
     for (key, node) in &graph.nodes {
@@ -571,13 +569,16 @@ fn rewrite_snapshot_manifests(
             }
         }
         if changed {
-            fs::write(
-                &manifest_path,
-                toml::to_string_pretty(&document).map_err(|error| {
-                    format!("failed to encode {}: {error}", manifest_path.display())
-                })?,
-            )
-            .map_err(|error| format!("failed to rewrite {}: {error}", manifest_path.display()))?;
+            let replacement = toml::to_string_pretty(&document).map_err(|error| {
+                format!("failed to encode {}: {error}", manifest_path.display())
+            })?;
+            captured.replace_captured_utf8(
+                &node.package_dir,
+                Path::new("rsspkg.toml"),
+                &node.manifest_source,
+                &replacement,
+                super::PACKAGE_MANIFEST_MAX_BYTES,
+            )?;
         }
     }
     Ok(())
@@ -585,6 +586,7 @@ fn rewrite_snapshot_manifests(
 
 fn rewrite_snapshot_locks(
     graph: &super::dependency::ResolvedDependencyGraph,
+    captured: &CapturedProjectGraph,
     destinations: &BTreeMap<String, PathBuf>,
 ) -> Result<(), String> {
     let source_map = graph
@@ -593,12 +595,20 @@ fn rewrite_snapshot_locks(
         .map(|key| (key.clone(), package_path_source(&destinations[key])))
         .collect::<BTreeMap<_, _>>();
 
-    for destination in destinations.values() {
-        let lock_path = destination.join("rsspkg.lock");
-        if !lock_path.is_file() {
+    for node in graph.nodes.values() {
+        if !captured.has_captured_regular_file(&node.package_dir, Path::new("rsspkg.lock"))? {
             continue;
         }
-        let mut lock = super::lock::read_package_lock(&lock_path)?;
+        let destination = captured
+            .captured_path(&node.package_dir)
+            .expect("every resolved package root must be captured");
+        let lock_path = destination.join("rsspkg.lock");
+        let source = captured.read_captured_utf8(
+            &node.package_dir,
+            Path::new("rsspkg.lock"),
+            super::lock::PACKAGE_LOCK_MAX_BYTES,
+        )?;
+        let mut lock = super::lock::parse_package_lock(&source, &lock_path.display().to_string())?;
         for package in &mut lock.packages {
             let Some(path) = package.source.strip_prefix("path+") else {
                 continue;
@@ -608,8 +618,13 @@ fn rewrite_snapshot_locks(
                 package.source = snapshot_source.clone();
             }
         }
-        fs::write(&lock_path, package_lock_toml(&lock))
-            .map_err(|error| format!("failed to rewrite {}: {error}", lock_path.display()))?;
+        captured.replace_captured_utf8(
+            &node.package_dir,
+            Path::new("rsspkg.lock"),
+            &source,
+            &package_lock_toml(&lock),
+            super::lock::PACKAGE_LOCK_MAX_BYTES,
+        )?;
     }
     Ok(())
 }

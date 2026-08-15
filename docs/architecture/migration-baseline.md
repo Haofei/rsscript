@@ -731,8 +731,11 @@ an arbitrary shell executor.
     lifetime, canonical path mirroring, bounded no-follow recursive copy, and
     captured-to-original diagnostic mapping for compatibility package graphs;
     compiler authorization only resolves package semantics and composes that
-    capture boundary. This keeps project graph I/O reusable without widening
-    the pure compiler input API.
+    capture boundary. Its bounded private-file read, compare-and-replace, and
+    create-only metadata operations now own captured manifest/lock rewriting;
+    compiler compatibility computes dependency semantics but does not reopen or
+    mutate files inside that private graph. This keeps project graph I/O
+    reusable without widening the pure compiler input API.
     Manifest dependency discovery now parses the loader-owned
     `WorkspaceManifestV1` projection and admits only explicit local path
     dependencies into capture; version, git, and registry declarations cannot

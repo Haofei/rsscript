@@ -88,6 +88,213 @@ impl CapturedProjectGraph {
     pub fn path_mappings(&self) -> &[(PathBuf, PathBuf)] {
         &self.paths
     }
+
+    /// Read a bounded UTF-8 file from the private captured graph.
+    ///
+    /// `original_root` identifies a root supplied to
+    /// [`capture_project_graph`]; `relative_path` is restricted to normal path
+    /// components. Compatibility adapters can therefore inspect the immutable
+    /// private copy without reopening a mutable author checkout.
+    pub fn read_captured_utf8(
+        &self,
+        original_root: &Path,
+        relative_path: &Path,
+        max_bytes: u64,
+    ) -> Result<String, String> {
+        let path = self.captured_regular_file_path(original_root, relative_path)?;
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            format!(
+                "failed to inspect captured file {}: {error}",
+                path.display()
+            )
+        })?;
+        if metadata.len() > max_bytes {
+            return Err(format!(
+                "captured file exceeds {max_bytes}-byte limit: {}",
+                path.display()
+            ));
+        }
+        let mut file = File::open(&path)
+            .map_err(|error| format!("failed to open captured file {}: {error}", path.display()))?;
+        let mut contents = String::new();
+        file.read_to_string(&mut contents).map_err(|error| {
+            format!(
+                "failed to read UTF-8 captured file {}: {error}",
+                path.display()
+            )
+        })?;
+        if contents.len() as u64 > max_bytes {
+            return Err(format!(
+                "captured file changed beyond {max_bytes}-byte limit while reading: {}",
+                path.display()
+            ));
+        }
+        Ok(contents)
+    }
+
+    /// Whether a regular, non-link file exists beneath one captured root.
+    pub fn has_captured_regular_file(
+        &self,
+        original_root: &Path,
+        relative_path: &Path,
+    ) -> Result<bool, String> {
+        let path = self.captured_file_path(original_root, relative_path)?;
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => {
+                return Err(format!(
+                    "failed to inspect captured file {}: {error}",
+                    path.display()
+                ));
+            }
+        };
+        if is_link_like(&metadata) || !metadata.is_file() {
+            return Err(format!(
+                "captured graph entry must be a regular non-link file: {}",
+                path.display()
+            ));
+        }
+        Ok(true)
+    }
+
+    /// Replace a captured UTF-8 file only if it still matches the source seen
+    /// during dependency resolution. This updates a private mirror, never an
+    /// author's original checkout.
+    pub fn replace_captured_utf8(
+        &self,
+        original_root: &Path,
+        relative_path: &Path,
+        expected_contents: &str,
+        replacement: &str,
+        max_bytes: u64,
+    ) -> Result<(), String> {
+        if replacement.len() as u64 > max_bytes {
+            return Err(format!(
+                "replacement exceeds {max_bytes}-byte limit for captured file {}",
+                relative_path.display()
+            ));
+        }
+        let path = self.captured_regular_file_path(original_root, relative_path)?;
+        let actual = self.read_captured_utf8(original_root, relative_path, max_bytes)?;
+        if actual != expected_contents {
+            return Err(format!(
+                "captured file changed after graph capture: {}",
+                path.display()
+            ));
+        }
+        let mut output = OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(&path)
+            .map_err(|error| {
+                format!(
+                    "failed to rewrite captured file {}: {error}",
+                    path.display()
+                )
+            })?;
+        output.write_all(replacement.as_bytes()).map_err(|error| {
+            format!(
+                "failed to rewrite captured file {}: {error}",
+                path.display()
+            )
+        })?;
+        output
+            .flush()
+            .map_err(|error| format!("failed to flush captured file {}: {error}", path.display()))
+    }
+
+    /// Create a new bounded UTF-8 metadata file inside a captured package
+    /// root. Existing files are never overwritten; graph assemblers use this
+    /// only for capture-owned metadata excluded from the copied tree.
+    pub fn create_captured_utf8(
+        &self,
+        original_root: &Path,
+        relative_path: &Path,
+        contents: &str,
+        max_bytes: u64,
+    ) -> Result<(), String> {
+        if contents.len() as u64 > max_bytes {
+            return Err(format!(
+                "new captured file exceeds {max_bytes}-byte limit: {}",
+                relative_path.display()
+            ));
+        }
+        let path = self.captured_file_path(original_root, relative_path)?;
+        let parent = path
+            .parent()
+            .expect("captured file path always has a captured-root parent");
+        let parent_metadata = fs::symlink_metadata(parent).map_err(|error| {
+            format!(
+                "failed to inspect captured file parent {}: {error}",
+                parent.display()
+            )
+        })?;
+        if is_link_like(&parent_metadata) || !parent_metadata.is_dir() {
+            return Err(format!(
+                "captured file parent must be a real directory: {}",
+                parent.display()
+            ));
+        }
+        let mut output = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|error| {
+                format!("failed to create captured file {}: {error}", path.display())
+            })?;
+        output.write_all(contents.as_bytes()).map_err(|error| {
+            format!("failed to write captured file {}: {error}", path.display())
+        })?;
+        output
+            .flush()
+            .map_err(|error| format!("failed to flush captured file {}: {error}", path.display()))
+    }
+
+    fn captured_regular_file_path(
+        &self,
+        original_root: &Path,
+        relative_path: &Path,
+    ) -> Result<PathBuf, String> {
+        let path = self.captured_file_path(original_root, relative_path)?;
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            format!(
+                "failed to inspect captured file {}: {error}",
+                path.display()
+            )
+        })?;
+        if is_link_like(&metadata) || !metadata.is_file() {
+            return Err(format!(
+                "captured graph entry must be a regular non-link file: {}",
+                path.display()
+            ));
+        }
+        Ok(path)
+    }
+
+    fn captured_file_path(
+        &self,
+        original_root: &Path,
+        relative_path: &Path,
+    ) -> Result<PathBuf, String> {
+        if relative_path.as_os_str().is_empty()
+            || relative_path
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            return Err(format!(
+                "captured graph relative path must contain only normal components: {}",
+                relative_path.display()
+            ));
+        }
+        let root = self.captured_path(original_root).ok_or_else(|| {
+            format!(
+                "captured graph does not contain original package root {}",
+                original_root.display()
+            )
+        })?;
+        Ok(root.join(relative_path))
+    }
 }
 
 /// Capture the given package roots into one private temporary graph.
@@ -825,6 +1032,67 @@ mod tests {
         assert_eq!(
             graph.original_path(&captured.join("nested/input.txt")),
             Some(package.join("nested/input.txt"))
+        );
+        assert_eq!(
+            graph
+                .read_captured_utf8(&package, Path::new("nested/input.txt"), 1024)
+                .expect("read captured text"),
+            "captured"
+        );
+        graph
+            .replace_captured_utf8(
+                &package,
+                Path::new("nested/input.txt"),
+                "captured",
+                "rewritten",
+                1024,
+            )
+            .expect("rewrite private capture");
+        assert_eq!(
+            graph
+                .read_captured_utf8(&package, Path::new("nested/input.txt"), 1024)
+                .expect("read rewritten text"),
+            "rewritten"
+        );
+        assert!(
+            graph
+                .replace_captured_utf8(
+                    &package,
+                    Path::new("nested/input.txt"),
+                    "captured",
+                    "ignored",
+                    1024,
+                )
+                .is_err()
+        );
+        graph
+            .create_captured_utf8(
+                &package,
+                Path::new("capture-metadata.toml"),
+                "identity = 'captured'\n",
+                1024,
+            )
+            .expect("create capture-owned metadata");
+        assert_eq!(
+            graph
+                .read_captured_utf8(&package, Path::new("capture-metadata.toml"), 1024)
+                .expect("read capture metadata"),
+            "identity = 'captured'\n"
+        );
+        assert!(
+            graph
+                .create_captured_utf8(
+                    &package,
+                    Path::new("capture-metadata.toml"),
+                    "replacement",
+                    1024,
+                )
+                .is_err()
+        );
+        assert!(
+            graph
+                .read_captured_utf8(&package, Path::new("../outside"), 1024)
+                .is_err()
         );
     }
 

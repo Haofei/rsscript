@@ -17,7 +17,7 @@ use super::{
     package_feature_may_change_boundary_risk, package_risk_label, relative_path,
 };
 
-const PACKAGE_LOCK_MAX_BYTES: u64 = 16 * 1024 * 1024;
+pub(super) const PACKAGE_LOCK_MAX_BYTES: u64 = 16 * 1024 * 1024;
 const NATIVE_HASH_MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const NATIVE_HASH_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const BINDING_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
@@ -111,10 +111,16 @@ pub fn diff_package_locks(old_path: &Path, new_path: &Path) -> Result<PackageLoc
 
 pub(super) fn read_package_lock(path: &Path) -> Result<PackageLock, String> {
     let source = read_bounded_utf8(path, PACKAGE_LOCK_MAX_BYTES, "package lock")?;
-    let lock: PackageLock = toml::from_str(&source)
-        .map_err(|error| format!("failed to parse {}: {error}", path.display()))?;
+    parse_package_lock(&source, &path.display().to_string())
+}
+
+/// Parse a lockfile whose bounded bytes have already been captured by the
+/// project boundary. This keeps compatibility graph I/O out of the lock model.
+pub(super) fn parse_package_lock(source: &str, label: &str) -> Result<PackageLock, String> {
+    let lock: PackageLock =
+        toml::from_str(source).map_err(|error| format!("failed to parse {label}: {error}"))?;
     validate_locked_package_identities(&lock.packages)
-        .map_err(|error| format!("invalid package lock {}: {error}", path.display()))?;
+        .map_err(|error| format!("invalid package lock {label}: {error}"))?;
     Ok(lock)
 }
 
