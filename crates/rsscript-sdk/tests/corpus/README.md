@@ -58,3 +58,14 @@ all aspects" stays enforced rather than aspirational.
 - `tests/vm.rs` / `tests/vm_eval.rs` — focused VM/parity unit tests (the
   corpus is the preferred home for new end-to-end execution cases).
 - `src/native_plugin/` + `native-abi/` unit tests — the dynamic native bridge.
+
+## Compatibility corpus
+
+`compatibility/provider_replacement.{rss,rssi,toml}` is deliberately separate
+from execution differential fixtures. It freezes the deployable boundary:
+identical immutable inputs produce identical Artifact Bundles; an incompatible
+Provider fails at link time without executing; two compatible Provider
+implementations link the same verified Bundle; and a checked-in v1 Bundle stays
+readable independently from the current writer. The runner is not involved, so
+the corpus can exercise the reviewed SDK and canonical `WireValue` contract
+without ambient host services.

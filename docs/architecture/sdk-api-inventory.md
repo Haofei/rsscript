@@ -50,10 +50,14 @@ snapshot path during migration.
   for a host-controlled input channel, while runners and provenance-aware
   hosts implement their own admission policy.
 - Provider lifecycle: `ProviderRegistry`, provider descriptors, structured
-  signatures, `WireInterpreterFn`/`AsyncWireInterpreterFn`/`WireValue` for the
-  canonical scalar plus descriptor-scoped aggregate Provider path (`List<T>`,
-  tuples, `Option<T>`, and `Result<T, E>`), registration errors, and typed
-  execution context contracts.
+  signatures, their constructor support types (`DataEffect`,
+  `ParameterSignature`, `ProviderErrorMapping`, `ResourceCleanupContract`, and
+  `RUNTIME_ABI_VERSION`), `WireInterpreterFn`/`AsyncWireInterpreterFn`/
+  `WireValue` for the canonical scalar plus descriptor-scoped aggregate Provider
+  path (`List<T>`, tuples, `Option<T>`, and `Result<T, E>`), registration
+  errors, and typed execution context contracts. This permits a Provider author
+  to construct and register a complete descriptor solely through the reviewed
+  SDK façade.
   Legacy `NativeInterpreterFn`/`NativeValue` are not re-exported from this
   reviewed façade; compatibility adapters must opt into the SDK
   `compatibility` surface or depend directly on the low-level Provider crate.

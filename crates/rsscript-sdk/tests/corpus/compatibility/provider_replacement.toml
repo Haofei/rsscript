@@ -1,0 +1,7 @@
+# This corpus is intentionally small and frozen. It proves the delivery
+# contract rather than a language feature: artifact bytes are provider-neutral,
+# providers preflight structurally, and compatible replacements can link the
+# same verified artifact.
+symbol = "host.echo.echo"
+value = "rss"
+old_reader_fixture = "rsscript-bytecode/fixtures/v1/reference.rssbundle.base64"

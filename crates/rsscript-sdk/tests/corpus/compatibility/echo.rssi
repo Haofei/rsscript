@@ -1,0 +1,3 @@
+module host.echo
+
+pub fn echo(value: read String) -> String

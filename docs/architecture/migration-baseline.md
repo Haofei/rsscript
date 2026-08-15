@@ -2355,8 +2355,14 @@ an arbitrary shell executor.
     interning order cannot create a false golden change. Additional lowering
     failures can be added as source fixtures without conflating them with
     diagnostics or executable MIR evidence.
-  - [ ] **E03.2 — Add Artifact/Provider compatibility corpus.** Cover old readers,
-    ABI mismatch, replacement Providers, and deterministic bundles.
+  - [x] **E03.2 — Add Artifact/Provider compatibility corpus.** The checked-in
+    `compatibility/provider_replacement` corpus compiles the same immutable
+    source/interface snapshot twice and requires byte-identical Bundles; it
+    proves a descriptor-signature mismatch fails during link before the
+    callable executes, then links the same verified Bundle against two distinct
+    canonical `WireValue` Provider identities. It also reads and executes the
+    independent checked-in deployed v1 Bundle, so old-reader coverage does not
+    depend on regenerating a fixture with the current compiler.
   - [ ] **E03.3 — Add execution state-machine corpus.** Cover budgets,
     cancellation, cleanup, Provider errors, and interpreter/experiment parity.
 - [x] **E04 — Require ADR/RFC records for contract changes.** Core CI compares

@@ -394,10 +394,11 @@ pub mod artifact {
 pub mod provider_api {
     pub use super::ProviderRegistry;
     pub use rsscript_provider_api::{
-        AsyncWireInterpreterFn, BlockingBehavior, CancellationBehavior, ExternalSymbol,
-        FunctionSignature, HostCallContext, ProviderCallContext, ProviderCallMode,
-        ProviderDescriptor, ProviderError, ProviderErrorCode, ProviderFunction,
-        ProviderFunctionDescriptor, ProviderLoadError, ResourceHandle, WireInterpreterFn,
+        AsyncWireInterpreterFn, BlockingBehavior, CancellationBehavior, DataEffect, ExternalSymbol,
+        FunctionSignature, HostCallContext, ParameterSignature, ProviderCallContext,
+        ProviderCallMode, ProviderDescriptor, ProviderError, ProviderErrorCode,
+        ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor, ProviderLoadError,
+        RUNTIME_ABI_VERSION, ResourceCleanupContract, ResourceHandle, WireInterpreterFn,
         WireProviderFuture, WireValue,
     };
 }

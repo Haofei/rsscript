@@ -1,0 +1,7 @@
+module app
+
+use host.echo.*
+
+fn main() -> String {
+    return echo(value: read "rss")
+}
