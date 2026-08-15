@@ -852,6 +852,7 @@ fn builtin_registry_is_versioned_and_keeps_library_calls_out_of_provider_dispatc
         "struct BuiltinDescriptor",
         "enum BuiltinDeterminism",
         "enum BuiltinCost",
+        "enum BuiltinClass",
         "enum BuiltinSignatureSource",
         "pub fn builtin_descriptor",
     ] {

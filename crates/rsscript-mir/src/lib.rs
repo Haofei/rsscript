@@ -60,6 +60,15 @@ pub enum BuiltinCost {
     InputDependent,
 }
 
+/// Execution ownership of a catalog direct call. Provider calls are never
+/// builtins: they are represented separately by [`MirCallTarget::External`]
+/// and therefore cannot accidentally acquire a VM instruction identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinClass {
+    VmPrimitive,
+    DeterministicBuiltin,
+}
+
 /// Origin of the canonical signature carried by a builtin registry entry.
 /// Public library calls use their `.rssi` declaration; implementation-only VM
 /// primitives remain explicitly marked until their library family is moved.
@@ -82,6 +91,7 @@ pub struct BuiltinDescriptor {
     pub signature_source: BuiltinSignatureSource,
     pub determinism: BuiltinDeterminism,
     pub cost: BuiltinCost,
+    pub class: BuiltinClass,
 }
 
 include!(concat!(env!("OUT_DIR"), "/rss-mir-builtin-catalog.rs"));
@@ -2955,7 +2965,7 @@ mod tests {
         let id = builtin_id("String", "len").expect("String.len is catalog-owned");
         let descriptor = builtin_descriptor(id).expect("catalog identity has a descriptor");
 
-        assert_eq!(BUILTIN_REGISTRY_SCHEMA, "rsscript.builtin_registry.v1");
+        assert_eq!(BUILTIN_REGISTRY_SCHEMA, "rsscript.builtin_registry.v2");
         assert_eq!(BUILTIN_REGISTRY_DIGEST.len(), 64);
         assert_eq!(descriptor.id, id);
         assert_eq!(descriptor.namespace, "String");
@@ -2971,6 +2981,13 @@ mod tests {
         );
         assert_eq!(descriptor.determinism, BuiltinDeterminism::Deterministic);
         assert_eq!(descriptor.cost, BuiltinCost::InputDependent);
+        assert_eq!(descriptor.class, BuiltinClass::DeterministicBuiltin);
+
+        let primitive = builtin_descriptor(
+            builtin_id("Channel", "bounded").expect("Channel.bounded is catalog-owned"),
+        )
+        .expect("stateful builtin has an explicit descriptor");
+        assert_eq!(primitive.class, BuiltinClass::VmPrimitive);
 
         let internal = builtin_descriptor(
             builtin_id("Clone", "clone").expect("internal primitive is catalog-owned"),

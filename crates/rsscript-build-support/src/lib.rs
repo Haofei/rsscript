@@ -144,6 +144,21 @@ enum BuiltinCostKind {
 }
 
 #[derive(Debug, Clone, Copy)]
+enum BuiltinClassKind {
+    VmPrimitive,
+    DeterministicBuiltin,
+}
+
+impl BuiltinClassKind {
+    fn generated_name(self) -> &'static str {
+        match self {
+            Self::VmPrimitive => "BuiltinClass::VmPrimitive",
+            Self::DeterministicBuiltin => "BuiltinClass::DeterministicBuiltin",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 enum BuiltinSignatureSource {
     Interface,
     Internal,
@@ -166,6 +181,7 @@ struct BuiltinRegistryEntry<'a> {
     signature_source: BuiltinSignatureSource,
     determinism: BuiltinDeterminismKind,
     cost: BuiltinCostKind,
+    class: BuiltinClassKind,
 }
 
 impl BuiltinCostKind {
@@ -545,6 +561,7 @@ pub fn write_mir_builtin_catalog() -> Result<(), String> {
                 .expect("validated direct intrinsic must have a VM id");
             let determinism = builtin_determinism(binding);
             let cost = builtin_cost(binding);
+            let class = builtin_class(binding);
             Ok(BuiltinRegistryEntry {
                 id: index,
                 binding,
@@ -553,6 +570,7 @@ pub fn write_mir_builtin_catalog() -> Result<(), String> {
                 signature_source,
                 determinism,
                 cost,
+                class,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -571,7 +589,7 @@ pub fn write_mir_builtin_catalog() -> Result<(), String> {
         .iter()
         .map(|entry| {
             format!(
-                "    BuiltinDescriptor {{ id: BuiltinId::new({}), namespace: {:?}, name: {:?}, vm_name: {:?}, signature: {:?}, signature_source: {}, determinism: {}, cost: {} }},",
+                "    BuiltinDescriptor {{ id: BuiltinId::new({}), namespace: {:?}, name: {:?}, vm_name: {:?}, signature: {:?}, signature_source: {}, determinism: {}, cost: {}, class: {} }},",
                 entry.id,
                 entry.binding.namespace,
                 entry.binding.name,
@@ -580,6 +598,7 @@ pub fn write_mir_builtin_catalog() -> Result<(), String> {
                 entry.signature_source.generated_name(),
                 entry.determinism.generated_name(),
                 entry.cost.generated_name(),
+                entry.class.generated_name(),
             )
         })
         .collect::<Vec<_>>()
@@ -592,7 +611,7 @@ pub fn write_mir_builtin_catalog() -> Result<(), String> {
         .join("\n");
     let generated = format!(
         r#"/// Versioned contract for catalog-owned deterministic core-library calls.
-pub const BUILTIN_REGISTRY_SCHEMA: &str = "rsscript.builtin_registry.v1";
+pub const BUILTIN_REGISTRY_SCHEMA: &str = "rsscript.builtin_registry.v2";
 /// SHA-256 over the canonical ordered contract entries in this registry.
 pub const BUILTIN_REGISTRY_DIGEST: &str = "{registry_digest}";
 pub const BUILTIN_REGISTRY: &[BuiltinDescriptor] = &[
@@ -629,7 +648,7 @@ pub fn builtin_descriptor(id: BuiltinId) -> Option<&'static BuiltinDescriptor> {
 
 fn builtin_registry_digest(entries: &[BuiltinRegistryEntry<'_>]) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"rsscript.builtin_registry.v1\0");
+    hasher.update(b"rsscript.builtin_registry.v2\0");
     for entry in entries {
         for field in [
             entry.id.to_string(),
@@ -640,6 +659,7 @@ fn builtin_registry_digest(entries: &[BuiltinRegistryEntry<'_>]) -> String {
             entry.signature_source.generated_name().to_owned(),
             entry.determinism.generated_name().to_owned(),
             entry.cost.generated_name().to_owned(),
+            entry.class.generated_name().to_owned(),
         ] {
             hasher.update(field.as_bytes());
             hasher.update([0]);
@@ -667,6 +687,46 @@ fn builtin_cost(binding: &IntrinsicBinding) -> BuiltinCostKind {
             BuiltinCostKind::Constant
         }
         _ => BuiltinCostKind::InputDependent,
+    }
+}
+
+/// Direct catalog entries are either VM primitives (allocation, ownership,
+/// task/channel state, output, and dynamic representation boundaries) or
+/// deterministic library calls. Provider APIs never enter this catalog: MIR
+/// represents them only as `ExternalSymbolId` calls.
+fn builtin_class(binding: &IntrinsicBinding) -> BuiltinClassKind {
+    let stateful_namespace = matches!(
+        binding.namespace.as_str(),
+        "Arguments"
+            | "Buffer"
+            | "CancellationSource"
+            | "CancellationToken"
+            | "Channel"
+            | "ChannelError"
+            | "DecodeError"
+            | "Dyn"
+            | "Output"
+            | "Receiver"
+            | "Sender"
+            | "Stream"
+            | "Weak"
+    );
+    let representation_boundary = matches!(
+        (binding.namespace.as_str(), binding.name.as_str()),
+        ("Bytes", "consume")
+            | ("Clone", "clone")
+            | ("Deque", "new")
+            | ("List", "consume" | "new")
+            | ("Map", "new")
+            | ("PersistentMap", "new")
+            | ("Set", "new")
+            | ("SortedMap", "new")
+            | ("SortedSet", "new")
+    );
+    if stateful_namespace || representation_boundary {
+        BuiltinClassKind::VmPrimitive
+    } else {
+        BuiltinClassKind::DeterministicBuiltin
     }
 }
 

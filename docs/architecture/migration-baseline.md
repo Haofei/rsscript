@@ -1734,9 +1734,14 @@ an arbitrary shell executor.
       explicitly separates Core execution contracts from deterministic corelib,
       and binds the sole remaining legacy JSON adapter to P06. Architecture
       tests reject any unreviewed direct VM runtime dependency.
-- [ ] **V07 — Classify the intrinsic catalog.** Every entry is exactly one of a
-  VM primitive, deterministic builtin, or Provider external symbol; adding a
-  library API must not silently change the VM instruction set.
+- [x] **V07 — Classify the intrinsic catalog.** The versioned
+  `rsscript.builtin_registry.v2` classifies every catalog-owned direct call as
+  either a `VmPrimitive` (allocation/ownership, task/channel, output, or
+  dynamic-representation boundary) or a `DeterministicBuiltin`. Provider calls
+  cannot enter that registry: MIR represents them only as `ExternalSymbolId`
+  targets. Classification participates in the registry digest, and generation
+  tests keep direct bindings complete and unambiguous, so adding a library API
+  cannot silently grow the VM instruction surface.
 
 ### 4. Bytecode and compatibility contracts
 
