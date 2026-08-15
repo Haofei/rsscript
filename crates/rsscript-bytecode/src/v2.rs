@@ -7,10 +7,14 @@
 
 use std::collections::BTreeSet;
 
-use rsscript_abi_model::WireType;
+use rsscript_abi_model::{CORE_LIBRARY_ABI_VERSION, RUNTIME_ABI_VERSION, WireType};
+use semver::VersionReq;
 use serde::{Deserialize, Serialize};
 
-use crate::{BytecodeError, BytecodeLimits};
+use crate::{
+    BYTECODE_V2_ISA_VERSION, BYTECODE_V2_SCHEMA, BytecodeArtifact, BytecodeError, BytecodeLimits,
+    SUPPORTED_LANGUAGE_SEMANTICS, VerificationContext, verify_artifact_contract,
+};
 
 macro_rules! wire_id {
     ($name:ident) => {
@@ -571,9 +575,9 @@ impl VerifiedProgramV2 {
     }
 }
 
-/// V2 verification owner. A future Artifact v2 verifier will compose this
-/// after envelope/version/import validation and pass only `VerifiedProgramV2`
-/// to the VM decoder.
+/// V2 payload-verification owner. [`BytecodeV2ArtifactVerifier`] composes this
+/// with the versioned Artifact envelope and import table; neither verifier
+/// enables v2 execution in the reference VM.
 pub struct BytecodeV2Verifier {
     limits: BytecodeLimits,
 }
@@ -586,9 +590,114 @@ impl BytecodeV2Verifier {
     pub fn verify_payload(&self, payload: &[u8]) -> Result<VerifiedProgramV2, BytecodeError> {
         decode_program(payload, self.limits)
     }
+
+    fn verify_payload_with_artifact_imports(
+        &self,
+        payload: &[u8],
+        artifact_import_count: usize,
+    ) -> Result<VerifiedProgramV2, BytecodeError> {
+        let program = self.verify_payload(payload)?;
+        for (index, import) in program.program().imports().iter().enumerate() {
+            if import.artifact_import() as usize >= artifact_import_count {
+                return Err(invalid(format!(
+                    "v2 executable import {index} references missing Artifact import {}",
+                    import.artifact_import()
+                )));
+            }
+        }
+        Ok(program)
+    }
 }
 
 impl Default for BytecodeV2Verifier {
+    fn default() -> Self {
+        Self::new(BytecodeLimits::default())
+    }
+}
+
+/// An Artifact and payload that passed the complete v2 container, ABI, import
+/// and typed-instruction checks. Its fields are private so neither callers nor
+/// the VM can smuggle an unverified v2 program across this phase boundary.
+#[derive(Debug, Clone)]
+pub struct VerifiedArtifactV2 {
+    artifact: BytecodeArtifact,
+    program: VerifiedProgramV2,
+}
+
+impl VerifiedArtifactV2 {
+    pub fn artifact(&self) -> &BytecodeArtifact {
+        &self.artifact
+    }
+
+    pub fn program(&self) -> &VerifiedProgramV2 {
+        &self.program
+    }
+
+    pub fn into_artifact(self) -> BytecodeArtifact {
+        self.artifact
+    }
+}
+
+/// Standalone verifier for the numeric v2 Artifact contract. This is an
+/// Artifact-tooling boundary only: v1 remains the deployed compiler output and
+/// the sole executable schema accepted by the reference VM until the v2 ISA
+/// covers the full Core execution model.
+pub struct BytecodeV2ArtifactVerifier {
+    limits: BytecodeLimits,
+    language_compatibility: VersionReq,
+}
+
+impl BytecodeV2ArtifactVerifier {
+    pub fn new(limits: BytecodeLimits) -> Self {
+        Self {
+            limits,
+            language_compatibility: VersionReq::parse(SUPPORTED_LANGUAGE_SEMANTICS)
+                .expect("declared language compatibility requirement"),
+        }
+    }
+
+    pub fn with_language_compatibility(
+        limits: BytecodeLimits,
+        language_compatibility: VersionReq,
+    ) -> Self {
+        Self {
+            limits,
+            language_compatibility,
+        }
+    }
+
+    pub fn verify(&self, bytes: &[u8]) -> Result<VerifiedArtifactV2, BytecodeError> {
+        self.verify_with_context(bytes, VerificationContext::default())
+    }
+
+    pub fn verify_with_context(
+        &self,
+        bytes: &[u8],
+        context: VerificationContext<'_>,
+    ) -> Result<VerifiedArtifactV2, BytecodeError> {
+        context.check()?;
+        if bytes.len() > self.limits.max_artifact_bytes {
+            return Err(BytecodeError::LimitExceeded("artifact bytes"));
+        }
+        let artifact = BytecodeArtifact::from_bytes(bytes)?;
+        verify_artifact_contract(
+            &artifact,
+            self.limits,
+            &self.language_compatibility,
+            BYTECODE_V2_SCHEMA,
+            BYTECODE_V2_ISA_VERSION,
+            CORE_LIBRARY_ABI_VERSION,
+            RUNTIME_ABI_VERSION,
+            context,
+        )?;
+        let program = BytecodeV2Verifier::new(self.limits)
+            .verify_payload_with_artifact_imports(&artifact.payload, artifact.imports.len())?;
+        context.check()?;
+        Ok(VerifiedArtifactV2 { artifact, program })
+    }
+}
+
+impl Default for BytecodeV2ArtifactVerifier {
     fn default() -> Self {
         Self::new(BytecodeLimits::default())
     }
@@ -769,6 +878,11 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
+    const TEST_CATALOG_DIGEST: &str =
+        "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+    const TEST_SOURCE_DIGEST: &str =
+        "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+
     fn program(instructions: Vec<WireInstructionV2>) -> WireProgramV2 {
         WireProgramV2::new(
             vec![WireType::Unit],
@@ -838,6 +952,77 @@ mod tests {
         assert!(matches!(
             decode_program(&unknown, BytecodeLimits::default()),
             Err(BytecodeError::InvalidPayload(message)) if message.contains("unknown opcode")
+        ));
+    }
+
+    #[test]
+    fn v2_artifact_verifier_checks_the_envelope_and_typed_payload() {
+        let program = WireProgramV2::new(
+            vec![WireType::Unit],
+            vec![vec![0]],
+            0,
+            vec![WireFunctionV2::new(
+                0,
+                1,
+                vec![
+                    WireInstructionV2::new(WireOpcodeV2::LoadConstant, vec![0, 0]),
+                    WireInstructionV2::new(WireOpcodeV2::Return, vec![0]),
+                ],
+            )],
+        );
+        let artifact = BytecodeArtifact::new_v2(
+            "0.1.0",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
+            RUNTIME_ABI_VERSION,
+            TEST_SOURCE_DIGEST,
+            vec![],
+            &program,
+        )
+        .expect("v2 Artifact encodes");
+        let bytes = artifact.to_bytes().expect("v2 Artifact envelope encodes");
+        let verified = BytecodeV2ArtifactVerifier::default()
+            .verify(&bytes)
+            .expect("v2 Artifact verifies");
+        assert_eq!(verified.program().program(), &program);
+        assert_eq!(verified.artifact().header.schema, BYTECODE_V2_SCHEMA);
+        assert!(matches!(
+            crate::BytecodeVerifier::default().verify(&bytes),
+            Err(BytecodeError::UnsupportedSchema(schema)) if schema == BYTECODE_V2_SCHEMA
+        ));
+    }
+
+    #[test]
+    fn v2_artifact_verifier_binds_payload_imports_to_artifact_imports() {
+        let program = WireProgramV2::with_tables(
+            vec![WireType::Unit],
+            vec![vec![0]],
+            vec![WireImportV2::new(0)],
+            vec![],
+            vec![WireFunctionV2::new(
+                0,
+                1,
+                vec![
+                    WireInstructionV2::new(WireOpcodeV2::LoadConstant, vec![0, 0]),
+                    WireInstructionV2::new(WireOpcodeV2::Return, vec![0]),
+                ],
+            )],
+            vec![],
+        );
+        let artifact = BytecodeArtifact::new_v2(
+            "0.1.0",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
+            RUNTIME_ABI_VERSION,
+            TEST_SOURCE_DIGEST,
+            vec![],
+            &program,
+        )
+        .expect("v2 Artifact encodes");
+        assert!(matches!(
+            BytecodeV2ArtifactVerifier::default().verify(&artifact.to_bytes().unwrap()),
+            Err(BytecodeError::InvalidPayload(message))
+                if message.contains("references missing Artifact import 0")
         ));
     }
 

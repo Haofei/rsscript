@@ -1790,30 +1790,34 @@ an arbitrary shell executor.
     `rsscript-bytecode::v2` now owns typed function/type/constant/import/register
     identities, numeric opcodes with exact operand arity, and independent
     structural checks for register, function, import, constant, and jump IDs.
-    Exports/debug tables and a production Artifact writer remain follow-up;
-    v1 stays the deployed artifact path.
+    Exports/debug tables are present. A verifier-only v2 Artifact constructor
+    and reader exist for tooling; v1 stays the sole deployed compiler/VM path.
   - [x] **B02.2 — Add a bounded canonical v2 codec.** The v2 codec emits
     array-shaped `[numeric_opcode, operands]` records, decodes only canonical
     CBOR, rejects unknown numeric opcodes, and invokes the typed structural
-    verifier before returning a program. Artifact section integration and the
-    remaining tables remain follow-up work.
+    verifier before returning a program. It is composed with Artifact envelope
+    validation for tooling; the deployed writer and VM reader remain v1.
   - [x] **B02.3 — Model import, export, and optional debug tables.** V2 now
     carries numeric Artifact-import links, numeric function exports, and
     function/instruction source locations as separate tables. The verifier
-    rejects invalid export/debug references and inverted source ranges; section
-    layout in a deployed v2 Artifact remains follow-up work.
-- [ ] **B03 — Generate codec and verification rules from one instruction
+    rejects invalid export/debug references and inverted source ranges; the
+    same table links are checked against the Artifact import section.
+- [x] **B03 — Generate codec and verification rules from one instruction
   schema.** The schema generates Rust instruction types, encoder, bounded
   decoder, operand validation, documentation, and fuzz seeds; string field maps
-  and `serde_json::Value` verification are removed.
+  and `serde_json::Value` verification are removed from the v2 path. The
+  verifier-only v2 Artifact reader validates the common envelope/version ABI
+  contract before admitting a typed program; v1 remains the production
+  compiler/VM schema until v2 covers all Core semantics.
   - [x] **B03.1 — Make v2 opcode schema the single source of truth.** One
     macro declaration now generates `WireOpcodeV2` and the
     `INSTRUCTION_SCHEMA_V2` table with numeric tags, names, operand classes, and
     arity; it drives raw decode lookup, structural operand validation, and
     generated Markdown reference output. A bounded arbitrary-byte property
     corpus plus the `bytecode_v2` fuzz target and canonical checked-in seed
-    prove the v2 decoder cannot panic; deployed Artifact v2 integration remains
-    follow-up work.
+    prove the v2 decoder cannot panic. The standalone v2 Artifact verifier
+    checks the shared envelope, compatibility versions, import table, and typed
+    numeric payload; it does not make v2 executable by the reference VM.
   - [x] **B03.2 — Verify v2 instruction-CFG register data flow.** The typed
     verifier computes per-instruction predecessor intersections, rejects reads
     not defined on every reachable path, and rejects fallthrough past a function

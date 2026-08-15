@@ -15,6 +15,10 @@ use sha2::{Digest, Sha256};
 pub mod v2;
 
 pub const BYTECODE_SCHEMA: &str = "rsscript.bytecode.v1";
+/// Typed numeric Artifact schema. It is verifier-only until the v2 ISA covers
+/// the complete Core execution model; the reference VM intentionally accepts
+/// only the deployed v1 schema.
+pub const BYTECODE_V2_SCHEMA: &str = "rsscript.bytecode.v2";
 /// Version of the binary Artifact container envelope, independent of language
 /// semantics and instruction-set compatibility.
 pub const BYTECODE_CONTAINER_FORMAT_VERSION: u16 = 1;
@@ -22,6 +26,8 @@ pub const BYTECODE_CONTAINER_FORMAT_VERSION: u16 = 1;
 pub const SUPPORTED_LANGUAGE_SEMANTICS: &str = ">=0.1.0, <0.2.0";
 /// Version of the executable instruction-set encoding inside the v1 envelope.
 pub const BYTECODE_ISA_VERSION: u32 = 1;
+/// Instruction-set contract for [`BYTECODE_V2_SCHEMA`].
+pub const BYTECODE_V2_ISA_VERSION: u32 = 2;
 pub const BYTECODE_MAGIC: &[u8; 8] = b"RSSBC\0\x01\0";
 const SECTION_HEADER: u8 = 1;
 const SECTION_IMPORTS: u8 = 2;
@@ -67,6 +73,56 @@ impl BytecodeArtifact {
         interface_catalog_digest: impl Into<String>,
         runtime_abi_version: u32,
         source_content_hash: impl Into<String>,
+        imports: Vec<ExternalImport>,
+        payload: Vec<u8>,
+    ) -> Result<Self, BytecodeError> {
+        Self::new_with_contract(
+            BYTECODE_SCHEMA,
+            BYTECODE_ISA_VERSION,
+            language_version,
+            compiler_version,
+            interface_catalog_digest,
+            runtime_abi_version,
+            source_content_hash,
+            imports,
+            payload,
+        )
+    }
+
+    /// Construct a typed numeric v2 Artifact. This does not make v2 a VM
+    /// execution path: callers must use [`v2::BytecodeV2ArtifactVerifier`] and
+    /// the reference VM continues to consume only v1 verified bytecode.
+    pub fn new_v2(
+        language_version: impl Into<String>,
+        compiler_version: impl Into<String>,
+        interface_catalog_digest: impl Into<String>,
+        runtime_abi_version: u32,
+        source_content_hash: impl Into<String>,
+        imports: Vec<ExternalImport>,
+        program: &v2::WireProgramV2,
+    ) -> Result<Self, BytecodeError> {
+        let payload = v2::encode_program(program)?;
+        Self::new_with_contract(
+            BYTECODE_V2_SCHEMA,
+            BYTECODE_V2_ISA_VERSION,
+            language_version,
+            compiler_version,
+            interface_catalog_digest,
+            runtime_abi_version,
+            source_content_hash,
+            imports,
+            payload,
+        )
+    }
+
+    fn new_with_contract(
+        schema: &str,
+        bytecode_isa_version: u32,
+        language_version: impl Into<String>,
+        compiler_version: impl Into<String>,
+        interface_catalog_digest: impl Into<String>,
+        runtime_abi_version: u32,
+        source_content_hash: impl Into<String>,
         mut imports: Vec<ExternalImport>,
         payload: Vec<u8>,
     ) -> Result<Self, BytecodeError> {
@@ -74,9 +130,9 @@ impl BytecodeArtifact {
         let executable_hash = digest(&payload);
         let mut artifact = Self {
             header: BytecodeHeader {
-                schema: BYTECODE_SCHEMA.to_string(),
+                schema: schema.to_string(),
                 language_version: language_version.into(),
-                bytecode_isa_version: BYTECODE_ISA_VERSION,
+                bytecode_isa_version,
                 core_library_abi_version: CORE_LIBRARY_ABI_VERSION,
                 compiler_version: compiler_version.into(),
                 interface_catalog_digest: interface_catalog_digest.into(),
@@ -335,97 +391,123 @@ impl BytecodeVerifier {
             return Err(BytecodeError::LimitExceeded("artifact bytes"));
         }
         let artifact = BytecodeArtifact::from_bytes(bytes)?;
-        context.check()?;
-        if artifact.header.schema != BYTECODE_SCHEMA {
-            return Err(BytecodeError::UnsupportedSchema(artifact.header.schema));
-        }
-        Version::parse(&artifact.header.compiler_version)
-            .map_err(|_| BytecodeError::InvalidProvenance("compiler version"))?;
-        for (name, digest) in [
-            (
-                "source content hash",
-                artifact.header.source_content_hash.as_str(),
-            ),
-            (
-                "interface catalog digest",
-                artifact.header.interface_catalog_digest.as_str(),
-            ),
-        ] {
-            if !is_sha256_digest(digest) {
-                return Err(BytecodeError::InvalidProvenance(name));
-            }
-        }
-        if artifact
-            .header
-            .snapshot_digest
-            .as_deref()
-            .is_some_and(|digest| !is_sha256_digest(digest))
-        {
-            return Err(BytecodeError::InvalidProvenance("snapshot digest"));
-        }
-        let language = Version::parse(&artifact.header.language_version).map_err(|_| {
-            BytecodeError::UnsupportedLanguageVersion(artifact.header.language_version.clone())
-        })?;
-        if !self.compatibility.language.matches(&language) {
-            return Err(BytecodeError::UnsupportedLanguageVersion(
-                artifact.header.language_version.clone(),
-            ));
-        }
-        if artifact.header.bytecode_isa_version != self.compatibility.bytecode_isa_version {
-            return Err(BytecodeError::UnsupportedBytecodeIsa {
-                artifact: artifact.header.bytecode_isa_version,
-                verifier: self.compatibility.bytecode_isa_version,
-            });
-        }
-        if artifact.header.core_library_abi_version != self.compatibility.core_library_abi_version {
-            return Err(BytecodeError::UnsupportedCoreLibraryAbi {
-                artifact: artifact.header.core_library_abi_version,
-                runtime: self.compatibility.core_library_abi_version,
-            });
-        }
-        if artifact.header.runtime_abi_version != self.compatibility.runtime_abi_version {
-            return Err(BytecodeError::UnsupportedRuntimeAbi {
-                artifact: artifact.header.runtime_abi_version,
-                runtime: self.compatibility.runtime_abi_version,
-            });
-        }
-        if artifact.payload.len() > self.limits.max_payload_bytes {
-            return Err(BytecodeError::LimitExceeded("payload bytes"));
-        }
-        if artifact.imports.len() > self.limits.max_imports {
-            return Err(BytecodeError::LimitExceeded("imports"));
-        }
-        if artifact.header.executable_hash != digest(&artifact.payload) {
-            return Err(BytecodeError::ExecutableHashMismatch);
-        }
-        if artifact.checksum != artifact.compute_checksum()? {
-            return Err(BytecodeError::ChecksumMismatch);
-        }
-        if artifact
-            .imports
-            .windows(2)
-            .any(|pair| pair[0].symbol >= pair[1].symbol)
-        {
-            return Err(BytecodeError::ImportsNotCanonical);
-        }
-        if artifact
-            .imports
-            .iter()
-            .any(|import| import.abi_version != artifact.header.runtime_abi_version)
-        {
-            return Err(BytecodeError::ImportAbiMismatch);
-        }
-        if artifact
-            .imports
-            .iter()
-            .any(|import| import.signature.hash() != import.signature_hash)
-        {
-            return Err(BytecodeError::ImportSignatureHashMismatch);
-        }
+        verify_artifact_contract(
+            &artifact,
+            self.limits,
+            &self.compatibility.language,
+            BYTECODE_SCHEMA,
+            self.compatibility.bytecode_isa_version,
+            self.compatibility.core_library_abi_version,
+            self.compatibility.runtime_abi_version,
+            context,
+        )?;
         verify_executable_payload(&artifact.payload, &artifact.imports, self.limits, context)?;
         context.check()?;
         Ok(VerifiedBytecode { artifact })
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn verify_artifact_contract(
+    artifact: &BytecodeArtifact,
+    limits: BytecodeLimits,
+    language_compatibility: &VersionReq,
+    schema: &str,
+    bytecode_isa_version: u32,
+    core_library_abi_version: u32,
+    runtime_abi_version: u32,
+    context: VerificationContext<'_>,
+) -> Result<(), BytecodeError> {
+    context.check()?;
+    if artifact.header.schema != schema {
+        return Err(BytecodeError::UnsupportedSchema(
+            artifact.header.schema.clone(),
+        ));
+    }
+    Version::parse(&artifact.header.compiler_version)
+        .map_err(|_| BytecodeError::InvalidProvenance("compiler version"))?;
+    for (name, digest) in [
+        (
+            "source content hash",
+            artifact.header.source_content_hash.as_str(),
+        ),
+        (
+            "interface catalog digest",
+            artifact.header.interface_catalog_digest.as_str(),
+        ),
+    ] {
+        if !is_sha256_digest(digest) {
+            return Err(BytecodeError::InvalidProvenance(name));
+        }
+    }
+    if artifact
+        .header
+        .snapshot_digest
+        .as_deref()
+        .is_some_and(|digest| !is_sha256_digest(digest))
+    {
+        return Err(BytecodeError::InvalidProvenance("snapshot digest"));
+    }
+    let language = Version::parse(&artifact.header.language_version).map_err(|_| {
+        BytecodeError::UnsupportedLanguageVersion(artifact.header.language_version.clone())
+    })?;
+    if !language_compatibility.matches(&language) {
+        return Err(BytecodeError::UnsupportedLanguageVersion(
+            artifact.header.language_version.clone(),
+        ));
+    }
+    if artifact.header.bytecode_isa_version != bytecode_isa_version {
+        return Err(BytecodeError::UnsupportedBytecodeIsa {
+            artifact: artifact.header.bytecode_isa_version,
+            verifier: bytecode_isa_version,
+        });
+    }
+    if artifact.header.core_library_abi_version != core_library_abi_version {
+        return Err(BytecodeError::UnsupportedCoreLibraryAbi {
+            artifact: artifact.header.core_library_abi_version,
+            runtime: core_library_abi_version,
+        });
+    }
+    if artifact.header.runtime_abi_version != runtime_abi_version {
+        return Err(BytecodeError::UnsupportedRuntimeAbi {
+            artifact: artifact.header.runtime_abi_version,
+            runtime: runtime_abi_version,
+        });
+    }
+    if artifact.payload.len() > limits.max_payload_bytes {
+        return Err(BytecodeError::LimitExceeded("payload bytes"));
+    }
+    if artifact.imports.len() > limits.max_imports {
+        return Err(BytecodeError::LimitExceeded("imports"));
+    }
+    if artifact.header.executable_hash != digest(&artifact.payload) {
+        return Err(BytecodeError::ExecutableHashMismatch);
+    }
+    if artifact.checksum != artifact.compute_checksum()? {
+        return Err(BytecodeError::ChecksumMismatch);
+    }
+    if artifact
+        .imports
+        .windows(2)
+        .any(|pair| pair[0].symbol >= pair[1].symbol)
+    {
+        return Err(BytecodeError::ImportsNotCanonical);
+    }
+    if artifact
+        .imports
+        .iter()
+        .any(|import| import.abi_version != artifact.header.runtime_abi_version)
+    {
+        return Err(BytecodeError::ImportAbiMismatch);
+    }
+    if artifact
+        .imports
+        .iter()
+        .any(|import| import.signature.hash() != import.signature_hash)
+    {
+        return Err(BytecodeError::ImportSignatureHashMismatch);
+    }
+    Ok(())
 }
 
 impl Default for BytecodeVerifier {
