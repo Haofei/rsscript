@@ -98,8 +98,9 @@ pub use analyzer::{
     analyze_sources_with_interfaces, analyze_sources_with_interfaces_result,
     analyze_sources_with_interfaces_result_with_operation,
     analyze_sources_with_interfaces_without_core,
-    analyze_sources_with_interfaces_without_core_result, analyze_syntax_source, core_interfaces,
-    standard_package_interfaces, validate_source, validate_source_with_operation,
+    analyze_sources_with_interfaces_without_core_result,
+    analyze_sources_with_interfaces_without_core_result_with_operation, analyze_syntax_source,
+    core_interfaces, standard_package_interfaces, validate_source, validate_source_with_operation,
     validate_sources_with_interfaces, validate_sources_with_interfaces_with_operation,
     validate_sources_with_interfaces_without_core,
 };
@@ -140,9 +141,9 @@ pub use control_flow::{
 };
 pub use database::{
     AnalysisResult, CompilationSession, CompilationSessionStats, FrontendCompletion,
-    FrontendInputSnapshot, FrontendStopReason, ModuleHeader, SemanticDatabase, SessionSourceStore,
-    SourceFileSnapshot, SourceSnapshot, SourceStoreError, SourceUpdate, ValidatedProgram,
-    WorkspaceModuleGraph, WorkspaceModuleNode,
+    FrontendInputSnapshot, FrontendStopReason, ModuleHeader, SemanticDatabase,
+    SessionInterfacePolicy, SessionSourceStore, SourceFileSnapshot, SourceSnapshot,
+    SourceStoreError, SourceUpdate, ValidatedProgram, WorkspaceModuleGraph, WorkspaceModuleNode,
 };
 pub use declarations::{
     duplicate_declaration_diagnostics, unknown_binding_diagnostics, unknown_field_diagnostics,

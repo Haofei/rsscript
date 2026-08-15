@@ -663,7 +663,8 @@ an arbitrary shell executor.
     The CLI `fix` workflow now follows the same session-owned
     analysis route, preserving duplicate-interface diagnostics through its
     explicit legacy fallback. `--no-core` checks now use the same session
-    query with an empty Core interface set; only deliberately duplicate
+    query with an explicit `WithoutCore` interface policy, so Core injection
+    cannot leak back through a session default; only deliberately duplicate
     interface paths retain a direct compatibility fallback so established
     diagnostics do not change. Package lowering, neutral package analysis,
     review evidence, and package-interface environment checks now capture their

@@ -197,6 +197,20 @@ pub enum SourceStoreError {
     RevisionExhausted { file_id: FileId },
 }
 
+/// Controls whether semantic workspace queries inject the language's Core
+/// interfaces in addition to interfaces explicitly present in the session.
+///
+/// The policy belongs to the immutable session input boundary rather than a
+/// caller-side analyzer choice. This keeps CLI, SDK, package, and editor
+/// callers on the same query/cache path while making `--no-core` semantically
+/// distinct from a normal workspace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SessionInterfacePolicy {
+    #[default]
+    WithCore,
+    WithoutCore,
+}
+
 impl fmt::Display for SourceStoreError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -312,10 +326,11 @@ impl SessionSourceStore {
 
 /// The shared frontend input boundary. Query caching is layered on top of this
 /// revisioned store; callers cannot mutate a snapshot after it is captured.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct CompilationSession {
     sources: SessionSourceStore,
     interfaces: SessionSourceStore,
+    interface_policy: SessionInterfacePolicy,
     parse_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<Program>>,
     hir_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<Hir>>,
     workspace_hir_cache: Option<Arc<Hir>>,
@@ -360,6 +375,12 @@ pub struct CompilationSession {
     semantic_document_analysis_cache_misses: u64,
     semantic_document_diagnostic_cache_hits: u64,
     semantic_document_diagnostic_cache_misses: u64,
+}
+
+impl Default for CompilationSession {
+    fn default() -> Self {
+        Self::with_interface_policy(SessionInterfacePolicy::WithCore)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -620,6 +641,68 @@ enum SessionFileRole {
 }
 
 impl CompilationSession {
+    /// Create a session with an explicit immutable interface policy.
+    pub fn with_interface_policy(interface_policy: SessionInterfacePolicy) -> Self {
+        Self {
+            sources: SessionSourceStore::default(),
+            interfaces: SessionSourceStore::default(),
+            interface_policy,
+            parse_cache: BTreeMap::new(),
+            hir_cache: BTreeMap::new(),
+            workspace_hir_cache: None,
+            workspace_type_cache: None,
+            workspace_analysis_cache: None,
+            semantic_document_analysis_cache: BTreeMap::new(),
+            semantic_document_diagnostic_cache: BTreeMap::new(),
+            syntax_diagnostic_cache: BTreeMap::new(),
+            lint_cache: BTreeMap::new(),
+            format_cache: BTreeMap::new(),
+            symbol_cache: BTreeMap::new(),
+            document_symbol_cache: BTreeMap::new(),
+            module_header_cache: BTreeMap::new(),
+            workspace_module_graph_cache: None,
+            workspace_diagnostic_cache: None,
+            parse_cache_hits: 0,
+            parse_cache_misses: 0,
+            hir_cache_hits: 0,
+            hir_cache_misses: 0,
+            workspace_hir_cache_hits: 0,
+            workspace_hir_cache_misses: 0,
+            workspace_type_cache_hits: 0,
+            workspace_type_cache_misses: 0,
+            workspace_analysis_cache_hits: 0,
+            workspace_analysis_cache_misses: 0,
+            lint_cache_hits: 0,
+            lint_cache_misses: 0,
+            format_cache_hits: 0,
+            format_cache_misses: 0,
+            symbol_cache_hits: 0,
+            symbol_cache_misses: 0,
+            document_symbol_cache_hits: 0,
+            document_symbol_cache_misses: 0,
+            module_header_cache_hits: 0,
+            module_header_cache_misses: 0,
+            workspace_module_graph_cache_hits: 0,
+            workspace_module_graph_cache_misses: 0,
+            workspace_diagnostic_cache_hits: 0,
+            workspace_diagnostic_cache_misses: 0,
+            semantic_document_analysis_cache_hits: 0,
+            semantic_document_analysis_cache_misses: 0,
+            semantic_document_diagnostic_cache_hits: 0,
+            semantic_document_diagnostic_cache_misses: 0,
+        }
+    }
+
+    /// Create a session that analyzes only explicitly supplied interfaces.
+    pub fn without_core() -> Self {
+        Self::with_interface_policy(SessionInterfacePolicy::WithoutCore)
+    }
+
+    /// Return the semantic policy fixed when this session was created.
+    pub const fn interface_policy(&self) -> SessionInterfacePolicy {
+        self.interface_policy
+    }
+
     pub fn set_file(
         &mut self,
         path: impl Into<String>,
@@ -800,25 +883,44 @@ impl CompilationSession {
         // not yet represented by the package merge query. Selecting it here
         // preserves semantics without letting callers bypass the session's
         // revision, cancellation, or cache boundary.
-        let analysis = Arc::new(match (sources.as_slice(), operation) {
-            ([(path, source)], Some(operation)) => {
-                crate::analyze_source_with_interfaces_result_with_operation(
-                    path,
-                    source,
-                    &interfaces,
-                    operation,
-                )
-            }
-            ([(path, source)], None) => {
-                crate::analyze_source_with_interfaces_result(path, source, &interfaces)
-            }
-            (_, Some(operation)) => crate::analyze_sources_with_interfaces_result_with_operation(
-                &sources,
-                &interfaces,
-                operation,
-            ),
-            (_, None) => crate::analyze_sources_with_interfaces_result(&sources, &interfaces),
-        });
+        let analysis = Arc::new(
+            match (sources.as_slice(), operation, self.interface_policy) {
+                ([(path, source)], Some(operation), SessionInterfacePolicy::WithCore) => {
+                    crate::analyze_source_with_interfaces_result_with_operation(
+                        path,
+                        source,
+                        &interfaces,
+                        operation,
+                    )
+                }
+                ([(path, source)], None, SessionInterfacePolicy::WithCore) => {
+                    crate::analyze_source_with_interfaces_result(path, source, &interfaces)
+                }
+                (_, Some(operation), SessionInterfacePolicy::WithCore) => {
+                    crate::analyze_sources_with_interfaces_result_with_operation(
+                        &sources,
+                        &interfaces,
+                        operation,
+                    )
+                }
+                (_, None, SessionInterfacePolicy::WithCore) => {
+                    crate::analyze_sources_with_interfaces_result(&sources, &interfaces)
+                }
+                (_, Some(operation), SessionInterfacePolicy::WithoutCore) => {
+                    crate::analyze_sources_with_interfaces_without_core_result_with_operation(
+                        &sources,
+                        &interfaces,
+                        operation,
+                    )
+                }
+                (_, None, SessionInterfacePolicy::WithoutCore) => {
+                    crate::analyze_sources_with_interfaces_without_core_result(
+                        &sources,
+                        &interfaces,
+                    )
+                }
+            },
+        );
         if let Some(operation) = operation {
             operation.check()?;
         }
@@ -872,9 +974,15 @@ impl CompilationSession {
 
         self.workspace_diagnostic_cache_misses =
             self.workspace_diagnostic_cache_misses.saturating_add(1);
-        let input = self.frontend_input_snapshot();
-        let diagnostics: Arc<[Diagnostic]> =
-            crate::analyze_frontend_input_snapshot_with_operation(&input, operation)?.into();
+        // The complete analysis query already owns the one immutable
+        // source/interface snapshot and its interface policy. Projecting
+        // diagnostics from it avoids a second direct analyzer route that
+        // could accidentally inject Core for a `WithoutCore` session.
+        let diagnostics: Arc<[Diagnostic]> = self
+            .workspace_analysis_with_operation(operation)?
+            .diagnostics()
+            .to_vec()
+            .into();
         operation.check()?;
         self.workspace_diagnostic_cache = Some(Arc::clone(&diagnostics));
         Ok(diagnostics)
@@ -1759,7 +1867,9 @@ impl CompilationSession {
             .iter()
             .map(|dependency| (dependency.path(), dependency.text()))
             .collect::<Vec<_>>();
-        let analysis = if input.sources.is_empty() {
+        let analysis = if input.sources.is_empty()
+            && self.interface_policy == SessionInterfacePolicy::WithCore
+        {
             Arc::new(crate::analyze_source_with_interfaces_result_with_operation(
                 input.path.as_ref(),
                 input.text.as_ref(),
@@ -1775,13 +1885,22 @@ impl CompilationSession {
                     .iter()
                     .map(|dependency| (dependency.path(), dependency.text())),
             );
-            Arc::new(
-                crate::analyze_sources_with_interfaces_result_with_operation(
-                    &source_slices,
-                    &interface_slices,
-                    operation,
-                ),
-            )
+            Arc::new(match self.interface_policy {
+                SessionInterfacePolicy::WithCore => {
+                    crate::analyze_sources_with_interfaces_result_with_operation(
+                        &source_slices,
+                        &interface_slices,
+                        operation,
+                    )
+                }
+                SessionInterfacePolicy::WithoutCore => {
+                    crate::analyze_sources_with_interfaces_without_core_result_with_operation(
+                        &source_slices,
+                        &interface_slices,
+                        operation,
+                    )
+                }
+            })
         };
         operation.check()?;
         self.semantic_document_analysis_cache_misses = self
@@ -2770,6 +2889,34 @@ fn main() -> Int {
             session.workspace_analysis_with_operation(&cancelled),
             Err(OperationAbort::Cancelled)
         ));
+    }
+
+    #[test]
+    fn session_without_core_matches_the_explicit_no_core_entrypoint() {
+        let source = "fn main() -> Int { return Host.value() }\n";
+        let interfaces = [("host.rssi", "module Host\npub fn value() -> Int\n")];
+        let expected = crate::analyze_sources_with_interfaces_without_core_result(
+            &[("main.rss", source)],
+            &interfaces,
+        );
+
+        let mut session = CompilationSession::without_core();
+        assert_eq!(
+            session.interface_policy(),
+            SessionInterfacePolicy::WithoutCore
+        );
+        session.set_file("main.rss", source).unwrap();
+        for (path, text) in interfaces {
+            session.set_interface(path, text).unwrap();
+        }
+        let actual = session.workspace_analysis();
+        assert_eq!(actual.diagnostics(), expected.diagnostics());
+
+        let operation = OperationContext::default();
+        let cached = session
+            .workspace_analysis_with_operation(&operation)
+            .unwrap();
+        assert!(Arc::ptr_eq(&actual, &cached));
     }
 
     #[test]

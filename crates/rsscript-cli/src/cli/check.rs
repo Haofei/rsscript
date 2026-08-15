@@ -280,7 +280,7 @@ fn analyze_source_without_core_with_session(
             analyze_source_with_interfaces_without_core(path, source, interfaces)
         };
     }
-    let mut session = CompilationSession::default();
+    let mut session = CompilationSession::without_core();
     session
         .set_file(path, source)
         .expect("CLI source path must be a valid session path");

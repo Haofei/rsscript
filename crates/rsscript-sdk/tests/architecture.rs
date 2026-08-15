@@ -3214,7 +3214,11 @@ fn workspace_diagnostic_query_contract_is_semantic_owned() {
     let root = workspace_root();
     let semantics = read(&root.join("crates/rsscript-semantics/src/database.rs"));
     assert!(semantics.contains("pub fn semantic_workspace_diagnostics_with_operation"));
-    assert!(semantics.contains("analyze_frontend_input_snapshot_with_operation"));
+    assert!(semantics.contains("self.workspace_analysis_with_operation(operation)?"));
+    assert!(
+        !semantics.contains("analyze_frontend_input_snapshot_with_operation"),
+        "workspace diagnostics must project the session-owned analysis rather than select a second analyzer path"
+    );
 
     let language_service = read(&root.join("crates/rsscript-language-service/src/lib.rs"));
     assert!(language_service.contains("semantic_document_diagnostics"));

@@ -531,6 +531,24 @@ pub fn analyze_sources_with_interfaces_without_core_result(
     )
 }
 
+/// Analyze a complete immutable source/interface set without injecting Core
+/// interfaces while observing the caller-owned operation boundary.
+pub fn analyze_sources_with_interfaces_without_core_result_with_operation(
+    sources: &[(&str, &str)],
+    interfaces: &[(&str, &str)],
+    operation: &OperationContext,
+) -> AnalysisResult {
+    analyze_input_result(
+        AnalysisInput {
+            sources: AnalysisSources::Many(sources),
+            interfaces,
+            flavor: AnalysisFlavor::FullWithoutBuiltinInterfaces,
+        },
+        FrontendBudgetLimits::default(),
+        Some(operation),
+    )
+}
+
 pub fn validate_sources_with_interfaces_without_core(
     sources: &[(&str, &str)],
     interfaces: &[(&str, &str)],
