@@ -719,7 +719,7 @@ an arbitrary shell executor.
   APIs. The latter now live behind the explicit SDK `project` adapter, so the
   reviewed `Compiler` surface remains in-memory; compiler package traversal
   and persistence remain to be moved.
-  - [ ] **S05.1 — Move workspace capture to `rsscript-project`.** Move
+  - [x] **S05.1 — Move workspace capture to `rsscript-project`.** Move
     directory traversal, manifest/dependency discovery, path normalization, and
     snapshot capture from compiler. The loader now exposes immutable
     WorkspaceSnapshot capture with explicit-base and operation-aware APIs plus
@@ -804,9 +804,12 @@ an arbitrary shell executor.
     - [x] **S05.1e — Move legacy review manifest semantics.** Review/check
       package assembly consumes captured root-manifest bytes and shares the
       graph with dependency resolution rather than reopening `rsspkg.toml`.
-      The parent remains open for its independent private-snapshot and
-      authorization-path acceptance review; checked child work never completes
-      that milestone automatically.
+      The independent private-snapshot and authorization-path acceptance review
+      is now closed by the architecture gate: it asserts project ownership of
+      captured graph lifetimes, bounded no-follow reads/writes, dependency-root
+      resolution, manifest-graph capture, source traversal, and compiler
+      consumption without direct filesystem reopening. Focused project and
+      compiler package tests exercise the same capture boundary.
   - [x] **S05.2 — Move Artifact persistence to an adapter.** Relocate locks,
     atomic writes, temporary files, compression, and artifact-store policy out
     of compiler. The confined lock/read/write implementation now lives in the
