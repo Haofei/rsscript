@@ -2,9 +2,9 @@
   "schema": "rsscript.migration_queue.v1",
   "tasks": [
     {
-      "id": "V06.2.2b",
+      "id": "V06.2.2b.2",
       "priority": 10,
-      "depends_on": ["V06.2.2a"],
+      "depends_on": ["V06.2.2b.1"],
       "scope": [
         "crates/rsscript-vm/**",
         "crates/rsscript-corelib/**",

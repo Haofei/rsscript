@@ -1685,6 +1685,13 @@ an arbitrary shell executor.
       - [ ] **V06.2.2b — Extract pure map/set/deque transforms.** Continue only
         with transformations that have no closure callback, mutable receiver, or
         resource lifecycle behavior.
+        - [x] **V06.2.2b.1 — Extract set algebra and deque materialization.**
+          `Set.difference`, `intersection`, `union`, and `Deque.to_list` now use
+          generic core-library algorithms. The VM retains map-key conversion,
+          fresh-value allocation, and all mutating deque operations.
+        - [ ] **V06.2.2b.2 — Evaluate remaining map/set transforms.** Only move
+          operations whose iteration and result construction can be made pure
+          without pulling VM keys, callbacks, or cost accounting into corelib.
   - [ ] **V06.3 — Reduce VM dependencies to execution primitives.** Verify VM
     Core no longer directly depends on library implementation crates.
 - [ ] **V07 — Classify the intrinsic catalog.** Every entry is exactly one of a

@@ -51,6 +51,9 @@ pub mod encoding {
 /// Pure, representation-independent collection transformations. Callers own
 /// allocation accounting and choose their concrete collection layout.
 pub mod collections {
+    use std::collections::{HashMap, VecDeque};
+    use std::hash::Hash;
+
     pub fn dedup<T: PartialEq>(values: impl IntoIterator<Item = T>) -> Vec<T> {
         let mut result = Vec::new();
         for value in values {
@@ -77,6 +80,41 @@ pub mod collections {
 
     pub fn slice<T>(values: impl IntoIterator<Item = T>, start: usize, len: usize) -> Vec<T> {
         values.into_iter().skip(start).take(len).collect()
+    }
+
+    pub fn deque_to_vec<T: Clone>(values: &VecDeque<T>) -> Vec<T> {
+        values.iter().cloned().collect()
+    }
+
+    pub fn map_difference<K: Clone + Eq + Hash, V: Clone>(
+        left: &HashMap<K, V>,
+        right: &HashMap<K, V>,
+    ) -> HashMap<K, V> {
+        left.iter()
+            .filter(|(key, _)| !right.contains_key(key))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
+    }
+
+    pub fn map_intersection<K: Clone + Eq + Hash, V: Clone>(
+        left: &HashMap<K, V>,
+        right: &HashMap<K, V>,
+    ) -> HashMap<K, V> {
+        left.iter()
+            .filter(|(key, _)| right.contains_key(key))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
+    }
+
+    pub fn map_union<K: Clone + Eq + Hash, V: Clone>(
+        left: &HashMap<K, V>,
+        right: &HashMap<K, V>,
+    ) -> HashMap<K, V> {
+        let mut result = left.clone();
+        for (key, value) in right {
+            result.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+        result
     }
 }
 
@@ -109,5 +147,27 @@ mod tests {
         assert_eq!(skip([1, 2, 3], 1), vec![2, 3]);
         assert_eq!(take([1, 2, 3], 2), vec![1, 2]);
         assert_eq!(slice([1, 2, 3, 4], 1, 2), vec![2, 3]);
+        assert_eq!(
+            deque_to_vec(&std::collections::VecDeque::from([1, 2, 3])),
+            vec![1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn map_set_algebra_is_representation_independent() {
+        let left = std::collections::HashMap::from([("a", 1), ("b", 2)]);
+        let right = std::collections::HashMap::from([("b", 20), ("c", 3)]);
+        assert_eq!(
+            map_difference(&left, &right),
+            std::collections::HashMap::from([("a", 1)])
+        );
+        assert_eq!(
+            map_intersection(&left, &right),
+            std::collections::HashMap::from([("b", 2)])
+        );
+        assert_eq!(
+            map_union(&left, &right),
+            std::collections::HashMap::from([("a", 1), ("b", 2), ("c", 3)])
+        );
     }
 }

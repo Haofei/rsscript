@@ -26,7 +26,7 @@ impl RegVm {
             )))),
             RegIntrinsic::DequeToList => {
                 let deque = expect_deque_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let list = deque.borrow().iter().cloned().collect::<Vec<_>>();
+                let list = core_deque_to_vec(&deque.borrow());
                 self.fresh_list(TypedVec::from_values(list))
             }
             other => {

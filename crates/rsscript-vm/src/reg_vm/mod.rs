@@ -36,7 +36,9 @@ use flate2::read::GzDecoder;
 use hmac::{Hmac, Mac};
 use rsscript_corelib::{
     collections::{
-        dedup as core_list_dedup, reverse as core_list_reverse, skip as core_list_skip,
+        dedup as core_list_dedup, deque_to_vec as core_deque_to_vec,
+        map_difference as core_map_difference, map_intersection as core_map_intersection,
+        map_union as core_map_union, reverse as core_list_reverse, skip as core_list_skip,
         slice as core_list_slice, take as core_list_take,
     },
     encoding::{

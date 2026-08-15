@@ -879,6 +879,8 @@ fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
     let hex = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/hex.rs"));
     let url = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/url.rs"));
     let list = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/list.rs"));
+    let deque = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/deque.rs"));
+    let set = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/set.rs"));
 
     assert!(corelib_manifest.contains("name = \"rsscript-corelib\""));
     for forbidden in ["rsscript-vm", "rsscript-provider", "rsscript-bytecode"] {
@@ -899,6 +901,10 @@ fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
         "pub fn skip",
         "pub fn take",
         "pub fn slice",
+        "pub fn deque_to_vec",
+        "pub fn map_difference",
+        "pub fn map_intersection",
+        "pub fn map_union",
     ] {
         assert!(
             corelib.contains(required),
@@ -928,6 +934,17 @@ fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
         assert!(
             list.contains(required),
             "list adapter is missing `{required}`"
+        );
+    }
+    assert!(deque.contains("core_deque_to_vec(&deque.borrow())"));
+    for required in [
+        "core_map_difference(&left.borrow(), &right.borrow())",
+        "core_map_intersection(&left.borrow(), &right.borrow())",
+        "core_map_union(&left.borrow(), &right.borrow())",
+    ] {
+        assert!(
+            set.contains(required),
+            "set adapter is missing `{required}`"
         );
     }
 }

@@ -23,25 +23,13 @@ impl RegVm {
             RegIntrinsic::SetDifference => {
                 let left = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let right = expect_map_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let right = right.borrow();
-                let result = left
-                    .borrow()
-                    .iter()
-                    .filter(|(key, _)| !right.contains_key(key))
-                    .map(|(key, value)| (key.clone(), value.clone()))
-                    .collect::<ValueMap>();
+                let result = core_map_difference(&left.borrow(), &right.borrow());
                 self.fresh_map(result)
             }
             RegIntrinsic::SetIntersection => {
                 let left = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let right = expect_map_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let right = right.borrow();
-                let result = left
-                    .borrow()
-                    .iter()
-                    .filter(|(key, _)| right.contains_key(key))
-                    .map(|(key, value)| (key.clone(), value.clone()))
-                    .collect::<ValueMap>();
+                let result = core_map_intersection(&left.borrow(), &right.borrow());
                 self.fresh_map(result)
             }
             RegIntrinsic::SetIsEmpty => {
@@ -73,10 +61,7 @@ impl RegVm {
             RegIntrinsic::SetUnion => {
                 let left = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let right = expect_map_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let mut result = left.borrow().clone();
-                for (key, value) in right.borrow().iter() {
-                    result.entry(key.clone()).or_insert_with(|| value.clone());
-                }
+                let result = core_map_union(&left.borrow(), &right.borrow());
                 self.fresh_map(result)
             }
             RegIntrinsic::SortedSetContains => {
