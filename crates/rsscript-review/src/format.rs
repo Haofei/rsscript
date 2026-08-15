@@ -1,9 +1,10 @@
 use rsscript_compiler::compatibility::{
     PackageCheck, PackageDependencyKind, PackageDiff, PackageLock, PackageLockDiff,
     PackageMetadataReport, PackageReview, PackageReviewAwaitBoundary, PackageReviewAwaitSite,
-    PackageReviewDependency, PackageReviewExport, PackageRisk, PackageTree, PackageTreeNode,
+    PackageReviewDependency, PackageReviewExport, PackageTree, PackageTreeNode,
     format_review_human,
 };
+use rsscript_review_core::PackageRisk;
 
 fn package_risk_label(risk: PackageRisk) -> &'static str {
     match risk {

@@ -6,3 +6,6 @@
 mod format;
 
 pub use format::*;
+pub use rsscript_review_core::{
+    NativeApiRiskPolicy, PackageRisk, PackageRiskEvidence, package_risk,
+};

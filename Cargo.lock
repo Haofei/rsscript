@@ -1824,6 +1824,7 @@ dependencies = [
  "rsscript-operation",
  "rsscript-project",
  "rsscript-provider-api",
+ "rsscript-review-core",
  "rsscript-semantics",
  "rsscript-syntax",
  "rsscript-text",
@@ -2030,8 +2031,16 @@ name = "rsscript-review"
 version = "0.1.0"
 dependencies = [
  "rsscript-compiler",
+ "rsscript-review-core",
  "serde_json",
  "toml",
+]
+
+[[package]]
+name = "rsscript-review-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

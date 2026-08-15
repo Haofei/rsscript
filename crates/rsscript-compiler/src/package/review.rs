@@ -2,6 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use rsscript_project::{ProjectManifestGraphLimits, capture_project_manifest_graph};
+use rsscript_review_core::{
+    NativeApiRiskPolicy, PackageRiskEvidence, package_risk as derive_package_risk,
+};
 
 use crate::analyzer::core_interfaces;
 use crate::diagnostic::{Diagnostic, Span, code};
@@ -1038,34 +1041,10 @@ fn package_risk(
     native_apis: usize,
     unknown_external_binding_bindings: usize,
 ) -> PackageRisk {
-    if native.is_some_and(|native| !native.semantic.source_scan_best_effort.complete) {
-        return PackageRisk::Unknown;
-    }
-    if manifest
-        .review
-        .as_ref()
-        .and_then(|review| review.expect.risk.as_deref())
-        == Some("unknown")
-        || review_map.summary.unknown.functions > 0
-        || unknown_external_binding_bindings > 0
-    {
-        return PackageRisk::Unknown;
-    }
-    if diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.severity.is_error())
-    {
-        return PackageRisk::High;
-    }
-    if manifest
-        .features
-        .iter()
-        .any(|(name, values)| package_feature_may_change_boundary_risk(name, values))
-    {
-        return PackageRisk::High;
-    }
-    if let Some(native) = native
-        && (native
+    let native_source_scan_complete =
+        native.is_none_or(|native| native.semantic.source_scan_best_effort.complete);
+    let has_unreviewed_native_behavior = native.is_some_and(|native| {
+        native
             .build_scripts
             .as_deref()
             .is_some_and(|policy| policy != "forbid")
@@ -1090,27 +1069,37 @@ fn package_risk(
                 && native
                     .ffi_policy
                     .as_deref()
-                    .is_none_or(|policy| policy != "allow")))
-    {
-        return PackageRisk::High;
-    }
-    if native_apis > 0 {
-        return package_native_api_risk(manifest);
-    }
-    if native.is_some() || review_map.summary.review_required.functions > 0 {
-        return PackageRisk::Elevated;
-    }
-    PackageRisk::Low
-}
-
-fn package_native_api_risk(manifest: &Manifest) -> PackageRisk {
-    match manifest
+                    .is_none_or(|policy| policy != "allow"))
+    });
+    let native_api_risk = match manifest
         .review
         .as_ref()
         .and_then(|review| review.policy.native_api_risk.as_deref())
     {
-        Some("high") => PackageRisk::High,
-        Some("elevated") => PackageRisk::Elevated,
-        _ => PackageRisk::High,
-    }
+        Some("elevated") => Some(NativeApiRiskPolicy::Elevated),
+        Some("high") => Some(NativeApiRiskPolicy::High),
+        _ => None,
+    };
+    derive_package_risk(&PackageRiskEvidence {
+        native_source_scan_complete,
+        expected_unknown: manifest
+            .review
+            .as_ref()
+            .and_then(|review| review.expect.risk.as_deref())
+            == Some("unknown"),
+        unknown_review_functions: review_map.summary.unknown.functions,
+        unknown_external_bindings: unknown_external_binding_bindings,
+        has_error_diagnostics: diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity.is_error()),
+        has_boundary_changing_features: manifest
+            .features
+            .iter()
+            .any(|(name, values)| package_feature_may_change_boundary_risk(name, values)),
+        has_unreviewed_native_behavior,
+        native_api_count: native_apis,
+        native_api_risk,
+        has_native_package: native.is_some(),
+        review_required_functions: review_map.summary.review_required.functions,
+    })
 }

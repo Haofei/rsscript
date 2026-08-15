@@ -5,6 +5,10 @@ use serde::{Deserialize, Serialize};
 use crate::diagnostic::{Diagnostic, Span};
 use crate::review::{ReviewFinding, ReviewMap};
 
+/// Compatibility re-export for legacy package APIs. New review consumers must
+/// import the model from `rsscript-review-core` directly.
+pub use rsscript_review_core::PackageRisk;
+
 pub use rsscript_artifact::{
     PACKAGE_ANALYSIS_SCHEMA, PackageAnalysisAwaitSiteV1 as PackageAnalysisAwaitSite,
     PackageAnalysisCallEdgeV1 as PackageAnalysisCallEdge,
@@ -360,15 +364,6 @@ pub enum PackageInterfaceChangeKind {
     Added,
     Removed,
     Modified,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PackageRisk {
-    Low,
-    Elevated,
-    High,
-    Unknown,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]

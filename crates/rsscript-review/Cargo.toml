@@ -8,5 +8,6 @@ publish = false
 
 [dependencies]
 rsscript-compiler = { path = "../rsscript-compiler", default-features = false, features = ["package"] }
+rsscript-review-core = { path = "../rsscript-review-core" }
 serde_json = "1"
 toml = "0.8"

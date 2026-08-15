@@ -856,10 +856,12 @@ an arbitrary shell executor.
     `compatibility` namespace.
     Their implementations and package types still need to move to dedicated
     project/review/AOT crates before this item can close.
-    - [ ] **S05.3a — Extract neutral risk facts and calculation.** Move the
-      review/risk data model and calculation out of compiler compatibility into
-      the optional review consumer, leaving compiler package code to emit only
-      neutral typed analysis facts.
+    - [x] **S05.3a — Extract neutral risk facts and calculation.** The review
+      risk lattice and its pure evidence evaluator now live in
+      `rsscript-review-core`. Compiler compatibility code collects neutral
+      typed facts and preserves only a compatibility re-export; the optional
+      `rsscript-review` consumer owns the public review-model API. Artifact
+      analysis remains deterministic and policy-neutral.
   - [ ] **S05.4 — Move Rust/AOT lowering to its experimental boundary.** Compiler
     reviewed top-level APIs no longer expose generated Rust or native lowering
     APIs. Native package dependency identity now belongs to the package snapshot,

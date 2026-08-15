@@ -23,6 +23,7 @@ rsscript-mir = { path = "../rsscript-mir", optional = true }
 rsscript-operation = { path = "../rsscript-operation" }
 rsscript-provider-api = { path = "../rsscript-provider-api", optional = true }
 rsscript-project = { path = "../rsscript-project", optional = true }
+rsscript-review-core = { path = "../rsscript-review-core", optional = true }
 rsscript-semantics = { path = "../rsscript-semantics" }
 rsscript-syntax = { path = "../rsscript-syntax" }
 rsscript-text = { path = "../rsscript-text" }
@@ -65,6 +66,7 @@ package = [
     "dep:libc",
     "dep:rustix",
     "dep:rsscript-project",
+    "dep:rsscript-review-core",
     "dep:sha2",
     "dep:tempfile",
     "dep:toml",

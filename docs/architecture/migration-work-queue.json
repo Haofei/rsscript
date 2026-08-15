@@ -2,23 +2,24 @@
   "schema": "rsscript.migration_queue.v1",
   "tasks": [
     {
-      "id": "S05.3a",
+      "id": "S05.4",
       "priority": 100,
-      "depends_on": ["S05.2"],
+      "depends_on": ["S05.3a"],
       "scope": [
-        "crates/rsscript-compiler/src/package/**",
-        "crates/rsscript-review/**",
-        "crates/rsscript-artifact/**",
+        "crates/rsscript-compiler/src/rust_lower/**",
+        "crates/rsscript-compiler/src/runtime_abi.rs",
+        "crates/rsscript-compiler/src/lib.rs",
+        "experiments/aot-runtime/**",
         "docs/architecture/migration-baseline.md"
       ],
       "acceptance": [
-        "Compiler package code emits neutral typed analysis facts without owning review-risk calculation.",
-        "The optional review consumer owns risk interpretation and its public types.",
-        "Reviewed artifact output remains deterministic and policy-neutral."
+        "Compiler-root APIs expose no generated-Rust or AOT lowering symbols.",
+        "The experimental AOT boundary owns generated Rust, source maps, and runtime ABI helpers.",
+        "Normal compiler and CLI execution builds do not select the AOT feature closure."
       ],
       "verification": [
-        "cargo test -p rsscript-review --locked",
-        "cargo test -p rsscript-compiler --locked"
+        "cargo test -p rsscript-compiler --features aot-rust --locked",
+        "cargo test -p rsscript-cli --features aot-rust --locked"
       ]
     }
   ]
