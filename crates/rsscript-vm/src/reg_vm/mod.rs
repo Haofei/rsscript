@@ -31,7 +31,6 @@ use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 
-use chrono::{DateTime, Datelike, NaiveDate, SecondsFormat, TimeZone, Timelike, Utc};
 use flate2::read::GzDecoder;
 use hmac::{Hmac, Mac};
 use rsscript_corelib::{
@@ -41,6 +40,16 @@ use rsscript_corelib::{
         map_is_subset as core_map_is_subset, map_keys as core_map_keys,
         map_union as core_map_union, map_values as core_map_values, reverse as core_list_reverse,
         skip as core_list_skip, slice as core_list_slice, take as core_list_take,
+    },
+    date::{
+        add_days as core_date_add_days, add_ms as core_date_add_ms, day as core_date_day,
+        days_between as core_date_days_between, days_in_month as core_date_days_in_month,
+        format_iso as core_date_format_iso, format_ymd as core_date_format_ymd,
+        hour as core_date_hour, is_leap_year as core_date_is_leap_year, minute as core_date_minute,
+        month as core_date_month, parse_iso as core_date_parse_iso,
+        parse_ymd as core_date_parse_ymd, second as core_date_second,
+        start_of_day as core_date_start_of_day, weekday as core_date_weekday,
+        year as core_date_year,
     },
     encoding::{
         base64_decode, base64_encode, hex_decode as core_hex_decode, hex_encode as core_hex_encode,
@@ -119,8 +128,6 @@ pub fn with_native_cost_model_disabled<R>(f: impl FnOnce() -> R) -> R {
     let _guard = CostModeGuard::new(CostMode::Off);
     f()
 }
-
-const MS_PER_DAY: i64 = 86_400_000;
 
 // ============================================================================
 // Central intrinsic/effect registry (JIT descriptor table)

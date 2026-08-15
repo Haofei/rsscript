@@ -249,58 +249,6 @@ pub(super) fn hmac_sha256_digest(key: &[u8], value: &[u8]) -> String {
     format!("{:x}", mac.finalize().into_bytes())
 }
 
-pub(super) fn utc_datetime(unix_ms: i64) -> chrono::DateTime<Utc> {
-    Utc.timestamp_millis_opt(unix_ms)
-        .single()
-        .unwrap_or_else(|| {
-            Utc.timestamp_millis_opt(0)
-                .single()
-                .expect("epoch is valid")
-        })
-}
-
-pub(super) fn date_parse_ymd(value: &str) -> Option<i64> {
-    let date = NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()?;
-    let datetime = date.and_hms_opt(0, 0, 0)?;
-    Some(Utc.from_utc_datetime(&datetime).timestamp_millis())
-}
-
-pub(super) fn date_parse_iso(value: &str) -> Option<i64> {
-    DateTime::parse_from_rfc3339(value)
-        .ok()
-        .map(|datetime| datetime.with_timezone(&Utc).timestamp_millis())
-}
-
-pub(super) fn date_is_leap_year(year: i64) -> bool {
-    let Ok(year) = i32::try_from(year) else {
-        return false;
-    };
-    NaiveDate::from_ymd_opt(year, 2, 29).is_some()
-}
-
-pub(super) fn date_days_in_month(year: i64, month: i64) -> i64 {
-    let Ok(year) = i32::try_from(year) else {
-        return 0;
-    };
-    let Ok(month) = u32::try_from(month) else {
-        return 0;
-    };
-    let Some(first) = NaiveDate::from_ymd_opt(year, month, 1) else {
-        return 0;
-    };
-    let Some(next_month) = (if month == 12 {
-        year.checked_add(1)
-            .and_then(|year| NaiveDate::from_ymd_opt(year, 1, 1))
-    } else {
-        month
-            .checked_add(1)
-            .and_then(|month| NaiveDate::from_ymd_opt(year, month, 1))
-    }) else {
-        return 0;
-    };
-    (next_month - first).num_days()
-}
-
 /// Insert `value` into an already-sorted `Vec` via binary search, keeping it
 /// sorted (`Ok(false)` if an equal element is present). O(log n) search + O(n)
 /// shift — no clone and no full re-sort, unlike rebuilding the whole backing.

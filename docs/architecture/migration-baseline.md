@@ -1679,6 +1679,11 @@ an arbitrary shell executor.
       match, capture, find, replace, and split now use `rsscript-corelib`'s
       `CompiledRegex`; the VM owns only its language value representation and
       error/result conversion. `regex` is no longer a direct VM dependency.
+    - [x] **V06.2.1c — Extract deterministic date calculations.** UTC parsing,
+      formatting, calendar fields, and date arithmetic now live in
+      `rsscript-corelib::date`. Wall-clock acquisition remains absent from the
+      library and must still arrive through a time Provider; `chrono` is no
+      longer a direct VM dependency.
     - [ ] **V06.2.2 — Extract collection algorithms.** Move non-primitive list,
       map, set, and deque transformations behind the same pure-library boundary
       without moving ownership-sensitive mutation primitives out of the VM.

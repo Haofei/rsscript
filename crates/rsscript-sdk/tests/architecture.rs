@@ -882,6 +882,7 @@ fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
     let deque = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/deque.rs"));
     let set = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/set.rs"));
     let regex = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/regex.rs"));
+    let date = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/date.rs"));
     let value_access = read(&root.join("crates/rsscript-vm/src/reg_vm/value_access.rs"));
 
     assert!(corelib_manifest.contains("name = \"rsscript-corelib\""));
@@ -913,6 +914,9 @@ fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
         "pub struct CompiledRegex",
         "pub fn captures",
         "pub fn replace_all",
+        "pub fn format_iso",
+        "pub fn parse_iso",
+        "pub fn start_of_day",
     ] {
         assert!(
             corelib.contains(required),
@@ -920,7 +924,13 @@ fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
         );
     }
     assert!(vm_manifest.contains("rsscript-corelib"));
-    for removed in ["base64 =", "hex =", "percent-encoding =", "regex ="] {
+    for removed in [
+        "base64 =",
+        "hex =",
+        "percent-encoding =",
+        "regex =",
+        "chrono =",
+    ] {
         assert!(
             !vm_manifest.contains(removed),
             "VM manifest must not directly own encoding implementation dependency `{removed}`"
@@ -934,6 +944,8 @@ fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
     assert!(url.contains("url_decode_component(value)"));
     assert!(regex.contains("CompiledRegex::compile(pattern)"));
     assert!(value_access.contains("Result<CompiledRegex, EvalError>"));
+    assert!(date.contains("core_date_format_iso(unix_ms)"));
+    assert!(date.contains("core_date_start_of_day(unix_ms)"));
     for required in [
         "core_list_dedup(list.borrow().iter())",
         "core_list_reverse(list.borrow().iter())",

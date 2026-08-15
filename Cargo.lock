@@ -1869,6 +1869,7 @@ name = "rsscript-corelib"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "chrono",
  "hex",
  "percent-encoding",
  "regex",
@@ -2162,7 +2163,6 @@ version = "0.1.0"
 name = "rsscript-vm"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "flate2",
  "hmac",
  "rsscript-abi-model",

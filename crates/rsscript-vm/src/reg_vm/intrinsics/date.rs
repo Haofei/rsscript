@@ -18,92 +18,81 @@ impl RegVm {
             RegIntrinsic::DateAddDays => {
                 let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let days = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(VmValue::Int(
-                    unix_ms.saturating_add(days.saturating_mul(MS_PER_DAY)),
-                ))
+                Ok(VmValue::Int(core_date_add_days(unix_ms, days)))
             }
             RegIntrinsic::DateAddMs => {
                 let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(VmValue::Int(unix_ms.saturating_add(ms)))
+                Ok(VmValue::Int(core_date_add_ms(unix_ms, ms)))
             }
             RegIntrinsic::DateDay => {
                 let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Int(utc_datetime(unix_ms).day() as i64))
+                Ok(VmValue::Int(core_date_day(unix_ms)))
             }
             RegIntrinsic::DateDaysBetween => {
                 let start_unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let end_unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(VmValue::Int(
-                    end_unix_ms.saturating_sub(start_unix_ms) / MS_PER_DAY,
-                ))
+                Ok(VmValue::Int(core_date_days_between(
+                    start_unix_ms,
+                    end_unix_ms,
+                )))
             }
             RegIntrinsic::DateDaysInMonth => {
                 let year = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let month = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(VmValue::Int(date_days_in_month(year, month)))
+                Ok(VmValue::Int(core_date_days_in_month(year, month)))
             }
             RegIntrinsic::DateFormatIso => {
                 let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                self.fresh_string(
-                    utc_datetime(unix_ms).to_rfc3339_opts(SecondsFormat::Millis, true),
-                )
+                self.fresh_string(core_date_format_iso(unix_ms))
             }
             RegIntrinsic::DateFormatYmd => {
                 let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                self.fresh_string(utc_datetime(unix_ms).format("%Y-%m-%d").to_string())
+                self.fresh_string(core_date_format_ymd(unix_ms))
             }
             RegIntrinsic::DateHour => {
                 let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Int(utc_datetime(unix_ms).hour() as i64))
+                Ok(VmValue::Int(core_date_hour(unix_ms)))
             }
             RegIntrinsic::DateIsLeapYear => {
                 let year = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Bool(date_is_leap_year(year)))
+                Ok(VmValue::Bool(core_date_is_leap_year(year)))
             }
             RegIntrinsic::DateMinute => {
                 let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Int(utc_datetime(unix_ms).minute() as i64))
+                Ok(VmValue::Int(core_date_minute(unix_ms)))
             }
             RegIntrinsic::DateMonth => {
                 let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Int(utc_datetime(unix_ms).month() as i64))
+                Ok(VmValue::Int(core_date_month(unix_ms)))
             }
             RegIntrinsic::DateParseIso => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(date_parse_iso(value)
+                Ok(core_date_parse_iso(value)
                     .map(|value| VmValue::some(VmValue::Int(value)))
                     .unwrap_or(VmValue::OptionNone))
             }
             RegIntrinsic::DateParseYmd => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(date_parse_ymd(value)
+                Ok(core_date_parse_ymd(value)
                     .map(|value| VmValue::some(VmValue::Int(value)))
                     .unwrap_or(VmValue::OptionNone))
             }
             RegIntrinsic::DateSecond => {
                 let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Int(utc_datetime(unix_ms).second() as i64))
+                Ok(VmValue::Int(core_date_second(unix_ms)))
             }
             RegIntrinsic::DateStartOfDay => {
                 let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let start = utc_datetime(unix_ms)
-                    .date_naive()
-                    .and_hms_opt(0, 0, 0)
-                    .expect("midnight is valid");
-                Ok(VmValue::Int(
-                    Utc.from_utc_datetime(&start).timestamp_millis(),
-                ))
+                Ok(VmValue::Int(core_date_start_of_day(unix_ms)))
             }
             RegIntrinsic::DateWeekday => {
                 let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Int(
-                    utc_datetime(unix_ms).weekday().number_from_monday() as i64,
-                ))
+                Ok(VmValue::Int(core_date_weekday(unix_ms)))
             }
             RegIntrinsic::DateYear => {
                 let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Int(utc_datetime(unix_ms).year() as i64))
+                Ok(VmValue::Int(core_date_year(unix_ms)))
             }
             other => unreachable!("exec_date_intrinsics called with non-date intrinsic: {other:?}"),
         }

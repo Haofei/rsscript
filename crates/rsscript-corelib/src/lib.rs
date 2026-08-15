@@ -176,9 +176,125 @@ pub mod regex {
     }
 }
 
+/// Pure UTC calendar calculations. There is deliberately no `now` operation:
+/// wall-clock access remains a Provider capability.
+pub mod date {
+    use chrono::{DateTime, Datelike, NaiveDate, SecondsFormat, TimeZone, Timelike, Utc};
+
+    pub const MS_PER_DAY: i64 = 86_400_000;
+
+    fn utc_datetime(unix_ms: i64) -> DateTime<Utc> {
+        Utc.timestamp_millis_opt(unix_ms)
+            .single()
+            .unwrap_or_else(|| {
+                Utc.timestamp_millis_opt(0)
+                    .single()
+                    .expect("epoch is valid")
+            })
+    }
+
+    pub fn add_days(unix_ms: i64, days: i64) -> i64 {
+        unix_ms.saturating_add(days.saturating_mul(MS_PER_DAY))
+    }
+
+    pub fn add_ms(unix_ms: i64, ms: i64) -> i64 {
+        unix_ms.saturating_add(ms)
+    }
+
+    pub fn day(unix_ms: i64) -> i64 {
+        utc_datetime(unix_ms).day() as i64
+    }
+
+    pub fn days_between(start_unix_ms: i64, end_unix_ms: i64) -> i64 {
+        end_unix_ms.saturating_sub(start_unix_ms) / MS_PER_DAY
+    }
+
+    pub fn days_in_month(year: i64, month: i64) -> i64 {
+        let Ok(year) = i32::try_from(year) else {
+            return 0;
+        };
+        let Ok(month) = u32::try_from(month) else {
+            return 0;
+        };
+        let Some(first) = NaiveDate::from_ymd_opt(year, month, 1) else {
+            return 0;
+        };
+        let Some(next_month) = (if month == 12 {
+            year.checked_add(1)
+                .and_then(|year| NaiveDate::from_ymd_opt(year, 1, 1))
+        } else {
+            month
+                .checked_add(1)
+                .and_then(|month| NaiveDate::from_ymd_opt(year, month, 1))
+        }) else {
+            return 0;
+        };
+        (next_month - first).num_days()
+    }
+
+    pub fn format_iso(unix_ms: i64) -> String {
+        utc_datetime(unix_ms).to_rfc3339_opts(SecondsFormat::Millis, true)
+    }
+
+    pub fn format_ymd(unix_ms: i64) -> String {
+        utc_datetime(unix_ms).format("%Y-%m-%d").to_string()
+    }
+
+    pub fn hour(unix_ms: i64) -> i64 {
+        utc_datetime(unix_ms).hour() as i64
+    }
+
+    pub fn is_leap_year(year: i64) -> bool {
+        let Ok(year) = i32::try_from(year) else {
+            return false;
+        };
+        NaiveDate::from_ymd_opt(year, 2, 29).is_some()
+    }
+
+    pub fn minute(unix_ms: i64) -> i64 {
+        utc_datetime(unix_ms).minute() as i64
+    }
+
+    pub fn month(unix_ms: i64) -> i64 {
+        utc_datetime(unix_ms).month() as i64
+    }
+
+    pub fn parse_iso(value: &str) -> Option<i64> {
+        DateTime::parse_from_rfc3339(value)
+            .ok()
+            .map(|datetime| datetime.with_timezone(&Utc).timestamp_millis())
+    }
+
+    pub fn parse_ymd(value: &str) -> Option<i64> {
+        let date = NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()?;
+        let datetime = date.and_hms_opt(0, 0, 0)?;
+        Some(Utc.from_utc_datetime(&datetime).timestamp_millis())
+    }
+
+    pub fn second(unix_ms: i64) -> i64 {
+        utc_datetime(unix_ms).second() as i64
+    }
+
+    pub fn start_of_day(unix_ms: i64) -> i64 {
+        let start = utc_datetime(unix_ms)
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .expect("midnight is valid");
+        Utc.from_utc_datetime(&start).timestamp_millis()
+    }
+
+    pub fn weekday(unix_ms: i64) -> i64 {
+        utc_datetime(unix_ms).weekday().number_from_monday() as i64
+    }
+
+    pub fn year(unix_ms: i64) -> i64 {
+        utc_datetime(unix_ms).year() as i64
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{collections::*, encoding::*, regex::CompiledRegex};
+    use super::{collections::*, date, encoding::*, regex::CompiledRegex};
 
     #[test]
     fn encoding_algorithms_are_deterministic_and_round_trip() {
@@ -250,5 +366,18 @@ mod tests {
             vec!["".to_owned(), " ".to_owned(), "".to_owned()]
         );
         assert!(CompiledRegex::compile("(").is_err());
+    }
+
+    #[test]
+    fn date_calculations_are_utc_and_do_not_read_the_clock() {
+        let epoch = 0;
+        assert_eq!(date::add_days(epoch, 1), date::MS_PER_DAY);
+        assert_eq!(date::format_ymd(epoch), "1970-01-01");
+        assert_eq!(date::format_iso(epoch), "1970-01-01T00:00:00.000Z");
+        assert_eq!(date::parse_ymd("1970-01-02"), Some(date::MS_PER_DAY));
+        assert_eq!(date::parse_iso("1970-01-01T00:00:00Z"), Some(epoch));
+        assert!(date::is_leap_year(2024));
+        assert_eq!(date::days_in_month(2024, 2), 29);
+        assert_eq!(date::weekday(epoch), 4);
     }
 }
