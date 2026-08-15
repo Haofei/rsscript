@@ -27,7 +27,7 @@ rsscript-semantics = { path = "../rsscript-semantics" }
 rsscript-syntax = { path = "../rsscript-syntax" }
 rsscript-text = { path = "../rsscript-text" }
 rsscript-work-budget = { path = "../rsscript-work-budget" }
-rsscript-vm = { path = "../rsscript-vm", default-features = false, features = ["legacy-exec-ir"], optional = true }
+rsscript-vm = { path = "../rsscript-vm", default-features = false, optional = true }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = { version = "0.10", optional = true }
@@ -78,7 +78,7 @@ legacy-exec-ir = ["package", "rsscript-lowering/legacy-exec-ir"]
 language-service = []
 # The RSS-written frontend is a research parity harness.  Keep it out of Core
 # test builds; the dedicated self-host workflow opts in explicitly.
-selfhost-parity = ["dep:rsscript-vm"]
+selfhost-parity = ["package", "dep:rsscript-vm"]
 # Native (Cranelift) baseline JIT for the integer/control core. Off by default so
 # normal builds/tests don't pull in the codegen dependency; enable for the Rust
 # differential/benchmark harnesses and force-JIT CI.

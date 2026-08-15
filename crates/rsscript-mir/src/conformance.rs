@@ -1020,6 +1020,35 @@ impl<'a> Interpreter<'a> {
                         };
                         values[destination.index()] = Some(value);
                     }
+                    MirInstruction::SetField { base, field, value } => {
+                        let replacement = value_at(&values, *value)?;
+                        let updated = match value_at(&values, *base)? {
+                            MirValue::Record { name, mut fields } => {
+                                let Some((_, slot)) =
+                                    fields.iter_mut().find(|(name, _)| name == field)
+                                else {
+                                    return Err(MirExecutionError::InvalidOperation(
+                                        "missing record field",
+                                    ));
+                                };
+                                *slot = replacement;
+                                MirValue::Record { name, fields }
+                            }
+                            MirValue::JsonObject(mut fields) => {
+                                let Some((_, slot)) =
+                                    fields.iter_mut().find(|(name, _)| name == field)
+                                else {
+                                    return Err(MirExecutionError::InvalidOperation(
+                                        "missing object field",
+                                    ));
+                                };
+                                *slot = replacement;
+                                MirValue::JsonObject(fields)
+                            }
+                            _ => return Err(MirExecutionError::InvalidOperation("field base")),
+                        };
+                        values[base.index()] = Some(updated);
+                    }
                     MirInstruction::ListLen { destination, list } => {
                         let length = match value_at(&values, *list)? {
                             MirValue::List(items) => items.len() as i64,
@@ -1097,6 +1126,22 @@ impl<'a> Interpreter<'a> {
                             value_at(&values, *left)?,
                             value_at(&values, *right)?,
                         )?);
+                    }
+                    MirInstruction::StringConcat {
+                        destination,
+                        left,
+                        right,
+                    } => {
+                        let left = match value_at(&values, *left)? {
+                            MirValue::String(value) => value,
+                            _ => return Err(MirExecutionError::InvalidOperation("string left")),
+                        };
+                        let right = match value_at(&values, *right)? {
+                            MirValue::String(value) => value,
+                            _ => return Err(MirExecutionError::InvalidOperation("string right")),
+                        };
+                        values[destination.index()] =
+                            Some(MirValue::String(format!("{left}{right}")));
                     }
                     MirInstruction::Call {
                         destination,

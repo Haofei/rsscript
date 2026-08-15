@@ -1224,13 +1224,8 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 Ok(())
             }
             checked::HirStmt::Assign { target, value, .. } => {
-                let checked::HirExpr::Ident { name, .. } = target else {
-                    return self.unsupported("non-local checked HIR assignment");
-                };
-                let place = self.lookup_place(name)?;
                 let value = self.lower_expression(value)?;
-                self.emit(MirInstruction::WritePlace { place, value });
-                Ok(())
+                self.lower_assignment_target(target, value)
             }
             checked::HirStmt::Expr(expression) => {
                 let value = self.lower_expression(expression)?;
@@ -1290,6 +1285,34 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 Ok(())
             }
             checked::HirStmt::Unknown(_) => self.unsupported("unknown checked HIR statement"),
+        }
+    }
+
+    /// Lower assignment as an explicit rebuild chain. A field assignment first
+    /// produces the updated aggregate and then assigns that value to its base;
+    /// this preserves value semantics for nested paths without asking a
+    /// backend to inspect source-shaped assignment syntax.
+    fn lower_assignment_target(
+        &mut self,
+        target: &checked::HirExpr,
+        value: ValueId,
+    ) -> Result<(), MirLoweringError> {
+        match target {
+            checked::HirExpr::Ident { name, .. } => {
+                let place = self.lookup_place(name)?;
+                self.emit(MirInstruction::WritePlace { place, value });
+                Ok(())
+            }
+            checked::HirExpr::Field { base, name, .. } => {
+                let base_value = self.lower_expression(base)?;
+                self.emit(MirInstruction::SetField {
+                    base: base_value,
+                    field: name.clone(),
+                    value,
+                });
+                self.lower_assignment_target(base, base_value)
+            }
+            _ => self.unsupported("non-place checked HIR assignment"),
         }
     }
 
@@ -1921,6 +1944,20 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                     value: None,
                 });
             }
+            "concat" if signature.namespace.as_deref() == Some("String") => {
+                if receiver.is_some() || args.len() != 2 {
+                    return self.unsupported("String.concat with invalid checked call shape");
+                }
+                let mut ordered = args.iter().collect::<Vec<_>>();
+                ordered.sort_by_key(|argument| argument.evaluation_index);
+                let left = self.lower_expression(&ordered[0].value)?;
+                let right = self.lower_expression(&ordered[1].value)?;
+                self.emit(MirInstruction::StringConcat {
+                    destination,
+                    left,
+                    right,
+                });
+            }
             "get" if signature.namespace.as_deref() == Some("List") => {
                 if receiver.is_some() || args.len() != 2 {
                     return self.unsupported("List.get with invalid checked call shape");
@@ -2503,7 +2540,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
     /// new in-place MIR operation decides its own runtime contract instead of
     /// erasing `mut` into an ordinary value before codegen.
     fn lower_mutable_builtin_place(
-        &self,
+        &mut self,
         value: &checked::HirExpr,
     ) -> Result<PlaceId, MirLoweringError> {
         let checked::HirExpr::Effect {
@@ -2514,10 +2551,31 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
         else {
             return self.unsupported("mutating builtin argument without checked mut effect");
         };
-        let checked::HirExpr::Ident { name, .. } = value.as_ref() else {
-            return self.unsupported("mutating builtin argument on non-local value");
-        };
-        self.lookup_place(name)
+        self.lower_mutable_place(value)
+    }
+
+    /// A checked `mut` argument is usually a local place. Struct fields are
+    /// also valid mutable collection locations: materialize the field value in
+    /// a compiler-private place so the existing collection MIR instructions
+    /// retain their explicit mutation operand while the runtime continues to
+    /// mutate the shared collection identity.
+    fn lower_mutable_place(
+        &mut self,
+        value: &checked::HirExpr,
+    ) -> Result<PlaceId, MirLoweringError> {
+        match value {
+            checked::HirExpr::Ident { name, .. } => self.lookup_place(name),
+            checked::HirExpr::Field { .. } => {
+                let source = self.lower_expression(value)?;
+                let place = self.place(&format!("$mir_mut_field_{}", self.place_names.len()));
+                self.emit(MirInstruction::WritePlace {
+                    place,
+                    value: source,
+                });
+                Ok(place)
+            }
+            _ => self.unsupported("mutating builtin argument on non-place value"),
+        }
     }
 
     /// Materialize a value that the resolved builtin retains and preserve the
@@ -2536,7 +2594,9 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 value,
                 ..
             } => match value.as_ref() {
-                checked::HirExpr::Ident { name, .. } => Some(self.lookup_place(name)?),
+                checked::HirExpr::Ident { name, .. } if !is_checked_literal_ident(value) => {
+                    Some(self.lookup_place(name)?)
+                }
                 _ => None,
             },
             _ => None,
@@ -2577,17 +2637,28 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
         // place to borrow. Preserve that distinction in MIR as an ordinary
         // value argument; only local `read` values use `BorrowRead` so the
         // verifier can track the place lifetime.
-        if *effect == checked::ParamEffect::Read
-            && !matches!(
-                value.as_ref(),
-                checked::HirExpr::Ident { .. } | checked::HirExpr::Manage { .. }
-            )
-        {
-            return self.lower_expression(value).map(MirCallArgument::Value);
+        if *effect == checked::ParamEffect::Read {
+            match value.as_ref() {
+                checked::HirExpr::Ident { name, .. } if !is_checked_literal_ident(value) => {
+                    return self.lookup_place(name).map(MirCallArgument::BorrowRead);
+                }
+                checked::HirExpr::Manage { value, .. } => {
+                    let checked::HirExpr::Ident { name, .. } = value.as_ref() else {
+                        return self
+                            .unsupported("manage checked HIR call argument on non-local value");
+                    };
+                    return self.lookup_place(name).map(MirCallArgument::BorrowRead);
+                }
+                _ => return self.lower_expression(value).map(MirCallArgument::Value),
+            }
+        }
+        if *effect == checked::ParamEffect::Mut {
+            return self
+                .lower_mutable_place(value)
+                .map(MirCallArgument::BorrowMut);
         }
         let value = match value.as_ref() {
             checked::HirExpr::Ident { .. } => value.as_ref(),
-            checked::HirExpr::Manage { value, .. } => value.as_ref(),
             _ => return self.unsupported("checked HIR data effect on non-local value"),
         };
         let checked::HirExpr::Ident { name, .. } = value else {
@@ -2595,8 +2666,9 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
         };
         let place = self.lookup_place(name)?;
         Ok(match effect {
-            checked::ParamEffect::Read => MirCallArgument::BorrowRead(place),
-            checked::ParamEffect::Mut => MirCallArgument::BorrowMut(place),
+            checked::ParamEffect::Read | checked::ParamEffect::Mut => {
+                unreachable!("read and mut effects returned above")
+            }
             checked::ParamEffect::Take => MirCallArgument::Take(place),
         })
     }
@@ -2611,21 +2683,26 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
         let value = receiver.value.as_ref();
         match receiver.effect {
             checked::ParamEffect::Read => {
-                if let checked::HirExpr::Ident { name, .. } = value {
+                if let checked::HirExpr::Ident { name, .. } = value
+                    && !is_checked_literal_ident(value)
+                {
                     return self.lookup_place(name).map(MirCallArgument::BorrowRead);
                 }
                 self.lower_expression(value).map(MirCallArgument::Value)
             }
-            checked::ParamEffect::Mut | checked::ParamEffect::Take => {
+            checked::ParamEffect::Mut => {
+                let place = self.lower_mutable_place(value)?;
+                Ok(MirCallArgument::BorrowMut(place))
+            }
+            checked::ParamEffect::Take => {
                 let checked::HirExpr::Ident { name, .. } = value else {
-                    return self
-                        .unsupported("checked HIR mutable/take receiver on non-local value");
+                    return self.unsupported("checked HIR take receiver on non-local value");
                 };
                 let place = self.lookup_place(name)?;
                 Ok(match receiver.effect {
-                    checked::ParamEffect::Mut => MirCallArgument::BorrowMut(place),
                     checked::ParamEffect::Take => MirCallArgument::Take(place),
                     checked::ParamEffect::Read => unreachable!("matched above"),
+                    checked::ParamEffect::Mut => unreachable!("matched above"),
                 })
             }
         }
@@ -4357,6 +4434,17 @@ fn checked_binary_op(op: rsscript_syntax::ast::BinaryOp) -> MirBinaryOp {
         rsscript_syntax::ast::BinaryOp::LogicalAnd => MirBinaryOp::LogicalAnd,
         rsscript_syntax::ast::BinaryOp::LogicalOr => MirBinaryOp::LogicalOr,
     }
+}
+
+/// Booleans and `Unit` are represented as identifiers by the source-shaped
+/// HIR. They are language literals, not local places, even when semantic call
+/// binding wraps them in a `read` effect. Keeping that distinction here avoids
+/// projecting a literal argument into an invalid `BorrowRead` operation.
+fn is_checked_literal_ident(expression: &checked::HirExpr) -> bool {
+    matches!(
+        expression,
+        checked::HirExpr::Ident { name, .. } if matches!(name.as_str(), "Unit" | "true" | "false")
+    )
 }
 
 fn match_literal(

@@ -122,12 +122,12 @@ completion proofs.
 Useful gates:
 
 ```sh
-docker compose run --rm dev cargo test -p rsscript-compiler --features legacy-exec-ir,selfhost-parity selfhost_parity -- --test-threads=1
-docker compose run --rm -e RSS_SELFHOST_TIER=2 dev cargo test -p rsscript-compiler --features legacy-exec-ir,selfhost-parity --release --lib selfhost_parity::lexer_parity_corpus -- --ignored --exact --test-threads=1 --nocapture
-docker compose run --rm -e RSS_SELFHOST_PARSE_TIER=1 dev cargo test -p rsscript-compiler --features legacy-exec-ir,selfhost-parity --release --lib selfhost_parity::parser_parity_corpus -- --ignored --exact --test-threads=1 --nocapture
-docker compose run --rm dev cargo test -p rsscript-compiler --features legacy-exec-ir,selfhost-parity --release --lib selfhost_parity::checker_parity_corpus -- --ignored --exact --test-threads=1 --nocapture
-docker compose run --rm -e RSS_SELFHOST_AST_TIER=2 dev cargo test -p rsscript-compiler --features legacy-exec-ir,selfhost-parity --release --lib selfhost_parity::ast_parity_samples -- --exact --test-threads=1 --nocapture
-docker compose run --rm dev cargo test -p rsscript-compiler --features legacy-exec-ir,selfhost-parity --lib selfhost_parity::package_contract_ -- --nocapture
+docker compose run --rm dev cargo test -p rsscript-compiler --features selfhost-parity selfhost_parity -- --test-threads=1
+docker compose run --rm -e RSS_SELFHOST_TIER=2 dev cargo test -p rsscript-compiler --features selfhost-parity --release --lib selfhost_parity::lexer_parity_corpus -- --ignored --exact --test-threads=1 --nocapture
+docker compose run --rm -e RSS_SELFHOST_PARSE_TIER=1 dev cargo test -p rsscript-compiler --features selfhost-parity --release --lib selfhost_parity::parser_parity_corpus -- --ignored --exact --test-threads=1 --nocapture
+docker compose run --rm dev cargo test -p rsscript-compiler --features selfhost-parity --release --lib selfhost_parity::checker_parity_corpus -- --ignored --exact --test-threads=1 --nocapture
+docker compose run --rm -e RSS_SELFHOST_AST_TIER=2 dev cargo test -p rsscript-compiler --features selfhost-parity --release --lib selfhost_parity::ast_parity_samples -- --exact --test-threads=1 --nocapture
+docker compose run --rm dev cargo test -p rsscript-compiler --features selfhost-parity --lib selfhost_parity::package_contract_ -- --nocapture
 ```
 
 ## Token Dump Contract

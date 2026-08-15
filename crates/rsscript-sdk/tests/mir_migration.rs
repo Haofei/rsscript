@@ -1453,12 +1453,15 @@ fn sdk_builds_use_mir_codegen_artifacts_for_the_entire_migration_corpus() {
         // source hash even for equivalent source text.
         let validated = validate_sources_with_interfaces(&[(&file, case.source)], &[])
             .unwrap_or_else(|error| {
-                panic!("{} must validate through the snapshot frontend: {error:?}", case.name)
+                panic!(
+                    "{} must validate through the snapshot frontend: {error:?}",
+                    case.name
+                )
             });
         let compiled = compile_validated_to_ir(&validated);
-        let verified_mir = compiled.mir().unwrap_or_else(|error| {
-            panic!("{} must lower to verified MIR: {error}", case.name)
-        });
+        let verified_mir = compiled
+            .mir()
+            .unwrap_or_else(|error| panic!("{} must lower to verified MIR: {error}", case.name));
         let mut expected = rsscript_codegen_vm::emit_artifact(
             &verified_mir,
             compiled.source_hash(),
@@ -1466,11 +1469,16 @@ fn sdk_builds_use_mir_codegen_artifacts_for_the_entire_migration_corpus() {
             env!("CARGO_PKG_VERSION"),
         )
         .unwrap_or_else(|error| {
-            panic!("{} must emit through independent MIR codegen: {error}", case.name)
+            panic!(
+                "{} must emit through independent MIR codegen: {error}",
+                case.name
+            )
         });
-        let built = Compiler.compile(&file, case.source).unwrap_or_else(|error| {
-            panic!("SDK must build migration case `{}`: {error:?}", case.name)
-        });
+        let built = Compiler
+            .compile(&file, case.source)
+            .unwrap_or_else(|error| {
+                panic!("SDK must build migration case `{}`: {error:?}", case.name)
+            });
         // Codegen owns the provider-neutral executable payload. The SDK owns
         // the workspace identity because it is the layer that captures the
         // immutable source snapshot. Bind the same snapshot before comparing
@@ -1482,9 +1490,9 @@ fn sdk_builds_use_mir_codegen_artifacts_for_the_entire_migration_corpus() {
             .unwrap_or_else(|error| {
                 panic!("{} must bind SDK snapshot identity: {error}", case.name)
             });
-        let expected = expected.to_bytes().unwrap_or_else(|error| {
-            panic!("{} must serialize MIR Artifact: {error}", case.name)
-        });
+        let expected = expected
+            .to_bytes()
+            .unwrap_or_else(|error| panic!("{} must serialize MIR Artifact: {error}", case.name));
         assert_eq!(
             built.artifact_bytes(),
             expected,
@@ -2395,6 +2403,56 @@ fn main() -> Int {
     .eval_main_with_args(std::iter::empty::<String>())
     .expect("builtin literal bytecode executes");
     assert_eq!(output.value, "1");
+}
+
+#[test]
+fn direct_checked_hir_field_assignment_and_string_concat_reach_verified_bytecode() {
+    let source = r#"
+struct State {
+    enabled: Bool
+}
+
+fn main() -> String {
+    let mut state = State(enabled: false)
+    state.enabled = true
+    if state.enabled {
+        return String.concat(left: "field-", right: "updated")
+    }
+    return "wrong"
+}
+"#;
+    let compiled = compile_source_to_ir("direct-hir-field-assignment.rss", source)
+        .expect("field assignment fixture compiles");
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("field assignment and string concat lower directly from checked HIR");
+    assert!(
+        mir.functions()[0]
+            .blocks()
+            .iter()
+            .flat_map(|block| block.instructions())
+            .any(|instruction| matches!(instruction, MirInstruction::SetField { .. }))
+    );
+    assert!(
+        mir.functions()[0]
+            .blocks()
+            .iter()
+            .flat_map(|block| block.instructions())
+            .any(|instruction| matches!(instruction, MirInstruction::StringConcat { .. }))
+    );
+    let legacy = reg_vm_eval_source_main("direct-hir-field-assignment.rss", source)
+        .expect("legacy field assignment path executes");
+    let output = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("field assignment emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("field assignment bytecode executes");
+    assert_eq!(output.value, "field-updated");
+    assert_eq!(output.value, legacy.value);
+    assert_eq!(output.usage, legacy.usage);
 }
 
 #[test]

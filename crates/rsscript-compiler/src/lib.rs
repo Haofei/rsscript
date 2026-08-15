@@ -19,7 +19,7 @@ mod editor_grammar;
 mod formatter;
 mod generate;
 mod hir;
-#[cfg(all(test, feature = "legacy-exec-ir", feature = "selfhost-parity"))]
+#[cfg(all(test, feature = "selfhost-parity"))]
 mod interface_metadata;
 mod interfaces;
 mod lexer {
@@ -34,7 +34,7 @@ mod package;
 mod review;
 #[cfg(feature = "package")]
 mod runtime_abi;
-#[cfg(all(test, feature = "legacy-exec-ir", feature = "selfhost-parity"))]
+#[cfg(all(test, feature = "selfhost-parity"))]
 mod selfhost_parity;
 mod semantic;
 mod symbols;
@@ -46,7 +46,7 @@ mod text_util {
     #[allow(unused_imports)]
     pub(crate) use rsscript_text::*;
 }
-#[cfg(all(test, feature = "legacy-exec-ir", feature = "selfhost-parity"))]
+#[cfg(all(test, feature = "selfhost-parity"))]
 mod vm_adapter {
     use rsscript_vm::{EvalError, RegVmExecutable};
 
@@ -56,16 +56,23 @@ mod vm_adapter {
         let interfaces = crate::interfaces::standard_package_interfaces().collect::<Vec<_>>();
         let validated = crate::analyzer::validate_sources_with_interfaces(sources, &interfaces)
             .map_err(EvalError::Diagnostics)?;
-        let compiled = crate::compiler_output::compile_validated_to_ir(&validated);
-        rsscript_vm::compile_executable_ir(
-            compiled.executable(),
-            compiled.source_hash(),
-            compiled.interface_catalog_digest(),
+        let snapshot_digest = format!("sha256:{}", "0".repeat(64));
+        let artifact = crate::compiler_output::compile_validated_to_bytecode(
+            &validated,
+            &snapshot_digest,
         )
+        .map_err(|error| EvalError::Runtime(error.to_string()))?;
+        let bytes = artifact
+            .to_bytes()
+            .map_err(|error| EvalError::Runtime(error.to_string()))?;
+        let verified = rsscript_bytecode::BytecodeVerifier::default()
+            .verify(&bytes)
+            .map_err(|error| EvalError::Runtime(error.to_string()))?;
+        RegVmExecutable::from_verified_bytecode(verified)
     }
 }
 
-#[cfg(all(test, feature = "legacy-exec-ir", feature = "selfhost-parity"))]
+#[cfg(all(test, feature = "selfhost-parity"))]
 use rsscript_vm::RegVmExecutable;
 
 #[cfg(feature = "bytecode")]

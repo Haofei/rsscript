@@ -921,8 +921,9 @@ an arbitrary shell executor.
     `package` feature, while reviewed SDK `execution` selects lowering but not
     package capture. The broad compiler `execution` feature has been deleted:
     legacy source-shaped IR consumers must name `legacy-exec-ir`, and the
-    legacy VM remains an optional dependency selected only by the explicit
-    `selfhost-parity` research feature. The lowering closure no longer declares
+    VM remains an optional dependency selected only by the explicit
+    `selfhost-parity` research feature, which exercises checked HIR through
+    MIR and verified bytecode rather than the legacy IR. The lowering closure no longer declares
     the Provider runtime API, and its Cargo-metadata tree rejects Provider,
     AOT, VM, review, persistence, and OS adapters. Unused REIR/review/fuzz/schema
     dev dependencies have been removed. Normal
@@ -1306,6 +1307,16 @@ an arbitrary shell executor.
       bytecode fixtures prove buffer mutation and completed string output. Both
       retain named reference-interpreter exceptions for their unmodeled runtime
       representations.
+    - [x] **M03.4p — Lower record updates and string concatenation without
+      source-shaped special calls.** `String.concat` is now an explicit
+      `StringConcat` MIR operation. Nested checked-HIR field assignments become
+      an explicit `SetField` rebuild/writeback chain; codegen reserves a
+      discard-only register for the legacy VM's `Unit` result so it cannot
+      overwrite the rebuilt value. The checked-HIR, verifier, reference
+      interpreter, and VM-bytecode migration tests prove literal `read`
+      arguments, field observation after update, and string output agree with
+      the legacy execution path. The full self-host parity suite now uses this
+      direct MIR/verified-bytecode path without enabling `legacy-exec-ir`.
 - [ ] **M04 — Lower checked HIR to MIR exactly once.** Backend code cannot
   inspect syntax AST or reconstruct semantic facts. MIR verification rejects
   unresolved calls, invalid ownership state, incomplete cleanup, and malformed

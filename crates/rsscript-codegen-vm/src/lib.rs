@@ -745,6 +745,15 @@ fn lower_instruction(
                 ("name", json!(field)),
             ],
         )),
+        MirInstruction::SetField { base, field, value } => code.push(instr(
+            "SetField",
+            [
+                ("dst", json!(scratch_reg(function))),
+                ("base", json!(value_reg(function, *base))),
+                ("name", json!(field)),
+                ("value", json!(value_reg(function, *value))),
+            ],
+        )),
         MirInstruction::ListLen { destination, list } => code.push(instr(
             "ListLen",
             [
@@ -900,6 +909,18 @@ fn lower_instruction(
             value_reg(function, *left),
             value_reg(function, *right),
         )?),
+        MirInstruction::StringConcat {
+            destination,
+            left,
+            right,
+        } => code.push(instr(
+            "StringConcat",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("left", json!(value_reg(function, *left))),
+                ("right", json!(value_reg(function, *right))),
+            ],
+        )),
         MirInstruction::Call {
             destination,
             target,
@@ -1271,6 +1292,14 @@ fn value_reg(function: &MirFunction, value: ValueId) -> usize {
 
 fn task_reg(function: &MirFunction, task: TaskId) -> usize {
     function.place_count() as usize + function.value_count() as usize + task.index()
+}
+
+/// The legacy register instruction for field assignment returns `Unit` while
+/// updating its base register. Reserve the final register declared for every
+/// generated function as its discard-only result slot so that Unit can never
+/// overwrite a typed MIR value.
+fn scratch_reg(function: &MirFunction) -> usize {
+    function.place_count() as usize + function.value_count() as usize + task_count(function)
 }
 
 fn task_count(function: &MirFunction) -> usize {

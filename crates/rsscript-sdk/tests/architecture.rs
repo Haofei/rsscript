@@ -368,7 +368,7 @@ fn selfhost_parity_is_an_explicit_research_feature_not_a_release_gate() {
     let release_workflow = read(&root.join(".github/workflows/release.yml"));
 
     assert!(
-        compiler_manifest.contains("selfhost-parity = [\"dep:rsscript-vm\"]"),
+        compiler_manifest.contains("selfhost-parity = [\"package\", \"dep:rsscript-vm\"]"),
         "the Research harness must require an explicit compiler feature"
     );
     assert!(
@@ -376,8 +376,8 @@ fn selfhost_parity_is_an_explicit_research_feature_not_a_release_gate() {
         "self-host test modules must be gated at their compilation boundary"
     );
     assert!(
-        selfhost_workflow.contains("--features legacy-exec-ir,selfhost-parity"),
-        "the dedicated Research workflow must opt in explicitly"
+        selfhost_workflow.contains("--features selfhost-parity"),
+        "the dedicated Research workflow must opt in to its direct-MIR harness explicitly"
     );
     assert!(
         !release_workflow.contains("selfhost_parity::"),
@@ -4091,6 +4091,14 @@ fn compiler_default_dependency_closure_is_host_neutral() {
         .filter_map(toml::Value::as_str)
         .collect::<BTreeSet<_>>();
     assert!(selfhost.contains("dep:rsscript-vm"));
+    assert!(selfhost.contains("package"));
+    assert!(
+        !selfhost.contains("legacy-exec-ir")
+            && manifest["dependencies"]["rsscript-vm"]
+                .get("features")
+                .is_none(),
+        "self-host parity must enter the VM only through verified bytecode, never the legacy executable-IR feature"
+    );
     assert!(package.contains("bytecode"));
     let bytecode = manifest["features"]["bytecode"]
         .as_array()

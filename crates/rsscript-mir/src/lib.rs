@@ -341,6 +341,16 @@ pub enum MirInstruction {
         base: ValueId,
         field: String,
     },
+    /// Rebuild an aggregate with one field replaced. The update is fed back
+    /// through its `base` value by lowering, so nested source assignments stay
+    /// explicit and backend-independent. The operation has no result: it
+    /// updates the owned base value in place, matching the VM's value-rebuild
+    /// instruction without pretending that its `Unit` result is a struct.
+    SetField {
+        base: ValueId,
+        field: String,
+        value: ValueId,
+    },
     /// Read the length of a resolved list value. This keeps lowered list
     /// iteration free of source-level iterator identity.
     ListLen {
@@ -439,6 +449,14 @@ pub enum MirInstruction {
     Binary {
         destination: ValueId,
         op: MirBinaryOp,
+        left: ValueId,
+        right: ValueId,
+    },
+    /// Concatenate two immutable strings. This is a primitive operation rather
+    /// than a source-level `String.concat` call, so backends never need to
+    /// reconstruct a special intrinsic spelling from syntax.
+    StringConcat {
+        destination: ValueId,
         left: ValueId,
         right: ValueId,
     },
@@ -1583,6 +1601,7 @@ fn instruction_definitions(instruction: &MirInstruction) -> Vec<ValueId> {
         | MirInstruction::TakePlace { destination, .. }
         | MirInstruction::Manage { destination, .. }
         | MirInstruction::Binary { destination, .. }
+        | MirInstruction::StringConcat { destination, .. }
         | MirInstruction::Call { destination, .. }
         | MirInstruction::MakeClosure { destination, .. }
         | MirInstruction::CallClosure { destination, .. }
@@ -1597,6 +1616,7 @@ fn instruction_definitions(instruction: &MirInstruction) -> Vec<ValueId> {
         | MirInstruction::Spawn { .. }
         | MirInstruction::Cancel { .. }
         | MirInstruction::Join { .. }
+        | MirInstruction::SetField { .. }
         | MirInstruction::Discard { .. } => Vec::new(),
     }
 }
@@ -1647,10 +1667,12 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         | MirInstruction::MapInsertOld { key, value, .. } => vec![*key, *value],
         MirInstruction::MapRemove { key, .. } => vec![*key],
         MirInstruction::GetField { base, .. } => vec![*base],
+        MirInstruction::SetField { base, value, .. } => vec![*base, *value],
         MirInstruction::ListLen { list, .. } => vec![*list],
         MirInstruction::AcquireResource { source, .. } => vec![*source],
         MirInstruction::Manage { source, .. } => vec![*source],
-        MirInstruction::Binary { left, right, .. } => vec![*left, *right],
+        MirInstruction::Binary { left, right, .. }
+        | MirInstruction::StringConcat { left, right, .. } => vec![*left, *right],
         MirInstruction::Call { arguments, .. } => arguments
             .iter()
             .filter_map(|argument| match argument {
@@ -1922,6 +1944,8 @@ fn transfer_move_state(
         | MirInstruction::GetField { .. }
         | MirInstruction::ListLen { .. }
         | MirInstruction::Binary { .. }
+        | MirInstruction::StringConcat { .. }
+        | MirInstruction::SetField { .. }
         | MirInstruction::Await { .. }
         | MirInstruction::Select { .. }
         | MirInstruction::Cancel { .. }
@@ -2240,11 +2264,21 @@ fn verify_instruction(
             used.push(*value);
             Ok(())
         }
+        MirInstruction::SetField { base, value, .. } => {
+            used.push(*base);
+            used.push(*value);
+            Ok(())
+        }
         MirInstruction::Binary {
             destination,
             left,
             right,
             ..
+        }
+        | MirInstruction::StringConcat {
+            destination,
+            left,
+            right,
         } => {
             define(*destination, defined)?;
             used.push(*left);
