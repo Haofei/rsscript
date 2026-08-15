@@ -67,6 +67,70 @@ value = 1
 expected = "section 1 hash mismatch"
 
 [[case]]
+name = "bytecode-import-section-order"
+scope = "bytecode"
+operation = "set_byte"
+offset = 567
+value = 1
+expected = "sections are duplicated or not canonical"
+
+[[case]]
+name = "bytecode-import-section-not-required"
+scope = "bytecode"
+operation = "set_byte"
+offset = 568
+value = 0
+expected = "section 2 is not marked required"
+
+[[case]]
+name = "bytecode-import-section-hash-mismatch"
+scope = "bytecode"
+operation = "xor_byte"
+offset = 577
+value = 1
+expected = "section 2 hash mismatch"
+
+[[case]]
+name = "bytecode-code-section-unknown"
+scope = "bytecode"
+operation = "set_byte"
+offset = 610
+value = 5
+expected = "unknown required section 5"
+
+[[case]]
+name = "bytecode-code-section-not-required"
+scope = "bytecode"
+operation = "set_byte"
+offset = 611
+value = 0
+expected = "section 3 is not marked required"
+
+[[case]]
+name = "bytecode-code-section-hash-mismatch"
+scope = "bytecode"
+operation = "xor_byte"
+offset = 620
+value = 1
+expected = "section 3 hash mismatch"
+
+[[case]]
+name = "bytecode-checksum-section-not-required"
+scope = "bytecode"
+operation = "set_byte"
+offset = 886
+value = 0
+expected = "section 4 is not marked required"
+
+[[case]]
+name = "bytecode-checksum-section-hash-mismatch"
+scope = "bytecode"
+operation = "xor_byte"
+offset = 895
+value = 1
+expected = "section 4 hash mismatch"
+
+[[case]]
 name = "bytecode-artifact-size-limit"
 scope = "bytecode"
 operation = "verify_artifact_limit"

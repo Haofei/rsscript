@@ -1877,8 +1877,9 @@ an arbitrary shell executor.
     - [x] **B05.2b — Add a static v1 container-boundary corpus.** A checked-in
       mutation manifest applies immutable, named boundary cases to the deployed
       reference Bundle and its embedded bytecode: bundle magic/manifest/artifact
-      size limits plus bytecode magic/container version, section count/flags,
-      section hash, and verifier Artifact-size limits. The public reader checks
+      size limits plus bytecode magic/container version, and every required
+      header/import/code/checksum section's order, required-flag, or hash
+      boundary, plus verifier Artifact-size limits. The public reader checks
       every case fail-closed without recompiling the reference source.
     - [x] **B05.2c — Add a static v2 typed-decoder and Artifact corpus.** A
       checked-in canonical v2 payload and named mutation manifest exercise the
