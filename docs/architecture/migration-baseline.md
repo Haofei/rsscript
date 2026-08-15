@@ -2347,7 +2347,7 @@ an arbitrary shell executor.
       result stay equal. The source deliberately scopes the resource after the
       task group drains, demonstrating the language rule that resources cannot
       remain live across an `await`.
-- [ ] **E03 — Establish compatibility and conformance corpora.** Add source to
+- [x] **E03 — Establish compatibility and conformance corpora.** Add source to
   diagnostic/HIR/MIR goldens, MIR to bytecode fixtures, old Artifact readers,
   cross-platform deterministic builds, Provider ABI compatibility, resource
   cleanup state machines, and interpreter/experimental-backend differential
@@ -2369,13 +2369,15 @@ an arbitrary shell executor.
     canonical `WireValue` Provider identities. It also reads and executes the
     independent checked-in deployed v1 Bundle, so old-reader coverage does not
     depend on regenerating a fixture with the current compiler.
-  - [~] **E03.3 — Add execution state-machine corpus.** The checked-in
+  - [x] **E03.3 — Add execution state-machine corpus.** The checked-in
     `execution_state` corpus now drives the reviewed SDK and canonical
     `WireValue` Provider boundary through success, script failure, Provider
     failure, cancellation, deadline expiry, step exhaustion, and cleanup
     failure. Every case asserts its structured `ExecutionReport`, exact-once
-    cleanup, and zero live Provider resources. Interpreter/experimental-backend
-    differential fixtures remain to close this item.
+    cleanup, and zero live Provider resources. The experiment-owned terminal-state
+    corpus additionally runs no-Provider completion, step exhaustion, pre-cancelled,
+    and expired-deadline fixtures through interpreter and tier-0 JIT under identical
+    `VmLimits`; native/OSR experiment builds use their bounded fallback paths.
 - [x] **E04 — Require ADR/RFC records for contract changes.** Core CI compares
   each change with its base revision and rejects syntax/semantics, ABI-model,
   MIR, bytecode, Provider ABI, or reviewed SDK changes unless the same change updates a

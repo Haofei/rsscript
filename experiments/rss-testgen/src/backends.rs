@@ -10,14 +10,30 @@
 //! driver adds it separately (via the test crate's existing compiled runner) so
 //! the bounded runs still get the full N-way check.
 
-use rsscript_sdk::{EvalOutput, NativeValue};
+use rsscript_sdk::{EvalError, EvalOutput, NativeValue, VmLimits};
 
 /// An execution engine for a runnable RSScript program.
 pub trait Backend {
     fn name(&self) -> &'static str;
+    /// Run `main` under caller-provided limits. This is intentionally an
+    /// experiment-only capability: it lets terminal-state differentials cover
+    /// cancellation/deadline/budget behavior without widening the reviewed SDK
+    /// façade with legacy VM entry points.
+    fn run_with_limits(
+        &self,
+        file: &str,
+        source: &str,
+        args: &[&str],
+        limits: VmLimits,
+    ) -> Result<EvalOutput, EvalError>;
+
     /// Run `main` and return its normalized stdout, or `Err(message)` on failure
     /// (a compile/runtime error, or a `main` that returned `Err`).
-    fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String>;
+    fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String> {
+        self.run_with_limits(file, source, args, VmLimits::default())
+            .map_err(|error| format!("{error:?}"))
+            .and_then(stdout_or_main_err)
+    }
 }
 
 /// Normalize an [`EvalOutput`] into success-stdout or failure. A `main` returning
@@ -40,10 +56,19 @@ impl Backend for Interpreter {
         "vm-interpreter"
     }
 
-    fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String> {
-        rsscript_sdk::reg_vm_eval_source_main_with_args(file, source, args.iter().copied())
-            .map_err(|error| format!("{error:?}"))
-            .and_then(stdout_or_main_err)
+    fn run_with_limits(
+        &self,
+        file: &str,
+        source: &str,
+        args: &[&str],
+        limits: VmLimits,
+    ) -> Result<EvalOutput, EvalError> {
+        rsscript_sdk::reg_vm_eval_source_main_with_limits(
+            file,
+            source,
+            args.iter().copied(),
+            limits,
+        )
     }
 }
 
@@ -56,16 +81,38 @@ impl Backend for Jit {
         "vm-jit"
     }
 
-    fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String> {
-        rsscript_sdk::reg_vm_eval_source_main_jit(file, source, args.iter().copied())
-            .map_err(|error| format!("{error:?}"))
-            .and_then(stdout_or_main_err)
+    fn run_with_limits(
+        &self,
+        file: &str,
+        source: &str,
+        args: &[&str],
+        limits: VmLimits,
+    ) -> Result<EvalOutput, EvalError> {
+        rsscript_sdk::reg_vm_compile_source(file, source)?
+            .eval_main_with_args_jit_and_limits(args.iter().copied(), limits)
     }
 }
 
 /// The native (Cranelift) JIT tier.
 #[cfg(feature = "native-jit")]
 pub struct NativeJit;
+
+#[cfg(feature = "native-jit")]
+fn run_native_with_limits(
+    file: &str,
+    source: &str,
+    args: &[&str],
+    limits: VmLimits,
+) -> Result<EvalOutput, EvalError> {
+    // The force-deopt/safepoint experiment entry points intentionally have no
+    // bounded counterpart. Bounded terminal-state differential therefore uses
+    // the ordinary native entry point, which falls back to the interpreter
+    // whenever a limit is armed; normal stdout differential below still uses
+    // each force plan to exercise its distinct JIT state machine.
+    rsscript_sdk::reg_vm_compile_source(file, source)?
+        .eval_main_with_args_native_with_limits(args.iter().copied(), limits)
+        .map(|(output, _stats)| output)
+}
 
 #[cfg(feature = "native-jit")]
 impl Backend for NativeJit {
@@ -77,6 +124,16 @@ impl Backend for NativeJit {
         rsscript_sdk::reg_vm_eval_source_main_native(file, source, args.iter().copied())
             .map_err(|error| format!("{error:?}"))
             .and_then(stdout_or_main_err)
+    }
+
+    fn run_with_limits(
+        &self,
+        file: &str,
+        source: &str,
+        args: &[&str],
+        limits: VmLimits,
+    ) -> Result<EvalOutput, EvalError> {
+        run_native_with_limits(file, source, args, limits)
     }
 }
 
@@ -95,6 +152,16 @@ impl Backend for NativeJitForceDeopt {
         rsscript_sdk::reg_vm_eval_source_main_native_force_deopt(file, source, args.iter().copied())
             .map_err(|error| format!("{error:?}"))
             .and_then(stdout_or_main_err)
+    }
+
+    fn run_with_limits(
+        &self,
+        file: &str,
+        source: &str,
+        args: &[&str],
+        limits: VmLimits,
+    ) -> Result<EvalOutput, EvalError> {
+        run_native_with_limits(file, source, args, limits)
     }
 }
 
@@ -126,6 +193,16 @@ impl Backend for NativeJitForceSafepoint {
         .map_err(|error| format!("{error:?}"))
         .and_then(stdout_or_main_err)
     }
+
+    fn run_with_limits(
+        &self,
+        file: &str,
+        source: &str,
+        args: &[&str],
+        limits: VmLimits,
+    ) -> Result<EvalOutput, EvalError> {
+        run_native_with_limits(file, source, args, limits)
+    }
 }
 
 /// The native tier with every generated safepoint forced to bail. This gives the
@@ -149,6 +226,16 @@ impl Backend for NativeJitForceAllSafepoints {
         .map_err(|error| format!("{error:?}"))
         .and_then(stdout_or_main_err)
     }
+
+    fn run_with_limits(
+        &self,
+        file: &str,
+        source: &str,
+        args: &[&str],
+        limits: VmLimits,
+    ) -> Result<EvalOutput, EvalError> {
+        run_native_with_limits(file, source, args, limits)
+    }
 }
 
 /// The native tier with OSR forced on. This exercises mid-function native entry
@@ -166,6 +253,18 @@ impl Backend for NativeJitOsr {
         rsscript_sdk::reg_vm_eval_source_main_native_osr(file, source, args.iter().copied())
             .map_err(|error| format!("{error:?}"))
             .and_then(stdout_or_main_err)
+    }
+
+    fn run_with_limits(
+        &self,
+        file: &str,
+        source: &str,
+        args: &[&str],
+        limits: VmLimits,
+    ) -> Result<EvalOutput, EvalError> {
+        rsscript_sdk::reg_vm_compile_source(file, source)?
+            .eval_main_with_args_native_osr_with_limits(args.iter().copied(), limits)
+            .map(|(output, _stats)| output)
     }
 }
 
