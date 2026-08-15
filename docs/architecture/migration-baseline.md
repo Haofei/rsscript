@@ -671,7 +671,7 @@ an arbitrary shell executor.
     `compile_source_to_ir` convenience now captures its input through the
     session before constructing compiler output. Remaining test callers are
     still explicit migration work.
-- [ ] **S04 — Make language service consume semantic queries directly.** It
+- [x] **S04 — Make language service consume semantic queries directly.** It
   must not depend on the compiler compatibility façade, package persistence,
   VM, SDK, or Providers; revision invalidation and request cancellation require
   focused tests.
@@ -842,7 +842,7 @@ an arbitrary shell executor.
 
 ### 2. Typed CFG MIR
 
-- [ ] **M01 — Define typed stable identities.** Add `FunctionId`, `TypeId`,
+- [x] **M01 — Define typed stable identities.** Add `FunctionId`, `TypeId`,
   `BlockId`, `ValueId`, `PlaceId`, `BuiltinId`, `ExternalSymbolId`, and
   `ResourceTypeId` without string identity at backend boundaries.
   - [x] **M01.1 — Define index/newtype IDs and ownership tables.** Initial
