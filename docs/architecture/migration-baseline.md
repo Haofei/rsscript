@@ -667,10 +667,12 @@ an arbitrary shell executor.
     now use the session policy; the static compatibility corpus exercises those
     routes. The sole operation-abort fallback preserves the legacy
     `AnalysisResult`-rather-than-`Result` signature.
-  - [ ] **S03.5c — Quarantine the exceptional legacy fixtures.** Document and
-    isolate empty-path and duplicate-interface cases whose asserted historical
-    diagnostics cannot be represented by the normal session input model. Those
-    fixtures must not be reusable by production callers.
+  - [x] **S03.5c — Quarantine the exceptional legacy fixtures.** Empty paths,
+    duplicate source paths, and duplicate interface paths now select one
+    private `legacy_frontend_fixtures` adapter. Its direct-analyzer calls
+    preserve historical fixture diagnostics, while normal immutable snapshots
+    have no public bypass around `CompilationSession`; regression and
+    architecture tests protect both sides of that boundary.
 - [x] **S04 — Make language service consume semantic queries directly.** It
   must not depend on the compiler compatibility façade, package persistence,
   VM, SDK, or Providers; revision invalidation and request cancellation require

@@ -2,26 +2,6 @@
   "schema": "rsscript.migration_queue.v1",
   "tasks": [
     {
-      "id": "S03.5c",
-      "priority": 10,
-      "depends_on": ["S03.4"],
-      "scope": [
-        "crates/rsscript-sdk/src/lib.rs",
-        "crates/rsscript-sdk/tests/**",
-        "crates/rsscript-compiler/src/compatibility/**",
-        "docs/architecture/migration-baseline.md"
-      ],
-      "acceptance": [
-        "Empty-path and duplicate-interface legacy analyzer calls are confined to named compatibility helpers.",
-        "Normal SDK or production paths cannot select the exceptional direct-analyzer helpers.",
-        "Regression tests prove ordinary session callers retain their diagnostics while exceptional fixtures retain their historical cases."
-      ],
-      "verification": [
-        "cargo test -p rsscript-semantics --locked",
-        "cargo test -p rsscript-sdk --features=compatibility,aot-rust,legacy-exec-ir --test static --locked"
-      ]
-    },
-    {
       "id": "S05.1",
       "priority": 20,
       "depends_on": [],

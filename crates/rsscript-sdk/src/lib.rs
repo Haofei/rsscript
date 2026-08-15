@@ -128,6 +128,7 @@ use rsscript_semantics::CompilationSession;
 use sha2::{Digest, Sha256};
 #[cfg(feature = "execution")]
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 #[cfg(feature = "project")]
@@ -570,34 +571,16 @@ impl Compiler {
 }
 
 /// Adopt the semantic-owned session query for ordinary immutable snapshots.
-/// Empty logical paths were historically accepted by the direct in-memory
-/// compatibility API but cannot be stable session identities, so preserve that
-/// narrow behavior until the public snapshot model rejects them explicitly.
+/// Exceptional legacy snapshots are delegated to a private compatibility
+/// adapter. Normal production callers have no switch that can select that
+/// adapter: all session-compatible inputs use the semantic-owned query below.
 #[cfg(feature = "execution")]
 fn validate_snapshot_with_session(
     snapshot: &FrontendInputSnapshot,
     operation: Option<&OperationContext>,
 ) -> Result<ValidatedProgram, CompileError> {
-    let has_empty_path = snapshot
-        .sources()
-        .files()
-        .iter()
-        .chain(snapshot.interfaces().files())
-        .any(|file| file.path().is_empty());
-    if has_empty_path {
-        let sources = snapshot_pairs(snapshot.sources());
-        let interfaces = snapshot_pairs(snapshot.interfaces());
-        return match operation {
-            Some(operation) => {
-                validate_sources_with_interfaces_with_operation(&sources, &interfaces, operation)
-                    .map_err(|diagnostics| match operation.check() {
-                        Ok(()) => CompileError::Diagnostics(diagnostics),
-                        Err(abort) => CompileError::from(abort),
-                    })
-            }
-            None => validate_sources_with_interfaces(&sources, &interfaces)
-                .map_err(CompileError::Diagnostics),
-        };
+    if legacy_frontend_fixtures::snapshot_reason(snapshot).is_some() {
+        return legacy_frontend_fixtures::validate_snapshot(snapshot, operation);
     }
 
     let mut session = session_for_snapshot(snapshot);
@@ -613,36 +596,14 @@ fn validate_snapshot_with_session(
 }
 
 /// Analyze a snapshot through the same session-owned workspace query used by
-/// compilation. The compatibility fallback mirrors
-/// [`validate_snapshot_with_session`]: an empty logical path cannot be a
-/// stable session identity yet.
+/// compilation. The sole fallback is the private legacy-fixture adapter used
+/// for historical inputs that cannot have stable session identities.
 fn analyze_snapshot_with_session(
     snapshot: &FrontendInputSnapshot,
     operation: Option<&OperationContext>,
 ) -> Result<Vec<Diagnostic>, CompileError> {
-    let has_empty_path = snapshot
-        .sources()
-        .files()
-        .iter()
-        .chain(snapshot.interfaces().files())
-        .any(|file| file.path().is_empty());
-    if has_empty_path {
-        let sources = snapshot_pairs(snapshot.sources());
-        let interfaces = snapshot_pairs(snapshot.interfaces());
-        return match operation {
-            Some(operation) => {
-                operation.check().map_err(CompileError::from)?;
-                let diagnostics = analyze_sources_with_interfaces_result_with_operation(
-                    &sources,
-                    &interfaces,
-                    operation,
-                )
-                .into_diagnostics();
-                operation.check().map_err(CompileError::from)?;
-                Ok(diagnostics)
-            }
-            None => Ok(analyze_sources_with_interfaces(&sources, &interfaces)),
-        };
+    if legacy_frontend_fixtures::snapshot_reason(snapshot).is_some() {
+        return legacy_frontend_fixtures::analyze_snapshot(snapshot, operation);
     }
 
     let mut session = session_for_snapshot(snapshot);
@@ -656,6 +617,7 @@ fn analyze_snapshot_with_session(
 }
 
 fn session_for_snapshot(snapshot: &FrontendInputSnapshot) -> CompilationSession {
+    debug_assert!(legacy_frontend_fixtures::snapshot_reason(snapshot).is_none());
     let mut session = CompilationSession::default();
     for file in snapshot.sources().files() {
         session
@@ -671,9 +633,8 @@ fn session_for_snapshot(snapshot: &FrontendInputSnapshot) -> CompilationSession 
 }
 
 /// Analyze one ordinary in-memory source through the session-owned standard
-/// prelude query. Empty logical paths deliberately retain the legacy route:
-/// compatibility fixtures assert their historical diagnostics and cannot be
-/// represented by the normal session source store.
+/// prelude query. Empty logical paths deliberately retain the private legacy
+/// fixture route because they cannot be represented by the session store.
 #[cfg(feature = "compatibility")]
 fn analyze_standard_source_with_session(
     file: &str,
@@ -681,12 +642,7 @@ fn analyze_standard_source_with_session(
     operation: Option<&OperationContext>,
 ) -> AnalysisResult {
     if file.is_empty() {
-        return match operation {
-            Some(operation) => {
-                rsscript_compiler::analyze_source_result_with_operation(file, source, operation)
-            }
-            None => rsscript_compiler::analyze_source_result(file, source),
-        };
+        return legacy_frontend_fixtures::analyze_standard_source(file, source, operation);
     }
     let mut session = CompilationSession::with_standard_packages();
     session
@@ -698,12 +654,118 @@ fn analyze_standard_source_with_session(
             // The legacy compatibility signature returns an `AnalysisResult`,
             // while the session API correctly exposes cancellation as a
             // `Result`. Preserve the legacy representation only for the abort
-            // result; ordinary work always uses the session cache/query path.
-            Err(_) => {
-                rsscript_compiler::analyze_source_result_with_operation(file, source, operation)
-            }
+            // result in the named compatibility adapter; ordinary work always
+            // uses the session cache/query path.
+            Err(_) => legacy_frontend_fixtures::analyze_standard_source(
+                file,
+                source,
+                Some(operation),
+            ),
         },
         None => (*session.workspace_analysis()).clone(),
+    }
+}
+
+/// Historical frontend inputs which cannot be represented by the immutable
+/// session source store without changing their asserted diagnostic behavior.
+///
+/// This module is intentionally private. It exists solely to preserve a small
+/// migration corpus while session callers take the production path. In
+/// particular, neither [`Compiler`] nor an embedding API exposes a mode that
+/// chooses direct analyzer calls.
+mod legacy_frontend_fixtures {
+    use super::*;
+
+    /// A session assigns one stable identity per non-empty logical path.
+    /// Historical direct-analyzer fixtures may instead use an empty path or
+    /// duplicate a source/interface path to assert an old diagnostic.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) enum SnapshotReason {
+        EmptyLogicalPath,
+        DuplicateSourcePath,
+        DuplicateInterfacePath,
+    }
+
+    pub(super) fn snapshot_reason(snapshot: &FrontendInputSnapshot) -> Option<SnapshotReason> {
+        let source_paths = snapshot
+            .sources()
+            .files()
+            .iter()
+            .map(|file| file.path())
+            .collect::<BTreeSet<_>>();
+        let interface_paths = snapshot
+            .interfaces()
+            .files()
+            .iter()
+            .map(|file| file.path())
+            .collect::<BTreeSet<_>>();
+        if source_paths.iter().any(|path| path.is_empty())
+            || interface_paths.iter().any(|path| path.is_empty())
+        {
+            Some(SnapshotReason::EmptyLogicalPath)
+        } else if source_paths.len() != snapshot.sources().files().len() {
+            Some(SnapshotReason::DuplicateSourcePath)
+        } else if interface_paths.len() != snapshot.interfaces().files().len() {
+            Some(SnapshotReason::DuplicateInterfacePath)
+        } else {
+            None
+        }
+    }
+
+    #[cfg(feature = "execution")]
+    pub(super) fn validate_snapshot(
+        snapshot: &FrontendInputSnapshot,
+        operation: Option<&OperationContext>,
+    ) -> Result<ValidatedProgram, CompileError> {
+        let sources = snapshot_pairs(snapshot.sources());
+        let interfaces = snapshot_pairs(snapshot.interfaces());
+        match operation {
+            Some(operation) => {
+                validate_sources_with_interfaces_with_operation(&sources, &interfaces, operation)
+                    .map_err(|diagnostics| match operation.check() {
+                        Ok(()) => CompileError::Diagnostics(diagnostics),
+                        Err(abort) => CompileError::from(abort),
+                    })
+            }
+            None => validate_sources_with_interfaces(&sources, &interfaces)
+                .map_err(CompileError::Diagnostics),
+        }
+    }
+
+    pub(super) fn analyze_snapshot(
+        snapshot: &FrontendInputSnapshot,
+        operation: Option<&OperationContext>,
+    ) -> Result<Vec<Diagnostic>, CompileError> {
+        let sources = snapshot_pairs(snapshot.sources());
+        let interfaces = snapshot_pairs(snapshot.interfaces());
+        match operation {
+            Some(operation) => {
+                operation.check().map_err(CompileError::from)?;
+                let diagnostics = analyze_sources_with_interfaces_result_with_operation(
+                    &sources,
+                    &interfaces,
+                    operation,
+                )
+                .into_diagnostics();
+                operation.check().map_err(CompileError::from)?;
+                Ok(diagnostics)
+            }
+            None => Ok(analyze_sources_with_interfaces(&sources, &interfaces)),
+        }
+    }
+
+    #[cfg(feature = "compatibility")]
+    pub(super) fn analyze_standard_source(
+        file: &str,
+        source: &str,
+        operation: Option<&OperationContext>,
+    ) -> AnalysisResult {
+        match operation {
+            Some(operation) => {
+                rsscript_compiler::analyze_source_result_with_operation(file, source, operation)
+            }
+            None => rsscript_compiler::analyze_source_result(file, source),
+        }
     }
 }
 
@@ -2635,6 +2697,70 @@ fn main() -> Result<Int, String> {
             artifact.analysis_envelope().payload()["snapshot_digest"],
             artifact.snapshot_digest()
         );
+    }
+
+    #[test]
+    fn exceptional_frontend_fixtures_preserve_direct_analyzer_diagnostics() {
+        let compiler = Compiler;
+        let empty_path = FrontendInputSnapshot::single(
+            "",
+            "fn main() -> Int { return Missing.value }\n",
+        );
+        assert_eq!(
+            legacy_frontend_fixtures::snapshot_reason(&empty_path),
+            Some(legacy_frontend_fixtures::SnapshotReason::EmptyLogicalPath)
+        );
+        assert_eq!(
+            diagnostic_fingerprint(compiler.check_snapshot(&empty_path)),
+            diagnostic_fingerprint(analyze_sources_with_interfaces(
+                &[("", "fn main() -> Int { return Missing.value }\n")],
+                &[],
+            )),
+            "empty-path fixture must preserve its historical analyzer result"
+        );
+
+        let duplicate_interface = FrontendInputSnapshot::from_sources(
+            [(
+                "main.rss",
+                "module app\nuse host.*\nfn main() -> Unit { ping(); return Unit }\n",
+            )],
+            [
+                ("host.rssi", "module host\npub fn ping() -> Unit\n"),
+                ("host.rssi", "module host\npub fn ping() -> Unit\n"),
+            ],
+        );
+        assert_eq!(
+            legacy_frontend_fixtures::snapshot_reason(&duplicate_interface),
+            Some(legacy_frontend_fixtures::SnapshotReason::DuplicateInterfacePath)
+        );
+        assert_eq!(
+            diagnostic_fingerprint(compiler.check_snapshot(&duplicate_interface)),
+            diagnostic_fingerprint(analyze_sources_with_interfaces(
+                &[ (
+                    "main.rss",
+                    "module app\nuse host.*\nfn main() -> Unit { ping(); return Unit }\n",
+                ) ],
+                &[
+                    ("host.rssi", "module host\npub fn ping() -> Unit\n"),
+                    ("host.rssi", "module host\npub fn ping() -> Unit\n"),
+                ],
+            )),
+            "duplicate-interface fixture must not be silently overwritten by the session store"
+        );
+
+        let ordinary = FrontendInputSnapshot::single(
+            "ordinary.rss",
+            "fn main() -> Unit { return Unit }\n",
+        );
+        assert_eq!(legacy_frontend_fixtures::snapshot_reason(&ordinary), None);
+        assert!(compiler.check_snapshot(&ordinary).is_empty());
+    }
+
+    fn diagnostic_fingerprint(diagnostics: Vec<Diagnostic>) -> Vec<(String, String)> {
+        diagnostics
+            .into_iter()
+            .map(|diagnostic| (diagnostic.code, diagnostic.summary))
+            .collect()
     }
 
     #[test]

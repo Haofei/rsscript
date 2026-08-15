@@ -3244,6 +3244,24 @@ fn session_owns_the_core_interface_policy() {
     let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
     assert!(sdk.contains("CompilationSession::with_standard_packages()"));
     assert!(sdk.contains("fn analyze_standard_source_with_session"));
+    assert!(sdk.contains("mod legacy_frontend_fixtures"));
+    assert!(sdk.contains("enum SnapshotReason"));
+
+    let session_boundary = sdk
+        .split("fn validate_snapshot_with_session")
+        .nth(1)
+        .and_then(|rest| rest.split("mod legacy_frontend_fixtures").next())
+        .expect("reviewed session boundary and private legacy fixture module must exist");
+    for direct_analyzer_call in [
+        "validate_sources_with_interfaces(",
+        "analyze_sources_with_interfaces(",
+        "rsscript_compiler::analyze_source_result",
+    ] {
+        assert!(
+            !session_boundary.contains(direct_analyzer_call),
+            "ordinary SDK paths must not select the legacy direct analyzer: {direct_analyzer_call}"
+        );
+    }
 }
 
 #[test]
