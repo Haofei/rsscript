@@ -1895,10 +1895,11 @@ an arbitrary shell executor.
     - [x] **B05.2c — Add a static v2 typed-decoder and Artifact corpus.** A
       checked-in canonical v2 payload and named mutation manifest exercise the
       independent numeric decoder without rebuilding a Rust wire program.
-      A separate static v2 Artifact covers the envelope-to-payload reader path.
-      Unknown opcode, constant-table/register, return-register references, and
-      malformed Artifact magic all fail closed through the appropriate v2
-      verifier.
+      A separate static v2 Artifact and named container-boundary manifest cover
+      the envelope-to-payload reader path. Unknown opcode,
+      constant-table/register, return-register references, every required v2
+      container section's flag/hash boundary, unknown container, and Artifact
+      size limits all fail closed through the appropriate v2 verifier.
   - [x] **B05.3 — Test deterministic bytes across supported platforms.** The
     checked-in canonical compilation baseline compares repeated Bundle bytes
     and their analysis/provenance digest from one immutable snapshot. It now

@@ -35,6 +35,20 @@ struct V2MalformedFixture {
     expected: String,
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct V2ArtifactBoundaryFixtures {
+    case: Vec<V2ArtifactBoundaryFixture>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct V2ArtifactBoundaryFixture {
+    name: String,
+    operation: String,
+    offset: usize,
+    value: u64,
+    expected: String,
+}
+
 const BASELINE_SOURCE: &str = r#"
 fn main() -> Int {
     let mut index = 0
@@ -340,6 +354,52 @@ fn checked_in_v2_payload_and_malformed_instruction_fixture_remain_fail_closed() 
             .verify_payload(&malformed)
             .expect_err("static malformed v2 payload must fail closed")
             .to_string();
+        assert!(
+            error.contains(&fixture.expected),
+            "{} expected error containing {:?}, got {error}",
+            fixture.name,
+            fixture.expected,
+        );
+    }
+}
+
+#[test]
+fn checked_in_v2_artifact_boundary_fixture_remains_fail_closed() {
+    use rsscript_bytecode::v2::BytecodeV2ArtifactVerifier;
+
+    let fixtures: V2ArtifactBoundaryFixtures = toml::from_str(include_str!(
+        "../../rsscript-bytecode/fixtures/v2/artifact-boundaries.toml"
+    ))
+    .expect("malformed v2 Artifact fixture manifest is valid TOML");
+    let artifact = STANDARD
+        .decode(
+            include_str!("../../rsscript-bytecode/fixtures/v2/reference.artifact.base64")
+                .lines()
+                .collect::<String>(),
+        )
+        .expect("checked-in v2 Artifact uses base64");
+
+    for fixture in fixtures.case {
+        let error = if fixture.operation == "verify_artifact_limit" {
+            BytecodeV2ArtifactVerifier::new(BytecodeLimits {
+                max_artifact_bytes: fixture.value as usize,
+                ..BytecodeLimits::default()
+            })
+            .verify(&artifact)
+            .expect_err("static v2 Artifact must honor its configured size limit")
+            .to_string()
+        } else {
+            let mut malformed = artifact.clone();
+            match fixture.operation.as_str() {
+                "set_byte" => malformed[fixture.offset] = fixture.value as u8,
+                "xor_byte" => malformed[fixture.offset] ^= fixture.value as u8,
+                other => panic!("unknown v2 Artifact malformed-fixture operation `{other}`"),
+            }
+            BytecodeV2ArtifactVerifier::default()
+                .verify(&malformed)
+                .expect_err("static malformed v2 Artifact must fail closed")
+                .to_string()
+        };
         assert!(
             error.contains(&fixture.expected),
             "{} expected error containing {:?}, got {error}",

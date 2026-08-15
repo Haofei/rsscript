@@ -1,0 +1,87 @@
+# Immutable mutations for the verifier-only numeric v2 Artifact reader. The
+# base Artifact is checked in rather than reconstructed from the current wire
+# types, so container compatibility stays reviewable as the v2 schema evolves.
+
+[[case]]
+name = "v2-invalid-magic"
+operation = "set_byte"
+offset = 0
+value = 0
+expected = "invalid RSScript bytecode magic"
+
+[[case]]
+name = "v2-unknown-container"
+operation = "set_byte"
+offset = 6
+value = 2
+expected = "invalid RSScript bytecode magic"
+
+[[case]]
+name = "v2-header-not-required"
+operation = "set_byte"
+offset = 11
+value = 0
+expected = "section 1 is not marked required"
+
+[[case]]
+name = "v2-header-hash-mismatch"
+operation = "xor_byte"
+offset = 20
+value = 1
+expected = "section 1 hash mismatch"
+
+[[case]]
+name = "v2-import-not-required"
+operation = "set_byte"
+offset = 479
+value = 0
+expected = "section 2 is not marked required"
+
+[[case]]
+name = "v2-import-hash-mismatch"
+operation = "xor_byte"
+offset = 488
+value = 1
+expected = "section 2 hash mismatch"
+
+[[case]]
+name = "v2-code-unknown"
+operation = "set_byte"
+offset = 521
+value = 5
+expected = "unknown required section 5"
+
+[[case]]
+name = "v2-code-not-required"
+operation = "set_byte"
+offset = 522
+value = 0
+expected = "section 3 is not marked required"
+
+[[case]]
+name = "v2-code-hash-mismatch"
+operation = "xor_byte"
+offset = 531
+value = 1
+expected = "section 3 hash mismatch"
+
+[[case]]
+name = "v2-checksum-not-required"
+operation = "set_byte"
+offset = 689
+value = 0
+expected = "section 4 is not marked required"
+
+[[case]]
+name = "v2-checksum-hash-mismatch"
+operation = "xor_byte"
+offset = 698
+value = 1
+expected = "section 4 hash mismatch"
+
+[[case]]
+name = "v2-artifact-size-limit"
+operation = "verify_artifact_limit"
+offset = 0
+value = 1
+expected = "artifact bytes"
