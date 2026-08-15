@@ -13,9 +13,12 @@ the compiler the physical owner of project/review input representation.
 ## Decision
 
 `rsscript-package-review` owns the captured package manifest model,
-feature-selected source-set model, and bounded loader. It depends on
-`rsscript-project` for confined/no-follow capture and on `rsscript-package-model`
-for versioned file-kind identity; it has no compiler dependency.
+feature-selected source-set model, bounded loader, and source-level contract
+extractor. The latter calls `CompilationSession` and syntax directly rather
+than routing semantic facts through compiler-local helpers. The crate depends
+on `rsscript-project` for confined/no-follow capture and on
+`rsscript-package-model` for versioned file-kind identity; it has no compiler
+dependency.
 
 The compiler's opt-in `package` compatibility feature has a private forwarding
 module during the staged migration so existing authorization, native, lock, and

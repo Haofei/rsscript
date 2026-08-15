@@ -1,121 +1,120 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::diagnostic::{Diagnostic, code};
-use crate::syntax::ast::{
+use rsscript_diagnostics::{Diagnostic, Span, code};
+use rsscript_review_source::{ReviewMap, ReviewMapClassification};
+use rsscript_syntax::ast::{
     ConstDecl, DataEffect, Expr, FieldDecl, FunctionDecl, GenericBound, GenericParam, Item, Param,
     ProtocolDecl, ProtocolImpl, SumTypeDecl, SumVariant, TypeAliasDecl, TypeDecl, TypeKind,
     TypeRef,
 };
-use crate::syntax::parse_source;
-use rsscript_review_source::{ReviewMap, ReviewMapClassification};
+use rsscript_syntax::parse_source;
 
-use super::analysis::session_analysis;
-use super::{PackageReviewExport, PackageReviewFileKind, PackageSource};
+use crate::PackageSource;
+use crate::session_analysis;
+use rsscript_package_model::{PackageReviewExport, PackageReviewFileKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PackageFunctionContract {
-    pub(super) name: String,
-    pub(super) params: Vec<PackageParamContract>,
-    pub(super) return_type: Option<String>,
-    pub(super) returns_fresh: bool,
-    pub(super) is_async: bool,
-    pub(super) default_impl_marker: bool,
-    pub(super) deprecated_reason: Option<String>,
-    pub(super) retained_params: BTreeSet<String>,
-    pub(super) span: crate::diagnostic::Span,
+pub struct PackageFunctionContract {
+    pub name: String,
+    pub params: Vec<PackageParamContract>,
+    pub return_type: Option<String>,
+    pub returns_fresh: bool,
+    pub is_async: bool,
+    pub default_impl_marker: bool,
+    pub deprecated_reason: Option<String>,
+    pub retained_params: BTreeSet<String>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PackageProtocolImplContract {
-    pub(super) protocol: String,
-    pub(super) type_name: String,
-    pub(super) mappings: Vec<PackageProtocolImplMappingContract>,
-    pub(super) span: crate::diagnostic::Span,
+pub struct PackageProtocolImplContract {
+    pub protocol: String,
+    pub type_name: String,
+    pub mappings: Vec<PackageProtocolImplMappingContract>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct PackageProtocolImplMappingContract {
-    pub(super) method: String,
-    pub(super) target: String,
+pub struct PackageProtocolImplMappingContract {
+    pub method: String,
+    pub target: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PackageProtocolContract {
-    pub(super) name: String,
-    pub(super) methods: Vec<PackageProtocolMethodContract>,
-    pub(super) span: crate::diagnostic::Span,
+pub struct PackageProtocolContract {
+    pub name: String,
+    pub methods: Vec<PackageProtocolMethodContract>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PackageProtocolMethodContract {
-    pub(super) name: String,
-    pub(super) contract: PackageFunctionContract,
+pub struct PackageProtocolMethodContract {
+    pub name: String,
+    pub contract: PackageFunctionContract,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PackageParamContract {
-    pub(super) name: String,
-    pub(super) effect: Option<&'static str>,
-    pub(super) type_name: String,
+pub struct PackageParamContract {
+    pub name: String,
+    pub effect: Option<&'static str>,
+    pub type_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PackageTypeContract {
-    pub(super) name: String,
-    pub(super) kind: TypeKind,
-    pub(super) is_opaque: bool,
-    pub(super) type_params: Vec<PackageGenericContract>,
-    pub(super) fields: Vec<PackageFieldContract>,
-    pub(super) span: crate::diagnostic::Span,
+pub struct PackageTypeContract {
+    pub name: String,
+    pub kind: TypeKind,
+    pub is_opaque: bool,
+    pub type_params: Vec<PackageGenericContract>,
+    pub fields: Vec<PackageFieldContract>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PackageSumTypeContract {
-    pub(super) name: String,
-    pub(super) type_params: Vec<PackageGenericContract>,
-    pub(super) variants: Vec<PackageSumVariantContract>,
-    pub(super) span: crate::diagnostic::Span,
+pub struct PackageSumTypeContract {
+    pub name: String,
+    pub type_params: Vec<PackageGenericContract>,
+    pub variants: Vec<PackageSumVariantContract>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PackageSumVariantContract {
-    pub(super) name: String,
-    pub(super) fields: Vec<PackageFieldContract>,
+pub struct PackageSumVariantContract {
+    pub name: String,
+    pub fields: Vec<PackageFieldContract>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PackageTypeAliasContract {
-    pub(super) name: String,
-    pub(super) type_params: Vec<PackageGenericContract>,
-    pub(super) target: String,
-    pub(super) span: crate::diagnostic::Span,
+pub struct PackageTypeAliasContract {
+    pub name: String,
+    pub type_params: Vec<PackageGenericContract>,
+    pub target: String,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PackageConstContract {
-    pub(super) name: String,
-    pub(super) type_annotation: Option<String>,
-    pub(super) value: Expr,
-    pub(super) span: crate::diagnostic::Span,
+pub struct PackageConstContract {
+    pub name: String,
+    pub type_annotation: Option<String>,
+    pub value: Expr,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PackageGenericContract {
-    pub(super) name: String,
-    pub(super) bound: Option<String>,
+pub struct PackageGenericContract {
+    pub name: String,
+    pub bound: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PackageFieldContract {
-    pub(super) name: String,
-    pub(super) type_name: String,
-    pub(super) is_handle: bool,
-    pub(super) is_weak: bool,
+pub struct PackageFieldContract {
+    pub name: String,
+    pub type_name: String,
+    pub is_handle: bool,
+    pub is_weak: bool,
 }
 
-pub(super) fn package_interface_environment_diagnostics(
-    interfaces: &[(&str, &str)],
-) -> Vec<Diagnostic> {
+pub fn package_interface_environment_diagnostics(interfaces: &[(&str, &str)]) -> Vec<Diagnostic> {
     session_analysis(&[("<package-interface-environment>", "")], interfaces)
         .diagnostics()
         .iter()
@@ -124,7 +123,7 @@ pub(super) fn package_interface_environment_diagnostics(
         .collect()
 }
 
-pub(super) fn package_interface_contract_diagnostics(
+pub fn package_interface_contract_diagnostics(
     sources: &[PackageSource],
     external_bindings: &BTreeMap<String, String>,
 ) -> Vec<Diagnostic> {
@@ -491,7 +490,7 @@ pub(super) fn package_interface_contract_diagnostics(
     diagnostics
 }
 
-pub(super) fn package_type_contracts_match(
+pub fn package_type_contracts_match(
     interface: &PackageTypeContract,
     source: &PackageTypeContract,
 ) -> bool {
@@ -501,7 +500,7 @@ pub(super) fn package_type_contracts_match(
         && (interface.is_opaque || interface.fields == source.fields)
 }
 
-pub(super) fn package_function_contracts_match(
+pub fn package_function_contracts_match(
     interface: &PackageFunctionContract,
     source: &PackageFunctionContract,
 ) -> bool {
@@ -705,7 +704,7 @@ fn collect_package_item_contracts<T>(
     contracts
 }
 
-pub(super) fn collect_package_type_contracts(
+pub fn collect_package_type_contracts(
     sources: &[PackageSource],
     kind: PackageReviewFileKind,
 ) -> BTreeMap<String, PackageTypeContract> {
@@ -721,7 +720,7 @@ pub(super) fn collect_package_type_contracts(
     })
 }
 
-pub(super) fn collect_package_function_contracts(
+pub fn collect_package_function_contracts(
     sources: &[PackageSource],
     kind: PackageReviewFileKind,
 ) -> BTreeMap<String, PackageFunctionContract> {
@@ -737,7 +736,7 @@ pub(super) fn collect_package_function_contracts(
     })
 }
 
-pub(super) fn collect_package_sum_type_contracts(
+pub fn collect_package_sum_type_contracts(
     sources: &[PackageSource],
     kind: PackageReviewFileKind,
 ) -> BTreeMap<String, PackageSumTypeContract> {
@@ -753,7 +752,7 @@ pub(super) fn collect_package_sum_type_contracts(
     })
 }
 
-pub(super) fn collect_package_type_alias_contracts(
+pub fn collect_package_type_alias_contracts(
     sources: &[PackageSource],
     kind: PackageReviewFileKind,
 ) -> BTreeMap<String, PackageTypeAliasContract> {
@@ -769,7 +768,7 @@ pub(super) fn collect_package_type_alias_contracts(
     })
 }
 
-pub(super) fn collect_package_const_contracts(
+pub fn collect_package_const_contracts(
     sources: &[PackageSource],
     kind: PackageReviewFileKind,
 ) -> BTreeMap<String, PackageConstContract> {
@@ -785,7 +784,7 @@ pub(super) fn collect_package_const_contracts(
     })
 }
 
-pub(super) fn collect_package_protocol_impl_contracts(
+pub fn collect_package_protocol_impl_contracts(
     sources: &[PackageSource],
     kind: PackageReviewFileKind,
 ) -> BTreeMap<String, PackageProtocolImplContract> {
@@ -803,7 +802,7 @@ pub(super) fn collect_package_protocol_impl_contracts(
     contracts
 }
 
-pub(super) fn collect_package_protocol_contracts(
+pub fn collect_package_protocol_contracts(
     sources: &[PackageSource],
     kind: PackageReviewFileKind,
 ) -> BTreeMap<String, PackageProtocolContract> {
@@ -818,7 +817,7 @@ pub(super) fn collect_package_protocol_contracts(
     contracts
 }
 
-pub(super) fn package_interface_diagnostic_exports(
+pub fn package_interface_diagnostic_exports(
     sources: &[PackageSource],
     diagnostics: &[Diagnostic],
 ) -> Vec<PackageReviewExport> {
@@ -865,7 +864,7 @@ pub(super) fn package_interface_diagnostic_exports(
     exports
 }
 
-pub(super) fn package_review_exports(
+pub fn package_review_exports(
     sources: &[PackageSource],
     review_map: &ReviewMap,
 ) -> Vec<PackageReviewExport> {
@@ -1178,7 +1177,7 @@ fn package_review_map_function_is_unknown(function: &str, review_map: &ReviewMap
     })
 }
 
-pub(super) fn package_contract_has_resource_boundary(
+pub fn package_contract_has_resource_boundary(
     contract: &PackageFunctionContract,
     resource_types: &BTreeSet<&str>,
 ) -> bool {
@@ -1191,7 +1190,7 @@ pub(super) fn package_contract_has_resource_boundary(
         })
 }
 
-pub(super) fn package_type_name_has_resource_boundary(
+pub fn package_type_name_has_resource_boundary(
     type_name: &str,
     resource_types: &BTreeSet<&str>,
 ) -> bool {
@@ -1368,7 +1367,7 @@ fn package_protocol_contract(protocol: &ProtocolDecl, items: &[Item]) -> Package
     }
 }
 
-pub(super) fn package_protocol_impl_contract_key(protocol: &str, type_name: &str) -> String {
+pub fn package_protocol_impl_contract_key(protocol: &str, type_name: &str) -> String {
     format!("{protocol} for {type_name}")
 }
 
@@ -1526,7 +1525,7 @@ fn package_generic_params_label(params: &[PackageGenericContract]) -> String {
     }
 }
 
-pub(super) fn package_function_contract_label(contract: &PackageFunctionContract) -> String {
+pub fn package_function_contract_label(contract: &PackageFunctionContract) -> String {
     let params = contract
         .params
         .iter()
@@ -1594,7 +1593,7 @@ fn package_protocol_method_contract_label(method: &PackageProtocolMethodContract
     label.strip_prefix("pub ").unwrap_or(&label).to_string()
 }
 
-pub(super) fn package_type_contracts_for_source(
+pub fn package_type_contracts_for_source(
     source: &PackageSource,
 ) -> BTreeMap<String, PackageTypeContract> {
     parse_source(&source.path, &source.contents)
@@ -1614,7 +1613,7 @@ pub(super) fn package_type_contracts_for_source(
         .collect()
 }
 
-pub(super) fn package_function_contracts_for_source(
+pub fn package_function_contracts_for_source(
     source: &PackageSource,
 ) -> BTreeMap<String, PackageFunctionContract> {
     parse_source(&source.path, &source.contents)
@@ -1634,7 +1633,7 @@ pub(super) fn package_function_contracts_for_source(
         .collect()
 }
 
-pub(super) fn package_added_type_contract_is_high_risk(contract: &PackageTypeContract) -> bool {
+pub fn package_added_type_contract_is_high_risk(contract: &PackageTypeContract) -> bool {
     contract.kind == TypeKind::Resource
         || contract
             .fields
@@ -1642,7 +1641,7 @@ pub(super) fn package_added_type_contract_is_high_risk(contract: &PackageTypeCon
             .any(|field| field.is_handle || field.is_weak)
 }
 
-pub(super) fn package_type_contract_boundary_changed(
+pub fn package_type_contract_boundary_changed(
     old: &PackageTypeContract,
     new: &PackageTypeContract,
 ) -> bool {
@@ -1653,7 +1652,7 @@ pub(super) fn package_type_contract_boundary_changed(
         || old.fields.len() != new.fields.len()
 }
 
-pub(super) fn package_added_function_contract_is_high_risk(
+pub fn package_added_function_contract_is_high_risk(
     contract: &PackageFunctionContract,
     resource_types: &BTreeSet<&str>,
 ) -> bool {
@@ -1667,7 +1666,7 @@ pub(super) fn package_added_function_contract_is_high_risk(
         || package_contract_has_resource_boundary(contract, resource_types)
 }
 
-pub(super) fn package_function_contract_boundary_changed(
+pub fn package_function_contract_boundary_changed(
     old: &PackageFunctionContract,
     new: &PackageFunctionContract,
     resource_types: &BTreeSet<&str>,

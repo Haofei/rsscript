@@ -1893,6 +1893,20 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
         "captured package manifests and source sets must be physically owned by the package-review boundary"
     );
     let source_set = read(&source_set_path);
+    let contract_path = root.join("crates/rsscript-package-review/src/contract.rs");
+    assert!(
+        contract_path.is_file()
+            && !root
+                .join("crates/rsscript-compiler/src/package/contract.rs")
+                .exists(),
+        "package contract extraction must be physically owned by the package-review boundary"
+    );
+    let contract = read(&contract_path);
+    assert!(
+        contract.contains("use crate::session_analysis;")
+            && contract.contains("use rsscript_syntax::ast::"),
+        "package contract extraction must use the review-owned session and syntax boundaries directly"
+    );
     let manifest_loader = function_source(
         &source_set,
         "pub fn load_package_manifest_with_source(",

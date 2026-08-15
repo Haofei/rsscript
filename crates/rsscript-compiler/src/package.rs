@@ -42,7 +42,11 @@ mod analysis_await;
 mod analysis_execution;
 mod authorization;
 mod check;
-mod contract;
+// Contract extraction is review-owned. Keep only a private compatibility
+// forwarding module until package review execution migrates completely.
+mod contract {
+    pub(super) use rsscript_package_review::*;
+}
 mod dependency;
 mod diff;
 mod graph;

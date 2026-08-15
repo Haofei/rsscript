@@ -9,6 +9,10 @@ publish = false
 [dependencies]
 rsscript-package-model = { path = "../rsscript-package-model" }
 rsscript-project = { path = "../rsscript-project" }
+rsscript-diagnostics = { path = "../rsscript-diagnostics" }
+rsscript-semantics = { path = "../rsscript-semantics" }
+rsscript-syntax = { path = "../rsscript-syntax" }
+rsscript-review-source = { path = "../rsscript-review-source" }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 
