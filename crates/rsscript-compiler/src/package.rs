@@ -39,7 +39,9 @@ pub(super) use rsscript_project::{
 mod analysis;
 #[path = "package/review/review_await.rs"]
 mod analysis_await;
-mod analysis_execution;
+mod analysis_execution {
+    pub(super) use rsscript_package_review::*;
+}
 mod authorization;
 mod check;
 // Contract extraction is review-owned. Keep only a private compatibility

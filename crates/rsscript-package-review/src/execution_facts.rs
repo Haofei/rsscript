@@ -1,15 +1,16 @@
 use std::collections::BTreeSet;
 
-use crate::syntax::ast::{Block, Callee, DataEffect, Expr, Item, Stmt};
+use rsscript_syntax::ast::{Block, Callee, DataEffect, Expr, Item, Stmt};
 
-use super::{
+use crate::PackageSource;
+use rsscript_package_model::{
     PackageAnalysisResourceLifetime, PackageAnalysisResourceTransfer, PackageAnalysisTaskGroup,
-    PackageReviewFileKind, PackageSource,
+    PackageReviewFileKind,
 };
 
-pub(super) fn collect_execution_facts(
+pub fn collect_execution_facts(
     sources: &[PackageSource],
-    database: &crate::semantic::SemanticDatabase,
+    database: &rsscript_semantics::SemanticDatabase,
 ) -> (
     Vec<PackageAnalysisResourceLifetime>,
     Vec<PackageAnalysisResourceTransfer>,
@@ -366,7 +367,7 @@ fn count_select_arms(block: &Block) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::syntax::parse_source;
+    use rsscript_syntax::parse_source;
 
     #[test]
     fn records_only_explicit_take_of_with_binding_as_resource_transfer() {

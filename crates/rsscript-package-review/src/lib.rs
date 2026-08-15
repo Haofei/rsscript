@@ -6,9 +6,11 @@
 //! the compiler for semantic facts.
 
 mod contract;
+mod execution_facts;
 mod source_set;
 
 pub use contract::*;
+pub use execution_facts::*;
 pub use source_set::*;
 
 use std::collections::BTreeSet;
