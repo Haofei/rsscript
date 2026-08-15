@@ -2464,10 +2464,7 @@ fn requires_legacy_builtin_metadata(signature: &checked::FunctionSig) -> bool {
         .map(|namespace| namespace.split('<').next().unwrap_or(namespace).trim());
     matches!(
         (namespace, signature.name.as_str()),
-        (Some("Json"), "decode" | "decode_text")
-            | (Some("Channel"), _)
-            | (Some("Sender"), _)
-            | (Some("Receiver"), _)
+        (Some("Json"), "decode" | "decode_text") | (Some("Sender"), _) | (Some("Receiver"), _)
     )
 }
 

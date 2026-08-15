@@ -990,16 +990,24 @@ mechanical acceptance condition holds.
       JSON decode now carries its concrete target as a verifier-checked MIR
       `TypeId`; only the v1 encoder projects that typed operand onto its legacy
       `CallTypedIntrinsic` string field. Argument capture,
-      channel builtins and dynamic protocol dispatch still reject direct MIR
-      lowering rather than erasing their scheduler or dispatch contracts into
-      bytecode. The explicit migration-only executable-IR bridge remains
-      responsible for those forms until MIR introduces their typed operands.
+      Scheduler-suspending channel builtins and dynamic protocol dispatch still
+      reject direct MIR lowering rather than erasing their scheduler or dispatch
+      contracts into bytecode. The explicit migration-only executable-IR bridge
+      remains responsible for those forms until MIR introduces their typed
+      operands.
     - [x] **M03.4d — Admit catalog-backed async builtins.** Direct catalog
       membership, rather than the legacy `is_builtin` flag alone, now determines
       whether an interface-shaped standard-library call is lowered as a
       `BuiltinId`. This keeps VM-owned cancellation operations out of Artifact
       Provider imports while preserving their resolved effects and argument
       modes in MIR.
+    - [x] **M03.4e — Lower synchronous channel endpoints.** The phantom generic
+      payload type is fully checked before lowering; `Channel.bounded/message`,
+      `.sender`, and `.receiver` now use their catalog `BuiltinId` operations
+      directly, remain absent from the Artifact Provider-import table, and
+      execute through verified bytecode. Scheduler-suspending `Sender` and
+      `Receiver` operations remain fail-closed until their suspension contract
+      is modeled explicitly in direct MIR.
 - [ ] **M04 — Lower checked HIR to MIR exactly once.** Backend code cannot
   inspect syntax AST or reconstruct semantic facts. MIR verification rejects
   unresolved calls, invalid ownership state, incomplete cleanup, and malformed
@@ -1026,7 +1034,8 @@ mechanical acceptance condition holds.
       IR: typed task handles feed `Select`, then an explicit winner-index CFG
       ladder binds and runs exactly one arm. Cancellation syntax remains
       follow-up direct-lowering work except for the cooperative standard-package
-      source/token/cancel/poll operations covered by M03.3e.
+      source/token/cancel/poll operations covered by M03.3e and synchronous
+      channel endpoint construction covered by M03.4e.
   - [x] **M04.2 — Verify MIR ownership, resources, and task scopes.** The
     construction verifier runs ownership-mode, move/drop, resource-lifetime,
     resource-cleanup-over-CFG, and structured-task-close passes. Targeted
