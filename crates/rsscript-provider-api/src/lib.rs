@@ -10,9 +10,9 @@ use std::time::Duration;
 
 pub use rsscript_abi_model::{
     DataEffect, ExternalImport, ExternalSymbol, FunctionSignature, InvalidExternalSymbol,
-    ParameterSignature, SignatureHash, WireCallTypeTable, WireRecordFieldLayout, WireRecordLayout,
-    WireResourceHandle, WireResourceTypeId, WireType, WireTypeId, WireTypeTableOverflow, WireValue,
-    WireVariantId, WireVariantLayout, RUNTIME_ABI_VERSION,
+    ParameterSignature, RUNTIME_ABI_VERSION, SignatureHash, WireCallTypeTable,
+    WireRecordFieldLayout, WireRecordLayout, WireResourceHandle, WireResourceTypeId, WireType,
+    WireTypeId, WireTypeTableOverflow, WireValue, WireVariantId, WireVariantLayout,
 };
 pub use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationId};
 use serde::{Deserialize, Serialize};
@@ -132,13 +132,13 @@ pub enum ProviderErrorCode {
     Internal,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderError {
     pub code: ProviderErrorCode,
     pub message: String,
     pub retryable: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub details: Option<serde_json::Value>,
+    pub details: Option<WireValue>,
 }
 
 impl ProviderError {
@@ -189,7 +189,9 @@ impl ProviderError {
                 error.kind(),
                 std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
             ),
-            details: Some(serde_json::json!({ "io_kind": format!("{:?}", error.kind()) })),
+            details: Some(WireValue::String {
+                value: format!("{:?}", error.kind()),
+            }),
         }
     }
 }
@@ -691,12 +693,12 @@ impl WireInterpreterFn {
 
     pub fn new_contextual(
         function: impl for<'a> Fn(
-                &mut ProviderCallContext<'a>,
-                Vec<WireValue>,
-            ) -> Result<WireValue, ProviderError>
-            + Send
-            + Sync
-            + 'static,
+            &mut ProviderCallContext<'a>,
+            Vec<WireValue>,
+        ) -> Result<WireValue, ProviderError>
+        + Send
+        + Sync
+        + 'static,
     ) -> Self {
         Self {
             inner: Arc::new(function),
@@ -739,21 +741,21 @@ impl NativeInterpreterFn {
 
     pub fn new(
         function: impl Fn(Vec<NativeValue>) -> Result<NativeValue, ProviderError>
-            + Send
-            + Sync
-            + 'static,
+        + Send
+        + Sync
+        + 'static,
     ) -> Self {
         Self::new_contextual(move |_, args| function(args))
     }
 
     pub fn new_contextual(
         function: impl for<'a> Fn(
-                &mut ProviderCallContext<'a>,
-                Vec<NativeValue>,
-            ) -> Result<NativeValue, ProviderError>
-            + Send
-            + Sync
-            + 'static,
+            &mut ProviderCallContext<'a>,
+            Vec<NativeValue>,
+        ) -> Result<NativeValue, ProviderError>
+        + Send
+        + Sync
+        + 'static,
     ) -> Self {
         Self {
             inner: Arc::new(function),
@@ -1246,6 +1248,23 @@ mod tests {
         assert_eq!(value.estimated_payload_bytes(), 5 + 4 + 4 + 2 + 1);
         assert_eq!(estimated_payload_bytes(&[value.clone(), value]), 32);
     }
+
+    #[test]
+    fn provider_error_details_use_the_canonical_wire_value_model() {
+        let error = ProviderError::from_io(
+            "read fixture",
+            std::io::Error::new(std::io::ErrorKind::NotFound, "missing"),
+        );
+        assert_eq!(
+            error.details,
+            Some(WireValue::String {
+                value: "NotFound".to_owned(),
+            })
+        );
+        let encoded = serde_json::to_value(&error).expect("Provider error serializes");
+        assert_eq!(encoded["details"]["kind"], "string");
+        assert_eq!(encoded["details"]["value"], "NotFound");
+    }
     use proptest::prelude::*;
     use rsscript_abi_model::{DataEffect, ParameterSignature};
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -1484,9 +1503,11 @@ mod tests {
         assert_eq!(wire.slot, 12);
         assert_eq!(wire.generation, 34);
         assert_eq!(ResourceHandle::from_wire(wire), handle);
-        assert!(serde_json::to_string(&wire)
-            .expect("wire handle serializes")
-            .contains("resource_type"));
+        assert!(
+            serde_json::to_string(&wire)
+                .expect("wire handle serializes")
+                .contains("resource_type")
+        );
     }
 
     #[test]

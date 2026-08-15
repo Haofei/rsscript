@@ -2025,7 +2025,10 @@ an arbitrary shell executor.
     only the register VM, native ABI adapter, and conformance compatibility
     harness opt into its explicit `compatibility` feature. This prevents a new
     standalone Provider SDK consumer from compiling the legacy call boundary
-    by accident, while the VM migration remains open.
+    by accident. Canonical `ProviderError.details` now uses `WireValue` as
+    well, so structured error metadata no longer reintroduces
+    `serde_json::Value` as an implicit Provider ABI escape hatch; JSON remains
+    an explicitly named extension codec. The VM migration remains open.
 - [x] **P07 — Remove policy-shaped authority from Core ABI.** `HostCallContext`
   carries host-defined labels to Provider calls without Core interpreting an
   authorization policy. The runtime reports required symbols; provider profiles

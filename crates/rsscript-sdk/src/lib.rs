@@ -30,6 +30,16 @@ pub use rsscript_compiler::{
     vscode_tmlanguage_json,
 };
 
+#[cfg(all(feature = "compatibility", feature = "aot-rust"))]
+pub use rsscript_aot_backend::{
+    GeneratedRustPackage, LowerCoverageReport, LoweredRust, NativeRustDependency,
+    RemappedRustcDiagnostic, RustSourceMapEntry, lower_coverage_report, lower_program_to_rust,
+    lower_program_to_rust_with_map, lower_source_to_rust, lower_source_to_rust_package,
+    lower_source_to_rust_package_with_interfaces, lower_source_to_rust_with_map,
+    lower_sources_to_rust_package_with_interfaces, lower_sources_to_rust_package_with_options,
+    parse_runtime_diagnostics, parse_source_map_json, remap_rustc_diagnostic_json,
+    remap_rustc_diagnostic_json_lines, write_generated_rust_package,
+};
 #[cfg(feature = "compatibility")]
 pub use rsscript_artifact_store::{ArtifactStore, write_package_artifact_atomic};
 #[cfg(feature = "execution")]
@@ -66,16 +76,6 @@ pub use rsscript_compiler::compatibility::{
     package_lowering_input, package_sources, package_sources_with_dependency_interfaces,
     package_tree, prepare_executable_package, prepare_package_for_execution, review_map_sources,
     review_package_dir, review_sources,
-};
-#[cfg(all(feature = "compatibility", feature = "aot-rust"))]
-pub use rsscript_aot_backend::{
-    GeneratedRustPackage, LowerCoverageReport, LoweredRust, NativeRustDependency,
-    RemappedRustcDiagnostic, RustSourceMapEntry, lower_coverage_report, lower_program_to_rust,
-    lower_program_to_rust_with_map, lower_source_to_rust, lower_source_to_rust_package,
-    lower_source_to_rust_package_with_interfaces, lower_source_to_rust_with_map,
-    lower_sources_to_rust_package_with_interfaces, lower_sources_to_rust_package_with_options,
-    parse_runtime_diagnostics, parse_source_map_json, remap_rustc_diagnostic_json,
-    remap_rustc_diagnostic_json_lines, write_generated_rust_package,
 };
 #[cfg(feature = "execution")]
 #[cfg(not(feature = "compatibility"))]
@@ -653,11 +653,9 @@ fn analyze_standard_source_with_session(
             // `Result`. Preserve the legacy representation only for the abort
             // result in the named compatibility adapter; ordinary work always
             // uses the session cache/query path.
-            Err(_) => legacy_frontend_fixtures::analyze_standard_source(
-                file,
-                source,
-                Some(operation),
-            ),
+            Err(_) => {
+                legacy_frontend_fixtures::analyze_standard_source(file, source, Some(operation))
+            }
         },
         None => (*session.workspace_analysis()).clone(),
     }
@@ -2837,10 +2835,8 @@ fn main() -> Result<Int, String> {
     #[test]
     fn exceptional_frontend_fixtures_preserve_direct_analyzer_diagnostics() {
         let compiler = Compiler;
-        let empty_path = FrontendInputSnapshot::single(
-            "",
-            "fn main() -> Int { return Missing.value }\n",
-        );
+        let empty_path =
+            FrontendInputSnapshot::single("", "fn main() -> Int { return Missing.value }\n");
         assert_eq!(
             legacy_frontend_fixtures::snapshot_reason(&empty_path),
             Some(legacy_frontend_fixtures::SnapshotReason::EmptyLogicalPath)
@@ -2871,10 +2867,10 @@ fn main() -> Result<Int, String> {
         assert_eq!(
             diagnostic_fingerprint(compiler.check_snapshot(&duplicate_interface)),
             diagnostic_fingerprint(analyze_sources_with_interfaces(
-                &[ (
+                &[(
                     "main.rss",
                     "module app\nuse host.*\nfn main() -> Unit { ping(); return Unit }\n",
-                ) ],
+                )],
                 &[
                     ("host.rssi", "module host\npub fn ping() -> Unit\n"),
                     ("host.rssi", "module host\npub fn ping() -> Unit\n"),
@@ -2883,10 +2879,8 @@ fn main() -> Result<Int, String> {
             "duplicate-interface fixture must not be silently overwritten by the session store"
         );
 
-        let ordinary = FrontendInputSnapshot::single(
-            "ordinary.rss",
-            "fn main() -> Unit { return Unit }\n",
-        );
+        let ordinary =
+            FrontendInputSnapshot::single("ordinary.rss", "fn main() -> Unit { return Unit }\n");
         assert_eq!(legacy_frontend_fixtures::snapshot_reason(&ordinary), None);
         assert!(compiler.check_snapshot(&ordinary).is_empty());
     }
@@ -3171,9 +3165,9 @@ fn main() -> Result<Int, String> {
                             let mut error = provider::ProviderError::invalid_argument(
                                 "secret-token=do-not-report",
                             );
-                            error.details = Some(serde_json::json!({
-                                "credential": "do-not-report"
-                            }));
+                            error.details = Some(provider::WireValue::String {
+                                value: "credential=do-not-report".into(),
+                            });
                             Err(error)
                         }),
                     },

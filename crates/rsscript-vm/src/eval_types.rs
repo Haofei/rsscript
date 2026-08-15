@@ -827,7 +827,7 @@ impl ExternalFunction {
                 error
                     .details
                     .as_ref()
-                    .map_or(0, |details| details.to_string().len()),
+                    .map_or(0, rsscript_abi_model::WireValue::estimated_payload_bytes),
             ),
         };
         if let Some(trace) = context.trace {
@@ -975,7 +975,7 @@ impl ExternalFunction {
                     error
                         .details
                         .as_ref()
-                        .map_or(0, |details| details.to_string().len()),
+                        .map_or(0, rsscript_abi_model::WireValue::estimated_payload_bytes),
                 ),
             };
             if let Some(trace) = trace {
@@ -1224,7 +1224,7 @@ pub struct ExecutionUsage {
     pub tasks_live_at_return: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EvalError {
     Diagnostics(Vec<Diagnostic>),
     Execution {
