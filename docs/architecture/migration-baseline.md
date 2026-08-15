@@ -1109,7 +1109,7 @@ an arbitrary shell executor.
     propagates over reachable CFG edges and rejects a return branch that omits
     its lexical group drain even when sibling branches join. Cancellation and
     select cleanup edges remain follow-up work.
-- [ ] **M03 — Make semantic operations explicit.** MIR represents move,
+- [x] **M03 — Make semantic operations explicit.** MIR represents move,
   read/mut borrow, retain, drop, resource acquire/release, spawn, await, join,
   cancellation, selection, external calls, and every cleanup/unwind edge.
   - [x] **M03.1 — Add explicit ownership instructions.** MIR models standalone
@@ -1180,8 +1180,12 @@ an arbitrary shell executor.
       usage, and exact-once Provider cleanup count as the legacy VM. Provider
       failures and cancellation that occur outside a language short-circuit
       drain the same tracked scope through runtime finalization.
-  - [ ] **M03.3 — Add structured-concurrency instructions.** Model spawn, await,
-    join, cancel, and select with lexical task-group ownership.
+  - [x] **M03.3 — Add structured-concurrency instructions.** Model spawn, await,
+    join, cancel, and select with lexical task-group ownership. Explicit task
+    cancellation now drains the same verifier-visible resource scopes as normal
+    release, including parked tasks and `select` losers. Source-level shorthand
+    for direct task cancellation remains intentionally unsupported under the
+    language-surface freeze; it is not a missing execution semantic.
     - [x] **M03.3a — Establish typed task lifecycle primitives.** MIR now owns
       task and task-group IDs, verifies internal async spawn signatures and
       lexical close on normal returns, and rejects unsupported backend execution

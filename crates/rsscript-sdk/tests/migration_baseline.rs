@@ -92,7 +92,7 @@ fn canonical_compilation_and_diagnostics_are_migration_baselines() {
     );
     assert_eq!(
         sha256(&first_bytes),
-        "1dd2f94f264f0453806e61019fc3f1764bc2d55d06ecbda950be22fb64eec81d",
+        "f49759f58b8b4afa81bc39a4a5fc2af79de94a9d79bf80e0439cc5744059a1ed",
         "an intentional Artifact encoding or lowering change must update this digest"
     );
 
