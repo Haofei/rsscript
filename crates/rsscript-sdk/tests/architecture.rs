@@ -2147,6 +2147,30 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
                 .contains("rsscript_package_review::package_sources_with_dependency_interfaces"),
         "compiler source-list compatibility must delegate presentation to the package-review boundary"
     );
+    let mut remaining_compiler_package_files = std::fs::read_dir(
+        root.join("crates/rsscript-compiler/src/package"),
+    )
+    .expect("compiler package directory")
+    .map(|entry| {
+        entry
+            .expect("compiler package entry")
+            .file_name()
+            .into_string()
+            .expect("UTF-8 compiler package filename")
+    })
+    .collect::<Vec<_>>();
+    remaining_compiler_package_files.sort();
+    assert_eq!(
+        remaining_compiler_package_files,
+        vec!["authorization.rs", "metadata.rs", "native.rs"],
+        "compiler package compatibility may retain only authorization, legacy lowering metadata, and trusted native-wrapper adapters"
+    );
+    for removed in ["mod policy;", "mod review;", "mod source_set;"] {
+        assert!(
+            !package_module.contains(removed),
+            "compiler package root must not recreate review implementation module `{removed}`"
+        );
+    }
 }
 
 #[test]

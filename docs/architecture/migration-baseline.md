@@ -710,15 +710,16 @@ an arbitrary shell executor.
     response-budget cache semantics. Document diagnostics no longer retain a
     competing per-document semantic cache; precise dependency invalidation is
     an open `CompilationSession` query-engine responsibility.
-- [ ] **S05 — Finish compiler purity.** Compiler input is an explicit immutable
+- [x] **S05 — Finish compiler purity.** Compiler input is an explicit immutable
   `SourceSet`/`WorkspaceSnapshot`; package traversal, filesystem locking,
   temporary files, compression, Artifact persistence, review/risk, and Rust AOT
   lowering live outside the compiler dependency closure. The reviewed SDK now
   exposes `FrontendInputSnapshot` and `Compiler::compile_snapshot`, keeping
   in-memory source/interface capture separate from package-path convenience
   APIs. The latter now live behind the explicit SDK `project` adapter, so the
-  reviewed `Compiler` surface remains in-memory; compiler package traversal
-  and persistence remain to be moved.
+  reviewed `Compiler` surface remains in-memory. The optional compatibility
+  route consumes project-owned capture and artifact-store adapters rather than
+  owning package traversal or persistence itself.
   - [x] **S05.1 — Move workspace capture to `rsscript-project`.** Move
     directory traversal, manifest/dependency discovery, path normalization, and
     snapshot capture from compiler. The loader now exposes immutable
@@ -845,7 +846,7 @@ an arbitrary shell executor.
         Cargo.lock generation now computes content in compiler compatibility
         code and delegates its atomic, no-follow staging write to
         `rsscript-artifact-store`; package-lock capture remains project-owned.
-  - [ ] **S05.3 — Move review, risk, and package presentation out of compiler.**
+  - [x] **S05.3 — Move review, risk, and package presentation out of compiler.**
     Keep neutral analysis facts; make review formatting and policy adapters
     optional consumers. Package persistence, review/risk, and generated-Rust
     APIs are now quarantined below the explicit
@@ -854,9 +855,7 @@ an arbitrary shell executor.
     JSON, Markdown, and lock presentation now live in the optional
     `rsscript-review` consumer crate; the compiler no longer compiles those
     formatters. Source-level review facts and semantic diff now live in the
-    dedicated `rsscript-review-source` consumer crate. Captured package-review
-    execution and its legacy package presentation remain compiler compatibility
-    work and keep this item open.
+    dedicated `rsscript-review-source` consumer crate.
     The provider- and review-neutral `rsscript.package_analysis.v1` model now
     lives in `rsscript-artifact`; compiler package compatibility only produces
     and re-exports that typed schema. Its JSON presentation now belongs to the
@@ -871,9 +870,7 @@ an arbitrary shell executor.
     `compatibility` namespace.
     The shared legacy package review/check/diff/lock model is now physically
     owned by `rsscript-package-model`; `rsscript-review` consumes that model
-    and no longer depends on the compiler compatibility closure. Remaining
-    captured package-review execution and its presentation still need to move
-    to dedicated project/review/AOT crates before this item can close.
+    and no longer depends on the compiler compatibility closure.
     The captured manifest/source-set representation and package contract
     extractor, native binding descriptor validation, neutral package analysis,
     resource/task execution-fact collection, await-site collector, review-policy evaluator and diagnostics, dependency/feature resolver, the main package review evidence engine, package semantic diff, and package lock semantics are now physically owned by
@@ -889,6 +886,11 @@ an arbitrary shell executor.
     callback and snapshot/remapping adapters. Lock serialization and source-list
     presentation are likewise physically review-owned, with compiler preserving
     only compatibility forwarders.
+    Final closure audit restricts `rsscript-compiler/src/package` to snapshot
+    authorization, legacy lowering metadata, and trusted native-wrapper
+    adapters. Architecture tests reject any return of review, risk, graph,
+    check, lock, source-set, or presentation implementation files under the
+    compiler boundary.
     - [x] **S05.3a — Extract neutral risk facts and calculation.** The review
       risk lattice and its pure evidence evaluator now live in
       `rsscript-review-core`. Compiler compatibility code collects neutral
