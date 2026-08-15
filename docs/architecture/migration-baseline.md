@@ -1832,6 +1832,12 @@ an arbitrary shell executor.
       checked-in trailing-byte mutation is applied to the read-only reference
       bundle and must be rejected at the bundle boundary before verification or
       execution. Per-section/table/opcode/version/size fixtures remain open.
+    - [x] **B05.2b — Add a static v1 container-boundary corpus.** A checked-in
+      mutation manifest applies immutable, named boundary cases to the deployed
+      reference Bundle and its embedded bytecode: bundle magic/manifest/artifact
+      size limits plus bytecode magic/container version, section count/flags,
+      section hash, and verifier Artifact-size limits. The public reader checks
+      every case fail-closed without recompiling the reference source.
   - [x] **B05.3 — Test deterministic bytes across supported platforms.** The
     checked-in canonical compilation baseline compares repeated Bundle bytes
     and their analysis/provenance digest from one immutable snapshot. It now

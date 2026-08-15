@@ -1,9 +1,25 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rsscript_sdk::{
-    ArtifactVerifier, CancellationToken, Compiler, ExecutionRequest, RunLimits, Runtime,
-    TerminationReason, format_diagnostics_json,
+    ArtifactBundle, ArtifactVerifier, BytecodeArtifact, BytecodeLimits, BytecodeVerifier,
+    CancellationToken, Compiler, ExecutionRequest, RunLimits, Runtime, TerminationReason,
+    format_diagnostics_json,
 };
 use sha2::{Digest, Sha256};
+
+#[derive(Debug, serde::Deserialize)]
+struct MalformedBoundaryFixtures {
+    case: Vec<MalformedBoundaryFixture>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct MalformedBoundaryFixture {
+    name: String,
+    scope: String,
+    operation: String,
+    offset: usize,
+    value: u64,
+    expected: String,
+}
 
 const BASELINE_SOURCE: &str = r#"
 fn main() -> Int {
@@ -216,4 +232,72 @@ fn checked_in_v1_trailing_byte_fixture_remains_fail_closed() {
         error.to_string().contains("trailing"),
         "malformed fixture must fail at the bundle boundary: {error}"
     );
+}
+
+#[test]
+fn checked_in_v1_malformed_boundary_manifest_remains_fail_closed() {
+    // The table is intentionally checked in beside the deployed v1 fixture.
+    // It keeps boundary cases reviewable without reconstructing an Artifact
+    // from current compiler output, which would weaken old-reader coverage.
+    let fixtures: MalformedBoundaryFixtures = toml::from_str(include_str!(
+        "../../rsscript-bytecode/fixtures/v1/malformed-boundaries.toml"
+    ))
+    .expect("malformed v1 fixture manifest is valid TOML");
+    let bundle = STANDARD
+        .decode(
+            include_str!("../../rsscript-bytecode/fixtures/v1/reference.rssbundle.base64").trim(),
+        )
+        .expect("checked-in v1 compatibility bundle uses valid base64");
+    let artifact = ArtifactBundle::from_bytes(&bundle)
+        .expect("reference Bundle remains structurally readable")
+        .artifact_bytes()
+        .to_vec();
+
+    for fixture in fixtures.case {
+        let error = match fixture.scope.as_str() {
+            "bundle" => {
+                let mut bytes = bundle.clone();
+                apply_static_boundary_mutation(&mut bytes, &fixture);
+                ArtifactVerifier
+                    .verify_bytes(&bytes)
+                    .expect_err("static malformed Bundle must fail closed")
+                    .to_string()
+            }
+            "bytecode" if fixture.operation == "verify_artifact_limit" => {
+                BytecodeVerifier::new(BytecodeLimits {
+                    max_artifact_bytes: fixture.value as usize,
+                    ..BytecodeLimits::default()
+                })
+                .verify(&artifact)
+                .expect_err("static v1 bytecode must honor a configured Artifact size limit")
+                .to_string()
+            }
+            "bytecode" => {
+                let mut bytes = artifact.clone();
+                apply_static_boundary_mutation(&mut bytes, &fixture);
+                BytecodeArtifact::from_bytes(&bytes)
+                    .expect_err("static malformed bytecode must fail closed")
+                    .to_string()
+            }
+            other => panic!("unknown malformed-fixture scope `{other}`"),
+        };
+        assert!(
+            error.contains(&fixture.expected),
+            "{} expected error containing {:?}, got {error}",
+            fixture.name,
+            fixture.expected,
+        );
+    }
+}
+
+fn apply_static_boundary_mutation(bytes: &mut [u8], fixture: &MalformedBoundaryFixture) {
+    match fixture.operation.as_str() {
+        "set_byte" => bytes[fixture.offset] = fixture.value as u8,
+        "xor_byte" => bytes[fixture.offset] ^= fixture.value as u8,
+        "set_be_u64" => {
+            bytes[fixture.offset..fixture.offset + 8]
+                .copy_from_slice(&fixture.value.to_be_bytes());
+        }
+        other => panic!("unknown malformed-fixture operation `{other}`"),
+    }
 }
