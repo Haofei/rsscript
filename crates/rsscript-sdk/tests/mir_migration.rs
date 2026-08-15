@@ -663,6 +663,18 @@ fn main() -> Unit {
 }
 "#,
     },
+    MigrationCase {
+        name: "capturing_closure_call",
+        capability: "first-class closure invocation",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn main() -> Unit {
+    let signal = || { return Unit }
+    signal()
+    return Unit
+}
+"#,
+    },
 ];
 
 /// The reference interpreter intentionally remains a small oracle for pure
@@ -720,6 +732,12 @@ const EVIDENCE_OVERRIDES: &[MigrationEvidenceOverride] = &[
     },
     MigrationEvidenceOverride {
         case: "capturing_closure_value",
+        evidence: MigrationEvidence::VerifiedBytecode {
+            reference_interpreter_gap: "the test-only MIR interpreter intentionally has no first-class closure environment or closure-call value representation",
+        },
+    },
+    MigrationEvidenceOverride {
+        case: "capturing_closure_call",
         evidence: MigrationEvidence::VerifiedBytecode {
             reference_interpreter_gap: "the test-only MIR interpreter intentionally has no first-class closure environment or closure-call value representation",
         },
@@ -1456,6 +1474,38 @@ fn supported_sdk_builds_use_the_mir_codegen_artifact() {
         expected,
         "supported SDK compilation must use the MIR codegen Artifact rather than the legacy VM encoder"
     );
+}
+
+#[test]
+fn direct_checked_hir_closure_call_emits_typed_call_closure() {
+    let source = r#"
+fn main() -> Unit {
+    let signal = || { return Unit }
+    signal()
+    return Unit
+}
+"#;
+    let compiled = compile_source_to_ir("direct-hir-closure-call.rss", source)
+        .expect("closure-call fixture compiles");
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("local closure call lowers directly from checked HIR");
+    assert!(
+        mir.functions()
+            .iter()
+            .flat_map(|function| function.blocks())
+            .flat_map(|block| block.instructions())
+            .any(|instruction| matches!(instruction, MirInstruction::CallClosure { .. })),
+        "the direct path must preserve local closure invocation as typed CallClosure"
+    );
+    reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("closure-call MIR emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("closure-call bytecode executes");
 }
 
 #[test]

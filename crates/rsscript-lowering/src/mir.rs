@@ -1022,6 +1022,24 @@ struct LoweredFunction {
     debug: MirFunctionDebug,
 }
 
+/// Callable ABI retained for a local first-class closure value. The target is
+/// intentionally absent: a `CallClosure` dispatches through the runtime value,
+/// while the parameter contract stays verifier-visible and source-free.
+#[derive(Clone)]
+struct ClosureAbi {
+    parameter_types: Box<[TypeId]>,
+    parameter_modes: Box<[MirParameterMode]>,
+}
+
+impl From<&MirFunctionSignature> for ClosureAbi {
+    fn from(signature: &MirFunctionSignature) -> Self {
+        Self {
+            parameter_types: signature.parameter_types().to_vec().into_boxed_slice(),
+            parameter_modes: signature.parameter_modes().to_vec().into_boxed_slice(),
+        }
+    }
+}
+
 /// Owns synthetic closure functions while a checked-HIR module is lowered.
 /// The ordinary function and async-wrapper ranges are fixed before body
 /// lowering, so this registry is the one allocator for all nested closure
@@ -1068,11 +1086,12 @@ struct CheckedHirLowerer<'source, 'types, 'closures> {
     captures: Vec<rsscript_mir::MirClosureCapture>,
     targets: CallTargets,
     types: &'types mut TypeTable,
-    closures: &'closures mut ClosureRegistry,
+    closure_registry: &'closures mut ClosureRegistry,
     blocks: Vec<BlockDraft>,
     current: BlockId,
     places: HashMap<String, PlaceId>,
     place_types: HashMap<String, TypeId>,
+    closure_abis: HashMap<String, ClosureAbi>,
     place_names: Vec<String>,
     next_value: u32,
     tasks: HashMap<String, TaskId>,
@@ -1091,7 +1110,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
         captures: Vec<rsscript_mir::MirClosureCapture>,
         targets: CallTargets,
         types: &'types mut TypeTable,
-        closures: &'closures mut ClosureRegistry,
+        closure_registry: &'closures mut ClosureRegistry,
     ) -> Self {
         let mut lowerer = Self {
             id,
@@ -1101,11 +1120,12 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
             captures,
             targets,
             types,
-            closures,
+            closure_registry,
             blocks: vec![BlockDraft::new()],
             current: BlockId::new(0),
             places: HashMap::new(),
             place_types: HashMap::new(),
+            closure_abis: HashMap::new(),
             place_names: Vec::new(),
             next_value: 0,
             tasks: HashMap::new(),
@@ -1173,6 +1193,11 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 ..
             } => {
                 let place = self.place(name);
+                if let Some(checked::HirExpr::Closure { ty: Some(ty), .. }) = value {
+                    let signature = checked_closure_signature(self.types, ty, &self.function_name)?;
+                    self.closure_abis
+                        .insert(name.clone(), ClosureAbi::from(&signature));
+                }
                 if let Some(ty) = ty {
                     if let Ok(wire) = checked_type_to_wire(ty, &self.function_name) {
                         let ty = self.types.intern(wire);
@@ -1505,7 +1530,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
             initial_places.push((name, ty));
         }
 
-        let id = self.closures.allocate();
+        let id = self.closure_registry.allocate();
         let closure_name = format!("{}::<closure:{}>", self.function_name, id.index());
         let output = CheckedHirLowerer::new(
             id,
@@ -1516,10 +1541,10 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
             mir_captures,
             self.targets.clone(),
             self.types,
-            self.closures,
+            self.closure_registry,
         )
         .lower()?;
-        self.closures.push(output);
+        self.closure_registry.push(output);
 
         let destination = self.value();
         self.emit(MirInstruction::MakeClosure {
@@ -1608,6 +1633,13 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 return self.unsupported("checked HIR receiver enum-variant call");
             }
             return self.lower_enum_variant_call(callee, args);
+        }
+        if matches!(resolution, checked::CallResolution::Unknown)
+            && receiver.is_none()
+            && let rsscript_syntax::ast::Callee::Name(name) = callee
+            && let Some(abi) = self.closure_abis.get(name).cloned()
+        {
+            return self.lower_local_closure_call(name, args, abi);
         }
         let checked::CallResolution::Resolved { signature, kind } = resolution else {
             return self.unsupported("unresolved checked HIR call");
@@ -1711,6 +1743,38 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
         for place in retained_places {
             self.emit(MirInstruction::Retain { place });
         }
+        Ok(destination)
+    }
+
+    /// Lower an invocation through a local first-class closure value. The
+    /// closure's concrete synthetic function remains opaque here; its typed
+    /// parameter contract was recorded when the binding was constructed.
+    fn lower_local_closure_call(
+        &mut self,
+        name: &str,
+        args: &[checked::HirCallArg],
+        abi: ClosureAbi,
+    ) -> Result<ValueId, MirLoweringError> {
+        let place = self.lookup_place(name)?;
+        let closure = self.value();
+        self.emit(MirInstruction::ReadPlace {
+            destination: closure,
+            place,
+        });
+        let mut ordered = args.iter().collect::<Vec<_>>();
+        ordered.sort_by_key(|argument| argument.evaluation_index);
+        let arguments = ordered
+            .into_iter()
+            .map(|argument| self.lower_direct_call_argument(&argument.value))
+            .collect::<Result<Vec<_>, _>>()?;
+        let destination = self.value();
+        self.emit(MirInstruction::CallClosure {
+            destination,
+            closure,
+            parameter_types: abi.parameter_types,
+            parameter_modes: abi.parameter_modes,
+            arguments,
+        });
         Ok(destination)
     }
 
