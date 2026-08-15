@@ -512,15 +512,17 @@ fn rewrite_snapshot_manifests(
                 else {
                     continue;
                 };
-                let path = Path::new(&path);
-                if !path.is_absolute() {
-                    continue;
-                }
-                let target = super::canonical_path_label(path);
+                let declared_path = Path::new(&path);
+                let original_target = if declared_path.is_absolute() {
+                    declared_path.to_path_buf()
+                } else {
+                    node.package_dir.join(declared_path)
+                };
+                let target = super::canonical_path_label(&original_target);
                 let Some(destination) = destinations.get(&target) else {
                     return Err(format!(
-                        "absolute path dependency is outside the captured package graph: {}",
-                        path.display()
+                        "path dependency is outside the captured package graph: {}",
+                        original_target.display()
                     ));
                 };
                 specification.insert(
