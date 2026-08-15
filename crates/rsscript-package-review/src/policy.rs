@@ -1,15 +1,64 @@
 use std::path::Path;
 
-use crate::diagnostic::{Diagnostic, code};
+use rsscript_diagnostics::{Diagnostic, Span, code};
+use rsscript_project::read_project_utf8_file_bounded;
 
-use super::contract::collect_package_function_contracts;
-use super::source_set::ManifestReviewPolicy;
-use super::{
-    Manifest, PackageNativeRustCheck, PackageReview, PackageReviewFileKind, PackageRisk,
-    PackageSource, manifest_native_enabled, manifest_native_unsafe_boundary,
+use crate::ManifestReviewPolicy;
+use crate::collect_package_function_contracts;
+use crate::{Manifest, PackageSource};
+use rsscript_package_model::{
+    PackageNativeRustCheck, PackageReview, PackageReviewFileKind, PackageRisk,
 };
 
-pub(super) fn package_review_policy_ok(
+const PACKAGE_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
+
+fn manifest_native_enabled(manifest: &Manifest) -> bool {
+    manifest
+        .native
+        .as_ref()
+        .and_then(|native| native.rust.as_ref())
+        .is_some_and(|native| native.enabled)
+}
+
+fn manifest_native_unsafe_boundary(manifest: &Manifest) -> bool {
+    manifest
+        .native
+        .as_ref()
+        .and_then(|native| native.rust.as_ref())
+        .is_some_and(|native| {
+            native
+                .effective_unsafe_policies()
+                .has_non_forbidden_boundary()
+        })
+}
+
+fn package_manifest_key_span(package_dir: &Path, key: &str) -> Span {
+    let path = package_dir.join("rsspkg.toml");
+    let source = read_project_utf8_file_bounded(
+        &path,
+        PACKAGE_MANIFEST_MAX_BYTES,
+        "package review policy diagnostic read",
+    )
+    .unwrap_or_default();
+    for (index, line) in source.lines().enumerate() {
+        if let Some(column) = line.find(key) {
+            return Span {
+                file: path.display().to_string(),
+                line: index + 1,
+                column: column + 1,
+                length: key.len().max(1),
+            };
+        }
+    }
+    Span {
+        file: path.display().to_string(),
+        line: 1,
+        column: 1,
+        length: key.len().max(1),
+    }
+}
+
+pub fn package_review_policy_ok(
     manifest: &Manifest,
     review: &PackageReview,
     native_check: Option<&PackageNativeRustCheck>,
@@ -38,7 +87,7 @@ pub(super) fn package_review_policy_ok(
     true
 }
 
-pub(super) fn package_review_policy_has_high_risk_violation(
+pub fn package_review_policy_has_high_risk_violation(
     manifest: &Manifest,
     review: &PackageReview,
     native_check: Option<&PackageNativeRustCheck>,
@@ -57,7 +106,7 @@ pub(super) fn package_review_policy_has_high_risk_violation(
                 || native_check.is_some_and(|native| native.unsafe_detected))
 }
 
-pub(super) fn collect_manifest_review_policy_diagnostics(
+pub fn collect_manifest_review_policy_diagnostics(
     manifest: &Manifest,
     package_dir: &Path,
     review: &PackageReview,
@@ -326,7 +375,7 @@ fn package_review_policy_diagnostic(
     Diagnostic::error(
         code::PACKAGE_REVIEW_POLICY_VIOLATION,
         summary,
-        super::package_manifest_key_span(package_dir, key),
+        package_manifest_key_span(package_dir, key),
         label,
     )
     .with_cause(cause)
@@ -337,7 +386,7 @@ fn package_review_policy_diagnostic(
     )
 }
 
-pub(super) fn collect_manifest_review_policy_violations(
+pub fn collect_manifest_review_policy_violations(
     manifest: &Manifest,
     review: &PackageReview,
     native_check: Option<&PackageNativeRustCheck>,

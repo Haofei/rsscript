@@ -59,7 +59,9 @@ mod lock;
 mod lock_format;
 mod metadata;
 mod native;
-mod policy;
+mod policy {
+    pub(super) use rsscript_package_review::*;
+}
 mod review;
 // The legacy package compatibility façade keeps this module name only so its
 // remaining callers can migrate incrementally. Captured manifests and source
@@ -89,7 +91,6 @@ pub use lock::{diff_package_locks, lock_package_dir};
 pub(super) use lock_format::package_lock_toml;
 pub use metadata::package_lowering_input;
 pub(crate) use native::package_native_plugin_build_dependencies;
-use native::{manifest_native_enabled, manifest_native_unsafe_boundary};
 pub use review::review_package_dir;
 pub use rsscript_package_model::*;
 use source_set::{LoadedPackage, Manifest, ManifestNativeRust, PackageSource};

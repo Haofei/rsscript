@@ -1923,6 +1923,20 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
                 .exists(),
         "package await-site facts must be physically owned by the package-review boundary"
     );
+    let policy_path = root.join("crates/rsscript-package-review/src/policy.rs");
+    assert!(
+        policy_path.is_file()
+            && !root
+                .join("crates/rsscript-compiler/src/package/policy.rs")
+                .exists(),
+        "package review policy must be physically owned by the package-review boundary"
+    );
+    let policy = read(&policy_path);
+    assert!(
+        policy.contains("read_project_utf8_file_bounded")
+            && policy.contains("collect_package_function_contracts"),
+        "review policy must use project-owned bounded diagnostic input and review-owned contracts"
+    );
     let manifest_loader = function_source(&source_set, "pub fn load_package_manifest_with_source(");
     assert!(
         manifest_loader.contains("capture_project_manifest(package_dir, MANIFEST_MAX_BYTES)"),

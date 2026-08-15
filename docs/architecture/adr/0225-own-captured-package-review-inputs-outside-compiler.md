@@ -28,6 +28,11 @@ The dependency resolver likewise consumes project-captured manifest graphs and
 uses bounded project reads for diagnostic spans; it no longer lives in the
 compiler package module.
 
+The same boundary now owns manifest review-policy evaluation and diagnostics.
+Policy diagnostics use project-owned bounded manifest reads, and signature
+limits use review-owned contract extraction. Compiler-native helper functions
+no longer own or expose that review policy logic.
+
 The compiler's opt-in `package` compatibility feature has a private forwarding
 module during the staged migration so existing authorization, native, lock, and
 review callers retain their established behavior. The reviewed compiler default

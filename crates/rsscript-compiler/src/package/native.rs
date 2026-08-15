@@ -1008,26 +1008,6 @@ pub(super) fn native_effective_build_policy(
         .map(str::to_string)
 }
 
-pub(super) fn manifest_native_enabled(manifest: &Manifest) -> bool {
-    manifest
-        .native
-        .as_ref()
-        .and_then(|native| native.rust.as_ref())
-        .is_some_and(|native| native.enabled)
-}
-
-pub(super) fn manifest_native_unsafe_boundary(manifest: &Manifest) -> bool {
-    manifest
-        .native
-        .as_ref()
-        .and_then(|native| native.rust.as_ref())
-        .is_some_and(|native| {
-            native
-                .effective_unsafe_policies()
-                .has_non_forbidden_boundary()
-        })
-}
-
 #[cfg(test)]
 mod adapter_binding_tests {
     use super::*;

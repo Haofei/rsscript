@@ -876,7 +876,7 @@ an arbitrary shell executor.
     to dedicated project/review/AOT crates before this item can close.
     The captured manifest/source-set representation and package contract
     extractor, neutral resource/task execution-fact collection, await-site
-    collector, and dependency/feature resolver are now physically owned by
+    collector, review-policy evaluator and diagnostics, and dependency/feature resolver are now physically owned by
     `rsscript-package-review`; its extractor directly uses the semantic
     `CompilationSession` and syntax boundary, while async classification uses a
     read-only table generated from the shared intrinsic catalog rather than
