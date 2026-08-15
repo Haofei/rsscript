@@ -1,10 +1,10 @@
-#[cfg(not(unix))]
-use std::fs::OpenOptions;
-use std::fs::{self, File};
-use std::io::Write;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 use fs2::FileExt;
+use rsscript_project::{ProjectTreeLimits, collect_project_regular_files};
+use sha2::{Digest, Sha256};
 
 const MUTATION_LOCK: &str = ".rsscript-artifacts.lock";
 const ARTIFACT_READ_MAX_BYTES: u64 = 16 * 1024 * 1024;
@@ -397,6 +397,192 @@ pub fn write_package_artifact_atomic(
         )
     })?;
     store.write_atomic(relative, contents, label)
+}
+
+/// Copy a bounded, no-follow regular-file tree into a private Artifact staging
+/// directory. The caller owns the semantic decision to snapshot; this adapter
+/// owns filesystem traversal, byte accounting, and safe file copying.
+pub fn snapshot_regular_tree(
+    source: &Path,
+    destination: &Path,
+    limits: ProjectTreeLimits,
+    label: &str,
+    skip: impl Fn(&Path, &str) -> bool,
+) -> Result<(), String> {
+    let files = collect_project_regular_files(source, limits, label, skip)?;
+    fs::create_dir_all(destination).map_err(|error| {
+        format!(
+            "failed to create snapshot directory {}: {error}",
+            destination.display()
+        )
+    })?;
+    for file in files {
+        let relative = file.path.strip_prefix(source).map_err(|_| {
+            format!(
+                "{label} source escaped its root {}: {}",
+                source.display(),
+                file.path.display()
+            )
+        })?;
+        let target = destination.join(relative);
+        snapshot_regular_file_bounded(&file.path, &target, file.bytes, label)?;
+    }
+    Ok(())
+}
+
+/// Copy one regular file into a private Artifact staging directory without
+/// following source links.
+pub fn snapshot_regular_file(source: &Path, destination: &Path, label: &str) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(source)
+        .map_err(|error| format!("failed to inspect {}: {error}", source.display()))?;
+    if is_link_like(&metadata) || !metadata.is_file() {
+        return Err(format!(
+            "{label} must be a regular file, not a symlink or reparse point: {}",
+            source.display()
+        ));
+    }
+    snapshot_regular_file_bounded(source, destination, metadata.len(), label)
+}
+
+/// Return a deterministic digest for a bounded regular-file tree. `domain`
+/// prevents reuse across distinct snapshot protocols.
+pub fn regular_tree_digest(
+    root: &Path,
+    limits: ProjectTreeLimits,
+    label: &str,
+    domain: &[u8],
+) -> Result<String, String> {
+    let files = collect_project_regular_files(root, limits, label, |_, _| false)?;
+    let mut digest = Sha256::new();
+    digest.update(domain);
+    for file in files {
+        let relative = file.path.strip_prefix(root).map_err(|_| {
+            format!(
+                "{label} input escaped root {}: {}",
+                root.display(),
+                file.path.display()
+            )
+        })?;
+        digest.update(relative.to_string_lossy().as_bytes());
+        digest.update([0]);
+        let mut input = open_snapshot_input(&file.path, file.bytes, label)?;
+        std::io::copy(&mut input, &mut DigestWriter(&mut digest))
+            .map_err(|error| format!("failed to hash {}: {error}", file.path.display()))?;
+    }
+    Ok(hex::encode(digest.finalize()))
+}
+
+/// Seal a private snapshot tree read-only after it has been atomically
+/// published. This is an adapter responsibility, not compiler policy.
+pub fn seal_regular_tree_read_only(
+    root: &Path,
+    limits: ProjectTreeLimits,
+    label: &str,
+) -> Result<(), String> {
+    let files = collect_project_regular_files(root, limits, label, |_, _| false)?;
+    for file in files {
+        let mut permissions = fs::metadata(&file.path)
+            .map_err(|error| format!("failed to inspect {}: {error}", file.path.display()))?
+            .permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&file.path, permissions)
+            .map_err(|error| format!("failed to seal {}: {error}", file.path.display()))?;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut directories = Vec::new();
+        collect_directories(root, &mut directories)?;
+        for directory in directories.into_iter().rev() {
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o500))
+                .map_err(|error| format!("failed to seal {}: {error}", directory.display()))?;
+        }
+    }
+    Ok(())
+}
+
+fn snapshot_regular_file_bounded(
+    source: &Path,
+    destination: &Path,
+    expected_bytes: u64,
+    label: &str,
+) -> Result<(), String> {
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
+    }
+    let mut input = open_snapshot_input(source, expected_bytes, label)?;
+    let mut output = File::create(destination)
+        .map_err(|error| format!("failed to create {}: {error}", destination.display()))?;
+    let copied = std::io::copy(
+        &mut Read::by_ref(&mut input).take(expected_bytes.saturating_add(1)),
+        &mut output,
+    )
+    .map_err(|error| format!("failed to snapshot {}: {error}", source.display()))?;
+    if copied != expected_bytes {
+        return Err(format!(
+            "{label} changed while content snapshot was captured: {}",
+            source.display()
+        ));
+    }
+    output
+        .flush()
+        .map_err(|error| format!("failed to flush {}: {error}", destination.display()))
+}
+
+fn open_snapshot_input(source: &Path, expected_bytes: u64, label: &str) -> Result<File, String> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let input = options
+        .open(source)
+        .map_err(|error| format!("failed to snapshot {}: {error}", source.display()))?;
+    let opened = input
+        .metadata()
+        .map_err(|error| format!("failed to inspect opened {}: {error}", source.display()))?;
+    if !opened.is_file() || opened.len() != expected_bytes || is_link_like(&opened) {
+        return Err(format!(
+            "{label} changed while content snapshot was captured: {}",
+            source.display()
+        ));
+    }
+    Ok(input)
+}
+
+struct DigestWriter<'a>(&'a mut Sha256);
+
+impl Write for DigestWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn collect_directories(path: &Path, output: &mut Vec<PathBuf>) -> Result<(), String> {
+    output.push(path.to_path_buf());
+    for entry in
+        fs::read_dir(path).map_err(|error| format!("failed to read {}: {error}", path.display()))?
+    {
+        let entry = entry.map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+        if entry
+            .file_type()
+            .map_err(|error| format!("failed to inspect {}: {error}", entry.path().display()))?
+            .is_dir()
+        {
+            collect_directories(&entry.path(), output)?;
+        }
+    }
+    Ok(())
 }
 
 /// Publish a staged regular file on platforms without descriptor-relative
@@ -820,5 +1006,56 @@ mod tests {
                     .ends_with(".tmp"))
         );
         fs::remove_dir_all(root.as_ref()).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn regular_tree_snapshot_and_digest_are_deterministic() {
+        let root = test_dir("snapshot");
+        let source = root.join("source");
+        let destination = root.join("snapshot");
+        fs::create_dir_all(source.join("nested")).expect("fixture source tree");
+        fs::write(source.join("manifest.toml"), b"name = 'fixture'\n").expect("fixture manifest");
+        fs::write(source.join("nested/input.rss"), b"fn main() {}\n").expect("fixture source");
+
+        snapshot_regular_tree(
+            &source,
+            &destination,
+            ProjectTreeLimits::default(),
+            "test snapshot",
+            |_, _| false,
+        )
+        .expect("snapshot should succeed");
+        assert_eq!(
+            fs::read(destination.join("nested/input.rss")).expect("copied source"),
+            b"fn main() {}\n"
+        );
+
+        let first = regular_tree_digest(
+            &destination,
+            ProjectTreeLimits::default(),
+            "test snapshot digest",
+            b"rsscript-artifact-store-test-v1\\0",
+        )
+        .expect("first digest");
+        let second = regular_tree_digest(
+            &destination,
+            ProjectTreeLimits::default(),
+            "test snapshot digest",
+            b"rsscript-artifact-store-test-v1\\0",
+        )
+        .expect("second digest");
+        assert_eq!(first, second);
+
+        fs::write(destination.join("nested/input.rss"), b"fn main() { 1 }\n")
+            .expect("mutated copy");
+        let changed = regular_tree_digest(
+            &destination,
+            ProjectTreeLimits::default(),
+            "test snapshot digest",
+            b"rsscript-artifact-store-test-v1\\0",
+        )
+        .expect("changed digest");
+        assert_ne!(first, changed);
+        fs::remove_dir_all(root).expect("fixture cleanup");
     }
 }

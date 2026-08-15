@@ -1740,7 +1740,11 @@ name = "rsscript-artifact-store"
 version = "0.1.0"
 dependencies = [
  "fs2",
+ "hex",
+ "libc",
+ "rsscript-project",
  "rustix",
+ "sha2",
  "uuid",
 ]
 
@@ -1807,6 +1811,7 @@ dependencies = [
  "libc",
  "rsscript-abi-model",
  "rsscript-artifact",
+ "rsscript-artifact-store",
  "rsscript-build-support",
  "rsscript-bytecode",
  "rsscript-codegen-vm",

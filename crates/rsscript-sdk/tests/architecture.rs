@@ -1239,8 +1239,16 @@ fn artifact_persistence_is_an_execution_only_adapter() {
     let dependencies = dependency_packages(&adapter_manifest);
     assert_eq!(
         dependencies,
-        BTreeSet::from(["fs2".to_string(), "rustix".to_string(), "uuid".to_string(),]),
-        "artifact persistence adapter must not depend on compiler, VM, package, or Provider crates"
+        BTreeSet::from([
+            "fs2".to_string(),
+            "hex".to_string(),
+            "libc".to_string(),
+            "rsscript-project".to_string(),
+            "rustix".to_string(),
+            "sha2".to_string(),
+            "uuid".to_string(),
+        ]),
+        "artifact persistence adapter may depend only on low-level project traversal and filesystem primitives"
     );
 
     let compiler_manifest: toml::Value =
@@ -1251,18 +1259,20 @@ fn artifact_persistence_is_an_execution_only_adapter() {
             .as_table()
             .expect("compiler dependency table should exist")
             .get("rsscript-artifact-store")
-            .is_none(),
-        "compiler production dependencies must not include the persistence adapter"
+            .and_then(|dependency| dependency.get("optional"))
+            .and_then(toml::Value::as_bool)
+            .unwrap_or(false),
+        "only the optional package compatibility adapter may depend on artifact persistence"
     );
     let package_feature = compiler_manifest["features"]["package"]
         .as_array()
         .expect("compiler package feature should be declared");
     assert!(
-        !package_feature
+        package_feature
             .iter()
             .filter_map(toml::Value::as_str)
             .any(|entry| entry == "dep:rsscript-artifact-store"),
-        "compiler package feature must not restore persistence as a runtime dependency"
+        "compiler package compatibility must delegate snapshot persistence to the adapter"
     );
     let package = read(&root.join("crates/rsscript-compiler/src/package.rs"));
     assert!(
@@ -1285,6 +1295,16 @@ fn artifact_persistence_is_an_execution_only_adapter() {
             .exists(),
         "the compiler must not retain a second persistence implementation"
     );
+    let authorization = read(&root.join("crates/rsscript-compiler/src/package/authorization.rs"));
+    let adapter = read(&root.join("crates/rsscript-artifact-store/src/lib.rs"));
+    assert!(authorization.contains("rsscript_artifact_store"));
+    assert!(authorization.contains("snapshot_regular_tree("));
+    assert!(!authorization.contains("fn snapshot_tree("));
+    assert!(!authorization.contains("fn snapshot_file("));
+    assert!(!authorization.contains("fn make_tree_read_only("));
+    assert!(adapter.contains("pub fn snapshot_regular_tree("));
+    assert!(adapter.contains("pub fn regular_tree_digest("));
+    assert!(adapter.contains("pub fn seal_regular_tree_read_only("));
 }
 
 #[test]

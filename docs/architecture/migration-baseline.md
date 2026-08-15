@@ -800,14 +800,26 @@ an arbitrary shell executor.
   - [ ] **S05.2 — Move Artifact persistence to an adapter.** Relocate locks,
     atomic writes, temporary files, compression, and artifact-store policy out
     of compiler. The confined lock/read/write implementation now lives in the
-    standalone `rsscript-artifact-store` adapter. Compiler no longer has a
-    production dependency on the adapter or exposes a metadata write/verify
-    entry point; its package tests use the adapter only as a dev-dependency to
-    preserve output compatibility. Remaining package lock, review, native
-    snapshot, and generated-Rust persistence paths still need to leave the
-    compiler compatibility layer before this item can close. The adapter is no
-    longer re-exported through the compiler; only the explicit SDK compatibility
-    façade exposes it directly.
+    standalone `rsscript-artifact-store` adapter. The normal compiler frontend
+    remains free of persistence dependencies; its optional package compatibility
+    feature delegates persistence to that adapter without re-exporting it.
+    Remaining package lock, review, native-cache publication, and generated-Rust
+    persistence paths still need to leave the compiler compatibility layer before
+    this item can close. The adapter is no longer re-exported through the
+    compiler; only the explicit SDK compatibility façade exposes it directly.
+    - [x] **S05.2a — Extract private native snapshot primitives.** Bounded
+      regular-tree copying, no-follow file reads, deterministic snapshot
+      digests, and read-only sealing now belong to `rsscript-artifact-store`;
+      compiler authorization supplies only native-review policy and cache
+      composition.
+    - [ ] **S05.2b — Move native snapshot cache publication.** Relocate
+      staging-directory creation, private permissions, entry locks, atomic
+      publication, and cache revalidation from compiler authorization into an
+      artifact-store native-snapshot adapter.
+    - [ ] **S05.2c — Move remaining package lock and generated-artifact
+      persistence.** Keep compiler compatibility responsible only for deciding
+      artifact contents; move filesystem publication and cache ownership behind
+      explicit adapter APIs.
   - [ ] **S05.3 — Move review, risk, and package presentation out of compiler.**
     Keep neutral analysis facts; make review formatting and policy adapters
     optional consumers. Package persistence, review/risk, and generated-Rust

@@ -30,9 +30,7 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::diagnostic::Diagnostic;
 pub(crate) use rsscript_project::{
-    ProjectTreeLimits as TreeLimits,
-    collect_project_regular_files as collect_bounded_regular_files,
-    read_project_utf8_file_bounded as read_utf8_file_bounded,
+    ProjectTreeLimits as TreeLimits, read_project_utf8_file_bounded as read_utf8_file_bounded,
 };
 
 mod analysis;
@@ -279,6 +277,7 @@ fn package_risk_label(risk: PackageRisk) -> &'static str {
 #[cfg(test)]
 mod preparation_limit_tests {
     use super::*;
+    use rsscript_project::collect_project_regular_files as collect_bounded_regular_files;
 
     fn test_dir(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(

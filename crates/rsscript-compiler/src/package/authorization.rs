@@ -1,9 +1,11 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::collections::BTreeMap;
+use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 
 use fs2::FileExt;
+use rsscript_artifact_store::{
+    regular_tree_digest, seal_regular_tree_read_only, snapshot_regular_file, snapshot_regular_tree,
+};
 use rsscript_project::{CapturedPackageGraph, CapturedProjectGraph, capture_project_graph};
 use sha2::{Digest, Sha256};
 
@@ -12,9 +14,8 @@ use super::check::check_package_dir_captured;
 use super::dependency::{DependencyResolutionScope, resolve_dependency_graph};
 use super::{
     NativePluginBuildDependency, PackageAnalysis, PackageCheck, PackageLock, PackageLoweringInput,
-    PackageReview, PackageTree, PackageTreeNode, TreeLimits, collect_bounded_regular_files,
-    package_lock_toml, package_lowering_input, package_native_plugin_build_dependencies,
-    package_path_source,
+    PackageReview, PackageTree, PackageTreeNode, TreeLimits, package_lock_toml,
+    package_lowering_input, package_native_plugin_build_dependencies, package_path_source,
 };
 
 pub(super) type PackageGraphSnapshot = CapturedPackageGraph;
@@ -631,10 +632,20 @@ fn snapshot_native_build_inputs(
         let source = Path::new(&dependency.path);
         let reviewed_lock = validate_reviewed_cargo_inputs(source, &dependency.crate_name)?;
         let destination = directory.path().join("native").join(index.to_string());
-        snapshot_tree(source, &destination)?;
+        snapshot_regular_tree(
+            source,
+            &destination,
+            TreeLimits::default(),
+            "authorized native snapshot",
+            |_parent, name| matches!(name, "target" | ".git" | ".DS_Store"),
+        )?;
         if !destination.join("Cargo.lock").is_file() {
             if let Some(reviewed_lock) = reviewed_lock {
-                snapshot_file(&reviewed_lock, &destination.join("Cargo.lock"))?;
+                snapshot_regular_file(
+                    &reviewed_lock,
+                    &destination.join("Cargo.lock"),
+                    "reviewed native Cargo.lock snapshot",
+                )?;
             } else {
                 super::native::prepare_native_cargo_lock(&destination.join("Cargo.toml"))?;
             }
@@ -647,8 +658,19 @@ fn snapshot_native_build_inputs(
     let native_abi_source =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../experiments/native-abi");
     let native_abi_path = directory.path().join("native-abi");
-    snapshot_tree(&native_abi_source, &native_abi_path)?;
-    let digest = snapshot_tree_digest(directory.path())?;
+    snapshot_regular_tree(
+        &native_abi_source,
+        &native_abi_path,
+        TreeLimits::default(),
+        "native ABI snapshot",
+        |_parent, name| matches!(name, "target" | ".git" | ".DS_Store"),
+    )?;
+    let digest = regular_tree_digest(
+        directory.path(),
+        TreeLimits::default(),
+        "authorized native snapshot digest",
+        b"rsscript-authorized-native-snapshot-v1\0",
+    )?;
     let published = entries_root.join(&digest);
     let lock = OpenOptions::new()
         .create(true)
@@ -674,7 +696,12 @@ fn snapshot_native_build_inputs(
         ));
     }
     if published.exists() {
-        let published_digest = snapshot_tree_digest(&published)?;
+        let published_digest = regular_tree_digest(
+            &published,
+            TreeLimits::default(),
+            "authorized native snapshot digest",
+            b"rsscript-authorized-native-snapshot-v1\0",
+        )?;
         if published_digest != digest {
             return Err(format!(
                 "authorized native snapshot cache entry failed integrity verification: {}",
@@ -690,7 +717,11 @@ fn snapshot_native_build_inputs(
                 published.display()
             )
         })?;
-        make_tree_read_only(&published)?;
+        seal_regular_tree_read_only(
+            &published,
+            TreeLimits::default(),
+            "authorized snapshot sealing",
+        )?;
     }
 
     Ok((
@@ -711,45 +742,6 @@ fn snapshot_native_build_inputs(
             native_abi_path: published.join("native-abi"),
         }),
     ))
-}
-
-fn snapshot_tree_digest(root: &Path) -> Result<String, String> {
-    let mut digest = Sha256::new();
-    digest.update(b"rsscript-authorized-native-snapshot-v1\0");
-    let files = collect_bounded_regular_files(
-        root,
-        TreeLimits::default(),
-        "authorized native snapshot digest",
-        |_parent, _entry| false,
-    )?;
-    for file in files {
-        let relative = file.path.strip_prefix(root).map_err(|_| {
-            format!(
-                "native snapshot digest input escaped root: {}",
-                file.path.display()
-            )
-        })?;
-        digest.update(relative.to_string_lossy().as_bytes());
-        digest.update([0]);
-        let mut input = File::open(&file.path)
-            .map_err(|error| format!("failed to hash {}: {error}", file.path.display()))?;
-        std::io::copy(&mut input, &mut DigestWriter(&mut digest))
-            .map_err(|error| format!("failed to hash {}: {error}", file.path.display()))?;
-    }
-    Ok(hex::encode(digest.finalize()))
-}
-
-struct DigestWriter<'a>(&'a mut Sha256);
-
-impl Write for DigestWriter<'_> {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0.update(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
 }
 
 fn validate_reviewed_cargo_inputs(
@@ -794,102 +786,6 @@ fn validate_reviewed_cargo_inputs(
     Ok(Some(lock_path))
 }
 
-fn snapshot_tree(source: &Path, destination: &Path) -> Result<(), String> {
-    let files = collect_bounded_regular_files(
-        source,
-        TreeLimits::default(),
-        "authorized native snapshot",
-        |_parent, name| matches!(name, "target" | ".git" | ".DS_Store"),
-    )?;
-    fs::create_dir_all(destination).map_err(|error| {
-        format!(
-            "failed to create native snapshot directory {}: {error}",
-            destination.display()
-        )
-    })?;
-    let mut directories = BTreeSet::new();
-    for file in files {
-        let relative = file.path.strip_prefix(source).map_err(|_| {
-            format!(
-                "native snapshot source escaped reviewed root: {}",
-                file.path.display()
-            )
-        })?;
-        let target = destination.join(relative);
-        if let Some(parent) = target.parent() {
-            directories.insert(parent.to_path_buf());
-        }
-        snapshot_file_bounded(&file.path, &target, file.bytes)?;
-    }
-    for directory in directories {
-        fs::create_dir_all(&directory).map_err(|error| {
-            format!(
-                "failed to create native snapshot directory {}: {error}",
-                directory.display()
-            )
-        })?;
-    }
-    Ok(())
-}
-
-fn snapshot_file(source: &Path, destination: &Path) -> Result<(), String> {
-    let metadata = fs::symlink_metadata(source)
-        .map_err(|error| format!("failed to inspect {}: {error}", source.display()))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(format!(
-            "snapshot input must be a regular file, not a symlink: {}",
-            source.display()
-        ));
-    }
-    snapshot_file_bounded(source, destination, metadata.len())
-}
-
-fn snapshot_file_bounded(
-    source: &Path,
-    destination: &Path,
-    expected_bytes: u64,
-) -> Result<(), String> {
-    if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
-    }
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
-    }
-    let mut input = options
-        .open(source)
-        .map_err(|error| format!("failed to snapshot {}: {error}", source.display()))?;
-    let opened = input
-        .metadata()
-        .map_err(|error| format!("failed to inspect opened {}: {error}", source.display()))?;
-    if !opened.is_file() || opened.len() != expected_bytes {
-        return Err(format!(
-            "native input changed while content snapshot was captured: {}",
-            source.display()
-        ));
-    }
-    let mut output = File::create(destination)
-        .map_err(|error| format!("failed to create {}: {error}", destination.display()))?;
-    let copied = std::io::copy(
-        &mut Read::by_ref(&mut input).take(expected_bytes.saturating_add(1)),
-        &mut output,
-    )
-    .map_err(|error| format!("failed to snapshot {}: {error}", source.display()))?;
-    if copied != expected_bytes {
-        return Err(format!(
-            "native input changed while content snapshot was captured: {}",
-            source.display()
-        ));
-    }
-    output
-        .flush()
-        .map_err(|error| format!("failed to flush {}: {error}", destination.display()))
-}
-
 #[cfg(unix)]
 fn set_private_directory_permissions(path: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
@@ -903,52 +799,6 @@ fn set_private_directory_permissions(path: &Path) -> Result<(), String> {
         "external provider verification snapshots require verifiable private directory ownership and ACLs; this platform backend is unavailable for {}",
         path.display()
     ))
-}
-
-fn make_tree_read_only(root: &Path) -> Result<(), String> {
-    let files = collect_bounded_regular_files(
-        root,
-        TreeLimits::default(),
-        "authorized snapshot sealing",
-        |_parent, _entry| false,
-    )?;
-    for file in files {
-        let mut permissions = fs::metadata(&file.path)
-            .map_err(|error| format!("failed to inspect {}: {error}", file.path.display()))?
-            .permissions();
-        permissions.set_readonly(true);
-        fs::set_permissions(&file.path, permissions)
-            .map_err(|error| format!("failed to seal {}: {error}", file.path.display()))?;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut directories = Vec::new();
-        collect_directories(root, &mut directories)?;
-        for directory in directories.into_iter().rev() {
-            fs::set_permissions(&directory, fs::Permissions::from_mode(0o500))
-                .map_err(|error| format!("failed to seal {}: {error}", directory.display()))?;
-        }
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn collect_directories(path: &Path, output: &mut Vec<PathBuf>) -> Result<(), String> {
-    output.push(path.to_path_buf());
-    for entry in
-        fs::read_dir(path).map_err(|error| format!("failed to read {}: {error}", path.display()))?
-    {
-        let entry = entry.map_err(|error| format!("failed to read {}: {error}", path.display()))?;
-        if entry
-            .file_type()
-            .map_err(|error| format!("failed to inspect {}: {error}", entry.path().display()))?
-            .is_dir()
-        {
-            collect_directories(&entry.path(), output)?;
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
