@@ -117,7 +117,6 @@ pub use rsscript_artifact::{
     ResourceTransferFactV1, SEMANTIC_DIFF_SCHEMA, SOURCE_ANALYSIS_SCHEMA, SemanticDiffV1,
     SourceAnalysisV1, TaskGroupFactV1,
 };
-#[cfg(feature = "execution")]
 use rsscript_semantics::CompilationSession;
 #[cfg(feature = "execution")]
 use sha2::{Digest, Sha256};
@@ -498,17 +497,8 @@ impl Compiler {
     /// Check one immutable source/interface snapshot without reading a path or
     /// selecting a Provider.
     pub fn check_snapshot(&self, snapshot: &FrontendInputSnapshot) -> Vec<Diagnostic> {
-        #[cfg(feature = "execution")]
-        {
-            analyze_snapshot_with_session(snapshot, None)
-                .expect("an unchecked SDK snapshot check cannot abort")
-        }
-        #[cfg(not(feature = "execution"))]
-        {
-            let sources = snapshot_pairs(snapshot.sources());
-            let interfaces = snapshot_pairs(snapshot.interfaces());
-            analyze_sources_with_interfaces(&sources, &interfaces)
-        }
+        analyze_snapshot_with_session(snapshot, None)
+            .expect("an unchecked SDK snapshot check cannot abort")
     }
 
     pub fn check_with_operation(
@@ -528,24 +518,7 @@ impl Compiler {
         snapshot: &FrontendInputSnapshot,
         operation: &OperationContext,
     ) -> Result<Vec<Diagnostic>, CompileError> {
-        #[cfg(feature = "execution")]
-        {
-            analyze_snapshot_with_session(snapshot, Some(operation))
-        }
-        #[cfg(not(feature = "execution"))]
-        {
-            operation.check().map_err(CompileError::from)?;
-            let sources = snapshot_pairs(snapshot.sources());
-            let interfaces = snapshot_pairs(snapshot.interfaces());
-            let diagnostics = analyze_sources_with_interfaces_result_with_operation(
-                &sources,
-                &interfaces,
-                operation,
-            )
-            .into_diagnostics();
-            operation.check().map_err(CompileError::from)?;
-            Ok(diagnostics)
-        }
+        analyze_snapshot_with_session(snapshot, Some(operation))
     }
 
     #[cfg(feature = "execution")]
@@ -689,7 +662,6 @@ fn validate_snapshot_with_session(
 /// compilation. The compatibility fallback mirrors
 /// [`validate_snapshot_with_session`]: an empty logical path cannot be a
 /// stable session identity yet.
-#[cfg(feature = "execution")]
 fn analyze_snapshot_with_session(
     snapshot: &FrontendInputSnapshot,
     operation: Option<&OperationContext>,
@@ -729,7 +701,6 @@ fn analyze_snapshot_with_session(
     }
 }
 
-#[cfg(feature = "execution")]
 fn session_for_snapshot(snapshot: &FrontendInputSnapshot) -> CompilationSession {
     let mut session = CompilationSession::default();
     for file in snapshot.sources().files() {

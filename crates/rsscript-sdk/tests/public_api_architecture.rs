@@ -223,6 +223,28 @@ fn reviewed_facade_exports_match_the_checked_api_snapshot() {
 }
 
 #[test]
+fn default_snapshot_checks_share_the_compilation_session_query_boundary() {
+    let source = library_source();
+    assert!(
+        source.contains("use rsscript_semantics::CompilationSession;"),
+        "CompilationSession must be a base SDK dependency, not execution-only"
+    );
+    let check_snapshot = source
+        .split("pub fn check_snapshot(&self, snapshot: &FrontendInputSnapshot) -> Vec<Diagnostic>")
+        .nth(1)
+        .and_then(|rest| rest.split("pub fn check_with_operation").next())
+        .expect("reviewed snapshot-check implementation must exist");
+    assert!(
+        check_snapshot.contains("analyze_snapshot_with_session(snapshot, None)"),
+        "the default SDK check must use the session-owned analysis query"
+    );
+    assert!(
+        !check_snapshot.contains("#[cfg(feature = \"execution\")]"),
+        "default SDK checks must not select a separate non-session analysis path"
+    );
+}
+
+#[test]
 fn reviewed_execution_report_hides_legacy_native_value_behind_compatibility() {
     let source = library_source();
     let report_start = source

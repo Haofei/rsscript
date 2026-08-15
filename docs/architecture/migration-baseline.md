@@ -564,10 +564,11 @@ mechanical acceptance condition holds.
     core-aware single-file `check` path now also captures its source and explicit
     interfaces in `CompilationSession` before reading the cached complete
     analysis query. The reviewed SDK snapshot check APIs use that same cached
-    analysis query, while `Compiler::compile_snapshot` and its operation-aware
-    form use the session-owned validated query for normal non-empty logical
-    paths; only the historical empty-path in-memory compatibility case retains
-    direct analysis. The CLI `fix` workflow now follows the same session-owned
+    analysis query under every SDK feature combination, while
+    `Compiler::compile_snapshot` and its operation-aware form use the
+    session-owned validated query for normal non-empty logical paths; only the
+    historical empty-path in-memory compatibility case retains direct analysis.
+    The CLI `fix` workflow now follows the same session-owned
     analysis route, preserving duplicate-interface diagnostics through its
     explicit legacy fallback. `--no-core` checks now use the same session
     query with an empty Core interface set; only deliberately duplicate

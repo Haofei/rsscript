@@ -29,7 +29,6 @@ execution = [
     "dep:rsscript-bytecode",
     "dep:rsscript-interface-catalog",
     "dep:rsscript-provider-api",
-    "dep:rsscript-semantics",
     "dep:rsscript-vm",
 ]
 # Filesystem/package capture is a CLI and project-loader convenience boundary,
@@ -62,7 +61,7 @@ rsscript-interface-catalog = { path = "../rsscript-interface-catalog", optional 
 rsscript-lowering = { path = "../rsscript-lowering", optional = true }
 rsscript-mir = { path = "../rsscript-mir", optional = true }
 rsscript-provider-api = { path = "../rsscript-provider-api", optional = true }
-rsscript-semantics = { path = "../rsscript-semantics", optional = true }
+rsscript-semantics = { path = "../rsscript-semantics" }
 rsscript-vm = { path = "../rsscript-vm", optional = true, default-features = false }
 rsscript-workspace-loader = { path = "../rsscript-workspace-loader", optional = true }
 serde = { version = "1", features = ["derive"] }
