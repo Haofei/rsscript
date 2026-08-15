@@ -34,12 +34,13 @@ Artifact Bundle again in the child, accepts no dynamic Provider or library path,
 and applies process-tree and resource limits. Its opt-in Linux reference
 profiles can additionally require `no_new_privs`, user/mount/network namespaces,
 a Landlock ABI-v5 filesystem allowlist rooted at a parent-owned path, or a
-narrow Linux x86-64 seccomp deny-list. A missing kernel feature or denied
-control rejects that profile; it never falls back to the ambient boundary.
-These profiles remain defense in depth, not a complete container: deployments
-that require filesystem, network, identity, namespace, or syscall isolation
-must select and validate the OS controls that match their own Provider
-authority.
+narrow Linux x86-64 seccomp deny-list. A separate cgroup-v2 profile creates a
+child boundary only where the parent has explicit controller delegation. A
+missing kernel feature, denied control, or unavailable cgroup delegation
+rejects that profile; it never falls back to the ambient boundary. These
+profiles remain defense in depth, not a complete container: deployments that
+require filesystem, network, identity, namespace, or syscall isolation must
+select and validate the OS controls that match their own Provider authority.
 
 No RSScript API or documentation may describe the in-process runtime as a
 sandbox. Vulnerability reports and deployment guidance must identify which

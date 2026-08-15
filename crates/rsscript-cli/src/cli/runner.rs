@@ -9,9 +9,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use rss_process_guard::{
-    FilesystemRootAccess, GuardedChild, ProcessLimits, StrictIsolationControl,
-    StrictIsolationRequirements, restrict_current_process_to_root, spawn_guarded_child_strict_with,
-    verify_strict_child_context_with,
+    CgroupV2Boundary, FilesystemRootAccess, GuardedChild, ProcessLimits, StrictIsolationControl,
+    StrictIsolationRequirements, restrict_current_process_to_root,
+    spawn_guarded_child_strict_with_cgroup, verify_strict_child_context_with,
 };
 use rsscript_runner_protocol::{
     MAX_RESPONSE_BYTES, RunnerLimitsV1, RunnerProfileV1, RunnerRequestV1, RunnerResponseV1,
@@ -139,6 +139,7 @@ fn invoke_runner(
         .stderr(Stdio::piped())
         .env_clear();
     let filesystem_root = runner_filesystem_root(request.profile)?;
+    let cgroup = runner_cgroup_boundary(request.profile)?;
     if let Some(root) = &filesystem_root {
         command.env(RUNNER_FILESYSTEM_ROOT_ENV, root.path());
     }
@@ -150,7 +151,7 @@ fn invoke_runner(
     #[cfg(unix)]
     command.current_dir("/");
     let limits = runner_process_limits(&request.limits);
-    let mut child = spawn_runner(&mut command, limits, request.profile)
+    let mut child = spawn_runner(&mut command, limits, request.profile, cgroup)
         .map_err(|error| format!("cannot create guarded runner process: {error}"))?;
     let mut stdin = child
         .child_mut()
@@ -311,6 +312,7 @@ fn runner_isolation_requirements(profile: RunnerProfileV1) -> StrictIsolationReq
         RunnerProfileV1::NoProvidersSeccompFiltered => {
             baseline.require(StrictIsolationControl::SeccompFilter)
         }
+        RunnerProfileV1::NoProvidersCgroupV2 => baseline.require(StrictIsolationControl::CgroupV2),
         RunnerProfileV1::NoProviders
         | RunnerProfileV1::NoProvidersFilesystemIsolated
         | RunnerProfileV1::LogOnly => baseline,
@@ -332,14 +334,33 @@ fn runner_filesystem_root(profile: RunnerProfileV1) -> Result<Option<tempfile::T
     }
 }
 
+/// Allocate the cgroup only in the parent. The protocol deliberately has no
+/// cgroup path, controller, or resource-policy field, so a request cannot
+/// select an ambient hierarchy or widen this host boundary.
+fn runner_cgroup_boundary(profile: RunnerProfileV1) -> Result<Option<CgroupV2Boundary>, String> {
+    if profile == RunnerProfileV1::NoProvidersCgroupV2 {
+        CgroupV2Boundary::prepare_for_current_process()
+            .map(Some)
+            .map_err(|error| format!("cannot prepare dedicated runner cgroup-v2 boundary: {error}"))
+    } else {
+        Ok(None)
+    }
+}
+
 fn spawn_runner(
     command: &mut Command,
     limits: ProcessLimits,
     profile: RunnerProfileV1,
+    cgroup: Option<CgroupV2Boundary>,
 ) -> io::Result<GuardedChild> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
-        spawn_guarded_child_strict_with(command, limits, runner_isolation_requirements(profile))
+        spawn_guarded_child_strict_with_cgroup(
+            command,
+            limits,
+            runner_isolation_requirements(profile),
+            cgroup,
+        )
     }
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
     {
@@ -348,11 +369,13 @@ fn spawn_runner(
             RunnerProfileV1::NoProvidersNamespaced
                 | RunnerProfileV1::NoProvidersNetworkIsolated
                 | RunnerProfileV1::NoProvidersSeccompFiltered
+                | RunnerProfileV1::NoProvidersCgroupV2
         ) {
-            return spawn_guarded_child_strict_with(
+            return spawn_guarded_child_strict_with_cgroup(
                 command,
                 limits,
                 runner_isolation_requirements(profile),
+                cgroup,
             );
         }
         rss_process_guard::spawn_guarded_child(command, limits)
@@ -554,7 +577,8 @@ fn profiled_registry(profile: RunnerProfileV1) -> Result<ProviderRegistry, Strin
         | RunnerProfileV1::NoProvidersNamespaced
         | RunnerProfileV1::NoProvidersNetworkIsolated
         | RunnerProfileV1::NoProvidersFilesystemIsolated
-        | RunnerProfileV1::NoProvidersSeccompFiltered => Ok(ProviderRegistry::default()),
+        | RunnerProfileV1::NoProvidersSeccompFiltered
+        | RunnerProfileV1::NoProvidersCgroupV2 => Ok(ProviderRegistry::default()),
         // This preinstalled profile deliberately discards messages. It proves
         // exact allowlist linkage without granting filesystem, network,
         // process, credential, or ambient-environment authority to the child.
@@ -777,6 +801,14 @@ mod tests {
         assert!(requirements.requires(StrictIsolationControl::SeccompFilter));
         profiled_registry(RunnerProfileV1::NoProvidersSeccompFiltered)
             .expect("seccomp profile must not require provider installation");
+    }
+
+    #[test]
+    fn cgroup_profile_requires_a_parent_owned_boundary_without_provider_authority() {
+        let requirements = runner_isolation_requirements(RunnerProfileV1::NoProvidersCgroupV2);
+        assert!(requirements.requires(StrictIsolationControl::CgroupV2));
+        profiled_registry(RunnerProfileV1::NoProvidersCgroupV2)
+            .expect("cgroup profile must not require provider installation");
     }
 
     #[test]

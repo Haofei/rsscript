@@ -2085,9 +2085,15 @@ an arbitrary shell executor.
         filter installation reject the run instead of falling back to ambient
         syscall authority. This is a narrow defence-in-depth deny-list, not a
         complete syscall sandbox.
-    - [ ] **A09.2e — Add cgroup-v2 controls.** Attach child process trees to a
-      dedicated cgroup where supported, report unavailable delegation clearly,
-      and keep the runner's VM termination separate from containment failures.
+    - [x] **A09.2e — Add cgroup-v2 controls.** The explicit
+      `no_providers_cgroup_v2` profile asks the parent to create a unique child
+      cgroup beneath its current delegated cgroup-v2 path. The guarded child
+      enters that directory in `pre_exec`, before runner code parses protocol
+      or Artifact input, and `GuardedChild` removes it after process-tree
+      termination and reaping. A v1-only, read-only, or non-delegated hierarchy
+      rejects startup clearly; it never silently shares the parent cgroup.
+      Cgroup attachment remains containment evidence separate from VM script
+      termination and report semantics.
   - [ ] **A09.3 — Complete parent-side containment.** Cover process-tree kill,
     deadline, stdout/stderr/report limits, abnormal exits, and child disconnects.
     The child protocol now fail-closes contradictory response states: only a
@@ -2100,7 +2106,11 @@ an arbitrary shell executor.
     space ceilings from the approved runner request rather than retaining a
     wider fixed address-space allowance; a bounded runtime reserve covers
     verifier/protocol overhead while the VM keeps its independent live-memory
-    limit. Process-tree fault injection remains open.
+    limit.
+    - [ ] **A09.3a — Add deterministic process-tree fault injection.** Drive
+      runner children through root exit, descendant escape, pipe disconnect,
+      deadline, and output-overflow scenarios; assert reaping and preserve the
+      distinction between containment failures and VM reports.
   - [ ] **A09.4 — Fuzz protocol and runner failure paths.** Exercise framing,
     malformed messages, oversized inputs, incomplete I/O, and termination
     separation without calling it a universal sandbox. The bounded protocol now

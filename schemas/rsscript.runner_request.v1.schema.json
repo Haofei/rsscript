@@ -7,7 +7,7 @@
   "required": ["schema", "profile", "args", "limits", "metadata_only_trace"],
   "properties": {
     "schema": { "const": "rsscript.runner_request.v1" },
-    "profile": { "enum": ["no_providers", "no_providers_namespaced", "no_providers_network_isolated", "no_providers_filesystem_isolated", "no_providers_seccomp_filtered", "log_only"] },
+    "profile": { "enum": ["no_providers", "no_providers_namespaced", "no_providers_network_isolated", "no_providers_filesystem_isolated", "no_providers_seccomp_filtered", "no_providers_cgroup_v2", "log_only"] },
     "args": { "type": "array", "maxItems": 256, "items": { "type": "string", "maxLength": 65536 } },
     "limits": {
       "type": "object",

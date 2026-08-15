@@ -48,6 +48,10 @@ pub enum RunnerProfileV1 {
     /// ambient socket entry points and selected process-control syscalls;
     /// unsupported kernels or architectures reject the launch.
     NoProvidersSeccompFiltered,
+    /// Reference fail-closed profile with no Providers and a dedicated
+    /// host-created Linux cgroup-v2 boundary. Missing delegation rejects the
+    /// launch; the protocol cannot select a cgroup path or resource policy.
+    NoProvidersCgroupV2,
     /// Reference allowlisted profile with only `host.log.emit` installed.
     ///
     /// The sink is selected by the runner host and has no filesystem, network,
@@ -114,6 +118,15 @@ impl RunnerProfileV1 {
                 version: 1,
                 descriptor_digest:
                     "sha256:0fe43ddf8e26c4e21d7ccf61f3f558105e6b147890cd4b2d09af45223ceeeef7"
+                        .to_string(),
+            },
+            // sha256 of the versioned no-Provider profile descriptor plus its
+            // parent-owned cgroup-v2 boundary requirement.
+            Self::NoProvidersCgroupV2 => RunnerProfileIdentityV1 {
+                id: "rsscript.runner.no_providers_cgroup_v2".to_string(),
+                version: 1,
+                descriptor_digest:
+                    "sha256:8eabb71259a1b2975f49af2ddce8d1050eb9be37a0b96532b8ba17e4ebda2e57"
                         .to_string(),
             },
             // sha256 of the versioned profile descriptor containing the
@@ -604,6 +617,28 @@ mod tests {
         let json = serde_json::to_value(request).expect("request JSON");
         assert_eq!(json["profile"], "no_providers_seccomp_filtered");
         for forbidden in ["provider", "syscall", "seccomp", "authority", "policy"] {
+            assert!(
+                json.get(forbidden).is_none(),
+                "profile must not inject {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn cgroup_profile_carries_no_hierarchy_or_resource_policy_input() {
+        let request =
+            RunnerRequestV1::with_profile(Vec::new(), RunnerProfileV1::NoProvidersCgroupV2)
+                .expect("request");
+        let json = serde_json::to_value(request).expect("request JSON");
+        assert_eq!(json["profile"], "no_providers_cgroup_v2");
+        for forbidden in [
+            "provider",
+            "cgroup",
+            "controller",
+            "resource",
+            "path",
+            "authority",
+        ] {
             assert!(
                 json.get(forbidden).is_none(),
                 "profile must not inject {forbidden}"

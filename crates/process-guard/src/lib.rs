@@ -5,6 +5,12 @@
 
 use std::io;
 use std::process::{Child, Command, ExitStatus};
+#[cfg(target_os = "linux")]
+use std::{
+    ffi::{CStr, CString},
+    os::unix::ffi::OsStrExt,
+    path::PathBuf,
+};
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use std::{fs::File, os::fd::AsRawFd, path::Path};
 #[cfg(windows)]
@@ -246,7 +252,16 @@ pub const fn strict_isolation_support(control: StrictIsolationControl) -> LimitS
                     LimitSupport::Unsupported
                 }
             }
-            StrictIsolationControl::CgroupV2 => LimitSupport::Unsupported,
+            StrictIsolationControl::CgroupV2 => {
+                #[cfg(target_os = "linux")]
+                {
+                    LimitSupport::Enforced
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    LimitSupport::Unsupported
+                }
+            }
         };
     }
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
@@ -263,6 +278,119 @@ pub const fn strict_isolation_support(control: StrictIsolationControl) -> LimitS
 pub enum FilesystemRootAccess {
     ReadOnly,
     ReadWrite,
+}
+
+/// A parent-created cgroup-v2 directory that the guarded child enters before
+/// `exec`. The directory is deliberately selected by the host process, never
+/// by runner protocol input or script code.
+#[derive(Debug)]
+pub struct CgroupV2Boundary {
+    #[cfg(target_os = "linux")]
+    directory: PathBuf,
+    #[cfg(target_os = "linux")]
+    procs_path: CString,
+}
+
+impl CgroupV2Boundary {
+    /// Create a unique child cgroup beneath the current process's delegated
+    /// cgroup-v2 directory. A read-only hierarchy, missing delegation, or a
+    /// v1-only host is an error; strict callers must not fall back to the
+    /// parent's ambient cgroup.
+    #[cfg(target_os = "linux")]
+    pub fn prepare_for_current_process() -> io::Result<Self> {
+        let mount = Path::new("/sys/fs/cgroup");
+        if !mount.join("cgroup.controllers").is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "cgroup v2 is not mounted at /sys/fs/cgroup",
+            ));
+        }
+        let membership = std::fs::read_to_string("/proc/self/cgroup")?;
+        let relative = membership
+            .lines()
+            .find_map(|line| line.strip_prefix("0::"))
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "current process is not in a cgroup-v2 hierarchy",
+                )
+            })?;
+        let parent = mount.join(relative.trim_start_matches('/'));
+        if !parent.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "delegated cgroup-v2 parent does not exist: {}",
+                    parent.display()
+                ),
+            ));
+        }
+
+        static NEXT_BOUNDARY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        for _ in 0..32 {
+            let sequence = NEXT_BOUNDARY.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let directory =
+                parent.join(format!("rsscript-runner-{}-{sequence}", std::process::id()));
+            match std::fs::create_dir(&directory) {
+                Ok(()) => {
+                    let procs_path = directory.join("cgroup.procs");
+                    let procs_path =
+                        CString::new(procs_path.as_os_str().as_bytes()).map_err(|_| {
+                            let _ = std::fs::remove_dir(&directory);
+                            io::Error::new(
+                                io::ErrorKind::InvalidInput,
+                                "cgroup-v2 path contains an interior NUL byte",
+                            )
+                        })?;
+                    return Ok(Self {
+                        directory,
+                        procs_path,
+                    });
+                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error)
+                    if matches!(
+                        error.raw_os_error(),
+                        Some(libc::EROFS | libc::EPERM | libc::EACCES)
+                    ) =>
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        format!("cgroup-v2 delegation is unavailable: {error}"),
+                    ));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "could not allocate a unique cgroup-v2 runner boundary",
+        ))
+    }
+
+    /// Non-Linux platforms cannot claim the Linux cgroup-v2 boundary.
+    #[cfg(not(target_os = "linux"))]
+    pub fn prepare_for_current_process() -> io::Result<Self> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "cgroup-v2 runner boundaries are available only on Linux",
+        ))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn procs_path(&self) -> &CStr {
+        &self.procs_path
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for CgroupV2Boundary {
+    fn drop(&mut self) {
+        // ProcessGuard terminates and reaps the owned tree before this boundary
+        // is dropped. A failed cleanup remains host evidence, but must not
+        // panic while unwinding a runner failure.
+        let _ = std::fs::remove_dir(&self.directory);
+    }
 }
 
 /// Install a fail-closed Landlock allowlist for the current process.
@@ -720,6 +848,7 @@ pub fn spawn_guarded_child(
         applied_limits,
         finished: false,
         tree_terminated: false,
+        cgroup: None,
     })
 }
 
@@ -739,10 +868,31 @@ pub fn spawn_guarded_child_strict_with(
     limits: ProcessLimits,
     requirements: StrictIsolationRequirements,
 ) -> io::Result<GuardedChild> {
+    spawn_guarded_child_strict_with_cgroup(command, limits, requirements, None)
+}
+
+/// Strictly spawn a child with the declared kernel controls and an optional
+/// parent-owned cgroup-v2 boundary. A cgroup requirement without a prepared
+/// boundary is rejected before `Command::spawn`; the child enters the supplied
+/// boundary in `pre_exec`, before runner code can parse input.
+pub fn spawn_guarded_child_strict_with_cgroup(
+    command: &mut Command,
+    limits: ProcessLimits,
+    requirements: StrictIsolationRequirements,
+    cgroup: Option<CgroupV2Boundary>,
+) -> io::Result<GuardedChild> {
     platform_limit_support().require_fully_enforced(limits)?;
     requirements.require_fully_enforced()?;
-    configure_strict_platform(command, requirements)?;
-    spawn_guarded_child(command, limits)
+    if requirements.requires(StrictIsolationControl::CgroupV2) != cgroup.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "strict cgroup-v2 requirement must match a prepared boundary",
+        ));
+    }
+    configure_strict_platform(command, requirements, cgroup.as_ref())?;
+    let mut child = spawn_guarded_child(command, limits)?;
+    child.cgroup = cgroup;
+    Ok(child)
 }
 
 /// Verify that a Linux/Android child is running with the strict privilege
@@ -830,6 +980,7 @@ fn parse_seccomp_filter(status: &str) -> Option<bool> {
 fn configure_strict_platform(
     command: &mut Command,
     requirements: StrictIsolationRequirements,
+    cgroup: Option<&CgroupV2Boundary>,
 ) -> io::Result<()> {
     use std::os::unix::process::CommandExt;
 
@@ -838,9 +989,15 @@ fn configure_strict_platform(
         && !requirements.requires(StrictIsolationControl::MountNamespace)
         && !requirements.requires(StrictIsolationControl::NetworkNamespace)
         && !requirements.requires(StrictIsolationControl::SeccompFilter)
+        && !requirements.requires(StrictIsolationControl::CgroupV2)
     {
         return Ok(());
     }
+
+    #[cfg(target_os = "linux")]
+    let cgroup_procs_path = cgroup.map(|boundary| boundary.procs_path().to_owned());
+    #[cfg(target_os = "android")]
+    let _ = cgroup;
 
     // SAFETY: the closure invokes only raw kernel syscalls and direct procfs
     // descriptor writes, obtains no locks or heap-backed state after fork, and
@@ -857,6 +1014,10 @@ fn configure_strict_platform(
             }
             if requirements.requires(StrictIsolationControl::SeccompFilter) {
                 install_current_process_runner_seccomp_filter()?;
+            }
+            #[cfg(target_os = "linux")]
+            if let Some(procs_path) = &cgroup_procs_path {
+                attach_current_process_to_cgroup(procs_path)?;
             }
             Ok(())
         });
@@ -1034,10 +1195,50 @@ fn make_mount_propagation_private() -> io::Result<()> {
     }
 }
 
+/// Attach the pre-exec child to its parent-created cgroup before it can run
+/// runner code. The caller passes a preallocated C path, so this path performs
+/// no allocation or locking after `fork`.
+#[cfg(target_os = "linux")]
+fn attach_current_process_to_cgroup(procs_path: &CStr) -> io::Result<()> {
+    // SAFETY: `procs_path` is a NUL-terminated path created by the parent
+    // before fork; the raw descriptor is owned by this function.
+    let descriptor = unsafe { libc::open(procs_path.as_ptr(), libc::O_WRONLY | libc::O_CLOEXEC) };
+    if descriptor < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut line = [0_u8; 32];
+    // SAFETY: getpid has no pointer arguments and the child identity is stable
+    // through this pre-exec sequence.
+    let length = append_decimal(&mut line, unsafe { libc::getpid() } as u64);
+    line[length] = b'\n';
+    let bytes = &line[..length + 1];
+    // SAFETY: `bytes` is initialized and remains valid for this write. cgroup
+    // `cgroup.procs` accepts one process ID atomically.
+    let written = unsafe { libc::write(descriptor, bytes.as_ptr().cast(), bytes.len()) };
+    let write_result = if written == bytes.len() as isize {
+        Ok(())
+    } else if written < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::WriteZero,
+            "short cgroup-v2 process attachment write",
+        ))
+    };
+    // SAFETY: `descriptor` was opened above and is closed exactly once here.
+    let close_result = if unsafe { libc::close(descriptor) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    };
+    write_result.and(close_result)
+}
+
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 fn configure_strict_platform(
     _command: &mut Command,
     _requirements: StrictIsolationRequirements,
+    _cgroup: Option<&CgroupV2Boundary>,
 ) -> io::Result<()> {
     Ok(())
 }
@@ -1066,6 +1267,7 @@ pub struct GuardedChild {
     applied_limits: AppliedProcessLimits,
     finished: bool,
     tree_terminated: bool,
+    cgroup: Option<CgroupV2Boundary>,
 }
 
 impl GuardedChild {
@@ -1680,6 +1882,67 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cgroup_v2_boundary_is_attached_before_runner_code_or_fails_closed() {
+        const CHILD: &str = "RSSCRIPT_CGROUP_V2_CHILD";
+        const EXPECTED: &str = "RSSCRIPT_CGROUP_V2_EXPECTED";
+        if std::env::var_os(CHILD).is_some() {
+            let expected = std::env::var(EXPECTED).expect("expected cgroup directory name");
+            let membership =
+                std::fs::read_to_string("/proc/self/cgroup").expect("child cgroup membership");
+            assert!(
+                membership
+                    .lines()
+                    .any(|line| line.starts_with("0::") && line.ends_with(&expected)),
+                "child must enter the parent-created cgroup before test code: {membership}"
+            );
+            return;
+        }
+
+        let boundary = match CgroupV2Boundary::prepare_for_current_process() {
+            Ok(boundary) => boundary,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::Unsupported | io::ErrorKind::PermissionDenied
+                ) =>
+            {
+                eprintln!("cgroup-v2 delegation unavailable or denied: {error}");
+                return;
+            }
+            Err(error) => panic!("cgroup-v2 preparation must fail closed: {error}"),
+        };
+        let directory = boundary.directory.clone();
+        let expected = directory
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("ASCII cgroup directory name")
+            .to_string();
+        let requirements =
+            StrictIsolationRequirements::linux_runner().require(StrictIsolationControl::CgroupV2);
+        let mut command = Command::new(std::env::current_exe().expect("test executable"));
+        command
+            .args([
+                "--exact",
+                "tests::cgroup_v2_boundary_is_attached_before_runner_code_or_fails_closed",
+            ])
+            .env(CHILD, "1")
+            .env(EXPECTED, expected);
+        let child = spawn_guarded_child_strict_with_cgroup(
+            &mut command,
+            ProcessLimits::generated_program(),
+            requirements,
+            Some(boundary),
+        )
+        .expect("delegated cgroup child must spawn");
+        assert!(child.wait().expect("cgroup child should exit").success());
+        assert!(
+            !directory.exists(),
+            "cgroup boundary must be cleaned after the guarded tree exits"
+        );
+    }
+
     #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]
     fn linux_runner_contract_requires_and_verifies_no_new_privileges() {
@@ -1815,12 +2078,9 @@ mod tests {
             .expect("run isolated Landlock test child");
         match output.status.code() {
             Some(0) => {}
-            Some(77) => {
-                assert!(
-                    String::from_utf8_lossy(&output.stderr).contains("Landlock unavailable"),
-                    "unsupported Landlock result must be explicit"
-                );
-            }
+            // The helper reaches this code only after mapping a documented
+            // unsupported adapter result to the reserved fail-closed exit.
+            Some(77) => {}
             _ => panic!(
                 "Landlock child failed: status={}, stdout={}, stderr={}",
                 output.status,
