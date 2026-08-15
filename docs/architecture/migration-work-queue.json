@@ -2,9 +2,9 @@
   "schema": "rsscript.migration_queue.v1",
   "tasks": [
     {
-      "id": "S05.4b",
+      "id": "S05.4b2",
       "priority": 100,
-      "depends_on": ["S05.4a"],
+      "depends_on": ["S05.4b1"],
       "scope": [
         "crates/rsscript-compiler/src/rust_lower/**",
         "crates/rsscript-compiler/src/lib.rs",
@@ -14,7 +14,7 @@
         "docs/architecture/migration-baseline.md"
       ],
       "acceptance": [
-        "Source lowering, source-map parsing, Rust diagnostic remapping, and generated package publication are owned by the experiment boundary.",
+        "The remaining AST/HIR-to-Rust lowerer and generated package writer move to the experiment-owned backend.",
         "Compiler compatibility contains no AOT implementation modules after the migration.",
         "The experimental CLI path continues to produce equivalent generated-Rust package output."
       ],

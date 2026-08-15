@@ -5,10 +5,7 @@ use super::helpers::stmt_span;
 use super::lowerer::match_pattern_span;
 use super::types::RustSourceMapEntry;
 
-pub fn parse_source_map_json(source_map_json: &str) -> Result<Vec<RustSourceMapEntry>, String> {
-    serde_json::from_str(source_map_json)
-        .map_err(|error| format!("failed to parse RSScript source map JSON: {error}"))
-}
+pub use rsscript_aot_model::parse_source_map_json;
 
 pub(super) fn push_source_marker(
     out: &mut String,

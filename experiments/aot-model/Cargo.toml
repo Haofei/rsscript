@@ -13,6 +13,4 @@ doctest = false
 [dependencies]
 rsscript-diagnostics = { path = "../../crates/rsscript-diagnostics" }
 serde = { version = "1", features = ["derive"] }
-
-[dev-dependencies]
 serde_json = "1"

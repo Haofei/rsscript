@@ -883,6 +883,13 @@ an arbitrary shell executor.
     - [ ] **S05.4b — Move the Rust lowerer and diagnostics.** Move source
       lowering, source-map parsing, Rust diagnostic remapping, and generated
       package publication into the experiment-owned AOT backend.
+      - [x] **S05.4b1 — Move source-map wire utilities.** Source-map JSON
+        parsing and Rust diagnostic remapping now belong to `rsscript-aot-model`;
+        compiler compatibility preserves the experimental API only as a
+        forwarding bridge.
+      - [ ] **S05.4b2 — Move lowering and publication.** Move the remaining
+        AST/HIR-to-Rust lowerer and generated package writer to the experimental
+        backend, leaving compiler with no AOT implementation modules.
     - [ ] **S05.4c — Split runtime ABI catalog use.** Leave Core consumers with
       a neutral intrinsic catalog and move generated-Rust target discovery and
       AOT runtime validation into the experiment-owned backend.
