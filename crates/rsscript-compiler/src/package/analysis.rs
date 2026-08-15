@@ -1,14 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
+use std::sync::Arc;
 
-use crate::analyzer::{
-    analyze_source_with_interfaces_result, analyze_sources_with_interfaces_without_core_result,
-    core_interfaces,
-};
+use crate::analyzer::core_interfaces;
 use crate::diagnostic::{Diagnostic, Span, code};
 use crate::hir::CallResolution;
 use crate::lint::lint_source;
 use crate::syntax::ast::{Callee, TypeKind};
+use rsscript_semantics::{AnalysisResult, CompilationSession};
 
 use super::analysis_await::collect_package_await_sites;
 use super::analysis_execution::collect_execution_facts;
@@ -64,8 +63,9 @@ pub(super) fn analyze_package_dir_captured(package_dir: &Path) -> Result<Package
                     .filter(|(interface_path, _)| interface_path != path)
                     .copied(),
             );
-            analyze_source_with_interfaces_result(path, contents, &visible_interfaces)
-                .into_diagnostics()
+            session_analysis(&[(path, contents)], &visible_interfaces)
+                .diagnostics()
+                .to_vec()
         })
         .collect::<Vec<_>>();
     let interface_diagnostic_exports =
@@ -78,8 +78,9 @@ pub(super) fn analyze_package_dir_captured(package_dir: &Path) -> Result<Package
     )?);
     diagnostics.extend(interface_frontend_diagnostics);
     diagnostics.extend(
-        analyze_sources_with_interfaces_without_core_result(&program_refs, &source_interfaces)
-            .into_diagnostics(),
+        session_analysis(&program_refs, &source_interfaces)
+            .diagnostics()
+            .to_vec(),
     );
     if !test_refs.is_empty() {
         let mut test_interfaces = source_interfaces.clone();
@@ -99,8 +100,9 @@ pub(super) fn analyze_package_dir_captured(package_dir: &Path) -> Result<Package
             test_interfaces.extend(program_refs.iter().copied());
         }
         diagnostics.extend(
-            analyze_sources_with_interfaces_without_core_result(&test_refs, &test_interfaces)
-                .into_diagnostics(),
+            session_analysis(&test_refs, &test_interfaces)
+                .diagnostics()
+                .to_vec(),
         );
     }
     diagnostics.extend(package_interface_contract_diagnostics(
@@ -110,8 +112,7 @@ pub(super) fn analyze_package_dir_captured(package_dir: &Path) -> Result<Package
     diagnostics.extend(package_lint_diagnostics(sources));
     dedup_diagnostics(&mut diagnostics);
 
-    let semantic_analysis =
-        analyze_sources_with_interfaces_without_core_result(&program_refs, &source_interfaces);
+    let semantic_analysis = session_analysis(&program_refs, &source_interfaces);
     diagnostics.extend(
         semantic_analysis
             .diagnostics()
@@ -199,6 +200,35 @@ fn source_refs(sources: &[PackageSource], kind: PackageReviewFileKind) -> Vec<(&
         .filter(|source| source.kind == kind)
         .map(|source| (source.path.as_str(), source.contents.as_str()))
         .collect()
+}
+
+/// Route captured package sources through the same semantic session query as
+/// the CLI, SDK, and language service. Package callers historically passed
+/// Core interfaces manually to a `without_core` analyzer entry point; the
+/// session owns that catalog, so skip those duplicate inputs while preserving
+/// every dependency/package interface in the immutable snapshot.
+pub(super) fn session_analysis(
+    sources: &[(&str, &str)],
+    interfaces: &[(&str, &str)],
+) -> Arc<AnalysisResult> {
+    let core_paths = core_interfaces()
+        .iter()
+        .map(|(path, _)| *path)
+        .collect::<BTreeSet<_>>();
+    let mut session = CompilationSession::default();
+    for (path, contents) in interfaces {
+        if !core_paths.contains(path) {
+            session
+                .set_interface(*path, *contents)
+                .expect("captured package interfaces have unique normalized paths");
+        }
+    }
+    for (path, contents) in sources {
+        session
+            .set_file(*path, *contents)
+            .expect("captured package sources have unique normalized paths");
+    }
+    session.workspace_analysis()
 }
 
 fn package_call_edges(

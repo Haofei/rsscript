@@ -1,10 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use crate::analyzer::{
-    analyze_source_with_interfaces_result, analyze_sources_with_interfaces_without_core_result,
-    core_interfaces,
-};
+use crate::analyzer::core_interfaces;
 use crate::diagnostic::{Diagnostic, Span, code};
 use crate::hir::CallResolution;
 use crate::lint::lint_source;
@@ -32,6 +29,7 @@ use super::{
     package_feature_may_change_boundary_risk, package_feature_resolution_diagnostics,
 };
 
+use super::analysis::session_analysis;
 use super::analysis_await::*;
 
 pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
@@ -99,8 +97,9 @@ pub(super) fn review_package_dir_captured_with_features(
                     .filter(|(interface_path, _)| interface_path != path)
                     .copied(),
             );
-            analyze_source_with_interfaces_result(path, contents, &visible_interfaces)
-                .into_diagnostics()
+            session_analysis(&[(path, contents)], &visible_interfaces)
+                .diagnostics()
+                .to_vec()
         })
         .collect::<Vec<_>>();
     let interface_diagnostic_exports =
@@ -117,8 +116,9 @@ pub(super) fn review_package_dir_captured_with_features(
     diagnostics.extend(package_virtual_diagnostics(package_dir, manifest, sources));
     diagnostics.extend(interface_frontend_diagnostics);
     diagnostics.extend(
-        analyze_sources_with_interfaces_without_core_result(&source_refs, &source_interfaces)
-            .into_diagnostics(),
+        session_analysis(&source_refs, &source_interfaces)
+            .diagnostics()
+            .to_vec(),
     );
     if !test_refs.is_empty() {
         let mut test_interfaces = source_interfaces.clone();
@@ -138,8 +138,9 @@ pub(super) fn review_package_dir_captured_with_features(
             test_interfaces.extend(source_refs.clone());
         }
         diagnostics.extend(
-            analyze_sources_with_interfaces_without_core_result(&test_refs, &test_interfaces)
-                .into_diagnostics(),
+            session_analysis(&test_refs, &test_interfaces)
+                .diagnostics()
+                .to_vec(),
         );
     }
     diagnostics.extend(package_interface_contract_diagnostics(
@@ -161,10 +162,7 @@ pub(super) fn review_package_dir_captured_with_features(
         .iter()
         .map(|source| (source.path.as_str(), source.contents.as_str()))
         .collect::<Vec<_>>();
-    let review_analysis = analyze_sources_with_interfaces_without_core_result(
-        &review_source_refs,
-        &source_interfaces,
-    );
+    let review_analysis = session_analysis(&review_source_refs, &source_interfaces);
     diagnostics.extend(
         review_analysis
             .diagnostics()

@@ -581,8 +581,12 @@ mechanical acceptance condition holds.
     explicit legacy fallback. `--no-core` checks now use the same session
     query with an empty Core interface set; only deliberately duplicate
     interface paths retain a direct compatibility fallback so established
-    diagnostics do not change. Package compatibility and the remaining
-    test/AOT callers are still explicit migration work.
+    diagnostics do not change. Package lowering, neutral package analysis,
+    review evidence, and package-interface environment checks now capture their
+    sources and dependency interfaces in the same `CompilationSession` query;
+    Core catalog entries are supplied once by the session rather than manually
+    duplicated into a `without_core` analyzer call. Remaining test/AOT callers
+    are still explicit migration work.
 - [ ] **S04 — Make language service consume semantic queries directly.** It
   must not depend on the compiler compatibility façade, package persistence,
   VM, SDK, or Providers; revision invalidation and request cancellation require

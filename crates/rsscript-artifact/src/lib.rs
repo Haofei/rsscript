@@ -329,8 +329,19 @@ impl AnalysisEnvelopeV1 {
         let schema = AnalysisSchemaV1::parse(schema)
             .ok_or_else(|| ArtifactBundleError::UnsupportedAnalysisSchema(schema.to_string()))?;
         if schema == AnalysisSchemaV1::Source {
-            let source = SourceAnalysisV1::from_json(payload)?;
-            return Ok(Self::source(source));
+            // Preserve the exact accepted v1 source-analysis shape. Early v1
+            // bundles omitted empty optional fact arrays; rebuilding through
+            // `Self::source` would insert them and make a historically compact
+            // (otherwise valid) analysis section fail its byte-level legacy
+            // canonicality check. New producers still use `Self::source` and
+            // therefore emit the complete canonical form.
+            let source = SourceAnalysisV1::from_json(payload.clone())?;
+            return Ok(Self {
+                schema,
+                payload,
+                source: Some(source),
+                package: None,
+            });
         }
         let package = serde_json::from_value(payload)
             .map_err(|error| ArtifactBundleError::Analysis(error.to_string()))?;

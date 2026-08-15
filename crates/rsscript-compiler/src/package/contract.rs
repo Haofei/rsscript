@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::analyzer::analyze_source_with_interfaces;
 use crate::diagnostic::{Diagnostic, code};
 use crate::review::{ReviewMap, ReviewMapClassification};
 use crate::syntax::ast::{
@@ -10,6 +9,7 @@ use crate::syntax::ast::{
 };
 use crate::syntax::parse_source;
 
+use super::analysis::session_analysis;
 use super::{PackageReviewExport, PackageReviewFileKind, PackageSource};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,9 +116,11 @@ pub(super) struct PackageFieldContract {
 pub(super) fn package_interface_environment_diagnostics(
     interfaces: &[(&str, &str)],
 ) -> Vec<Diagnostic> {
-    analyze_source_with_interfaces("<package-interface-environment>", "", interfaces)
-        .into_iter()
+    session_analysis(&[("<package-interface-environment>", "")], interfaces)
+        .diagnostics()
+        .iter()
         .filter(|diagnostic| diagnostic.code == code::DUPLICATE_DECLARATION)
+        .cloned()
         .collect()
 }
 
