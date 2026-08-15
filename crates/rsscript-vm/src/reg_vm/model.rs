@@ -50,8 +50,10 @@ pub(crate) struct RegNativeSignature {
     pub(crate) return_type: Option<String>,
 }
 
+#[cfg(feature = "native-jit")]
 mod profile;
 
+#[cfg(feature = "native-jit")]
 pub(crate) use profile::*;
 
 /// Cached classification of a function as a scalar self-recursion JIT candidate

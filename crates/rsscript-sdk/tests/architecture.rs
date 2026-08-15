@@ -812,6 +812,32 @@ fn jit_planning_state_is_kept_out_of_verified_program_objects() {
 }
 
 #[test]
+fn default_vm_layout_excludes_native_jit_feedback_and_dependencies() {
+    let root = workspace_root();
+    let model = read(&root.join("crates/rsscript-vm/src/reg_vm/model.rs"));
+    let state = read(&root.join("crates/rsscript-vm/src/reg_vm/tier/state.rs"));
+    let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));
+
+    assert!(model.contains("#[cfg(feature = \"native-jit\")]\nmod profile;"));
+    for field in ["native_status", "call_count", "branch_count", "profile"] {
+        assert!(
+            state.contains(&format!("#[cfg(feature = \"native-jit\")]\n    {field}:")),
+            "default VM layout must not retain native JIT `{field}` feedback"
+        );
+    }
+    assert!(
+        vm.contains("#[cfg(feature = \"native-jit\")]\n    native: Option<NativeState>"),
+        "the evaluator's machine-code state must be native-JIT feature gated"
+    );
+
+    let closure = cargo_tree(&root, "rsscript-vm");
+    assert!(
+        !closure.contains("vm-jit "),
+        "default VM dependency closure must not include the native JIT lab:\n{closure}"
+    );
+}
+
+#[test]
 fn register_vm_execution_policy_is_snapshotted_before_running() {
     let root = workspace_root();
     let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));

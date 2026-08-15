@@ -1698,8 +1698,15 @@ impl RegVm {
                             // unchanged — we only observe it. `ip` was already
                             // advanced past this instruction, so its index is
                             // `ip - 1`.
-                            self.jit_state
-                                .record_call_site(&func, ip - 1, callee_id as u64, true);
+                            #[cfg(feature = "native-jit")]
+                            if self.native.is_some() {
+                                self.jit_state.record_call_site(
+                                    &func,
+                                    ip - 1,
+                                    callee_id as u64,
+                                    true,
+                                );
+                            }
                             let callee = Rc::clone(&unit.functions[callee_id]);
                             self.prepare_frame(next_base, callee.regs)?;
                             for (index, reg) in args.iter().enumerate() {
@@ -1873,12 +1880,15 @@ impl RegVm {
                             // does not change which closure runs; `ip` already
                             // points past this instruction, so its index is
                             // `ip - 1`.
-                            self.jit_state.record_call_site(
-                                &func,
-                                ip - 1,
-                                closure.function as u64,
-                                closure_captures_all_scalar(&closure),
-                            );
+                            #[cfg(feature = "native-jit")]
+                            if self.native.is_some() {
+                                self.jit_state.record_call_site(
+                                    &func,
+                                    ip - 1,
+                                    closure.function as u64,
+                                    closure_captures_all_scalar(&closure),
+                                );
+                            }
                             let result = self.call_closure_from_regs(
                                 unit, &closure, args, mut_args, base, next_base,
                             )?;

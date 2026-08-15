@@ -2,23 +2,23 @@
   "schema": "rsscript.migration_queue.v1",
   "tasks": [
     {
-      "id": "V05.3",
+      "id": "V06.1",
       "priority": 10,
-      "depends_on": ["V05.2"],
+      "depends_on": ["V05"],
       "scope": [
         "crates/rsscript-vm/**",
-        "crates/rsscript-sdk/tests/architecture.rs",
-        "Cargo.toml",
+        "crates/rsscript-vm/**",
+        "crates/rsscript-abi-model/**",
+        "crates/rsscript-interface-catalog/**",
         "docs/architecture/migration-baseline.md"
       ],
       "acceptance": [
-        "A default `rsscript-vm` build has no native JIT runtime state in `RegFunction`, `RegUnit`, or evaluator layout.",
-        "The Core dependency closure does not enable or require the experimental `vm-jit` crate.",
-        "Architecture tests reject reintroducing native JIT fields into verified program objects or the default evaluator."
+        "A versioned builtin registry declares stable `BuiltinId`, signature, determinism, cost, and catalog digest facts.",
+        "The register VM dispatches catalog-owned deterministic builtins through that contract without treating them as Provider calls.",
+        "Registry validation rejects duplicate IDs, mismatched signatures, and missing catalog entries."
       ],
       "verification": [
-        "cargo test -p rsscript-vm --no-default-features --offline",
-        "cargo tree -p rsscript-vm --no-default-features --offline",
+        "cargo test -p rsscript-vm --offline",
         "cargo test -p rsscript-sdk --test architecture --features compatibility --offline"
       ]
     }

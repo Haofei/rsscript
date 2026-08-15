@@ -29,11 +29,15 @@ struct JitFunctionState {
     tier0_analysis: Option<(bool, bool)>,
     self_recursion_kind: Option<SelfRecursionKind>,
     /// All mutable native-tier feedback belongs to the evaluation, never to the
-    /// decoded verified function object.
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    /// decoded verified function object. These fields do not exist in the
+    /// default VM build.
+    #[cfg(feature = "native-jit")]
     native_status: u8,
+    #[cfg(feature = "native-jit")]
     call_count: u32,
+    #[cfg(feature = "native-jit")]
     branch_count: u32,
+    #[cfg(feature = "native-jit")]
     profile: Option<Box<FunctionProfile>>,
 }
 
@@ -90,6 +94,7 @@ impl JitState {
             .expect("every JIT function pointer has a stable function state")
     }
 
+    #[cfg(feature = "native-jit")]
     fn state_mut(&mut self, function: &RegFunction) -> &mut JitFunctionState {
         let pointer = function as *const RegFunction as usize;
         let key = self
@@ -103,7 +108,7 @@ impl JitState {
     }
 
     /// Stable, evaluation-local function identity for native side tables.
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    #[cfg(feature = "native-jit")]
     pub(crate) fn function_ordinal(&self, function: &RegFunction) -> usize {
         let pointer = function as *const RegFunction as usize;
         self.keys_by_function_pointer
@@ -141,33 +146,34 @@ impl JitState {
             .self_recursion_kind = Some(kind);
     }
 
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    #[cfg(feature = "native-jit")]
     pub(crate) fn native_status(&self, function: &RegFunction) -> u8 {
         self.state(function).native_status
     }
 
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    #[cfg(feature = "native-jit")]
     pub(crate) fn set_native_status(&mut self, function: &RegFunction, status: u8) {
         self.state_mut(function).native_status = status;
     }
 
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    #[cfg(feature = "native-jit")]
     pub(crate) fn call_count(&self, function: &RegFunction) -> u32 {
         self.state(function).call_count
     }
 
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    #[cfg(feature = "native-jit")]
     pub(crate) fn branch_count(&self, function: &RegFunction) -> u32 {
         self.state(function).branch_count
     }
 
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    #[cfg(feature = "native-jit")]
     pub(crate) fn profile(&self, function: &RegFunction) -> Option<&FunctionProfile> {
         self.state(function).profile.as_deref()
     }
 
     /// Warm-gated, bounded dynamic-call feedback. It observes dispatch only and
     /// never changes an interpreted value or branch decision.
+    #[cfg(feature = "native-jit")]
     pub(crate) fn record_call_site(
         &mut self,
         function: &RegFunction,
@@ -193,7 +199,7 @@ impl JitState {
         }
     }
 
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    #[cfg(feature = "native-jit")]
     pub(crate) fn record_branch_site(
         &mut self,
         function: &RegFunction,
@@ -247,6 +253,7 @@ mod tests {
         assert_ne!(first_key.program, second_key.program);
     }
 
+    #[cfg(feature = "native-jit")]
     #[test]
     fn profile_feedback_is_isolated_per_evaluation() {
         let unit = unit();

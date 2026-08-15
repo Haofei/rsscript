@@ -1629,7 +1629,7 @@ an arbitrary shell executor.
     - [x] **V04.3a — Delete raw-byte verification.** The VM has no byte-slice
       verification entry point and only decodes the opaque `VerifiedBytecode`
       token from the bytecode verifier.
-- [ ] **V05 — Remove experimental state from Core VM program objects.** JIT,
+- [x] **V05 — Remove experimental state from Core VM program objects.** JIT,
   OSR, deopt, branch/call profiles, and native tier state move to
   experiment-owned side tables keyed by stable function IDs. V05.1 establishes
   the planning boundary; V05.2 completes the profile and native-state migration.
@@ -1645,8 +1645,13 @@ an arbitrary shell executor.
     ordinals rather than `RegFunction` pointers. `RegFunction` and decoded
     bytecode now contain only immutable verified program data; default and
     `native-jit` VM tests plus SDK architecture guards cover the boundary.
-  - [ ] **V05.3 — Make Core VM build without JIT data structures.** Add a
-    dependency and layout regression test.
+  - [x] **V05.3 — Make Core VM build without native-JIT data structures.**
+    `FunctionProfile` and all native status/counter/profile fields compile only
+    with `native-jit`; the default evaluator has no machine-code state and its
+    dependency tree excludes `vm-jit`. Tier-0's pure interpreter specialization
+    remains a Core execution optimization, while native compilation, OSR, and
+    deopt remain explicitly experimental. SDK architecture tests inspect the
+    default layout and Cargo closure to prevent regression.
 - [ ] **V06 — Split VM primitives from deterministic core library.** VM Core
   keeps frames, registers, scheduler, cancellation, resource table, limits,
   dispatch, and external calls. JSON/YAML, regex, compression, encoding, hashes,
