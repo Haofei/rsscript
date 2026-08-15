@@ -986,7 +986,7 @@ mechanical acceptance condition holds.
       compare return values with the legacy VM. A DualPath fixture cannot hide
       a fallback through `ExecutableIr`.
     - [x] **M05.1b — Close the initial MIR/VM bytecode loop.** The same scalar,
-      CFG, direct-call, `read`, `mut`, and `take` fixtures now compile MIR
+      CFG, direct-call, `read`, `mut`, `take`, and Unicode `Char` fixtures now compile MIR
       directly to a bytecode artifact, pass the ordinary bytecode verifier, and
       execute in the existing VM before their values are compared with both
       older paths. The corpus also compares CFG-lowered boolean short-circuit

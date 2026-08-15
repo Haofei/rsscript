@@ -205,6 +205,16 @@ fn main() -> JsonValue {
 "#,
     },
     MigrationCase {
+        name: "char_literal",
+        capability: "Unicode scalar character literals",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn main() -> Char {
+    return 'λ'
+}
+"#,
+    },
+    MigrationCase {
         name: "record_constructor_and_field",
         capability: "resolved record construction and field access",
         stage: MigrationStage::DualPath,
