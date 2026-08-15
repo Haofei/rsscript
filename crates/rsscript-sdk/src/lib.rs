@@ -1761,7 +1761,8 @@ impl ExecutionReport {
     }
 
     /// Canonical completed result value. See [`ExecutionOutcome::wire_value`]
-    /// for the intentional `None` behaviour of v1 named aggregate results.
+    /// for the intentional `None` behaviour of v1 named variants, whose
+    /// layouts are not present in that Artifact format.
     pub const fn wire_value(&self) -> Option<&provider::WireValue> {
         self.outcome.wire_value()
     }
@@ -2586,6 +2587,30 @@ mod tests {
         );
         assert_eq!(report.value(), Some("42"));
         assert_eq!(report.display_value(), Some("42"));
+    }
+
+    #[test]
+    fn stable_facade_exposes_v1_record_results_as_canonical_wire_values() {
+        let built = Compiler
+            .compile(
+                "main.rss",
+                "struct Point { x: Int }\nfn main() -> Point { return Point(x: 42) }",
+            )
+            .expect("compile record result");
+        let admitted = ArtifactVerifier
+            .verify(built)
+            .expect("verify record result")
+            .admit_trusted_input();
+        let report = Runtime::default()
+            .link(&admitted)
+            .expect("link record result")
+            .execute(ExecutionRequest::default());
+
+        assert!(matches!(
+            report.wire_value(),
+            Some(provider::WireValue::Record { fields, .. })
+                if fields == &vec![provider::WireValue::Int { value: 42 }]
+        ));
     }
 
     #[test]

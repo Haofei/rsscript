@@ -31,7 +31,7 @@ use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 
-use rsscript_abi_model::{WireType, WireValue};
+use rsscript_abi_model::{WireRecordFieldLayout, WireRecordLayout, WireType, WireValue};
 use rsscript_corelib::{
     collections::{
         dedup as core_list_dedup, deque_to_vec as core_deque_to_vec,
@@ -568,10 +568,10 @@ impl RegVmExecutable {
 
     /// Return the canonical result value for `main` when its v1 declaration
     /// contains enough structural type information to do so.  This is an
-    /// explicit compatibility bridge: named record/variant layouts are not
-    /// present in the v1 function signature and therefore return `None`
-    /// instead of leaking a dynamic stringly typed value through the reviewed
-    /// SDK report.
+    /// explicit compatibility bridge: v1 stores record layouts separately
+    /// from a function signature, while named variants are still not carried
+    /// by that Artifact contract. Unsupported values return `None` instead of
+    /// leaking a dynamic stringly typed value through the reviewed SDK report.
     fn main_result_wire_value(&self, value: NativeValue) -> Option<WireValue> {
         let result = self
             .unit
@@ -580,7 +580,23 @@ impl RegVmExecutable {
             .return_type
             .as_deref()
             .map(WireType::parse)?;
-        crate::eval_types::native_result_to_wire(value, &result).ok()
+        let record_layouts = self
+            .unit
+            .types
+            .values()
+            .map(|layout| WireRecordLayout {
+                ty: WireType::parse(&layout.name),
+                fields: layout
+                    .fields
+                    .iter()
+                    .map(|field| WireRecordFieldLayout {
+                        name: field.name.clone(),
+                        ty: WireType::parse(&field.type_name),
+                    })
+                    .collect(),
+            })
+            .collect();
+        crate::eval_types::native_result_to_wire(value, &result, record_layouts).ok()
     }
 
     fn prepare_vm(
