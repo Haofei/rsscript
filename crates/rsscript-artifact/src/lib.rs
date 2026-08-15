@@ -20,8 +20,8 @@ mod semantic_diff;
 pub use semantic_diff::{
     ArtifactIdentityV1, AwaitFactV1, CallEdgeFactV1, ChangedFactV1, CountChangeV1,
     DiagnosticFactV1, ExportFactV1, ExternalCallFactV1, ExternalContractFactV1, FactSetDiffV1,
-    FunctionParameterFactV1, ResourceLifetimeFactV1, ResourceTransferFactV1, SemanticDiffV1,
-    TaskGroupFactV1, SEMANTIC_DIFF_SCHEMA,
+    FunctionParameterFactV1, ResourceLifetimeFactV1, ResourceTransferFactV1, SEMANTIC_DIFF_SCHEMA,
+    SemanticDiffV1, TaskGroupFactV1,
 };
 
 pub const ARTIFACT_BUNDLE_SCHEMA: &str = "rsscript.artifact_bundle.v1";
@@ -265,11 +265,20 @@ impl AnalysisSchemaV1 {
 /// payloads can evolve behind their own schemas without turning Bundle loading
 /// into ad-hoc `$schema` string inspection at every consumer.
 #[derive(Debug, Clone, PartialEq)]
-pub struct AnalysisEnvelopeV1 {
-    schema: AnalysisSchemaV1,
-    payload: Value,
-    source: Option<SourceAnalysisV1>,
-    package: Option<PackageAnalysisV1>,
+pub enum AnalysisEnvelopeV1 {
+    /// Evidence produced from an immutable source/interface snapshot.
+    Source {
+        /// The accepted v1 wire payload. Readers retain a historical compact
+        /// payload here until a writer canonicalizes it again.
+        payload: Value,
+        source: SourceAnalysisV1,
+    },
+    /// Evidence produced from an immutable package snapshot.
+    Package {
+        /// The accepted v1 wire payload.
+        payload: Value,
+        package: PackageAnalysisV1,
+    },
 }
 
 impl AnalysisEnvelopeV1 {
@@ -289,12 +298,7 @@ impl AnalysisEnvelopeV1 {
             "call_edges": source.call_edges.clone(),
             "external_calls": source.external_calls.clone(),
         });
-        Self {
-            schema: AnalysisSchemaV1::Source,
-            payload,
-            source: Some(source),
-            package: None,
-        }
+        Self::Source { payload, source }
     }
 
     /// Construct the typed, provider-neutral evidence emitted by an immutable
@@ -307,12 +311,7 @@ impl AnalysisEnvelopeV1 {
         }
         let payload = serde_json::to_value(&package)
             .map_err(|error| ArtifactBundleError::Analysis(error.to_string()))?;
-        Ok(Self {
-            schema: AnalysisSchemaV1::Package,
-            payload,
-            source: None,
-            package: Some(package),
-        })
+        Ok(Self::Package { payload, package })
     }
 
     /// Decode analysis evidence read from a persisted Bundle or produced by a
@@ -336,12 +335,7 @@ impl AnalysisEnvelopeV1 {
             // canonicality check. New producers still use `Self::source` and
             // therefore emit the complete canonical form.
             let source = SourceAnalysisV1::from_json(payload.clone())?;
-            return Ok(Self {
-                schema,
-                payload,
-                source: Some(source),
-                package: None,
-            });
+            return Ok(Self::Source { payload, source });
         }
         let package = serde_json::from_value(payload)
             .map_err(|error| ArtifactBundleError::Analysis(error.to_string()))?;
@@ -349,28 +343,41 @@ impl AnalysisEnvelopeV1 {
     }
 
     pub const fn schema(&self) -> AnalysisSchemaV1 {
-        self.schema
+        match self {
+            Self::Source { .. } => AnalysisSchemaV1::Source,
+            Self::Package { .. } => AnalysisSchemaV1::Package,
+        }
     }
 
     pub fn payload(&self) -> &Value {
-        &self.payload
+        match self {
+            Self::Source { payload, .. } | Self::Package { payload, .. } => payload,
+        }
     }
 
     pub fn into_payload(self) -> Value {
-        self.payload
+        match self {
+            Self::Source { payload, .. } | Self::Package { payload, .. } => payload,
+        }
     }
 
     /// Return typed direct-source evidence when this envelope carries the
     /// `source_analysis.v1` schema. Package evidence remains a separate
     /// migration schema and intentionally does not pretend to be this type.
     pub fn source_analysis(&self) -> Option<&SourceAnalysisV1> {
-        self.source.as_ref()
+        match self {
+            Self::Source { source, .. } => Some(source),
+            Self::Package { .. } => None,
+        }
     }
 
     /// Typed package evidence when this envelope carries
     /// `rsscript.package_analysis.v1`.
     pub fn package_analysis(&self) -> Option<&PackageAnalysisV1> {
-        self.package.as_ref()
+        match self {
+            Self::Source { .. } => None,
+            Self::Package { package, .. } => Some(package),
+        }
     }
 }
 
@@ -738,8 +745,8 @@ fn validate_v1_analysis_encoding(
 fn legacy_compact_analysis_json(
     analysis: &AnalysisEnvelopeV1,
 ) -> Result<Vec<u8>, ArtifactBundleError> {
-    match (analysis.source_analysis(), analysis.package_analysis()) {
-        (Some(source), None) => {
+    match analysis {
+        AnalysisEnvelopeV1::Source { source, .. } => {
             #[derive(Serialize)]
             struct LegacySourceAnalysis<'a> {
                 #[serde(rename = "$schema")]
@@ -765,10 +772,7 @@ fn legacy_compact_analysis_json(
                 external_calls: &source.external_calls,
             })
         }
-        (None, Some(package)) => legacy_compact_json(package),
-        _ => Err(ArtifactBundleError::Analysis(
-            "analysis envelope has an invalid schema/payload pairing".to_string(),
-        )),
+        AnalysisEnvelopeV1::Package { package, .. } => legacy_compact_json(package),
     }
 }
 
@@ -777,15 +781,12 @@ fn legacy_compact_analysis_json(
 /// historical compact Bundle and writing it again always produces the current
 /// canonical representation.
 fn canonical_analysis_json(analysis: &AnalysisEnvelopeV1) -> Result<Vec<u8>, ArtifactBundleError> {
-    match (analysis.source_analysis(), analysis.package_analysis()) {
-        (Some(source), None) => {
+    match analysis {
+        AnalysisEnvelopeV1::Source { source, .. } => {
             let normalized = AnalysisEnvelopeV1::source(source.clone());
             canonical_json(normalized.payload())
         }
-        (None, Some(package)) => canonical_json(package),
-        _ => Err(ArtifactBundleError::Analysis(
-            "analysis envelope has an invalid schema/payload pairing".to_string(),
-        )),
+        AnalysisEnvelopeV1::Package { package, .. } => canonical_json(package),
     }
 }
 
@@ -1115,6 +1116,7 @@ mod tests {
             envelope.payload()["sources"],
             serde_json::json!(["src/main.rss", "src/main.rss"])
         );
+        assert!(matches!(envelope, AnalysisEnvelopeV1::Source { .. }));
     }
 
     #[test]
@@ -1131,6 +1133,10 @@ mod tests {
             decoded.analysis_envelope().schema(),
             AnalysisSchemaV1::Package
         );
+        assert!(matches!(
+            decoded.analysis_envelope(),
+            AnalysisEnvelopeV1::Package { .. }
+        ));
     }
 
     #[test]

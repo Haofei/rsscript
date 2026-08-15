@@ -1848,6 +1848,12 @@ visible without manually re-sorting every open parent milestone.
     its fixed profile identity as admission evidence.
   - [ ] **A04.1 — Audit all public phase types.** Replace optional phase fields
     and cross-phase enums with built/verified/linked/report-specific types.
+    - [x] **A04.1b — Make Bundle analysis evidence a closed variant.**
+      `AnalysisEnvelopeV1` now has explicit `Source` and `Package` variants;
+      an envelope cannot contain neither or both typed evidence models. The
+      Artifact reader retains the accepted historical payload only inside its
+      matching variant for v1 canonicality compatibility, and an architecture
+      guard rejects a return to optional mutually-exclusive fields.
   - [ ] **A04.2 — Audit every execution convenience API.** Script and Provider
     failures return `ExecutionReport`; only host/protocol failures return errors.
   - [ ] **A04.3 — Add compile-time and runtime phase tests.** Invalid transitions

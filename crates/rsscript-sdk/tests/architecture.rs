@@ -1330,8 +1330,15 @@ fn package_analysis_schema_is_an_artifact_contract_not_compiler_implementation()
         "compiler compatibility must re-export the Artifact-owned analysis type"
     );
     assert!(
-        artifact.contains("package: Option<PackageAnalysisV1>"),
-        "Bundle analysis must retain typed package evidence after decoding"
+        artifact.contains("pub enum AnalysisEnvelopeV1")
+            && artifact.contains("Package {")
+            && artifact.contains("package: PackageAnalysisV1"),
+        "Bundle analysis must encode source/package evidence as mutually exclusive typed states"
+    );
+    assert!(
+        !artifact.contains("source: Option<SourceAnalysisV1>")
+            && !artifact.contains("package: Option<PackageAnalysisV1>"),
+        "Bundle analysis must not represent mutually exclusive evidence variants with optional fields"
     );
     assert!(
         artifact.contains("Self::package(package)"),
@@ -1397,7 +1404,8 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
         "the project capture boundary must own private graph capture and its temporary-directory lifetime"
     );
     assert!(
-        package_types.contains("pub use rsscript_project::{NativeRustDependency, PackageLoweringInput};"),
+        package_types
+            .contains("pub use rsscript_project::{NativeRustDependency, PackageLoweringInput};"),
         "compiler compatibility may only re-export the project-owned capture models"
     );
 
@@ -1425,7 +1433,8 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
 
     let authorization = read(&root.join("crates/rsscript-compiler/src/package/authorization.rs"));
     assert!(
-        authorization.contains("use rsscript_project::{CapturedProjectGraph, capture_project_graph};")
+        authorization
+            .contains("use rsscript_project::{CapturedProjectGraph, capture_project_graph};")
             && authorization.contains("let captured = capture_project_graph("),
         "compiler package compatibility must compose the project-owned graph capture boundary"
     );
@@ -4402,10 +4411,7 @@ fn executable_backends_consume_validated_frontend_results() {
         compile_source.contains("compile_frontend_input_to_ir"),
         "single-source convenience lowering must delegate to the immutable frontend input boundary"
     );
-    let compile_frontend = function_source(
-        &compiler_output,
-        "pub fn compile_frontend_input_to_ir",
-    );
+    let compile_frontend = function_source(&compiler_output, "pub fn compile_frontend_input_to_ir");
     assert!(
         compile_frontend.contains("CompilationSession::default()")
             && compile_frontend.contains("workspace_validated()")
