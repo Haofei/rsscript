@@ -21,6 +21,7 @@ pub(crate) fn interface_catalog_digest() -> String {
 }
 
 #[cfg(feature = "package")]
+#[allow(unused_imports)]
 pub(crate) use rsscript_interface_catalog::builtin_interfaces;
 
 #[cfg(not(test))]

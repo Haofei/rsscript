@@ -4,6 +4,8 @@ use std::fmt;
 use sha2::{Digest, Sha256};
 
 use crate::{Diagnostic, ValidatedProgram, validate_source};
+#[cfg(feature = "package")]
+use rsscript_semantics::CompilationSession;
 
 /// Owned output of the platform-neutral compiler boundary.
 ///
@@ -165,21 +167,23 @@ pub fn compile_ir_to_bytecode(
 pub fn compile_package_input_to_ir(
     input: &crate::package::PackageLoweringInput,
 ) -> Result<CompiledIr, Vec<Diagnostic>> {
-    let mut interfaces = crate::interfaces::builtin_interfaces()
-        .map(|(path, contents)| (path.to_string(), contents.to_string()))
-        .collect::<Vec<_>>();
-    interfaces.extend(input.interfaces.iter().cloned());
-    let sources = input
-        .sources
-        .iter()
-        .map(|(path, contents)| (path.as_str(), contents.as_str()))
-        .collect::<Vec<_>>();
-    let interface_refs = interfaces
-        .iter()
-        .map(|(path, contents)| (path.as_str(), contents.as_str()))
-        .collect::<Vec<_>>();
-    let validated =
-        crate::validate_sources_with_interfaces_without_core(&sources, &interface_refs)?;
+    // Package compatibility remains a separate feature, but its frontend work
+    // must still enter through the semantic-owned session boundary. The
+    // session supplies the Core interface catalog; package interfaces are the
+    // only explicit additions, matching the previous `without_core` call
+    // without duplicating Core declarations in the captured input.
+    let mut session = CompilationSession::default();
+    for (path, contents) in &input.interfaces {
+        session
+            .set_interface(path, contents)
+            .expect("package lowering input contains normalized unique interface paths");
+    }
+    for (path, contents) in &input.sources {
+        session
+            .set_file(path, contents)
+            .expect("package lowering input contains normalized unique source paths");
+    }
+    let validated = session.workspace_validated()?;
     Ok(compile_validated_to_ir(&validated))
 }
 
