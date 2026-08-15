@@ -290,6 +290,39 @@ pub fn analyze_source_result_with_operation(
     )
 }
 
+/// Analyze a complete immutable source set with the language's standard
+/// packages. This is the multi-source counterpart to [`analyze_source_result`]
+/// and is intentionally distinct from caller-supplied Core interfaces: the
+/// standard package set carries legacy semantic facts not represented by the
+/// public Core interface list alone.
+pub fn analyze_sources_with_standard_packages_result(sources: &[(&str, &str)]) -> AnalysisResult {
+    analyze_input_result(
+        AnalysisInput {
+            sources: AnalysisSources::Many(sources),
+            interfaces: &[],
+            flavor: AnalysisFlavor::FullWithStandardPackages,
+        },
+        FrontendBudgetLimits::default(),
+        None,
+    )
+}
+
+/// Operation-aware form of [`analyze_sources_with_standard_packages_result`].
+pub fn analyze_sources_with_standard_packages_result_with_operation(
+    sources: &[(&str, &str)],
+    operation: &OperationContext,
+) -> AnalysisResult {
+    analyze_input_result(
+        AnalysisInput {
+            sources: AnalysisSources::Many(sources),
+            interfaces: &[],
+            flavor: AnalysisFlavor::FullWithStandardPackages,
+        },
+        FrontendBudgetLimits::default(),
+        Some(operation),
+    )
+}
+
 pub fn validate_source(file: &str, source: &str) -> Result<ValidatedProgram, Vec<Diagnostic>> {
     analyze_source_result(file, source).into_validated()
 }

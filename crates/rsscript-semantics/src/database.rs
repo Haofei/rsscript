@@ -193,6 +193,7 @@ pub struct SourceUpdate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceStoreError {
     EmptyPath,
+    InterfacesForbiddenByPolicy { policy: SessionInterfacePolicy },
     FileIdExhausted,
     RevisionExhausted { file_id: FileId },
 }
@@ -208,6 +209,10 @@ pub enum SourceStoreError {
 pub enum SessionInterfacePolicy {
     #[default]
     WithCore,
+    /// Use the historical standard-package prelude exactly as the legacy
+    /// single-source analyzer does. This policy owns its prelude and therefore
+    /// rejects caller-supplied interfaces.
+    WithStandardPackages,
     WithoutCore,
 }
 
@@ -215,6 +220,12 @@ impl fmt::Display for SourceStoreError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::EmptyPath => formatter.write_str("source path must not be empty"),
+            Self::InterfacesForbiddenByPolicy { policy } => {
+                write!(
+                    formatter,
+                    "session interface policy {policy:?} forbids explicit interfaces"
+                )
+            }
             Self::FileIdExhausted => formatter.write_str("source session exhausted file IDs"),
             Self::RevisionExhausted { file_id } => {
                 write!(
@@ -698,6 +709,13 @@ impl CompilationSession {
         Self::with_interface_policy(SessionInterfacePolicy::WithoutCore)
     }
 
+    /// Create a session whose analysis exactly matches the legacy standard
+    /// package prelude. Explicit interfaces are rejected because mixing them
+    /// with that prelude would select a different semantic contract.
+    pub fn with_standard_packages() -> Self {
+        Self::with_interface_policy(SessionInterfacePolicy::WithStandardPackages)
+    }
+
     /// Return the semantic policy fixed when this session was created.
     pub const fn interface_policy(&self) -> SessionInterfacePolicy {
         self.interface_policy
@@ -758,6 +776,11 @@ impl CompilationSession {
         path: impl Into<String>,
         text: impl Into<String>,
     ) -> Result<SourceUpdate, SourceStoreError> {
+        if self.interface_policy == SessionInterfacePolicy::WithStandardPackages {
+            return Err(SourceStoreError::InterfacesForbiddenByPolicy {
+                policy: self.interface_policy,
+            });
+        }
         let path = path.into();
         let previous_header = self.cached_module_header(SessionFileRole::Interface, &path);
         let update = self.interfaces.set_file(path.clone(), text)?;
@@ -885,6 +908,22 @@ impl CompilationSession {
         // revision, cancellation, or cache boundary.
         let analysis = Arc::new(
             match (sources.as_slice(), operation, self.interface_policy) {
+                (
+                    [(path, source)],
+                    Some(operation),
+                    SessionInterfacePolicy::WithStandardPackages,
+                ) => crate::analyze_source_result_with_operation(path, source, operation),
+                ([(path, source)], None, SessionInterfacePolicy::WithStandardPackages) => {
+                    crate::analyze_source_result(path, source)
+                }
+                (_, Some(operation), SessionInterfacePolicy::WithStandardPackages) => {
+                    crate::analyze_sources_with_standard_packages_result_with_operation(
+                        &sources, operation,
+                    )
+                }
+                (_, None, SessionInterfacePolicy::WithStandardPackages) => {
+                    crate::analyze_sources_with_standard_packages_result(&sources)
+                }
                 ([(path, source)], Some(operation), SessionInterfacePolicy::WithCore) => {
                     crate::analyze_source_with_interfaces_result_with_operation(
                         path,
@@ -1897,6 +1936,12 @@ impl CompilationSession {
                     crate::analyze_sources_with_interfaces_without_core_result_with_operation(
                         &source_slices,
                         &interface_slices,
+                        operation,
+                    )
+                }
+                SessionInterfacePolicy::WithStandardPackages => {
+                    crate::analyze_sources_with_standard_packages_result_with_operation(
+                        &source_slices,
                         operation,
                     )
                 }
@@ -2917,6 +2962,66 @@ fn main() -> Int {
             .workspace_analysis_with_operation(&operation)
             .unwrap();
         assert!(Arc::ptr_eq(&actual, &cached));
+    }
+
+    #[test]
+    fn session_standard_packages_match_the_legacy_standard_prelude() {
+        // This source relies on generic and callback facts carried by the
+        // standard package prelude. Injecting the public Core interfaces by
+        // hand used to select a subtly different analysis flavor here.
+        let source = r#"
+struct Adder derives(Clone) {
+    fxn: owned Fn(Int) -> Int
+}
+
+fn run() -> Int {
+    local adders = List.new<Adder>()
+    let base = 5
+    let a = Adder(fxn: fn(x) captures(read base) { return x * base })
+    List.push(list: mut adders, value: read a)
+    let result = List.get(list: read adders, index: 0)
+    return result.fxn(3)
+}
+"#;
+        let expected = crate::analyze_source_result("standard-prelude.rss", source);
+        let mut session = CompilationSession::with_standard_packages();
+        assert_eq!(
+            session.interface_policy(),
+            SessionInterfacePolicy::WithStandardPackages
+        );
+        session.set_file("standard-prelude.rss", source).unwrap();
+
+        let first = session.workspace_analysis();
+        assert_eq!(first.diagnostics(), expected.diagnostics());
+
+        let operation = OperationContext::default();
+        let cached = session
+            .workspace_analysis_with_operation(&operation)
+            .unwrap();
+        assert!(Arc::ptr_eq(&first, &cached));
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let cancelled = OperationContext {
+            cancellation: Some(cancellation),
+            ..OperationContext::default()
+        };
+        assert!(matches!(
+            session.workspace_analysis_with_operation(&cancelled),
+            Err(OperationAbort::Cancelled)
+        ));
+    }
+
+    #[test]
+    fn standard_package_session_rejects_explicit_interfaces() {
+        let mut session = CompilationSession::with_standard_packages();
+        assert!(matches!(
+            session.set_interface("host.rssi", "module Host\npub fn value() -> Int\n"),
+            Err(SourceStoreError::InterfacesForbiddenByPolicy {
+                policy: SessionInterfacePolicy::WithStandardPackages,
+            })
+        ));
+        assert!(session.interface_snapshot().is_empty());
     }
 
     #[test]
