@@ -97,6 +97,7 @@ The checklist is also machine-readable through the repository tool:
 cargo run -p rsscript-xtask -- migration-status --open
 cargo run -p rsscript-xtask -- migration-status --require S02 --require G07
 cargo run -p rsscript-xtask -- migration-next
+cargo run -p rsscript-xtask -- migration-audit
 cargo run -p rsscript-xtask -- migration-verify S05.1
 ```
 
@@ -113,6 +114,14 @@ only entries whose declared prerequisites are checked, and prints the focused
 verification commands for each ready slice. This keeps the full checklist as
 the single source of truth while making the next independently mergeable work
 visible without manually re-sorting every open parent milestone.
+
+`migration-audit` cross-checks the full checklist with that curated frontier.
+It reports open leaf items that have not yet been given a bounded work packet,
+and open parent milestones whose declared children are all checked. The latter
+is deliberately a review prompt—not automatic completion—because a parent may
+also require an independent mechanical acceptance condition. Use `--json` for
+automation that prepares the next work packet without creating a second TODO
+source.
 
 `migration-work ITEM` derives a reviewable work packet from that same queue:
 its prerequisite state, expected path scope, mechanical acceptance facts, and

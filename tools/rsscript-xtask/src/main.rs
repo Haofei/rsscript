@@ -144,6 +144,11 @@ struct MigrationWorkArguments {
     json: bool,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct MigrationAuditArguments {
+    json: bool,
+}
+
 #[derive(Debug, Serialize, PartialEq, Eq)]
 struct MigrationStatus {
     schema: &'static str,
@@ -229,6 +234,26 @@ struct MigrationWorkPacket {
     verification: Vec<String>,
 }
 
+/// Read-only consistency report over the authoritative checklist and the
+/// deliberately smaller execution frontier. It never infers completion: a
+/// parent whose children are checked is only a candidate for a human review
+/// of its stated acceptance condition.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct MigrationAudit {
+    schema: &'static str,
+    checklist_source: &'static str,
+    queue_source: &'static str,
+    open_leaf_items_not_queued: Vec<MigrationAuditItem>,
+    open_parents_with_completed_children: Vec<MigrationAuditItem>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct MigrationAuditItem {
+    id: String,
+    title: String,
+    line: usize,
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let mut arguments = std::env::args().skip(1);
     match arguments.next().as_deref() {
@@ -236,12 +261,46 @@ fn main() -> Result<(), Box<dyn Error>> {
         Some("migration-status") => run_migration_status(parse_migration_status_arguments(arguments)?),
         Some("migration-next") => run_migration_next(),
         Some("migration-next-json") => run_migration_next_json(),
+        Some("migration-audit") => run_migration_audit(parse_migration_audit_arguments(arguments)?),
         Some("migration-work") => run_migration_work(parse_migration_work_arguments(arguments)?),
         Some("migration-verify") => run_migration_verify(parse_migration_verify_arguments(arguments)?),
         _ => Err(
-            "usage:\n  cargo run -p rsscript-xtask --release -- core-metrics [--iterations N] [--output FILE] [--check SLO]\n  cargo run -p rsscript-xtask -- migration-status [--json] [--open] [--require ITEM]\n  cargo run -p rsscript-xtask -- migration-next\n  cargo run -p rsscript-xtask -- migration-next-json\n  cargo run -p rsscript-xtask -- migration-work ITEM [--json]\n  cargo run -p rsscript-xtask -- migration-verify ITEM [--dry-run]"
+            "usage:\n  cargo run -p rsscript-xtask --release -- core-metrics [--iterations N] [--output FILE] [--check SLO]\n  cargo run -p rsscript-xtask -- migration-status [--json] [--open] [--require ITEM]\n  cargo run -p rsscript-xtask -- migration-next\n  cargo run -p rsscript-xtask -- migration-next-json\n  cargo run -p rsscript-xtask -- migration-audit [--json]\n  cargo run -p rsscript-xtask -- migration-work ITEM [--json]\n  cargo run -p rsscript-xtask -- migration-verify ITEM [--dry-run]"
                 .into(),
         ),
+    }
+}
+
+fn run_migration_audit(arguments: MigrationAuditArguments) -> Result<(), Box<dyn Error>> {
+    let audit = migration_audit()?;
+    if arguments.json {
+        println!("{}", serde_json::to_string_pretty(&audit)?);
+        return Ok(());
+    }
+    println!(
+        "Migration audit: {} open leaf item(s) outside the curated queue; {} parent completion candidate(s)",
+        audit.open_leaf_items_not_queued.len(),
+        audit.open_parents_with_completed_children.len()
+    );
+    print_audit_items(
+        "Open leaf items not queued",
+        &audit.open_leaf_items_not_queued,
+    );
+    print_audit_items(
+        "Open parents whose declared children are all checked (review parent acceptance before checking)",
+        &audit.open_parents_with_completed_children,
+    );
+    Ok(())
+}
+
+fn print_audit_items(label: &str, items: &[MigrationAuditItem]) {
+    if items.is_empty() {
+        println!("{label}: none");
+        return;
+    }
+    println!("{label}:");
+    for item in items {
+        println!("  - {} — {} (line {})", item.id, item.title, item.line);
     }
 }
 
@@ -659,6 +718,19 @@ fn parse_migration_work_arguments(
     Ok(MigrationWorkArguments { item_id, json })
 }
 
+fn parse_migration_audit_arguments(
+    mut arguments: impl Iterator<Item = String>,
+) -> Result<MigrationAuditArguments, Box<dyn Error>> {
+    let mut parsed = MigrationAuditArguments { json: false };
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--json" => parsed.json = true,
+            _ => return Err(format!("unknown migration-audit argument: {argument}").into()),
+        }
+    }
+    Ok(parsed)
+}
+
 fn run_migration_status(arguments: MigrationStatusArguments) -> Result<(), Box<dyn Error>> {
     let path = workspace_root().join("docs/architecture/migration-baseline.md");
     let status = migration_status(&fs::read_to_string(&path)?)?;
@@ -773,6 +845,75 @@ fn migration_status(document: &str) -> Result<MigrationStatus, Box<dyn Error>> {
         open: items.len() - completed,
         items,
     })
+}
+
+fn migration_audit() -> Result<MigrationAudit, Box<dyn Error>> {
+    let root = workspace_root();
+    let status = migration_status(&fs::read_to_string(
+        root.join("docs/architecture/migration-baseline.md"),
+    )?)?;
+    // Validate the frontier before reporting against it. An audit that accepted
+    // an unknown or completed queue entry would hide exactly the drift it is
+    // intended to surface.
+    let _ready = migration_ready_queue()?;
+    let manifest: MigrationQueueManifest = serde_json::from_slice(&fs::read(
+        root.join("docs/architecture/migration-work-queue.json"),
+    )?)?;
+    let queued = manifest
+        .tasks
+        .iter()
+        .map(|task| task.id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    Ok(audit_migration_status(&status, &queued))
+}
+
+fn audit_migration_status(
+    status: &MigrationStatus,
+    queued: &std::collections::BTreeSet<&str>,
+) -> MigrationAudit {
+    let mut open_leaf_items_not_queued = Vec::new();
+    let mut open_parents_with_completed_children = Vec::new();
+    for item in &status.items {
+        let prefix = format!("{}.", item.id);
+        let descendants = status
+            .items
+            .iter()
+            .filter(|candidate| is_migration_descendant(&item.id, &candidate.id, &prefix))
+            .collect::<Vec<_>>();
+        if descendants.is_empty() {
+            if !item.completed && !queued.contains(item.id.as_str()) {
+                open_leaf_items_not_queued.push(MigrationAuditItem {
+                    id: item.id.clone(),
+                    title: item.title.clone(),
+                    line: item.line,
+                });
+            }
+        } else if !item.completed && descendants.iter().all(|child| child.completed) {
+            open_parents_with_completed_children.push(MigrationAuditItem {
+                id: item.id.clone(),
+                title: item.title.clone(),
+                line: item.line,
+            });
+        }
+    }
+    MigrationAudit {
+        schema: "rsscript.migration_audit.v1",
+        checklist_source: "docs/architecture/migration-baseline.md",
+        queue_source: "docs/architecture/migration-work-queue.json",
+        open_leaf_items_not_queued,
+        open_parents_with_completed_children,
+    }
+}
+
+/// The checklist predates the execution helper and uses both `M03.2.a`-style
+/// and compact `M03.2a` child IDs. Treat a dotted suffix as a descendant, or
+/// a non-empty all-letter suffix as a compact child; a numeric suffix such as
+/// `M01.10` must remain a sibling of `M01.1`, not become its child.
+fn is_migration_descendant(parent: &str, candidate: &str, dotted_prefix: &str) -> bool {
+    candidate.starts_with(dotted_prefix)
+        || candidate.strip_prefix(parent).is_some_and(|suffix| {
+            !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_alphabetic())
+        })
 }
 
 fn workspace_root() -> PathBuf {
@@ -1154,6 +1295,40 @@ mod tests {
     }
 
     #[test]
+    fn migration_audit_distinguishes_unqueued_leaves_from_parent_candidates() {
+        let status = migration_status(
+            "- [ ] **G01 — Parent.**\n  - [x] **G01.1 — Completed child.**\n- [ ] **S05.1 — Queued leaf.**\n- [ ] **E02.2 — Unqueued leaf.**\n",
+        )
+        .expect("well-formed checklist");
+        let queued = std::collections::BTreeSet::from(["S05.1"]);
+        assert_eq!(
+            audit_migration_status(&status, &queued),
+            MigrationAudit {
+                schema: "rsscript.migration_audit.v1",
+                checklist_source: "docs/architecture/migration-baseline.md",
+                queue_source: "docs/architecture/migration-work-queue.json",
+                open_leaf_items_not_queued: vec![MigrationAuditItem {
+                    id: "E02.2".into(),
+                    title: "Unqueued leaf.".into(),
+                    line: 4,
+                }],
+                open_parents_with_completed_children: vec![MigrationAuditItem {
+                    id: "G01".into(),
+                    title: "Parent.".into(),
+                    line: 1,
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn migration_audit_recognizes_compact_lettered_children_without_merging_numeric_siblings() {
+        assert!(is_migration_descendant("M03.2", "M03.2a", "M03.2."));
+        assert!(is_migration_descendant("M03.2", "M03.2.a", "M03.2."));
+        assert!(!is_migration_descendant("M01.1", "M01.10", "M01.1."));
+    }
+
+    #[test]
     fn published_migration_checklist_is_machine_readable() {
         let status = migration_status(include_str!(
             "../../../docs/architecture/migration-baseline.md"
@@ -1206,6 +1381,22 @@ mod tests {
         let error = parse_migration_work_arguments(std::iter::empty())
             .expect_err("a work item ID is required");
         assert!(error.to_string().contains("requires a migration item ID"));
+    }
+
+    #[test]
+    fn migration_audit_arguments_only_accept_json() {
+        assert_eq!(
+            parse_migration_audit_arguments(["--json".into()].into_iter())
+                .expect("JSON audit invocation"),
+            MigrationAuditArguments { json: true }
+        );
+        let error = parse_migration_audit_arguments(["--unknown".into()].into_iter())
+            .expect_err("unknown audit flags must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("unknown migration-audit argument")
+        );
     }
 
     #[test]
