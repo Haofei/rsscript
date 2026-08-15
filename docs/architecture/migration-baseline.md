@@ -2060,7 +2060,7 @@ an arbitrary shell executor.
     reviewed façade module. The default SDK test recomputes its SHA-256 digests,
     so CI rejects unreviewed stable-surface growth or removal; compatibility and
     execution feature builds retain their dedicated architecture gates.
-- [ ] **A04 — Remove invalid phase states and report-losing paths.** Public types
+- [x] **A04 — Remove invalid phase states and report-losing paths.** Public types
   do not use optional fields to represent incompatible phases; script,
   Provider, cancellation, deadline, and budget termination always return a full
   execution report. Only host/protocol/internal-invariant failures use outer
@@ -2068,8 +2068,8 @@ an arbitrary shell executor.
   snapshot digest, and in-memory SDK builds derive that digest from the complete
   source/interface input. `ExecutionReport` now carries one mutually exclusive
   `ExecutionOutcome` rather than independently mutable return/failure fields,
-  while its checked-in v1 JSON projection remains stable; the remaining
-  phase-type and report-path audit stays open.
+  while its checked-in v1 JSON projection remains stable; architecture and
+  runtime coverage now audit the phase and report paths exhaustively.
   - [x] **A04.1a — Require host Artifact admission before linking.** A
     `VerifiedArtifact` now becomes an `AdmittedArtifact` only through an
     explicit host-owned `ArtifactAdmissionPolicy`; `Runtime::link` accepts the
