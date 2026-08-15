@@ -543,7 +543,11 @@ mechanical acceptance condition holds.
     cache and operation boundary; this preserves protocol and generic facts
     until the package merge query owns them without a compatibility branch.
     Resolve/type and dependency-precise semantic-diagnostic invalidation remain
-    open.
+    open. The syntax-only `WorkspaceModuleGraph` now preserves its cached graph
+    across implementation-only source edits and interface signature edits when
+    a file's declared modules/imports are unchanged; module/import edits still
+    rebuild it fail-closed. This gives the LSP a precise shared dependency-graph
+    cache without prematurely claiming resolve/type precision.
   - [ ] **S03.4 — Thread cancellation and deadlines through every query.** Add
     cancellation, deadline, and diagnostic-budget tests for cold and cached
     paths. Session parse and local HIR queries now check the shared operation

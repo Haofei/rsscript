@@ -527,7 +527,15 @@ impl CompilationSession {
         path: impl Into<String>,
         text: impl Into<String>,
     ) -> Result<SourceUpdate, SourceStoreError> {
-        let update = self.sources.set_file(path, text)?;
+        let path = path.into();
+        let previous_header = self.cached_module_header(SessionFileRole::Source, &path);
+        let update = self.sources.set_file(path.clone(), text)?;
+        let graph_unchanged = update.changed
+            && self.module_header_is_unchanged(
+                SessionFileRole::Source,
+                &path,
+                previous_header.as_deref(),
+            );
         if update.changed {
             self.invalidate_parse_cache(SessionFileRole::Source, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Source, update.file_id);
@@ -536,7 +544,9 @@ impl CompilationSession {
             self.workspace_type_cache = None;
             self.workspace_analysis_cache = None;
             self.invalidate_module_header_cache(SessionFileRole::Source, update.file_id);
-            self.workspace_module_graph_cache = None;
+            if !graph_unchanged {
+                self.workspace_module_graph_cache = None;
+            }
             self.workspace_diagnostic_cache = None;
         }
         Ok(update)
@@ -563,7 +573,15 @@ impl CompilationSession {
         path: impl Into<String>,
         text: impl Into<String>,
     ) -> Result<SourceUpdate, SourceStoreError> {
-        let update = self.interfaces.set_file(path, text)?;
+        let path = path.into();
+        let previous_header = self.cached_module_header(SessionFileRole::Interface, &path);
+        let update = self.interfaces.set_file(path.clone(), text)?;
+        let graph_unchanged = update.changed
+            && self.module_header_is_unchanged(
+                SessionFileRole::Interface,
+                &path,
+                previous_header.as_deref(),
+            );
         if update.changed {
             self.invalidate_parse_cache(SessionFileRole::Interface, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Interface, update.file_id);
@@ -572,7 +590,9 @@ impl CompilationSession {
             self.workspace_type_cache = None;
             self.workspace_analysis_cache = None;
             self.invalidate_module_header_cache(SessionFileRole::Interface, update.file_id);
-            self.workspace_module_graph_cache = None;
+            if !graph_unchanged {
+                self.workspace_module_graph_cache = None;
+            }
             self.workspace_diagnostic_cache = None;
         }
         Ok(update)
@@ -1250,6 +1270,43 @@ impl CompilationSession {
         self.module_header_cache
             .retain(|(cached_role, cached_id, _), _| *cached_role != role || *cached_id != file_id);
     }
+
+    /// Return the current header only when a workspace graph is already cached.
+    ///
+    /// The graph contains exactly the path, role, module declarations and import
+    /// declarations represented by this header. Recomputing a graph after an
+    /// implementation-only edit therefore wastes a whole-workspace query and,
+    /// for editor clients, causes avoidable dependency churn. We intentionally
+    /// keep the comparison local to this syntax query: type/HIR/diagnostic
+    /// caches still invalidate on every changed byte until their dependency
+    /// edges are independently precise.
+    fn cached_module_header(
+        &mut self,
+        role: SessionFileRole,
+        path: &str,
+    ) -> Option<Arc<ModuleHeader>> {
+        self.workspace_module_graph_cache.as_ref()?;
+        match role {
+            SessionFileRole::Source => self.module_header(path),
+            SessionFileRole::Interface => self.interface_module_header(path),
+        }
+    }
+
+    fn module_header_is_unchanged(
+        &mut self,
+        role: SessionFileRole,
+        path: &str,
+        previous: Option<&ModuleHeader>,
+    ) -> bool {
+        let Some(previous) = previous else {
+            return false;
+        };
+        let current = match role {
+            SessionFileRole::Source => self.module_header(path),
+            SessionFileRole::Interface => self.interface_module_header(path),
+        };
+        current.as_deref() == Some(previous)
+    }
 }
 
 fn interface_filename_module(path: &str) -> Option<String> {
@@ -1787,6 +1844,59 @@ mod tests {
             Err(OperationAbort::Cancelled)
         );
         assert_eq!(session.stats().workspace_module_graph_cache_hits, 1);
+    }
+
+    #[test]
+    fn workspace_module_graph_survives_implementation_only_edits() {
+        let mut session = CompilationSession::default();
+        session
+            .set_file(
+                "main.rss",
+                "module app\nuse host.api\nfn main() -> Int { return Host.value() }\n",
+            )
+            .unwrap();
+        session
+            .set_interface("host.rssi", "module host.api\npub fn value() -> Int\n")
+            .unwrap();
+
+        let first = session.workspace_module_graph();
+        assert_eq!(session.stats().workspace_module_graph_cache_misses, 1);
+
+        // Changing executable bodies invalidates semantic queries, but does not
+        // alter this syntax-only graph's node identity or import closure.
+        session
+            .set_file(
+                "main.rss",
+                "module app\nuse host.api\nfn main() -> Int { return Host.value() + 1 }\n",
+            )
+            .unwrap();
+        let body_edit = session.workspace_module_graph();
+        assert!(Arc::ptr_eq(&first, &body_edit));
+        assert_eq!(session.stats().workspace_module_graph_cache_misses, 1);
+
+        // An interface signature edit likewise requires fresh semantic facts,
+        // while leaving the module/import graph valid for editor queries.
+        session
+            .set_interface(
+                "host.rssi",
+                "module host.api\npub fn value() -> Int\npub fn next() -> Int\n",
+            )
+            .unwrap();
+        let signature_edit = session.workspace_module_graph();
+        assert!(Arc::ptr_eq(&first, &signature_edit));
+        assert_eq!(session.stats().workspace_module_graph_cache_misses, 1);
+
+        // Import changes are graph changes and must rebuild instead of serving
+        // the stale cached node closure.
+        session
+            .set_interface(
+                "host.rssi",
+                "module host.api\nuse host.base\npub fn value() -> Int\n",
+            )
+            .unwrap();
+        let import_edit = session.workspace_module_graph();
+        assert!(!Arc::ptr_eq(&first, &import_edit));
+        assert_eq!(session.stats().workspace_module_graph_cache_misses, 2);
     }
 
     #[test]
