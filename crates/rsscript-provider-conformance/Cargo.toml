@@ -7,4 +7,4 @@ description = "Reusable contract checks for RSScript Provider implementations"
 publish = false
 
 [dependencies]
-rsscript-provider-api = { path = "../rsscript-provider-api" }
+rsscript-provider-api = { path = "../rsscript-provider-api", features = ["compatibility"] }

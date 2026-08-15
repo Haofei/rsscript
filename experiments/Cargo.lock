@@ -899,6 +899,7 @@ dependencies = [
  "rsscript-operation",
  "rsscript-project",
  "rsscript-review-core",
+ "rsscript-review-source",
  "rsscript-semantics",
  "rsscript-syntax",
  "rsscript-text",
@@ -910,6 +911,23 @@ dependencies = [
  "tempfile",
  "toml",
  "uuid",
+]
+
+[[package]]
+name = "rsscript-corelib"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "chrono",
+ "flate2",
+ "hex",
+ "hmac",
+ "percent-encoding",
+ "regex",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha2",
+ "sha3",
 ]
 
 [[package]]
@@ -1000,6 +1018,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsscript-review-source"
+version = "0.1.0"
+dependencies = [
+ "rsscript-diagnostics",
+ "rsscript-interface-catalog",
+ "rsscript-semantics",
+ "rsscript-syntax",
+ "rsscript-text",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "rsscript-sdk"
 version = "0.1.0"
 dependencies = [
@@ -1063,25 +1094,17 @@ version = "0.1.0"
 name = "rsscript-vm"
 version = "0.1.0"
 dependencies = [
- "base64",
- "chrono",
- "flate2",
- "hex",
- "hmac",
- "percent-encoding",
- "regex",
  "rsscript-abi-model",
  "rsscript-build-support",
  "rsscript-bytecode",
+ "rsscript-corelib",
  "rsscript-diagnostics",
  "rsscript-operation",
  "rsscript-provider-api",
  "rsscript-text",
  "serde",
  "serde_json",
- "serde_yaml_ng",
  "sha2",
- "sha3",
  "toml",
  "vm-jit",
 ]

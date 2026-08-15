@@ -10,7 +10,7 @@ name = "rss_native_abi"
 
 [dependencies]
 rsscript-abi-model = { path = "../../crates/rsscript-abi-model" }
-rsscript-provider-api = { path = "../../crates/rsscript-provider-api" }
+rsscript-provider-api = { path = "../../crates/rsscript-provider-api", features = ["compatibility"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"

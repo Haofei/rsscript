@@ -8,6 +8,12 @@ license = "MIT OR Apache-2.0"
 [lib]
 doctest = false
 
+[features]
+default = []
+# Transitional dynamic-value callable used by the register VM and native ABI
+# adapters. New Provider implementations use the default WireValue-only API.
+compatibility = []
+
 [dependencies]
 rsscript-abi-model = { path = "../rsscript-abi-model" }
 rsscript-operation = { path = "../rsscript-operation" }

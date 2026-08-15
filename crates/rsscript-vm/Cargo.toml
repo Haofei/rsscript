@@ -12,7 +12,7 @@ rsscript-bytecode = { path = "../rsscript-bytecode" }
 rsscript-corelib = { path = "../rsscript-corelib" }
 rsscript-diagnostics = { path = "../rsscript-diagnostics" }
 rsscript-operation = { path = "../rsscript-operation" }
-rsscript-provider-api = { path = "../rsscript-provider-api" }
+rsscript-provider-api = { path = "../rsscript-provider-api", features = ["compatibility"] }
 rsscript-text = { path = "../rsscript-text" }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["preserve_order"] }

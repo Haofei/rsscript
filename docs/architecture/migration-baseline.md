@@ -2020,7 +2020,12 @@ an arbitrary shell executor.
     retains a private v1 JSON projection solely so existing machine consumers
     can migrate independently. VM adapters and the v1 report schema still
     carry the legacy representation until the typed report outcome replaces
-    that compatibility projection.
+    that compatibility projection. `rsscript-provider-api` now also excludes
+    the legacy dynamic value/callable definitions from its default feature set:
+    only the register VM, native ABI adapter, and conformance compatibility
+    harness opt into its explicit `compatibility` feature. This prevents a new
+    standalone Provider SDK consumer from compiling the legacy call boundary
+    by accident, while the VM migration remains open.
 - [x] **P07 — Remove policy-shaped authority from Core ABI.** `HostCallContext`
   carries host-defined labels to Provider calls without Core interpreting an
   authorization policy. The runtime reports required symbols; provider profiles
