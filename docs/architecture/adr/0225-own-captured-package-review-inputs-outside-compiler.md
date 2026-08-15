@@ -45,6 +45,12 @@ formatting and source-contract validation from compiler package code while
 leaving native Rust build/review execution in its explicit compatibility
 boundary.
 
+The full package review evidence engine is now review-owned too. The compiler
+does not re-export its implementation: it supplies only the legacy native Rust
+inspection callback plus captured-snapshot path remapping. That prevents native
+wrapper support from pulling parser, semantic evidence, policy, or package
+review presentation back into compiler-owned source modules.
+
 The compiler's opt-in `package` compatibility feature has a private forwarding
 module during the staged migration so existing authorization, native, lock, and
 review callers retain their established behavior. The reviewed compiler default

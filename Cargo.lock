@@ -1960,6 +1960,7 @@ dependencies = [
  "rsscript-interface-catalog",
  "rsscript-package-model",
  "rsscript-project",
+ "rsscript-review-core",
  "rsscript-review-source",
  "rsscript-semantics",
  "rsscript-syntax",

@@ -12,6 +12,7 @@ mod contract;
 mod dependency;
 mod execution_facts;
 mod policy;
+mod review;
 mod runtime_catalog;
 mod source_set;
 
@@ -22,6 +23,7 @@ pub use contract::*;
 pub use dependency::*;
 pub use execution_facts::*;
 pub use policy::*;
+pub use review::*;
 pub use source_set::*;
 
 use std::collections::BTreeSet;

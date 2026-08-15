@@ -24,7 +24,7 @@
 )]
 // Compatibility package/review tooling keeps its lint debt local to this module.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::diagnostic::Diagnostic;
@@ -37,10 +37,7 @@ pub(super) use rsscript_project::{
 };
 
 mod analysis {
-    pub(super) use rsscript_package_review::{analyze_package_dir_captured, session_analysis};
-}
-mod analysis_await {
-    pub(super) use rsscript_package_review::*;
+    pub(super) use rsscript_package_review::analyze_package_dir_captured;
 }
 mod authorization;
 mod check;
@@ -61,7 +58,24 @@ mod native;
 mod policy {
     pub(super) use rsscript_package_review::*;
 }
-mod review;
+// Legacy composition only: review evidence is package-review-owned. Native
+// Rust inspection remains an opt-in compiler compatibility adapter.
+mod review {
+    use std::path::Path;
+
+    use rsscript_package_model::PackageReview;
+
+    pub(super) fn review_package_dir_captured_with_features(
+        package_dir: &Path,
+        selected_features: Option<&[String]>,
+    ) -> Result<PackageReview, String> {
+        rsscript_package_review::review_package_dir_captured_with_features(
+            package_dir,
+            selected_features,
+            super::native::package_native_rust_review,
+        )
+    }
+}
 // The legacy package compatibility façade keeps this module name only so its
 // remaining callers can migrate incrementally. Captured manifests and source
 // sets are physically owned by the independent package-review boundary.
@@ -74,6 +88,13 @@ const PACKAGE_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
 pub fn analyze_package_dir(package_dir: &Path) -> Result<PackageAnalysis, String> {
     authorization::load_workspace_snapshot(package_dir).map(|snapshot| snapshot.analysis().clone())
 }
+pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
+    let snapshot = authorization::snapshot_package_graph_inputs(package_dir)?;
+    let mut review = review::review_package_dir_captured_with_features(snapshot.root(), None)
+        .map_err(|error| snapshot.remap_error(error))?;
+    authorization::remap_review(&snapshot, &mut review);
+    Ok(review)
+}
 pub use authorization::{
     ExecutablePackageSnapshot, PreparedPackage, WorkspaceSnapshot, load_workspace_snapshot,
     load_workspace_snapshot_with_operation, prepare_executable_package,
@@ -82,9 +103,7 @@ pub use authorization::{
 pub use check::check_package_dir;
 use dependency::{
     PackageDependencySpec, collect_dependency_interface_sources,
-    collect_dependency_interface_sources_for_tests_from_manifest_graph,
-    collect_dependency_interface_sources_from_manifest_graph, collect_dependency_lowering_sources,
-    package_dependency_spec, package_feature_resolution_diagnostics_from_manifest_graph,
+    collect_dependency_lowering_sources,
 };
 pub use diff::diff_package_dirs;
 pub use graph::package_tree;
@@ -92,7 +111,6 @@ pub use lock::{diff_package_locks, lock_package_dir};
 pub(super) use lock_format::package_lock_toml;
 pub use metadata::package_lowering_input;
 pub(crate) use native::package_native_plugin_build_dependencies;
-pub use review::review_package_dir;
 pub use rsscript_package_model::*;
 use source_set::{LoadedPackage, Manifest, ManifestNativeRust, PackageSource};
 
@@ -152,46 +170,6 @@ pub(super) fn dedup_diagnostics(diagnostics: &mut Vec<Diagnostic>) {
             diagnostic.span.length,
         ))
     });
-}
-
-fn package_manifest_key_span(package_dir: &Path, key: &str) -> crate::diagnostic::Span {
-    let path = package_dir.join("rsspkg.toml");
-    let file = path.display().to_string();
-    let source = read_utf8_file_bounded(
-        &path,
-        PACKAGE_MANIFEST_MAX_BYTES,
-        "package manifest diagnostic read",
-    )
-    .unwrap_or_default();
-    for (index, line) in source.lines().enumerate() {
-        if let Some(column) = line.find(key) {
-            return crate::diagnostic::Span {
-                file,
-                line: index + 1,
-                column: column + 1,
-                length: key.len().max(1),
-            };
-        }
-    }
-    crate::diagnostic::Span {
-        file,
-        line: 1,
-        column: 1,
-        length: key.len().max(1),
-    }
-}
-
-fn collect_package_feature_boundary_reasons(
-    features: &BTreeMap<String, Vec<String>>,
-    reasons: &mut Vec<String>,
-) {
-    for (name, values) in features {
-        if package_feature_may_change_boundary_risk(name, values) {
-            reasons.push(format!(
-                "package feature `{name}` may change native/unsafe/build risk"
-            ));
-        }
-    }
 }
 
 fn package_feature_may_change_boundary_risk(name: &str, values: &[String]) -> bool {

@@ -15,6 +15,7 @@ rsscript-diagnostics = { path = "../rsscript-diagnostics" }
 rsscript-semantics = { path = "../rsscript-semantics" }
 rsscript-syntax = { path = "../rsscript-syntax" }
 rsscript-review-source = { path = "../rsscript-review-source" }
+rsscript-review-core = { path = "../rsscript-review-core" }
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 toml = "0.8"

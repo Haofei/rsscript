@@ -1,55 +1,139 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use rsscript_diagnostics::{Diagnostic, Span, code};
 use rsscript_project::{ProjectManifestGraphLimits, capture_project_manifest_graph};
 use rsscript_review_core::{
     NativeApiRiskPolicy, PackageRiskEvidence, package_risk as derive_package_risk,
 };
-
-use crate::analyzer::core_interfaces;
-use crate::diagnostic::{Diagnostic, Span, code};
-use crate::hir::CallResolution;
-use crate::lint::lint_source;
-use crate::syntax::ast::{Callee, Expr, Item, TypeKind};
 use rsscript_review_source::{ReviewMap, ReviewMapClassification, review_map_semantic_database};
+use rsscript_semantics::{
+    SemanticDatabase, core_interfaces,
+    hir::{CallResolution, HirCallSite},
+};
+use rsscript_syntax::{
+    ast::{Callee, Expr, Item, TypeKind},
+    lint_source,
+};
 
-use super::contract::{
+use crate::contract::{
     PackageFunctionContract, collect_package_const_contracts, collect_package_function_contracts,
     collect_package_sum_type_contracts, collect_package_type_alias_contracts,
     collect_package_type_contracts, package_contract_has_resource_boundary,
     package_interface_contract_diagnostics, package_interface_diagnostic_exports,
     package_interface_environment_diagnostics, package_review_exports,
 };
-use super::native::{
-    native_binding_interface_sources, package_external_bindings,
-    package_native_binding_diagnostics, package_native_rust_review,
+use crate::source_set::{
+    Manifest, ManifestNativeRust, PackageSource, load_package_from_manifest_source,
 };
-use super::source_set::{Manifest, PackageSource, load_package_from_manifest_source};
-use super::{
-    PackageDependencyKind, PackageExternalBinding, PackageNativeRustReview,
-    PackageProviderImplementation, PackageReview, PackageReviewAwaitBoundary,
-    PackageReviewAwaitSite, PackageReviewDependency, PackageReviewFile, PackageReviewFileKind,
-    PackageReviewSummary, PackageRisk, PackageVirtual,
+use crate::{
+    AwaitBoundary, native_binding_interface_sources, package_external_bindings,
+    package_feature_resolution_diagnostics_from_manifest_graph, package_native_binding_diagnostics,
+    session_analysis,
+};
+use crate::{
     collect_dependency_interface_sources_for_tests_from_manifest_graph,
-    collect_dependency_interface_sources_from_manifest_graph, dedup_diagnostics,
-    package_dependency_spec, package_feature_may_change_boundary_risk,
-    package_feature_resolution_diagnostics_from_manifest_graph,
+    collect_dependency_interface_sources_from_manifest_graph, collect_package_await_sites,
+    package_dependency_spec,
+};
+use rsscript_package_model::{
+    ArtifactProducer, PACKAGE_REVIEW_SCHEMA, PackageDependencyKind, PackageExternalBinding,
+    PackageIdentity, PackageNativeRustReview, PackageProviderImplementation, PackageReview,
+    PackageReviewAwaitBoundary, PackageReviewAwaitSite, PackageReviewDependency, PackageReviewFile,
+    PackageReviewFileKind, PackageReviewSummary, PackageRisk, PackageVirtual,
 };
 
-use super::analysis::session_analysis;
-use super::analysis_await::*;
+/// Native Rust inspection stays an optional compatibility adapter. The review
+/// engine itself owns all package/source/semantic evidence and receives this
+/// narrow callback only when a host still supports legacy native wrappers.
+pub type NativeRustReviewFn = fn(
+    &Path,
+    &Manifest,
+    &[PackageSource],
+    &ManifestNativeRust,
+) -> Result<PackageNativeRustReview, String>;
 
-pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
-    let snapshot = super::authorization::snapshot_package_graph_inputs(package_dir)?;
-    let mut review = review_package_dir_captured_with_features(snapshot.root(), None)
-        .map_err(|error| snapshot.remap_error(error))?;
-    super::authorization::remap_review(&snapshot, &mut review);
-    Ok(review)
+const PACKAGE_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
+
+fn dedup_diagnostics(diagnostics: &mut Vec<Diagnostic>) {
+    let mut seen = BTreeSet::new();
+    diagnostics.retain(|diagnostic| {
+        seen.insert((
+            diagnostic.code.clone(),
+            diagnostic.summary.clone(),
+            diagnostic.span.file.clone(),
+            diagnostic.span.line,
+            diagnostic.span.column,
+            diagnostic.span.length,
+        ))
+    });
 }
 
-pub(super) fn review_package_dir_captured_with_features(
+fn package_identity(manifest: &Manifest) -> PackageIdentity {
+    PackageIdentity {
+        name: manifest.package.name.clone(),
+        version: manifest.package.version.clone(),
+        edition: manifest.package.edition.clone(),
+    }
+}
+
+fn package_manifest_key_span(package_dir: &Path, key: &str) -> Span {
+    let path = package_dir.join("rsspkg.toml");
+    let source = rsscript_project::read_project_utf8_file_bounded(
+        &path,
+        PACKAGE_MANIFEST_MAX_BYTES,
+        "package review diagnostic read",
+    )
+    .unwrap_or_default();
+    for (index, line) in source.lines().enumerate() {
+        if let Some(column) = line.find(key) {
+            return Span {
+                file: path.display().to_string(),
+                line: index + 1,
+                column: column + 1,
+                length: key.len().max(1),
+            };
+        }
+    }
+    Span {
+        file: path.display().to_string(),
+        line: 1,
+        column: 1,
+        length: key.len().max(1),
+    }
+}
+
+fn package_feature_may_change_boundary_risk(name: &str, values: &[String]) -> bool {
+    package_feature_token_is_boundary_risk(name)
+        || values
+            .iter()
+            .any(|value| package_feature_token_is_boundary_risk(value))
+}
+
+fn package_feature_token_is_boundary_risk(token: &str) -> bool {
+    let normalized = token.to_ascii_lowercase();
+    ["native", "unsafe", "ffi", "build", "proc", "macro", "link"]
+        .iter()
+        .any(|marker| normalized.contains(marker))
+}
+
+fn collect_package_feature_boundary_reasons(
+    features: &BTreeMap<String, Vec<String>>,
+    reasons: &mut Vec<String>,
+) {
+    for (name, values) in features {
+        if package_feature_may_change_boundary_risk(name, values) {
+            reasons.push(format!(
+                "package feature `{name}` may change native/unsafe/build risk"
+            ));
+        }
+    }
+}
+
+pub fn review_package_dir_captured_with_features(
     package_dir: &Path,
     selected_features: Option<&[String]>,
+    native_rust_review: NativeRustReviewFn,
 ) -> Result<PackageReview, String> {
     let manifest_graph =
         capture_project_manifest_graph(package_dir, ProjectManifestGraphLimits::default())?;
@@ -196,7 +280,7 @@ pub(super) fn review_package_dir_captured_with_features(
         .as_ref()
         .and_then(|native| native.rust.as_ref())
         .filter(|native| native.enabled)
-        .map(|native| package_native_rust_review(package_dir, manifest, sources, native))
+        .map(|native| native_rust_review(package_dir, manifest, sources, native))
         .transpose()?;
 
     let external_bindings =
@@ -312,9 +396,9 @@ pub(super) fn review_package_dir_captured_with_features(
     });
 
     Ok(PackageReview {
-        schema: super::PACKAGE_REVIEW_SCHEMA.to_string(),
-        producer: super::ArtifactProducer::current(),
-        package: super::package_identity(manifest),
+        schema: PACKAGE_REVIEW_SCHEMA.to_string(),
+        producer: ArtifactProducer::current(),
+        package: package_identity(manifest),
         manifest_path: package.manifest_path.display().to_string(),
         risk,
         reasons,
@@ -490,7 +574,7 @@ fn package_virtual_diagnostic(
     Diagnostic::error(
         code::PACKAGE_PROVIDER_DECLARATION,
         summary,
-        super::package_manifest_key_span(package_dir, "virtual"),
+        package_manifest_key_span(package_dir, "virtual"),
         label,
     )
     .with_cause(cause)
@@ -511,7 +595,7 @@ fn package_provider_implementation_diagnostic(
     Diagnostic::error(
         code::PACKAGE_PROVIDER_DECLARATION,
         summary,
-        super::package_manifest_key_span(package_dir, interface_package),
+        package_manifest_key_span(package_dir, interface_package),
         key,
     )
     .with_cause(cause)
@@ -526,7 +610,7 @@ fn collect_manifest_review_reasons(manifest: &Manifest, reasons: &mut Vec<String
     if !manifest.features.is_empty() {
         reasons.push("package declares selectable package features".to_string());
     }
-    super::collect_package_feature_boundary_reasons(&manifest.features, reasons);
+    collect_package_feature_boundary_reasons(&manifest.features, reasons);
     if let Some(review) = &manifest.review {
         if review.expect.risk.as_deref() == Some("unknown") {
             reasons.push("manifest declares unknown package risk".to_string());
@@ -781,7 +865,7 @@ fn package_api_effect_summary(
 fn package_review_external_bindings(
     manifest: &Manifest,
     sources: &[PackageSource],
-    database: &crate::semantic::SemanticDatabase,
+    database: &SemanticDatabase,
 ) -> Vec<PackageExternalBinding> {
     let call_graph = collect_package_call_graph(sources, database);
     let mut external_bindings = BTreeMap::new();
@@ -900,7 +984,7 @@ struct PackageCallSite {
 
 fn collect_package_call_graph(
     sources: &[PackageSource],
-    database: &crate::semantic::SemanticDatabase,
+    database: &SemanticDatabase,
 ) -> PackageCallGraph {
     let mut reverse_calls = BTreeMap::new();
     let mut function_spans = BTreeMap::new();
@@ -963,7 +1047,7 @@ fn collect_package_call_graph(
     }
 }
 
-fn package_call_site_label(call_site: &crate::hir::HirCallSite) -> String {
+fn package_call_site_label(call_site: &HirCallSite) -> String {
     match &call_site.resolution {
         CallResolution::Resolved { signature, .. } => match &signature.namespace {
             Some(namespace) => format!("{namespace}.{}", signature.name),

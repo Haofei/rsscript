@@ -2022,7 +2022,15 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
             && !native.contains("load_package_with_features"),
         "native dependency resolution must consume project-captured manifests rather than reopen packages"
     );
-    let review = read(&root.join("crates/rsscript-compiler/src/package/review.rs"));
+    let review_path = root.join("crates/rsscript-package-review/src/review.rs");
+    assert!(
+        review_path.is_file()
+            && !root
+                .join("crates/rsscript-compiler/src/package/review.rs")
+                .exists(),
+        "package review execution must be physically owned by the package-review boundary"
+    );
+    let review = read(&review_path);
     assert!(
         review.contains("capture_project_manifest_graph")
             && review.contains("load_package_from_manifest_source")

@@ -26,7 +26,7 @@ use super::{
 };
 
 pub(super) use rsscript_package_review::{
-    native_binding_interface_sources, package_external_bindings, package_native_binding_diagnostics,
+    native_binding_interface_sources, package_external_bindings,
 };
 
 const NATIVE_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
