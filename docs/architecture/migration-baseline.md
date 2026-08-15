@@ -2066,6 +2066,13 @@ an arbitrary shell executor.
     - [ ] **A09.2d — Add filesystem and syscall controls.** Add rooted
       filesystem and seccomp adapters whose required rules are installed before
       Artifact parsing; keep unavailable controls fail-closed.
+      - [ ] **A09.2d.a — Add the rooted filesystem adapter.** Install a Linux
+        filesystem restriction before Artifact parsing for profiles that declare
+        a host-owned root; reject unsupported kernel policy rather than falling
+        back to the ambient filesystem.
+      - [ ] **A09.2d.b — Add the syscall filter adapter.** Install the profile's
+        minimal seccomp policy before Artifact parsing, including an explicit
+        compatibility/fail-closed decision for unavailable kernels.
     - [ ] **A09.2e — Add cgroup-v2 controls.** Attach child process trees to a
       dedicated cgroup where supported, report unavailable delegation clearly,
       and keep the runner's VM termination separate from containment failures.
