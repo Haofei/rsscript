@@ -8,15 +8,19 @@ publish = false
 
 [dependencies]
 rsscript-package-model = { path = "../rsscript-package-model" }
+rsscript-abi-model = { path = "../rsscript-abi-model" }
+rsscript-interface-catalog = { path = "../rsscript-interface-catalog" }
 rsscript-project = { path = "../rsscript-project" }
 rsscript-diagnostics = { path = "../rsscript-diagnostics" }
 rsscript-semantics = { path = "../rsscript-semantics" }
 rsscript-syntax = { path = "../rsscript-syntax" }
 rsscript-review-source = { path = "../rsscript-review-source" }
 serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
 toml = "0.8"
 
 [dev-dependencies]
+tempfile = "3"
 uuid = { version = "1", features = ["v4"] }
 
 [build-dependencies]

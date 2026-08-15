@@ -1915,6 +1915,21 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
                 .exists(),
         "package resource/task execution facts must be physically owned by the package-review boundary"
     );
+    let package_analysis_path = root.join("crates/rsscript-package-review/src/analysis.rs");
+    assert!(
+        package_analysis_path.is_file()
+            && !root
+                .join("crates/rsscript-compiler/src/package/analysis.rs")
+                .exists(),
+        "neutral package analysis must be physically owned by the package-review boundary"
+    );
+    let package_analysis = read(&package_analysis_path);
+    assert!(
+        package_analysis.contains("CompilationSession")
+            && package_analysis.contains("rsscript_interface_catalog::CORE_INTERFACES")
+            && package_analysis.contains("fn interface_catalog_digest"),
+        "package analysis must consume semantic queries and the catalog-owned digest directly"
+    );
     let await_facts_path = root.join("crates/rsscript-package-review/src/await_facts.rs");
     assert!(
         await_facts_path.is_file()
@@ -4982,7 +4997,7 @@ fn bytecode_language_compatibility_is_not_inferred_from_compiler_version() {
     assert!(emitter.contains("compiler_provenance"));
     assert!(verifier.contains("BYTECODE_CONTAINER_FORMAT_VERSION"));
 
-    let analysis = read(&root.join("crates/rsscript-compiler/src/package/analysis.rs"));
+    let analysis = read(&root.join("crates/rsscript-package-review/src/analysis.rs"));
     assert!(analysis.contains("rsscript_abi_model::LANGUAGE_SEMANTICS_VERSION"));
     assert!(
         !analysis.contains("language_version: env!(\"CARGO_PKG_VERSION\")"),
@@ -5552,7 +5567,7 @@ fn workspace_analysis_does_not_flow_through_optional_review() {
         .split("#[cfg(test)]")
         .next()
         .expect("production authorization source");
-    let analysis = read(&root.join("crates/rsscript-compiler/src/package/analysis.rs"));
+    let analysis = read(&root.join("crates/rsscript-package-review/src/analysis.rs"));
     let types = read(&root.join("crates/rsscript-package-model/src/lib.rs"));
 
     assert!(authorization.contains("analyze_package_dir_captured"));

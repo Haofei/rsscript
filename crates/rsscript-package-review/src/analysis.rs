@@ -2,16 +2,17 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::analyzer::core_interfaces;
-use crate::diagnostic::{Diagnostic, Span, code};
-use crate::hir::CallResolution;
-use crate::lint::lint_source;
-use crate::syntax::ast::{Callee, TypeKind};
-use rsscript_semantics::{AnalysisResult, CompilationSession};
+use rsscript_diagnostics::{Diagnostic, Span, code};
+use rsscript_semantics::hir::{CallResolution, HirCallSite};
+use rsscript_semantics::{AnalysisResult, CompilationSession, SemanticDatabase, core_interfaces};
+use rsscript_syntax::{
+    ast::{Callee, TypeKind},
+    lint_source,
+};
+use sha2::{Digest, Sha256};
 
-use super::analysis_await::collect_package_await_sites;
-use super::analysis_execution::collect_execution_facts;
-use super::contract::{
+use crate::await_facts::collect_package_await_sites;
+use crate::contract::{
     collect_package_const_contracts, collect_package_function_contracts,
     collect_package_protocol_contracts, collect_package_protocol_impl_contracts,
     collect_package_sum_type_contracts, collect_package_type_alias_contracts,
@@ -19,21 +20,22 @@ use super::contract::{
     package_interface_contract_diagnostics, package_interface_diagnostic_exports,
     package_interface_environment_diagnostics,
 };
-use super::dependency::{
+use crate::dependency::{
     collect_dependency_interface_sources, collect_dependency_interface_sources_for_tests,
     package_feature_resolution_diagnostics,
 };
-use super::source_set::{PackageSource, load_package};
-use super::{
+use crate::execution_facts::collect_execution_facts;
+use crate::source_set::{PackageSource, load_package};
+use rsscript_package_model::{
     PACKAGE_ANALYSIS_SCHEMA, PackageAnalysis, PackageAnalysisAwaitSite, PackageAnalysisCallEdge,
     PackageAnalysisExport, PackageAnalysisExternalImport, PackageAnalysisFile,
-    PackageAnalysisParameter, PackageAnalysisProducer, PackageAnalysisSummary,
-    PackageReviewFileKind, dedup_diagnostics, package_identity,
+    PackageAnalysisParameter, PackageAnalysisProducer, PackageAnalysisSummary, PackageIdentity,
+    PackageReviewFileKind,
 };
 
 /// Analyze one already-captured package graph without consulting review policy,
 /// provider metadata, native implementations, or deployment evidence.
-pub(super) fn analyze_package_dir_captured(package_dir: &Path) -> Result<PackageAnalysis, String> {
+pub fn analyze_package_dir_captured(package_dir: &Path) -> Result<PackageAnalysis, String> {
     let package = load_package(package_dir)?;
     let sources = &package.sources;
     let dependency_interfaces =
@@ -165,7 +167,7 @@ pub(super) fn analyze_package_dir_captured(package_dir: &Path) -> Result<Package
             env!("RSSCRIPT_COMPILED_CACHE_FINGERPRINT"),
         ),
         language_version: rsscript_abi_model::LANGUAGE_SEMANTICS_VERSION.to_string(),
-        interface_catalog_digest: crate::interfaces::interface_catalog_digest(),
+        interface_catalog_digest: interface_catalog_digest(),
         snapshot_digest: String::new(),
         module_digest: None,
         package: package_identity(&package.manifest),
@@ -189,11 +191,6 @@ pub(super) fn analyze_package_dir_captured(package_dir: &Path) -> Result<Package
     })
 }
 
-pub fn analyze_package_dir(package_dir: &Path) -> Result<PackageAnalysis, String> {
-    super::authorization::load_workspace_snapshot(package_dir)
-        .map(|snapshot| snapshot.analysis().clone())
-}
-
 fn source_refs(sources: &[PackageSource], kind: PackageReviewFileKind) -> Vec<(&str, &str)> {
     sources
         .iter()
@@ -207,7 +204,7 @@ fn source_refs(sources: &[PackageSource], kind: PackageReviewFileKind) -> Vec<(&
 /// Core interfaces manually to a `without_core` analyzer entry point; the
 /// session owns that catalog, so skip those duplicate inputs while preserving
 /// every dependency/package interface in the immutable snapshot.
-pub(super) fn session_analysis(
+pub fn session_analysis(
     sources: &[(&str, &str)],
     interfaces: &[(&str, &str)],
 ) -> Arc<AnalysisResult> {
@@ -231,9 +228,43 @@ pub(super) fn session_analysis(
     session.workspace_analysis()
 }
 
-fn package_call_edges(
-    database: &crate::semantic::SemanticDatabase,
-) -> Vec<PackageAnalysisCallEdge> {
+fn dedup_diagnostics(diagnostics: &mut Vec<Diagnostic>) {
+    let mut seen = BTreeSet::new();
+    diagnostics.retain(|diagnostic| {
+        seen.insert((
+            diagnostic.code.clone(),
+            diagnostic.summary.clone(),
+            diagnostic.span.file.clone(),
+            diagnostic.span.line,
+            diagnostic.span.column,
+            diagnostic.span.length,
+        ))
+    });
+}
+
+fn package_identity(manifest: &crate::Manifest) -> PackageIdentity {
+    PackageIdentity {
+        name: manifest.package.name.clone(),
+        version: manifest.package.version.clone(),
+        edition: manifest.package.edition.clone(),
+    }
+}
+
+fn interface_catalog_digest() -> String {
+    let mut digest = Sha256::new();
+    for (path, source) in rsscript_interface_catalog::CORE_INTERFACES
+        .iter()
+        .chain(rsscript_interface_catalog::STANDARD_PACKAGE_INTERFACES.iter())
+    {
+        digest.update((path.len() as u64).to_be_bytes());
+        digest.update(path.as_bytes());
+        digest.update((source.len() as u64).to_be_bytes());
+        digest.update(source.as_bytes());
+    }
+    format!("sha256:{:x}", digest.finalize())
+}
+
+fn package_call_edges(database: &SemanticDatabase) -> Vec<PackageAnalysisCallEdge> {
     let mut edges = database
         .hir()
         .call_sites()
@@ -248,7 +279,7 @@ fn package_call_edges(
     edges
 }
 
-fn package_recursive_functions(database: &crate::semantic::SemanticDatabase) -> Vec<String> {
+fn package_recursive_functions(database: &SemanticDatabase) -> Vec<String> {
     let edges = package_call_edges(database);
     let functions = database
         .hir()
@@ -282,7 +313,7 @@ fn package_recursive_functions(database: &crate::semantic::SemanticDatabase) -> 
         .collect()
 }
 
-fn package_call_site_label(call_site: &crate::hir::HirCallSite) -> String {
+fn package_call_site_label(call_site: &HirCallSite) -> String {
     match &call_site.resolution {
         CallResolution::Resolved { signature, .. } => match &signature.namespace {
             Some(namespace) => format!("{namespace}.{}", signature.name),
@@ -551,7 +582,7 @@ fn public_contract_count<T>(
 
 fn package_external_imports(
     sources: &[PackageSource],
-    database: &crate::semantic::SemanticDatabase,
+    database: &SemanticDatabase,
 ) -> Vec<PackageAnalysisExternalImport> {
     #[derive(Clone)]
     struct Caller {

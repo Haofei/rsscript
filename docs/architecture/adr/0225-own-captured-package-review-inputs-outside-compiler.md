@@ -33,6 +33,12 @@ Policy diagnostics use project-owned bounded manifest reads, and signature
 limits use review-owned contract extraction. Compiler-native helper functions
 no longer own or expose that review policy logic.
 
+Neutral package analysis also belongs to this boundary. It builds
+`rsscript.package_analysis.v1` directly from captured sources and
+`CompilationSession` facts, and reads the catalog digest from the catalog
+crate rather than a compiler implementation helper. The compiler retains only
+the authorization wrapper needed by its legacy compatibility entry point.
+
 The compiler's opt-in `package` compatibility feature has a private forwarding
 module during the staged migration so existing authorization, native, lock, and
 review callers retain their established behavior. The reviewed compiler default

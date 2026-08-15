@@ -36,11 +36,10 @@ pub(super) use rsscript_project::{
     project_path_source as package_path_source, relative_project_path_label as relative_path,
 };
 
-mod analysis;
-mod analysis_await {
-    pub(super) use rsscript_package_review::*;
+mod analysis {
+    pub(super) use rsscript_package_review::{analyze_package_dir_captured, session_analysis};
 }
-mod analysis_execution {
+mod analysis_await {
     pub(super) use rsscript_package_review::*;
 }
 mod authorization;
@@ -72,7 +71,9 @@ mod source_set {
 
 const PACKAGE_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
 
-pub use analysis::analyze_package_dir;
+pub fn analyze_package_dir(package_dir: &Path) -> Result<PackageAnalysis, String> {
+    authorization::load_workspace_snapshot(package_dir).map(|snapshot| snapshot.analysis().clone())
+}
 pub use authorization::{
     ExecutablePackageSnapshot, PreparedPackage, WorkspaceSnapshot, load_workspace_snapshot,
     load_workspace_snapshot_with_operation, prepare_executable_package,

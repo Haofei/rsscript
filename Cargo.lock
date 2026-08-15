@@ -1954,14 +1954,18 @@ dependencies = [
 name = "rsscript-package-review"
 version = "0.1.0"
 dependencies = [
+ "rsscript-abi-model",
  "rsscript-build-support",
  "rsscript-diagnostics",
+ "rsscript-interface-catalog",
  "rsscript-package-model",
  "rsscript-project",
  "rsscript-review-source",
  "rsscript-semantics",
  "rsscript-syntax",
  "serde",
+ "sha2",
+ "tempfile",
  "toml",
  "uuid",
 ]
