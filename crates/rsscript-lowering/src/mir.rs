@@ -1603,6 +1603,13 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                     key,
                 });
             }
+            "clear" if signature.namespace.as_deref() == Some("Map") => {
+                if receiver.is_some() || args.len() != 1 {
+                    return self.unsupported("Map.clear with invalid checked call shape");
+                }
+                let map = self.lower_mutable_builtin_place(&args[0].value)?;
+                self.emit(MirInstruction::MapClear { destination, map });
+            }
             _ => {
                 let Some(namespace) = signature.namespace.as_deref() else {
                     return self.unsupported("builtin checked HIR call without namespace");
@@ -1778,6 +1785,28 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         let destination = self.value();
         self.emit(MirInstruction::TakePlace { destination, place });
         Ok(destination)
+    }
+
+    /// A mutating builtin must carry the checked mutable place directly. This
+    /// is intentionally narrower than general mutable argument lowering: each
+    /// new in-place MIR operation decides its own runtime contract instead of
+    /// erasing `mut` into an ordinary value before codegen.
+    fn lower_mutable_builtin_place(
+        &self,
+        value: &checked::HirExpr,
+    ) -> Result<PlaceId, MirLoweringError> {
+        let checked::HirExpr::Effect {
+            effect: checked::ParamEffect::Mut,
+            value,
+            ..
+        } = value
+        else {
+            return self.unsupported("mutating builtin argument without checked mut effect");
+        };
+        let checked::HirExpr::Ident { name, .. } = value.as_ref() else {
+            return self.unsupported("mutating builtin argument on non-local value");
+        };
+        self.lookup_place(name)
     }
 
     /// `manage local` consumes the local graph and creates a stable managed

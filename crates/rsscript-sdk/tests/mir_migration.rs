@@ -213,6 +213,21 @@ fn main() -> Int {
 "#,
     },
     MigrationCase {
+        name: "map_clear",
+        capability: "resolved mutable-map clear",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn main() -> Bool {
+    let mut table: Map<Int, Int> = {1 => 42}
+    Map.clear<Int, Int>(map: mut table)
+    match Map.get<Int, Int>(map: read table, key: read 1) {
+        Some(_) => { return false }
+        None => { return true }
+    }
+}
+"#,
+    },
+    MigrationCase {
         name: "json_object_literal",
         capability: "JSON object literals",
         stage: MigrationStage::DualPath,
@@ -549,6 +564,48 @@ fn main() -> Int {
     let legacy = reg_vm_eval_source_main("direct-hir-map-get.rss", source)
         .expect("legacy Map.get path executes");
     assert_eq!(legacy.value, "42");
+    assert_eq!(direct.value, legacy.value);
+    assert_eq!(direct.stdout, legacy.stdout);
+    assert_eq!(direct.stderr, legacy.stderr);
+    assert_eq!(direct.usage, legacy.usage);
+}
+
+#[test]
+fn direct_checked_hir_map_clear_preserves_mutable_place_contract() {
+    let source = r#"
+fn main() -> Bool {
+    let mut table: Map<Int, Int> = {1 => 42}
+    Map.clear<Int, Int>(map: mut table)
+    match Map.get<Int, Int>(map: read table, key: read 1) {
+        Some(_) => { return false }
+        None => { return true }
+    }
+}
+"#;
+    let compiled = compile_source_to_ir("direct-hir-map-clear.rss", source)
+        .expect("Map.clear fixture compiles");
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("Map.clear should lower directly from checked HIR");
+    assert!(
+        mir.functions()
+            .iter()
+            .flat_map(|function| function.blocks())
+            .flat_map(|block| block.instructions())
+            .any(|instruction| matches!(instruction, MirInstruction::MapClear { .. })),
+        "direct MIR must preserve Map.clear as an explicit mutable-place operation"
+    );
+    let direct = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("MapClear MIR emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("MapClear bytecode executes");
+    let legacy = reg_vm_eval_source_main("direct-hir-map-clear.rss", source)
+        .expect("legacy Map.clear path executes");
+    assert_eq!(legacy.value, "true");
     assert_eq!(direct.value, legacy.value);
     assert_eq!(direct.stdout, legacy.stdout);
     assert_eq!(direct.stderr, legacy.stderr);

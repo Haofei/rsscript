@@ -633,6 +633,19 @@ impl<'a> Interpreter<'a> {
                         };
                         values[destination.index()] = Some(value);
                     }
+                    MirInstruction::MapClear { destination, map } => {
+                        let entries = match places[map.index()].as_mut() {
+                            Some(MirValue::Map(entries)) => entries,
+                            Some(_) => {
+                                return Err(MirExecutionError::InvalidOperation("map base"));
+                            }
+                            None => {
+                                return Err(MirExecutionError::UninitializedPlace(map.index()));
+                            }
+                        };
+                        entries.clear();
+                        values[destination.index()] = Some(MirValue::Unit);
+                    }
                     MirInstruction::GetField {
                         destination,
                         base,

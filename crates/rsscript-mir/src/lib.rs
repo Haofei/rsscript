@@ -165,6 +165,13 @@ pub enum MirInstruction {
         map: ValueId,
         key: ValueId,
     },
+    /// Clear a resolved mutable map in place. The map is a `PlaceId` so the
+    /// mutation contract is verifier-visible and cannot be reconstructed from
+    /// a source-level `mut` qualifier by a backend.
+    MapClear {
+        destination: ValueId,
+        map: PlaceId,
+    },
     /// Read a checked field from an already-resolved aggregate value. The
     /// field spelling is data for the runtime object representation; it is not
     /// a source-level callee or type identity.
@@ -1203,6 +1210,7 @@ fn instruction_definitions(instruction: &MirInstruction) -> Vec<ValueId> {
         | MirInstruction::UnwrapOption { destination, .. }
         | MirInstruction::ListGet { destination, .. }
         | MirInstruction::MapGet { destination, .. }
+        | MirInstruction::MapClear { destination, .. }
         | MirInstruction::GetField { destination, .. }
         | MirInstruction::ListLen { destination, .. }
         | MirInstruction::ReadPlace { destination, .. }
@@ -1284,7 +1292,8 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         | MirInstruction::Await { .. }
         | MirInstruction::Select { .. }
         | MirInstruction::Cancel { .. }
-        | MirInstruction::Join { .. } => Vec::new(),
+        | MirInstruction::Join { .. }
+        | MirInstruction::MapClear { .. } => Vec::new(),
         MirInstruction::TryResult { source, .. } => vec![*source],
     }
 }
@@ -1419,6 +1428,7 @@ fn transfer_move_state(
             moved_places.remove(place);
             Ok(())
         }
+        MirInstruction::MapClear { map, .. } => check_live(*map, moved_places),
         MirInstruction::Call { arguments, .. } => {
             for argument in arguments {
                 match argument {
@@ -1548,6 +1558,10 @@ fn verify_instruction(
             define(*destination, defined)?;
             used.push(*source);
             Ok(())
+        }
+        MirInstruction::MapClear { destination, map } => {
+            check_live_place(*map, moved_places)?;
+            define(*destination, defined)
         }
         MirInstruction::ReadPlace { destination, place } => {
             check_live_place(*place, moved_places)?;

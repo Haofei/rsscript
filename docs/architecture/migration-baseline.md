@@ -1025,6 +1025,12 @@ mechanical acceptance condition holds.
       reference interpreter, and codegen all preserve the resolved map/key
       values; the dual-path corpus compares both a hit and its `Some` match
       projection with the legacy VM.
+    - [x] **M03.4h — Lower special mutable-map clear without a legacy
+      intrinsic.** `Map.clear(mut map)` is represented by `MapClear { map:
+      PlaceId }`, preserving the checked mutable-place contract until codegen
+      emits the established verifier-checked v1 operation. The direct and
+      dual-path corpus proves the map is mutated in place and that later
+      catalog calls observe the cleared state.
 - [ ] **M04 — Lower checked HIR to MIR exactly once.** Backend code cannot
   inspect syntax AST or reconstruct semantic facts. MIR verification rejects
   unresolved calls, invalid ownership state, incomplete cleanup, and malformed
@@ -1243,6 +1249,10 @@ mechanical acceptance condition holds.
       key value IDs to the existing verifier-checked option-valued v1 map read.
       The direct-HIR and reusable migration corpus prove `Map.get` reaches that
       operation without the source-shaped executable-IR bridge.
+    - [x] **V02.3i — Emit resolved mutable-map clear.** `MapClear` maps a
+      verifier-checked mutable `PlaceId` to the existing v1 map clear operation.
+      No backend has to rediscover a source `mut` qualifier; direct bytecode
+      parity proves subsequent reads observe the same mutation as the legacy VM.
   - [x] **V02.4 — Switch reviewed builds to the compiler bytecode boundary.**
     SDK source, interface, and package builds delegate checked HIR → MIR →
     `codegen-vm` Artifact emission to the compiler's VM-free `bytecode`

@@ -447,6 +447,13 @@ fn lower_instruction(
                 ("key", json!(value_reg(function, *key))),
             ],
         )),
+        MirInstruction::MapClear { destination, map } => code.push(instr(
+            "MapClear",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("map", json!(place_reg(*map))),
+            ],
+        )),
         MirInstruction::GetField {
             destination,
             base,
