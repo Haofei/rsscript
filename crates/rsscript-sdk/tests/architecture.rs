@@ -2983,6 +2983,7 @@ fn compiler_legacy_package_review_and_aot_exports_are_quarantined() {
         "pub use package::{",
         "pub use review::{",
         "pub use rust_lower::{",
+        "pub use compiler_output::compile_package_input_to_ir;",
     ] {
         assert!(
             !compiler.contains(legacy_root_export),
@@ -2992,6 +2993,7 @@ fn compiler_legacy_package_review_and_aot_exports_are_quarantined() {
     assert!(compiler.contains("pub use crate::package::{"));
     assert!(compiler.contains("pub use crate::review::{"));
     assert!(compiler.contains("pub use crate::rust_lower::{"));
+    assert!(compiler.contains("pub use crate::compiler_output::compile_package_input_to_ir;"));
 
     let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
     assert!(sdk.contains("pub use rsscript_compiler::compatibility::{"));

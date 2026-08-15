@@ -70,8 +70,6 @@ mod vm_adapter {
 #[cfg(all(test, feature = "execution", feature = "selfhost-parity"))]
 use rsscript_vm::RegVmExecutable;
 
-#[cfg(all(feature = "lowering", feature = "package"))]
-pub use compiler_output::compile_package_input_to_ir;
 #[cfg(feature = "bytecode")]
 pub use compiler_output::{
     BytecodeCompileError, compile_ir_to_bytecode, compile_validated_to_bytecode,

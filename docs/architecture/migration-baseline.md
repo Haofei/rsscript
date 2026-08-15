@@ -653,7 +653,9 @@ mechanical acceptance condition holds.
     Reviewed `BuiltArtifact` callers now receive a versioned analysis envelope
     and typed source/package projections instead of a raw JSON value; the latter
     is compatibility-only and CLI output remains the application serialization
-    boundary.
+    boundary. The remaining package-to-IR compiler entry point is also no
+    longer a compiler-root export: it is reachable only through the explicit
+    `compatibility` namespace.
     Their implementations and package types still need to move to dedicated
     project/review/AOT crates before this item can close.
   - [ ] **S05.4 — Move Rust/AOT lowering to its experimental boundary.** Compiler
