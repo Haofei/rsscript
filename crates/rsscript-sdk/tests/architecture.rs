@@ -3673,6 +3673,53 @@ fn session_owns_the_core_interface_policy() {
 }
 
 #[test]
+fn production_frontend_callers_share_the_compilation_session_boundary() {
+    let root = workspace_root();
+    let compiler_output = read(&root.join("crates/rsscript-compiler/src/compiler_output.rs"));
+    let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
+    let project = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
+    let cli_check = read(&root.join("crates/rsscript-cli/src/cli/check.rs"));
+    let cli_fmt = read(&root.join("crates/rsscript-cli/src/cli/fmt.rs"));
+    let cli_fix = read(&root.join("crates/rsscript-cli/src/cli/fix.rs"));
+    let cli_artifact = read(&root.join("crates/rsscript-cli/src/cli/artifact.rs"));
+
+    for required in [
+        "CompilationSession::default()",
+        "session.workspace_validated()?",
+    ] {
+        assert!(
+            compiler_output.contains(required),
+            "pure compiler lowering must use the shared session query: {required}"
+        );
+    }
+    for required in [
+        "CompilationSession::with_standard_packages()",
+        "fn analyze_standard_source_with_session",
+        "legacy_frontend_fixtures",
+    ] {
+        assert!(
+            sdk.contains(required),
+            "ordinary SDK analysis must use the shared session boundary: {required}"
+        );
+    }
+    for (name, source) in [("check", cli_check), ("fmt", cli_fmt), ("fix", cli_fix)] {
+        assert!(
+            source.contains("CompilationSession"),
+            "CLI {name} must use CompilationSession rather than construct a frontend analyzer"
+        );
+    }
+    assert!(
+        cli_artifact.contains("ProjectCompiler::new()")
+            && cli_artifact.contains(".compile_package(Path::new(input))"),
+        "normal artifact commands must capture once through the project boundary before pure compilation"
+    );
+    assert!(
+        project.contains("Compiler.compile_snapshot(snapshot.frontend())"),
+        "project convenience compilation must pass its immutable frontend snapshot to the pure compiler"
+    );
+}
+
+#[test]
 fn compiler_legacy_package_review_and_aot_exports_are_quarantined() {
     let root = workspace_root();
     let compiler = read(&root.join("crates/rsscript-compiler/src/lib.rs"));

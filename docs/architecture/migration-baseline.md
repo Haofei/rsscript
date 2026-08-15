@@ -546,7 +546,7 @@ an arbitrary shell executor.
     compatibility analyzer migrates. The sole explicit compiler exception is
     the Rust `#lower_name` backend constraint; all language diagnostic
     contracts are delegated to `rsscript-semantics`.
-- [ ] **S03 — Add one `CompilationSession` query boundary.** Introduce stable
+- [x] **S03 — Add one `CompilationSession` query boundary.** Introduce stable
   source/module/interface/definition/type identities, dependency tracking,
   cancellation, deadlines, and cached HIR/MIR queries shared by CLI, package
   compilation, tests, and editor tooling.
@@ -644,7 +644,7 @@ an arbitrary shell executor.
     are tested on both cold and cached LSP results without truncating the
     session-owned result. Resolve/type dependency precision remains a query
     granularity concern, not an operation-boundary escape hatch.
-- [ ] **S03.5 — Migrate CLI/package/test callers.** All frontend consumers use
+- [x] **S03.5 — Migrate CLI/package/test callers.** All frontend consumers use
     the session API; direct analyzer construction becomes private. This is a
     parent milestone: its remaining work is split below so a superficial caller
     migration cannot change the historical standard-prelude semantics.
@@ -673,6 +673,11 @@ an arbitrary shell executor.
     preserve historical fixture diagnostics, while normal immutable snapshots
     have no public bypass around `CompilationSession`; regression and
     architecture tests protect both sides of that boundary.
+  - The production-callers architecture test now verifies that compiler
+    lowering, normal SDK analysis, CLI check/fmt/fix, and CLI artifact builds
+    all select the shared session or its immutable project-capture boundary;
+    direct analyzer construction remains confined to explicit compatibility
+    fixtures and self-host research tests.
 - [x] **S04 — Make language service consume semantic queries directly.** It
   must not depend on the compiler compatibility façade, package persistence,
   VM, SDK, or Providers; revision invalidation and request cancellation require
