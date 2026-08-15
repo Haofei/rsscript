@@ -3841,10 +3841,9 @@ fn legacy_executable_ir_lowering_is_an_explicit_vm_compatibility_feature() {
 
     let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));
     assert!(
-        vm.contains(
-            "#[cfg(feature = \"legacy-exec-ir\")]\n#[doc(hidden)]\npub fn compile_executable_ir"
-        ) && vm.contains("#[cfg(feature = \"legacy-exec-ir\")]\nmod lower;"),
-        "VM source-shaped lowering must remain behind its explicit compatibility feature"
+        !vm.contains("pub fn compile_executable_ir")
+            && vm.contains("#[cfg(feature = \"legacy-exec-ir\")]\nmod lower;"),
+        "the VM must not expose a public source-shaped executable-IR constructor; retained compatibility lowering is internal only"
     );
     let bytecode = read(&root.join("crates/rsscript-vm/src/reg_vm/bytecode.rs"));
     assert!(

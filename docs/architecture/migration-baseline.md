@@ -1621,8 +1621,13 @@ an arbitrary shell executor.
     rejected from returning.
   - [ ] **V03.3 — Restrict VM constructors.** Delete constructors accepting raw
     bytecode, executable IR, or decoded mutable instruction vectors.
-    - [x] **V03.3a — Delete raw bytecode VM constructors.** The public VM loader
+  - [x] **V03.3a — Delete raw bytecode VM constructors.** The public VM loader
       accepts only `VerifiedBytecode`; SDK and CLI verification own byte input.
+  - [x] **V03.3b — Delete the public executable-IR constructor.**
+    `compile_executable_ir` no longer exists in the VM public API. The remaining
+    source-shaped lowering code is internal to the explicit migration feature
+    and has no compiler, SDK, CLI, or self-host caller; M06/V04 own its physical
+    removal after the last compatibility fixtures are retired.
 - [ ] **V04 — Make the VM execution-only.** Remove MIR/executable-IR lowering,
   bytecode encoding, Artifact packaging, compiler/source helpers, and duplicate
   payload verification from `rsscript-vm`.

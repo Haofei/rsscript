@@ -144,26 +144,6 @@ const URL_COMPONENT_SET: &percent_encoding::AsciiSet = &NON_ALPHANUMERIC
     .remove(b'.')
     .remove(b'~');
 
-/// Lower owned, validated executable IR into a verified VM artifact. This is
-/// the only compiler-facing VM construction boundary: it consumes no AST, HIR,
-/// source loader, package model, or semantic database.
-#[cfg(feature = "legacy-exec-ir")]
-#[doc(hidden)]
-pub fn compile_executable_ir(
-    executable: &rsscript_exec_ir::ExecutableIr,
-    source_hash: &str,
-    interface_catalog_digest: &str,
-) -> Result<RegVmExecutable, EvalError> {
-    let unit = RegUnit::lower(executable)?;
-    let verified =
-        bytecode::encode_and_verify(&unit, source_hash, interface_catalog_digest, executable)?;
-    let (artifact, unit) = verified.into_parts();
-    Ok(RegVmExecutable {
-        unit: Rc::new(unit),
-        artifact,
-    })
-}
-
 // ============================================================================
 // Central intrinsic/effect registry (JIT descriptor table)
 // ============================================================================
