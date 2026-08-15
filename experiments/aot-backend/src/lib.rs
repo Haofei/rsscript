@@ -8,6 +8,119 @@ use rsscript_artifact_store::{
 };
 use rsscript_project::NativeRustDependency;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AotRuntimeIntrinsic {
+    namespace: &'static str,
+    name: &'static str,
+    rust_target: &'static str,
+}
+
+include!(concat!(env!("OUT_DIR"), "/rss-aot-runtime-intrinsics.rs"));
+
+/// Returns the experimental generated-Rust runtime target for one neutral
+/// intrinsic identity.
+pub fn runtime_intrinsic_target(namespace: &str, name: &str) -> Option<&'static str> {
+    AOT_RUNTIME_INTRINSICS
+        .iter()
+        .find(|intrinsic| intrinsic.namespace == namespace && intrinsic.name == name)
+        .map(|intrinsic| intrinsic.rust_target)
+}
+
+/// All runtime-backed signatures understood by this AOT backend.
+pub fn runtime_intrinsic_signatures() -> Vec<String> {
+    AOT_RUNTIME_INTRINSICS
+        .iter()
+        .map(|intrinsic| format!("{}.{}", intrinsic.namespace, intrinsic.name))
+        .collect()
+}
+
+/// Confirms that every generated-Rust target exists in the supplied runtime
+/// source directory. This deliberately lives outside Core compiler code.
+pub fn runtime_intrinsic_supported_signatures(runtime_src: &Path) -> Result<Vec<String>, String> {
+    let functions = runtime_public_function_names(runtime_src)?;
+    Ok(AOT_RUNTIME_INTRINSICS
+        .iter()
+        .filter_map(|intrinsic| {
+            intrinsic
+                .rust_target
+                .strip_prefix("rsscript_runtime::")
+                .filter(|target| functions.contains(*target))
+                .map(|_| format!("{}.{}", intrinsic.namespace, intrinsic.name))
+        })
+        .collect())
+}
+
+/// Validates the checked-in experimental runtime associated with this backend.
+pub fn default_runtime_intrinsic_supported_signatures() -> Result<Vec<String>, String> {
+    let runtime_src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../aot-runtime/src");
+    runtime_intrinsic_supported_signatures(&runtime_src)
+}
+
+fn runtime_public_function_names(
+    runtime_src: &Path,
+) -> Result<std::collections::HashSet<String>, String> {
+    let mut functions = std::collections::HashSet::new();
+    for entry in std::fs::read_dir(runtime_src).map_err(|error| {
+        format!(
+            "failed to read AOT runtime {}: {error}",
+            runtime_src.display()
+        )
+    })? {
+        let path = entry
+            .map_err(|error| format!("failed to read AOT runtime entry: {error}"))?
+            .path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).map_err(|error| {
+            format!(
+                "failed to read AOT runtime source {}: {error}",
+                path.display()
+            )
+        })?;
+        collect_runtime_public_functions(&source, &mut functions);
+    }
+    Ok(functions)
+}
+
+fn collect_runtime_public_functions(
+    source: &str,
+    functions: &mut std::collections::HashSet<String>,
+) {
+    let bytes = source.as_bytes();
+    let mut index = 0;
+    while let Some(relative) = source[index..].find("pub ") {
+        index += relative + "pub ".len();
+        let mut cursor = skip_ascii_whitespace(bytes, index);
+        if source[cursor..].starts_with("async ") {
+            cursor += "async ".len();
+            cursor = skip_ascii_whitespace(bytes, cursor);
+        }
+        if !source[cursor..].starts_with("fn ") {
+            continue;
+        }
+        cursor += "fn ".len();
+        cursor = skip_ascii_whitespace(bytes, cursor);
+        let start = cursor;
+        while cursor < bytes.len()
+            && (bytes[cursor].is_ascii_alphanumeric() || bytes[cursor] == b'_')
+        {
+            cursor += 1;
+        }
+        if cursor > start {
+            functions.insert(source[start..cursor].to_string());
+        }
+        index = cursor;
+    }
+}
+
+fn skip_ascii_whitespace(bytes: &[u8], mut index: usize) -> usize {
+    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+        index += 1;
+    }
+    index
+}
+
 /// Immutable input consumed by the experimental Rust/AOT lowering path.
 ///
 /// It deliberately contains no directory, VFS, artifact-store, or
@@ -91,5 +204,12 @@ mod tests {
         );
         assert!(input.interfaces.is_empty());
         assert!(input.native_dependencies.is_empty());
+    }
+
+    #[test]
+    fn checked_in_aot_runtime_covers_all_generated_targets() {
+        let supported = super::default_runtime_intrinsic_supported_signatures()
+            .expect("checked-in AOT runtime should be readable");
+        assert_eq!(supported, super::runtime_intrinsic_signatures());
     }
 }

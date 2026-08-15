@@ -4,7 +4,7 @@
     {
       "id": "S05.4b2b2b2",
       "priority": 100,
-      "depends_on": ["S05.4b2b2b1"],
+      "depends_on": ["S05.4b2b2b1", "S05.4c"],
       "scope": [
         "crates/rsscript-compiler/src/rust_lower/**",
         "crates/rsscript-compiler/src/lib.rs",

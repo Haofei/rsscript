@@ -149,8 +149,9 @@ const FUNCTION_KINDS: &[&str] = &["sync", "async", "native"];
 const RUST_LOWER_SUPPORTED_FUNCTION_KINDS: &[&str] = &["sync", "async", "native"];
 
 pub fn lower_coverage_report() -> LowerCoverageReport {
-    let runtime_all = runtime_abi::runtime_intrinsic_signatures();
-    let runtime_supported = runtime_abi::runtime_intrinsic_supported_signatures()
+    let runtime_all = rsscript_aot_backend::runtime_intrinsic_signatures();
+    let runtime_supported = rsscript_aot_backend::default_runtime_intrinsic_supported_signatures()
+        .expect("experiment-owned AOT runtime should be readable")
         .into_iter()
         .collect::<BTreeSet<_>>();
 

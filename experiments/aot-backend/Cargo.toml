@@ -17,3 +17,6 @@ rsscript-project = { path = "../../crates/rsscript-project" }
 
 [dev-dependencies]
 tempfile = "3"
+
+[build-dependencies]
+rsscript-build-support = { path = "../../crates/rsscript-build-support" }

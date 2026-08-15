@@ -919,9 +919,10 @@ an arbitrary shell executor.
               - [ ] **S05.4b2b2b2 — Move AST/HIR source lowering.** Move the
                 lowerer implementation once its coverage and input contracts no
                 longer belong to compiler.
-    - [ ] **S05.4c — Split runtime ABI catalog use.** Leave Core consumers with
-      a neutral intrinsic catalog and move generated-Rust target discovery and
-      AOT runtime validation into the experiment-owned backend.
+    - [x] **S05.4c — Split runtime ABI catalog use.** Core compiler consumers
+      now use only neutral intrinsic identity and managed-handle facts. The
+      experiment-owned backend generates Rust targets from the same catalog and
+      owns AOT runtime source validation.
   - [ ] **S05.5 — Enforce a frontend-only compiler dependency closure.** Cargo
     metadata and `cargo tree` tests reject OS, persistence, Provider, VM, review,
     JIT, and AOT dependencies. Compiler lowering is now a dedicated feature;

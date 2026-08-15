@@ -1,25 +1,13 @@
 pub(crate) struct RuntimeIntrinsic {
-    #[cfg(feature = "aot-rust")]
-    pub(crate) rust_target: &'static str,
-    #[cfg(any(feature = "aot-rust", test))]
     pub(crate) managed_handle_args: &'static [&'static str],
     namespace: &'static str,
     name: &'static str,
 }
 
-const fn runtime_intrinsic(
-    namespace: &'static str,
-    name: &'static str,
-    rust_target: &'static str,
-) -> RuntimeIntrinsic {
-    #[cfg(not(feature = "aot-rust"))]
-    let _ = rust_target;
+const fn runtime_intrinsic(namespace: &'static str, name: &'static str) -> RuntimeIntrinsic {
     RuntimeIntrinsic {
         namespace,
         name,
-        #[cfg(feature = "aot-rust")]
-        rust_target,
-        #[cfg(any(feature = "aot-rust", test))]
         managed_handle_args: &[],
     }
 }
@@ -33,97 +21,14 @@ pub(crate) fn lookup_runtime_intrinsic(
         .find(|intrinsic| intrinsic.namespace == namespace && intrinsic.name == name)
 }
 
-#[cfg(feature = "aot-rust")]
-pub(crate) fn runtime_intrinsic_signatures() -> Vec<String> {
-    RUNTIME_INTRINSICS
-        .iter()
-        .map(|intrinsic| format!("{}.{}", intrinsic.namespace, intrinsic.name))
-        .collect()
-}
-
-#[cfg(feature = "aot-rust")]
-pub(crate) fn runtime_intrinsic_supported_signatures() -> Vec<String> {
-    let runtime_functions = runtime_public_function_names();
-    RUNTIME_INTRINSICS
-        .iter()
-        .filter_map(|intrinsic| {
-            let target = intrinsic.rust_target.strip_prefix("rsscript_runtime::")?;
-            runtime_functions
-                .contains(target)
-                .then(|| format!("{}.{}", intrinsic.namespace, intrinsic.name))
-        })
-        .collect()
-}
-
-#[cfg(feature = "aot-rust")]
-fn runtime_public_function_names() -> std::collections::HashSet<String> {
-    let runtime_src =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../experiments/aot-runtime/src");
-    let mut functions = std::collections::HashSet::new();
-    for entry in std::fs::read_dir(&runtime_src).expect("runtime/src should be readable") {
-        let path = entry.expect("runtime/src entry should be readable").path();
-        if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
-            continue;
-        }
-        let source = std::fs::read_to_string(&path).expect("runtime source should be readable");
-        collect_runtime_public_functions(&source, &mut functions);
-    }
-    functions
-}
-
-#[cfg(feature = "aot-rust")]
-fn collect_runtime_public_functions(
-    source: &str,
-    functions: &mut std::collections::HashSet<String>,
-) {
-    let bytes = source.as_bytes();
-    let mut index = 0;
-    while let Some(relative) = source[index..].find("pub ") {
-        index += relative + "pub ".len();
-        let mut cursor = skip_ascii_whitespace(bytes, index);
-        if source[cursor..].starts_with("async ") {
-            cursor += "async ".len();
-            cursor = skip_ascii_whitespace(bytes, cursor);
-        }
-        if !source[cursor..].starts_with("fn ") {
-            continue;
-        }
-        cursor += "fn ".len();
-        cursor = skip_ascii_whitespace(bytes, cursor);
-        let start = cursor;
-        while cursor < bytes.len()
-            && (bytes[cursor].is_ascii_alphanumeric() || bytes[cursor] == b'_')
-        {
-            cursor += 1;
-        }
-        if cursor > start {
-            functions.insert(source[start..cursor].to_string());
-        }
-        index = cursor;
-    }
-}
-
-#[cfg(feature = "aot-rust")]
-fn skip_ascii_whitespace(bytes: &[u8], mut index: usize) -> usize {
-    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
-        index += 1;
-    }
-    index
-}
-
 include!(concat!(env!("OUT_DIR"), "/rss-runtime-intrinsics.rs"));
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
-    #[cfg(feature = "aot-rust")]
-    use std::fs;
-    #[cfg(feature = "aot-rust")]
-    use std::path::Path;
-
     use crate::interfaces::default_interfaces;
     use crate::syntax::ast::Item;
     use crate::syntax::parse_source;
+    use std::collections::{HashMap, HashSet};
 
     use super::RUNTIME_INTRINSICS;
 
@@ -189,77 +94,5 @@ mod tests {
             }
         }
         public_functions
-    }
-
-    #[cfg(feature = "aot-rust")]
-    #[test]
-    fn runtime_intrinsic_rust_targets_exist() {
-        let runtime_functions = runtime_public_functions();
-        for intrinsic in RUNTIME_INTRINSICS {
-            let target = intrinsic
-                .rust_target
-                .strip_prefix("rsscript_runtime::")
-                .expect("runtime intrinsic target should be in rsscript_runtime");
-            assert!(
-                runtime_functions.contains(target),
-                "runtime intrinsic {}.{} points to missing Rust runtime target `{}`",
-                intrinsic.namespace,
-                intrinsic.name,
-                intrinsic.rust_target
-            );
-        }
-    }
-
-    #[cfg(feature = "aot-rust")]
-    fn runtime_public_functions() -> HashSet<String> {
-        let runtime_src =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../experiments/aot-runtime/src");
-        let mut functions = HashSet::new();
-        for entry in fs::read_dir(&runtime_src).expect("runtime/src should be readable") {
-            let path = entry.expect("runtime/src entry should be readable").path();
-            if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
-                continue;
-            }
-            let source = fs::read_to_string(&path).expect("runtime source should be readable");
-            collect_public_functions(&source, &mut functions);
-        }
-        functions
-    }
-
-    #[cfg(feature = "aot-rust")]
-    fn collect_public_functions(source: &str, functions: &mut HashSet<String>) {
-        let bytes = source.as_bytes();
-        let mut index = 0;
-        while let Some(relative) = source[index..].find("pub ") {
-            index += relative + "pub ".len();
-            let mut cursor = skip_ascii_whitespace(bytes, index);
-            if source[cursor..].starts_with("async ") {
-                cursor += "async ".len();
-                cursor = skip_ascii_whitespace(bytes, cursor);
-            }
-            if !source[cursor..].starts_with("fn ") {
-                continue;
-            }
-            cursor += "fn ".len();
-            cursor = skip_ascii_whitespace(bytes, cursor);
-            let start = cursor;
-            while cursor < bytes.len()
-                && (bytes[cursor].is_ascii_alphanumeric() || bytes[cursor] == b'_')
-            {
-                cursor += 1;
-            }
-            if cursor > start {
-                functions.insert(source[start..cursor].to_string());
-            }
-            index = cursor;
-        }
-    }
-
-    #[cfg(feature = "aot-rust")]
-    fn skip_ascii_whitespace(bytes: &[u8], mut index: usize) -> usize {
-        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
-            index += 1;
-        }
-        index
     }
 }

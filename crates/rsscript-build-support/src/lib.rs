@@ -309,18 +309,7 @@ fn write_core_package_index() -> Result<(), String> {
 }
 
 pub fn write_reg_vm_runtime_intrinsics() -> Result<(), String> {
-    println!("cargo:rerun-if-changed=intrinsics.toml");
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
-    let local_catalog = manifest_dir.join("intrinsics.toml");
-    let catalog_path = if local_catalog.exists() {
-        local_catalog
-    } else {
-        workspace_root(&manifest_dir)?.join("crates/rsscript-compiler/intrinsics.toml")
-    };
-    let source = fs::read_to_string(&catalog_path)
-        .map_err(|error| format!("failed to read {}: {error}", catalog_path.display()))?;
-    let catalog: IntrinsicCatalog = toml::from_str(&source)
-        .map_err(|error| format!("failed to parse {}: {error}", catalog_path.display()))?;
+    let catalog = read_intrinsic_catalog()?;
     validate_intrinsic_catalog(&catalog)?;
 
     let enum_variants = catalog
@@ -354,13 +343,12 @@ pub fn write_reg_vm_runtime_intrinsics() -> Result<(), String> {
     let runtime_entries = catalog
         .binding
         .iter()
-        .filter_map(|binding| {
-            binding.runtime_target.as_ref().map(|target| {
-                format!(
-                    "    runtime_intrinsic({:?}, {:?}, {:?}),",
-                    binding.namespace, binding.name, target
-                )
-            })
+        .filter(|binding| binding.runtime_target.is_some())
+        .map(|binding| {
+            format!(
+                "    runtime_intrinsic({:?}, {:?}),",
+                binding.namespace, binding.name
+            )
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -403,6 +391,46 @@ pub fn write_reg_vm_runtime_intrinsics() -> Result<(), String> {
     )
     .map_err(|error| format!("reg VM special form index should be written: {error}"))?;
     Ok(())
+}
+
+/// Generates the target-bearing intrinsic table consumed only by the
+/// experiment-owned Rust/AOT backend.
+pub fn write_aot_runtime_intrinsics() -> Result<(), String> {
+    let catalog = read_intrinsic_catalog()?;
+    validate_intrinsic_catalog(&catalog)?;
+    let entries = catalog
+        .binding
+        .iter()
+        .filter_map(|binding| {
+            binding.runtime_target.as_ref().map(|target| {
+                format!(
+                    "    AotRuntimeIntrinsic {{ namespace: {:?}, name: {:?}, rust_target: {:?} }},",
+                    binding.namespace, binding.name, target
+                )
+            })
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let generated =
+        format!("const AOT_RUNTIME_INTRINSICS: &[AotRuntimeIntrinsic] = &[\n{entries}\n];\n");
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("out dir"));
+    fs::write(out_dir.join("rss-aot-runtime-intrinsics.rs"), generated)
+        .map_err(|error| format!("AOT runtime intrinsic table should be written: {error}"))
+}
+
+fn read_intrinsic_catalog() -> Result<IntrinsicCatalog, String> {
+    println!("cargo:rerun-if-changed=intrinsics.toml");
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
+    let local_catalog = manifest_dir.join("intrinsics.toml");
+    let catalog_path = if local_catalog.exists() {
+        local_catalog
+    } else {
+        workspace_root(&manifest_dir)?.join("crates/rsscript-compiler/intrinsics.toml")
+    };
+    let source = fs::read_to_string(&catalog_path)
+        .map_err(|error| format!("failed to read {}: {error}", catalog_path.display()))?;
+    toml::from_str(&source)
+        .map_err(|error| format!("failed to parse {}: {error}", catalog_path.display()))
 }
 
 /// Generate the typed MIR-to-v1 compatibility catalog for direct core-library

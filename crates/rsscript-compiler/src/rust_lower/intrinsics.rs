@@ -7,8 +7,7 @@ pub(super) fn runtime_intrinsic_target(callee: &Callee) -> Option<&'static str> 
     let Callee::Qualified { namespace, name } = callee else {
         return None;
     };
-    runtime_abi::lookup_runtime_intrinsic(type_root_name(namespace), type_root_name(name))
-        .map(|intrinsic| intrinsic.rust_target)
+    rsscript_aot_backend::runtime_intrinsic_target(type_root_name(namespace), type_root_name(name))
 }
 
 pub(super) fn runtime_intrinsic_wants_managed_handle_arg(
