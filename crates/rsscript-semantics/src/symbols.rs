@@ -77,7 +77,7 @@ pub struct RssDocumentSymbol {
 }
 
 /// File-local index of definitions and references.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SymbolIndex {
     definitions: Vec<Definition>,
     references: Vec<Reference>,

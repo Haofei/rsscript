@@ -1177,10 +1177,12 @@ fn language_engine_does_not_read_the_operating_system() {
         .expect("language-service description");
     assert!(description.to_ascii_lowercase().contains("incremental"));
     for boundary in [
-        "lint_cache",
-        "format_cache",
-        "symbol_cache",
+        "CompilationSession",
         "workspace_module_graph",
+        "frontend.format_",
+        "frontend.lint_",
+        "frontend.symbol_index_",
+        "frontend.document_symbols_",
     ] {
         assert!(
             language_service.contains(boundary),
@@ -1195,18 +1197,12 @@ fn language_engine_does_not_read_the_operating_system() {
         language_service.contains("CompilationSession"),
         "language-service dependency queries must consume the shared frontend session"
     );
-    for query in [
-        "symbol_index_from_program",
-        "document_symbols_from_program",
-        "workspace_module_graph",
-    ] {
-        assert!(
-            language_service.contains(query),
-            "language-service editor query must consume parsed syntax through {query}"
-        );
-    }
     for forbidden in [
         "parse_source",
+        "lint_cache:",
+        "format_cache:",
+        "symbol_cache:",
+        "document_symbol_cache:",
         "fn document_dependencies",
         "fn interface_modules",
         "dependency_cache:",

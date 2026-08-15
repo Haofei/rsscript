@@ -525,7 +525,10 @@ mechanical acceptance condition holds.
     revision-invalidated workspace query with cancellation/deadline handling.
     Syntax-only formatter/editor diagnostics are likewise cached by
     role/file/revision in the session-owned source store, including replacement
-    invalidation and cancellation/deadline checks. Complete workspace diagnostics
+    invalidation and cancellation/deadline checks. Formatter output, syntax
+    symbol indexes, and document-symbol trees now use that same session-owned
+    role/file/revision boundary, so editor clients do not retain a second
+    revision cache for any source-derived query. Complete workspace diagnostics
     also use a session-owned, immutable source/interface snapshot cache with
     revision invalidation. Their explicit
     `CompilationSession::semantic_workspace_diagnostics_with_operation` query
@@ -602,7 +605,10 @@ mechanical acceptance condition holds.
   - [x] **S04.1 — Replace the compiler façade dependency with syntax/semantic
     query dependencies.** Editor symbols and formatting now come directly from
     `rsscript-semantics` and `rsscript-syntax`; syntax lint now also bypasses
-    compiler. Module/import dependency discovery and local editor symbols now
+    compiler. Formatting, lint, symbol, and document-symbol queries are now
+    cached by `CompilationSession`, leaving `LanguageService` with only
+    document overlays, request accounting, and protocol adaptation.
+    Module/import dependency discovery and local editor symbols now
     consume shared CompilationSession parse/header/module-graph queries instead
     of reparsing or line-oriented text extraction, including interface
     visibility and invalidation traversal. The LSP now delegates both single-file and package

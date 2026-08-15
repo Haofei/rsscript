@@ -8,12 +8,15 @@ use rsscript_operation::{OperationAbort, OperationContext};
 use rsscript_source_model::{FileId, SourceRevision};
 use rsscript_syntax::{
     ast::{Item, Program, merge_programs},
-    parse_source,
+    format_source, lint_source, parse_source,
 };
 
-use crate::SemanticTypeFacts;
 use crate::hir::Hir;
 use crate::{InterfaceDescriptorError, InterfaceDescriptorV1};
+use crate::{
+    RssDocumentSymbol, SemanticTypeFacts, SymbolIndex, document_symbols_from_program,
+    symbol_index_from_program,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrontendStopReason {
@@ -319,6 +322,11 @@ pub struct CompilationSession {
     workspace_type_cache: Option<Arc<SemanticTypeFacts>>,
     workspace_analysis_cache: Option<Arc<AnalysisResult>>,
     syntax_diagnostic_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<[Diagnostic]>>,
+    lint_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<[Diagnostic]>>,
+    format_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<str>>,
+    symbol_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<SymbolIndex>>,
+    document_symbol_cache:
+        BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<[RssDocumentSymbol]>>,
     module_header_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<ModuleHeader>>,
     workspace_module_graph_cache: Option<Arc<WorkspaceModuleGraph>>,
     workspace_diagnostic_cache: Option<Arc<[Diagnostic]>>,
@@ -332,6 +340,14 @@ pub struct CompilationSession {
     workspace_type_cache_misses: u64,
     workspace_analysis_cache_hits: u64,
     workspace_analysis_cache_misses: u64,
+    lint_cache_hits: u64,
+    lint_cache_misses: u64,
+    format_cache_hits: u64,
+    format_cache_misses: u64,
+    symbol_cache_hits: u64,
+    symbol_cache_misses: u64,
+    document_symbol_cache_hits: u64,
+    document_symbol_cache_misses: u64,
     module_header_cache_hits: u64,
     module_header_cache_misses: u64,
     workspace_module_graph_cache_hits: u64,
@@ -352,6 +368,14 @@ pub struct CompilationSessionStats {
     pub workspace_type_cache_misses: u64,
     pub workspace_analysis_cache_hits: u64,
     pub workspace_analysis_cache_misses: u64,
+    pub lint_cache_hits: u64,
+    pub lint_cache_misses: u64,
+    pub format_cache_hits: u64,
+    pub format_cache_misses: u64,
+    pub symbol_cache_hits: u64,
+    pub symbol_cache_misses: u64,
+    pub document_symbol_cache_hits: u64,
+    pub document_symbol_cache_misses: u64,
     pub module_header_cache_hits: u64,
     pub module_header_cache_misses: u64,
     pub workspace_module_graph_cache_hits: u64,
@@ -540,6 +564,7 @@ impl CompilationSession {
             self.invalidate_parse_cache(SessionFileRole::Source, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Source, update.file_id);
             self.invalidate_syntax_diagnostic_cache(SessionFileRole::Source, update.file_id);
+            self.invalidate_editor_cache(SessionFileRole::Source, update.file_id);
             self.workspace_hir_cache = None;
             self.workspace_type_cache = None;
             self.workspace_analysis_cache = None;
@@ -558,6 +583,7 @@ impl CompilationSession {
             self.invalidate_parse_cache(SessionFileRole::Source, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Source, update.file_id);
             self.invalidate_syntax_diagnostic_cache(SessionFileRole::Source, update.file_id);
+            self.invalidate_editor_cache(SessionFileRole::Source, update.file_id);
             self.workspace_hir_cache = None;
             self.workspace_type_cache = None;
             self.workspace_analysis_cache = None;
@@ -586,6 +612,7 @@ impl CompilationSession {
             self.invalidate_parse_cache(SessionFileRole::Interface, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Interface, update.file_id);
             self.invalidate_syntax_diagnostic_cache(SessionFileRole::Interface, update.file_id);
+            self.invalidate_editor_cache(SessionFileRole::Interface, update.file_id);
             self.workspace_hir_cache = None;
             self.workspace_type_cache = None;
             self.workspace_analysis_cache = None;
@@ -604,6 +631,7 @@ impl CompilationSession {
             self.invalidate_parse_cache(SessionFileRole::Interface, update.file_id);
             self.invalidate_hir_cache(SessionFileRole::Interface, update.file_id);
             self.invalidate_syntax_diagnostic_cache(SessionFileRole::Interface, update.file_id);
+            self.invalidate_editor_cache(SessionFileRole::Interface, update.file_id);
             self.workspace_hir_cache = None;
             self.workspace_type_cache = None;
             self.workspace_analysis_cache = None;
@@ -906,6 +934,70 @@ impl CompilationSession {
         Ok(diagnostics)
     }
 
+    /// Format one source revision through the session-owned editor cache.
+    /// Formatting is syntax-only, but its result still belongs to the same
+    /// immutable file identity as parse, HIR, lint, and symbols so editor
+    /// clients cannot retain a competing revision cache.
+    pub fn format_file(&mut self, path: &str) -> Option<Arc<str>> {
+        let snapshot = self.source_snapshot();
+        let file = snapshot.files().iter().find(|file| file.path() == path)?;
+        self.format_snapshot_file(SessionFileRole::Source, file)
+    }
+
+    /// Format one interface revision through the same role-separated cache.
+    pub fn format_interface(&mut self, path: &str) -> Option<Arc<str>> {
+        let snapshot = self.interface_snapshot();
+        let file = snapshot.files().iter().find(|file| file.path() == path)?;
+        self.format_snapshot_file(SessionFileRole::Interface, file)
+    }
+
+    /// Return lint diagnostics for one source revision. Unlike complete
+    /// workspace diagnostics this intentionally stays local and syntax-only,
+    /// which keeps formatter/editor preflight cheap without creating a second
+    /// cache in the language service.
+    pub fn lint_file(&mut self, path: &str) -> Option<Arc<[Diagnostic]>> {
+        let snapshot = self.source_snapshot();
+        let file = snapshot.files().iter().find(|file| file.path() == path)?;
+        self.lint_snapshot_file(SessionFileRole::Source, file)
+    }
+
+    /// Interface linting uses the same session cache and stable identity as
+    /// source linting.
+    pub fn lint_interface(&mut self, path: &str) -> Option<Arc<[Diagnostic]>> {
+        let snapshot = self.interface_snapshot();
+        let file = snapshot.files().iter().find(|file| file.path() == path)?;
+        self.lint_snapshot_file(SessionFileRole::Interface, file)
+    }
+
+    /// Return syntax-derived symbols for one source revision from the shared
+    /// session. Semantic consumers can layer richer facts over this stable
+    /// document query without reparsing the text.
+    pub fn symbol_index_file(&mut self, path: &str) -> Option<Arc<SymbolIndex>> {
+        let snapshot = self.source_snapshot();
+        let file = snapshot.files().iter().find(|file| file.path() == path)?;
+        self.symbol_index_snapshot_file(SessionFileRole::Source, file)
+    }
+
+    pub fn symbol_index_interface(&mut self, path: &str) -> Option<Arc<SymbolIndex>> {
+        let snapshot = self.interface_snapshot();
+        let file = snapshot.files().iter().find(|file| file.path() == path)?;
+        self.symbol_index_snapshot_file(SessionFileRole::Interface, file)
+    }
+
+    /// Return document symbols for one source revision from the session-owned
+    /// parse-derived cache.
+    pub fn document_symbols_file(&mut self, path: &str) -> Option<Arc<[RssDocumentSymbol]>> {
+        let snapshot = self.source_snapshot();
+        let file = snapshot.files().iter().find(|file| file.path() == path)?;
+        self.document_symbols_snapshot_file(SessionFileRole::Source, file)
+    }
+
+    pub fn document_symbols_interface(&mut self, path: &str) -> Option<Arc<[RssDocumentSymbol]>> {
+        let snapshot = self.interface_snapshot();
+        let file = snapshot.files().iter().find(|file| file.path() == path)?;
+        self.document_symbols_snapshot_file(SessionFileRole::Interface, file)
+    }
+
     /// Parse one interface revision through the same cache. File IDs are
     /// session-local across both stores, so the query key also records its role.
     pub fn parse_interface(&mut self, path: &str) -> Option<Arc<Program>> {
@@ -1175,6 +1267,14 @@ impl CompilationSession {
             workspace_type_cache_misses: self.workspace_type_cache_misses,
             workspace_analysis_cache_hits: self.workspace_analysis_cache_hits,
             workspace_analysis_cache_misses: self.workspace_analysis_cache_misses,
+            lint_cache_hits: self.lint_cache_hits,
+            lint_cache_misses: self.lint_cache_misses,
+            format_cache_hits: self.format_cache_hits,
+            format_cache_misses: self.format_cache_misses,
+            symbol_cache_hits: self.symbol_cache_hits,
+            symbol_cache_misses: self.symbol_cache_misses,
+            document_symbol_cache_hits: self.document_symbol_cache_hits,
+            document_symbol_cache_misses: self.document_symbol_cache_misses,
             module_header_cache_hits: self.module_header_cache_hits,
             module_header_cache_misses: self.module_header_cache_misses,
             workspace_module_graph_cache_hits: self.workspace_module_graph_cache_hits,
@@ -1234,6 +1334,20 @@ impl CompilationSession {
             .retain(|(cached_role, cached_id, _), _| *cached_role != role || *cached_id != file_id);
     }
 
+    /// Evict every syntax-derived editor query for one changed/deleted file.
+    /// The language service deliberately does not mirror these maps: file ID,
+    /// role, and revision remain the single cache key owned by the session.
+    fn invalidate_editor_cache(&mut self, role: SessionFileRole, file_id: FileId) {
+        self.lint_cache
+            .retain(|(cached_role, cached_id, _), _| *cached_role != role || *cached_id != file_id);
+        self.format_cache
+            .retain(|(cached_role, cached_id, _), _| *cached_role != role || *cached_id != file_id);
+        self.symbol_cache
+            .retain(|(cached_role, cached_id, _), _| *cached_role != role || *cached_id != file_id);
+        self.document_symbol_cache
+            .retain(|(cached_role, cached_id, _), _| *cached_role != role || *cached_id != file_id);
+    }
+
     fn syntax_diagnostics_snapshot_file(
         &mut self,
         role: SessionFileRole,
@@ -1247,6 +1361,72 @@ impl CompilationSession {
         self.syntax_diagnostic_cache
             .insert(key, Arc::clone(&diagnostics));
         Some(diagnostics)
+    }
+
+    fn lint_snapshot_file(
+        &mut self,
+        role: SessionFileRole,
+        file: &SourceFileSnapshot,
+    ) -> Option<Arc<[Diagnostic]>> {
+        let key = (role, file.file_id(), file.revision());
+        if let Some(diagnostics) = self.lint_cache.get(&key) {
+            self.lint_cache_hits = self.lint_cache_hits.saturating_add(1);
+            return Some(Arc::clone(diagnostics));
+        }
+        let diagnostics = Arc::from(lint_source(file.path(), file.text()));
+        self.lint_cache.insert(key, Arc::clone(&diagnostics));
+        self.lint_cache_misses = self.lint_cache_misses.saturating_add(1);
+        Some(diagnostics)
+    }
+
+    fn format_snapshot_file(
+        &mut self,
+        role: SessionFileRole,
+        file: &SourceFileSnapshot,
+    ) -> Option<Arc<str>> {
+        let key = (role, file.file_id(), file.revision());
+        if let Some(formatted) = self.format_cache.get(&key) {
+            self.format_cache_hits = self.format_cache_hits.saturating_add(1);
+            return Some(Arc::clone(formatted));
+        }
+        let formatted: Arc<str> = format_source(file.path(), file.text()).into();
+        self.format_cache.insert(key, Arc::clone(&formatted));
+        self.format_cache_misses = self.format_cache_misses.saturating_add(1);
+        Some(formatted)
+    }
+
+    fn symbol_index_snapshot_file(
+        &mut self,
+        role: SessionFileRole,
+        file: &SourceFileSnapshot,
+    ) -> Option<Arc<SymbolIndex>> {
+        let key = (role, file.file_id(), file.revision());
+        if let Some(symbols) = self.symbol_cache.get(&key) {
+            self.symbol_cache_hits = self.symbol_cache_hits.saturating_add(1);
+            return Some(Arc::clone(symbols));
+        }
+        let program = self.parse_snapshot_file(role, file)?;
+        let symbols = Arc::new(symbol_index_from_program(file.text(), &program));
+        self.symbol_cache.insert(key, Arc::clone(&symbols));
+        self.symbol_cache_misses = self.symbol_cache_misses.saturating_add(1);
+        Some(symbols)
+    }
+
+    fn document_symbols_snapshot_file(
+        &mut self,
+        role: SessionFileRole,
+        file: &SourceFileSnapshot,
+    ) -> Option<Arc<[RssDocumentSymbol]>> {
+        let key = (role, file.file_id(), file.revision());
+        if let Some(symbols) = self.document_symbol_cache.get(&key) {
+            self.document_symbol_cache_hits = self.document_symbol_cache_hits.saturating_add(1);
+            return Some(Arc::clone(symbols));
+        }
+        let program = self.parse_snapshot_file(role, file)?;
+        let symbols: Arc<[RssDocumentSymbol]> = document_symbols_from_program(&program).into();
+        self.document_symbol_cache.insert(key, Arc::clone(&symbols));
+        self.document_symbol_cache_misses = self.document_symbol_cache_misses.saturating_add(1);
+        Some(symbols)
     }
 
     fn module_header_snapshot_file(
@@ -1665,6 +1845,7 @@ fn main() -> Int {
                 workspace_module_graph_cache_misses: 0,
                 workspace_diagnostic_cache_hits: 0,
                 workspace_diagnostic_cache_misses: 0,
+                ..CompilationSessionStats::default()
             }
         );
 
@@ -1685,6 +1866,61 @@ fn main() -> Int {
         assert!(!Arc::ptr_eq(&first, &replacement));
         session.remove_file("main.rss");
         assert!(session.parse_file("main.rss").is_none());
+    }
+
+    #[test]
+    fn compilation_session_owns_revisioned_editor_queries() {
+        let mut session = CompilationSession::default();
+        session
+            .set_file("main.rss", "fn main()->Int{return 1}\n")
+            .expect("source enters session");
+
+        let first_format = session.format_file("main.rss").expect("format");
+        let second_format = session.format_file("main.rss").expect("cached format");
+        assert!(Arc::ptr_eq(&first_format, &second_format));
+        let first_lint = session.lint_file("main.rss").expect("lint");
+        let second_lint = session.lint_file("main.rss").expect("cached lint");
+        assert!(Arc::ptr_eq(&first_lint, &second_lint));
+        let first_symbols = session.symbol_index_file("main.rss").expect("symbols");
+        let second_symbols = session
+            .symbol_index_file("main.rss")
+            .expect("cached symbols");
+        assert!(Arc::ptr_eq(&first_symbols, &second_symbols));
+        let first_document_symbols = session
+            .document_symbols_file("main.rss")
+            .expect("document symbols");
+        let second_document_symbols = session
+            .document_symbols_file("main.rss")
+            .expect("cached document symbols");
+        assert!(Arc::ptr_eq(
+            &first_document_symbols,
+            &second_document_symbols
+        ));
+
+        let stats = session.stats();
+        assert_eq!((stats.format_cache_misses, stats.format_cache_hits), (1, 1));
+        assert_eq!((stats.lint_cache_misses, stats.lint_cache_hits), (1, 1));
+        assert_eq!((stats.symbol_cache_misses, stats.symbol_cache_hits), (1, 1));
+        assert_eq!(
+            (
+                stats.document_symbol_cache_misses,
+                stats.document_symbol_cache_hits,
+            ),
+            (1, 1)
+        );
+
+        session
+            .set_file("main.rss", "fn main() -> Int { return 2 }\n")
+            .expect("replacement invalidates editor queries");
+        let formatted = session.format_file("main.rss").expect("replacement format");
+        assert!(formatted.contains("return 2"));
+        let symbols = session
+            .document_symbols_file("main.rss")
+            .expect("replacement document symbols");
+        assert_eq!(symbols[0].name, "main");
+        let stats = session.stats();
+        assert_eq!(stats.format_cache_misses, 2);
+        assert_eq!(stats.document_symbol_cache_misses, 2);
     }
 
     #[test]
@@ -2189,6 +2425,7 @@ fn main() -> Int {
                 workspace_module_graph_cache_misses: 0,
                 workspace_diagnostic_cache_hits: 0,
                 workspace_diagnostic_cache_misses: 0,
+                ..CompilationSessionStats::default()
             }
         );
     }

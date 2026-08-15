@@ -5,9 +5,9 @@
 //! Its API is deliberately document-oriented so editor clients do not couple
 //! themselves to analyzer databases, runtime values, VM registers, or optional
 //! backends.
-//! Parsing-adjacent queries are cached independently. Semantic diagnostics are
-//! cached only by the shared [`CompilationSession`], so editor clients never
-//! maintain a competing interface-dependency cache.
+//! Every source-derived query is cached by the shared [`CompilationSession`].
+//! Editor clients retain only document overlays, request accounting, and LSP
+//! protocol adaptation; they never maintain a competing revision cache.
 
 use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationContext};
 use std::collections::{BTreeMap, BTreeSet};
@@ -46,10 +46,6 @@ pub struct DocumentSnapshot {
 pub struct LanguageService {
     documents: BTreeMap<String, Document>,
     frontend: CompilationSession,
-    lint_cache: BTreeMap<(String, u64), Arc<[Diagnostic]>>,
-    format_cache: BTreeMap<(String, u64), Arc<str>>,
-    symbol_cache: BTreeMap<(String, u64), Arc<SymbolIndex>>,
-    document_symbol_cache: BTreeMap<(String, u64), Arc<[RssDocumentSymbol]>>,
     query_stats: BTreeMap<QueryKind, QueryStats>,
     cache_hits: u64,
     cache_misses: u64,
@@ -134,10 +130,6 @@ impl LanguageService {
         Self {
             documents: BTreeMap::new(),
             frontend: CompilationSession::default(),
-            lint_cache: BTreeMap::new(),
-            format_cache: BTreeMap::new(),
-            symbol_cache: BTreeMap::new(),
-            document_symbol_cache: BTreeMap::new(),
             query_stats: BTreeMap::new(),
             cache_hits: 0,
             cache_misses: 0,
@@ -202,12 +194,10 @@ impl LanguageService {
     }
 
     fn invalidate_document_queries(&mut self, path: &str) {
-        let mut removed = 0u64;
-        removed += retain_other_paths(&mut self.lint_cache, path);
-        removed += retain_other_paths(&mut self.format_cache, path);
-        removed += retain_other_paths(&mut self.symbol_cache, path);
-        removed += retain_other_paths(&mut self.document_symbol_cache, path);
-        self.invalidations = self.invalidations.saturating_add(removed);
+        // The session evicts every parse/HIR/lint/format/symbol query for the
+        // changed stable file identity. This service owns no derived cache, so
+        // it cannot accidentally keep a stale competing result.
+        let _ = path;
     }
 
     pub fn snapshot(&self, path: &str) -> Option<DocumentSnapshot> {
@@ -311,35 +301,31 @@ impl LanguageService {
 
     pub fn format(&mut self, path: &str) -> Option<String> {
         let document = self.documents.get(path)?.clone();
-        let snapshot = self.session_document_snapshot(path, &document)?;
-        let key = (path.to_string(), document.revision);
-        if let Some(cached) = self.format_cache.get(&key) {
-            let value = cached.to_string();
-            self.record_hit(QueryKind::Format);
-            return Some(value);
-        }
-        let value: Arc<str> = format_source(path, &snapshot.text).into();
-        self.format_cache.insert(key, Arc::clone(&value));
-        self.record_miss(QueryKind::Format);
+        let before = self.frontend.stats();
+        let value = match document.kind {
+            DocumentKind::Source => self.frontend.format_file(path),
+            DocumentKind::Interface => self.frontend.format_interface(path),
+        }?;
+        let after = self.frontend.stats();
+        self.record_session_cache_result(
+            QueryKind::Format,
+            after.format_cache_hits > before.format_cache_hits,
+        );
         Some(value.to_string())
     }
 
     pub fn symbols(&mut self, path: &str) -> Option<SymbolIndex> {
         let document = self.documents.get(path)?.clone();
-        let snapshot = self.session_document_snapshot(path, &document)?;
-        let key = (path.to_string(), document.revision);
-        if let Some(cached) = self.symbol_cache.get(&key) {
-            let value = cached.as_ref().clone();
-            self.record_hit(QueryKind::Symbols);
-            return Some(value);
-        }
-        let program = match document.kind {
-            DocumentKind::Source => self.frontend.parse_file(path),
-            DocumentKind::Interface => self.frontend.parse_interface(path),
+        let before = self.frontend.stats();
+        let value = match document.kind {
+            DocumentKind::Source => self.frontend.symbol_index_file(path),
+            DocumentKind::Interface => self.frontend.symbol_index_interface(path),
         }?;
-        let value = Arc::new(symbol_index_from_program(&snapshot.text, &program));
-        self.symbol_cache.insert(key, Arc::clone(&value));
-        self.record_miss(QueryKind::Symbols);
+        let after = self.frontend.stats();
+        self.record_session_cache_result(
+            QueryKind::Symbols,
+            after.symbol_cache_hits > before.symbol_cache_hits,
+        );
         Some(value.as_ref().clone())
     }
 
@@ -347,21 +333,17 @@ impl LanguageService {
         let Some(document) = self.documents.get(path).cloned() else {
             return Vec::new();
         };
-        let key = (path.to_string(), document.revision);
-        if let Some(cached) = self.document_symbol_cache.get(&key) {
-            let value = cached.to_vec();
-            self.record_hit(QueryKind::DocumentSymbols);
-            return value;
+        let before = self.frontend.stats();
+        let value = match document.kind {
+            DocumentKind::Source => self.frontend.document_symbols_file(path),
+            DocumentKind::Interface => self.frontend.document_symbols_interface(path),
         }
-        let program = match document.kind {
-            DocumentKind::Source => self.frontend.parse_file(path),
-            DocumentKind::Interface => self.frontend.parse_interface(path),
-        };
-        let value: Arc<[RssDocumentSymbol]> = program
-            .map(|program| document_symbols_from_program(&program).into())
-            .unwrap_or_else(|| Arc::from([]));
-        self.document_symbol_cache.insert(key, Arc::clone(&value));
-        self.record_miss(QueryKind::DocumentSymbols);
+        .unwrap_or_else(|| Arc::from([]));
+        let after = self.frontend.stats();
+        self.record_session_cache_result(
+            QueryKind::DocumentSymbols,
+            after.document_symbol_cache_hits > before.document_symbol_cache_hits,
+        );
         value.to_vec()
     }
 
@@ -374,19 +356,17 @@ impl LanguageService {
         let Some(document) = self.documents.get(path).cloned() else {
             return Ok(Vec::new());
         };
-        let Some(snapshot) = self.session_document_snapshot(path, &document) else {
-            return Ok(Vec::new());
-        };
-        let key = (path.to_string(), document.revision);
-        if let Some(cached) = self.lint_cache.get(&key) {
-            let value = cached.to_vec();
-            self.record_hit(QueryKind::Lint);
-            operation.check()?;
-            return Ok(value);
+        let before = self.frontend.stats();
+        let value = match document.kind {
+            DocumentKind::Source => self.frontend.lint_file(path),
+            DocumentKind::Interface => self.frontend.lint_interface(path),
         }
-        let value: Arc<[Diagnostic]> = lint_source(path, &snapshot.text).into();
-        self.lint_cache.insert(key, Arc::clone(&value));
-        self.record_miss(QueryKind::Lint);
+        .unwrap_or_else(|| Arc::from([]));
+        let after = self.frontend.stats();
+        self.record_session_cache_result(
+            QueryKind::Lint,
+            after.lint_cache_hits > before.lint_cache_hits,
+        );
         operation.check()?;
         Ok(value.to_vec())
     }
@@ -427,6 +407,14 @@ impl LanguageService {
 
     fn record_miss(&mut self, query: QueryKind) {
         self.query_stats.entry(query).or_default().misses += 1;
+    }
+
+    fn record_session_cache_result(&mut self, query: QueryKind, hit: bool) {
+        if hit {
+            self.record_hit(query);
+        } else {
+            self.record_miss(query);
+        }
     }
 
     pub fn query_stats(&self, query: QueryKind) -> QueryStats {
@@ -484,12 +472,6 @@ fn deduplicate_diagnostics(diagnostics: &mut Vec<Diagnostic>) {
             diagnostic.span.length,
         ))
     });
-}
-
-fn retain_other_paths<V>(cache: &mut BTreeMap<(String, u64), V>, path: &str) -> u64 {
-    let before = cache.len();
-    cache.retain(|(cached_path, _), _| cached_path != path);
-    u64::try_from(before.saturating_sub(cache.len())).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
