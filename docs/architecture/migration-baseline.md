@@ -886,7 +886,9 @@ an arbitrary shell executor.
     that review boundary through the same explicit callback. Compiler package
     compatibility retains only adapters and snapshot/remapping façades while
     check and the public compatibility façade are now limited to staged
-    callback and snapshot/remapping adapters.
+    callback and snapshot/remapping adapters. Lock serialization and source-list
+    presentation are likewise physically review-owned, with compiler preserving
+    only compatibility forwarders.
     - [x] **S05.3a — Extract neutral risk facts and calculation.** The review
       risk lattice and its pure evidence evaluator now live in
       `rsscript-review-core`. Compiler compatibility code collects neutral

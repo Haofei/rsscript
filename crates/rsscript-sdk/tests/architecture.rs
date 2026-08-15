@@ -2069,6 +2069,18 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
             && lock.contains("rsscript_project::project_path_source"),
         "package lock must own hashing/comparison and receive native path resolution explicitly"
     );
+    let lock_format_path = root.join("crates/rsscript-package-review/src/lock_format.rs");
+    assert!(
+        lock_format_path.is_file()
+            && !root
+                .join("crates/rsscript-compiler/src/package/lock_format.rs")
+                .exists(),
+        "package lock serialization must be physically owned by the package-review boundary"
+    );
+    assert!(
+        read(&lock_format_path).contains("pub fn package_lock_toml"),
+        "package review must own canonical lock presentation"
+    );
     let graph_path = root.join("crates/rsscript-package-review/src/graph.rs");
     assert!(
         graph_path.is_file()
@@ -2128,6 +2140,12 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
             && package_module.contains("snapshot_package_graph_inputs")
             && package_module.contains("remap_check"),
         "compiler package check compatibility must only authorize captured input and remap public paths"
+    );
+    assert!(
+        package_module.contains("rsscript_package_review::package_sources(package_dir)")
+            && package_module
+                .contains("rsscript_package_review::package_sources_with_dependency_interfaces"),
+        "compiler source-list compatibility must delegate presentation to the package-review boundary"
     );
 }
 

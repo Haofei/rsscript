@@ -15,6 +15,7 @@ mod diff;
 mod execution_facts;
 mod graph;
 mod lock;
+mod lock_format;
 mod policy;
 mod review;
 mod runtime_catalog;
@@ -30,6 +31,7 @@ pub use diff::*;
 pub use execution_facts::*;
 pub use graph::*;
 pub use lock::*;
+pub use lock_format::*;
 pub use policy::*;
 pub use review::*;
 pub use source_set::*;
@@ -63,4 +65,42 @@ pub fn session_analysis(
             .expect("captured package sources have unique normalized paths");
     }
     session.workspace_analysis()
+}
+
+/// Return the package's captured source and interface files in the legacy
+/// presentation model without routing through compiler compatibility code.
+pub fn package_sources(
+    package_dir: &std::path::Path,
+) -> Result<Vec<rsscript_package_model::PackageSourceFile>, String> {
+    let package = load_package(package_dir)?;
+    Ok(package_source_files(package.sources))
+}
+
+/// Return captured package files plus resolved dependency interfaces for
+/// compatibility tools that still present the expanded source set.
+pub fn package_sources_with_dependency_interfaces(
+    package_dir: &std::path::Path,
+) -> Result<Vec<rsscript_package_model::PackageSourceFile>, String> {
+    let package = load_package(package_dir)?;
+    let mut sources = package.sources;
+    sources.extend(collect_dependency_interface_sources(
+        package_dir,
+        &package.manifest,
+    )?);
+    sources.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(package_source_files(sources))
+}
+
+fn package_source_files(
+    sources: Vec<PackageSource>,
+) -> Vec<rsscript_package_model::PackageSourceFile> {
+    sources
+        .into_iter()
+        .map(|source| rsscript_package_model::PackageSourceFile {
+            path: source.path,
+            relative_path: source.relative_path,
+            contents: source.contents,
+            kind: source.kind,
+        })
+        .collect()
 }

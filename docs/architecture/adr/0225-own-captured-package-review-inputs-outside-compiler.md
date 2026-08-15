@@ -59,6 +59,8 @@ Package lock construction, comparison, bounded parsing, and content hashing
 are review-owned as well. The one native-sensitive operation is an explicit
 rooted-path resolver callback; compiler compatibility retains only that adapter
 and snapshot remapping rather than lock semantics or hashing implementation.
+Canonical lock serialization and legacy source-list presentation now live in
+the same review boundary; compiler compatibility only forwards those APIs.
 
 Package graph construction and graph-level review validation are also
 review-owned. They consume the project-captured manifest graph and receive the

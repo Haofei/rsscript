@@ -114,7 +114,6 @@ mod lock {
         rsscript_package_review::diff_package_locks(old_path, new_path)
     }
 }
-mod lock_format;
 mod metadata;
 mod native;
 // Legacy composition only: review evidence is package-review-owned. Native
@@ -181,40 +180,20 @@ pub fn package_tree(package_dir: &Path) -> Result<PackageTree, String> {
     authorization::remap_tree(&snapshot, &mut tree);
     Ok(tree)
 }
-pub(super) use lock_format::package_lock_toml;
+pub(super) use rsscript_package_review::package_lock_toml;
 pub use metadata::package_lowering_input;
 pub(crate) use native::package_native_plugin_build_dependencies;
 pub use rsscript_package_model::*;
 use source_set::{Manifest, ManifestNativeRust, PackageSource};
 
 pub fn package_sources(package_dir: &Path) -> Result<Vec<PackageSourceFile>, String> {
-    let package = source_set::load_package(package_dir)?;
-    Ok(package_source_files(package.sources))
+    rsscript_package_review::package_sources(package_dir)
 }
 
 pub fn package_sources_with_dependency_interfaces(
     package_dir: &Path,
 ) -> Result<Vec<PackageSourceFile>, String> {
-    let package = source_set::load_package(package_dir)?;
-    let mut sources = package.sources;
-    sources.extend(collect_dependency_interface_sources(
-        package_dir,
-        &package.manifest,
-    )?);
-    sources.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok(package_source_files(sources))
-}
-
-fn package_source_files(sources: Vec<PackageSource>) -> Vec<PackageSourceFile> {
-    sources
-        .into_iter()
-        .map(|source| PackageSourceFile {
-            path: source.path,
-            relative_path: source.relative_path,
-            contents: source.contents,
-            kind: source.kind,
-        })
-        .collect()
+    rsscript_package_review::package_sources_with_dependency_interfaces(package_dir)
 }
 
 fn collect_regular_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
