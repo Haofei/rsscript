@@ -17,7 +17,7 @@ pub fn check_package_dir(package_dir: &Path) -> Result<PackageCheck, String> {
     let snapshot = super::authorization::snapshot_package_graph_inputs(package_dir)?;
     let mut check =
         check_package_dir_captured(snapshot.root()).map_err(|error| snapshot.remap_error(error))?;
-    snapshot.remap_check(&mut check);
+    super::authorization::remap_check(&snapshot, &mut check);
     Ok(check)
 }
 

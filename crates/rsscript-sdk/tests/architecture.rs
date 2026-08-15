@@ -1404,6 +1404,13 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
         "the project capture boundary must own private graph capture and its temporary-directory lifetime"
     );
     assert!(
+        project.contains("pub struct CapturedPackageGraph")
+            && project.contains("pub fn select_package_root")
+            && project.contains("pub fn remap_path_label")
+            && project.contains("pub fn remap_error"),
+        "the project capture boundary must own selected graph roots and generic private-path remapping"
+    );
+    assert!(
         package_types
             .contains("pub use rsscript_project::{NativeRustDependency, PackageLoweringInput};"),
         "compiler compatibility may only re-export the project-owned capture models"
@@ -1433,9 +1440,11 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
 
     let authorization = read(&root.join("crates/rsscript-compiler/src/package/authorization.rs"));
     assert!(
-        authorization
-            .contains("use rsscript_project::{CapturedProjectGraph, capture_project_graph};")
-            && authorization.contains("let captured = capture_project_graph("),
+        authorization.contains("CapturedPackageGraph")
+            && authorization.contains("let captured = capture_project_graph(")
+            && authorization
+                .contains("pub(super) type PackageGraphSnapshot = CapturedPackageGraph;")
+            && !authorization.contains("pub(super) struct PackageGraphSnapshot"),
         "compiler package compatibility must compose the project-owned graph capture boundary"
     );
     assert!(

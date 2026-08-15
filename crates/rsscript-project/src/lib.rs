@@ -44,6 +44,17 @@ pub struct CapturedProjectGraph {
     paths: Vec<(PathBuf, PathBuf)>,
 }
 
+/// One selected package root inside an immutable captured project graph.
+///
+/// The graph retains the private temporary directory and every dependency
+/// mapping; this projection adds the root consumed by one package-oriented
+/// adapter without exposing mutable checkout paths.
+#[derive(Debug)]
+pub struct CapturedPackageGraph {
+    captured: CapturedProjectGraph,
+    root: PathBuf,
+}
+
 impl CapturedProjectGraph {
     pub fn root(&self) -> &Path {
         &self.root
@@ -87,6 +98,20 @@ impl CapturedProjectGraph {
 
     pub fn path_mappings(&self) -> &[(PathBuf, PathBuf)] {
         &self.paths
+    }
+
+    /// Select one captured package root after graph assembly has completed.
+    pub fn select_package_root(self, original_root: &Path) -> Result<CapturedPackageGraph, String> {
+        let root = self.captured_path(original_root).ok_or_else(|| {
+            format!(
+                "captured graph does not contain original package root {}",
+                original_root.display()
+            )
+        })?;
+        Ok(CapturedPackageGraph {
+            root: root.to_path_buf(),
+            captured: self,
+        })
     }
 
     /// Read a bounded UTF-8 file from the private captured graph.
@@ -294,6 +319,45 @@ impl CapturedProjectGraph {
             )
         })?;
         Ok(root.join(relative_path))
+    }
+}
+
+impl CapturedPackageGraph {
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn original_path(&self, snapshot_path: &Path) -> Option<PathBuf> {
+        self.captured.original_path(snapshot_path)
+    }
+
+    /// Rewrite a graph-private path label for host-facing diagnostics without
+    /// leaking the private temporary capture location.
+    pub fn remap_path_label(&self, value: &str) -> String {
+        if let Some(path) = value.strip_prefix("path+") {
+            return self
+                .original_path(Path::new(path))
+                .map(|path| format!("path+{}", path.display()))
+                .unwrap_or_else(|| value.to_string());
+        }
+        self.original_path(Path::new(value))
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| value.to_string())
+    }
+
+    /// Replace every private capture prefix in an error string with its
+    /// original project path, preferring the deepest matching path first.
+    pub fn remap_error(&self, error: String) -> String {
+        let mut paths = self.captured.path_mappings().iter().collect::<Vec<_>>();
+        paths.sort_by_key(|(_, captured)| std::cmp::Reverse(captured.as_os_str().len()));
+        paths
+            .into_iter()
+            .fold(error, |error, (original, captured)| {
+                error.replace(
+                    &captured.display().to_string(),
+                    &original.display().to_string(),
+                )
+            })
     }
 }
 
@@ -1093,6 +1157,24 @@ mod tests {
             graph
                 .read_captured_utf8(&package, Path::new("../outside"), 1024)
                 .is_err()
+        );
+        let captured_input = captured.join("nested/input.txt");
+        let selected = graph
+            .select_package_root(&package)
+            .expect("select captured package root");
+        assert!(selected.root().is_dir());
+        assert_eq!(
+            selected.original_path(&captured_input),
+            Some(package.join("nested/input.txt"))
+        );
+        assert_eq!(
+            selected.remap_path_label(&captured_input.display().to_string()),
+            package.join("nested/input.txt").display().to_string()
+        );
+        assert!(
+            selected
+                .remap_error(format!("failed under {}", selected.root().display()))
+                .contains(&package.display().to_string())
         );
     }
 

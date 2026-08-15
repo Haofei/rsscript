@@ -4,7 +4,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use fs2::FileExt;
-use rsscript_project::{CapturedProjectGraph, capture_project_graph};
+use rsscript_project::{CapturedPackageGraph, CapturedProjectGraph, capture_project_graph};
 use sha2::{Digest, Sha256};
 
 use super::analysis::analyze_package_dir_captured;
@@ -17,140 +17,103 @@ use super::{
     package_path_source,
 };
 
-#[derive(Debug)]
-pub(super) struct PackageGraphSnapshot {
-    captured: CapturedProjectGraph,
-    root: PathBuf,
+pub(super) type PackageGraphSnapshot = CapturedPackageGraph;
+
+fn remap_span(snapshot: &PackageGraphSnapshot, span: &mut crate::diagnostic::Span) {
+    span.file = snapshot.remap_path_label(&span.file);
 }
 
-impl PackageGraphSnapshot {
-    pub(super) fn root(&self) -> &Path {
-        &self.root
-    }
-
-    pub(super) fn original_path(&self, snapshot_path: &Path) -> Option<PathBuf> {
-        self.captured.original_path(snapshot_path)
-    }
-
-    fn remap_path_label(&self, value: &str) -> String {
-        if let Some(path) = value.strip_prefix("path+") {
-            return self
-                .original_path(Path::new(path))
-                .map(|path| format!("path+{}", path.display()))
-                .unwrap_or_else(|| value.to_string());
-        }
-        self.original_path(Path::new(value))
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| value.to_string())
-    }
-
-    pub(super) fn remap_error(&self, error: String) -> String {
-        let mut paths = self.captured.path_mappings().iter().collect::<Vec<_>>();
-        paths.sort_by_key(|(_, captured)| std::cmp::Reverse(captured.as_os_str().len()));
-        paths
-            .into_iter()
-            .fold(error, |error, (original, captured)| {
-                error.replace(
-                    &captured.display().to_string(),
-                    &original.display().to_string(),
-                )
-            })
-    }
-
-    fn remap_span(&self, span: &mut crate::diagnostic::Span) {
-        span.file = self.remap_path_label(&span.file);
-    }
-
-    fn remap_diagnostic(&self, diagnostic: &mut crate::diagnostic::Diagnostic) {
-        self.remap_span(&mut diagnostic.span);
-        for fix in &mut diagnostic.fixes {
-            if let Some(edit) = &mut fix.edit {
-                self.remap_span(&mut edit.span);
-            }
+fn remap_diagnostic(
+    snapshot: &PackageGraphSnapshot,
+    diagnostic: &mut crate::diagnostic::Diagnostic,
+) {
+    remap_span(snapshot, &mut diagnostic.span);
+    for fix in &mut diagnostic.fixes {
+        if let Some(edit) = &mut fix.edit {
+            remap_span(snapshot, &mut edit.span);
         }
     }
+}
 
-    pub(super) fn remap_review(&self, review: &mut PackageReview) {
-        review.manifest_path = self.remap_path_label(&review.manifest_path);
-        for dependency in &mut review.dependencies {
-            dependency.source = self.remap_path_label(&dependency.source);
-        }
-        for file in &mut review.files {
-            file.path = self.remap_path_label(&file.path);
-        }
-        for external_binding in &mut review.external_bindings {
-            if let Some(span) = &mut external_binding.span {
-                self.remap_span(span);
-            }
-        }
-        for await_site in &mut review.await_sites {
-            self.remap_span(&mut await_site.span);
-        }
-        for file in &mut review.review_map.files {
-            file.file = self.remap_path_label(&file.file);
-        }
-        for module in &mut review.review_map.modules {
-            module.file = self.remap_path_label(&module.file);
-        }
-        for diagnostic in &mut review.diagnostics {
-            self.remap_diagnostic(diagnostic);
+pub(super) fn remap_review(snapshot: &PackageGraphSnapshot, review: &mut PackageReview) {
+    review.manifest_path = snapshot.remap_path_label(&review.manifest_path);
+    for dependency in &mut review.dependencies {
+        dependency.source = snapshot.remap_path_label(&dependency.source);
+    }
+    for file in &mut review.files {
+        file.path = snapshot.remap_path_label(&file.path);
+    }
+    for external_binding in &mut review.external_bindings {
+        if let Some(span) = &mut external_binding.span {
+            remap_span(snapshot, span);
         }
     }
+    for await_site in &mut review.await_sites {
+        remap_span(snapshot, &mut await_site.span);
+    }
+    for file in &mut review.review_map.files {
+        file.file = snapshot.remap_path_label(&file.file);
+    }
+    for module in &mut review.review_map.modules {
+        module.file = snapshot.remap_path_label(&module.file);
+    }
+    for diagnostic in &mut review.diagnostics {
+        remap_diagnostic(snapshot, diagnostic);
+    }
+}
 
-    pub(super) fn remap_analysis(&self, analysis: &mut PackageAnalysis) {
-        for file in &mut analysis.files {
-            file.path = self.remap_path_label(&file.path);
-        }
-        for external_import in &mut analysis.external_imports {
-            if let Some(span) = &mut external_import.span {
-                self.remap_span(span);
-            }
-        }
-        for await_site in &mut analysis.await_sites {
-            self.remap_span(&mut await_site.span);
-        }
-        for diagnostic in &mut analysis.diagnostics {
-            self.remap_diagnostic(diagnostic);
+pub(super) fn remap_analysis(snapshot: &PackageGraphSnapshot, analysis: &mut PackageAnalysis) {
+    for file in &mut analysis.files {
+        file.path = snapshot.remap_path_label(&file.path);
+    }
+    for external_import in &mut analysis.external_imports {
+        if let Some(span) = &mut external_import.span {
+            remap_span(snapshot, span);
         }
     }
-
-    pub(super) fn remap_lock(&self, lock: &mut PackageLock) {
-        for package in &mut lock.packages {
-            package.source = self.remap_path_label(&package.source);
-        }
+    for await_site in &mut analysis.await_sites {
+        remap_span(snapshot, &mut await_site.span);
     }
-
-    pub(super) fn remap_tree(&self, tree: &mut PackageTree) {
-        self.remap_tree_node(&mut tree.root);
+    for diagnostic in &mut analysis.diagnostics {
+        remap_diagnostic(snapshot, diagnostic);
     }
+}
 
-    fn remap_tree_node(&self, node: &mut PackageTreeNode) {
-        node.source = self.remap_path_label(&node.source);
+pub(super) fn remap_lock(snapshot: &PackageGraphSnapshot, lock: &mut PackageLock) {
+    for package in &mut lock.packages {
+        package.source = snapshot.remap_path_label(&package.source);
+    }
+}
+
+pub(super) fn remap_tree(snapshot: &PackageGraphSnapshot, tree: &mut PackageTree) {
+    fn remap_tree_node(snapshot: &PackageGraphSnapshot, node: &mut PackageTreeNode) {
+        node.source = snapshot.remap_path_label(&node.source);
         for dependency in &mut node.dependencies {
-            self.remap_tree_node(dependency);
+            remap_tree_node(snapshot, dependency);
         }
     }
+    remap_tree_node(snapshot, &mut tree.root);
+}
 
-    pub(super) fn remap_check(&self, check: &mut PackageCheck) {
-        check.package_dir = self.remap_path_label(&check.package_dir);
-        check.lock.path = self.remap_path_label(&check.lock.path);
-        for change in &mut check.lock.package_changes {
-            for field in &mut change.changes {
-                if field.field == "source" {
-                    field.before = field
-                        .before
-                        .as_deref()
-                        .map(|value| self.remap_path_label(value));
-                    field.after = field
-                        .after
-                        .as_deref()
-                        .map(|value| self.remap_path_label(value));
-                }
+pub(super) fn remap_check(snapshot: &PackageGraphSnapshot, check: &mut PackageCheck) {
+    check.package_dir = snapshot.remap_path_label(&check.package_dir);
+    check.lock.path = snapshot.remap_path_label(&check.lock.path);
+    for change in &mut check.lock.package_changes {
+        for field in &mut change.changes {
+            if field.field == "source" {
+                field.before = field
+                    .before
+                    .as_deref()
+                    .map(|value| snapshot.remap_path_label(value));
+                field.after = field
+                    .after
+                    .as_deref()
+                    .map(|value| snapshot.remap_path_label(value));
             }
         }
-        for diagnostic in &mut check.diagnostics {
-            self.remap_diagnostic(diagnostic);
-        }
+    }
+    for diagnostic in &mut check.diagnostics {
+        remap_diagnostic(snapshot, diagnostic);
     }
 }
 
@@ -260,7 +223,7 @@ fn load_workspace_snapshot_inner(
     let mut analysis = analyze_package_dir_captured(package_snapshot.root())
         .map_err(|error| package_snapshot.remap_error(error))?;
     check_operation(operation)?;
-    package_snapshot.remap_analysis(&mut analysis);
+    remap_analysis(&package_snapshot, &mut analysis);
     analysis.snapshot_digest = digest.clone();
     Ok(WorkspaceSnapshot {
         package_dir,
@@ -497,11 +460,12 @@ fn snapshot_package_graph_inputs_inner(
     rewrite_snapshot_locks(&graph, &captured, &destinations)?;
     check_operation(operation)?;
 
-    let root = destinations
+    let root = graph
+        .nodes
         .get(&graph.root)
-        .cloned()
+        .map(|node| node.package_dir.as_path())
         .ok_or_else(|| "package graph snapshot did not contain its root package".to_string())?;
-    Ok(PackageGraphSnapshot { captured, root })
+    captured.select_package_root(root)
 }
 
 fn validate_captured_manifest(
@@ -1143,7 +1107,7 @@ mod tests {
                 .expect("captured review");
         let mut captured_lock =
             super::super::lock::lock_package_dir_captured(snapshot.root()).expect("captured lock");
-        snapshot.remap_lock(&mut captured_lock);
+        remap_lock(&snapshot, &mut captured_lock);
         let check = super::super::check::check_package_dir_captured(snapshot.root())
             .expect("captured check");
 

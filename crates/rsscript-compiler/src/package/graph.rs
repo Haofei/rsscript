@@ -20,7 +20,7 @@ pub fn package_tree(package_dir: &Path) -> Result<PackageTree, String> {
     let snapshot = super::authorization::snapshot_package_graph_inputs(package_dir)?;
     let mut tree =
         package_tree_captured(snapshot.root()).map_err(|error| snapshot.remap_error(error))?;
-    snapshot.remap_tree(&mut tree);
+    super::authorization::remap_tree(&snapshot, &mut tree);
     Ok(tree)
 }
 

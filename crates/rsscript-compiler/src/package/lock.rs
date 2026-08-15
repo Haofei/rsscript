@@ -26,7 +26,7 @@ pub fn lock_package_dir(package_dir: &Path) -> Result<PackageLock, String> {
     let snapshot = super::authorization::snapshot_package_graph_inputs(package_dir)?;
     let mut lock =
         lock_package_dir_captured(snapshot.root()).map_err(|error| snapshot.remap_error(error))?;
-    snapshot.remap_lock(&mut lock);
+    super::authorization::remap_lock(&snapshot, &mut lock);
     Ok(lock)
 }
 
