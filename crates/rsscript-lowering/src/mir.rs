@@ -1304,14 +1304,10 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         receiver: Option<&checked::HirCallReceiver>,
         args: &[checked::HirCallArg],
     ) -> Result<ValueId, MirLoweringError> {
-        // These builtins carry generic result/payload metadata or scheduler
-        // protocol state that the current owned `BuiltinId` target cannot
-        // represent structurally. Do not erase that information into an
-        // untyped v1 intrinsic: the explicit compatibility path retains it
-        // until MIR gains a typed builtin-instantiation/protocol operand.
-        if requires_legacy_builtin_metadata(signature) && !is_json_decode_builtin(signature) {
-            return self.unsupported("typed builtin metadata");
-        }
+        // JSON decode is the current builtin whose concrete type argument
+        // changes runtime behavior. Its type operand is preserved below;
+        // generic channel payloads are already fully checked and phantom to
+        // the VM's channel state, so they retain the ordinary `BuiltinId`.
         let destination = self.value();
         match signature.name.as_str() {
             "Ok" | "Err" => {
@@ -2455,17 +2451,6 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             construct,
         })
     }
-}
-
-fn requires_legacy_builtin_metadata(signature: &checked::FunctionSig) -> bool {
-    let namespace = signature
-        .namespace
-        .as_deref()
-        .map(|namespace| namespace.split('<').next().unwrap_or(namespace).trim());
-    matches!(
-        (namespace, signature.name.as_str()),
-        (Some("Json"), "decode" | "decode_text") | (Some("Sender"), _) | (Some("Receiver"), _)
-    )
 }
 
 fn is_catalog_builtin(signature: &checked::FunctionSig) -> bool {

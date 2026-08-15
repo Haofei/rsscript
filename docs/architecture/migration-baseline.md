@@ -1005,9 +1005,13 @@ mechanical acceptance condition holds.
       payload type is fully checked before lowering; `Channel.bounded/message`,
       `.sender`, and `.receiver` now use their catalog `BuiltinId` operations
       directly, remain absent from the Artifact Provider-import table, and
-      execute through verified bytecode. Scheduler-suspending `Sender` and
-      `Receiver` operations remain fail-closed until their suspension contract
-      is modeled explicitly in direct MIR.
+      execute through verified bytecode.
+    - [x] **M03.4f — Lower awaited channel operations.** `await Sender.send` and
+      `await Receiver.recv` now preserve their catalog `BuiltinId` and use the
+      established VM `CallIntrinsic` suspension/resumption path, with no
+      Provider import or compatibility lowering. Direct `async let` and
+      `select` wrappers for channel builtins remain fail-closed until MIR owns
+      an explicit builtin-task wrapper contract.
 - [ ] **M04 — Lower checked HIR to MIR exactly once.** Backend code cannot
   inspect syntax AST or reconstruct semantic facts. MIR verification rejects
   unresolved calls, invalid ownership state, incomplete cleanup, and malformed
@@ -1035,7 +1039,8 @@ mechanical acceptance condition holds.
       ladder binds and runs exactly one arm. Cancellation syntax remains
       follow-up direct-lowering work except for the cooperative standard-package
       source/token/cancel/poll operations covered by M03.3e and synchronous
-      channel endpoint construction covered by M03.4e.
+      channel endpoint construction plus direct awaited send/receive covered by
+      M03.4e–M03.4f.
   - [x] **M04.2 — Verify MIR ownership, resources, and task scopes.** The
     construction verifier runs ownership-mode, move/drop, resource-lifetime,
     resource-cleanup-over-CFG, and structured-task-close passes. Targeted

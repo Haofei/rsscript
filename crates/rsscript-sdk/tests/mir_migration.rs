@@ -734,6 +734,70 @@ fn main() -> Result<Bool, ChannelError> {
 }
 
 #[test]
+fn direct_checked_hir_awaited_channel_send_and_receive_preserve_async_contract() {
+    let source = r#"
+async fn main() -> Result<Int, ChannelError> {
+    let mut channel: Channel<Int> = Channel.bounded<Int>(capacity: 1)?
+    let mut sender: Sender<Int> = Channel.sender<Int>(channel: read channel)
+    let receiver: Receiver<Int> = Channel.receiver<Int>(channel: mut channel)?
+    local payload = 42
+    await Sender.send<Int>(sender: read sender, value: take payload)?
+    Sender.close<Int>(sender: mut sender)
+    let received = await Receiver.recv<Int>(receiver: read receiver)?
+    match received {
+        Some(value) => return Ok(value)
+        None => return Ok(0)
+    }
+}
+"#;
+    let validated = validate_sources_with_interfaces(
+        &[("direct-hir-channel-async.rss", source)],
+        standard_package_interfaces(),
+    )
+    .expect("channel send/receive fixture validates with the explicit async package interfaces");
+    let compiled = compile_validated_to_ir(&validated);
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("awaited channel operations should not require executable IR");
+    assert!(
+        mir.functions()
+            .iter()
+            .flat_map(|function| function.blocks())
+            .flat_map(|block| block.instructions())
+            .any(|instruction| matches!(
+                instruction,
+                MirInstruction::Call {
+                    target: MirCallTarget::Builtin { .. },
+                    ..
+                }
+            )),
+        "direct MIR must preserve channel calls as catalog builtins"
+    );
+    let direct_executable = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("channel send/receive MIR emits verified bytecode");
+    assert!(
+        direct_executable.bytecode_artifact().imports.is_empty(),
+        "VM-owned channel calls must not appear as Provider imports"
+    );
+    let direct = direct_executable
+        .eval_main_with_args(std::iter::empty::<String>())
+        .expect("channel send/receive bytecode executes");
+    let legacy = reg_vm_compile_validated(&validated)
+        .expect("legacy channel send/receive bytecode compiles")
+        .eval_main_with_args(std::iter::empty::<String>())
+        .expect("legacy channel send/receive bytecode executes");
+    assert_eq!(legacy.value, "Ok { value: 42 }");
+    assert_eq!(direct.value, legacy.value);
+    assert_eq!(direct.stdout, legacy.stdout);
+    assert_eq!(direct.stderr, legacy.stderr);
+    assert_eq!(direct.usage, legacy.usage);
+}
+
+#[test]
 fn direct_checked_hir_json_decode_preserves_typed_builtin_metadata() {
     let source = r#"
 struct Decoded derives(JsonDecode) { count: Int }
