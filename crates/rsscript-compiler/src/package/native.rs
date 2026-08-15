@@ -25,9 +25,7 @@ use super::{
     read_utf8_file_bounded,
 };
 
-mod bindings;
-
-pub(super) use bindings::{
+pub(super) use rsscript_package_review::{
     native_binding_interface_sources, package_external_bindings, package_native_binding_diagnostics,
 };
 

@@ -5535,7 +5535,7 @@ fn high_risk_state_machines_keep_dedicated_module_owners() {
     let root = workspace_root();
     let required = [
         "crates/rsscript-semantics/src/task_groups.rs",
-        "crates/rsscript-compiler/src/package/native/bindings.rs",
+        "crates/rsscript-package-review/src/bindings.rs",
         "crates/rsscript-vm/src/reg_vm/tier/admission.rs",
         "crates/rsscript-vm/src/reg_vm/tier/call_scratch.rs",
         "crates/rsscript-vm/src/reg_vm/tier/recursion.rs",

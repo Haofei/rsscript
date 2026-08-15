@@ -3,16 +3,17 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use crate::diagnostic::{Diagnostic, Span, code};
-use crate::formatter::format_program;
-use crate::syntax::ast::{FunctionDecl, Item, Program, TypeRef};
-use crate::syntax::parse_source;
-
-use super::super::contract::collect_package_function_contracts;
-use super::super::{
-    ManifestNativeRust, PackageReviewFileKind, PackageSource, read_utf8_file_bounded,
+use rsscript_diagnostics::{Diagnostic, Span, code};
+use rsscript_package_model::PackageReviewFileKind;
+use rsscript_project::read_project_utf8_file_bounded;
+use rsscript_syntax::{
+    ast::{FunctionDecl, Item, Program, TypeRef},
+    format_program, parse_source,
 };
-use super::NATIVE_MANIFEST_MAX_BYTES;
+
+use crate::{ManifestNativeRust, PackageSource, collect_package_function_contracts};
+
+const NATIVE_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -32,14 +33,12 @@ struct FunctionBinding {
     review_effects: Vec<String>,
 }
 
-pub(in crate::package) fn package_external_bindings(
-    package_dir: &Path,
-) -> Result<BTreeMap<String, String>, String> {
+pub fn package_external_bindings(package_dir: &Path) -> Result<BTreeMap<String, String>, String> {
     let path = package_dir.join("native/bindings.rssbind.toml");
     if !path.exists() {
         return Ok(BTreeMap::new());
     }
-    let source = read_utf8_file_bounded(
+    let source = read_project_utf8_file_bounded(
         &path,
         NATIVE_MANIFEST_MAX_BYTES,
         "native binding manifest read",
@@ -88,7 +87,7 @@ fn flatten_external_bindings(
     Ok(flat)
 }
 
-pub(in crate::package) fn native_binding_interface_sources(
+pub fn native_binding_interface_sources(
     sources: &[PackageSource],
     external_bindings: &BTreeMap<String, String>,
 ) -> Vec<PackageSource> {
@@ -149,7 +148,7 @@ pub(in crate::package) fn native_binding_interface_sources(
         .collect()
 }
 
-pub(in crate::package) fn package_native_binding_diagnostics(
+pub fn package_native_binding_diagnostics(
     package_dir: &Path,
     sources: &[PackageSource],
     external_bindings: &BTreeMap<String, String>,
@@ -326,7 +325,7 @@ fn unsupported_native_value_type(ty: &TypeRef) -> Option<String> {
 fn native_binding_span(package_dir: &Path, symbol: &str) -> Span {
     let path = package_dir.join("native/bindings.rssbind.toml");
     let file = path.display().to_string();
-    let source = read_utf8_file_bounded(
+    let source = read_project_utf8_file_bounded(
         &path,
         NATIVE_MANIFEST_MAX_BYTES,
         "native binding manifest diagnostic read",

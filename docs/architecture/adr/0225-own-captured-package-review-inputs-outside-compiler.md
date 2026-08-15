@@ -39,6 +39,12 @@ Neutral package analysis also belongs to this boundary. It builds
 crate rather than a compiler implementation helper. The compiler retains only
 the authorization wrapper needed by its legacy compatibility entry point.
 
+Native binding descriptor parsing, binding-interface projection, and binding
+diagnostics are likewise review-owned. This removes native binding manifest
+formatting and source-contract validation from compiler package code while
+leaving native Rust build/review execution in its explicit compatibility
+boundary.
+
 The compiler's opt-in `package` compatibility feature has a private forwarding
 module during the staged migration so existing authorization, native, lock, and
 review callers retain their established behavior. The reviewed compiler default
