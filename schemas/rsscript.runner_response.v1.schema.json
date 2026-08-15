@@ -21,7 +21,7 @@
       }
     },
     "runner_termination": {
-      "enum": ["completed", "verification_rejected", "link_rejected", "protocol_rejected", "host_failure"]
+      "enum": ["completed", "isolation_rejected", "verification_rejected", "link_rejected", "protocol_rejected", "host_failure"]
     },
     "report": { "type": ["object", "null"] },
     "error": { "type": ["string", "null"] }

@@ -8,7 +8,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use rss_process_guard::{GuardedChild, ProcessLimits};
+#[cfg(any(target_os = "linux", target_os = "android"))]
+use rss_process_guard::spawn_guarded_child_strict_with;
+use rss_process_guard::{
+    GuardedChild, ProcessLimits, StrictIsolationRequirements, verify_strict_child_context_with,
+};
 use rsscript_runner_protocol::{
     MAX_RESPONSE_BYTES, RunnerLimitsV1, RunnerProfileV1, RunnerRequestV1, RunnerResponseV1,
     RunnerTerminationV1, read_request, read_response, validate_response_profile, write_request,
@@ -292,7 +296,11 @@ fn format_runner_disconnect_error(
 fn spawn_runner(command: &mut Command, limits: ProcessLimits) -> io::Result<GuardedChild> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
-        rss_process_guard::spawn_guarded_child_strict(command, limits)
+        spawn_guarded_child_strict_with(
+            command,
+            limits,
+            StrictIsolationRequirements::linux_runner(),
+        )
     }
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
     {
@@ -326,7 +334,7 @@ pub(crate) fn runner_entrypoint() -> ExitCode {
             Ok(()) => execute_request(request, bundle),
             Err(error) => RunnerResponseV1::rejected(
                 request.profile,
-                RunnerTerminationV1::HostFailure,
+                RunnerTerminationV1::IsolationRejected,
                 format!("runner isolation preflight failed: {error}"),
             ),
         },
@@ -351,7 +359,7 @@ pub(crate) fn runner_entrypoint() -> ExitCode {
 /// claim the isolated execution path. Other platforms retain their existing
 /// process-tree and resource-limit guard without claiming this Linux control.
 fn verify_runner_execution_context() -> io::Result<()> {
-    rss_process_guard::verify_strict_child_context()
+    verify_strict_child_context_with(StrictIsolationRequirements::linux_runner())
 }
 
 fn execute_request(request: RunnerRequestV1, bundle: Vec<u8>) -> RunnerResponseV1 {

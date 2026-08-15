@@ -144,6 +144,10 @@ impl RunnerRequestV1 {
 #[serde(rename_all = "snake_case")]
 pub enum RunnerTerminationV1 {
     Completed,
+    /// The child refused to execute because a declared runner isolation
+    /// control was not installed or could not be verified.  This is separate
+    /// from both Artifact verification and VM/script termination.
+    IsolationRejected,
     VerificationRejected,
     LinkRejected,
     ProtocolRejected,
@@ -515,6 +519,19 @@ mod tests {
             write_response(Vec::new(), &rejected_with_report),
             Err(ProtocolError::Invalid(_))
         ));
+    }
+
+    #[test]
+    fn isolation_rejection_is_a_runner_failure_not_a_vm_report() {
+        let response = RunnerResponseV1::rejected(
+            RunnerProfileV1::NoProviders,
+            RunnerTerminationV1::IsolationRejected,
+            "required strict isolation control is unavailable",
+        );
+        assert!(response.report.is_none());
+        assert!(response.error.is_some());
+        let json = serde_json::to_value(response).expect("response JSON");
+        assert_eq!(json["runner_termination"], "isolation_rejected");
     }
 
     #[test]

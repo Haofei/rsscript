@@ -2,19 +2,19 @@
   "schema": "rsscript.migration_queue.v1",
   "tasks": [
     {
-      "id": "A09.2",
+      "id": "A09.2b",
       "priority": 80,
-      "depends_on": ["A09.1a", "A09.1b"],
+      "depends_on": ["A09.2a"],
       "scope": [
-        "crates/rsscript-runner/**",
-        "crates/rss-process-guard/**",
+        "crates/process-guard/**",
         "crates/rsscript-cli/**",
-        "docs/security/**"
+        "crates/rsscript-runner-protocol/**",
+        "docs/threat-model.md"
       ],
       "acceptance": [
-        "The Linux reference runner applies its declared process-isolation controls before execution.",
-        "Runner control failures are reported separately from VM termination reasons.",
-        "Tests exercise the supported Linux control path and fail closed when controls are unavailable."
+        "A profile which requires user or mount namespaces installs them before runner code can parse an Artifact.",
+        "Kernel policy which makes the namespace adapter unavailable is reported as an isolation failure before execution.",
+        "The Linux adapter has focused supported-path and fail-closed coverage."
       ],
       "verification": [
         "cargo test -p rss-process-guard --locked",

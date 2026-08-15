@@ -2040,11 +2040,28 @@ an arbitrary shell executor.
       configuration and Linux isolation support.
   - [ ] **A09.2 — Add Linux isolation adapters.** Implement optional namespace,
     syscall, filesystem, network, and cgroup controls with capability detection
-    and fail-closed profile requirements. The strict Linux/Android child path
-    now installs kernel `no_new_privs` before runner code begins, and the
-    hidden runner entrypoint rechecks that kernel status before parsing an
-    Artifact so a direct child invocation fails closed. Namespace,
-    syscall-filter, filesystem, network, and cgroup adapters remain open.
+    and fail-closed profile requirements.
+    - [x] **A09.2a — Establish the strict control contract.**
+      `rss-process-guard` now represents every planned Linux control explicitly.
+      The reference runner declares `no_new_privs`, installs it before runner
+      code begins, and rechecks the kernel status in the hidden child before
+      Artifact parsing. Requiring an adapter that is not implemented is an
+      `Unsupported` launch error rather than advisory hardening; an in-child
+      preflight failure is reported as `isolation_rejected`, separately from
+      Artifact, link, and VM termination.
+    - [ ] **A09.2b — Add user and mount namespace controls.** Install the
+      optional Linux user/mount namespace adapter before runner code, detect
+      unavailable kernel policy, and fail closed whenever a future profile
+      requires it.
+    - [ ] **A09.2c — Add network namespace controls.** Install a private
+      network namespace only for profiles that require it, with a capability
+      check and explicit failure rather than an implied network restriction.
+    - [ ] **A09.2d — Add filesystem and syscall controls.** Add rooted
+      filesystem and seccomp adapters whose required rules are installed before
+      Artifact parsing; keep unavailable controls fail-closed.
+    - [ ] **A09.2e — Add cgroup-v2 controls.** Attach child process trees to a
+      dedicated cgroup where supported, report unavailable delegation clearly,
+      and keep the runner's VM termination separate from containment failures.
   - [ ] **A09.3 — Complete parent-side containment.** Cover process-tree kill,
     deadline, stdout/stderr/report limits, abnormal exits, and child disconnects.
     The child protocol now fail-closes contradictory response states: only a

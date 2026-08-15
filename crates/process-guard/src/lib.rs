@@ -101,6 +101,150 @@ pub enum LimitSupport {
     Unsupported,
 }
 
+/// A kernel control which can be required by a strict runner profile.
+///
+/// This is deliberately a small, host-side contract rather than a language
+/// capability model.  A profile may only require a control that the launcher
+/// can install before the child starts executing runner code.  Controls that
+/// do not yet have an adapter are reported as unsupported and fail closed;
+/// they are never silently treated as advisory hardening.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StrictIsolationControl {
+    /// Linux's `PR_SET_NO_NEW_PRIVS` privilege-transition guard.
+    NoNewPrivileges,
+    /// A private Linux user namespace.
+    UserNamespace,
+    /// A private Linux mount namespace.
+    MountNamespace,
+    /// A private Linux network namespace.
+    NetworkNamespace,
+    /// A restrictive Linux seccomp filter.
+    SeccompFilter,
+    /// A dedicated cgroup-v2 boundary.
+    CgroupV2,
+}
+
+impl StrictIsolationControl {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::NoNewPrivileges => "no_new_privs",
+            Self::UserNamespace => "user namespace",
+            Self::MountNamespace => "mount namespace",
+            Self::NetworkNamespace => "network namespace",
+            Self::SeccompFilter => "seccomp filter",
+            Self::CgroupV2 => "cgroup v2",
+        }
+    }
+}
+
+/// The explicitly declared kernel controls for one strict child launch.
+///
+/// `linux_runner` is the current reference-runner baseline.  It establishes
+/// `no_new_privs` before execution on Linux/Android.  The remaining controls
+/// are represented here now so callers can require them without accidentally
+/// receiving a weaker child while their adapters are being implemented.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StrictIsolationRequirements {
+    no_new_privileges: bool,
+    user_namespace: bool,
+    mount_namespace: bool,
+    network_namespace: bool,
+    seccomp_filter: bool,
+    cgroup_v2: bool,
+}
+
+impl StrictIsolationRequirements {
+    pub const fn none() -> Self {
+        Self {
+            no_new_privileges: false,
+            user_namespace: false,
+            mount_namespace: false,
+            network_namespace: false,
+            seccomp_filter: false,
+            cgroup_v2: false,
+        }
+    }
+
+    /// The controls installed by the current strict reference runner.
+    pub const fn linux_runner() -> Self {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
+            return Self::none().require(StrictIsolationControl::NoNewPrivileges);
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        Self::none()
+    }
+
+    /// Require one control.  The launch is rejected if it cannot be enforced.
+    pub const fn require(mut self, control: StrictIsolationControl) -> Self {
+        match control {
+            StrictIsolationControl::NoNewPrivileges => self.no_new_privileges = true,
+            StrictIsolationControl::UserNamespace => self.user_namespace = true,
+            StrictIsolationControl::MountNamespace => self.mount_namespace = true,
+            StrictIsolationControl::NetworkNamespace => self.network_namespace = true,
+            StrictIsolationControl::SeccompFilter => self.seccomp_filter = true,
+            StrictIsolationControl::CgroupV2 => self.cgroup_v2 = true,
+        }
+        self
+    }
+
+    pub const fn requires(self, control: StrictIsolationControl) -> bool {
+        match control {
+            StrictIsolationControl::NoNewPrivileges => self.no_new_privileges,
+            StrictIsolationControl::UserNamespace => self.user_namespace,
+            StrictIsolationControl::MountNamespace => self.mount_namespace,
+            StrictIsolationControl::NetworkNamespace => self.network_namespace,
+            StrictIsolationControl::SeccompFilter => self.seccomp_filter,
+            StrictIsolationControl::CgroupV2 => self.cgroup_v2,
+        }
+    }
+
+    fn require_fully_enforced(self) -> io::Result<()> {
+        for control in [
+            StrictIsolationControl::NoNewPrivileges,
+            StrictIsolationControl::UserNamespace,
+            StrictIsolationControl::MountNamespace,
+            StrictIsolationControl::NetworkNamespace,
+            StrictIsolationControl::SeccompFilter,
+            StrictIsolationControl::CgroupV2,
+        ] {
+            if self.requires(control) && strict_isolation_support(control) != LimitSupport::Enforced
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    format!(
+                        "required strict isolation control `{}` is unavailable on this platform",
+                        control.name()
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Report whether a strict isolation control is actually enforced by this
+/// crate.  This is intentionally about implementation support, not a claim
+/// that a particular host policy is sufficient for untrusted code.
+pub const fn strict_isolation_support(control: StrictIsolationControl) -> LimitSupport {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        return match control {
+            StrictIsolationControl::NoNewPrivileges => LimitSupport::Enforced,
+            StrictIsolationControl::UserNamespace
+            | StrictIsolationControl::MountNamespace
+            | StrictIsolationControl::NetworkNamespace
+            | StrictIsolationControl::SeccompFilter
+            | StrictIsolationControl::CgroupV2 => LimitSupport::Unsupported,
+        };
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    {
+        let _ = control;
+        LimitSupport::Unsupported
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AppliedProcessLimits {
     pub cpu: LimitSupport,
@@ -255,8 +399,20 @@ pub fn spawn_guarded_child_strict(
     command: &mut Command,
     limits: ProcessLimits,
 ) -> io::Result<GuardedChild> {
+    spawn_guarded_child_strict_with(command, limits, StrictIsolationRequirements::linux_runner())
+}
+
+/// Strictly spawn a child with the exact kernel controls declared by the
+/// caller.  Every requested control must be enforced before the child begins
+/// executing; unavailable adapters are an error rather than best effort.
+pub fn spawn_guarded_child_strict_with(
+    command: &mut Command,
+    limits: ProcessLimits,
+    requirements: StrictIsolationRequirements,
+) -> io::Result<GuardedChild> {
     platform_limit_support().require_fully_enforced(limits)?;
-    configure_strict_platform(command)?;
+    requirements.require_fully_enforced()?;
+    configure_strict_platform(command, requirements)?;
     spawn_guarded_child(command, limits)
 }
 
@@ -269,8 +425,23 @@ pub fn spawn_guarded_child_strict(
 /// platforms return success because the strict launcher does not claim an
 /// equivalent kernel control there.
 pub fn verify_strict_child_context() -> io::Result<()> {
+    verify_strict_child_context_with(StrictIsolationRequirements::linux_runner())
+}
+
+/// Verify the strict controls expected by a child-side runner entrypoint.
+///
+/// The check mirrors [`spawn_guarded_child_strict_with`] and deliberately
+/// rejects an entrypoint launched without the required control.  Future
+/// controls are checked here as their adapters become available.
+pub fn verify_strict_child_context_with(
+    requirements: StrictIsolationRequirements,
+) -> io::Result<()> {
+    requirements.require_fully_enforced()?;
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
+        if !requirements.requires(StrictIsolationControl::NoNewPrivileges) {
+            return Ok(());
+        }
         let status = std::fs::read_to_string("/proc/self/status")?;
         if parse_no_new_privileges(&status) == Some(true) {
             return Ok(());
@@ -304,8 +475,15 @@ fn parse_no_new_privileges(status: &str) -> Option<bool> {
 /// Other platforms retain the existing strict resource/process-tree checks but
 /// do not claim an equivalent privilege-transition control.
 #[cfg(any(target_os = "linux", target_os = "android"))]
-fn configure_strict_platform(command: &mut Command) -> io::Result<()> {
+fn configure_strict_platform(
+    command: &mut Command,
+    requirements: StrictIsolationRequirements,
+) -> io::Result<()> {
     use std::os::unix::process::CommandExt;
+
+    if !requirements.requires(StrictIsolationControl::NoNewPrivileges) {
+        return Ok(());
+    }
 
     // SAFETY: the closure invokes only `prctl` with integer arguments and
     // obtains no locks or heap-backed state after fork. Any kernel failure is
@@ -324,7 +502,10 @@ fn configure_strict_platform(command: &mut Command) -> io::Result<()> {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
-fn configure_strict_platform(_command: &mut Command) -> io::Result<()> {
+fn configure_strict_platform(
+    _command: &mut Command,
+    _requirements: StrictIsolationRequirements,
+) -> io::Result<()> {
     Ok(())
 }
 
@@ -855,6 +1036,35 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[test]
+    fn unavailable_strict_control_fails_before_child_spawn() {
+        let mut command = if cfg!(windows) {
+            Command::new("cmd")
+        } else {
+            Command::new("sh")
+        };
+        if cfg!(windows) {
+            command.args(["/C", "exit 0"]);
+        } else {
+            command.args(["-c", "exit 0"]);
+        }
+        let requirements =
+            StrictIsolationRequirements::none().require(StrictIsolationControl::NetworkNamespace);
+        let error = spawn_guarded_child_strict_with(
+            &mut command,
+            ProcessLimits {
+                cpu_seconds: 0,
+                address_space_bytes: 0,
+                open_files: 0,
+                file_size_bytes: 0,
+            },
+            requirements,
+        )
+        .expect_err("unimplemented strict control must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert!(error.to_string().contains("network namespace"));
+    }
+
     #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]
     fn strict_child_starts_with_no_new_privileges() {
@@ -878,6 +1088,27 @@ mod tests {
             .expect("read child status");
         assert!(child.wait().expect("child should exit").success());
         assert_eq!(stdout.trim(), "NoNewPrivs:\t1");
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn linux_runner_contract_requires_and_verifies_no_new_privileges() {
+        let requirements = StrictIsolationRequirements::linux_runner();
+        assert!(requirements.requires(StrictIsolationControl::NoNewPrivileges));
+        assert_eq!(
+            strict_isolation_support(StrictIsolationControl::NoNewPrivileges),
+            LimitSupport::Enforced
+        );
+        assert_eq!(
+            strict_isolation_support(StrictIsolationControl::MountNamespace),
+            LimitSupport::Unsupported
+        );
+        let status = std::fs::read_to_string("/proc/self/status").expect("read process status");
+        let result = verify_strict_child_context_with(requirements);
+        assert_eq!(
+            result.is_ok(),
+            parse_no_new_privileges(&status) == Some(true)
+        );
     }
 
     #[cfg(any(target_os = "linux", target_os = "android"))]
