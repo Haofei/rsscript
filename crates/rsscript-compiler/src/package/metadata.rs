@@ -6,8 +6,8 @@ use super::native::{
 };
 use super::source_set::load_package;
 use super::{
-    collect_dependency_interface_sources, collect_dependency_lowering_sources, PackageIdentity,
-    PackageLoweringInput, PackageReviewFileKind,
+    PackageIdentity, PackageLoweringInput, PackageReviewFileKind,
+    collect_dependency_interface_sources, collect_dependency_lowering_sources,
 };
 
 pub fn package_lowering_input(package_dir: &Path) -> Result<PackageLoweringInput, String> {
@@ -15,7 +15,7 @@ pub fn package_lowering_input(package_dir: &Path) -> Result<PackageLoweringInput
     let dependency_interfaces =
         collect_dependency_interface_sources(package_dir, &package.manifest)?;
     let dependency_sources = collect_dependency_lowering_sources(package_dir, &package.manifest)?;
-    let native_dependencies = package_native_rust_dependencies(package_dir, &package.manifest)?;
+    let native_dependencies = package_native_rust_dependencies(package_dir)?;
     let external_bindings = package_external_bindings(package_dir)?;
     let native_binding_interfaces =
         native_binding_interface_sources(&package.sources, &external_bindings);

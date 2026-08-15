@@ -1373,7 +1373,7 @@ mod tests {
     fn published_migration_frontier_is_fail_closed_and_prioritized() {
         let queue = migration_ready_queue().expect("published frontier must be valid");
         assert_eq!(queue.schema, MIGRATION_QUEUE_SCHEMA);
-        assert!(queue.ready.iter().any(|item| item.id == "S05.1d"));
+        assert!(queue.ready.iter().any(|item| item.id == "S05.1e"));
         assert!(
             queue
                 .ready
@@ -1431,7 +1431,7 @@ mod tests {
 
     #[test]
     fn published_migration_work_packet_is_bounded_and_actionable() {
-        let packet = migration_work_packet("S05.1d").expect("published work packet");
+        let packet = migration_work_packet("S05.1e").expect("published work packet");
         assert_eq!(packet.schema, "rsscript.migration_work_packet.v1");
         assert_eq!(packet.state, "ready");
         assert!(!packet.scope.is_empty());

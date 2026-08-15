@@ -6,14 +6,16 @@ use std::path::{Component, Path, PathBuf};
 #[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rsscript_project::resolve_project_path_dependency;
+use rsscript_project::{
+    ProjectManifestGraph, ProjectManifestGraphLimits, capture_project_manifest_graph,
+    resolve_project_path_dependency,
+};
 
 use super::NativeRustDependency;
 
 use super::dependency::package_dependency_spec;
 use super::source_set::{
-    load_package, load_package_manifest, load_package_with_features, resolve_package_features,
-    selected_root_package_features,
+    parse_package_manifest_source, resolve_package_features, selected_root_package_features,
 };
 use super::{
     Manifest, ManifestNativeRust, PackageNativeRustAuthorDeclaration, PackageNativeRustCheck,
@@ -32,15 +34,18 @@ const NATIVE_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
 
 pub(super) fn package_native_rust_dependencies(
     package_dir: &Path,
-    manifest: &Manifest,
 ) -> Result<Vec<NativeRustDependency>, String> {
+    let manifest_graph =
+        capture_project_manifest_graph(package_dir, ProjectManifestGraphLimits::default())?;
+    let manifest = captured_manifest(&manifest_graph, package_dir)?;
     let mut visited = BTreeSet::new();
     let mut dependencies = Vec::new();
-    let selected_features = selected_root_package_features(manifest);
+    let selected_features = selected_root_package_features(&manifest);
     collect_package_native_rust_dependencies(
         package_dir,
-        manifest,
+        &manifest,
         &selected_features,
+        &manifest_graph,
         &mut visited,
         &mut dependencies,
     )?;
@@ -50,15 +55,17 @@ pub(super) fn package_native_rust_dependencies(
 pub(crate) fn package_native_plugin_build_dependencies(
     package_dir: &Path,
 ) -> Result<Vec<super::NativePluginBuildDependency>, String> {
-    let package = load_package(package_dir)?;
-    let manifest = &package.manifest;
+    let manifest_graph =
+        capture_project_manifest_graph(package_dir, ProjectManifestGraphLimits::default())?;
+    let manifest = captured_manifest(&manifest_graph, package_dir)?;
     let mut visited = BTreeSet::new();
     let mut dependencies = Vec::new();
-    let selected_features = selected_root_package_features(manifest);
+    let selected_features = selected_root_package_features(&manifest);
     collect_package_native_plugin_build_dependencies(
         package_dir,
-        manifest,
+        &manifest,
         &selected_features,
+        &manifest_graph,
         &mut visited,
         &mut dependencies,
     )?;
@@ -69,6 +76,7 @@ fn collect_package_native_plugin_build_dependencies(
     package_dir: &Path,
     manifest: &Manifest,
     selected_features: &[String],
+    manifest_graph: &ProjectManifestGraph,
     visited: &mut BTreeSet<String>,
     dependencies: &mut Vec<super::NativePluginBuildDependency>,
 ) -> Result<(), String> {
@@ -112,14 +120,13 @@ fn collect_package_native_plugin_build_dependencies(
         let Some(dependency_dir) = resolve_project_path_dependency(package_dir, path)? else {
             continue;
         };
-        let dependency_manifest = load_package_manifest(&dependency_dir)?;
+        let dependency_manifest = captured_manifest(manifest_graph, &dependency_dir)?;
         let selected_features = resolve_package_features(&dependency_manifest, &spec.features);
-        let dependency_package =
-            load_package_with_features(&dependency_dir, Some(&selected_features.selected))?;
         collect_package_native_plugin_build_dependencies(
             &dependency_dir,
-            &dependency_package.manifest,
+            &dependency_manifest,
             &selected_features.selected,
+            manifest_graph,
             visited,
             dependencies,
         )?;
@@ -167,6 +174,7 @@ fn collect_package_native_rust_dependencies(
     package_dir: &Path,
     manifest: &Manifest,
     selected_features: &[String],
+    manifest_graph: &ProjectManifestGraph,
     visited: &mut BTreeSet<String>,
     dependencies: &mut Vec<NativeRustDependency>,
 ) -> Result<(), String> {
@@ -187,19 +195,35 @@ fn collect_package_native_rust_dependencies(
         let Some(dependency_dir) = resolve_project_path_dependency(package_dir, path)? else {
             continue;
         };
-        let dependency_manifest = load_package_manifest(&dependency_dir)?;
+        let dependency_manifest = captured_manifest(manifest_graph, &dependency_dir)?;
         let selected_features = resolve_package_features(&dependency_manifest, &spec.features);
-        let dependency_package =
-            load_package_with_features(&dependency_dir, Some(&selected_features.selected))?;
         collect_package_native_rust_dependencies(
             &dependency_dir,
-            &dependency_package.manifest,
+            &dependency_manifest,
             &selected_features.selected,
+            manifest_graph,
             visited,
             dependencies,
         )?;
     }
     Ok(())
+}
+
+/// Decode package semantics from bytes admitted by the project capture graph.
+/// This helper intentionally has no filesystem fallback: a dependency absent
+/// from the graph was not captured and cannot be consulted by compiler-native
+/// compatibility resolution.
+fn captured_manifest(
+    manifest_graph: &ProjectManifestGraph,
+    package_dir: &Path,
+) -> Result<Manifest, String> {
+    let source = manifest_graph.manifest_source(package_dir).ok_or_else(|| {
+        format!(
+            "project manifest graph omitted native dependency root {}",
+            package_dir.display()
+        )
+    })?;
+    parse_package_manifest_source(package_dir, source)
 }
 
 fn package_own_native_rust_dependencies(

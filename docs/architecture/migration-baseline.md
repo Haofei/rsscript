@@ -788,10 +788,13 @@ an arbitrary shell executor.
       The compiler dependency resolver consumes the bounded, deduplicated
       `ProjectManifestGraph`, preserving legacy root spelling only for lock
       identity.
-    - [ ] **S05.1d — Move legacy review/native manifest graph semantics.**
-      Review and native compatibility resolution consume the same captured
-      manifest graph rather than reopening manifests; compiler retains only
+    - [x] **S05.1d — Move native manifest graph semantics.** Native dependency
+      and plugin-build resolution consume the same captured manifest graph
+      rather than reopening dependency manifests; compiler retains only
       package-semantic interpretation and feature selection.
+    - [ ] **S05.1e — Move legacy review manifest semantics.** Review/check
+      package assembly consumes captured root-manifest bytes and shares the
+      graph with dependency resolution rather than reopening `rsspkg.toml`.
   - [ ] **S05.2 — Move Artifact persistence to an adapter.** Relocate locks,
     atomic writes, temporary files, compression, and artifact-store policy out
     of compiler. The confined lock/read/write implementation now lives in the

@@ -2,7 +2,7 @@
   "schema": "rsscript.migration_queue.v1",
   "tasks": [
     {
-      "id": "S05.1d",
+      "id": "S05.1e",
       "priority": 20,
       "depends_on": [],
       "scope": [
@@ -13,8 +13,8 @@
       ],
       "acceptance": [
         "Project capture owns bounded, confined manifest and source-tree reads.",
-        "Legacy review and native compatibility resolution consume project-captured manifest bytes and do not reopen manifests.",
-        "Compiler retains only package-semantic parsing and feature selection after capture."
+        "Legacy review/check package assembly consumes project-captured root-manifest bytes and does not reopen rsspkg.toml.",
+        "Review dependency resolution shares the captured manifest graph, while compiler retains only package-semantic parsing and feature selection."
       ],
       "verification": [
         "cargo test -p rsscript-project --locked",

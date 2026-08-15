@@ -1529,6 +1529,12 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
         !dependency.contains("load_package_manifest_with_source"),
         "compiler dependency discovery must not reopen manifests after project capture"
     );
+    assert!(
+        native.contains("capture_project_manifest_graph")
+            && !native.contains("load_package_manifest")
+            && !native.contains("load_package_with_features"),
+        "native dependency resolution must consume project-captured manifests rather than reopen packages"
+    );
     let package_module = read(&root.join("crates/rsscript-compiler/src/package.rs"));
     assert!(
         package_module.contains("collect_project_regular_files as collect_bounded_regular_files")

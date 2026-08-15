@@ -161,6 +161,16 @@ impl ProjectManifestGraph {
         let root = root.canonicalize().ok()?;
         self.packages.iter().find(|package| package.root == root)
     }
+
+    /// Raw captured manifest bytes for one root in this graph.
+    ///
+    /// The lookup's canonicalization remains inside the project boundary, so
+    /// compiler compatibility consumers never need to reopen or probe a
+    /// manifest merely to find the bytes captured for a dependency.
+    pub fn manifest_source(&self, root: &Path) -> Option<&str> {
+        self.package(root)
+            .map(ProjectManifestGraphPackage::manifest_source)
+    }
 }
 
 impl ProjectManifestSnapshot {
