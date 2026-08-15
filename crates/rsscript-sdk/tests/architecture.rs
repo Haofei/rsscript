@@ -3234,10 +3234,16 @@ fn session_owns_the_core_interface_policy() {
     let semantics = read(&root.join("crates/rsscript-semantics/src/database.rs"));
     assert!(semantics.contains("pub enum SessionInterfacePolicy"));
     assert!(semantics.contains("pub fn without_core() -> Self"));
+    assert!(semantics.contains("pub fn with_standard_packages() -> Self"));
     assert!(semantics.contains("SessionInterfacePolicy::WithoutCore"));
+    assert!(semantics.contains("SessionInterfacePolicy::WithStandardPackages"));
 
     let cli_check = read(&root.join("crates/rsscript-cli/src/cli/check.rs"));
     assert!(cli_check.contains("CompilationSession::without_core()"));
+
+    let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
+    assert!(sdk.contains("CompilationSession::with_standard_packages()"));
+    assert!(sdk.contains("fn analyze_standard_source_with_session"));
 }
 
 #[test]

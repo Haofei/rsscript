@@ -658,11 +658,15 @@ an arbitrary shell executor.
     workspace queries, while rejecting caller-supplied interfaces. A closure
     inference regression and a nested path-dependency capture conflict exposed
     by the compatibility corpus were corrected before the corpus was accepted.
-  - [ ] **S03.5b — Migrate ordinary SDK and test callers.** With S03.5a
+  - [x] **S03.5b — Migrate ordinary SDK and test callers.** With S03.5a
     complete, route normal non-empty, unique logical paths through the matching
     `WithStandardPackages` session policy. Preserve cancellation, deadlines,
     and diagnostic budgets; keep direct analyzer construction only in an
-    explicit compatibility fixture.
+    explicit compatibility fixture. The SDK's legacy `analyze_source`,
+    `analyze_source_result`, operation-aware result, and `analyze_source_with_core`
+    now use the session policy; the static compatibility corpus exercises those
+    routes. The sole operation-abort fallback preserves the legacy
+    `AnalysisResult`-rather-than-`Result` signature.
   - [ ] **S03.5c — Quarantine the exceptional legacy fixtures.** Document and
     isolate empty-path and duplicate-interface cases whose asserted historical
     diagnostics cannot be represented by the normal session input model. Those

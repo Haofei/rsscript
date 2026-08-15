@@ -2,19 +2,19 @@
   "schema": "rsscript.migration_queue.v1",
   "tasks": [
     {
-      "id": "S03.5b",
+      "id": "S03.5c",
       "priority": 10,
       "depends_on": ["S03.4"],
       "scope": [
-        "crates/rsscript-semantics/src/database.rs",
         "crates/rsscript-sdk/src/lib.rs",
         "crates/rsscript-sdk/tests/**",
+        "crates/rsscript-compiler/src/compatibility/**",
         "docs/architecture/migration-baseline.md"
       ],
       "acceptance": [
-        "Normal SDK and test callers use CompilationSession::with_standard_packages for ordinary single-source inputs.",
-        "Cold and cached operation-aware session queries preserve legacy FullWithStandardPackages diagnostics.",
-        "Direct analyzer calls remain only in named exceptional compatibility fixtures."
+        "Empty-path and duplicate-interface legacy analyzer calls are confined to named compatibility helpers.",
+        "Normal SDK or production paths cannot select the exceptional direct-analyzer helpers.",
+        "Regression tests prove ordinary session callers retain their diagnostics while exceptional fixtures retain their historical cases."
       ],
       "verification": [
         "cargo test -p rsscript-semantics --locked",

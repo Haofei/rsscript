@@ -14,10 +14,8 @@ pub use rsscript_compiler::{
     FrontendCompletion, FrontendInputSnapshot, FrontendStopReason, GenerateContext, LiteralClass,
     PrefixStatus, Reference, RssDocumentSymbol, SemanticDatabase, Severity, SourceFileSnapshot,
     SourceSnapshot, Span, SymbolCompleteness, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
-    TextRange, TypeRef, VSCODE_GRAMMAR_PATH, ValidatedProgram, analyze_source,
-    analyze_source_result, analyze_source_result_with_operation, analyze_source_with_core,
-    analyze_source_with_interfaces, analyze_source_with_interfaces_result,
-    analyze_source_with_interfaces_result_with_operation,
+    TextRange, TypeRef, VSCODE_GRAMMAR_PATH, ValidatedProgram, analyze_source_with_interfaces,
+    analyze_source_with_interfaces_result, analyze_source_with_interfaces_result_with_operation,
     analyze_source_with_interfaces_without_core, analyze_source_without_core,
     analyze_sources_with_interfaces, analyze_sources_with_interfaces_result,
     analyze_sources_with_interfaces_result_with_operation,
@@ -670,6 +668,72 @@ fn session_for_snapshot(snapshot: &FrontendInputSnapshot) -> CompilationSession 
             .expect("non-empty immutable snapshot interface path must be session-valid");
     }
     session
+}
+
+/// Analyze one ordinary in-memory source through the session-owned standard
+/// prelude query. Empty logical paths deliberately retain the legacy route:
+/// compatibility fixtures assert their historical diagnostics and cannot be
+/// represented by the normal session source store.
+#[cfg(feature = "compatibility")]
+fn analyze_standard_source_with_session(
+    file: &str,
+    source: &str,
+    operation: Option<&OperationContext>,
+) -> AnalysisResult {
+    if file.is_empty() {
+        return match operation {
+            Some(operation) => {
+                rsscript_compiler::analyze_source_result_with_operation(file, source, operation)
+            }
+            None => rsscript_compiler::analyze_source_result(file, source),
+        };
+    }
+    let mut session = CompilationSession::with_standard_packages();
+    session
+        .set_file(file, source)
+        .expect("non-empty single-source compatibility input must be session-valid");
+    match operation {
+        Some(operation) => match session.workspace_analysis_with_operation(operation) {
+            Ok(analysis) => (*analysis).clone(),
+            // The legacy compatibility signature returns an `AnalysisResult`,
+            // while the session API correctly exposes cancellation as a
+            // `Result`. Preserve the legacy representation only for the abort
+            // result; ordinary work always uses the session cache/query path.
+            Err(_) => {
+                rsscript_compiler::analyze_source_result_with_operation(file, source, operation)
+            }
+        },
+        None => (*session.workspace_analysis()).clone(),
+    }
+}
+
+/// Compatibility analysis entry point backed by the session query for normal
+/// inputs. Prefer [`Compiler`] or a captured snapshot for new embedding code.
+#[cfg(feature = "compatibility")]
+pub fn analyze_source(file: &str, source: &str) -> Vec<Diagnostic> {
+    analyze_standard_source_with_session(file, source, None).into_diagnostics()
+}
+
+/// Session-backed compatibility result for one standard-prelude source.
+#[cfg(feature = "compatibility")]
+pub fn analyze_source_result(file: &str, source: &str) -> AnalysisResult {
+    analyze_standard_source_with_session(file, source, None)
+}
+
+/// Operation-aware session-backed compatibility result for one source.
+#[cfg(feature = "compatibility")]
+pub fn analyze_source_result_with_operation(
+    file: &str,
+    source: &str,
+    operation: &OperationContext,
+) -> AnalysisResult {
+    analyze_standard_source_with_session(file, source, Some(operation))
+}
+
+/// Historical alias for [`analyze_source`].
+#[cfg(feature = "compatibility")]
+pub fn analyze_source_with_core(file: &str, source: &str) -> Vec<Diagnostic> {
+    analyze_source(file, source)
 }
 
 #[cfg(feature = "execution")]
