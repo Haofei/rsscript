@@ -19,8 +19,9 @@ use rsscript_exec_ir::{
 use rsscript_mir::{
     BasicBlock, BlockId, FunctionId, MirBinaryOp, MirCallArgument, MirCallTarget,
     MirExternalImport, MirFunction, MirFunctionDebug, MirFunctionSignature, MirInstruction,
-    MirLiteral, MirModule, MirParameterMode, MirSourceLocation, MirTerminator, MirTypeLayout,
-    PlaceId, ResourceTypeId, TaskGroupId, TaskId, TypeId, ValueId, VerifiedMir,
+    MirInstructionSource, MirLiteral, MirModule, MirParameterMode, MirSourceLocation,
+    MirTerminator, MirTypeLayout, PlaceId, ResourceTypeId, TaskGroupId, TaskId, TypeId, ValueId,
+    VerifiedMir,
 };
 use rsscript_semantics::{ResolvedTypeKind, hir as checked};
 use rsscript_text::{decode_char_token, decode_string_token, type_root_name};
@@ -1093,6 +1094,7 @@ struct CheckedHirLowerer<'source, 'types, 'closures> {
     place_types: HashMap<String, TypeId>,
     closure_abis: HashMap<String, ClosureAbi>,
     place_names: Vec<String>,
+    instruction_sources: Vec<MirInstructionSource>,
     next_value: u32,
     tasks: HashMap<String, TaskId>,
     next_task: u32,
@@ -1127,6 +1129,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
             place_types: HashMap::new(),
             closure_abis: HashMap::new(),
             place_names: Vec::new(),
+            instruction_sources: Vec::new(),
             next_value: 0,
             tasks: HashMap::new(),
             next_task: 0,
@@ -1179,7 +1182,8 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                     self.body.span.column,
                     self.body.span.length,
                 ),
-            ),
+            )
+            .with_instruction_sources(self.instruction_sources),
         })
     }
 
@@ -1294,22 +1298,28 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
         expression: &checked::HirExpr,
     ) -> Result<ValueId, MirLoweringError> {
         match expression {
-            checked::HirExpr::Ident { name, .. } if name == "Unit" => {
-                self.literal(MirLiteral::Unit)
-            }
-            checked::HirExpr::Ident { name, .. } if name == "true" => {
-                self.literal(MirLiteral::Bool(true))
-            }
-            checked::HirExpr::Ident { name, .. } if name == "false" => {
-                self.literal(MirLiteral::Bool(false))
-            }
+            checked::HirExpr::Ident { name, span, .. } if name == "Unit" => self
+                .literal_with_source(
+                    MirLiteral::Unit,
+                    MirSourceLocation::new(span.file.clone(), span.line, span.column, span.length),
+                ),
+            checked::HirExpr::Ident { name, span, .. } if name == "true" => self
+                .literal_with_source(
+                    MirLiteral::Bool(true),
+                    MirSourceLocation::new(span.file.clone(), span.line, span.column, span.length),
+                ),
+            checked::HirExpr::Ident { name, span, .. } if name == "false" => self
+                .literal_with_source(
+                    MirLiteral::Bool(false),
+                    MirSourceLocation::new(span.file.clone(), span.line, span.column, span.length),
+                ),
             checked::HirExpr::Ident { name, .. } => {
                 let destination = self.value();
                 let place = self.lookup_place(name)?;
                 self.emit(MirInstruction::ReadPlace { destination, place });
                 Ok(destination)
             }
-            checked::HirExpr::Number { value, .. } => {
+            checked::HirExpr::Number { value, span } => {
                 let value = value
                     .parse::<i64>()
                     .map(MirLiteral::Int)
@@ -1318,14 +1328,19 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                         function: self.function_name.to_owned(),
                         construct: "non-numeric checked HIR literal",
                     })?;
-                self.literal(value)
+                self.literal_with_source(
+                    value,
+                    MirSourceLocation::new(span.file.clone(), span.line, span.column, span.length),
+                )
             }
-            checked::HirExpr::String { value, .. } => {
-                self.literal(MirLiteral::String(decode_string_token(value)))
-            }
-            checked::HirExpr::Char { value, .. } => {
-                self.literal(MirLiteral::Char(decode_char_token(value)))
-            }
+            checked::HirExpr::String { value, span } => self.literal_with_source(
+                MirLiteral::String(decode_string_token(value)),
+                MirSourceLocation::new(span.file.clone(), span.line, span.column, span.length),
+            ),
+            checked::HirExpr::Char { value, span } => self.literal_with_source(
+                MirLiteral::Char(decode_char_token(value)),
+                MirSourceLocation::new(span.file.clone(), span.line, span.column, span.length),
+            ),
             checked::HirExpr::Binary {
                 op:
                     op @ (rsscript_syntax::ast::BinaryOp::LogicalAnd
@@ -1618,6 +1633,21 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
     fn literal(&mut self, value: MirLiteral) -> Result<ValueId, MirLoweringError> {
         let destination = self.value();
         self.emit(MirInstruction::LoadLiteral { destination, value });
+        Ok(destination)
+    }
+
+    fn literal_with_source(
+        &mut self,
+        value: MirLiteral,
+        source: MirSourceLocation,
+    ) -> Result<ValueId, MirLoweringError> {
+        let destination = self.value();
+        let block = self.current;
+        let instruction_index = u32::try_from(self.current_block().instructions.len())
+            .expect("RSScript MIR instruction count exceeds the u32 source-map address space");
+        self.emit(MirInstruction::LoadLiteral { destination, value });
+        self.instruction_sources
+            .push(MirInstructionSource::new(block, instruction_index, source));
         Ok(destination)
     }
 

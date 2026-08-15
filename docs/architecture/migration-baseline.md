@@ -856,15 +856,18 @@ an arbitrary shell executor.
       carries structural iterable/item types, so direct list-loop lowering no
       longer recognizes `List<...>` by text. Function-value types stay
       fail-closed until the wire ABI gives them an explicit representation.
-  - [ ] **M01.3 — Add stable display/debug/source-map side tables.** Human names
-    remain available without becoming executable identity.
+  - [x] **M01.3 — Add stable display/debug/source-map side tables.** Human names
+    and literal origins remain available without becoming executable identity.
   - [x] **M01.3a — Add initial debug names.** Function/place debug names are
-    present without becoming executable identity. Constant-level locations
-    remain follow-up work.
+    present without becoming executable identity.
   - [x] **M01.3b — Preserve function source locations as side-table data.**
     Direct checked-HIR lowering records the originating function-body location
     in `MirFunctionDebug`; executable operations remain typed-ID-only, and the
     legacy compatibility bridge simply leaves unavailable locations absent.
+  - [x] **M01.3c — Preserve literal instruction locations as validated side-table
+    data.** Direct checked-HIR lowering records each source literal's CFG block
+    and instruction index beside MIR. The verifier rejects invalid or duplicate
+    entries, while instructions remain free of source text.
 - [x] **M02 — Define an owned CFG MIR.** Functions contain basic blocks,
   instructions, and terminators; MIR does not depend on syntax and contains no
   unresolved or `Unknown` execution node.

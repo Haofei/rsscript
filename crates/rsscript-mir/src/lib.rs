@@ -596,6 +596,7 @@ pub struct MirFunctionDebug {
     name: String,
     places: Vec<String>,
     source: Option<MirSourceLocation>,
+    instruction_sources: Vec<MirInstructionSource>,
 }
 
 /// Source-only location retained beside executable MIR identities.
@@ -636,6 +637,42 @@ impl MirSourceLocation {
 
     pub fn length(&self) -> usize {
         self.length
+    }
+}
+
+/// Source-only location for one instruction in a function's CFG.
+///
+/// This table deliberately lives beside executable MIR: instructions remain
+/// typed-ID-only and backends can ignore source evidence entirely. The MIR
+/// verifier nevertheless checks every entry so diagnostics cannot silently
+/// point at a different function, block, or instruction after a lowering
+/// change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MirInstructionSource {
+    block: BlockId,
+    instruction_index: u32,
+    source: MirSourceLocation,
+}
+
+impl MirInstructionSource {
+    pub fn new(block: BlockId, instruction_index: u32, source: MirSourceLocation) -> Self {
+        Self {
+            block,
+            instruction_index,
+            source,
+        }
+    }
+
+    pub fn block(&self) -> BlockId {
+        self.block
+    }
+
+    pub fn instruction_index(&self) -> u32 {
+        self.instruction_index
+    }
+
+    pub fn source(&self) -> &MirSourceLocation {
+        &self.source
     }
 }
 
@@ -721,6 +758,7 @@ impl MirFunctionDebug {
             name: name.into(),
             places,
             source: None,
+            instruction_sources: Vec::new(),
         }
     }
 
@@ -734,7 +772,18 @@ impl MirFunctionDebug {
             name: name.into(),
             places,
             source: Some(source),
+            instruction_sources: Vec::new(),
         }
+    }
+
+    /// Attach validated, source-only instruction mappings without changing
+    /// executable identities or instruction operands.
+    pub fn with_instruction_sources(
+        mut self,
+        instruction_sources: Vec<MirInstructionSource>,
+    ) -> Self {
+        self.instruction_sources = instruction_sources;
+        self
     }
 
     pub fn name(&self) -> &str {
@@ -747,6 +796,10 @@ impl MirFunctionDebug {
 
     pub fn source(&self) -> Option<&MirSourceLocation> {
         self.source.as_ref()
+    }
+
+    pub fn instruction_sources(&self) -> &[MirInstructionSource] {
+        &self.instruction_sources
     }
 }
 
@@ -1029,6 +1082,7 @@ impl MirModule {
                 &self.functions,
                 &self.external_imports,
             )?;
+            verify_instruction_sources(function, &self.function_debug[index])?;
             verify_resource_types(function, &self.types)?;
             verify_record_types(function, &self.types)?;
             verify_resource_lifetimes(function)?;
@@ -1044,6 +1098,42 @@ impl MirModule {
         }
         Ok(())
     }
+}
+
+fn verify_instruction_sources(
+    function: &MirFunction,
+    debug: &MirFunctionDebug,
+) -> Result<(), MirValidationError> {
+    let mut seen = BTreeSet::new();
+    for entry in debug.instruction_sources() {
+        let Some(block) = function.blocks().get(entry.block().index()) else {
+            return Err(MirValidationError::InvalidInstructionSourceBlock {
+                function: function.id(),
+                block: entry.block(),
+            });
+        };
+        if block.id() != entry.block() {
+            return Err(MirValidationError::InvalidInstructionSourceBlock {
+                function: function.id(),
+                block: entry.block(),
+            });
+        }
+        if entry.instruction_index() as usize >= block.instructions().len() {
+            return Err(MirValidationError::InvalidInstructionSourceIndex {
+                function: function.id(),
+                block: entry.block(),
+                instruction_index: entry.instruction_index(),
+            });
+        }
+        if !seen.insert((entry.block(), entry.instruction_index())) {
+            return Err(MirValidationError::DuplicateInstructionSource {
+                function: function.id(),
+                block: entry.block(),
+                instruction_index: entry.instruction_index(),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn verify_type_layouts(
@@ -2557,6 +2647,20 @@ pub enum MirValidationError {
         functions: usize,
         debug: usize,
     },
+    InvalidInstructionSourceBlock {
+        function: FunctionId,
+        block: BlockId,
+    },
+    InvalidInstructionSourceIndex {
+        function: FunctionId,
+        block: BlockId,
+        instruction_index: u32,
+    },
+    DuplicateInstructionSource {
+        function: FunctionId,
+        block: BlockId,
+        instruction_index: u32,
+    },
     FunctionParameterModeCount {
         function: FunctionId,
         types: usize,
@@ -2766,6 +2870,55 @@ mod tests {
             TypeId::new(0),
             false,
         )
+    }
+
+    #[test]
+    fn instruction_source_maps_must_reference_one_existing_instruction_once() {
+        let function = MirFunction::new(
+            FunctionId::new(0),
+            signature(),
+            0,
+            1,
+            vec![BasicBlock::new(
+                BlockId::new(0),
+                vec![MirInstruction::LoadLiteral {
+                    destination: ValueId::new(0),
+                    value: MirLiteral::Unit,
+                }],
+                MirTerminator::Return(None),
+            )],
+        );
+        let location = MirSourceLocation::new("main.rss", 1, 1, 4);
+        let invalid = MirModule::new(
+            vec![WireType::Unit],
+            vec![function.clone()],
+            vec![
+                MirFunctionDebug::new("main", vec![]).with_instruction_sources(vec![
+                    MirInstructionSource::new(BlockId::new(0), 1, location.clone()),
+                ]),
+            ],
+            vec![],
+        );
+        assert!(matches!(
+            invalid,
+            Err(MirValidationError::InvalidInstructionSourceIndex { .. })
+        ));
+
+        let duplicate = MirModule::new(
+            vec![WireType::Unit],
+            vec![function],
+            vec![
+                MirFunctionDebug::new("main", vec![]).with_instruction_sources(vec![
+                    MirInstructionSource::new(BlockId::new(0), 0, location.clone()),
+                    MirInstructionSource::new(BlockId::new(0), 0, location),
+                ]),
+            ],
+            vec![],
+        );
+        assert!(matches!(
+            duplicate,
+            Err(MirValidationError::DuplicateInstructionSource { .. })
+        ));
     }
 
     #[test]

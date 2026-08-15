@@ -1,4 +1,6 @@
+#[cfg(feature = "bytecode")]
 use std::error::Error;
+#[cfg(feature = "bytecode")]
 use std::fmt;
 
 use sha2::{Digest, Sha256};
@@ -267,6 +269,16 @@ fn main() -> Int {
             .expect("checked-HIR lowering records a source location");
         assert_eq!(source.file(), "direct-hir-mir.rss");
         assert!(source.length() > 0);
+        let literal_sources = debug.instruction_sources();
+        assert_eq!(literal_sources.len(), 2);
+        assert_eq!(literal_sources[0].block(), rsscript_mir::BlockId::new(0));
+        assert_eq!(literal_sources[0].instruction_index(), 0);
+        assert_eq!(literal_sources[0].source().file(), "direct-hir-mir.rss");
+        assert_eq!(literal_sources[1].instruction_index(), 2);
+        assert_ne!(
+            literal_sources[0].source().column(),
+            literal_sources[1].source().column(),
+        );
         mir.verify().expect("direct HIR MIR verifies");
     }
 
