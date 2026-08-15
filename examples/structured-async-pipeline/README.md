@@ -40,9 +40,20 @@ regression suite:
 cargo test -p structured-async-pipeline
 ```
 
+The companion `script/isolated.rss` has the same structured-async task shape
+without an external import. It is intentionally runnable through the reference
+runner's fixed no-Provider profile, which verifies the production
+Artifact→runner→report path without permitting request-selected Provider code:
+
+```text
+cargo run -p rsscript-cli --bin rss --features execution -- run --json \
+  examples/structured-async-pipeline/script/isolated.rss
+```
+
 For a Provider injection example, see
 [`embedded-report-pipeline`](../embedded-report-pipeline/README.md). This
 example deliberately uses the trusted in-process SDK path because the reference
-runner's fixed profiles do not install this example-only Provider. Neither route
-claims a universal sandbox: untrusted inputs require the reference runner plus
-host-selected OS-level controls.
+runner's fixed profiles do not install this example-only Provider; the companion
+fixture demonstrates the isolated path. Neither route claims a universal
+sandbox: untrusted inputs require the reference runner plus host-selected
+OS-level controls.

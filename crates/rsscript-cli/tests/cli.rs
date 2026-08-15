@@ -3,6 +3,42 @@
 use std::fs;
 use std::process::Command;
 
+#[cfg(feature = "execution")]
+fn run_isolated_fixture(name: &str, source: &str) -> serde_json::Value {
+    let bin = env!("CARGO_BIN_EXE_rss");
+    let temp = tempfile::tempdir().expect("temp dir should be creatable");
+    let path = temp.path().join(name);
+    fs::write(&path, source).expect("write isolated fixture");
+    let output = Command::new(bin)
+        .args(["run", "--json", path.to_str().expect("path is utf-8")])
+        .output()
+        .expect("isolated runner should execute");
+    assert!(
+        output.status.success(),
+        "rss run failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("runner emits an execution report")
+}
+
+#[cfg(feature = "execution")]
+fn stable_runner_projection(report: &serde_json::Value) -> serde_json::Value {
+    // Duration and Artifact identity are intentionally host/provenance-specific.
+    // This checked-in projection freezes the report semantics the product
+    // promises across the isolated parent/child protocol.
+    serde_json::json!({
+        "termination_reason": report["termination_reason"],
+        "usage": report["usage"],
+        "value": report["value"],
+        "stdout": report["stdout"],
+        "stderr": report["stderr"],
+        "provider_call_count": report["provider_call_traces"].as_array().map(Vec::len),
+        "diagnostic_count": report["diagnostics"].as_array().map(Vec::len),
+        "failure": report["failure"],
+    })
+}
+
 #[test]
 fn top_level_help_succeeds_on_stdout() {
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
@@ -132,6 +168,36 @@ fn run_cli_defaults_to_the_isolated_verified_vm() {
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "hello VM\n");
     assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[cfg(feature = "execution")]
+#[test]
+fn structured_async_example_has_a_stable_isolated_runner_report() {
+    let report = run_isolated_fixture(
+        "structured-async-runner.rss",
+        include_str!("../../../examples/structured-async-pipeline/script/isolated.rss"),
+    );
+    let projection = stable_runner_projection(&report);
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../examples/structured-async-pipeline/fixtures/isolated-runner.report.json"
+    ))
+    .expect("checked-in runner report projection is valid JSON");
+    assert_eq!(projection, expected);
+}
+
+#[cfg(feature = "execution")]
+#[test]
+fn embedded_report_example_has_a_stable_isolated_runner_report() {
+    let report = run_isolated_fixture(
+        "embedded-report-runner.rss",
+        include_str!("../../../examples/embedded-report-pipeline/script/isolated.rss"),
+    );
+    let projection = stable_runner_projection(&report);
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../examples/embedded-report-pipeline/fixtures/isolated-runner.report.json"
+    ))
+    .expect("checked-in runner report projection is valid JSON");
+    assert_eq!(projection, expected);
 }
 
 #[cfg(feature = "execution")]

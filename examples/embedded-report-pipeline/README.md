@@ -27,3 +27,12 @@ semantic `.rssi` descriptors. It also verifies that a bundle compared with
 itself produces an empty `rsscript.semantic_diff.v2`, demonstrating that
 interface contract evidence and Artifact identity are reviewable inputs rather
 than provider-specific runtime state.
+
+`script/isolated.rss` is a no-import companion for the reference runner. It
+keeps the filesystem/log Provider selection in the trusted embedding path while
+documenting the default isolated Artifact→report route separately:
+
+```text
+cargo run -p rsscript-cli --bin rss --features execution -- run --json \
+  examples/embedded-report-pipeline/script/isolated.rss
+```

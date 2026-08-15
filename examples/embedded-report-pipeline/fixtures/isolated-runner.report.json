@@ -1,0 +1,28 @@
+{
+  "termination_reason": "completed",
+  "usage": {
+    "steps_consumed": 2,
+    "allocation_bytes_consumed": 0,
+    "live_memory_bytes_at_return": 22,
+    "peak_live_memory_bytes": 32,
+    "output_bytes": 0,
+    "intrinsic_calls": 0,
+    "provider_calls": 0,
+    "resources_created": 0,
+    "resources_cleaned": 0,
+    "resource_cleanup_failures": 0,
+    "resources_peak_live": 0,
+    "resources_live_at_return": 0,
+    "tasks_created": 1,
+    "tasks_completed": 1,
+    "tasks_cancelled": 0,
+    "tasks_peak_live": 1,
+    "tasks_live_at_return": 0
+  },
+  "value": "embedded runner report",
+  "stdout": "",
+  "stderr": "",
+  "provider_call_count": 0,
+  "diagnostic_count": 0,
+  "failure": null
+}

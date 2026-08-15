@@ -1,0 +1,28 @@
+{
+  "termination_reason": "completed",
+  "usage": {
+    "steps_consumed": 19,
+    "allocation_bytes_consumed": 48,
+    "live_memory_bytes_at_return": 16,
+    "peak_live_memory_bytes": 332,
+    "output_bytes": 13,
+    "intrinsic_calls": 2,
+    "provider_calls": 0,
+    "resources_created": 0,
+    "resources_cleaned": 0,
+    "resource_cleanup_failures": 0,
+    "resources_peak_live": 0,
+    "resources_live_at_return": 0,
+    "tasks_created": 3,
+    "tasks_completed": 3,
+    "tasks_cancelled": 0,
+    "tasks_peak_live": 3,
+    "tasks_live_at_return": 0
+  },
+  "value": "Ok { value: Unit }",
+  "stdout": "user\nprofile\n",
+  "stderr": "",
+  "provider_call_count": 0,
+  "diagnostic_count": 0,
+  "failure": null
+}

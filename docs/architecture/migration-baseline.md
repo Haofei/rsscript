@@ -2314,7 +2314,7 @@ an arbitrary shell executor.
 - [x] **E01 — Gate representative Core performance.** CI records check,
   compile, Artifact verify, VM, Provider boundary, cancellation, Artifact size,
   and deterministic usage metrics against the checked SLO fixture.
-- [ ] **E02 — Add two complete product examples.** Keep the embedded Provider
+- [x] **E02 — Add two complete product examples.** Keep the embedded Provider
   replacement pipeline and add a reviewable async/resource workflow; each must
   contain source, interfaces, generated Provider contract, memory and
   production-like Providers, Artifact identity, semantic-diff fixture, and
@@ -2324,11 +2324,12 @@ an arbitrary shell executor.
     digest alongside the provider-neutral Artifact digest, and asserts an empty
     neutral self-diff. Its executable test now compiles, verifies, links, and
     runs the same Artifact with both in-memory and rooted filesystem Providers,
-    asserting their distinct reports while Artifact bytes remain unchanged.
-    Trusted/isolated report snapshots remain follow-up work.
-  - [ ] **E02.2 — Add an async/resource workflow example.** Demonstrate task
+    asserting their distinct reports while Artifact bytes remain unchanged. Its
+    no-import companion executes through the actual isolated runner parent/child
+    path and compares a checked-in stable report projection.
+  - [x] **E02.2 — Add an async/resource workflow example.** Demonstrate task
     groups, cancellation, cleanup, mock/production-like Providers, and failures.
-    - [~] **E02.2.1 — Add the structured async/resource baseline.**
+    - [x] **E02.2.1 — Add the structured async/resource baseline.**
       `examples/structured-async-pipeline` now proves the verified
       `task_group` / `async let` / `await` path alongside an explicit
       `host.session` resource declared in `.rssi` and implemented through
@@ -2336,13 +2337,14 @@ an arbitrary shell executor.
       compiled Artifact import equals the generated structural descriptor before
       link, verifies exact-once resource cleanup on success, preserves a
       pre-cancelled run of the same Artifact, and records an intentional cleanup
-      failure without losing its execution report. The same Artifact is linked
+      failure without losing its execution report. Its no-Provider companion
+      fixture executes through the actual isolated runner parent/child path and
+      compares a checked-in stable report projection. The same Artifact is linked
       to both an in-memory and a production-like resource Provider; their
       host-side cleanup evidence differs while Artifact digest and script
       result stay equal. The source deliberately scopes the resource after the
       task group drains, demonstrating the language rule that resources cannot
-      remain live across an `await`. Isolated-runner fixtures and report
-      snapshots still need to be added before E02.2 can close.
+      remain live across an `await`.
 - [ ] **E03 — Establish compatibility and conformance corpora.** Add source to
   diagnostic/HIR/MIR goldens, MIR to bytecode fixtures, old Artifact readers,
   cross-platform deterministic builds, Provider ABI compatibility, resource

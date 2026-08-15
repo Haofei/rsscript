@@ -1,0 +1,8 @@
+// The embedding example's isolated companion intentionally has no imports.
+// The primary report pipeline needs host-owned filesystem and log Providers;
+// this fixture proves that the same product example also documents the default
+// Artifact→runner→ExecutionReport route without widening a runner profile.
+
+fn main() -> String {
+    return "embedded runner report"
+}
