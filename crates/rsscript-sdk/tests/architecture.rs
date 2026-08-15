@@ -1246,6 +1246,7 @@ fn artifact_persistence_is_an_execution_only_adapter() {
             "rsscript-project".to_string(),
             "rustix".to_string(),
             "sha2".to_string(),
+            "tempfile".to_string(),
             "uuid".to_string(),
         ]),
         "artifact persistence adapter may depend only on low-level project traversal and filesystem primitives"
@@ -1274,6 +1275,18 @@ fn artifact_persistence_is_an_execution_only_adapter() {
             .any(|entry| entry == "dep:rsscript-artifact-store"),
         "compiler package compatibility must delegate snapshot persistence to the adapter"
     );
+    for dependency in ["fs2", "hex", "libc", "rustix", "tempfile"] {
+        assert!(
+            compiler_manifest["dependencies"]
+                .as_table()
+                .expect("compiler dependency table should exist")
+                .get(dependency)
+                .and_then(|dependency| dependency.get("optional"))
+                .and_then(toml::Value::as_bool)
+                .unwrap_or(false),
+            "compiler default closure must keep `{dependency}` behind package compatibility only"
+        );
+    }
     let package = read(&root.join("crates/rsscript-compiler/src/package.rs"));
     assert!(
         !package.contains("pub use rsscript_artifact_store"),
@@ -1298,11 +1311,16 @@ fn artifact_persistence_is_an_execution_only_adapter() {
     let authorization = read(&root.join("crates/rsscript-compiler/src/package/authorization.rs"));
     let adapter = read(&root.join("crates/rsscript-artifact-store/src/lib.rs"));
     assert!(authorization.contains("rsscript_artifact_store"));
+    assert!(authorization.contains("NativeSnapshotStore::open_default"));
     assert!(authorization.contains("snapshot_regular_tree("));
+    assert!(!authorization.contains("OpenOptions::new"));
+    assert!(!authorization.contains("set_private_directory_permissions"));
     assert!(!authorization.contains("fn snapshot_tree("));
     assert!(!authorization.contains("fn snapshot_file("));
     assert!(!authorization.contains("fn make_tree_read_only("));
     assert!(adapter.contains("pub fn snapshot_regular_tree("));
+    assert!(adapter.contains("pub struct NativeSnapshotStore"));
+    assert!(adapter.contains("pub fn publish("));
     assert!(adapter.contains("pub fn regular_tree_digest("));
     assert!(adapter.contains("pub fn seal_regular_tree_read_only("));
 }

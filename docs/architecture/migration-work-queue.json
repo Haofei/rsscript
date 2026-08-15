@@ -2,26 +2,6 @@
   "schema": "rsscript.migration_queue.v1",
   "tasks": [
     {
-      "id": "S05.2b",
-      "priority": 20,
-      "depends_on": ["S05.2a"],
-      "scope": [
-        "crates/rsscript-artifact-store/**",
-        "crates/rsscript-compiler/src/package/authorization.rs",
-        "crates/rsscript-sdk/tests/architecture.rs",
-        "docs/architecture/migration-baseline.md"
-      ],
-      "acceptance": [
-        "The artifact-store adapter owns native snapshot staging, entry locking, publication, and cache digest revalidation.",
-        "Compiler authorization retains native-input review policy but does not create or publish private cache directories.",
-        "A reused native snapshot is revalidated before it is returned."
-      ],
-      "verification": [
-        "cargo test -p rsscript-artifact-store --locked",
-        "cargo test -p rsscript-sdk --features compatibility --test architecture --locked"
-      ]
-    },
-    {
       "id": "A09.2",
       "priority": 80,
       "depends_on": ["A09.1a", "A09.1b"],

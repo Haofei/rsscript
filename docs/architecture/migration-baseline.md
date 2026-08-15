@@ -810,12 +810,14 @@ an arbitrary shell executor.
     - [x] **S05.2a — Extract private native snapshot primitives.** Bounded
       regular-tree copying, no-follow file reads, deterministic snapshot
       digests, and read-only sealing now belong to `rsscript-artifact-store`;
-      compiler authorization supplies only native-review policy and cache
-      composition.
-    - [ ] **S05.2b — Move native snapshot cache publication.** Relocate
-      staging-directory creation, private permissions, entry locks, atomic
-      publication, and cache revalidation from compiler authorization into an
-      artifact-store native-snapshot adapter.
+      compiler authorization supplies only native-review policy and its
+      authorized input set.
+    - [x] **S05.2b — Move native snapshot cache publication.** The
+      `NativeSnapshotStore` adapter now owns staging-directory creation,
+      private permissions, entry locks, atomic publication, and cache digest
+      revalidation. Compiler authorization calls it only after determining the
+      reviewed native inputs and translates the published paths into lowering
+      metadata.
     - [ ] **S05.2c — Move remaining package lock and generated-artifact
       persistence.** Keep compiler compatibility responsible only for deciding
       artifact contents; move filesystem publication and cache ownership behind

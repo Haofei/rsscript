@@ -399,6 +399,143 @@ pub fn write_package_artifact_atomic(
     store.write_atomic(relative, contents, label)
 }
 
+/// Owns the private staging and content-addressed publication lifecycle for
+/// reviewed native build snapshots. Callers decide which inputs are approved;
+/// this adapter ensures that the resulting tree is staged, sealed, and reused
+/// only after a digest check.
+pub struct NativeSnapshotStore {
+    staging_root: PathBuf,
+    entries_root: PathBuf,
+    locks_root: PathBuf,
+}
+
+/// A private, unpublished native snapshot tree.
+pub struct NativeSnapshotStaging {
+    directory: tempfile::TempDir,
+}
+
+/// A sealed, content-addressed native snapshot that may safely be reused.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PublishedNativeSnapshot {
+    digest: String,
+    path: PathBuf,
+}
+
+impl NativeSnapshotStore {
+    /// Open the host-selected default native snapshot cache.
+    pub fn open_default() -> Result<Self, String> {
+        let root = std::env::var_os("RSS_NATIVE_SNAPSHOT_CACHE_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::temp_dir().join("rss-native-snapshots-v2"));
+        Self::open(&root)
+    }
+
+    /// Open or create a private content-addressed native snapshot cache.
+    pub fn open(root: &Path) -> Result<Self, String> {
+        ensure_private_directory(root, "native snapshot cache root")?;
+        let staging_root = root.join("staging");
+        let entries_root = root.join("entries");
+        let locks_root = root.join("locks");
+        for (path, label) in [
+            (&staging_root, "native snapshot staging directory"),
+            (&entries_root, "native snapshot entry directory"),
+            (&locks_root, "native snapshot lock directory"),
+        ] {
+            ensure_private_directory(path, label)?;
+        }
+        Ok(Self {
+            staging_root,
+            entries_root,
+            locks_root,
+        })
+    }
+
+    /// Create a private staging tree which is deleted unless published.
+    pub fn stage(&self) -> Result<NativeSnapshotStaging, String> {
+        let directory = tempfile::Builder::new()
+            .prefix("rsscript-authorized-native-")
+            .tempdir_in(&self.staging_root)
+            .map_err(|error| format!("failed to create private native snapshot: {error}"))?;
+        set_private_directory_permissions(directory.path())?;
+        Ok(NativeSnapshotStaging { directory })
+    }
+
+    /// Publish a staged tree under its digest, or reuse an existing entry only
+    /// after revalidating it. The domain identifies the caller's snapshot
+    /// protocol so digest values cannot cross protocol boundaries.
+    pub fn publish(
+        &self,
+        staging: NativeSnapshotStaging,
+        limits: ProjectTreeLimits,
+        label: &str,
+        domain: &[u8],
+    ) -> Result<PublishedNativeSnapshot, String> {
+        let digest = regular_tree_digest(staging.path(), limits, label, domain)?;
+        let published = self.entries_root.join(&digest);
+        let lock = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(self.locks_root.join(format!("{digest}.lock")))
+            .map_err(|error| format!("failed to open native snapshot cache lock: {error}"))?;
+        lock.lock_exclusive()
+            .map_err(|error| format!("failed to lock native snapshot cache entry: {error}"))?;
+
+        if let Ok(metadata) = fs::symlink_metadata(&published)
+            && (is_link_like(&metadata) || !metadata.is_dir())
+        {
+            return Err(format!(
+                "native snapshot cache entry must be a real directory: {}",
+                published.display()
+            ));
+        }
+        if published.exists() {
+            let published_digest = regular_tree_digest(&published, limits, label, domain)?;
+            if published_digest != digest {
+                return Err(format!(
+                    "native snapshot cache entry failed integrity verification: {}",
+                    published.display()
+                ));
+            }
+            drop(staging);
+        } else {
+            let staged_path = staging.directory.keep();
+            fs::rename(&staged_path, &published).map_err(|error| {
+                format!(
+                    "failed to publish native snapshot {}: {error}",
+                    published.display()
+                )
+            })?;
+            seal_regular_tree_read_only(&published, limits, label)?;
+        }
+
+        Ok(PublishedNativeSnapshot {
+            digest,
+            path: published,
+        })
+    }
+}
+
+impl NativeSnapshotStaging {
+    /// Path available to the caller while the snapshot is still private.
+    pub fn path(&self) -> &Path {
+        self.directory.path()
+    }
+}
+
+impl PublishedNativeSnapshot {
+    /// Content-addressed identity of the published tree.
+    pub fn digest(&self) -> &str {
+        &self.digest
+    }
+
+    /// Sealed filesystem path of the published tree.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
 /// Copy a bounded, no-follow regular-file tree into a private Artifact staging
 /// directory. The caller owns the semantic decision to snapshot; this adapter
 /// owns filesystem traversal, byte accounting, and safe file copying.
@@ -552,6 +689,36 @@ fn open_snapshot_input(source: &Path, expected_bytes: u64, label: &str) -> Resul
         ));
     }
     Ok(input)
+}
+
+fn ensure_private_directory(path: &Path, label: &str) -> Result<(), String> {
+    fs::create_dir_all(path)
+        .map_err(|error| format!("failed to create {label} {}: {error}", path.display()))?;
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect {label} {}: {error}", path.display()))?;
+    if is_link_like(&metadata) || !metadata.is_dir() {
+        return Err(format!(
+            "{label} must be a real directory, not a symlink or reparse point: {}",
+            path.display()
+        ));
+    }
+    set_private_directory_permissions(path)
+}
+
+#[cfg(unix)]
+fn set_private_directory_permissions(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+        .map_err(|error| format!("failed to protect {}: {error}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn set_private_directory_permissions(path: &Path) -> Result<(), String> {
+    Err(format!(
+        "native snapshot publication requires verifiable private directory ownership and ACLs; this platform backend is unavailable for {}",
+        path.display()
+    ))
 }
 
 struct DigestWriter<'a>(&'a mut Sha256);
@@ -1056,6 +1223,66 @@ mod tests {
         )
         .expect("changed digest");
         assert_ne!(first, changed);
+        fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_snapshot_store_reuses_only_a_revalidated_entry() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = test_dir("native-snapshot-store");
+        let store = NativeSnapshotStore::open(&root).expect("native snapshot store");
+        let first_staging = store.stage().expect("first staging tree");
+        fs::create_dir_all(first_staging.path().join("native")).expect("staging source tree");
+        fs::write(
+            first_staging.path().join("native/lib.rs"),
+            b"pub fn first() {}\n",
+        )
+        .expect("staged source");
+        let first = store
+            .publish(
+                first_staging,
+                ProjectTreeLimits::default(),
+                "test native snapshot",
+                b"rsscript-native-snapshot-test-v1\0",
+            )
+            .expect("first publication");
+
+        let second_staging = store.stage().expect("second staging tree");
+        fs::create_dir_all(second_staging.path().join("native")).expect("staging source tree");
+        fs::write(
+            second_staging.path().join("native/lib.rs"),
+            b"pub fn first() {}\n",
+        )
+        .expect("staged source");
+        let second = store
+            .publish(
+                second_staging,
+                ProjectTreeLimits::default(),
+                "test native snapshot",
+                b"rsscript-native-snapshot-test-v1\0",
+            )
+            .expect("existing entry should be revalidated and reused");
+        assert_eq!(first.digest(), second.digest());
+        assert_eq!(first.path(), second.path());
+        assert_eq!(
+            fs::read(first.path().join("native/lib.rs")).expect("published source"),
+            b"pub fn first() {}\n"
+        );
+
+        fn make_writable(path: &Path) {
+            let metadata = fs::metadata(path).expect("inspect cleanup path");
+            let mut permissions = metadata.permissions();
+            permissions.set_mode(if metadata.is_dir() { 0o700 } else { 0o600 });
+            fs::set_permissions(path, permissions).expect("unseal cleanup path");
+            if metadata.is_dir() {
+                for entry in fs::read_dir(path).expect("read cleanup directory") {
+                    make_writable(&entry.expect("cleanup entry").path());
+                }
+            }
+        }
+        make_writable(&root);
         fs::remove_dir_all(root).expect("fixture cleanup");
     }
 }

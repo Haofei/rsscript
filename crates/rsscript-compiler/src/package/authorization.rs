@@ -1,11 +1,8 @@
 use std::collections::BTreeMap;
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::path::{Path, PathBuf};
 
-use fs2::FileExt;
-use rsscript_artifact_store::{
-    regular_tree_digest, seal_regular_tree_read_only, snapshot_regular_file, snapshot_regular_tree,
-};
+use rsscript_artifact_store::{NativeSnapshotStore, snapshot_regular_file, snapshot_regular_tree};
 use rsscript_project::{CapturedPackageGraph, CapturedProjectGraph, capture_project_graph};
 use sha2::{Digest, Sha256};
 
@@ -607,25 +604,8 @@ fn snapshot_native_build_inputs(
         return Ok((Vec::new(), None));
     }
 
-    // The cache layout is versioned because earlier layouts did not verify a
-    // reused entry before returning it.  Do not let a partially populated
-    // legacy cache become an authorized native build input.
-    let cache_root = std::env::var_os("RSS_NATIVE_SNAPSHOT_CACHE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("rss-native-snapshots-v2"));
-    let staging_root = cache_root.join("staging");
-    let entries_root = cache_root.join("entries");
-    let locks_root = cache_root.join("locks");
-    for path in [&cache_root, &staging_root, &entries_root, &locks_root] {
-        fs::create_dir_all(path)
-            .map_err(|error| format!("failed to create {}: {error}", path.display()))?;
-        set_private_directory_permissions(path)?;
-    }
-    let directory = tempfile::Builder::new()
-        .prefix("rsscript-authorized-native-")
-        .tempdir_in(&staging_root)
-        .map_err(|error| format!("failed to create private native snapshot: {error}"))?;
-    set_private_directory_permissions(directory.path())?;
+    let store = NativeSnapshotStore::open_default()?;
+    let directory = store.stage()?;
 
     let mut snapshotted = Vec::with_capacity(dependencies.len());
     for (index, dependency) in dependencies.iter().enumerate() {
@@ -665,64 +645,12 @@ fn snapshot_native_build_inputs(
         "native ABI snapshot",
         |_parent, name| matches!(name, "target" | ".git" | ".DS_Store"),
     )?;
-    let digest = regular_tree_digest(
-        directory.path(),
+    let published = store.publish(
+        directory,
         TreeLimits::default(),
         "authorized native snapshot digest",
         b"rsscript-authorized-native-snapshot-v1\0",
     )?;
-    let published = entries_root.join(&digest);
-    let lock = OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(locks_root.join(format!(
-            "{}.lock",
-            published
-                .file_name()
-                .and_then(|name| name.to_str())
-                .expect("snapshot digest is UTF-8")
-        )))
-        .map_err(|error| format!("failed to open native snapshot cache lock: {error}"))?;
-    lock.lock_exclusive()
-        .map_err(|error| format!("failed to lock native snapshot cache entry: {error}"))?;
-    if let Ok(metadata) = fs::symlink_metadata(&published)
-        && (metadata.file_type().is_symlink() || !metadata.is_dir())
-    {
-        return Err(format!(
-            "authorized native snapshot cache entry must be a real directory: {}",
-            published.display()
-        ));
-    }
-    if published.exists() {
-        let published_digest = regular_tree_digest(
-            &published,
-            TreeLimits::default(),
-            "authorized native snapshot digest",
-            b"rsscript-authorized-native-snapshot-v1\0",
-        )?;
-        if published_digest != digest {
-            return Err(format!(
-                "authorized native snapshot cache entry failed integrity verification: {}",
-                published.display()
-            ));
-        }
-        drop(directory);
-    } else {
-        let staging = directory.keep();
-        fs::rename(&staging, &published).map_err(|error| {
-            format!(
-                "failed to publish authorized native snapshot {}: {error}",
-                published.display()
-            )
-        })?;
-        seal_regular_tree_read_only(
-            &published,
-            TreeLimits::default(),
-            "authorized snapshot sealing",
-        )?;
-    }
 
     Ok((
         snapshotted
@@ -730,6 +658,7 @@ fn snapshot_native_build_inputs(
             .enumerate()
             .map(|(index, mut dependency)| {
                 dependency.path = published
+                    .path()
                     .join("native")
                     .join(index.to_string())
                     .display()
@@ -738,8 +667,8 @@ fn snapshot_native_build_inputs(
             })
             .collect(),
         Some(PrivateContentSnapshot {
-            root: published.clone(),
-            native_abi_path: published.join("native-abi"),
+            root: published.path().to_path_buf(),
+            native_abi_path: published.path().join("native-abi"),
         }),
     ))
 }
@@ -784,21 +713,6 @@ fn validate_reviewed_cargo_inputs(
         ));
     }
     Ok(Some(lock_path))
-}
-
-#[cfg(unix)]
-fn set_private_directory_permissions(path: &Path) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
-        .map_err(|error| format!("failed to protect {}: {error}", path.display()))
-}
-
-#[cfg(not(unix))]
-fn set_private_directory_permissions(path: &Path) -> Result<(), String> {
-    Err(format!(
-        "external provider verification snapshots require verifiable private directory ownership and ACLs; this platform backend is unavailable for {}",
-        path.display()
-    ))
 }
 
 #[cfg(test)]
