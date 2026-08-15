@@ -515,6 +515,88 @@ pub fn write_generated_rust_package(
     Ok(())
 }
 
+/// Atomically write a generated `Cargo.lock` beside a captured `Cargo.toml`.
+/// Native snapshots are private staging trees, so this deliberately avoids the
+/// package mutation lock file used by [`ArtifactStore`]; adding that lock file
+/// would change the content-addressed native snapshot itself.
+pub fn write_generated_cargo_lock(cargo_toml: &Path, contents: &str) -> Result<(), String> {
+    let package_dir = cargo_toml.parent().ok_or_else(|| {
+        format!(
+            "generated Cargo.lock requires a Cargo.toml parent directory: {}",
+            cargo_toml.display()
+        )
+    })?;
+    let directory_metadata = fs::symlink_metadata(package_dir).map_err(|error| {
+        format!(
+            "failed to inspect generated Cargo.lock directory {}: {error}",
+            package_dir.display()
+        )
+    })?;
+    if is_link_like(&directory_metadata) || !directory_metadata.is_dir() {
+        return Err(format!(
+            "generated Cargo.lock directory must be a real directory: {}",
+            package_dir.display()
+        ));
+    }
+    let destination = package_dir.join("Cargo.lock");
+    match fs::symlink_metadata(&destination) {
+        Ok(metadata) if is_link_like(&metadata) || !metadata.is_file() => {
+            return Err(format!(
+                "generated Cargo.lock destination must be a regular file, not a symlink or reparse point: {}",
+                destination.display()
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "failed to inspect generated Cargo.lock {}: {error}",
+                destination.display()
+            ));
+        }
+    }
+
+    let temporary = package_dir.join(format!(
+        ".Cargo.lock.{}.{}.tmp",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|error| {
+                format!("failed to create generated Cargo.lock temporary file: {error}")
+            })?;
+        file.write_all(contents.as_bytes())
+            .map_err(|error| format!("failed to write generated Cargo.lock: {error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("failed to sync generated Cargo.lock: {error}"))?;
+        #[cfg(unix)]
+        fs::rename(&temporary, &destination)
+            .map_err(|error| format!("failed to publish generated Cargo.lock: {error}"))?;
+        #[cfg(not(unix))]
+        replace_portable_file(&temporary, &destination, "generated Cargo.lock")?;
+        #[cfg(unix)]
+        File::open(package_dir)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| {
+                format!(
+                    "failed to sync generated Cargo.lock directory {}: {error}",
+                    package_dir.display()
+                )
+            })?;
+        #[cfg(not(unix))]
+        sync_directory(package_dir)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
 /// Atomically replace a regular artifact below `package_root` without following
 /// symlinks in its parent path or at the destination.
 ///
@@ -1453,5 +1535,46 @@ mod tests {
         .expect("generated package should update");
         assert!(!root.join("src/main.rs").exists());
         fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn generated_cargo_lock_writer_replaces_existing_regular_content() {
+        let root = test_dir("generated-cargo-lock");
+        fs::create_dir_all(&root).expect("fixture root");
+        let cargo_toml = root.join("Cargo.toml");
+        fs::write(&cargo_toml, "[package]\nname = 'fixture'\n").expect("fixture manifest");
+        fs::write(root.join("Cargo.lock"), "old\n").expect("fixture lock");
+
+        write_generated_cargo_lock(&cargo_toml, "version = 4\n")
+            .expect("generated Cargo.lock should publish");
+        assert_eq!(
+            fs::read_to_string(root.join("Cargo.lock")).expect("published lock"),
+            "version = 4\n"
+        );
+        fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn generated_cargo_lock_writer_rejects_a_symlink_destination() {
+        use std::os::unix::fs::symlink;
+
+        let root = test_dir("generated-cargo-lock-link");
+        let outside = test_dir("generated-cargo-lock-link-outside");
+        fs::create_dir_all(&root).expect("fixture root");
+        fs::write(root.join("Cargo.toml"), "[package]\nname = 'fixture'\n")
+            .expect("fixture manifest");
+        fs::write(&outside, "outside\n").expect("outside content");
+        symlink(&outside, root.join("Cargo.lock")).expect("fixture lock symlink");
+
+        let error = write_generated_cargo_lock(&root.join("Cargo.toml"), "version = 4\n")
+            .expect_err("generated lock must reject symlink destination");
+        assert!(error.contains("regular file"), "{error}");
+        assert_eq!(
+            fs::read_to_string(&outside).expect("outside read"),
+            "outside\n"
+        );
+        fs::remove_dir_all(root).expect("fixture cleanup");
+        fs::remove_file(outside).expect("outside cleanup");
     }
 }

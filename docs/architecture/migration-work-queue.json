@@ -2,27 +2,6 @@
   "schema": "rsscript.migration_queue.v1",
   "tasks": [
     {
-      "id": "S05.2c2",
-      "priority": 20,
-      "depends_on": ["S05.2c1"],
-      "scope": [
-        "crates/rsscript-artifact-store/**",
-        "crates/rsscript-compiler/src/package/native.rs",
-        "crates/rsscript-sdk/tests/architecture.rs",
-        "docs/architecture/migration-baseline.md"
-      ],
-      "acceptance": [
-        "The artifact-store adapter writes generated Cargo.lock content atomically below a confined package root.",
-        "Compiler native compatibility code computes dependency-free lockfile content but does not perform the write.",
-        "Existing native snapshot and generated package tests preserve their observable output."
-      ],
-      "verification": [
-        "cargo test -p rsscript-artifact-store --locked",
-        "cargo test -p rsscript-compiler --features aot-rust --lib --locked",
-        "cargo test -p rsscript-sdk --features compatibility --test architecture --locked"
-      ]
-    },
-    {
       "id": "A09.2",
       "priority": 80,
       "depends_on": ["A09.1a", "A09.1b"],

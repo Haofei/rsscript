@@ -797,16 +797,17 @@ an arbitrary shell executor.
       The parent remains open for its independent private-snapshot and
       authorization-path acceptance review; checked child work never completes
       that milestone automatically.
-  - [ ] **S05.2 — Move Artifact persistence to an adapter.** Relocate locks,
+  - [x] **S05.2 — Move Artifact persistence to an adapter.** Relocate locks,
     atomic writes, temporary files, compression, and artifact-store policy out
     of compiler. The confined lock/read/write implementation now lives in the
     standalone `rsscript-artifact-store` adapter. The normal compiler frontend
     remains free of persistence dependencies; its optional package compatibility
     feature delegates persistence to that adapter without re-exporting it.
-    Remaining package lock, review, native-cache publication, and generated-Rust
-    persistence paths still need to leave the compiler compatibility layer before
-    this item can close. The adapter is no longer re-exported through the
-    compiler; only the explicit SDK compatibility façade exposes it directly.
+    Package lock capture now remains with the project snapshot boundary, while
+    native-cache, generated Rust, and generated Cargo.lock publication are
+    explicit artifact-store operations. The adapter is no longer re-exported
+    through the compiler; only the explicit SDK compatibility façade exposes it
+    directly.
     - [x] **S05.2a — Extract private native snapshot primitives.** Bounded
       regular-tree copying, no-follow file reads, deterministic snapshot
       digests, and read-only sealing now belong to `rsscript-artifact-store`;
@@ -827,10 +828,10 @@ an arbitrary shell executor.
         `rsscript-artifact-store`; confined creation, atomic replace,
         unchanged-file preservation, and stale-main removal no longer live in
         compiler code.
-      - [ ] **S05.2c2 — Extract generated lockfile publication.** Move native
-        Cargo.lock generation and any remaining compatibility lockfile writes
-        behind explicit artifact-store APIs, leaving compiler code to decide
-        only the generated lock contents.
+      - [x] **S05.2c2 — Extract generated lockfile publication.** Native
+        Cargo.lock generation now computes content in compiler compatibility
+        code and delegates its atomic, no-follow staging write to
+        `rsscript-artifact-store`; package-lock capture remains project-owned.
   - [ ] **S05.3 — Move review, risk, and package presentation out of compiler.**
     Keep neutral analysis facts; make review formatting and policy adapters
     optional consumers. Package persistence, review/risk, and generated-Rust

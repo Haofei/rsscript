@@ -1330,6 +1330,18 @@ fn artifact_persistence_is_an_execution_only_adapter() {
     assert!(!rust_lower.contains("fn remove_if_exists("));
     assert!(adapter.contains("pub struct GeneratedRustPackageFiles"));
     assert!(adapter.contains("pub fn write_generated_rust_package("));
+    let native = read(&root.join("crates/rsscript-compiler/src/package/native.rs"));
+    let generated_lock_start = native
+        .find("pub(super) fn prepare_native_cargo_lock")
+        .expect("native lock generation should remain explicit");
+    let generated_lock_end = native[generated_lock_start..]
+        .find("#[cfg(test)]")
+        .map(|offset| generated_lock_start + offset)
+        .expect("test-only native helpers should follow generated lock generation");
+    let generated_lock = &native[generated_lock_start..generated_lock_end];
+    assert!(generated_lock.contains("write_generated_cargo_lock("));
+    assert!(!generated_lock.contains("fs::write("));
+    assert!(adapter.contains("pub fn write_generated_cargo_lock("));
 }
 
 #[test]
