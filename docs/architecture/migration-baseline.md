@@ -1846,6 +1846,11 @@ an arbitrary shell executor.
       size limits plus bytecode magic/container version, section count/flags,
       section hash, and verifier Artifact-size limits. The public reader checks
       every case fail-closed without recompiling the reference source.
+    - [x] **B05.2c — Add a static v2 typed-decoder corpus.** A checked-in
+      canonical v2 payload and named mutation manifest exercise the independent
+      numeric decoder without rebuilding a Rust wire program. Unknown opcode,
+      constant-table/register, and return-register references all fail closed
+      through `BytecodeV2Verifier`.
   - [x] **B05.3 — Test deterministic bytes across supported platforms.** The
     checked-in canonical compilation baseline compares repeated Bundle bytes
     and their analysis/provenance digest from one immutable snapshot. It now

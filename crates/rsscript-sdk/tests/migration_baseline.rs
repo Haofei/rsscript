@@ -21,6 +21,20 @@ struct MalformedBoundaryFixture {
     expected: String,
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct V2MalformedFixtures {
+    case: Vec<V2MalformedFixture>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct V2MalformedFixture {
+    name: String,
+    operation: String,
+    offset: usize,
+    value: u64,
+    expected: String,
+}
+
 const BASELINE_SOURCE: &str = r#"
 fn main() -> Int {
     let mut index = 0
@@ -299,5 +313,41 @@ fn apply_static_boundary_mutation(bytes: &mut [u8], fixture: &MalformedBoundaryF
                 .copy_from_slice(&fixture.value.to_be_bytes());
         }
         other => panic!("unknown malformed-fixture operation `{other}`"),
+    }
+}
+
+#[test]
+fn checked_in_v2_payload_and_malformed_instruction_fixture_remain_fail_closed() {
+    use rsscript_bytecode::v2::BytecodeV2Verifier;
+
+    let fixtures: V2MalformedFixtures = toml::from_str(include_str!(
+        "../../rsscript-bytecode/fixtures/v2/malformed-boundaries.toml"
+    ))
+    .expect("malformed v2 fixture manifest is valid TOML");
+    let payload = STANDARD
+        .decode(
+            include_str!("../../rsscript-bytecode/fixtures/v2/reference.payload.base64").trim(),
+        )
+        .expect("checked-in v2 payload uses valid base64");
+    BytecodeV2Verifier::default()
+        .verify_payload(&payload)
+        .expect("checked-in v2 payload remains structurally verifiable");
+
+    for fixture in fixtures.case {
+        let mut malformed = payload.clone();
+        match fixture.operation.as_str() {
+            "set_byte" => malformed[fixture.offset] = fixture.value as u8,
+            other => panic!("unknown v2 malformed-fixture operation `{other}`"),
+        }
+        let error = BytecodeV2Verifier::default()
+            .verify_payload(&malformed)
+            .expect_err("static malformed v2 payload must fail closed")
+            .to_string();
+        assert!(
+            error.contains(&fixture.expected),
+            "{} expected error containing {:?}, got {error}",
+            fixture.name,
+            fixture.expected,
+        );
     }
 }

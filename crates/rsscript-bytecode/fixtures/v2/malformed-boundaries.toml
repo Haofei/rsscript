@@ -1,0 +1,31 @@
+# Static mutations for the typed v2 decoder. The base payload is checked in
+# rather than constructed from current Rust wire types, so these cases continue
+# to exercise the old-reader boundary as the v2 writer evolves.
+
+[[case]]
+name = "unknown-opcode"
+operation = "set_byte"
+offset = 85
+value = 20
+expected = "unknown opcode"
+
+[[case]]
+name = "load-constant-invalid-register"
+operation = "set_byte"
+offset = 87
+value = 1
+expected = "invalid register"
+
+[[case]]
+name = "load-constant-invalid-constant"
+operation = "set_byte"
+offset = 88
+value = 1
+expected = "invalid constant"
+
+[[case]]
+name = "return-invalid-register"
+operation = "set_byte"
+offset = 92
+value = 1
+expected = "invalid register"
