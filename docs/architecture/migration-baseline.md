@@ -1872,10 +1872,13 @@ an arbitrary shell executor.
       build scripts derive an `InterfaceDescriptorV1` in semantics and pass it
       to `ProviderInterface::from_descriptor`; bindgen no longer depends on
       `rsscript-syntax` or exposes a source-parsing entry point.
-- [ ] **P05 — Generate typed Rust Provider APIs.** Generate sync/async traits,
+- [x] **P05 — Generate typed Rust Provider APIs.** Generate sync/async traits,
   typed parameters/results, resource wrappers, descriptor/signature constants,
   registration glue, mocks, completeness checks, and conformance skeletons.
-  `NativeValue` remains only in generated adapters.
+  `NativeValue` remains only in generated adapters. Bindgen and conformance
+  regressions cover scalar/aggregate/named layouts, async call modes,
+  generation-safe resources, registry glue, generated mocks, and completeness
+  failures against the descriptor-owned contract.
   - [x] **P05.1 — Generate scalar and aggregate Rust type mappings.** Generated
     traits cover unit, booleans, integers, floats, strings, bytes, lists,
     options, results, tuples, records, and variants. The bindgen regression
