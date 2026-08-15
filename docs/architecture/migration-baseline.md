@@ -1045,6 +1045,13 @@ mechanical acceptance condition holds.
       `List.get` and `len` reuse the existing typed list read/length
       operations. The corpus proves update, option result, retention, and
       subsequent observation parity without source-level builtin recovery.
+    - [x] **M03.4k — Lower special mutable-set updates without legacy
+      intrinsics.** `Set.insert`, `remove`, and `clear` now carry a mutable
+      `PlaceId`; insertion retains a checked `read` local value explicitly and
+      returns the VM's boolean membership result. The verified-bytecode parity
+      fixture covers insertion, duplicate detection, removal, and clear. The
+      small reference interpreter does not model the hash-set runtime, so its
+      named evidence exception cannot bypass direct/legacy bytecode parity.
 - [ ] **M04 — Lower checked HIR to MIR exactly once.** Backend code cannot
   inspect syntax AST or reconstruct semantic facts. MIR verification rejects
   unresolved calls, invalid ownership state, incomplete cleanup, and malformed
@@ -1278,6 +1285,10 @@ mechanical acceptance condition holds.
       verifier-checked v1 instructions. The direct migration corpus covers
       every operation alongside typed `List.get`/`len`, option branches, and
       retention facts.
+    - [x] **V02.3l — Emit resolved mutable-set updates.** `SetClear`,
+      `SetInsert`, and `SetRemove` map explicit mutable set places and values
+      to the corresponding verifier-checked v1 instructions. The migration
+      fixture proves boolean outcomes and retention against the legacy VM.
   - [x] **V02.4 — Switch reviewed builds to the compiler bytecode boundary.**
     SDK source, interface, and package builds delegate checked HIR → MIR →
     `codegen-vm` Artifact emission to the compiler's VM-free `bytecode`

@@ -494,6 +494,28 @@ fn main() -> Int {
 "#,
     },
     MigrationCase {
+        name: "set_mutations",
+        capability: "resolved mutable-set updates with retention",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn main() -> Int {
+    let mut values = Set.new<Int>()
+    let value = 7
+    if Set.insert<Int>(set: mut values, value: read value) == false {
+        return 0
+    }
+    if Set.insert<Int>(set: mut values, value: read value) {
+        return 0
+    }
+    if Set.remove<Int>(set: mut values, value: read value) == false {
+        return 0
+    }
+    Set.clear<Int>(set: mut values)
+    return 1
+}
+"#,
+    },
+    MigrationCase {
         name: "typed_json_decode",
         capability: "typed JSON decode builtins and record layouts",
         stage: MigrationStage::DualPath,
@@ -512,12 +534,20 @@ fn main() -> Result<Int, JsonError> {
 /// MIR. JSON decoding needs a typed runtime intrinsic and record layout
 /// materialization, so it proves the mandatory legacy/direct verified-bytecode
 /// parity but does not pretend to have a third oracle it cannot execute.
-const EVIDENCE_OVERRIDES: &[MigrationEvidenceOverride] = &[MigrationEvidenceOverride {
-    case: "typed_json_decode",
-    evidence: MigrationEvidence::VerifiedBytecode {
-        reference_interpreter_gap: "the test-only MIR interpreter does not model typed JSON decode intrinsics or record-layout materialization",
+const EVIDENCE_OVERRIDES: &[MigrationEvidenceOverride] = &[
+    MigrationEvidenceOverride {
+        case: "typed_json_decode",
+        evidence: MigrationEvidence::VerifiedBytecode {
+            reference_interpreter_gap: "the test-only MIR interpreter does not model typed JSON decode intrinsics or record-layout materialization",
+        },
     },
-}];
+    MigrationEvidenceOverride {
+        case: "set_mutations",
+        evidence: MigrationEvidence::VerifiedBytecode {
+            reference_interpreter_gap: "the test-only MIR interpreter does not model Set.new or hashable set runtime representation",
+        },
+    },
+];
 
 #[test]
 fn dual_path_cases_match_the_legacy_vm() {
@@ -836,6 +866,77 @@ fn main() -> Int {
     let legacy = reg_vm_eval_source_main("direct-hir-list-mutations.rss", source)
         .expect("legacy List mutation path executes");
     assert_eq!(legacy.value, "16");
+    assert_eq!(direct.value, legacy.value);
+    assert_eq!(direct.stdout, legacy.stdout);
+    assert_eq!(direct.stderr, legacy.stderr);
+    assert_eq!(direct.usage, legacy.usage);
+}
+
+#[test]
+fn direct_checked_hir_set_mutations_preserve_retention_and_boolean_contracts() {
+    let source = r#"
+fn main() -> Int {
+    let mut values = Set.new<Int>()
+    let value = 7
+    if Set.insert<Int>(set: mut values, value: read value) == false {
+        return 0
+    }
+    if Set.insert<Int>(set: mut values, value: read value) {
+        return 0
+    }
+    if Set.remove<Int>(set: mut values, value: read value) == false {
+        return 0
+    }
+    Set.clear<Int>(set: mut values)
+    return 1
+}
+"#;
+    let compiled = compile_source_to_ir("direct-hir-set-mutations.rss", source)
+        .expect("Set mutation fixture compiles");
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("Set mutations should lower directly from checked HIR");
+    let instructions = mir
+        .functions()
+        .iter()
+        .flat_map(|function| function.blocks())
+        .flat_map(|block| block.instructions())
+        .collect::<Vec<_>>();
+    assert!(
+        instructions
+            .iter()
+            .any(|instruction| matches!(instruction, MirInstruction::SetInsert { .. })),
+        "direct MIR must preserve Set.insert as an explicit mutable-place operation"
+    );
+    assert!(
+        instructions
+            .iter()
+            .any(|instruction| matches!(instruction, MirInstruction::SetRemove { .. })),
+        "direct MIR must preserve Set.remove as an explicit mutable-place operation"
+    );
+    assert!(
+        instructions
+            .iter()
+            .any(|instruction| matches!(instruction, MirInstruction::SetClear { .. })),
+        "direct MIR must preserve Set.clear as an explicit mutable-place operation"
+    );
+    assert!(
+        instructions
+            .iter()
+            .any(|instruction| matches!(instruction, MirInstruction::Retain { .. })),
+        "Set insertion must retain a read-local value explicitly"
+    );
+    let direct = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("Set mutation MIR emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("Set mutation bytecode executes");
+    let legacy = reg_vm_eval_source_main("direct-hir-set-mutations.rss", source)
+        .expect("legacy Set mutation path executes");
+    assert_eq!(legacy.value, "1");
     assert_eq!(direct.value, legacy.value);
     assert_eq!(direct.stdout, legacy.stdout);
     assert_eq!(direct.stderr, legacy.stderr);

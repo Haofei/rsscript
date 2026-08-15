@@ -740,6 +740,11 @@ impl<'a> Interpreter<'a> {
                         *slot = value;
                         values[destination.index()] = Some(MirValue::Unit);
                     }
+                    MirInstruction::SetClear { .. }
+                    | MirInstruction::SetInsert { .. }
+                    | MirInstruction::SetRemove { .. } => {
+                        return Err(MirExecutionError::UnsupportedBuiltinCall);
+                    }
                     MirInstruction::MapGet {
                         destination,
                         map,

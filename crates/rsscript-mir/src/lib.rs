@@ -194,6 +194,25 @@ pub enum MirInstruction {
         index: ValueId,
         value: ValueId,
     },
+    /// Clear a resolved mutable hash-set place.
+    SetClear {
+        destination: ValueId,
+        set: PlaceId,
+    },
+    /// Insert a value into a resolved mutable hash-set place, returning whether
+    /// it was absent. The retained value and mutable place remain explicit.
+    SetInsert {
+        destination: ValueId,
+        set: PlaceId,
+        value: ValueId,
+    },
+    /// Remove a value from a resolved mutable hash-set place, returning whether
+    /// it was present.
+    SetRemove {
+        destination: ValueId,
+        set: PlaceId,
+        value: ValueId,
+    },
     /// Read a value from a resolved mutable map. The result remains an
     /// `Option` so absence is explicit in the typed control-flow graph rather
     /// than hidden in a source-level `Map.get` spelling.
@@ -1278,6 +1297,9 @@ fn instruction_definitions(instruction: &MirInstruction) -> Vec<ValueId> {
         | MirInstruction::ListPush { destination, .. }
         | MirInstruction::ListRemoveAt { destination, .. }
         | MirInstruction::ListSet { destination, .. }
+        | MirInstruction::SetClear { destination, .. }
+        | MirInstruction::SetInsert { destination, .. }
+        | MirInstruction::SetRemove { destination, .. }
         | MirInstruction::MapGet { destination, .. }
         | MirInstruction::MapClear { destination, .. }
         | MirInstruction::MapInsert { destination, .. }
@@ -1336,6 +1358,9 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         }
         MirInstruction::ListRemoveAt { index, .. } => vec![*index],
         MirInstruction::ListSet { index, value, .. } => vec![*index, *value],
+        MirInstruction::SetInsert { value, .. } | MirInstruction::SetRemove { value, .. } => {
+            vec![*value]
+        }
         MirInstruction::MapGet { map, key, .. } => vec![*map, *key],
         MirInstruction::MapInsert { key, value, .. }
         | MirInstruction::MapInsertOld { key, value, .. } => vec![*key, *value],
@@ -1376,7 +1401,8 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         | MirInstruction::Join { .. }
         | MirInstruction::MapClear { .. }
         | MirInstruction::ListClear { .. }
-        | MirInstruction::ListPop { .. } => Vec::new(),
+        | MirInstruction::ListPop { .. }
+        | MirInstruction::SetClear { .. } => Vec::new(),
         MirInstruction::TryResult { source, .. } => vec![*source],
     }
 }
@@ -1518,6 +1544,9 @@ fn transfer_move_state(
         | MirInstruction::ListPush { list, .. }
         | MirInstruction::ListRemoveAt { list, .. }
         | MirInstruction::ListSet { list, .. } => check_live(*list, moved_places),
+        MirInstruction::SetClear { set, .. }
+        | MirInstruction::SetInsert { set, .. }
+        | MirInstruction::SetRemove { set, .. } => check_live(*set, moved_places),
         MirInstruction::MapInsert { map, .. }
         | MirInstruction::MapInsertOld { map, .. }
         | MirInstruction::MapRemove { map, .. } => check_live(*map, moved_places),
@@ -1695,6 +1724,25 @@ fn verify_instruction(
             check_live_place(*list, moved_places)?;
             define(*destination, defined)?;
             used.push(*index);
+            used.push(*value);
+            Ok(())
+        }
+        MirInstruction::SetClear { destination, set } => {
+            check_live_place(*set, moved_places)?;
+            define(*destination, defined)
+        }
+        MirInstruction::SetInsert {
+            destination,
+            set,
+            value,
+        }
+        | MirInstruction::SetRemove {
+            destination,
+            set,
+            value,
+        } => {
+            check_live_place(*set, moved_places)?;
+            define(*destination, defined)?;
             used.push(*value);
             Ok(())
         }

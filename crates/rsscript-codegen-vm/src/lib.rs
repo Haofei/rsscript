@@ -499,6 +499,37 @@ fn lower_instruction(
                 ("value", json!(value_reg(function, *value))),
             ],
         )),
+        MirInstruction::SetClear { destination, set } => code.push(instr(
+            "SetClear",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("set", json!(place_reg(*set))),
+            ],
+        )),
+        MirInstruction::SetInsert {
+            destination,
+            set,
+            value,
+        } => code.push(instr(
+            "SetInsert",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("set", json!(place_reg(*set))),
+                ("value", json!(value_reg(function, *value))),
+            ],
+        )),
+        MirInstruction::SetRemove {
+            destination,
+            set,
+            value,
+        } => code.push(instr(
+            "SetRemove",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("set", json!(place_reg(*set))),
+                ("value", json!(value_reg(function, *value))),
+            ],
+        )),
         MirInstruction::MapGet {
             destination,
             map,

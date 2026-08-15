@@ -1694,6 +1694,45 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                     self.emit(MirInstruction::Retain { place });
                 }
             }
+            "clear" if signature.namespace.as_deref() == Some("Set") => {
+                if receiver.is_some() || args.len() != 1 {
+                    return self.unsupported("Set.clear with invalid checked call shape");
+                }
+                let set = self.lower_mutable_builtin_place(&args[0].value)?;
+                self.emit(MirInstruction::SetClear { destination, set });
+            }
+            "insert" if signature.namespace.as_deref() == Some("Set") => {
+                if receiver.is_some() || args.len() != 2 {
+                    return self.unsupported("Set.insert with invalid checked call shape");
+                }
+                let mut ordered = args.iter().collect::<Vec<_>>();
+                ordered.sort_by_key(|argument| argument.evaluation_index);
+                let set = self.lower_mutable_builtin_place(&ordered[0].value)?;
+                let (value, retained_value) =
+                    self.lower_retained_builtin_value(&ordered[1].value)?;
+                self.emit(MirInstruction::SetInsert {
+                    destination,
+                    set,
+                    value,
+                });
+                if let Some(place) = retained_value {
+                    self.emit(MirInstruction::Retain { place });
+                }
+            }
+            "remove" if signature.namespace.as_deref() == Some("Set") => {
+                if receiver.is_some() || args.len() != 2 {
+                    return self.unsupported("Set.remove with invalid checked call shape");
+                }
+                let mut ordered = args.iter().collect::<Vec<_>>();
+                ordered.sort_by_key(|argument| argument.evaluation_index);
+                let set = self.lower_mutable_builtin_place(&ordered[0].value)?;
+                let value = self.lower_expression(&ordered[1].value)?;
+                self.emit(MirInstruction::SetRemove {
+                    destination,
+                    set,
+                    value,
+                });
+            }
             "get" if signature.namespace.as_deref() == Some("Map") => {
                 if receiver.is_some() || args.len() != 2 {
                     return self.unsupported("Map.get with invalid checked call shape");
