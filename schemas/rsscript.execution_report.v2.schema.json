@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rsscript.dev/schemas/rsscript.execution_report.v2.schema.json",
+  "title": "RSScript execution report v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "artifact_digest",
+    "outcome",
+    "usage",
+    "telemetry",
+    "stdout",
+    "stderr",
+    "provider_call_traces",
+    "diagnostics"
+  ],
+  "properties": {
+    "schema": { "const": "rsscript.execution_report.v2" },
+    "artifact_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "outcome": { "$ref": "#/$defs/outcome" },
+    "usage": { "type": "object" },
+    "telemetry": { "type": "object" },
+    "stdout": { "type": "string" },
+    "stderr": { "type": "string" },
+    "provider_call_traces": { "type": "array" },
+    "diagnostics": { "type": "array" }
+  },
+  "$defs": {
+    "outcome": {
+      "oneOf": [
+        { "$ref": "#/$defs/completed" },
+        { "$ref": "#/$defs/failed" }
+      ]
+    },
+    "completed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "wire_value", "display_value"],
+      "properties": {
+        "kind": { "const": "completed" },
+        "wire_value": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/wire_value" }
+          ]
+        },
+        "display_value": { "type": "string" }
+      }
+    },
+    "failed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "failure"],
+      "properties": {
+        "kind": { "const": "failed" },
+        "failure": { "$ref": "#/$defs/runtime_error" }
+      }
+    },
+    "runtime_error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "message"],
+      "properties": {
+        "reason": {
+          "enum": [
+            "completed",
+            "script_error",
+            "cancelled",
+            "deadline_exceeded",
+            "step_budget_exceeded",
+            "allocation_budget_exceeded",
+            "live_memory_limit_exceeded",
+            "output_limit_exceeded",
+            "provider_error",
+            "provider_budget_exceeded",
+            "intrinsic_budget_exceeded",
+            "resource_limit_exceeded",
+            "verification_failure",
+            "internal_error"
+          ]
+        },
+        "message": { "type": "string" }
+      }
+    },
+    "wire_value": {
+      "oneOf": [
+        { "$ref": "#/$defs/wire_unit" },
+        { "$ref": "#/$defs/wire_bool" },
+        { "$ref": "#/$defs/wire_int" },
+        { "$ref": "#/$defs/wire_float" },
+        { "$ref": "#/$defs/wire_string" },
+        { "$ref": "#/$defs/wire_char" },
+        { "$ref": "#/$defs/wire_bytes" },
+        { "$ref": "#/$defs/wire_list" },
+        { "$ref": "#/$defs/wire_map" },
+        { "$ref": "#/$defs/wire_tuple" },
+        { "$ref": "#/$defs/wire_record" },
+        { "$ref": "#/$defs/wire_variant" },
+        { "$ref": "#/$defs/wire_resource" }
+      ]
+    },
+    "wire_unit": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind"], "properties": { "kind": { "const": "unit" } }
+    },
+    "wire_bool": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": { "kind": { "const": "bool" }, "value": { "type": "boolean" } }
+    },
+    "wire_int": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": { "kind": { "const": "int" }, "value": { "type": "integer" } }
+    },
+    "wire_float": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": { "kind": { "const": "float" }, "value": { "type": "number" } }
+    },
+    "wire_string": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": { "kind": { "const": "string" }, "value": { "type": "string" } }
+    },
+    "wire_char": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": { "kind": { "const": "char" }, "value": { "type": "string", "minLength": 1, "maxLength": 1 } }
+    },
+    "wire_bytes": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": { "kind": { "const": "bytes" }, "value": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 255 } } }
+    },
+    "wire_list": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "element_type", "values"],
+      "properties": { "kind": { "const": "list" }, "element_type": { "type": "integer", "minimum": 0 }, "values": { "type": "array", "items": { "$ref": "#/$defs/wire_value" } } }
+    },
+    "wire_map": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "key_type", "value_type", "entries"],
+      "properties": { "kind": { "const": "map" }, "key_type": { "type": "integer", "minimum": 0 }, "value_type": { "type": "integer", "minimum": 0 }, "entries": { "type": "array", "items": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "$ref": "#/$defs/wire_value" } } } }
+    },
+    "wire_tuple": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "values"],
+      "properties": { "kind": { "const": "tuple" }, "values": { "type": "array", "items": { "$ref": "#/$defs/wire_value" } } }
+    },
+    "wire_record": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "type_id", "fields"],
+      "properties": { "kind": { "const": "record" }, "type_id": { "type": "integer", "minimum": 0 }, "fields": { "type": "array", "items": { "$ref": "#/$defs/wire_value" } } }
+    },
+    "wire_variant": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "type_id", "variant_id", "payload"],
+      "properties": { "kind": { "const": "variant" }, "type_id": { "type": "integer", "minimum": 0 }, "variant_id": { "type": "integer", "minimum": 0 }, "payload": { "oneOf": [ { "type": "null" }, { "$ref": "#/$defs/wire_value" } ] } }
+    },
+    "wire_resource": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "handle"],
+      "properties": { "kind": { "const": "resource" }, "handle": { "$ref": "#/$defs/resource_handle" } }
+    },
+    "resource_handle": {
+      "type": "object", "additionalProperties": false,
+      "required": ["resource_type", "slot", "generation"],
+      "properties": { "resource_type": { "type": "integer", "minimum": 0 }, "slot": { "type": "integer", "minimum": 0 }, "generation": { "type": "integer", "minimum": 0 } }
+    }
+  }
+}

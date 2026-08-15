@@ -19,7 +19,7 @@ fn load_json(path: &Path) -> serde_json::Value {
 }
 
 #[test]
-fn execution_report_schema_accepts_golden_reports_and_live_output() {
+fn execution_report_v1_schema_retains_historical_golden_reports() {
     let root = workspace_root();
     let schema = load_json(&root.join("schemas/rsscript.execution_report.v1.schema.json"));
     let validator = jsonschema::validator_for(&schema).expect("execution report schema");
@@ -40,7 +40,13 @@ fn execution_report_schema_accepts_golden_reports_and_live_output() {
             assert_eq!(report["termination_reason"], failure["reason"]);
         }
     }
+}
 
+#[test]
+fn execution_report_v2_schema_accepts_live_output_without_native_value() {
+    let root = workspace_root();
+    let schema = load_json(&root.join("schemas/rsscript.execution_report.v2.schema.json"));
+    let validator = jsonschema::validator_for(&schema).expect("execution report schema");
     let compiler = rsscript_sdk::Compiler;
     let package = compiler
         .compile("main.rss", "fn main() -> Unit { return Unit }")
@@ -59,20 +65,47 @@ fn execution_report_schema_accepts_golden_reports_and_live_output() {
         .map(|error| error.to_string())
         .collect::<Vec<_>>();
     assert!(errors.is_empty(), "live report schema errors: {errors:#?}");
+    assert_eq!(report["schema"], "rsscript.execution_report.v2");
+    assert_eq!(report["outcome"]["kind"], "completed");
+    assert_eq!(report["outcome"]["wire_value"]["kind"], "unit");
+    assert!(report.get("native_value").is_none());
 }
 
 #[test]
 fn execution_report_schema_is_fail_closed() {
     let root = workspace_root();
-    let schema = load_json(&root.join("schemas/rsscript.execution_report.v1.schema.json"));
+    let schema = load_json(&root.join("schemas/rsscript.execution_report.v2.schema.json"));
     let validator = jsonschema::validator_for(&schema).expect("execution report schema");
-    let mut report = load_json(&root.join("schemas/fixtures/execution-report/completed.json"));
+    let mut report = serde_json::json!({
+        "schema": "rsscript.execution_report.v2",
+        "artifact_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "outcome": {
+            "kind": "completed",
+            "wire_value": { "kind": "int", "value": 42 },
+            "display_value": "42"
+        },
+        "usage": {},
+        "telemetry": {},
+        "stdout": "",
+        "stderr": "",
+        "provider_call_traces": [],
+        "diagnostics": []
+    });
 
     report["unexpected"] = serde_json::json!(true);
     assert!(!validator.is_valid(&report));
 
-    let mut mismatched = load_json(&root.join("schemas/fixtures/execution-report/cancelled.json"));
-    mismatched["termination_reason"] = serde_json::json!("unknown_reason");
+    let mut mismatched = report;
+    mismatched
+        .as_object_mut()
+        .expect("object")
+        .remove("unexpected");
+    mismatched["outcome"]["wire_value"] = serde_json::json!({
+        "kind": "record",
+        "type_id": 1,
+        "fields": [],
+        "unexpected": true
+    });
     assert!(!validator.is_valid(&mismatched));
 }
 

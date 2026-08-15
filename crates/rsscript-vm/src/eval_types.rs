@@ -1230,7 +1230,6 @@ pub struct EvalExecutionReport {
     /// legacy v1 Artifact carries enough layout information to derive it.
     /// Absent values are deliberately not replaced with dynamic identifiers.
     pub wire_value: Option<WireValue>,
-    pub native_value: Option<NativeValue>,
     pub stdout: String,
     pub stderr: String,
     pub provider_call_traces: Vec<ProviderCallTrace>,

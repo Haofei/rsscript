@@ -76,6 +76,7 @@ fn public_schemas_reject_unknown_top_level_fields() {
         "rsscript.bytecode.v1.schema.json",
         "rsscript-bindings-v1.json",
         "rsscript.execution_report.v1.schema.json",
+        "rsscript.execution_report.v2.schema.json",
         "rsscript.core_metrics.v1.schema.json",
     ] {
         let schema = schema(name);

@@ -15,7 +15,7 @@ length-prefixed protocol. The child:
    `no_new_privs` before it parses the Artifact;
 6. returns `rsscript.runner_response.v1` containing the host-selected profile
    identity plus the normal
-   `rsscript.execution_report.v1`.
+   `rsscript.execution_report.v2`.
 
 Runner termination and VM termination are separate. A protocol, verification,
 or link rejection is a runner failure. Script errors, cancellation, deadlines,

@@ -180,7 +180,6 @@ fn checked_in_v1_bundle_remains_read_only_verifiable_and_executable() {
         .link(&admitted)
         .expect("checked-in v1 bundle links without Providers")
         .execute(ExecutionRequest::default());
-    let serialized = serde_json::to_value(&report).expect("execution report serializes");
 
     assert_eq!(
         report.termination_reason(),
@@ -189,9 +188,9 @@ fn checked_in_v1_bundle_remains_read_only_verifiable_and_executable() {
     );
     assert_eq!(report.value(), expected["value"].as_str());
     assert_eq!(
-        serialized["termination_reason"].as_str(),
+        Some(report.termination_reason().as_str()),
         expected["termination_reason"].as_str(),
-        "the v1 report projection retains its structured termination reason"
+        "the v1 Artifact remains executable even though the reviewed report writer is v2"
     );
 }
 
@@ -226,16 +225,10 @@ fn checked_in_v1_failure_bundle_retains_its_complete_execution_report() {
         TerminationReason::StepBudgetExceeded,
         "v1 failure bundle must retain the script-level termination reason"
     );
-    let serialized = serde_json::to_value(&report).expect("execution report serializes");
     assert_eq!(
-        serialized["value"].as_str(),
-        expected["value"].as_str(),
-        "the v1 report projection retains its structured failure value"
-    );
-    assert_eq!(
-        serialized["termination_reason"].as_str(),
+        Some(report.termination_reason().as_str()),
         expected["termination_reason"].as_str(),
-        "the v1 report projection retains its structured termination reason"
+        "the v1 Artifact retains its structured terminal reason through the v2 report"
     );
     assert!(report.failure().is_some());
 }

@@ -2078,15 +2078,16 @@ an arbitrary shell executor.
     the legacy dynamic callable. An architecture test rejects any regression to
     `NativeValue` or `NativeInterpreterFn` in official Provider source. Async
     Providers can use the same safe subset through `AsyncWireInterpreterFn`.
-  - [ ] **P06.4 — Remove legacy escape variants from canonical APIs.** JSON stays
+  - [x] **P06.4 — Remove legacy escape variants from canonical APIs.** JSON stays
     only behind a named extension codec with explicit interface declaration.
     The reviewed SDK Provider façade no longer re-exports `NativeValue` or
     `NativeInterpreterFn`; both remain compatibility-only. The reviewed Rust
-    `ExecutionReport` also no longer exposes a public `NativeValue` field; it
-    retains a private v1 JSON projection solely so existing machine consumers
-    can migrate independently. VM adapters and the v1 report schema still
-    carry the legacy representation until the typed report outcome replaces
-    that compatibility projection. `rsscript-provider-api` now also excludes
+    `ExecutionReport` also no longer exposes a public `NativeValue` field. The
+    reviewed SDK emits `rsscript.execution_report.v2`, whose explicit outcome
+    carries only `WireValue`; v1 schemas and fixtures remain historical reader
+    evidence and are no longer emitted by the canonical path. VM adapters can
+    retain a dynamic value only at their explicitly named compatibility
+    boundary. `rsscript-provider-api` now also excludes
     the legacy dynamic value/callable definitions from its default feature set:
     only the register VM, native ABI adapter, and conformance compatibility
     harness opt into its explicit `compatibility` feature. This prevents a new
@@ -2100,8 +2101,8 @@ an arbitrary shell executor.
     Artifact now carries a verifier-checked complete named-sum layout table as
     well as record layouts, so `WireValue::Variant` results use deterministic
     numeric case identities rather than returning `None` or fabricating string
-    identity. The v1 JSON report and VM compatibility projection remain until
-    the typed report outcome replaces that legacy serialization boundary.
+    identity. The v2 JSON report serializes that typed outcome directly and
+    never contains a `NativeValue` projection.
 - [x] **P07 — Remove policy-shaped authority from Core ABI.** `HostCallContext`
   carries host-defined labels to Provider calls without Core interpreting an
   authorization policy. The runtime reports required symbols; provider profiles

@@ -315,24 +315,18 @@ fn default_snapshot_checks_share_the_compilation_session_query_boundary() {
 }
 
 #[test]
-fn reviewed_execution_report_hides_legacy_native_value_behind_compatibility() {
+fn reviewed_execution_report_excludes_legacy_native_value() {
     let source = library_source();
     let report_start = source
         .find("pub struct ExecutionReport")
         .expect("ExecutionReport must remain a reviewed report type");
-    let report = &source[report_start..];
-    let public_native_value = "pub native_value: Option<NativeValue>";
-    let offset = report
-        .find(public_native_value)
-        .expect("compatibility report projection must remain explicitly gated");
-    let prefix = &report[..offset];
+    let report = source[report_start..]
+        .split("#[cfg(feature = \"execution\")]\nimpl ExecutionReport")
+        .next()
+        .expect("execution-report fields must precede its implementation");
     assert!(
-        prefix.ends_with("#[cfg(feature = \"compatibility\")]\n    "),
-        "the legacy NativeValue report field must require the compatibility feature"
-    );
-    assert!(
-        report.contains("legacy_native_value: Option<serde_json::Value>"),
-        "the v1 JSON compatibility projection must stay private to the reviewed SDK"
+        !report.contains("NativeValue"),
+        "the canonical execution report must not retain a NativeValue projection"
     );
     assert!(
         source.contains("wire_value: Option<provider::WireValue>"),

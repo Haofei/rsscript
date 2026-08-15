@@ -38,9 +38,11 @@ cancellation latency, structured-task/resource peaks, and per-Provider-symbol
 call, failure, logical payload-byte, total-duration, and maximum-duration
 summaries. The logical payload estimate deliberately excludes allocator
 capacity and Provider-specific transport framing. Reports serialize as the versioned
-`rsscript.execution_report.v1` schema. Failed executions return a
-machine-readable termination reason plus a diagnostic message instead of a bare
-string error.
+`rsscript.execution_report.v2` schema. Its mutually-exclusive `outcome`
+contains either a canonical typed `WireValue` result or a machine-readable
+failure; the historical v1 `NativeValue` projection is not emitted by the
+reviewed SDK. Failed executions return a machine-readable termination reason
+plus a diagnostic message instead of a bare string error.
 
 The bytecode VM is the reference execution model. Rust AOT, Cranelift JIT,
 native plugins, REIR, and self-hosting remain optional Experimental, Integration,

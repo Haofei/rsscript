@@ -1508,17 +1508,6 @@ impl LinkedArtifact<'_> {
             usage: output.usage,
             telemetry,
             outcome,
-            // The v1 JSON report still carries the legacy projection for
-            // backwards-compatible machine consumers. It is deliberately not
-            // part of the reviewed Rust API: new embedders receive only the
-            // stable textual result until the typed report outcome is ready.
-            #[cfg(not(feature = "compatibility"))]
-            legacy_native_value: output.native_value.map(|value| {
-                serde_json::to_value(value)
-                    .expect("NativeValue must remain serializable for the v1 report contract")
-            }),
-            #[cfg(feature = "compatibility")]
-            native_value: output.native_value,
             stdout: output.stdout,
             stderr: output.stderr,
             provider_call_traces: match request.trace_policy {
@@ -1585,7 +1574,14 @@ impl Default for ExecutionRequest {
 }
 
 #[cfg(feature = "execution")]
-pub const EXECUTION_REPORT_SCHEMA: &str = "rsscript.execution_report.v1";
+/// The canonical report schema emitted by the reviewed SDK.
+///
+/// Version 2 makes the mutually-exclusive [`ExecutionOutcome`] explicit and
+/// carries only [`provider::WireValue`] for a completed program result.  The
+/// previous v1 JSON document included a `NativeValue` compatibility projection
+/// and remains a historical reader fixture, but is no longer emitted by the
+/// reviewed execution path.
+pub const EXECUTION_REPORT_SCHEMA: &str = "rsscript.execution_report.v2";
 
 #[cfg(feature = "execution")]
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
@@ -1666,7 +1662,8 @@ pub struct ProviderFunctionTelemetry {
 /// linking, and verification failures stay outside execution and therefore do
 /// not manufacture a partial report.
 #[cfg(feature = "execution")]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ExecutionOutcome {
     Completed {
         /// Canonical result value. A legacy v1 Artifact without enough named
@@ -1721,9 +1718,9 @@ impl ExecutionOutcome {
 
 /// Structured execution evidence for one linked Artifact run.
 ///
-/// [`Self::outcome`] is the only terminal program state. The JSON serializer
-/// intentionally retains the checked-in v1 wire projection while Rust callers
-/// use the phase-safe outcome accessors below.
+/// [`Self::outcome`] is the only terminal program state. The v2 JSON schema
+/// serializes this same typed state directly, so machine consumers do not need
+/// a dynamic `NativeValue` compatibility projection.
 #[cfg(feature = "execution")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecutionReport {
@@ -1732,14 +1729,6 @@ pub struct ExecutionReport {
     outcome: ExecutionOutcome,
     pub usage: ExecutionUsage,
     pub telemetry: ExecutionTelemetry,
-    /// Legacy v1 JSON projection retained only for consumers of the checked-in
-    /// report schema. New Rust embedders cannot observe or construct the
-    /// dynamic representation through the reviewed SDK.
-    #[cfg(not(feature = "compatibility"))]
-    legacy_native_value: Option<serde_json::Value>,
-    /// Legacy dynamic result projection for compatibility callers only.
-    #[cfg(feature = "compatibility")]
-    pub native_value: Option<NativeValue>,
     pub stdout: String,
     pub stderr: String,
     pub provider_call_traces: Vec<provider::ProviderCallTrace>,
@@ -1795,10 +1784,6 @@ impl ExecutionReport {
                 cancellation,
                 &[],
             ),
-            #[cfg(not(feature = "compatibility"))]
-            legacy_native_value: None,
-            #[cfg(feature = "compatibility")]
-            native_value: None,
             stdout: String::new(),
             stderr: String::new(),
             provider_call_traces: Vec::new(),
@@ -1807,8 +1792,8 @@ impl ExecutionReport {
     }
 }
 
-/// Preserve the versioned JSON report contract while the Rust SDK moves from
-/// independent optional terminal fields to [`ExecutionOutcome`].
+/// Serialize the canonical v2 report contract.  Unlike v1, this document has
+/// one explicit terminal outcome and never serializes `NativeValue`.
 #[cfg(feature = "execution")]
 impl serde::Serialize for ExecutionReport {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -1817,23 +1802,16 @@ impl serde::Serialize for ExecutionReport {
     {
         use serde::ser::SerializeStruct;
 
-        let mut state = serializer.serialize_struct("ExecutionReport", 13)?;
+        let mut state = serializer.serialize_struct("ExecutionReport", 9)?;
         state.serialize_field("schema", self.schema)?;
         state.serialize_field("artifact_digest", &self.artifact_digest)?;
-        state.serialize_field("termination_reason", &self.termination_reason())?;
+        state.serialize_field("outcome", &self.outcome)?;
         state.serialize_field("usage", &self.usage)?;
         state.serialize_field("telemetry", &self.telemetry)?;
-        state.serialize_field("value", self.value().unwrap_or_default())?;
-        state.serialize_field("display_value", self.display_value().unwrap_or_default())?;
-        #[cfg(not(feature = "compatibility"))]
-        state.serialize_field("native_value", &self.legacy_native_value)?;
-        #[cfg(feature = "compatibility")]
-        state.serialize_field("native_value", &self.native_value)?;
         state.serialize_field("stdout", &self.stdout)?;
         state.serialize_field("stderr", &self.stderr)?;
         state.serialize_field("provider_call_traces", &self.provider_call_traces)?;
         state.serialize_field("diagnostics", &self.diagnostics)?;
-        state.serialize_field("failure", &self.failure())?;
         state.end()
     }
 }
@@ -2557,7 +2535,8 @@ mod tests {
         assert_eq!(report.termination_reason().as_str(), "completed");
         let json = serde_json::to_value(&report).expect("serialize execution report");
         assert_eq!(json["schema"], EXECUTION_REPORT_SCHEMA);
-        assert_eq!(json["termination_reason"], "completed");
+        assert_eq!(json["outcome"]["kind"], "completed");
+        assert_eq!(json["outcome"]["wire_value"]["kind"], "unit");
         assert!(json["usage"]["steps_consumed"].as_u64().unwrap() > 0);
         assert_eq!(
             CompileErrorCode::PackageSnapshot.as_str(),

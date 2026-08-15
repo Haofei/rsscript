@@ -1312,16 +1312,17 @@ impl RegVmExecutable {
         match result {
             Ok(value) => {
                 let display_value = value.display();
-                let native_value = value.native_value();
-                let wire_value = native_value
-                    .clone()
+                // `NativeValue` remains an internal compatibility bridge while
+                // old VM values are retired.  Execution reports retain only
+                // the canonical wire result and never expose this projection.
+                let wire_value = value
+                    .native_value()
                     .and_then(|value| self.main_result_wire_value(value));
                 Ok(EvalExecutionReport {
                     usage,
                     value: Some(display_value.clone()),
                     display_value: Some(display_value),
                     wire_value,
-                    native_value,
                     stdout,
                     stderr,
                     provider_call_traces,
@@ -1333,7 +1334,6 @@ impl RegVmExecutable {
                 value: None,
                 display_value: None,
                 wire_value: None,
-                native_value: None,
                 stdout,
                 stderr,
                 provider_call_traces,
