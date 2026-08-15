@@ -86,6 +86,7 @@ impl RegVm {
             tasks_cancelled: 0,
             tasks_live: 0,
             tasks_peak_live: 0,
+            resource_scopes: HashMap::new(),
             provider_trace: std::sync::Arc::new(
                 crate::eval_types::ProviderTraceCollector::default(),
             ),
@@ -1591,9 +1592,11 @@ impl RegVm {
                             }
                             frame.tail_calls += 1;
                         }
+                        RegInstr::ResourceAcquire { resource } => {
+                            self.acquire_resource_scope(base + *resource);
+                        }
                         RegInstr::ResourceDrop { resource } => {
-                            let value = self.reg(base + *resource).clone();
-                            self.run_resource_drop(unit, value, next_base)?;
+                            self.release_resource_scope(unit, base + *resource)?;
                         }
                         RegInstr::CallKnown {
                             dst,
@@ -1755,6 +1758,7 @@ impl RegVm {
                                         // turning the scheduler's per-step scans O(n²)).
                                         Some(result) => {
                                             self.tasks.remove(&task);
+                                            self.cleanup_task_resource_scopes(unit, task)?;
                                             self.set_reg(base + *dst, result);
                                         }
                                         // Park until the joined task completes.
@@ -1791,6 +1795,7 @@ impl RegVm {
                             }) {
                                 for task in tasks {
                                     self.tasks.remove(&task);
+                                    self.cleanup_task_resource_scopes(unit, task)?;
                                 }
                             } else {
                                 self.suspension = Some(Suspension {
@@ -1831,7 +1836,7 @@ impl RegVm {
                                         .get(&won_tid)
                                         .and_then(|s| s.done.clone())
                                         .expect("done");
-                                    self.cancel_select_losers(&tids, won_tid);
+                                    self.cancel_select_losers(unit, &tids, won_tid)?;
                                     self.set_reg(base + *winner, VmValue::Int(index as i64));
                                     self.set_reg(base + *value, won);
                                 }
@@ -2331,8 +2336,7 @@ impl RegVm {
                             };
                             if let Some(return_value) = short_circuit {
                                 for resource in cleanup {
-                                    let resource_value = self.reg(base + *resource).clone();
-                                    self.run_resource_drop(unit, resource_value, next_base)?;
+                                    self.release_resource_scope(unit, base + *resource)?;
                                 }
                                 // Short-circuit: return the failure from the *current*
                                 // frame only (pop one frame like `Return`), not out of

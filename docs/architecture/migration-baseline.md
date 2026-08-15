@@ -1143,9 +1143,16 @@ an arbitrary shell executor.
       the lexical resource cleanup edge before the VM short-circuits an
       `Err`/`None`; codegen emits the verifier-checked v1 instructions and the
       execution-feature SDK tests cover both task results and an `Err` return.
-  - [ ] **M03.2 — Add resource lifetime instructions and cleanup edges.** Model
+  - [x] **M03.2 — Add resource lifetime instructions and cleanup edges.** Model
     acquire/manage/release and verify cleanup for normal return, branch exit,
-    error, and cancellation.
+    error, and cancellation. The v1 projection now emits an explicit
+    `ResourceAcquire` marker after every typed acquire; Artifact verification
+    proves LIFO release, empty normal returns, and `TryResult` cleanup coverage.
+    The VM retains task-owned scope values independently of parked register
+    windows, drains them on task cancellation/select loss and terminal program
+    failure, and executes the same resource-drop path as normal release.
+    Provider-owned handles retain their separate exact-once registry finalizer,
+    so neither lifecycle suppresses the other.
     - [x] **M03.2a — Establish acquire/release verifier primitives.** Typed MIR
       models canonical resource acquire/release, rejects invalid resource IDs
       and unbalanced normal-return lifetimes, and makes unsupported VM codegen
@@ -1165,14 +1172,14 @@ an arbitrary shell executor.
       lexical resource cleanup stack and emits release operations before
       `return`, `break`, and `continue`; managed early-return and loop-break
       scopes are covered by MIR verification. Provider errors and cancellation
-      still rely on runtime cleanup and remain follow-up work.
+      drain the same verifier-visible scope through the VM finalizer.
     - [x] **M03.2d — Emit error short-circuit cleanup edges.** A checked
       `Result` `?` inside a managed `with` scope now carries the complete
       lexical resource stack in verifier-visible `TryResult::cleanup`. The
       direct HIR → MIR → verified-bytecode path returns the same `Err`, streams,
       usage, and exact-once Provider cleanup count as the legacy VM. Provider
       failures and cancellation that occur outside a language short-circuit
-      remain runtime-finalization concerns.
+      drain the same tracked scope through runtime finalization.
   - [ ] **M03.3 — Add structured-concurrency instructions.** Model spawn, await,
     join, cancel, and select with lexical task-group ownership.
     - [x] **M03.3a — Establish typed task lifecycle primitives.** MIR now owns

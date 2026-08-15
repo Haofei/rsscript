@@ -663,6 +663,7 @@ fn verify_executable_payload(
             initialized_registers.extend(resources);
         }
         verify_register_initialization(function_id, initialized_registers, code)?;
+        verify_resource_scope_lifetimes(function_id, code)?;
         verify_call_shapes(function_id, code, functions, imports)?;
         let _ = name;
     }
@@ -1361,6 +1362,219 @@ fn verify_register_initialization(
     Ok(())
 }
 
+/// Prove lexical resource-scope balance for bytecode produced by the explicit
+/// MIR resource path. Older v1 Artifacts have no `ResourceAcquire` marker and
+/// retain their compatibility execution path; once a function opts in, every
+/// normal exit and language short-circuit is checked against one exact LIFO
+/// scope stack. Provider failure, host cancellation, and budget termination
+/// use the VM's run-owned finalizer for this same tracked stack.
+fn verify_resource_scope_lifetimes(
+    function_id: usize,
+    code: &[serde_json::Value],
+) -> Result<(), BytecodeError> {
+    if code.is_empty() {
+        return Ok(());
+    }
+    let has_markers = code.iter().any(|instruction| {
+        instruction
+            .get("ResourceAcquire")
+            .is_some_and(serde_json::Value::is_object)
+    });
+    if !has_markers {
+        return Ok(());
+    }
+
+    let mut incoming = vec![None::<Vec<usize>>; code.len()];
+    incoming[0] = Some(Vec::new());
+    let mut work = VecDeque::from([0usize]);
+    while let Some(ip) = work.pop_front() {
+        let state = incoming[ip]
+            .clone()
+            .expect("queued instructions always have resource state");
+        let (opcode, fields) = instruction_parts(function_id, ip, &code[ip])?;
+        let mut after = state;
+        match opcode {
+            "ResourceAcquire" => after.push(required_index(fields, "resource")?),
+            "ResourceDrop" => {
+                let resource = required_index(fields, "resource")?;
+                if after.pop() != Some(resource) {
+                    return Err(invalid_payload(format!(
+                        "function {function_id} instruction {ip} releases a resource outside lexical LIFO order"
+                    )));
+                }
+            }
+            "TryResult" => {
+                let cleanup = fields["cleanup"]
+                    .as_array()
+                    .ok_or_else(|| invalid_payload("TryResult cleanup is not an array"))?
+                    .iter()
+                    .map(|value| json_usize(value, "cleanup"))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let expected = after.iter().rev().copied().collect::<Vec<_>>();
+                if cleanup != expected {
+                    return Err(invalid_payload(format!(
+                        "function {function_id} instruction {ip} TryResult cleanup does not cover its live resource scopes"
+                    )));
+                }
+            }
+            "Return" => {
+                if !after.is_empty() {
+                    return Err(invalid_payload(format!(
+                        "function {function_id} instruction {ip} returns with live resource scopes"
+                    )));
+                }
+                continue;
+            }
+            // An explicit RuntimeError has no language-level cleanup operand;
+            // execution terminates through the run-owned VM finalizer.
+            "RuntimeError" => continue,
+            _ => {}
+        }
+
+        match opcode {
+            "Jump" => enqueue_resource_scope_state(
+                &mut incoming,
+                &mut work,
+                required_index(fields, "target")?,
+                after,
+                function_id,
+            )?,
+            "JumpIfBool" | "JumpIfIntCompare" => {
+                enqueue_resource_scope_state(
+                    &mut incoming,
+                    &mut work,
+                    required_index(fields, "target")?,
+                    after.clone(),
+                    function_id,
+                )?;
+                enqueue_resource_scope_fallthrough(
+                    &mut incoming,
+                    &mut work,
+                    ip,
+                    after,
+                    function_id,
+                )?;
+            }
+            "MatchOption" => {
+                enqueue_resource_scope_state(
+                    &mut incoming,
+                    &mut work,
+                    required_index(fields, "some_ip")?,
+                    after.clone(),
+                    function_id,
+                )?;
+                enqueue_resource_scope_state(
+                    &mut incoming,
+                    &mut work,
+                    required_index(fields, "none_ip")?,
+                    after,
+                    function_id,
+                )?;
+            }
+            "MatchResult" => {
+                enqueue_resource_scope_state(
+                    &mut incoming,
+                    &mut work,
+                    required_index(fields, "ok_ip")?,
+                    after.clone(),
+                    function_id,
+                )?;
+                enqueue_resource_scope_state(
+                    &mut incoming,
+                    &mut work,
+                    required_index(fields, "err_ip")?,
+                    after,
+                    function_id,
+                )?;
+            }
+            "MatchVariant" => {
+                enqueue_resource_scope_state(
+                    &mut incoming,
+                    &mut work,
+                    required_index(fields, "match_ip")?,
+                    after.clone(),
+                    function_id,
+                )?;
+                enqueue_resource_scope_state(
+                    &mut incoming,
+                    &mut work,
+                    required_index(fields, "else_ip")?,
+                    after,
+                    function_id,
+                )?;
+            }
+            "MatchMapGet" | "MatchSortedMapGet" => {
+                enqueue_resource_scope_state(
+                    &mut incoming,
+                    &mut work,
+                    required_index(fields, "some_ip")?,
+                    after.clone(),
+                    function_id,
+                )?;
+                enqueue_resource_scope_state(
+                    &mut incoming,
+                    &mut work,
+                    required_index(fields, "none_ip")?,
+                    after,
+                    function_id,
+                )?;
+            }
+            _ => enqueue_resource_scope_fallthrough(
+                &mut incoming,
+                &mut work,
+                ip,
+                after,
+                function_id,
+            )?,
+        }
+    }
+    Ok(())
+}
+
+fn enqueue_resource_scope_fallthrough(
+    incoming: &mut [Option<Vec<usize>>],
+    work: &mut VecDeque<usize>,
+    ip: usize,
+    state: Vec<usize>,
+    function_id: usize,
+) -> Result<(), BytecodeError> {
+    if ip + 1 < incoming.len() {
+        enqueue_resource_scope_state(incoming, work, ip + 1, state, function_id)?;
+    } else if !state.is_empty() {
+        return Err(invalid_payload(format!(
+            "function {function_id} falls off its body with live resource scopes"
+        )));
+    }
+    Ok(())
+}
+
+fn enqueue_resource_scope_state(
+    incoming: &mut [Option<Vec<usize>>],
+    work: &mut VecDeque<usize>,
+    target: usize,
+    state: Vec<usize>,
+    function_id: usize,
+) -> Result<(), BytecodeError> {
+    let Some(entry) = incoming.get_mut(target) else {
+        return Err(invalid_payload(format!(
+            "function {function_id} resource scope branch target {target} is outside its body"
+        )));
+    };
+    match entry {
+        None => {
+            *entry = Some(state);
+            work.push_back(target);
+        }
+        Some(existing) if *existing == state => {}
+        Some(_) => {
+            return Err(invalid_payload(format!(
+                "function {function_id} merges incompatible lexical resource scopes"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn required_index(
     fields: &serde_json::Map<String, serde_json::Value>,
     field: &str,
@@ -1675,7 +1889,7 @@ fn instruction_fields(opcode: &str) -> &'static [&'static str] {
         "SetFieldSlot" => &["dst", "base", "slot", "value"],
         "SetField" => &["dst", "base", "name", "value"],
         "MakeStruct" | "MakeVariant" => &["dst", "layout", "fields"],
-        "ResourceDrop" => &["resource"],
+        "ResourceDrop" | "ResourceAcquire" => &["resource"],
         "MakeList" => &["dst", "items"],
         "MakeObject" => &["dst", "fields"],
         "MakeMap" => &["dst", "entries"],
@@ -1886,6 +2100,7 @@ const KNOWN_OPCODES: &[&str] = &[
     "SetField",
     "MakeStruct",
     "ResourceDrop",
+    "ResourceAcquire",
     "MakeVariant",
     "MakeList",
     "MakeObject",
@@ -2710,6 +2925,47 @@ mod tests {
             ),
             Err(BytecodeError::InvalidPayload(message))
                 if message.contains("missing field register `path`")
+        ));
+    }
+
+    #[test]
+    fn explicit_resource_scope_markers_must_balance_before_return() {
+        let artifact_for = |include_release: bool| {
+            let mut code = vec![
+                serde_json::json!({"LoadUnit": {"dst": 0}}),
+                serde_json::json!({"ResourceAcquire": {"resource": 0}}),
+            ];
+            if include_release {
+                code.push(serde_json::json!({"ResourceDrop": {"resource": 0}}));
+            }
+            code.push(serde_json::json!({"Return": {"src": 0}}));
+            BytecodeArtifact::new(
+                "0.1.0",
+                "0.1.0",
+                TEST_CATALOG_DIGEST,
+                RUNTIME_ABI_VERSION,
+                TEST_SOURCE_DIGEST,
+                vec![],
+                encode_executable_payload(&serde_json::json!({
+                    "functions": [{
+                        "name": "main", "params": 0, "captures": 0, "regs": 1,
+                        "local_regs": {}, "code": code
+                    }],
+                    "function_ids": {"main": 0}, "resource_drop_functions": {},
+                    "types": {},
+                    "native_signatures": {"main": {"params": [], "return_type": "Unit"}},
+                    "closure_identity_observable": false
+                }))
+                .expect("payload"),
+            )
+            .expect("artifact")
+        };
+        BytecodeVerifier::default()
+            .verify(&artifact_for(true).to_bytes().unwrap())
+            .expect("balanced explicit resource scope");
+        assert!(matches!(
+            BytecodeVerifier::default().verify(&artifact_for(false).to_bytes().unwrap()),
+            Err(BytecodeError::InvalidPayload(message)) if message.contains("returns with live resource scopes")
         ));
     }
 

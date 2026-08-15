@@ -1665,6 +1665,10 @@ struct RegVm {
     tasks_cancelled: u64,
     tasks_live: usize,
     tasks_peak_live: usize,
+    /// Lexical resource scopes owned by each scheduler task. Entries retain a
+    /// clone of the acquired value so cancellation can finalize a parked task
+    /// after its register window has been moved out of the active VM stack.
+    resource_scopes: HashMap<TaskId, Vec<TrackedResource>>,
     /// Structured trace of calls crossing the Provider boundary.
     provider_trace: std::sync::Arc<crate::eval_types::ProviderTraceCollector>,
     /// VM-owned, generation-checked Provider resource slots.
@@ -1696,6 +1700,12 @@ struct RegVm {
     /// not re-walk unsupported closure bytecode. Captured closures are excluded
     /// because their behavior depends on per-allocation captures.
     pure_closure_plan_cache: HashMap<(usize, usize), Option<PureClosurePlan>>,
+}
+
+#[derive(Clone)]
+struct TrackedResource {
+    register: usize,
+    value: VmValue,
 }
 
 /// Outcome of a [`RegVm::try_native`] attempt.
@@ -2241,8 +2251,8 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
     }
 
     /// Telemetry as JSON for VM/JIT benchmark and reporting harnesses.
-    pub fn to_json(&self) -> serde_json::Value {
-        let mut value = serde_json::json!({
+    pub fn to_json(&self) -> crate::serde_json::Value {
+        let mut value = crate::serde_json::json!({
             "considered": self.considered,
             "translated": self.translated,
             "compiled": self.compiled,
@@ -6307,7 +6317,7 @@ extern "C" fn rss_jit_bytes_slice(_ctx: vm_jit::HostCtx, handle: i64, start: i64
 }
 
 #[cfg(feature = "native-jit")]
-fn jit_json_clone(value: &VmValue) -> Option<Rc<serde_json::Value>> {
+fn jit_json_clone(value: &VmValue) -> Option<Rc<crate::serde_json::Value>> {
     match value {
         VmValue::Json(value) => Some(Rc::clone(value)),
         VmValue::Managed(inner) => jit_json_clone(&inner.borrow()),
@@ -6323,7 +6333,7 @@ extern "C" fn rss_jit_json_parse(_ctx: vm_jit::HostCtx, text: i64) -> i64 {
     };
     match _ctx
         .heap_read_handle(text, jit_string_clone)
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|text| crate::serde_json::from_str::<crate::serde_json::Value>(&text).ok())
     {
         Some(value) => _ctx.publish_heap_result(VmValue::Json(Rc::new(value))),
         None => {
@@ -6369,7 +6379,7 @@ extern "C" fn rss_jit_json_field_int(_ctx: vm_jit::HostCtx, value: i64, name: i6
         (Some(value), Some(name)) => match value
             .as_object()
             .and_then(|obj| obj.get(name.as_str()))
-            .and_then(serde_json::Value::as_i64)
+            .and_then(crate::serde_json::Value::as_i64)
         {
             Some(value) => value,
             None => {

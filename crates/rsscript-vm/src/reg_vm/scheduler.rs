@@ -53,7 +53,13 @@ impl RegVm {
             }
         };
         let root = self.create_task(func, args);
-        self.run_scheduler(&unit, root)
+        let result = self.run_scheduler(&unit, root);
+        let cleanup = self.cleanup_all_resource_scopes(&unit);
+        match (result, cleanup) {
+            (Err(error), _) => Err(error),
+            (Ok(_), Err(error)) => Err(error),
+            (Ok(value), Ok(())) => Ok(value),
+        }
     }
 
     /// Register a new ready task running `func` with `args` placed in its first
@@ -241,7 +247,12 @@ impl RegVm {
     /// side effects, and could even abort the whole program with a late error.
     /// Removing the task slot makes any stale ready-queue entry a no-op and stops
     /// the scheduler (and sleeper wakeups) from ever resuming it.
-    pub(super) fn cancel_select_losers(&mut self, handles: &[TaskId], winner: TaskId) {
+    pub(super) fn cancel_select_losers(
+        &mut self,
+        unit: &RegUnit,
+        handles: &[TaskId],
+        winner: TaskId,
+    ) -> Result<(), EvalError> {
         for handle in handles {
             if *handle != winner {
                 if let Some(task) = self.tasks.remove(handle)
@@ -249,9 +260,11 @@ impl RegVm {
                 {
                     self.tasks_cancelled = self.tasks_cancelled.saturating_add(1);
                     self.tasks_live = self.tasks_live.saturating_sub(1);
+                    self.cleanup_task_resource_scopes(unit, *handle)?;
                 }
             }
         }
+        Ok(())
     }
 
     /// Close a child task's lifetime without treating cancellation as a
@@ -275,7 +288,7 @@ impl RegVm {
             self.tasks_cancelled = self.tasks_cancelled.saturating_add(1);
             self.tasks_live = self.tasks_live.saturating_sub(1);
         }
-        Ok(())
+        self.cleanup_task_resource_scopes(&Rc::clone(&self.unit), task)
     }
 
     /// Produce the result of `tid`'s satisfied wait and re-queue it.
@@ -308,11 +321,15 @@ impl RegVm {
                 // forever, making the scheduler's per-step scans O(n²) (see the
                 // `AwaitJoin` immediate-path note).
                 self.tasks.remove(&task);
+                let unit = Rc::clone(&self.unit);
+                self.cleanup_task_resource_scopes(&unit, task)?;
                 self.complete_wait(tid, result);
             }
             Wait::JoinAll { tasks } => {
                 for task in tasks {
                     self.tasks.remove(&task);
+                    let unit = Rc::clone(&self.unit);
+                    self.cleanup_task_resource_scopes(&unit, task)?;
                 }
                 self.complete_wait(tid, VmValue::Unit);
             }
@@ -335,7 +352,8 @@ impl RegVm {
                     .get(&task)
                     .and_then(|slot| slot.done.clone())
                     .expect("winning arm value");
-                self.cancel_select_losers(&handles, task);
+                let unit = Rc::clone(&self.unit);
+                self.cancel_select_losers(&unit, &handles, task)?;
                 self.write_saved_reg(tid, winner_dst, VmValue::Int(index as i64));
                 self.complete_wait_at(tid, value_dst, value);
             }
@@ -484,5 +502,31 @@ mod tests {
             vm.cancel_task(99),
             Err(EvalError::Runtime(message)) if message.contains("unknown or already-reaped")
         ));
+    }
+
+    #[test]
+    fn cancelling_a_parked_task_drains_its_tracked_resource_scopes() {
+        let mut vm = RegVm::new(
+            cancellation_unit(),
+            "sha256:test-resource-cancel".to_string(),
+            vec![],
+            HashMap::new(),
+        );
+        let root = Rc::clone(&vm.unit.functions[0]);
+        vm.create_task(root, Vec::new());
+        let worker = Rc::clone(&vm.unit.functions[1]);
+        let task = vm.create_task(worker, Vec::new());
+        vm.current_task = task;
+        vm.stack = vec![VmValue::Unit];
+        vm.written = vec![true];
+        vm.acquire_resource_scope(0);
+        vm.current_task = 0;
+
+        vm.cancel_task(task)
+            .expect("cancelling a parked tracked task");
+        assert!(
+            !vm.resource_scopes.contains_key(&task),
+            "cancel must drain lexical resource scopes even after task registers are parked"
+        );
     }
 }

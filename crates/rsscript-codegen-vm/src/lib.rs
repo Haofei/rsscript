@@ -852,13 +852,19 @@ fn lower_instruction(
         MirInstruction::Drop { place } => {
             code.push(instr("LoadUnit", [("dst", json!(place_reg(*place)))]))
         }
-        MirInstruction::AcquireResource { place, source, .. } => code.push(instr(
-            "Move",
-            [
-                ("dst", json!(place_reg(*place))),
-                ("src", json!(value_reg(function, *source))),
-            ],
-        )),
+        MirInstruction::AcquireResource { place, source, .. } => {
+            code.push(instr(
+                "Move",
+                [
+                    ("dst", json!(place_reg(*place))),
+                    ("src", json!(value_reg(function, *source))),
+                ],
+            ));
+            code.push(instr(
+                "ResourceAcquire",
+                [("resource", json!(place_reg(*place)))],
+            ));
+        }
         MirInstruction::ReleaseResource { place } => code.push(instr(
             "ResourceDrop",
             [("resource", json!(place_reg(*place)))],
@@ -1706,6 +1712,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert!(opcodes.contains(&"Move"));
+        assert!(opcodes.contains(&"ResourceAcquire"));
         assert!(opcodes.contains(&"ResourceDrop"));
         BytecodeVerifier::default()
             .verify(&artifact.to_bytes().expect("encode resource bytecode"))

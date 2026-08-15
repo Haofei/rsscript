@@ -274,6 +274,13 @@ pub(crate) enum RegInstr {
     ResourceDrop {
         resource: Reg,
     },
+    /// Enter an explicitly verified resource scope. The v1 register VM still
+    /// carries the resource value in an ordinary register, but this marker
+    /// records its lexical lifetime so terminal failure/cancellation can run
+    /// the same drop path as normal scope exit.
+    ResourceAcquire {
+        resource: Reg,
+    },
     MakeVariant {
         dst: Reg,
         /// Interned shared layout (V2.0), precomputed at lowering time (see
