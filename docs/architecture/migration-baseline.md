@@ -946,8 +946,9 @@ mechanical acceptance condition holds.
       internal async binding lowers to `Spawn`, and awaiting its local task
       lowers to `Await`; the lifecycle verifier rejects any unclosed child.
       Awaited external Provider calls lower through resolved external `Call`,
-      whose VM dispatch owns future suspension/resumption; async bindings to
-      external calls and select remain fail-closed; join/cancel syntax remains
+      whose VM dispatch owns future suspension/resumption. Resolved catalog
+      builtins use the same task lifecycle through typed synthetic wrappers;
+      unsupported dynamic calls remain fail-closed. Join/cancel syntax remains
       follow-up work.
     - [x] **M03.3c — Execute lexical task-group drain.** `Join` lowers to the
       v1 `JoinTasks` instruction over its resolved child handles. The scheduler
@@ -955,11 +956,12 @@ mechanical acceptance condition holds.
       each child exactly once; awaited children are safe to omit from the drain.
       Cancellation delivery remains follow-up work.
     - [x] **M03.3d — Lower first-ready selects.** A checked `select` over
-      direct async internal or external Provider calls now emits
+      direct async internal, external Provider, or catalog builtin calls emits
       verifier-visible `Spawn` operations followed by one
       `Select { tasks, winner, value }`. External calls use a synthetic,
-      typed task wrapper containing only the resolved `CallExternal`, so
-      provider-specific spawn semantics never enter MIR. The instruction
+      typed task wrapper containing only the resolved call target, so
+      provider-specific spawn semantics never enter MIR and VM-owned builtins
+      keep their `BuiltinId`. The instruction
       consumes every child task; the bytecode VM transfers the winning result
       and cancels/reaps losers before explicit CFG arm dispatch. MIR validation
       rejects duplicate or non-live selected tasks, and the migration suite
@@ -1009,9 +1011,11 @@ mechanical acceptance condition holds.
     - [x] **M03.4f — Lower awaited channel operations.** `await Sender.send` and
       `await Receiver.recv` now preserve their catalog `BuiltinId` and use the
       established VM `CallIntrinsic` suspension/resumption path, with no
-      Provider import or compatibility lowering. Direct `async let` and
-      `select` wrappers for channel builtins remain fail-closed until MIR owns
-      an explicit builtin-task wrapper contract.
+      Provider import or compatibility lowering. `async let` and `select`
+      construct typed synthetic builtin-task wrappers with the same
+      `BuiltinId`, preserving verifier-visible task ownership and cancellation
+      without creating Provider imports; the direct-vs-legacy migration corpus
+      covers a capacity-one select that cancels and reaps the losing send task.
 - [ ] **M04 — Lower checked HIR to MIR exactly once.** Backend code cannot
   inspect syntax AST or reconstruct semantic facts. MIR verification rejects
   unresolved calls, invalid ownership state, incomplete cleanup, and malformed
@@ -1032,15 +1036,16 @@ mechanical acceptance condition holds.
       resolved external `Call` and uses the VM's Provider-future suspension
       path. `async let` bindings to resolved async external calls now lower
       through synthetic, typed internal wrappers containing only the checked
-      `CallExternal`; this preserves normal task-group lifecycle without a
-      Provider-specific MIR spawn operation. First-ready selects over direct
-      internal and external async calls also lower without the compatibility
-      IR: typed task handles feed `Select`, then an explicit winner-index CFG
-      ladder binds and runs exactly one arm. Cancellation syntax remains
-      follow-up direct-lowering work except for the cooperative standard-package
-      source/token/cancel/poll operations covered by M03.3e and synchronous
-      channel endpoint construction plus direct awaited send/receive covered by
-      M03.4e–M03.4f.
+      `CallExternal`; catalog async builtins use equivalent wrappers that
+      retain their `BuiltinId`. This preserves normal task-group lifecycle
+      without a Provider-specific MIR spawn operation. First-ready selects over
+      direct internal, external, and catalog-builtin async calls also lower
+      without the compatibility IR: typed task handles feed `Select`, then an
+      explicit winner-index CFG ladder binds and runs exactly one arm.
+      Cancellation syntax remains follow-up direct-lowering work except for the
+      cooperative standard-package source/token/cancel/poll operations covered
+      by M03.3e and channel construction/send/receive plus their task wrappers
+      covered by M03.4e–M03.4f.
   - [x] **M04.2 — Verify MIR ownership, resources, and task scopes.** The
     construction verifier runs ownership-mode, move/drop, resource-lifetime,
     resource-cleanup-over-CFG, and structured-task-close passes. Targeted

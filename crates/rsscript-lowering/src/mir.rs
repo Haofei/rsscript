@@ -89,6 +89,7 @@ pub fn lower_executable_ir_to_mir(
             })
             .collect(),
         async_external_wrappers: BTreeMap::new(),
+        async_builtin_wrappers: BTreeMap::new(),
         variants: BTreeMap::new(),
         dynamic_protocol_methods: std::collections::BTreeSet::new(),
     };
@@ -147,6 +148,7 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<VerifiedMir, MirLo
         .collect::<Result<Vec<_>, _>>()?;
     let external_imports = checked_external_imports(hir)?;
     let async_external_binding_symbols = checked_async_external_binding_symbols(hir)?;
+    let async_builtin_binding_signatures = checked_async_builtin_binding_signatures(hir)?;
     let variants = hir
         .sum_variants()
         .map(|(variant, owner, fields)| {
@@ -199,6 +201,18 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<VerifiedMir, MirLo
             )
         })
         .collect::<Vec<_>>();
+    let mut async_builtin_wrappers = Vec::with_capacity(async_builtin_binding_signatures.len());
+    for (wrapper_index, (key, signature)) in async_builtin_binding_signatures.iter().enumerate() {
+        let id = FunctionId::new(
+            (functions.len() + async_external_wrappers.len() + wrapper_index) as u32,
+        );
+        async_builtin_wrappers.push(AsyncBuiltinWrapper::new(
+            id,
+            key,
+            signature,
+            types.checked_function_signature(key, signature)?,
+        )?);
+    }
     let targets = CallTargets {
         functions: functions
             .iter()
@@ -218,6 +232,10 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<VerifiedMir, MirLo
         async_external_wrappers: async_external_wrappers
             .iter()
             .map(|wrapper| (wrapper.symbol.as_str().to_owned(), wrapper.id))
+            .collect(),
+        async_builtin_wrappers: async_builtin_wrappers
+            .iter()
+            .map(|wrapper| (wrapper.key.clone(), wrapper.id))
             .collect(),
         variants,
         dynamic_protocol_methods,
@@ -241,6 +259,10 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<VerifiedMir, MirLo
         debug.push(output.debug);
     }
     for wrapper in async_external_wrappers {
+        lowered.push(wrapper.function);
+        debug.push(wrapper.debug);
+    }
+    for wrapper in async_builtin_wrappers {
         lowered.push(wrapper.function);
         debug.push(wrapper.debug);
     }
@@ -329,6 +351,7 @@ fn collect_async_external_bindings_from_statement(
             if let checked::CallResolution::Resolved { signature, .. } = resolution
                 && signature.is_external
                 && signature.is_async
+                && !is_catalog_builtin(signature)
             {
                 symbols.insert(checked_external_symbol(signature)?.as_str().to_owned());
             }
@@ -385,9 +408,112 @@ fn collect_async_external_spawn_operation(
     let checked::CallResolution::Resolved { signature, .. } = resolution else {
         return Ok(());
     };
-    if signature.is_external && signature.is_async {
+    if signature.is_external && signature.is_async && !is_catalog_builtin(signature) {
         symbols.insert(checked_external_symbol(signature)?.as_str().to_owned());
     }
+    Ok(())
+}
+
+/// Collect async catalog builtins that need a synthetic child-task function.
+/// A direct `await` executes the builtin in the current task, while `async let`
+/// and `select` require a concrete `Spawn` target so task lifetime, join, and
+/// cancellation remain verifier-visible.
+fn checked_async_builtin_binding_signatures(
+    hir: &checked::Hir,
+) -> Result<BTreeMap<String, checked::FunctionSig>, MirLoweringError> {
+    let mut signatures = BTreeMap::new();
+    for (_, body) in hir.function_bodies() {
+        let Some(block) = body.block.as_ref() else {
+            continue;
+        };
+        collect_async_builtin_bindings_from_block(block, &mut signatures)?;
+    }
+    Ok(signatures)
+}
+
+fn collect_async_builtin_bindings_from_block(
+    block: &checked::HirBlock,
+    signatures: &mut BTreeMap<String, checked::FunctionSig>,
+) -> Result<(), MirLoweringError> {
+    for statement in &block.statements {
+        collect_async_builtin_bindings_from_statement(statement, signatures)?;
+    }
+    Ok(())
+}
+
+fn collect_async_builtin_bindings_from_statement(
+    statement: &checked::HirStmt,
+    signatures: &mut BTreeMap<String, checked::FunctionSig>,
+) -> Result<(), MirLoweringError> {
+    match statement {
+        checked::HirStmt::Let {
+            is_async: true,
+            value: Some(checked::HirExpr::Call { resolution, .. }),
+            ..
+        } => collect_async_builtin_signature(resolution, signatures),
+        checked::HirStmt::With { body, .. }
+        | checked::HirStmt::Loop { body, .. }
+        | checked::HirStmt::For { body, .. } => {
+            collect_async_builtin_bindings_from_block(body, signatures)
+        }
+        checked::HirStmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            collect_async_builtin_bindings_from_block(then_body, signatures)?;
+            if let Some(else_body) = else_body {
+                collect_async_builtin_bindings_from_block(else_body, signatures)?;
+            }
+            Ok(())
+        }
+        checked::HirStmt::Match { arms, .. } => {
+            for arm in arms {
+                collect_async_builtin_bindings_from_block(&arm.body, signatures)?;
+            }
+            Ok(())
+        }
+        checked::HirStmt::Select { arms, .. } => {
+            for arm in arms {
+                let (operation, _) = peel_checked_select_operation(&arm.operation);
+                if let checked::HirExpr::Call { resolution, .. } = operation {
+                    collect_async_builtin_signature(resolution, signatures)?;
+                }
+                collect_async_builtin_bindings_from_block(&arm.body, signatures)?;
+            }
+            Ok(())
+        }
+        checked::HirStmt::Let { .. }
+        | checked::HirStmt::Return { .. }
+        | checked::HirStmt::Assign { .. }
+        | checked::HirStmt::Break(_)
+        | checked::HirStmt::Continue(_)
+        | checked::HirStmt::Expr(_)
+        | checked::HirStmt::Unknown(_) => Ok(()),
+    }
+}
+
+fn collect_async_builtin_signature(
+    resolution: &checked::CallResolution,
+    signatures: &mut BTreeMap<String, checked::FunctionSig>,
+) -> Result<(), MirLoweringError> {
+    let checked::CallResolution::Resolved { signature, .. } = resolution else {
+        return Ok(());
+    };
+    if !signature.is_async || !is_catalog_builtin(signature) {
+        return Ok(());
+    }
+    let namespace =
+        signature
+            .namespace
+            .as_deref()
+            .ok_or_else(|| MirLoweringError::Unsupported {
+                function: signature.name.clone(),
+                construct: "async builtin checked HIR call without namespace",
+            })?;
+    signatures
+        .entry(format!("{namespace}.{}", signature.name))
+        .or_insert_with(|| signature.as_ref().clone());
     Ok(())
 }
 
@@ -484,6 +610,7 @@ struct CallTargets {
     functions: BTreeMap<String, FunctionId>,
     external_imports: BTreeMap<String, rsscript_mir::ExternalSymbolId>,
     async_external_wrappers: BTreeMap<String, FunctionId>,
+    async_builtin_wrappers: BTreeMap<String, FunctionId>,
     variants: BTreeMap<String, VariantLayout>,
     dynamic_protocol_methods: std::collections::BTreeSet<(String, String)>,
 }
@@ -548,6 +675,100 @@ impl AsyncExternalWrapper {
             function,
             debug,
         }
+    }
+}
+
+/// Synthetic async builtin functions keep `async let` and `select` on the
+/// same structured-task model as internal calls without falsely creating a
+/// Provider import for a VM-owned operation. The wrapper is assembled only
+/// from checked signature facts and a catalog `BuiltinId`; it carries no
+/// source callee spelling into executable MIR.
+struct AsyncBuiltinWrapper {
+    id: FunctionId,
+    key: String,
+    function: MirFunction,
+    debug: MirFunctionDebug,
+}
+
+impl AsyncBuiltinWrapper {
+    fn new(
+        id: FunctionId,
+        key: &str,
+        signature: &checked::FunctionSig,
+        mir_signature: MirFunctionSignature,
+    ) -> Result<Self, MirLoweringError> {
+        let namespace =
+            signature
+                .namespace
+                .as_deref()
+                .ok_or_else(|| MirLoweringError::Unsupported {
+                    function: signature.name.clone(),
+                    construct: "async builtin checked HIR call without namespace",
+                })?;
+        let builtin = rsscript_mir::builtin_id(namespace, &signature.name).ok_or_else(|| {
+            MirLoweringError::Unsupported {
+                function: signature.name.clone(),
+                construct: "async checked HIR call without catalog builtin identity",
+            }
+        })?;
+        let arguments = signature
+            .params
+            .iter()
+            .enumerate()
+            .map(|(index, parameter)| match parameter.effect {
+                Some(checked::ParamEffect::Read) | None => {
+                    MirCallArgument::BorrowRead(PlaceId::new(index as u32))
+                }
+                Some(checked::ParamEffect::Mut) => {
+                    MirCallArgument::BorrowMut(PlaceId::new(index as u32))
+                }
+                Some(checked::ParamEffect::Take) => {
+                    MirCallArgument::Take(PlaceId::new(index as u32))
+                }
+            })
+            .collect();
+        let result = ValueId::new(0);
+        let function = MirFunction::new(
+            id,
+            mir_signature,
+            signature.params.len() as u32,
+            1,
+            vec![BasicBlock::new(
+                BlockId::new(0),
+                vec![MirInstruction::Call {
+                    destination: result,
+                    target: MirCallTarget::Builtin {
+                        id: builtin,
+                        parameter_modes: signature
+                            .params
+                            .iter()
+                            .map(|parameter| match parameter.effect {
+                                Some(checked::ParamEffect::Read) | None => MirParameterMode::Read,
+                                Some(checked::ParamEffect::Mut) => MirParameterMode::Mut,
+                                Some(checked::ParamEffect::Take) => MirParameterMode::Take,
+                            })
+                            .collect(),
+                        type_arguments: Box::new([]),
+                    },
+                    arguments,
+                }],
+                MirTerminator::Return(Some(result)),
+            )],
+        );
+        let debug = MirFunctionDebug::new(
+            format!("__rss_async_builtin_{}", key.replace('.', "_")),
+            signature
+                .params
+                .iter()
+                .map(|parameter| parameter.name.clone())
+                .collect(),
+        );
+        Ok(Self {
+            id,
+            key: key.to_owned(),
+            function,
+            debug,
+        })
     }
 }
 
@@ -1645,14 +1866,30 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         let checked::CallResolution::Resolved { signature, .. } = resolution else {
             return self.unsupported("unresolved async checked HIR call");
         };
-        if signature.is_builtin {
+        if signature.is_builtin && !is_catalog_builtin(signature) {
             return self.unsupported("async builtin checked HIR call");
         }
         let qualified = signature
             .namespace
             .as_ref()
             .map(|namespace| format!("{namespace}.{}", signature.name));
-        let target = if signature.is_external {
+        let target = if is_catalog_builtin(signature) {
+            self.targets
+                .async_builtin_wrappers
+                .get(
+                    qualified
+                        .as_deref()
+                        .ok_or_else(|| MirLoweringError::Unsupported {
+                            function: self.function_name.to_owned(),
+                            construct: "async catalog builtin without qualified identity",
+                        })?,
+                )
+                .copied()
+                .ok_or_else(|| MirLoweringError::Unsupported {
+                    function: self.function_name.to_owned(),
+                    construct: "async catalog builtin checked HIR wrapper",
+                })?
+        } else if signature.is_external {
             let symbol = checked_external_symbol(signature)?;
             self.targets
                 .async_external_wrappers

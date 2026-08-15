@@ -798,6 +798,130 @@ async fn main() -> Result<Int, ChannelError> {
 }
 
 #[test]
+fn direct_checked_hir_async_channel_binding_preserves_scheduler_semantics() {
+    let source = r#"
+async fn main() -> Result<Int, ChannelError> {
+    let mut channel: Channel<Int> = Channel.bounded<Int>(capacity: 1)?
+    let mut sender: Sender<Int> = Channel.sender<Int>(channel: read channel)
+    let receiver: Receiver<Int> = Channel.receiver<Int>(channel: mut channel)?
+    local payload = 42
+    task_group {
+        async let sent = Sender.send<Int>(sender: read sender, value: take payload)
+        await sent?
+        Sender.close<Int>(sender: mut sender)
+        let received = await Receiver.recv<Int>(receiver: read receiver)?
+        match received {
+            Some(value) => return Ok(value)
+            None => return Ok(0)
+        }
+    }
+}
+"#;
+    let validated = validate_sources_with_interfaces(
+        &[("direct-hir-channel-binding.rss", source)],
+        standard_package_interfaces(),
+    )
+    .expect("async channel binding fixture validates with the explicit async package interfaces");
+    let compiled = compile_validated_to_ir(&validated);
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("async channel binding should not require executable IR");
+    assert!(
+        mir.functions()
+            .iter()
+            .flat_map(|function| function.blocks())
+            .flat_map(|block| block.instructions())
+            .any(|instruction| matches!(instruction, MirInstruction::Spawn { .. })),
+        "direct MIR must preserve the channel call as a structured child task"
+    );
+    let direct_executable = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("async channel binding MIR emits verified bytecode");
+    assert!(
+        direct_executable.bytecode_artifact().imports.is_empty(),
+        "VM-owned channel calls must not appear as Provider imports"
+    );
+    let direct = direct_executable
+        .eval_main_with_args(std::iter::empty::<String>())
+        .expect("async channel binding bytecode executes");
+    let legacy = reg_vm_compile_validated(&validated)
+        .expect("legacy async channel binding bytecode compiles")
+        .eval_main_with_args(std::iter::empty::<String>())
+        .expect("legacy async channel binding bytecode executes");
+    assert_eq!(legacy.value, "Ok { value: 42 }");
+    assert_eq!(direct.value, legacy.value);
+    assert_eq!(direct.stdout, legacy.stdout);
+    assert_eq!(direct.stderr, legacy.stderr);
+    assert_eq!(direct.usage, legacy.usage);
+}
+
+#[test]
+fn direct_checked_hir_channel_select_cancels_the_losing_builtin_task() {
+    let source = r#"
+async fn main() -> Result<Int, ChannelError> {
+    let channel: Channel<Int> = Channel.bounded<Int>(capacity: 1)?
+    let sender: Sender<Int> = Channel.sender<Int>(channel: read channel)
+    local first = 1
+    local second = 2
+    select {
+        sent = await Sender.send<Int>(sender: read sender, value: take first) => {
+            let _ = sent
+            return Ok(1)
+        }
+        sent = await Sender.send<Int>(sender: read sender, value: take second) => {
+            let _ = sent
+            return Ok(2)
+        }
+    }
+    return Ok(0)
+}
+"#;
+    let validated = validate_sources_with_interfaces(
+        &[("direct-hir-channel-select.rss", source)],
+        standard_package_interfaces(),
+    )
+    .expect("channel select fixture validates with the explicit async package interfaces");
+    let compiled = compile_validated_to_ir(&validated);
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("channel select should not require executable IR");
+    assert!(
+        mir.functions()
+            .iter()
+            .flat_map(|function| function.blocks())
+            .flat_map(|block| block.instructions())
+            .any(|instruction| matches!(instruction, MirInstruction::Select { .. })),
+        "direct MIR must represent channel select through structured task selection"
+    );
+    let direct_executable = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("channel select MIR emits verified bytecode");
+    assert!(
+        direct_executable.bytecode_artifact().imports.is_empty(),
+        "VM-owned channel select calls must not appear as Provider imports"
+    );
+    let direct = direct_executable
+        .eval_main_with_args(std::iter::empty::<String>())
+        .expect("channel select bytecode executes");
+    let legacy = reg_vm_compile_validated(&validated)
+        .expect("legacy channel select bytecode compiles")
+        .eval_main_with_args(std::iter::empty::<String>())
+        .expect("legacy channel select bytecode executes");
+    assert_eq!(legacy.value, "Ok { value: 1 }");
+    assert_eq!(direct.value, legacy.value);
+    assert_eq!(direct.stdout, legacy.stdout);
+    assert_eq!(direct.stderr, legacy.stderr);
+    assert_eq!(direct.usage, legacy.usage);
+    assert_eq!(direct.usage.tasks_cancelled, 1);
+}
+
+#[test]
 fn direct_checked_hir_json_decode_preserves_typed_builtin_metadata() {
     let source = r#"
 struct Decoded derives(JsonDecode) { count: Int }
