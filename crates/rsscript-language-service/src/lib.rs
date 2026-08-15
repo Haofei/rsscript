@@ -229,14 +229,37 @@ impl LanguageService {
             deadline: request.deadline,
             ..OperationContext::default()
         };
-        let semantic_diagnostics = self.semantic_workspace_diagnostics(&operation, true)?;
-        let mut diagnostics = semantic_diagnostics.to_vec();
+        // A workspace request is an aggregation boundary, not a second broad
+        // semantic query.  Each document query is owned by
+        // `CompilationSession` and keyed by the exact source/interface import
+        // closure it observes.  Calling the old whole-workspace diagnostic
+        // query here would make an unrelated document edit invalidate every
+        // editor diagnostic request again.
+        let before = self.frontend.stats();
+        let mut diagnostics = Vec::new();
         for path in self.documents.keys().cloned().collect::<Vec<_>>() {
             check_request(request)?;
+            diagnostics.extend(
+                self.semantic_document_diagnostics(&path, &operation, false)?
+                    .iter()
+                    .cloned(),
+            );
             diagnostics.extend(
                 self.lint_with_operation(&path, &operation)
                     .map_err(LanguageServiceError::from)?,
             );
+        }
+        let after = self.frontend.stats();
+        if after.semantic_document_diagnostic_cache_misses
+            > before.semantic_document_diagnostic_cache_misses
+        {
+            self.cache_misses += 1;
+            self.record_miss(QueryKind::Diagnostics);
+        } else if after.semantic_document_diagnostic_cache_hits
+            > before.semantic_document_diagnostic_cache_hits
+        {
+            self.cache_hits += 1;
+            self.record_hit(QueryKind::Diagnostics);
         }
         deduplicate_diagnostics(&mut diagnostics);
         check_request(request)?;
@@ -267,32 +290,6 @@ impl LanguageService {
         );
         operation.check().map_err(LanguageServiceError::from)?;
         diagnostics.truncate(request.max_diagnostics);
-        Ok(diagnostics)
-    }
-
-    /// Query semantic diagnostics once for the immutable session input. Both
-    /// whole-workspace and single-document requests consume this same result;
-    /// document queries only filter by span and add their local lint facts.
-    fn semantic_workspace_diagnostics(
-        &mut self,
-        operation: &OperationContext,
-        record_query_stats: bool,
-    ) -> Result<Arc<[Diagnostic]>, LanguageServiceError> {
-        let before = self.frontend.stats();
-        let diagnostics = self
-            .frontend
-            .semantic_workspace_diagnostics_with_operation(operation)
-            .map_err(LanguageServiceError::from)?;
-        let after = self.frontend.stats();
-        if record_query_stats {
-            if after.workspace_diagnostic_cache_hits > before.workspace_diagnostic_cache_hits {
-                self.cache_hits += 1;
-                self.record_hit(QueryKind::Diagnostics);
-            } else {
-                self.cache_misses += 1;
-                self.record_miss(QueryKind::Diagnostics);
-            }
-        }
         Ok(diagnostics)
     }
 
@@ -600,7 +597,7 @@ mod tests {
     }
 
     #[test]
-    fn workspace_diagnostics_own_the_multi_document_analysis_query() {
+    fn workspace_diagnostics_compose_dependency_precise_document_queries() {
         let mut service = service();
         service.set_file(
             "host.rssi",
@@ -638,6 +635,47 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic.severity == Severity::Error)
         );
+    }
+
+    #[test]
+    fn unrelated_workspace_edits_reuse_other_document_semantic_queries() {
+        let mut service = service();
+        service.set_file(
+            "host.rssi",
+            1,
+            DocumentKind::Interface,
+            "module host\npub fn value() -> Int\n",
+        );
+        service.set_file(
+            "other.rssi",
+            1,
+            DocumentKind::Interface,
+            "module other\npub fn ignored() -> Int\n",
+        );
+        service.set_file(
+            "main.rss",
+            1,
+            DocumentKind::Source,
+            "module app\nuse host.*\nfn main() -> Int { return value() }\n",
+        );
+
+        assert!(service.workspace_diagnostics().is_empty());
+        let first = service.frontend.stats();
+        assert_eq!(first.semantic_document_diagnostic_cache_misses, 3);
+
+        // Only `other` needs a fresh document query.  `main` retains its
+        // cached resolve/type/HIR result because its visible contract closure
+        // still consists solely of `host`.
+        service.set_file(
+            "other.rssi",
+            2,
+            DocumentKind::Interface,
+            "module other\npub fn ignored() -> String\n",
+        );
+        assert!(service.workspace_diagnostics().is_empty());
+        let second = service.frontend.stats();
+        assert_eq!(second.semantic_document_diagnostic_cache_misses, 4);
+        assert_eq!(second.semantic_document_diagnostic_cache_hits, 2);
     }
 
     #[test]

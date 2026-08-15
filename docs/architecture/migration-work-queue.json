@@ -2,15 +2,6 @@
   "schema": "rsscript.migration_queue.v1",
   "tasks": [
     {
-      "id": "S03.3",
-      "priority": 10,
-      "depends_on": ["S03.1", "S03.2"],
-      "verification": [
-        "cargo test -p rsscript-semantics --lib --locked",
-        "cargo test -p rsscript-language-service --lib --locked"
-      ]
-    },
-    {
       "id": "S05.1",
       "priority": 20,
       "depends_on": [],

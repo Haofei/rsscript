@@ -537,7 +537,7 @@ visible without manually re-sorting every open parent milestone.
     path-ordered, retain non-reused file IDs, and advance revisions only when
     bytes change; focused tests cover replacement, deletion, and interface
     capture. Query migration remains follow-up work.
-  - [ ] **S03.3 — Cache parse, resolve, type, HIR, and diagnostic queries.**
+  - [x] **S03.3 — Cache parse, resolve, type, HIR, and diagnostic queries.**
     Record dependencies so unrelated file changes do not invalidate a workspace.
     `CompilationSession` now owns parse-tree and local HIR caching keyed by
     immutable role/file/revision, including replacement/deletion invalidation
@@ -549,9 +549,15 @@ visible without manually re-sorting every open parent milestone.
     caches document-level resolve/type/HIR results with the exact visible source
     and interface closure used by document diagnostics, so unrelated source or
     interface edits reuse the complete semantic result while imported source
-    revisions invalidate their consumers. The aggregate workspace analysis
-    still invalidates on every changed source/interface revision and remains
-    the outstanding query-splitting work. The session also caches an interface-aware
+    revisions invalidate their consumers. Language-service workspace diagnostics
+    now aggregate those dependency-precise document queries rather than calling
+    a broad whole-workspace analyzer query, so an unrelated source/interface
+    edit recomputes only the changed document while its unaffected peers remain
+    cache hits. The full `workspace_analysis` result intentionally remains a
+    whole-program compilation product: because it contains every source's HIR
+    and diagnostics, any changed source/interface revision produces a distinct
+    immutable result instead of exposing a partially stale aggregate. The
+    session also caches an interface-aware
     workspace HIR after that canonical rewrite. The
     declaration/signature `SemanticTypeFacts` owned by that HIR now also have a
     revision-invalidated workspace query with cancellation/deadline handling.
@@ -585,13 +591,13 @@ visible without manually re-sorting every open parent milestone.
     the document revision plus the transitive interface closure selected by its
     parsed imports. Consequently, an unrelated interface edit remains a cache
     hit for an open document, while a direct or transitive imported interface
-    edit recomputes its diagnostics. Whole-workspace resolve/type analysis and
-    workspace-wide diagnostic invalidation remain open. The syntax-only
+    edit recomputes its diagnostics. The syntax-only
     `WorkspaceModuleGraph` now preserves its cached graph
     across implementation-only source edits and interface signature edits when
     a file's declared modules/imports are unchanged; module/import edits still
     rebuild it fail-closed. This gives the LSP a precise shared dependency-graph
-    cache without prematurely claiming resolve/type precision.
+    cache without prematurely claiming source-body incrementality for a
+    whole-program compilation artifact.
   - [ ] **S03.4 — Thread cancellation and deadlines through every query.** Add
     cancellation, deadline, and diagnostic-budget tests for cold and cached
     paths. Session parse and local HIR queries now check the shared operation
@@ -655,10 +661,11 @@ visible without manually re-sorting every open parent milestone.
     visibility and invalidation traversal. The LSP now delegates both single-file and package
     overlay diagnostics to the language service workspace query instead of
     reconstructing a second analyzer call sequence. `LanguageService` and the
-    LSP no longer depend on the compiler: both use the semantic-owned complete
-    analyzer through the shared `WorkspaceDiagnosticQuery` contract while the
-    service owns the immutable session snapshot and cache, including document
-    text. Cargo metadata tests reject
+    LSP no longer depend on the compiler: both use semantic-owned session
+    queries while the service owns the immutable session snapshot and document
+    overlays. Workspace diagnostic requests compose those same
+    dependency-precise document queries instead of defining a competing broad
+    analysis path. Cargo metadata tests reject
     a language-service edge to compiler, VM, SDK, package persistence, or
     concrete Providers.
   - [x] **S04.2 — Add document revision and invalidation tests.** The language

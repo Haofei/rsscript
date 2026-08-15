@@ -3137,7 +3137,7 @@ fn workspace_diagnostic_query_contract_is_semantic_owned() {
     assert!(semantics.contains("analyze_frontend_input_snapshot_with_operation"));
 
     let language_service = read(&root.join("crates/rsscript-language-service/src/lib.rs"));
-    assert!(language_service.contains("semantic_workspace_diagnostics_with_operation"));
+    assert!(language_service.contains("semantic_document_diagnostics"));
     assert!(
         !language_service.contains("WorkspaceDiagnosticQuery"),
         "language-service must not select or inject a competing semantic query"
