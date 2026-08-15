@@ -2088,11 +2088,18 @@ an arbitrary shell executor.
       Artifact reader retains the accepted historical payload only inside its
       matching variant for v1 canonicality compatibility, and an architecture
       guard rejects a return to optional mutually-exclusive fields.
-  - [ ] **A04.2 — Audit every execution convenience API.** Script and Provider
-    failures return `ExecutionReport`; only host/protocol failures return errors.
-  - [ ] **A04.3 — Add compile-time and runtime phase tests.** Invalid transitions
-    are unrepresentable through public constructors and report retention is
-    tested for every termination reason.
+  - [x] **A04.2 — Audit every execution convenience API.** The reviewed SDK has
+    one execution convenience, `LinkedArtifact::execute(ExecutionRequest)`, and
+    it always returns `ExecutionReport`; `Runtime::link` is deliberately the
+    preceding host/protocol boundary and retains a distinct `LinkError`.
+    Architecture tests reject a second `run` entry point or a result-returning
+    execution method that could lose script/Provider/budget evidence.
+  - [x] **A04.3 — Add compile-time and runtime phase tests.** Required private
+    backing fields and one-way public transition signatures make invalid phase
+    construction unrepresentable to SDK callers. Runtime tests exercise the
+    report conversion for every VM execution failure kind, every Provider error
+    code, diagnostics, and script runtime errors, asserting that each retains
+    one terminal `ExecutionOutcome` and a full report.
 - [x] **A05 — Make execution bounded by default.** Unbounded execution requires
   an explicitly named trusted-host constructor; per-run limits live on the
   execution request.

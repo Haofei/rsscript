@@ -2177,6 +2177,144 @@ mod tests {
         assert_eq!(report.termination_reason(), TerminationReason::Completed);
     }
 
+    #[test]
+    fn every_script_or_provider_failure_retains_a_report_safe_terminal_outcome() {
+        // This is deliberately table-driven rather than a representative-sample
+        // test. `LinkedArtifact::execute` converts both immediate VM errors and
+        // normal VM outputs through this mapping, so a newly added execution
+        // failure cannot accidentally escape through a Result-returning
+        // convenience API without this test needing an update.
+        let execution_failures = [
+            (
+                ExecutionFailureKind::Cancelled,
+                TerminationReason::Cancelled,
+            ),
+            (
+                ExecutionFailureKind::DeadlineExceeded,
+                TerminationReason::DeadlineExceeded,
+            ),
+            (
+                ExecutionFailureKind::StepBudgetExceeded,
+                TerminationReason::StepBudgetExceeded,
+            ),
+            (
+                ExecutionFailureKind::AllocationBudgetExceeded,
+                TerminationReason::AllocationBudgetExceeded,
+            ),
+            (
+                ExecutionFailureKind::LiveMemoryLimitExceeded,
+                TerminationReason::LiveMemoryLimitExceeded,
+            ),
+            (
+                ExecutionFailureKind::OutputLimitExceeded,
+                TerminationReason::OutputLimitExceeded,
+            ),
+            (
+                ExecutionFailureKind::IntrinsicBudgetExceeded,
+                TerminationReason::IntrinsicBudgetExceeded,
+            ),
+            (
+                ExecutionFailureKind::ProviderBudgetExceeded,
+                TerminationReason::ProviderBudgetExceeded,
+            ),
+            (
+                ExecutionFailureKind::ResourceLimitExceeded,
+                TerminationReason::ResourceLimitExceeded,
+            ),
+        ];
+        for (kind, reason) in execution_failures {
+            let report = ExecutionReport::failed(
+                "sha256:test",
+                RuntimeError::from_execution(EvalError::execution(kind, "test failure")),
+                Vec::new(),
+                Duration::ZERO,
+                None,
+            );
+            assert_eq!(report.termination_reason(), reason);
+            assert!(matches!(report.outcome(), ExecutionOutcome::Failed(_)));
+            assert!(report.failure().is_some());
+            assert!(report.value().is_none());
+        }
+
+        for (code, reason) in [
+            (
+                provider::ProviderErrorCode::InvalidArgument,
+                TerminationReason::ProviderError,
+            ),
+            (
+                provider::ProviderErrorCode::NotFound,
+                TerminationReason::ProviderError,
+            ),
+            (
+                provider::ProviderErrorCode::PermissionDenied,
+                TerminationReason::ProviderError,
+            ),
+            (
+                provider::ProviderErrorCode::Cancelled,
+                TerminationReason::Cancelled,
+            ),
+            (
+                provider::ProviderErrorCode::DeadlineExceeded,
+                TerminationReason::DeadlineExceeded,
+            ),
+            (
+                provider::ProviderErrorCode::ResourceExhausted,
+                TerminationReason::ProviderError,
+            ),
+            (
+                provider::ProviderErrorCode::Unavailable,
+                TerminationReason::ProviderError,
+            ),
+            (
+                provider::ProviderErrorCode::Internal,
+                TerminationReason::ProviderError,
+            ),
+        ] {
+            let report = ExecutionReport::failed(
+                "sha256:test",
+                RuntimeError::from_execution(EvalError::Provider(provider::ProviderError::new(
+                    code,
+                    "provider failure",
+                ))),
+                Vec::new(),
+                Duration::ZERO,
+                None,
+            );
+            assert_eq!(report.termination_reason(), reason);
+            assert!(matches!(report.outcome(), ExecutionOutcome::Failed(_)));
+            assert!(report.failure().is_some());
+        }
+
+        let diagnostics = vec![Diagnostic::error(
+            "E_TEST",
+            "test diagnostic",
+            Span::default(),
+            "test label",
+        )];
+        let report = ExecutionReport::failed(
+            "sha256:test",
+            RuntimeError::from_execution(EvalError::Diagnostics(diagnostics.clone())),
+            diagnostics,
+            Duration::ZERO,
+            None,
+        );
+        assert_eq!(
+            report.termination_reason(),
+            TerminationReason::VerificationFailure
+        );
+        assert!(matches!(report.outcome(), ExecutionOutcome::Failed(_)));
+
+        let report = ExecutionReport::failed(
+            "sha256:test",
+            RuntimeError::from_execution(EvalError::Runtime("script failure".to_string())),
+            Vec::new(),
+            Duration::ZERO,
+            None,
+        );
+        assert_eq!(report.termination_reason(), TerminationReason::ScriptError);
+        assert!(matches!(report.outcome(), ExecutionOutcome::Failed(_)));
+    }
+
     #[cfg(all(feature = "project", feature = "compatibility"))]
     #[test]
     fn package_build_uses_one_immutable_snapshot_and_binds_its_digest() {

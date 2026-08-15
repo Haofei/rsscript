@@ -408,3 +408,29 @@ fn reviewed_artifact_phases_have_private_non_optional_state_and_one_way_transiti
         );
     }
 }
+
+#[test]
+fn reviewed_execution_conveniences_cannot_bypass_the_phase_or_report_boundary() {
+    let source = library_source();
+    let runtime = item_body(&source, "impl Runtime");
+    let linked = item_body(&source, "impl LinkedArtifact<'_>");
+
+    assert!(
+        runtime.contains(
+            "pub fn link<'artifact>(\n        &self,\n        artifact: &'artifact AdmittedArtifact,\n    ) -> Result<LinkedArtifact<'artifact>, LinkError>",
+        ),
+        "the only reviewed link convenience must require admission and retain a distinct host LinkError"
+    );
+    assert!(
+        linked.contains("pub fn execute(&self, request: ExecutionRequest) -> ExecutionReport"),
+        "the reviewed execution convenience must always retain an ExecutionReport"
+    );
+    assert!(
+        !linked.contains("pub fn execute(&self, request: ExecutionRequest) -> Result<"),
+        "script/provider/budget termination must not escape through a result-returning execution convenience"
+    );
+    assert!(
+        !linked.contains("pub fn run(") && !runtime.contains("pub fn run("),
+        "the reviewed SDK must not grow a second execution convenience that bypasses the report boundary"
+    );
+}
