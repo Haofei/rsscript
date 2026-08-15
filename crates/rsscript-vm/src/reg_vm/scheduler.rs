@@ -208,6 +208,7 @@ impl RegVm {
                         .iter()
                         .any(|h| self.tasks.get(h).is_some_and(|s| s.done.is_some())),
                     Some(Wait::Provider { result, .. }) => result.is_some(),
+                    Some(Wait::WireProvider { result, .. }) => result.is_some(),
                     None => false,
                 })
                 .map(|(id, _)| *id)
@@ -231,13 +232,23 @@ impl RegVm {
             {
                 *result = Some(value);
             }
+            if let Some(Wait::WireProvider { future, result, .. }) = slot.wait.as_mut()
+                && result.is_none()
+                && let Poll::Ready(value) = future.as_mut().poll(&mut context)
+            {
+                *result = Some(value);
+            }
         }
     }
 
     fn has_pending_provider_future(&self) -> bool {
-        self.tasks
-            .values()
-            .any(|slot| matches!(slot.wait, Some(Wait::Provider { result: None, .. })))
+        self.tasks.values().any(|slot| {
+            matches!(
+                slot.wait,
+                Some(Wait::Provider { result: None, .. })
+                    | Some(Wait::WireProvider { result: None, .. })
+            )
+        })
     }
 
     /// Cancel every losing `select` arm task once a winner is chosen. A resolved
@@ -365,6 +376,30 @@ impl RegVm {
             } => {
                 let raw = result
                     .expect("Provider future was ready")
+                    .map_err(EvalError::Provider)?;
+                let (value, mutated) =
+                    self.decode_external_result(&key, raw, mutation_targets.len())?;
+                for (register, mutated_value) in mutation_targets.into_iter().zip(mutated) {
+                    self.write_saved_reg(tid, register, mutated_value);
+                }
+                self.complete_wait(tid, value);
+            }
+            Wait::WireProvider {
+                result,
+                key,
+                mutation_targets,
+                ..
+            } => {
+                let wire = result
+                    .expect("wire Provider future was ready")
+                    .map_err(EvalError::Provider)?;
+                let function = self.external_bindings.get(&key).cloned().ok_or_else(|| {
+                    EvalError::Runtime(format!(
+                        "reg VM wire provider function `{key}` disappeared while suspended"
+                    ))
+                })?;
+                let raw = function
+                    .wire_result_to_native(wire)
                     .map_err(EvalError::Provider)?;
                 let (value, mutated) =
                     self.decode_external_result(&key, raw, mutation_targets.len())?;

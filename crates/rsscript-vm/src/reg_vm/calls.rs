@@ -408,14 +408,26 @@ impl RegVm {
             trace: Some(std::sync::Arc::clone(&self.provider_trace) as _),
             resources: Some(self.provider_resources.clone()),
         };
+        let mutation_targets = mut_args
+            .iter()
+            .map(|position| base + args[*position])
+            .collect();
+        if mut_args.is_empty() && function.is_wire_async() {
+            let wire_args = function
+                .wire_args_from_native(arg_values)
+                .map_err(EvalError::Provider)?;
+            return Ok(Wait::WireProvider {
+                future: function.start_wire_async(context, wire_args),
+                result: None,
+                key: key.to_string(),
+                mutation_targets,
+            });
+        }
         Ok(Wait::Provider {
             future: function.start_async(context, arg_values),
             result: None,
             key: key.to_string(),
-            mutation_targets: mut_args
-                .iter()
-                .map(|position| base + args[*position])
-                .collect(),
+            mutation_targets,
         })
     }
 

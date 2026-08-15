@@ -2061,9 +2061,12 @@ an arbitrary shell executor.
     a Provider-side `NativeValue` hop when the call has no `mut` mutation
     envelope: arguments are checked against the exact linked wire table, the
     Provider sees `WireValue`, and only the VM's explicitly named compatibility
-    edge decodes the result into its legacy register value. Native callables,
-    `mut` envelopes, and asynchronous VM dispatch remain the open migration
-    surface for this item.
+    edge decodes the result into its legacy register value. The same direct
+    route now covers descriptor-linked `AsyncWireInterpreterFn`: its scheduler
+    future carries `WireValue` end-to-end, preserves the normal cancellation,
+    deadline, resource, non-reentrancy, budget, and trace gates, and decodes
+    only after completion at the VM register boundary. Native callables and
+    `mut` mutation envelopes remain the open migration surface for this item.
   - [x] **P06.2a — Bridge generation-safe resource handles.** Provider
       runtime handles now convert to/from the canonical numeric wire handle
       with a descriptor-supplied resource type. Linked sync wire calls prove

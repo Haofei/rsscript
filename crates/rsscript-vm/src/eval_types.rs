@@ -729,6 +729,13 @@ impl ExternalFunction {
         matches!(self.callable, ProviderCallable::WireSync(_))
     }
 
+    /// Whether this linked function can use the canonical asynchronous wire
+    /// dispatcher. The register VM keeps the scheduler boundary explicit, but
+    /// the Provider callable itself receives and returns only `WireValue`.
+    pub(crate) const fn is_wire_async(&self) -> bool {
+        matches!(self.callable, ProviderCallable::WireAsync(_))
+    }
+
     /// Convert legacy VM boundary values to the exact descriptor-scoped wire
     /// signature without invoking a Provider. This is the last compatibility
     /// edge for register values; the Provider itself receives only `WireValue`.
@@ -1163,6 +1170,134 @@ impl ExternalFunction {
                         .details
                         .as_ref()
                         .map_or(0, rsscript_abi_model::WireValue::estimated_payload_bytes),
+                ),
+            };
+            if let Some(trace) = trace {
+                trace.record(ProviderCallTrace {
+                    call_id: trace_context.call_id,
+                    provider_id: trace_context.provider_id.clone(),
+                    provider_version: trace_context.provider_version.clone(),
+                    symbol: trace_context.symbol.clone(),
+                    request_bytes,
+                    response_bytes,
+                    elapsed: started.elapsed(),
+                    result: result.as_ref().map(|_| ()).map_err(|error| error.code),
+                });
+            }
+            result
+        })
+    }
+
+    /// Start a descriptor-linked asynchronous wire Provider without adapting
+    /// its arguments or result through `NativeValue`. This is intentionally a
+    /// separate scheduler entry point: the legacy async dispatcher remains
+    /// available only for compatibility callables and mutation envelopes.
+    pub(crate) fn start_wire_async(
+        &self,
+        mut context: AsyncProviderCallContext,
+        args: Vec<WireValue>,
+    ) -> WireProviderFuture {
+        let non_reentrant_permit = match self.acquire_non_reentrant_permit() {
+            Ok(permit) => permit,
+            Err(error) => return Box::pin(async move { Err(error) }),
+        };
+        let Some(contract) = self.contract.clone() else {
+            return Box::pin(async {
+                Err(ProviderError::unavailable(
+                    "async wire provider function requires a linked descriptor",
+                ))
+            });
+        };
+        context.provider_id.clone_from(&contract.provider_id);
+        context
+            .provider_version
+            .clone_from(&contract.provider_version);
+        context.symbol = contract.descriptor.symbol.as_str().to_string();
+        let callable = match &self.callable {
+            ProviderCallable::WireAsync(callable) => callable.clone(),
+            ProviderCallable::Async(_)
+            | ProviderCallable::Sync(_)
+            | ProviderCallable::WireSync(_) => {
+                return Box::pin(async {
+                    Err(ProviderError::unavailable(
+                        "non-wire async Provider cannot enter the wire async dispatcher",
+                    ))
+                });
+            }
+        };
+        let request_bytes = args
+            .iter()
+            .map(WireValue::estimated_payload_bytes)
+            .sum::<usize>();
+        let trace = context.trace.clone();
+        let trace_context = context.clone();
+        let resources_before = context
+            .resources
+            .as_ref()
+            .and_then(|resources| resources.snapshot().ok())
+            .map(|usage| usage.created);
+        let started = Instant::now();
+        Box::pin(async move {
+            let _non_reentrant_permit = non_reentrant_permit;
+            let result = async {
+                context.check_cancelled()?;
+                check_payload_budget(request_bytes, context.remaining_byte_budget, "request")?;
+                if contract.descriptor.call_mode != ProviderCallMode::Async {
+                    return Err(ProviderError::unavailable(
+                        "async wire callable has a synchronous Provider descriptor",
+                    ));
+                }
+                if contract.descriptor.blocking == BlockingBehavior::MayBlock {
+                    return Err(ProviderError::unavailable(
+                        "blocking work must not run inside an async Provider future",
+                    ));
+                }
+                let result = match catch_unwind(AssertUnwindSafe(|| callable.call(context, args))) {
+                    Ok(future) => PanicContainedWireProviderFuture::new(future).await,
+                    Err(_) => Err(provider_panic_error()),
+                };
+                if matches!(
+                    contract.descriptor.cancellation,
+                    CancellationBehavior::Cooperative | CancellationBehavior::AbortSafe
+                ) {
+                    trace_context.check_cancelled()?;
+                }
+                if result.is_ok()
+                    && contract.descriptor.resource_cleanup
+                        == ResourceCleanupContract::RuntimeRegistered
+                    && resources_before
+                        == trace_context
+                            .resources
+                            .as_ref()
+                            .and_then(|resources| resources.snapshot().ok())
+                            .map(|usage| usage.created)
+                {
+                    return Err(ProviderError::internal(
+                        "runtime-registered provider call returned without registering a resource",
+                    ));
+                }
+                let value = result?;
+                let response_bytes = value.estimated_payload_bytes();
+                check_payload_budget(
+                    response_bytes,
+                    trace_context.remaining_byte_budget,
+                    "response",
+                )?;
+                check_payload_budget(
+                    response_bytes,
+                    trace_context.remaining_output_budget,
+                    "response output",
+                )?;
+                Ok(value)
+            }
+            .await;
+            let response_bytes = match &result {
+                Ok(value) => value.estimated_payload_bytes(),
+                Err(error) => error.message.len().saturating_add(
+                    error
+                        .details
+                        .as_ref()
+                        .map_or(0, WireValue::estimated_payload_bytes),
                 ),
             };
             if let Some(trace) = trace {

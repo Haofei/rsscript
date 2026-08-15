@@ -7,7 +7,7 @@
 //! reference interpreter; the reviewed, explained exceptions are declared
 //! below rather than hidden in the test loop.
 
-use rsscript_abi_model::WireType;
+use rsscript_abi_model::{WireType, WireValue};
 use rsscript_compiler::{
     compile_source_to_ir, compile_validated_to_ir, standard_package_interfaces,
     validate_sources_with_interfaces,
@@ -21,6 +21,7 @@ use rsscript_mir::{
     MirFunctionDebug, MirFunctionSignature, MirInstruction, MirLiteral, MirModule,
     MirParameterMode, MirTerminator, TaskGroupId, TaskId, TypeId, ValueId,
 };
+use rsscript_sdk::provider_api::AsyncWireInterpreterFn;
 use rsscript_sdk::{
     AsyncInterpreterFn, BlockingBehavior, CancellationBehavior, CancellationToken, Compiler,
     EvalError, ExternalFunction, ExternalFunctionRegistry, ExternalSymbol, FunctionSignature,
@@ -2797,7 +2798,11 @@ fn direct_checked_hir_awaited_external_provider_matches_legacy_vm() {
             error_mapping: ProviderErrorMapping::StructuredV1,
         }],
     };
-    let callable = AsyncInterpreterFn::new(|_, _| async {
+    let callable = AsyncWireInterpreterFn::new(|_, values| async move {
+        assert!(
+            values.is_empty(),
+            "wire Provider receives no compatibility values"
+        );
         let mut first_poll = true;
         std::future::poll_fn(move |context| {
             if first_poll {
@@ -2805,7 +2810,7 @@ fn direct_checked_hir_awaited_external_provider_matches_legacy_vm() {
                 context.waker().wake_by_ref();
                 std::task::Poll::Pending
             } else {
-                std::task::Poll::Ready(Ok(NativeValue::Int(42)))
+                std::task::Poll::Ready(Ok(WireValue::Int { value: 42 }))
             }
         })
         .await

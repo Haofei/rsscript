@@ -71,7 +71,7 @@ use self::calls::PureClosurePlan;
 use crate::eval_types::{
     AsyncProviderCallContext, EvalError, EvalExecutionReport, EvalOutput, ExternalFunction,
     NativeValue, ProviderCallContext, ProviderCallMode, ProviderError, ProviderFuture,
-    ProviderResourceRegistry,
+    ProviderResourceRegistry, WireProviderFuture,
 };
 #[cfg(feature = "native-jit")]
 use crate::text_util::string_pad_len;
@@ -1437,6 +1437,15 @@ enum Wait {
     Provider {
         future: ProviderFuture,
         result: Option<Result<NativeValue, ProviderError>>,
+        key: String,
+        mutation_targets: Vec<usize>,
+    },
+    /// A descriptor-linked asynchronous Provider call whose callable receives
+    /// canonical wire values. The register VM only adapts the completed value
+    /// at its legacy register boundary.
+    WireProvider {
+        future: WireProviderFuture,
+        result: Option<Result<WireValue, ProviderError>>,
         key: String,
         mutation_targets: Vec<usize>,
     },
