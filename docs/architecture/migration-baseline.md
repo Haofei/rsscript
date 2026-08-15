@@ -587,8 +587,10 @@ mechanical acceptance condition holds.
     Core catalog entries are supplied once by the session rather than manually
     duplicated into a `without_core` analyzer call. Experimental Rust AOT
     lowering now uses that same session-owned validation snapshot for both
-    single-source and package inputs. Remaining test callers are still
-    explicit migration work.
+    single-source and package inputs. The compiler's direct in-memory
+    `compile_source_to_ir` convenience now captures its input through the
+    session before constructing compiler output. Remaining test callers are
+    still explicit migration work.
 - [ ] **S04 — Make language service consume semantic queries directly.** It
   must not depend on the compiler compatibility façade, package persistence,
   VM, SDK, or Providers; revision invalidation and request cancellation require

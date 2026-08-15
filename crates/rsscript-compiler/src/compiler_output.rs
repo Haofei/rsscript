@@ -3,7 +3,7 @@ use std::fmt;
 
 use sha2::{Digest, Sha256};
 
-use crate::{Diagnostic, ValidatedProgram, validate_source};
+use crate::{Diagnostic, ValidatedProgram};
 #[cfg(feature = "package")]
 use rsscript_semantics::CompilationSession;
 
@@ -107,7 +107,11 @@ impl CompiledIr {
 }
 
 pub fn compile_source_to_ir(file: &str, source: &str) -> Result<CompiledIr, Vec<Diagnostic>> {
-    let validated = validate_source(file, source)?;
+    let mut session = CompilationSession::default();
+    session
+        .set_file(file, source)
+        .expect("compiler source path must be a normalized unique logical path");
+    let validated = session.workspace_validated()?;
     Ok(compile_validated_to_ir(&validated))
 }
 
