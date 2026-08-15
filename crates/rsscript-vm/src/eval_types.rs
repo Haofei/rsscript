@@ -355,6 +355,7 @@ pub(crate) fn native_result_to_wire(
     value: NativeValue,
     result: &WireType,
     record_layouts: Vec<rsscript_abi_model::WireRecordLayout>,
+    variant_layouts: Vec<rsscript_abi_model::WireVariantLayout>,
 ) -> Result<WireValue, ProviderError> {
     let signature = FunctionSignature {
         parameters: Vec::new(),
@@ -363,6 +364,7 @@ pub(crate) fn native_result_to_wire(
     };
     let types = WireCallTypeTable::for_signature(&signature)
         .and_then(|types| types.with_record_layouts(record_layouts))
+        .and_then(|types| types.with_variant_layouts(variant_layouts))
         .map_err(|_| {
             ProviderError::internal("program result wire type table exceeds supported identities")
         })?;

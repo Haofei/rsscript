@@ -449,6 +449,7 @@ mod tests {
             function_ids: HashMap::from([("main".to_string(), 0)]),
             resource_drop_functions: HashMap::new(),
             types: HashMap::new(),
+            variant_layouts: HashMap::new(),
             native_signatures: HashMap::new(),
             closure_identity_observable: false,
         })

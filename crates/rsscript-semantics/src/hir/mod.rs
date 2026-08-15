@@ -507,6 +507,10 @@ pub struct Hir {
     fields_by_name: HashMap<String, Vec<FieldInfo>>,
     sum_variant_types: HashMap<String, String>,
     sum_variant_fields: HashMap<String, Vec<FieldInfo>>,
+    /// Source declaration order for user-sum cases. Hash maps remain suitable
+    /// for name resolution, but Artifact/Wire layouts require a stable case
+    /// ordinal that cannot be recovered from those lookup tables.
+    sum_variant_order: Vec<(String, String)>,
     duplicate_symbols: Vec<DuplicateSymbol>,
     call_sites: Vec<HirCallSite>,
     bindings: Vec<HirBinding>,

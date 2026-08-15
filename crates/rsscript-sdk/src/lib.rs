@@ -2614,6 +2614,34 @@ mod tests {
     }
 
     #[test]
+    fn stable_facade_exposes_v1_named_variant_results_as_canonical_wire_values() {
+        let built = Compiler
+            .compile(
+                "main.rss",
+                "sum ResultValue { Empty, Value(count: Int) }\nfn main() -> ResultValue { return Value(count: 42) }",
+            )
+            .expect("compile named variant result");
+        let admitted = ArtifactVerifier
+            .verify(built)
+            .expect("verify named variant result")
+            .admit_trusted_input();
+        let report = Runtime::default()
+            .link(&admitted)
+            .expect("link named variant result")
+            .execute(ExecutionRequest::default());
+
+        assert!(matches!(
+            report.wire_value(),
+            Some(provider::WireValue::Variant {
+                variant_id,
+                payload: Some(payload),
+                ..
+            }) if *variant_id == provider::WireVariantId::new(1)
+                && payload.as_ref() == &provider::WireValue::Int { value: 42 }
+        ));
+    }
+
+    #[test]
     fn source_artifacts_carry_resolved_call_facts_for_semantic_diff() {
         let compiler = Compiler;
         let old = compiler

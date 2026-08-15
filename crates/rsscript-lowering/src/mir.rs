@@ -14,8 +14,8 @@ use rsscript_mir::{
     BasicBlock, BlockId, FunctionId, MirBinaryOp, MirCallArgument, MirCallTarget,
     MirExternalImport, MirFunction, MirFunctionDebug, MirFunctionSignature, MirInstruction,
     MirInstructionSource, MirLiteral, MirModule, MirParameterMode, MirSourceLocation,
-    MirTerminator, MirTypeLayout, PlaceId, ResourceTypeId, TaskGroupId, TaskId, TypeId, ValueId,
-    VerifiedMir,
+    MirTerminator, MirTypeLayout, MirVariantCaseLayout, MirVariantLayout, PlaceId, ResourceTypeId,
+    TaskGroupId, TaskId, TypeId, ValueId, VerifiedMir,
 };
 use rsscript_semantics::{ResolvedTypeKind, hir as checked};
 use rsscript_text::{decode_char_token, decode_string_token, type_root_name};
@@ -284,10 +284,52 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<VerifiedMir, MirLo
             Ok(MirTypeLayout::new(ty, info.name.clone(), fields))
         })
         .collect::<Result<Vec<_>, MirLoweringError>>()?;
-    Ok(
-        MirModule::with_type_layouts(types.into_types(), type_layouts, lowered, debug, imports)?
-            .into_verified()?,
-    )
+    // `Hir` intentionally exposes user-sum declarations independently from
+    // call sites. Preserve that whole table in MIR so an Artifact consumer can
+    // materialize a typed final value even when a particular case is never
+    // constructed in a reachable body. HIR retains source declaration order
+    // separately from its name-resolution maps, which becomes the canonical
+    // numeric case order at the Wire boundary.
+    let mut sum_variants = BTreeMap::<String, Vec<(String, Vec<checked::FieldInfo>)>>::new();
+    for (variant, owner, fields) in hir.sum_variants() {
+        sum_variants
+            .entry(owner.to_owned())
+            .or_default()
+            .push((variant.to_owned(), fields.to_vec()));
+    }
+    let variant_layouts = sum_variants
+        .into_iter()
+        .map(|(owner, variants)| {
+            let ty = types.intern(WireType::Named {
+                package: None,
+                name: owner.clone(),
+                arguments: Vec::new(),
+            });
+            let variants = variants
+                .into_iter()
+                .map(|(variant, fields)| {
+                    let fields = fields
+                        .into_iter()
+                        .map(|field| {
+                            checked_type_to_wire(&field.ty, &owner)
+                                .map(|ty| (field.name, types.intern(ty)))
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok(MirVariantCaseLayout::new(variant, fields))
+                })
+                .collect::<Result<Vec<_>, MirLoweringError>>()?;
+            Ok(MirVariantLayout::new(ty, owner, variants))
+        })
+        .collect::<Result<Vec<_>, MirLoweringError>>()?;
+    Ok(MirModule::with_layouts(
+        types.into_types(),
+        type_layouts,
+        variant_layouts,
+        lowered,
+        debug,
+        imports,
+    )?
+    .into_verified()?)
 }
 
 /// External async imports need a synthetic task function only when they must

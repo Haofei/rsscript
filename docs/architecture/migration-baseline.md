@@ -2085,11 +2085,12 @@ an arbitrary shell executor.
     `serde_json::Value` as an implicit Provider ABI escape hatch; JSON remains
     an explicitly named extension codec. The reviewed `ExecutionOutcome` now
     exposes a canonical `WireValue` result when the declared v1 result
-    signature contains enough structural layout to derive one; v1's separate
-    record layouts are consumed for `WireValue::Record`, while unsupported
-    named variants remain `None` rather than fabricating dynamic string
+    signature contains enough structural layout to derive one. The emitted
+    Artifact now carries a verifier-checked complete named-sum layout table as
+    well as record layouts, so `WireValue::Variant` results use deterministic
+    numeric case identities rather than returning `None` or fabricating string
     identity. The v1 JSON report and VM compatibility projection remain until
-    an Artifact-wide typed result table completes the VM migration.
+    the typed report outcome replaces that legacy serialization boundary.
 - [x] **P07 — Remove policy-shaped authority from Core ABI.** `HostCallContext`
   carries host-defined labels to Provider calls without Core interpreting an
   authorization policy. The runtime reports required symbols; provider profiles

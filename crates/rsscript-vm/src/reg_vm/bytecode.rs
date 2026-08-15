@@ -14,6 +14,8 @@ struct WireUnit {
     function_ids: BTreeMap<String, usize>,
     resource_drop_functions: BTreeMap<String, usize>,
     types: BTreeMap<String, RegTypeInfo>,
+    #[serde(default)]
+    variant_layouts: BTreeMap<String, RegVariantInfo>,
     native_signatures: BTreeMap<String, RegNativeSignature>,
     closure_identity_observable: bool,
     #[serde(default)]
@@ -60,6 +62,7 @@ impl WireUnit {
             function_ids: self.function_ids.into_iter().collect(),
             resource_drop_functions: self.resource_drop_functions.into_iter().collect(),
             types: self.types.into_iter().collect(),
+            variant_layouts: self.variant_layouts.into_iter().collect(),
             native_signatures: self.native_signatures.into_iter().collect(),
             closure_identity_observable: self.closure_identity_observable,
         }

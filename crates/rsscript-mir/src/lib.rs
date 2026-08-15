@@ -1006,10 +1006,68 @@ impl MirTypeLayout {
     }
 }
 
+/// Runtime layout evidence for one named sum type.  The executable type table
+/// owns the canonical [`TypeId`]; this side table preserves declaration-order
+/// case and field shape for Artifact consumers that must materialize a typed
+/// wire value without recovering identity from a runtime string value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MirVariantLayout {
+    ty: TypeId,
+    name: String,
+    variants: Vec<MirVariantCaseLayout>,
+}
+
+/// One declaration-order case in a [`MirVariantLayout`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MirVariantCaseLayout {
+    name: String,
+    fields: Vec<(String, TypeId)>,
+}
+
+impl MirVariantLayout {
+    pub fn new(ty: TypeId, name: impl Into<String>, variants: Vec<MirVariantCaseLayout>) -> Self {
+        Self {
+            ty,
+            name: name.into(),
+            variants,
+        }
+    }
+
+    pub fn ty(&self) -> TypeId {
+        self.ty
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn variants(&self) -> &[MirVariantCaseLayout] {
+        &self.variants
+    }
+}
+
+impl MirVariantCaseLayout {
+    pub fn new(name: impl Into<String>, fields: Vec<(String, TypeId)>) -> Self {
+        Self {
+            name: name.into(),
+            fields,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn fields(&self) -> &[(String, TypeId)] {
+        &self.fields
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct MirModule {
     types: Vec<WireType>,
     type_layouts: Vec<MirTypeLayout>,
+    variant_layouts: Vec<MirVariantLayout>,
     functions: Vec<MirFunction>,
     function_debug: Vec<MirFunctionDebug>,
     external_imports: Vec<MirExternalImport>,
@@ -1065,6 +1123,7 @@ impl MirModule {
         let module = Self {
             types,
             type_layouts: Vec::new(),
+            variant_layouts: Vec::new(),
             functions,
             function_debug,
             external_imports,
@@ -1086,6 +1145,30 @@ impl MirModule {
         let module = Self {
             types,
             type_layouts,
+            variant_layouts: Vec::new(),
+            functions,
+            function_debug,
+            external_imports,
+        };
+        module.verify()?;
+        Ok(module)
+    }
+
+    /// Construct a module with explicit named record and sum layouts.  Both
+    /// tables are part of the typed executable contract; backends must not
+    /// infer a sum's cases from observed `MakeVariant` instructions.
+    pub fn with_layouts(
+        types: Vec<WireType>,
+        type_layouts: Vec<MirTypeLayout>,
+        variant_layouts: Vec<MirVariantLayout>,
+        functions: Vec<MirFunction>,
+        function_debug: Vec<MirFunctionDebug>,
+        external_imports: Vec<MirExternalImport>,
+    ) -> Result<Self, MirValidationError> {
+        let module = Self {
+            types,
+            type_layouts,
+            variant_layouts,
             functions,
             function_debug,
             external_imports,
@@ -1113,6 +1196,10 @@ impl MirModule {
         &self.type_layouts
     }
 
+    pub fn variant_layouts(&self) -> &[MirVariantLayout] {
+        &self.variant_layouts
+    }
+
     pub fn ty(&self, id: TypeId) -> Option<&WireType> {
         self.types.get(id.index())
     }
@@ -1131,6 +1218,7 @@ impl MirModule {
 
     pub fn verify(&self) -> Result<(), MirValidationError> {
         verify_type_layouts(&self.types, &self.type_layouts)?;
+        verify_variant_layouts(&self.types, &self.variant_layouts)?;
         if self.functions.len() != self.function_debug.len() {
             return Err(MirValidationError::FunctionDebugCount {
                 functions: self.functions.len(),
@@ -1235,6 +1323,52 @@ fn verify_type_layouts(
                     ty: layout.ty,
                     name: layout.name.clone(),
                 });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn verify_variant_layouts(
+    types: &[WireType],
+    layouts: &[MirVariantLayout],
+) -> Result<(), MirValidationError> {
+    let mut names = BTreeSet::new();
+    let mut layout_types = BTreeSet::new();
+    for layout in layouts {
+        if layout.name.is_empty() || !names.insert(layout.name.clone()) {
+            return Err(MirValidationError::InvalidTypeLayout {
+                ty: layout.ty,
+                name: layout.name.clone(),
+            });
+        }
+        if !layout_types.insert(layout.ty)
+            || !matches!(
+                types.get(layout.ty.index()),
+                Some(WireType::Named { name, .. }) if name == &layout.name
+            )
+        {
+            return Err(MirValidationError::InvalidTypeLayout {
+                ty: layout.ty,
+                name: layout.name.clone(),
+            });
+        }
+        let mut variant_names = BTreeSet::new();
+        for variant in &layout.variants {
+            if variant.name.is_empty() || !variant_names.insert(&variant.name) {
+                return Err(MirValidationError::InvalidTypeLayout {
+                    ty: layout.ty,
+                    name: layout.name.clone(),
+                });
+            }
+            let mut field_names = BTreeSet::new();
+            for (field, ty) in &variant.fields {
+                if field.is_empty() || !field_names.insert(field) || ty.index() >= types.len() {
+                    return Err(MirValidationError::InvalidTypeLayout {
+                        ty: layout.ty,
+                        name: layout.name.clone(),
+                    });
+                }
             }
         }
     }

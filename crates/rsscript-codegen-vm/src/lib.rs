@@ -85,6 +85,7 @@ fn wire_unit(mir: &MirModule) -> Result<Value, CodegenError> {
     let mut ids = BTreeMap::new();
     let mut native_signatures = BTreeMap::new();
     let mut types = BTreeMap::new();
+    let mut variant_layouts = BTreeMap::new();
     let mut functions = Vec::new();
     let mut source_map = Vec::new();
     for function in mir.functions() {
@@ -122,11 +123,36 @@ fn wire_unit(mir: &MirModule) -> Result<Value, CodegenError> {
             ));
         }
     }
+    for layout in mir.variant_layouts() {
+        if variant_layouts
+            .insert(
+                layout.name().to_owned(),
+                json!({
+                    "name": layout.name(),
+                    "variants": layout.variants().iter().map(|variant| {
+                        json!({
+                            "name": variant.name(),
+                            "fields": variant.fields().iter().map(|(name, ty)| {
+                                let ty = mir.ty(*ty).expect("validated MIR variant-layout field");
+                                json!({ "name": name, "type_name": legacy_signature_type(ty) })
+                            }).collect::<Vec<_>>(),
+                        })
+                    }).collect::<Vec<_>>(),
+                }),
+            )
+            .is_some()
+        {
+            return Err(CodegenError::InvalidMir(
+                "MIR contains duplicate runtime variant-layout name".to_owned(),
+            ));
+        }
+    }
     Ok(json!({
         "functions": functions,
         "function_ids": ids,
         "resource_drop_functions": BTreeMap::<String, usize>::new(),
         "types": types,
+        "variant_layouts": variant_layouts,
         "native_signatures": native_signatures,
         "closure_identity_observable": false,
         "source_map": source_map,

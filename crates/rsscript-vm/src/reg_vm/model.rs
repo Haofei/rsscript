@@ -6,6 +6,11 @@ pub(crate) struct RegUnit {
     pub(crate) function_ids: HashMap<String, usize>,
     pub(crate) resource_drop_functions: HashMap<String, usize>,
     pub(crate) types: HashMap<String, RegTypeInfo>,
+    /// Complete declared layouts for user sum types. This is compatibility
+    /// metadata for the v1 string-named VM representation; it lets the
+    /// reviewed report bridge a completed value into numeric `WireValue`
+    /// identities without inferring cases from executed instructions.
+    pub(crate) variant_layouts: HashMap<String, RegVariantInfo>,
     /// Declared HIR signatures keyed by lowered function name. The register VM
     /// bytecode remains untyped, but native lowering can use this as a conservative
     /// seed for scalar/handle ABI inference when a function body is otherwise
@@ -42,6 +47,18 @@ pub(crate) struct RegTypeInfo {
 pub(crate) struct RegFieldInfo {
     pub(crate) name: String,
     pub(crate) type_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct RegVariantInfo {
+    pub(crate) name: String,
+    pub(crate) variants: Vec<RegVariantCaseInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct RegVariantCaseInfo {
+    pub(crate) name: String,
+    pub(crate) fields: Vec<RegFieldInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

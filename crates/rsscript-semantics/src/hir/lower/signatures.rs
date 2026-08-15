@@ -215,6 +215,8 @@ impl Hir {
                     }
                     self.insert_type(type_info);
                     for variant in &sum.variants {
+                        self.sum_variant_order
+                            .push((variant.name.clone(), sum.name.clone()));
                         self.sum_variant_types
                             .insert(variant.name.clone(), sum.name.clone());
                         self.sum_variant_fields.insert(
@@ -337,7 +339,7 @@ impl Hir {
     /// All sum variants and their owner types, for provider-neutral executable
     /// projection. Backends must not infer this table from observed call sites.
     pub fn sum_variants(&self) -> impl Iterator<Item = (&str, &str, &[FieldInfo])> {
-        self.sum_variant_types.iter().map(|(variant, owner)| {
+        self.sum_variant_order.iter().map(|(variant, owner)| {
             (
                 variant.as_str(),
                 owner.as_str(),

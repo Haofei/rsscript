@@ -31,7 +31,10 @@ use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 
-use rsscript_abi_model::{WireRecordFieldLayout, WireRecordLayout, WireType, WireValue};
+use rsscript_abi_model::{
+    WireRecordFieldLayout, WireRecordLayout, WireType, WireValue, WireVariantCaseLayout,
+    WireVariantLayout,
+};
 use rsscript_corelib::{
     collections::{
         dedup as core_list_dedup, deque_to_vec as core_deque_to_vec,
@@ -567,10 +570,9 @@ impl RegVmExecutable {
     }
 
     /// Return the canonical result value for `main` when its v1 declaration
-    /// contains enough structural type information to do so.  This is an
-    /// explicit compatibility bridge: v1 stores record layouts separately
-    /// from a function signature, while named variants are still not carried
-    /// by that Artifact contract. Unsupported values return `None` instead of
+    /// contains enough structural type information to do so. This is an
+    /// explicit compatibility bridge: older v1 Artifacts may omit record or
+    /// named-variant side tables. Unsupported values return `None` instead of
     /// leaking a dynamic stringly typed value through the reviewed SDK report.
     fn main_result_wire_value(&self, value: NativeValue) -> Option<WireValue> {
         let result = self
@@ -596,7 +598,31 @@ impl RegVmExecutable {
                     .collect(),
             })
             .collect();
-        crate::eval_types::native_result_to_wire(value, &result, record_layouts).ok()
+        let variant_layouts = self
+            .unit
+            .variant_layouts
+            .values()
+            .map(|layout| WireVariantLayout {
+                ty: WireType::parse(&layout.name),
+                variants: layout
+                    .variants
+                    .iter()
+                    .map(|variant| WireVariantCaseLayout {
+                        name: variant.name.clone(),
+                        fields: variant
+                            .fields
+                            .iter()
+                            .map(|field| WireRecordFieldLayout {
+                                name: field.name.clone(),
+                                ty: WireType::parse(&field.type_name),
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            })
+            .collect();
+        crate::eval_types::native_result_to_wire(value, &result, record_layouts, variant_layouts)
+            .ok()
     }
 
     fn prepare_vm(

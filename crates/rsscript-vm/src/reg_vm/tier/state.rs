@@ -235,6 +235,7 @@ mod tests {
             function_ids: HashMap::new(),
             resource_drop_functions: HashMap::new(),
             types: HashMap::new(),
+            variant_layouts: HashMap::new(),
             native_signatures: HashMap::new(),
             closure_identity_observable: false,
         }
