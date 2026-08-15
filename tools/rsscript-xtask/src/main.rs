@@ -1401,7 +1401,7 @@ mod tests {
     fn published_migration_frontier_is_fail_closed_and_prioritized() {
         let queue = migration_ready_queue().expect("published frontier must be valid");
         assert_eq!(queue.schema, MIGRATION_QUEUE_SCHEMA);
-        assert!(queue.ready.iter().any(|item| item.id == "A09.4"));
+        assert!(queue.ready.iter().any(|item| item.id == "S05.3a"));
         assert!(!queue.ready.iter().any(|item| item.id == "S05.2c2"));
         assert!(!queue.ready.iter().any(|item| item.id == "S05.2b"));
         assert!(!queue.ready.iter().any(|item| item.id == "S05.1e"));
@@ -1462,7 +1462,7 @@ mod tests {
 
     #[test]
     fn published_migration_work_packet_is_bounded_and_actionable() {
-        let packet = migration_work_packet("A09.4").expect("published work packet");
+        let packet = migration_work_packet("S05.3a").expect("published work packet");
         assert_eq!(packet.schema, "rsscript.migration_work_packet.v1");
         assert_eq!(packet.state, "ready");
         assert!(!packet.scope.is_empty());
@@ -1472,15 +1472,15 @@ mod tests {
             packet
                 .scope
                 .iter()
-                .any(|path| path.contains("process-guard"))
+                .any(|path| path.contains("rsscript-review"))
         );
 
-        let runner = migration_work_packet("A09.4").expect("published runner work packet");
-        assert!(matches!(runner.state, "ready" | "blocked"));
-        if runner.state == "blocked" {
-            assert!(!runner.blocked_by.is_empty());
+        let queued = migration_work_packet("S05.3a").expect("published work packet");
+        assert!(matches!(queued.state, "ready" | "blocked"));
+        if queued.state == "blocked" {
+            assert!(!queued.blocked_by.is_empty());
         } else {
-            assert!(runner.blocked_by.is_empty());
+            assert!(queued.blocked_by.is_empty());
         }
     }
 

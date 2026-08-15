@@ -1,0 +1,45 @@
+name: Runner hardening
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Keep the coverage-guided process-boundary corpus alive without putting a
+    # nightly/libFuzzer install on the normal Core feedback path.
+    - cron: "43 10 * * 3"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/runner-hardening.yml"
+      - "Dockerfile"
+      - "compose.yaml"
+      - "fuzz/**"
+      - "crates/process-guard/**"
+      - "crates/rsscript-cli/**"
+      - "crates/rsscript-runner-protocol/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runner-hardening-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runner-protocol-fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+
+      - name: Build dev container
+        run: docker compose build dev
+
+      - name: Coverage-guided runner protocol smoke
+        run: >-
+          docker compose run --rm dev bash -lc
+          'rustup toolchain install nightly-2026-07-20 &&
+          (command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --version 0.13.2 --locked) &&
+          cd fuzz &&
+          cargo +nightly-2026-07-20 fuzz run runner_protocol -- -runs=10000 -max_total_time=30'

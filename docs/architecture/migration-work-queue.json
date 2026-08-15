@@ -2,23 +2,23 @@
   "schema": "rsscript.migration_queue.v1",
   "tasks": [
     {
-      "id": "A09.4",
-      "priority": 80,
-      "depends_on": ["A09.3a"],
+      "id": "S05.3a",
+      "priority": 100,
+      "depends_on": ["S05.2"],
       "scope": [
-        "crates/process-guard/**",
-        "crates/rsscript-cli/**",
-        "crates/rsscript-runner-protocol/**",
-        "docs/threat-model.md"
+        "crates/rsscript-compiler/src/package/**",
+        "crates/rsscript-review/**",
+        "crates/rsscript-artifact/**",
+        "docs/architecture/migration-baseline.md"
       ],
       "acceptance": [
-        "Protocol framing and runner parent/child failure paths have coverage-guided fuzzing or an equivalent bounded corpus.",
-        "Malformed messages, incomplete I/O, oversized inputs, and termination separation remain fail-closed.",
-        "Fuzz/corpus execution never describes the runner as a universal sandbox."
+        "Compiler package code emits neutral typed analysis facts without owning review-risk calculation.",
+        "The optional review consumer owns risk interpretation and its public types.",
+        "Reviewed artifact output remains deterministic and policy-neutral."
       ],
       "verification": [
-        "cargo test -p rss-process-guard --locked",
-        "cargo test -p rsscript-cli --features execution --locked"
+        "cargo test -p rsscript-review --locked",
+        "cargo test -p rsscript-compiler --locked"
       ]
     }
   ]

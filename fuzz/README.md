@@ -1,7 +1,8 @@
 # RSScript fuzzing
 
 Coverage-guided ([cargo-fuzz] / libFuzzer) harness for the RSScript front end,
-Artifact verifier, binding descriptors, and execution reports.
+Artifact verifier, binding descriptors, execution reports, and isolated-runner
+protocol framing.
 This is a **standalone crate**, detached from the parent workspace, so it never
 builds during `cargo build --workspace` or stable CI (libFuzzer needs nightly).
 
@@ -51,6 +52,11 @@ cargo +nightly fuzz run binding_descriptor
 cargo +nightly fuzz run execution_report
 cargo +nightly fuzz run runner_protocol
 ```
+
+The scheduled `Runner hardening` workflow runs a bounded `runner_protocol`
+smoke independently from the Core release gate. It exercises untrusted framing,
+not OS-level isolation; the reference runner remains defence in depth rather
+than a universal sandbox.
 
 Native-JIT/deopt/OSR differential smoke:
 

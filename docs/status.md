@@ -90,8 +90,10 @@ success/failure fixtures. A reusable conformance crate validates every official
 Provider's descriptor, ABI linkage, import resolution, and runtime-owned
 cancellation/deadline gate. Core product metrics are separate from JIT
 microbenchmarks and produce a strict versioned report checked against a release
-SLO. Raw Artifact, binding, and execution-report consumers have bounded fuzz
-targets, while ownership/retention/resource transitions have property coverage.
+SLO. Raw Artifact, binding, execution-report, and isolated-runner protocol
+consumers have bounded fuzz targets. The runner target is exercised by a
+separate weekly and runner-path-triggered hardening workflow, while
+ownership/retention/resource transitions have property coverage.
 Execution reports also carry measured Provider payload and duration summaries,
 structured-task lifecycle counters, peak live Provider resources, total runtime,
 exact current/peak reachable VM value storage, and request-to-cancellation-observation latency. Core metrics exercise 1,000

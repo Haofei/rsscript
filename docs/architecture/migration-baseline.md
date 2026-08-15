@@ -856,6 +856,10 @@ an arbitrary shell executor.
     `compatibility` namespace.
     Their implementations and package types still need to move to dedicated
     project/review/AOT crates before this item can close.
+    - [ ] **S05.3a — Extract neutral risk facts and calculation.** Move the
+      review/risk data model and calculation out of compiler compatibility into
+      the optional review consumer, leaving compiler package code to emit only
+      neutral typed analysis facts.
   - [ ] **S05.4 — Move Rust/AOT lowering to its experimental boundary.** Compiler
     reviewed top-level APIs no longer expose generated Rust or native lowering
     APIs. Native package dependency identity now belongs to the package snapshot,
@@ -2014,12 +2018,12 @@ an arbitrary shell executor.
     construction; SDK retains only explicit reviewed re-exports.
 - [x] **A08 — Run scripts out of process by default.** `rss run` uses the
   versioned child protocol; trusted in-process execution is explicit.
-- [ ] **A09 — Harden the reference Linux runner profile.** Add allowlisted
+- [x] **A09 — Harden the reference Linux runner profile.** Add allowlisted
   Provider profiles, namespace/syscall/filesystem/network controls where
   available, parent-enforced kill-on-deadline, protocol/disconnect fuzzing, and
   tests separating runner termination from VM termination. Continue to state
   that this is defense in depth rather than a universal sandbox.
-  - [ ] **A09.1 — Introduce explicit runner profiles.** Profiles preinstall
+  - [x] **A09.1 — Introduce explicit runner profiles.** Profiles preinstall
     allowlisted Providers and their host-owned roots/endpoints; requests cannot
     supply Provider code, library paths, credentials, or authorities.
     - [x] **A09.1a — Ship the fail-closed reference profile.** The versioned
@@ -2038,7 +2042,7 @@ an arbitrary shell executor.
       credentials, or authority. Filesystem/network-backed profiles remain
       follow-up work because their roots/endpoints require explicit host
       configuration and Linux isolation support.
-  - [ ] **A09.2 — Add Linux isolation adapters.** Implement optional namespace,
+  - [x] **A09.2 — Add Linux isolation adapters.** Implement optional namespace,
     syscall, filesystem, network, and cgroup controls with capability detection
     and fail-closed profile requirements.
     - [x] **A09.2a — Establish the strict control contract.**
@@ -2063,7 +2067,7 @@ an arbitrary shell executor.
       only loopback; kernel/container policy that forbids the setup rejects the
       launch before `exec`. This is a private network namespace, not a claim
       that every future HTTP profile has an endpoint policy.
-    - [ ] **A09.2d — Add filesystem and syscall controls.** Add rooted
+    - [x] **A09.2d — Add filesystem and syscall controls.** Add rooted
       filesystem and seccomp adapters whose required rules are installed before
       Artifact parsing; keep unavailable controls fail-closed.
       - [x] **A09.2d.a — Add the rooted filesystem adapter.** The explicit
@@ -2094,7 +2098,7 @@ an arbitrary shell executor.
       rejects startup clearly; it never silently shares the parent cgroup.
       Cgroup attachment remains containment evidence separate from VM script
       termination and report semantics.
-  - [ ] **A09.3 — Complete parent-side containment.** Cover process-tree kill,
+  - [x] **A09.3 — Complete parent-side containment.** Cover process-tree kill,
     deadline, stdout/stderr/report limits, abnormal exits, and child disconnects.
     The child protocol now fail-closes contradictory response states: only a
     completed runner response may carry a report, and every rejection requires
@@ -2114,12 +2118,14 @@ an arbitrary shell executor.
       descendant, and bounded stdout overflow through the actual guarded-child
       path. Each asserts tree reaping and reports a containment/protocol error,
       never a fabricated VM report.
-  - [ ] **A09.4 — Fuzz protocol and runner failure paths.** Exercise framing,
-    malformed messages, oversized inputs, incomplete I/O, and termination
-    separation without calling it a universal sandbox. The bounded protocol now
-    has exhaustive truncated-frame and oversized-length regression coverage plus
-    a coverage-guided request/response round-trip target; runner-process fault
-    injection remains open.
+  - [x] **A09.4 — Fuzz protocol and runner failure paths.** The
+    `runner_protocol` coverage-guided target feeds hostile request/response
+    bytes through bounded framing and canonical round-trips. A dedicated
+    scheduled and runner-path-triggered workflow runs a finite smoke without
+    coupling nightly/libFuzzer installation to the Core release gate. Combined
+    with A09.3a's deterministic child-process faults, malformed frames,
+    incomplete I/O, oversized inputs, and termination separation stay
+    fail-closed without describing the runner as a universal sandbox.
 
 ### 7. Adoption, evidence, and maintenance
 
