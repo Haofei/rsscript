@@ -1439,43 +1439,59 @@ fn main() -> String {
 }
 
 #[test]
-fn supported_sdk_builds_use_the_mir_codegen_artifact() {
-    let case = CASES
-        .iter()
-        .find(|case| case.name == "loop_and_assignment")
-        .expect("scalar CFG migration fixture");
-    let file = format!("{}.rss", case.name);
-    // Match the reviewed snapshot API's multi-source frontend flavor exactly:
-    // it includes the builtin interface set but has no supplied interfaces.
-    // `compile_source_to_ir` uses the historical standard-package flavor and
-    // therefore has a different immutable source hash even for this scalar
-    // program.
-    let validated = validate_sources_with_interfaces(&[(&file, case.source)], &[])
-        .expect("snapshot fixture validates");
-    let compiled = compile_validated_to_ir(&validated);
-    let verified_mir = compiled.mir().expect("fixture lowers to verified MIR");
-    let mut expected = rsscript_codegen_vm::emit_artifact(
-        &verified_mir,
-        compiled.source_hash(),
-        compiled.interface_catalog_digest(),
-        env!("CARGO_PKG_VERSION"),
-    )
-    .expect("fixture emits with independent MIR codegen");
-    let built = Compiler
-        .compile(&file, case.source)
-        .expect("SDK build succeeds");
-    // Codegen owns the provider-neutral executable payload. The SDK owns the
-    // workspace identity because it is the layer that captures the immutable
-    // source snapshot. Bind the same snapshot before comparing envelopes.
-    expected
-        .bind_snapshot_digest(built.snapshot_digest())
-        .expect("SDK snapshot identity binds to the emitted artifact");
-    let expected = expected.to_bytes().expect("Artifact serializes");
-    assert_eq!(
-        built.artifact_bytes(),
-        expected,
-        "supported SDK compilation must use the MIR codegen Artifact rather than the legacy VM encoder"
-    );
+fn sdk_builds_use_mir_codegen_artifacts_for_the_entire_migration_corpus() {
+    require_declared_migration_evidence(CASES, EVIDENCE_OVERRIDES).unwrap_or_else(|error| {
+        panic!("the SDK Artifact migration corpus must remain explicit: {error}")
+    });
+
+    for case in CASES {
+        let file = format!("{}.rss", case.name);
+        // Match the reviewed snapshot API's multi-source frontend flavor
+        // exactly: it includes the builtin interface set but has no supplied
+        // interfaces. `compile_source_to_ir` uses the historical
+        // standard-package flavor and therefore has a different immutable
+        // source hash even for equivalent source text.
+        let validated = validate_sources_with_interfaces(&[(&file, case.source)], &[])
+            .unwrap_or_else(|error| {
+                panic!("{} must validate through the snapshot frontend: {error:?}", case.name)
+            });
+        let compiled = compile_validated_to_ir(&validated);
+        let verified_mir = compiled.mir().unwrap_or_else(|error| {
+            panic!("{} must lower to verified MIR: {error}", case.name)
+        });
+        let mut expected = rsscript_codegen_vm::emit_artifact(
+            &verified_mir,
+            compiled.source_hash(),
+            compiled.interface_catalog_digest(),
+            env!("CARGO_PKG_VERSION"),
+        )
+        .unwrap_or_else(|error| {
+            panic!("{} must emit through independent MIR codegen: {error}", case.name)
+        });
+        let built = Compiler.compile(&file, case.source).unwrap_or_else(|error| {
+            panic!("SDK must build migration case `{}`: {error:?}", case.name)
+        });
+        // Codegen owns the provider-neutral executable payload. The SDK owns
+        // the workspace identity because it is the layer that captures the
+        // immutable source snapshot. Bind the same snapshot before comparing
+        // envelopes. This makes any reintroduction of the executable-IR
+        // fallback visible for every declared capability, rather than merely
+        // for a hand-picked scalar sample.
+        expected
+            .bind_snapshot_digest(built.snapshot_digest())
+            .unwrap_or_else(|error| {
+                panic!("{} must bind SDK snapshot identity: {error}", case.name)
+            });
+        let expected = expected.to_bytes().unwrap_or_else(|error| {
+            panic!("{} must serialize MIR Artifact: {error}", case.name)
+        });
+        assert_eq!(
+            built.artifact_bytes(),
+            expected,
+            "SDK case `{}` must use the MIR codegen Artifact rather than the legacy VM encoder",
+            case.name,
+        );
+    }
 }
 
 #[test]
