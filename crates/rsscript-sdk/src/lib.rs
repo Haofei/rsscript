@@ -77,10 +77,6 @@ pub use rsscript_aot_backend::{
     parse_runtime_diagnostics, parse_source_map_json, remap_rustc_diagnostic_json,
     remap_rustc_diagnostic_json_lines, write_generated_rust_package,
 };
-#[cfg(all(feature = "compatibility", feature = "aot-rust"))]
-pub use rsscript_compiler::compatibility::{
-    SymbolInventoryEntry, lowered_symbol_name, symbol_inventory,
-};
 #[cfg(feature = "execution")]
 #[cfg(not(feature = "compatibility"))]
 #[allow(unused_imports)]
@@ -95,8 +91,6 @@ pub use rsscript_review::{
 };
 #[cfg(feature = "native-jit")]
 pub use rsscript_vm::NativeStats;
-#[cfg(all(feature = "compatibility", feature = "legacy-exec-ir"))]
-pub use rsscript_vm::compile_executable_ir;
 #[cfg(feature = "execution")]
 #[cfg(not(feature = "compatibility"))]
 #[allow(unused_imports)]

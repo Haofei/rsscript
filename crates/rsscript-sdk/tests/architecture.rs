@@ -3873,14 +3873,9 @@ fn legacy_executable_ir_lowering_is_an_explicit_vm_compatibility_feature() {
             .all(|entry| entry.as_str() != Some("rsscript-vm/legacy-exec-ir")),
         "reviewed SDK execution must not select legacy lowering"
     );
-    let legacy = sdk_manifest["features"]["legacy-exec-ir"]
-        .as_array()
-        .expect("SDK legacy-exec-ir feature should be declared");
     assert!(
-        legacy
-            .iter()
-            .any(|entry| entry.as_str() == Some("rsscript-vm/legacy-exec-ir")),
-        "only the explicit SDK compatibility feature may select legacy lowering"
+        sdk_manifest["features"].get("legacy-exec-ir").is_none(),
+        "the SDK must not expose a source-shaped executable-IR compatibility feature"
     );
     let compatibility = sdk_manifest["features"]["compatibility"]
         .as_array()
@@ -3889,7 +3884,7 @@ fn legacy_executable_ir_lowering_is_an_explicit_vm_compatibility_feature() {
         compatibility
             .iter()
             .all(|entry| entry.as_str() != Some("legacy-exec-ir")),
-        "legacy root APIs must require the explicit legacy-exec-ir feature in addition to compatibility"
+        "SDK compatibility must not restore source-shaped executable-IR APIs"
     );
 }
 
