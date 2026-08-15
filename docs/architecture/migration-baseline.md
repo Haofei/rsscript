@@ -564,7 +564,11 @@ visible without manually re-sorting every open parent milestone.
     caches the complete source/interface `AnalysisResult` and exposes its
     phase-gated validated projection, so resolve/type/HIR facts share the same
     revision, cancellation, and deadline boundary rather than requiring a
-    second analyzer cache. The complete analyzer and check
+    second analyzer cache. Workspace HIR and structural type-fact queries now
+    project directly from that cached checked analysis instead of independently
+    merging parsed programs and re-interning type signatures, so every
+    workspace resolve/type/HIR consumer observes the exact same semantic arena.
+    The complete analyzer and check
     implementation now live in `rsscript-semantics`; `rsscript-compiler` only
     re-exports the frontend entry points for package/AOT compatibility callers.
     A one-source workspace deliberately selects the same source-local semantic

@@ -1566,6 +1566,8 @@ fn compilation_session_owns_workspace_type_facts() {
         "workspace_type_cache: Option<Arc<SemanticTypeFacts>>",
         "pub fn workspace_type_facts(&mut self) -> Arc<SemanticTypeFacts>",
         "pub fn workspace_type_facts_with_operation(",
+        "let analysis = match operation {",
+        "analysis.database().hir().clone()",
         "self.workspace_type_cache = None;",
     ] {
         assert!(
@@ -3102,7 +3104,11 @@ fn namespace_isolation_and_workspace_hir_are_semantic_queries() {
         );
     }
     assert!(semantics.contains("workspace_hir_cache"));
-    assert!(semantics.contains("crate::isolate_sources_with_interfaces"));
+    assert!(
+        semantics.contains("self.workspace_analysis_with_operation(operation)?")
+            && semantics.contains("analysis.database().hir().clone()"),
+        "workspace HIR must be projected from the session-owned checked analysis rather than rebuilt from a parallel isolation path"
+    );
 
     let isolation = read(&root.join("crates/rsscript-semantics/src/module_isolation.rs"));
     assert!(isolation.contains("pub fn isolate_module_namespaces"));

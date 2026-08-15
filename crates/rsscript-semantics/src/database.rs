@@ -7,7 +7,7 @@ use rsscript_diagnostics::Diagnostic;
 use rsscript_operation::{OperationAbort, OperationContext};
 use rsscript_source_model::{FileId, SourceRevision};
 use rsscript_syntax::{
-    ast::{Item, Program, merge_programs},
+    ast::{Item, Program},
     format_source, lint_source, parse_source,
 };
 
@@ -1090,14 +1090,14 @@ impl CompilationSession {
         Ok(hir)
     }
 
-    /// Build and cache the interface-aware, namespace-isolated HIR for the
-    /// current immutable source/interface revisions.
+    /// Return the checked, namespace-isolated workspace HIR for the current
+    /// immutable source/interface revisions.
     ///
-    /// This is the session's workspace HIR query: it reuses cached parse trees,
-    /// applies the same source/interface namespace rewrite as compiler analysis,
-    /// and keeps host interfaces separate from executable source declarations.
-    /// Full type checking remains a transitional compiler query, but consumers
-    /// can no longer build a competing workspace HIR from ad-hoc file reads.
+    /// The HIR is projected from the session's complete analysis query rather
+    /// than independently merging parse trees. That makes resolve, type, HIR,
+    /// and diagnostics facts originate from one immutable revision set and
+    /// prevents editor consumers from accidentally observing a second,
+    /// structurally-similar but semantically different workspace HIR.
     pub fn workspace_hir(&mut self) -> Arc<Hir> {
         self.workspace_hir_inner(None)
             .expect("an unchecked workspace HIR query cannot abort")
@@ -1118,35 +1118,11 @@ impl CompilationSession {
             return Ok(Arc::clone(hir));
         }
 
-        let source_files = self.source_snapshot().files().to_vec();
-        let mut source_programs = Vec::with_capacity(source_files.len());
-        for file in &source_files {
-            if let Some(operation) = operation {
-                operation.check()?;
-            }
-            if let Some(program) = self.parse_snapshot_file(SessionFileRole::Source, file) {
-                source_programs.push((*program).clone());
-            }
-        }
-        let mut sources = merge_programs(source_programs);
-        let interface_files = self.interface_snapshot().files().to_vec();
-        let mut interfaces = Vec::with_capacity(interface_files.len());
-        for file in &interface_files {
-            if let Some(operation) = operation {
-                operation.check()?;
-            }
-            if let Some(program) = self.parse_snapshot_file(SessionFileRole::Interface, file) {
-                interfaces.push((*program).clone());
-            }
-        }
-        if let Some(operation) = operation {
-            operation.check()?;
-        }
-        crate::isolate_sources_with_interfaces(&mut sources, &mut interfaces);
-        if let Some(operation) = operation {
-            operation.check()?;
-        }
-        let hir = Arc::new(Hir::from_syntax_with_interfaces(&sources, &interfaces));
+        let analysis = match operation {
+            Some(operation) => self.workspace_analysis_with_operation(operation)?,
+            None => self.workspace_analysis(),
+        };
+        let hir = Arc::new(analysis.database().hir().clone());
         if let Some(operation) = operation {
             operation.check()?;
         }
@@ -2365,8 +2341,11 @@ fn main() -> Int {
             .set_interface("host.rssi", "module host\npub fn value() -> Int\n")
             .unwrap();
 
+        let analysis = session.workspace_analysis();
+        let analysis_types = analysis.database().hir().semantic_types_arc();
         let first = session.workspace_type_facts();
         assert!(first.functions().any(|(name, _)| name == "main"));
+        assert!(Arc::ptr_eq(&first, &analysis_types));
         let second = session.workspace_type_facts();
         assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(session.stats().workspace_type_cache_misses, 1);
@@ -2377,6 +2356,11 @@ fn main() -> Int {
             .unwrap();
         let replacement = session.workspace_type_facts();
         assert!(!Arc::ptr_eq(&first, &replacement));
+        let replacement_analysis = session.workspace_analysis();
+        assert!(Arc::ptr_eq(
+            &replacement,
+            &replacement_analysis.database().hir().semantic_types_arc()
+        ));
         assert_eq!(session.stats().workspace_type_cache_misses, 2);
 
         let cancellation = CancellationToken::new();
