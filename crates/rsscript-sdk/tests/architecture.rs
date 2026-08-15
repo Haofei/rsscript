@@ -3229,6 +3229,18 @@ fn workspace_diagnostic_query_contract_is_semantic_owned() {
 }
 
 #[test]
+fn session_owns_the_core_interface_policy() {
+    let root = workspace_root();
+    let semantics = read(&root.join("crates/rsscript-semantics/src/database.rs"));
+    assert!(semantics.contains("pub enum SessionInterfacePolicy"));
+    assert!(semantics.contains("pub fn without_core() -> Self"));
+    assert!(semantics.contains("SessionInterfacePolicy::WithoutCore"));
+
+    let cli_check = read(&root.join("crates/rsscript-cli/src/cli/check.rs"));
+    assert!(cli_check.contains("CompilationSession::without_core()"));
+}
+
+#[test]
 fn compiler_legacy_package_review_and_aot_exports_are_quarantined() {
     let root = workspace_root();
     let compiler = read(&root.join("crates/rsscript-compiler/src/lib.rs"));
