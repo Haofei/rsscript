@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 
 const METRICS_SCHEMA: &str = "rsscript.core_metrics.v1";
 const SLO_SCHEMA: &str = "rsscript.core_slo.v1";
+const MIGRATION_STATUS_SCHEMA: &str = "rsscript.migration_status.v1";
 const WORKLOAD: &str = r#"
 fn main() -> Int {
     let mut index = 0
@@ -122,12 +123,187 @@ struct Arguments {
     check: Option<PathBuf>,
 }
 
+#[derive(Debug)]
+struct MigrationStatusArguments {
+    json: bool,
+    open_only: bool,
+    required_items: Vec<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct MigrationStatus {
+    schema: &'static str,
+    source: &'static str,
+    completed: usize,
+    open: usize,
+    items: Vec<MigrationStatusItem>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct MigrationStatusItem {
+    id: String,
+    title: String,
+    completed: bool,
+    line: usize,
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let mut arguments = std::env::args().skip(1);
     match arguments.next().as_deref() {
         Some("core-metrics") => run_core_metrics(parse_arguments(arguments)?),
-        _ => Err("usage: cargo run -p rsscript-xtask --release -- core-metrics [--iterations N] [--output FILE] [--check SLO]".into()),
+        Some("migration-status") => run_migration_status(parse_migration_status_arguments(arguments)?),
+        _ => Err(
+            "usage:\n  cargo run -p rsscript-xtask --release -- core-metrics [--iterations N] [--output FILE] [--check SLO]\n  cargo run -p rsscript-xtask -- migration-status [--json] [--open] [--require ITEM]"
+                .into(),
+        ),
     }
+}
+
+fn parse_migration_status_arguments(
+    mut arguments: impl Iterator<Item = String>,
+) -> Result<MigrationStatusArguments, Box<dyn Error>> {
+    let mut parsed = MigrationStatusArguments {
+        json: false,
+        open_only: false,
+        required_items: Vec::new(),
+    };
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--json" => parsed.json = true,
+            "--open" => parsed.open_only = true,
+            "--require" => parsed.required_items.push(
+                arguments
+                    .next()
+                    .ok_or("--require requires a migration item ID")?,
+            ),
+            _ => return Err(format!("unknown migration-status argument: {argument}").into()),
+        }
+    }
+    Ok(parsed)
+}
+
+fn run_migration_status(arguments: MigrationStatusArguments) -> Result<(), Box<dyn Error>> {
+    let path = workspace_root().join("docs/architecture/migration-baseline.md");
+    let status = migration_status(&fs::read_to_string(&path)?)?;
+    for required in &arguments.required_items {
+        let item = status
+            .items
+            .iter()
+            .find(|item| item.id == *required)
+            .ok_or_else(|| format!("migration item `{required}` is not declared"))?;
+        if !item.completed {
+            return Err(format!(
+                "migration item `{required}` remains open (line {}: {})",
+                item.line, item.title
+            )
+            .into());
+        }
+    }
+
+    if arguments.json {
+        let mut output = status;
+        if arguments.open_only {
+            output.items.retain(|item| !item.completed);
+        }
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        return Ok(());
+    }
+
+    println!(
+        "Migration checklist: {} complete, {} open ({})",
+        status.completed,
+        status.open,
+        path.display()
+    );
+    for item in status
+        .items
+        .iter()
+        .filter(|item| {
+            arguments.required_items.is_empty()
+                || arguments
+                    .required_items
+                    .iter()
+                    .any(|required| required == &item.id)
+        })
+        .filter(|item| !arguments.open_only || !item.completed)
+    {
+        let marker = if item.completed { 'x' } else { ' ' };
+        println!(
+            "- [{marker}] {} — {} (line {})",
+            item.id, item.title, item.line
+        );
+    }
+    Ok(())
+}
+
+fn migration_status(document: &str) -> Result<MigrationStatus, Box<dyn Error>> {
+    let mut items = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    let lines = document.lines().collect::<Vec<_>>();
+    let mut offset = 0;
+    while offset < lines.len() {
+        let line = lines[offset];
+        let trimmed = line.trim_start();
+        let (completed, label) = match trimmed
+            .strip_prefix("- [x] **")
+            .map(|label| (true, label))
+            .or_else(|| trimmed.strip_prefix("- [ ] **").map(|label| (false, label)))
+        {
+            Some(item) => item,
+            None => {
+                offset += 1;
+                continue;
+            }
+        };
+        let start_line = offset + 1;
+        let mut label = label.to_string();
+        while !label.contains("**") {
+            offset += 1;
+            let continuation = lines
+                .get(offset)
+                .ok_or_else(|| format!("unterminated migration item on line {start_line}"))?;
+            label.push(' ');
+            label.push_str(continuation.trim());
+        }
+        let (label, _) = label
+            .split_once("**")
+            .expect("migration item loop must stop at closing bold marker");
+        let (id, title) = label
+            .split_once(" — ")
+            .ok_or_else(|| format!("migration item on line {start_line} is missing ` — `"))?;
+        if id.is_empty() || title.is_empty() {
+            return Err(format!("invalid migration item on line {start_line}").into());
+        }
+        if !seen.insert(id.to_string()) {
+            return Err(format!("duplicate migration item `{id}`").into());
+        }
+        items.push(MigrationStatusItem {
+            id: id.to_string(),
+            title: title.to_string(),
+            completed,
+            line: start_line,
+        });
+        offset += 1;
+    }
+    if items.is_empty() {
+        return Err("migration checklist contains no parseable items".into());
+    }
+    let completed = items.iter().filter(|item| item.completed).count();
+    Ok(MigrationStatus {
+        schema: MIGRATION_STATUS_SCHEMA,
+        source: "docs/architecture/migration-baseline.md",
+        completed,
+        open: items.len() - completed,
+        items,
+    })
+}
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("xtask must remain under the workspace tools directory")
+        .to_path_buf()
 }
 
 fn parse_arguments(
@@ -464,6 +640,51 @@ mod tests {
         let error = parse_arguments(["--iterations".into(), "1".into()].into_iter())
             .expect_err("one iteration cannot produce a useful distribution");
         assert!(error.to_string().contains("at least 2"));
+    }
+
+    #[test]
+    fn migration_status_parses_nested_and_wrapped_checklist_items() {
+        let status = migration_status(
+            "- [x] **G01 — Completed parent.**\n  - [ ] **G01.1 — Open child\n    item.**\n",
+        )
+        .expect("well-formed checklist");
+        assert_eq!(status.completed, 1);
+        assert_eq!(status.open, 1);
+        assert_eq!(
+            status.items,
+            vec![
+                MigrationStatusItem {
+                    id: "G01".into(),
+                    title: "Completed parent.".into(),
+                    completed: true,
+                    line: 1,
+                },
+                MigrationStatusItem {
+                    id: "G01.1".into(),
+                    title: "Open child item.".into(),
+                    completed: false,
+                    line: 2,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn migration_status_rejects_duplicate_item_ids() {
+        let error = migration_status("- [x] **G01 — First.**\n- [ ] **G01 — Second.**\n")
+            .expect_err("duplicate IDs make a checklist gate ambiguous");
+        assert!(error.to_string().contains("duplicate migration item `G01`"));
+    }
+
+    #[test]
+    fn published_migration_checklist_is_machine_readable() {
+        let status = migration_status(include_str!(
+            "../../../docs/architecture/migration-baseline.md"
+        ))
+        .expect("published migration checklist must remain parseable");
+        assert!(status.items.len() > 100);
+        assert!(status.items.iter().any(|item| item.id == "S02"));
+        assert!(status.items.iter().any(|item| item.id == "A09"));
     }
 
     #[test]

@@ -91,6 +91,19 @@ planning units: each should fit in one focused change set with targeted tests.
 A parent may be checked only after every child is checked and its stated
 mechanical acceptance condition holds.
 
+The checklist is also machine-readable through the repository tool:
+
+```text
+cargo run -p rsscript-xtask -- migration-status --open
+cargo run -p rsscript-xtask -- migration-status --require S02 --require G07
+```
+
+The first form produces the remaining work in document order (or use `--json`
+for automation). The second form is a fail-closed gate for a named completed
+item; it exits nonzero if an item is missing or remains open. This makes each
+focused migration change set able to add an explicit, reproducible completion
+check without inventing a second TODO source.
+
 ### 0. Freeze and migration guardrails
 
 - [x] **G01 — Classify every workspace package by maturity.**
