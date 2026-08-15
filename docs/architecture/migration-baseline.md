@@ -672,7 +672,11 @@ mechanical acceptance condition holds.
     optional consumers. Package persistence, review/risk, and generated-Rust
     APIs are now quarantined below the explicit
     `rsscript_compiler::compatibility` namespace; they are no longer top-level
-    compiler exports that new frontend consumers can accidentally adopt.
+    compiler exports that new frontend consumers can accidentally adopt. Human,
+    JSON, Markdown, and lock presentation now live in the optional
+    `rsscript-review` consumer crate; the compiler no longer compiles those
+    formatters. Risk calculation and captured package-review execution remain
+    legacy compiler compatibility work and keep this item open.
     The provider- and review-neutral `rsscript.package_analysis.v1` model now
     lives in `rsscript-artifact`; compiler package compatibility only produces
     and re-exports that typed schema. Its JSON presentation now belongs to the

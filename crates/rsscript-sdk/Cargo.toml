@@ -21,6 +21,7 @@ compatibility = [
     "dep:rsscript-codegen-vm",
     "dep:rsscript-lowering",
     "dep:rsscript-mir",
+    "dep:rsscript-review",
 ]
 execution = [
     "dep:rsscript-abi-model",
@@ -64,6 +65,7 @@ rsscript-provider-api = { path = "../rsscript-provider-api", optional = true }
 rsscript-semantics = { path = "../rsscript-semantics" }
 rsscript-vm = { path = "../rsscript-vm", optional = true, default-features = false }
 rsscript-project = { path = "../rsscript-project", optional = true }
+rsscript-review = { path = "../rsscript-review", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

@@ -1291,10 +1291,32 @@ fn package_analysis_schema_is_an_artifact_contract_not_compiler_implementation()
         !package_types.contains("pub struct PackageAnalysis {"),
         "compiler must not define a second package-analysis wire model"
     );
-    let package_format = read(&root.join("crates/rsscript-compiler/src/package/format.rs"));
+    assert!(
+        !root
+            .join("crates/rsscript-compiler/src/package/format.rs")
+            .exists(),
+        "compiler must not retain package evidence presentation"
+    );
+    let package_format = read(&root.join("crates/rsscript-review/src/format.rs"));
     assert!(
         !package_format.contains("format_package_analysis_json"),
-        "compiler must not own presentation for Artifact-owned analysis evidence"
+        "review adapter must not define a second presentation for Artifact-owned analysis evidence"
+    );
+    let review_manifest: toml::Value = toml::from_str(&read(
+        &root.join("crates/rsscript-review/Cargo.toml"),
+    ))
+    .expect("review adapter manifest should parse");
+    assert!(
+        normal_dependency_packages(&review_manifest).contains("rsscript-compiler"),
+        "review presentation must consume compiler evidence rather than reimplement analysis"
+    );
+    let compiler_manifest: toml::Value = toml::from_str(&read(
+        &root.join("crates/rsscript-compiler/Cargo.toml"),
+    ))
+    .expect("compiler manifest should parse");
+    assert!(
+        !normal_dependency_packages(&compiler_manifest).contains("rsscript-review"),
+        "compiler must not depend on optional review presentation"
     );
 }
 

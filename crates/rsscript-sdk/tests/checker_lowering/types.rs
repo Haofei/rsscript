@@ -537,8 +537,14 @@ fn run() -> Result<Unit, ChannelError> {
     return Ok(Unit)
 }
 "#;
-    let lowered =
-        lower_source_to_rust("typed-channel.rss", source).expect("typed channel let should lower");
+    let lowered = lower_source_to_rust_package(
+        "typed-channel.rss",
+        source,
+        "typed_channel",
+        "rsscript_runtime",
+    )
+    .expect("typed channel let should lower through the explicit standard-package interface set")
+    .lib_rs;
     assert!(
         lowered.contains("let mut ch: rsscript_runtime::RssChannel<i64> ="),
         "typed Channel<Int> let should emit a concrete Rust annotation, got:\n{lowered}"

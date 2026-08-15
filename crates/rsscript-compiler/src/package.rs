@@ -40,9 +40,9 @@ mod check;
 mod contract;
 mod dependency;
 mod diff;
-mod format;
 mod graph;
 mod lock;
+mod lock_format;
 mod metadata;
 mod native;
 mod policy;
@@ -69,9 +69,9 @@ use dependency::{
     package_dependency_spec, package_feature_resolution_diagnostics,
 };
 pub use diff::diff_package_dirs;
-pub use format::*;
 pub use graph::package_tree;
 pub use lock::{diff_package_locks, lock_package_dir};
+pub(super) use lock_format::package_lock_toml;
 pub use metadata::package_lowering_input;
 pub(crate) use native::package_native_plugin_build_dependencies;
 use native::{manifest_native_enabled, manifest_native_unsafe_boundary};

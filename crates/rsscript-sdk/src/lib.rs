@@ -49,13 +49,9 @@ pub use rsscript_bytecode::{
 pub use rsscript_compiler::compatibility::{
     analyze_package_dir, check_package_dir, compile_ir_to_bytecode, compile_package_input_to_ir,
     compile_source_to_ir, compile_validated_to_bytecode, compile_validated_to_ir,
-    diff_package_dirs, diff_package_locks, format_package_check_human, format_package_check_json,
-    format_package_diff_human, format_package_diff_json, format_package_lock_diff_human,
-    format_package_lock_diff_json, format_package_lock_json, format_package_lock_toml,
-    format_package_metadata_human, format_package_metadata_json, format_package_review_human,
-    format_package_review_json, format_package_review_markdown, format_package_tree_human,
-    format_package_tree_json, format_review_human, format_review_json, format_review_map_human,
-    format_review_map_json, load_workspace_snapshot, load_workspace_snapshot_with_operation,
+    diff_package_dirs, diff_package_locks, format_review_human, format_review_json,
+    format_review_map_human, format_review_map_json, load_workspace_snapshot,
+    load_workspace_snapshot_with_operation,
     lock_package_dir, lower_coverage_report, lower_program_to_rust, lower_program_to_rust_with_map,
     lower_source_to_rust, lower_source_to_rust_package,
     lower_source_to_rust_package_with_interfaces, lower_source_to_rust_with_map,
@@ -79,6 +75,14 @@ pub use rsscript_compiler::compatibility::{
     PackageTreeNode, PackageTreeSummary, PreparedPackage, RemappedRustcDiagnostic, ReviewFix,
     ReviewMap, ReviewMapCategorySummary, ReviewMapClassification, ReviewMapFile, ReviewMapFileRisk,
     ReviewMapRegion, ReviewMapSummary, ReviewRisk, SymbolInventoryEntry, WorkspaceSnapshot,
+};
+#[cfg(feature = "compatibility")]
+pub use rsscript_review::{
+    format_package_check_human, format_package_check_json, format_package_diff_human,
+    format_package_diff_json, format_package_lock_diff_human, format_package_lock_diff_json,
+    format_package_lock_json, format_package_lock_toml, format_package_metadata_human,
+    format_package_metadata_json, format_package_review_human, format_package_review_json,
+    format_package_review_markdown, format_package_tree_human, format_package_tree_json,
 };
 #[cfg(feature = "execution")]
 #[cfg(not(feature = "compatibility"))]

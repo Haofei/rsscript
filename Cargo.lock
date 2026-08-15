@@ -2015,6 +2015,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsscript-review"
+version = "0.1.0"
+dependencies = [
+ "rsscript-compiler",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
 name = "rsscript-review-reir"
 version = "0.1.0"
 dependencies = [
@@ -2052,6 +2061,7 @@ dependencies = [
  "rsscript-operation",
  "rsscript-project",
  "rsscript-provider-api",
+ "rsscript-review",
  "rsscript-review-reir",
  "rsscript-semantics",
  "rsscript-vm",

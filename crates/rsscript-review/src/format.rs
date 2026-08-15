@@ -1,9 +1,18 @@
-use crate::package::{
+use rsscript_compiler::compatibility::{
     PackageCheck, PackageDependencyKind, PackageDiff, PackageLock, PackageLockDiff,
     PackageMetadataReport, PackageReview, PackageReviewAwaitBoundary, PackageReviewAwaitSite,
-    PackageReviewDependency, PackageReviewExport, PackageTree, PackageTreeNode, package_risk_label,
+    PackageReviewDependency, PackageReviewExport, PackageRisk, PackageTree, PackageTreeNode,
+    format_review_human,
 };
-use crate::review::format_review_human;
+
+fn package_risk_label(risk: PackageRisk) -> &'static str {
+    match risk {
+        PackageRisk::Low => "low",
+        PackageRisk::Elevated => "elevated",
+        PackageRisk::High => "high",
+        PackageRisk::Unknown => "unknown",
+    }
+}
 
 pub fn format_package_review_json(review: &PackageReview) -> String {
     serde_json::to_string(review).expect("package review JSON serialization should not fail")
@@ -136,10 +145,10 @@ pub fn format_package_review_markdown(review: &PackageReview) -> String {
 
     let mut external_bindings = review.external_bindings.clone();
     external_bindings.sort_by_key(|external_binding| match external_binding.risk {
-        crate::package::types::PackageRisk::High => 0u8,
-        crate::package::types::PackageRisk::Elevated => 1,
-        crate::package::types::PackageRisk::Low => 2,
-        crate::package::types::PackageRisk::Unknown => 3,
+        PackageRisk::High => 0u8,
+        PackageRisk::Elevated => 1,
+        PackageRisk::Low => 2,
+        PackageRisk::Unknown => 3,
     });
     let mut seen = std::collections::BTreeSet::new();
     let mut rows = Vec::new();
@@ -151,10 +160,10 @@ pub fn format_package_review_markdown(review: &PackageReview) -> String {
             continue;
         }
         let risk = match external_binding.risk {
-            crate::package::types::PackageRisk::High => "high",
-            crate::package::types::PackageRisk::Elevated => "medium",
-            crate::package::types::PackageRisk::Low => "low",
-            crate::package::types::PackageRisk::Unknown => "unknown",
+            PackageRisk::High => "high",
+            PackageRisk::Elevated => "medium",
+            PackageRisk::Low => "low",
+            PackageRisk::Unknown => "unknown",
         };
         let note = external_binding
             .unknown_reason
@@ -208,7 +217,7 @@ pub fn format_package_review_markdown(review: &PackageReview) -> String {
 /// Distinct external_bindings the package requires, ranked high-risk first, so a
 /// reviewer sees the powers (and any unrecognized ones) at a glance.
 fn format_package_review_external_bindings_human(
-    external_bindings: &[crate::package::types::PackageExternalBinding],
+    external_bindings: &[rsscript_compiler::compatibility::PackageExternalBinding],
 ) -> String {
     if external_bindings.is_empty() {
         return String::new();
@@ -223,10 +232,10 @@ fn format_package_review_external_bindings_human(
             continue;
         }
         let (rank, label) = match external_binding.risk {
-            crate::package::types::PackageRisk::High => (0u8, "high"),
-            crate::package::types::PackageRisk::Elevated => (1, "medium"),
-            crate::package::types::PackageRisk::Low => (2, "low"),
-            crate::package::types::PackageRisk::Unknown => (3, "unknown"),
+            PackageRisk::High => (0u8, "high"),
+            PackageRisk::Elevated => (1, "medium"),
+            PackageRisk::Low => (2, "low"),
+            PackageRisk::Unknown => (3, "unknown"),
         };
         let mut line = format!(
             "  [{label}] {} via {}",
@@ -445,14 +454,14 @@ pub fn format_package_diff_human(diff: &PackageDiff) -> String {
         output.push_str("external_binding changes:\n");
         for change in &diff.external_binding_changes {
             let sign = match change.change {
-                crate::package::types::PackageExternalBindingChangeKind::Added => "+",
-                crate::package::types::PackageExternalBindingChangeKind::Removed => "-",
+                rsscript_compiler::compatibility::PackageExternalBindingChangeKind::Added => "+",
+                rsscript_compiler::compatibility::PackageExternalBindingChangeKind::Removed => "-",
             };
             let risk = match change.risk {
-                crate::package::types::PackageRisk::High => "high",
-                crate::package::types::PackageRisk::Elevated => "medium",
-                crate::package::types::PackageRisk::Low => "low",
-                crate::package::types::PackageRisk::Unknown => "unknown",
+                PackageRisk::High => "high",
+                PackageRisk::Elevated => "medium",
+                PackageRisk::Low => "low",
+                PackageRisk::Unknown => "unknown",
             };
             output.push_str(&format!(
                 "  {sign} [{risk}] {} via {}\n",

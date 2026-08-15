@@ -12,7 +12,7 @@ use super::dependency::{DependencyResolutionScope, resolve_dependency_graph};
 use super::{
     NativePluginBuildDependency, PackageAnalysis, PackageCheck, PackageLock, PackageLoweringInput,
     PackageReview, PackageTree, PackageTreeNode, TreeLimits, collect_bounded_regular_files,
-    copy_package_directory, copy_package_directory_with_operation, format_package_lock_toml,
+    copy_package_directory, copy_package_directory_with_operation, package_lock_toml,
     package_lowering_input, package_native_plugin_build_dependencies, package_path_source,
 };
 
@@ -675,7 +675,7 @@ fn rewrite_snapshot_locks(
                 package.source = snapshot_source.clone();
             }
         }
-        fs::write(&lock_path, format_package_lock_toml(&lock))
+        fs::write(&lock_path, package_lock_toml(&lock))
             .map_err(|error| format!("failed to rewrite {}: {error}", lock_path.display()))?;
     }
     Ok(())
@@ -1063,8 +1063,7 @@ mod tests {
 
     use super::*;
     use crate::package::{
-        check_package_dir, format_package_lock_toml, lock_package_dir, package_tree,
-        review_package_dir,
+        check_package_dir, lock_package_dir, package_lock_toml, package_tree, review_package_dir,
     };
 
     fn pure_package_fixture() -> PathBuf {
@@ -1112,7 +1111,7 @@ mod tests {
     fn successful_check_is_the_only_authorized_package_constructor() {
         let root = pure_package_fixture();
         let lock = lock_package_dir(&root).expect("fixture lock");
-        fs::write(root.join("rsspkg.lock"), format_package_lock_toml(&lock))
+        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock))
             .expect("fixture lockfile");
 
         let package = prepare_executable_package(&root).expect("checked fixture should authorize");
@@ -1171,7 +1170,7 @@ mod tests {
     fn authorization_checks_the_captured_source_not_a_later_checkout_mutation() {
         let root = pure_package_fixture();
         let lock = lock_package_dir(&root).expect("fixture lock");
-        fs::write(root.join("rsspkg.lock"), format_package_lock_toml(&lock))
+        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock))
             .expect("fixture lockfile");
 
         let original_root = root.canonicalize().expect("canonical fixture");
@@ -1197,7 +1196,7 @@ mod tests {
     fn captured_read_operations_ignore_later_checkout_mutation() {
         let root = pure_package_fixture();
         let lock = lock_package_dir(&root).expect("fixture lock");
-        fs::write(root.join("rsspkg.lock"), format_package_lock_toml(&lock))
+        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock))
             .expect("fixture lockfile");
 
         let snapshot = snapshot_package_graph_inputs(&root).expect("package graph snapshot");
@@ -1259,7 +1258,7 @@ mod tests {
         )
         .expect("root dependency manifest");
         let lock = lock_package_dir(&root).expect("fixture dependency lock");
-        fs::write(root.join("rsspkg.lock"), format_package_lock_toml(&lock))
+        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock))
             .expect("fixture lockfile");
 
         let review = review_package_dir(&root).expect("public review");
@@ -1349,7 +1348,7 @@ mod tests {
         )
         .expect("root dependency manifest");
         let lock = lock_package_dir(&root).expect("fixture dependency lock");
-        fs::write(root.join("rsspkg.lock"), format_package_lock_toml(&lock))
+        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock))
             .expect("fixture lockfile");
 
         let original_root = root.canonicalize().expect("canonical fixture");
@@ -1396,7 +1395,7 @@ mod tests {
         let root = pure_package_fixture();
         add_native_dependency(&root);
         let lock = lock_package_dir(&root).expect("fixture lock");
-        fs::write(root.join("rsspkg.lock"), format_package_lock_toml(&lock))
+        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock))
             .expect("fixture lockfile");
 
         let package =
@@ -1421,7 +1420,7 @@ mod tests {
         let root = pure_package_fixture();
         add_native_dependency(&root);
         let lock = lock_package_dir(&root).expect("fixture lock");
-        fs::write(root.join("rsspkg.lock"), format_package_lock_toml(&lock))
+        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock))
             .expect("fixture lockfile");
 
         let package =
@@ -1448,7 +1447,7 @@ mod tests {
         let root = pure_package_fixture();
         add_native_dependency(&root);
         let lock = lock_package_dir(&root).expect("fixture lock");
-        fs::write(root.join("rsspkg.lock"), format_package_lock_toml(&lock))
+        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock))
             .expect("fixture lockfile");
 
         let package =
@@ -1478,7 +1477,7 @@ mod tests {
         let root = pure_package_fixture();
         add_native_dependency(&root);
         let lock = lock_package_dir(&root).expect("fixture lock");
-        fs::write(root.join("rsspkg.lock"), format_package_lock_toml(&lock))
+        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock))
             .expect("fixture lockfile");
 
         let first = prepare_executable_package(&root).expect("first authorization");
@@ -1501,7 +1500,7 @@ mod tests {
         let root = pure_package_fixture();
         add_native_dependency(&root);
         let lock = lock_package_dir(&root).expect("fixture lock");
-        fs::write(root.join("rsspkg.lock"), format_package_lock_toml(&lock))
+        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock))
             .expect("fixture lockfile");
 
         let error = prepare_executable_package(&root)
@@ -1526,7 +1525,7 @@ mod tests {
         )
         .expect("fixture unlocked registry dependency");
         let lock = lock_package_dir(&root).expect("fixture RSS lock");
-        fs::write(root.join("rsspkg.lock"), format_package_lock_toml(&lock))
+        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock))
             .expect("fixture lockfile");
 
         let error = prepare_executable_package(&root)
