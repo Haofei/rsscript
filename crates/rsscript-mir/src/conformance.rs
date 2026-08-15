@@ -615,6 +615,131 @@ impl<'a> Interpreter<'a> {
                         };
                         values[destination.index()] = Some(value);
                     }
+                    MirInstruction::ListAppend {
+                        destination,
+                        list,
+                        values: appended,
+                    } => {
+                        let appended = match value_at(&values, *appended)? {
+                            MirValue::List(values) => values,
+                            _ => return Err(MirExecutionError::InvalidOperation("list append")),
+                        };
+                        let items = match places[list.index()].as_mut() {
+                            Some(MirValue::List(items)) => items,
+                            Some(_) => {
+                                return Err(MirExecutionError::InvalidOperation("list base"));
+                            }
+                            None => {
+                                return Err(MirExecutionError::UninitializedPlace(list.index()));
+                            }
+                        };
+                        items.extend(appended);
+                        values[destination.index()] = Some(MirValue::Unit);
+                    }
+                    MirInstruction::ListClear { destination, list } => {
+                        let items = match places[list.index()].as_mut() {
+                            Some(MirValue::List(items)) => items,
+                            Some(_) => {
+                                return Err(MirExecutionError::InvalidOperation("list base"));
+                            }
+                            None => {
+                                return Err(MirExecutionError::UninitializedPlace(list.index()));
+                            }
+                        };
+                        items.clear();
+                        values[destination.index()] = Some(MirValue::Unit);
+                    }
+                    MirInstruction::ListPop { destination, list } => {
+                        let items = match places[list.index()].as_mut() {
+                            Some(MirValue::List(items)) => items,
+                            Some(_) => {
+                                return Err(MirExecutionError::InvalidOperation("list base"));
+                            }
+                            None => {
+                                return Err(MirExecutionError::UninitializedPlace(list.index()));
+                            }
+                        };
+                        values[destination.index()] = Some(
+                            items
+                                .pop()
+                                .map(|value| MirValue::OptionSome(Box::new(value)))
+                                .unwrap_or(MirValue::OptionNone),
+                        );
+                    }
+                    MirInstruction::ListPush {
+                        destination,
+                        list,
+                        value,
+                    } => {
+                        let value = value_at(&values, *value)?;
+                        let items = match places[list.index()].as_mut() {
+                            Some(MirValue::List(items)) => items,
+                            Some(_) => {
+                                return Err(MirExecutionError::InvalidOperation("list base"));
+                            }
+                            None => {
+                                return Err(MirExecutionError::UninitializedPlace(list.index()));
+                            }
+                        };
+                        items.push(value);
+                        values[destination.index()] = Some(MirValue::Unit);
+                    }
+                    MirInstruction::ListRemoveAt {
+                        destination,
+                        list,
+                        index,
+                    } => {
+                        let index = match value_at(&values, *index)? {
+                            MirValue::Int(index) => index,
+                            _ => return Err(MirExecutionError::InvalidOperation("list index")),
+                        };
+                        let items = match places[list.index()].as_mut() {
+                            Some(MirValue::List(items)) => items,
+                            Some(_) => {
+                                return Err(MirExecutionError::InvalidOperation("list base"));
+                            }
+                            None => {
+                                return Err(MirExecutionError::UninitializedPlace(list.index()));
+                            }
+                        };
+                        let removed = (index >= 0)
+                            .then_some(index as usize)
+                            .filter(|index| *index < items.len())
+                            .map(|index| items.remove(index));
+                        values[destination.index()] = Some(
+                            removed
+                                .map(|value| MirValue::OptionSome(Box::new(value)))
+                                .unwrap_or(MirValue::OptionNone),
+                        );
+                    }
+                    MirInstruction::ListSet {
+                        destination,
+                        list,
+                        index,
+                        value,
+                    } => {
+                        let index = match value_at(&values, *index)? {
+                            MirValue::Int(index) if index >= 0 => index as usize,
+                            _ => return Err(MirExecutionError::InvalidOperation("list index")),
+                        };
+                        let value = value_at(&values, *value)?;
+                        let items = match places[list.index()].as_mut() {
+                            Some(MirValue::List(items)) => items,
+                            Some(_) => {
+                                return Err(MirExecutionError::InvalidOperation("list base"));
+                            }
+                            None => {
+                                return Err(MirExecutionError::UninitializedPlace(list.index()));
+                            }
+                        };
+                        let Some(slot) = items.get_mut(index) else {
+                            return Err(MirExecutionError::InvalidOperation(
+                                "list index out of bounds",
+                            ));
+                        };
+                        *slot = value;
+                        values[destination.index()] = Some(MirValue::Unit);
+                    }
                     MirInstruction::MapGet {
                         destination,
                         map,

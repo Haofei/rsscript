@@ -1589,6 +1589,111 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                     value: None,
                 });
             }
+            "get" if signature.namespace.as_deref() == Some("List") => {
+                if receiver.is_some() || args.len() != 2 {
+                    return self.unsupported("List.get with invalid checked call shape");
+                }
+                let mut ordered = args.iter().collect::<Vec<_>>();
+                ordered.sort_by_key(|argument| argument.evaluation_index);
+                let list = self.lower_expression(&ordered[0].value)?;
+                let index = self.lower_expression(&ordered[1].value)?;
+                self.emit(MirInstruction::ListGet {
+                    destination,
+                    list,
+                    index,
+                });
+            }
+            "len" if signature.namespace.as_deref() == Some("List") => {
+                if receiver.is_some() || args.len() != 1 {
+                    return self.unsupported("List.len with invalid checked call shape");
+                }
+                let list = self.lower_expression(&args[0].value)?;
+                self.emit(MirInstruction::ListLen { destination, list });
+            }
+            "append" if signature.namespace.as_deref() == Some("List") => {
+                if receiver.is_some() || args.len() != 2 {
+                    return self.unsupported("List.append with invalid checked call shape");
+                }
+                let mut ordered = args.iter().collect::<Vec<_>>();
+                ordered.sort_by_key(|argument| argument.evaluation_index);
+                let list = self.lower_mutable_builtin_place(&ordered[0].value)?;
+                let (values, retained_values) =
+                    self.lower_retained_builtin_value(&ordered[1].value)?;
+                self.emit(MirInstruction::ListAppend {
+                    destination,
+                    list,
+                    values,
+                });
+                if let Some(place) = retained_values {
+                    self.emit(MirInstruction::Retain { place });
+                }
+            }
+            "clear" if signature.namespace.as_deref() == Some("List") => {
+                if receiver.is_some() || args.len() != 1 {
+                    return self.unsupported("List.clear with invalid checked call shape");
+                }
+                let list = self.lower_mutable_builtin_place(&args[0].value)?;
+                self.emit(MirInstruction::ListClear { destination, list });
+            }
+            "pop" if signature.namespace.as_deref() == Some("List") => {
+                if receiver.is_some() || args.len() != 1 {
+                    return self.unsupported("List.pop with invalid checked call shape");
+                }
+                let list = self.lower_mutable_builtin_place(&args[0].value)?;
+                self.emit(MirInstruction::ListPop { destination, list });
+            }
+            "push" if signature.namespace.as_deref() == Some("List") => {
+                if receiver.is_some() || args.len() != 2 {
+                    return self.unsupported("List.push with invalid checked call shape");
+                }
+                let mut ordered = args.iter().collect::<Vec<_>>();
+                ordered.sort_by_key(|argument| argument.evaluation_index);
+                let list = self.lower_mutable_builtin_place(&ordered[0].value)?;
+                let (value, retained_value) =
+                    self.lower_retained_builtin_value(&ordered[1].value)?;
+                self.emit(MirInstruction::ListPush {
+                    destination,
+                    list,
+                    value,
+                });
+                if let Some(place) = retained_value {
+                    self.emit(MirInstruction::Retain { place });
+                }
+            }
+            "remove_at" if signature.namespace.as_deref() == Some("List") => {
+                if receiver.is_some() || args.len() != 2 {
+                    return self.unsupported("List.remove_at with invalid checked call shape");
+                }
+                let mut ordered = args.iter().collect::<Vec<_>>();
+                ordered.sort_by_key(|argument| argument.evaluation_index);
+                let list = self.lower_mutable_builtin_place(&ordered[0].value)?;
+                let index = self.lower_expression(&ordered[1].value)?;
+                self.emit(MirInstruction::ListRemoveAt {
+                    destination,
+                    list,
+                    index,
+                });
+            }
+            "set" if signature.namespace.as_deref() == Some("List") => {
+                if receiver.is_some() || args.len() != 3 {
+                    return self.unsupported("List.set with invalid checked call shape");
+                }
+                let mut ordered = args.iter().collect::<Vec<_>>();
+                ordered.sort_by_key(|argument| argument.evaluation_index);
+                let list = self.lower_mutable_builtin_place(&ordered[0].value)?;
+                let index = self.lower_expression(&ordered[1].value)?;
+                let (value, retained_value) =
+                    self.lower_retained_builtin_value(&ordered[2].value)?;
+                self.emit(MirInstruction::ListSet {
+                    destination,
+                    list,
+                    index,
+                    value,
+                });
+                if let Some(place) = retained_value {
+                    self.emit(MirInstruction::Retain { place });
+                }
+            }
             "get" if signature.namespace.as_deref() == Some("Map") => {
                 if receiver.is_some() || args.len() != 2 {
                     return self.unsupported("Map.get with invalid checked call shape");

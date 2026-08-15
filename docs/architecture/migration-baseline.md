@@ -1038,6 +1038,13 @@ mechanical acceptance condition holds.
       after the update. The direct/legacy/reference corpus proves insert,
       previous-value replacement, removal, and option-result control flow
       without reconstructing `mut` or `retains` from source spelling.
+    - [x] **M03.4j — Lower special mutable-list updates without legacy
+      intrinsics.** `List.append`, `push`, `set`, `remove_at`, `pop`, and
+      `clear` become dedicated MIR operations over an explicit mutable
+      `PlaceId`; append/push/set retain checked `read` local inputs explicitly.
+      `List.get` and `len` reuse the existing typed list read/length
+      operations. The corpus proves update, option result, retention, and
+      subsequent observation parity without source-level builtin recovery.
 - [ ] **M04 — Lower checked HIR to MIR exactly once.** Backend code cannot
   inspect syntax AST or reconstruct semantic facts. MIR verification rejects
   unresolved calls, invalid ownership state, incomplete cleanup, and malformed
@@ -1265,6 +1272,12 @@ mechanical acceptance condition holds.
       value operands to the verifier-checked v1 map update instructions. The
       direct migration corpus checks the same results, streams, usage, and
       retention facts against the legacy path.
+    - [x] **V02.3k — Emit resolved mutable-list updates.** `ListAppend`,
+      `ListClear`, `ListPop`, `ListPush`, `ListRemoveAt`, and `ListSet` map
+      explicit mutable list places and resolved value IDs to the corresponding
+      verifier-checked v1 instructions. The direct migration corpus covers
+      every operation alongside typed `List.get`/`len`, option branches, and
+      retention facts.
   - [x] **V02.4 — Switch reviewed builds to the compiler bytecode boundary.**
     SDK source, interface, and package builds delegate checked HIR → MIR →
     `codegen-vm` Artifact emission to the compiler's VM-free `bytecode`

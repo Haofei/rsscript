@@ -467,6 +467,33 @@ fn main() -> Int {
 "#,
     },
     MigrationCase {
+        name: "list_mutations",
+        capability: "resolved mutable-list updates with retention and option results",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn main() -> Int {
+    let mut values: List<Int> = [1, 2]
+    let appended = [3]
+    let pushed = 4
+    let replacement = 10
+    List.append<Int>(list: mut values, values: read appended)
+    List.push<Int>(list: mut values, value: read pushed)
+    List.set<Int>(list: mut values, index: read 0, value: read replacement)
+    let first = List.get<Int>(list: read values, index: read 0)
+    let removed = match List.remove_at<Int>(list: mut values, index: read 1) {
+        Some(value) => { value }
+        None => { return 0 }
+    }
+    let popped = match List.pop<Int>(list: mut values) {
+        Some(value) => { value }
+        None => { return 0 }
+    }
+    List.clear<Int>(list: mut values)
+    return first + removed + popped + List.len<Int>(list: read values)
+}
+"#,
+    },
+    MigrationCase {
         name: "typed_json_decode",
         capability: "typed JSON decode builtins and record layouts",
         stage: MigrationStage::DualPath,
@@ -728,6 +755,87 @@ fn main() -> Int {
     let legacy = reg_vm_eval_source_main("direct-hir-map-mutations.rss", source)
         .expect("legacy Map mutation path executes");
     assert_eq!(legacy.value, "7");
+    assert_eq!(direct.value, legacy.value);
+    assert_eq!(direct.stdout, legacy.stdout);
+    assert_eq!(direct.stderr, legacy.stderr);
+    assert_eq!(direct.usage, legacy.usage);
+}
+
+#[test]
+fn direct_checked_hir_list_mutations_preserve_retention_and_option_contracts() {
+    let source = r#"
+fn main() -> Int {
+    let mut values: List<Int> = [1, 2]
+    let appended = [3]
+    let pushed = 4
+    let replacement = 10
+    List.append<Int>(list: mut values, values: read appended)
+    List.push<Int>(list: mut values, value: read pushed)
+    List.set<Int>(list: mut values, index: read 0, value: read replacement)
+    let first = List.get<Int>(list: read values, index: read 0)
+    let removed = match List.remove_at<Int>(list: mut values, index: read 1) {
+        Some(value) => { value }
+        None => { return 0 }
+    }
+    let popped = match List.pop<Int>(list: mut values) {
+        Some(value) => { value }
+        None => { return 0 }
+    }
+    List.clear<Int>(list: mut values)
+    return first + removed + popped + List.len<Int>(list: read values)
+}
+"#;
+    let compiled = compile_source_to_ir("direct-hir-list-mutations.rss", source)
+        .expect("List mutation fixture compiles");
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("List mutations should lower directly from checked HIR");
+    let instructions = mir
+        .functions()
+        .iter()
+        .flat_map(|function| function.blocks())
+        .flat_map(|block| block.instructions())
+        .collect::<Vec<_>>();
+    for expected in [
+        "ListAppend",
+        "ListPush",
+        "ListSet",
+        "ListRemoveAt",
+        "ListPop",
+        "ListClear",
+    ] {
+        assert!(
+            instructions
+                .iter()
+                .any(|instruction| match (expected, instruction) {
+                    ("ListAppend", MirInstruction::ListAppend { .. })
+                    | ("ListPush", MirInstruction::ListPush { .. })
+                    | ("ListSet", MirInstruction::ListSet { .. })
+                    | ("ListRemoveAt", MirInstruction::ListRemoveAt { .. })
+                    | ("ListPop", MirInstruction::ListPop { .. })
+                    | ("ListClear", MirInstruction::ListClear { .. }) => true,
+                    _ => false,
+                }),
+            "direct MIR must preserve {expected} as an explicit mutable-place operation"
+        );
+    }
+    assert!(
+        instructions
+            .iter()
+            .any(|instruction| matches!(instruction, MirInstruction::Retain { .. })),
+        "List append, push, and set must retain read-local values explicitly"
+    );
+    let direct = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("List mutation MIR emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("List mutation bytecode executes");
+    let legacy = reg_vm_eval_source_main("direct-hir-list-mutations.rss", source)
+        .expect("legacy List mutation path executes");
+    assert_eq!(legacy.value, "16");
     assert_eq!(direct.value, legacy.value);
     assert_eq!(direct.stdout, legacy.stdout);
     assert_eq!(direct.stderr, legacy.stderr);

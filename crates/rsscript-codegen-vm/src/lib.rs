@@ -435,6 +435,70 @@ fn lower_instruction(
                 ("index", json!(value_reg(function, *index))),
             ],
         )),
+        MirInstruction::ListAppend {
+            destination,
+            list,
+            values,
+        } => code.push(instr(
+            "ListAppend",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("list", json!(place_reg(*list))),
+                ("values", json!(value_reg(function, *values))),
+            ],
+        )),
+        MirInstruction::ListClear { destination, list } => code.push(instr(
+            "ListClear",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("list", json!(place_reg(*list))),
+            ],
+        )),
+        MirInstruction::ListPop { destination, list } => code.push(instr(
+            "ListPop",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("list", json!(place_reg(*list))),
+            ],
+        )),
+        MirInstruction::ListPush {
+            destination,
+            list,
+            value,
+        } => code.push(instr(
+            "ListPush",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("list", json!(place_reg(*list))),
+                ("value", json!(value_reg(function, *value))),
+            ],
+        )),
+        MirInstruction::ListRemoveAt {
+            destination,
+            list,
+            index,
+        } => code.push(instr(
+            "ListRemoveAt",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("list", json!(place_reg(*list))),
+                ("index", json!(value_reg(function, *index))),
+            ],
+        )),
+        MirInstruction::ListSet {
+            destination,
+            list,
+            index,
+            value,
+        } => code.push(instr(
+            "ListSet",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("list", json!(place_reg(*list))),
+                ("index", json!(value_reg(function, *index))),
+                ("value", json!(value_reg(function, *value))),
+            ],
+        )),
         MirInstruction::MapGet {
             destination,
             map,

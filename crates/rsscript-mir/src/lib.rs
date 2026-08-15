@@ -157,6 +157,43 @@ pub enum MirInstruction {
         list: ValueId,
         index: ValueId,
     },
+    /// Append an owned list of values to a resolved mutable list place.
+    ListAppend {
+        destination: ValueId,
+        list: PlaceId,
+        values: ValueId,
+    },
+    /// Clear a resolved mutable list place.
+    ListClear {
+        destination: ValueId,
+        list: PlaceId,
+    },
+    /// Pop the last value from a resolved mutable list place, returning an
+    /// explicit `Option`.
+    ListPop {
+        destination: ValueId,
+        list: PlaceId,
+    },
+    /// Push a value into a resolved mutable list place.
+    ListPush {
+        destination: ValueId,
+        list: PlaceId,
+        value: ValueId,
+    },
+    /// Remove an indexed value from a resolved mutable list place, returning
+    /// an explicit `Option` when the index is out of range.
+    ListRemoveAt {
+        destination: ValueId,
+        list: PlaceId,
+        index: ValueId,
+    },
+    /// Replace an indexed value in a resolved mutable list place.
+    ListSet {
+        destination: ValueId,
+        list: PlaceId,
+        index: ValueId,
+        value: ValueId,
+    },
     /// Read a value from a resolved mutable map. The result remains an
     /// `Option` so absence is explicit in the typed control-flow graph rather
     /// than hidden in a source-level `Map.get` spelling.
@@ -1235,6 +1272,12 @@ fn instruction_definitions(instruction: &MirInstruction) -> Vec<ValueId> {
         | MirInstruction::MakeOption { destination, .. }
         | MirInstruction::UnwrapOption { destination, .. }
         | MirInstruction::ListGet { destination, .. }
+        | MirInstruction::ListAppend { destination, .. }
+        | MirInstruction::ListClear { destination, .. }
+        | MirInstruction::ListPop { destination, .. }
+        | MirInstruction::ListPush { destination, .. }
+        | MirInstruction::ListRemoveAt { destination, .. }
+        | MirInstruction::ListSet { destination, .. }
         | MirInstruction::MapGet { destination, .. }
         | MirInstruction::MapClear { destination, .. }
         | MirInstruction::MapInsert { destination, .. }
@@ -1287,6 +1330,12 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         MirInstruction::MakeOption { value, .. } => value.iter().copied().collect(),
         MirInstruction::UnwrapOption { source, .. } => vec![*source],
         MirInstruction::ListGet { list, index, .. } => vec![*list, *index],
+        MirInstruction::ListAppend { values, .. }
+        | MirInstruction::ListPush { value: values, .. } => {
+            vec![*values]
+        }
+        MirInstruction::ListRemoveAt { index, .. } => vec![*index],
+        MirInstruction::ListSet { index, value, .. } => vec![*index, *value],
         MirInstruction::MapGet { map, key, .. } => vec![*map, *key],
         MirInstruction::MapInsert { key, value, .. }
         | MirInstruction::MapInsertOld { key, value, .. } => vec![*key, *value],
@@ -1325,7 +1374,9 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         | MirInstruction::Select { .. }
         | MirInstruction::Cancel { .. }
         | MirInstruction::Join { .. }
-        | MirInstruction::MapClear { .. } => Vec::new(),
+        | MirInstruction::MapClear { .. }
+        | MirInstruction::ListClear { .. }
+        | MirInstruction::ListPop { .. } => Vec::new(),
         MirInstruction::TryResult { source, .. } => vec![*source],
     }
 }
@@ -1461,6 +1512,12 @@ fn transfer_move_state(
             Ok(())
         }
         MirInstruction::MapClear { map, .. } => check_live(*map, moved_places),
+        MirInstruction::ListAppend { list, .. }
+        | MirInstruction::ListClear { list, .. }
+        | MirInstruction::ListPop { list, .. }
+        | MirInstruction::ListPush { list, .. }
+        | MirInstruction::ListRemoveAt { list, .. }
+        | MirInstruction::ListSet { list, .. } => check_live(*list, moved_places),
         MirInstruction::MapInsert { map, .. }
         | MirInstruction::MapInsertOld { map, .. }
         | MirInstruction::MapRemove { map, .. } => check_live(*map, moved_places),
@@ -1592,6 +1649,53 @@ fn verify_instruction(
         } => {
             define(*destination, defined)?;
             used.push(*source);
+            Ok(())
+        }
+        MirInstruction::ListAppend {
+            destination,
+            list,
+            values,
+        } => {
+            check_live_place(*list, moved_places)?;
+            define(*destination, defined)?;
+            used.push(*values);
+            Ok(())
+        }
+        MirInstruction::ListClear { destination, list }
+        | MirInstruction::ListPop { destination, list } => {
+            check_live_place(*list, moved_places)?;
+            define(*destination, defined)
+        }
+        MirInstruction::ListPush {
+            destination,
+            list,
+            value,
+        } => {
+            check_live_place(*list, moved_places)?;
+            define(*destination, defined)?;
+            used.push(*value);
+            Ok(())
+        }
+        MirInstruction::ListRemoveAt {
+            destination,
+            list,
+            index,
+        } => {
+            check_live_place(*list, moved_places)?;
+            define(*destination, defined)?;
+            used.push(*index);
+            Ok(())
+        }
+        MirInstruction::ListSet {
+            destination,
+            list,
+            index,
+            value,
+        } => {
+            check_live_place(*list, moved_places)?;
+            define(*destination, defined)?;
+            used.push(*index);
+            used.push(*value);
             Ok(())
         }
         MirInstruction::MapClear { destination, map } => {
