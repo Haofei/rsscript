@@ -699,7 +699,9 @@ mechanical acceptance condition holds.
     `aot-rust` feature rather than ordinary compiler execution. The CLI mirrors
     this separation: its normal `execution` feature builds only the reference
     VM/isolated runner, while generated-Rust execution and its help text require
-    an explicit `aot-rust` feature. Rust source lowering, source maps, runtime
+    an explicit `aot-rust` feature. SDK `compatibility` no longer implicitly
+    selects AOT or exposes generated-Rust/source-map APIs; compatibility users
+    must opt into `aot-rust` as well. Rust source lowering, source maps, runtime
     ABI helpers, and the compatibility AOT façade remain in compiler, so this
     item remains open.
   - [ ] **S05.5 — Enforce a frontend-only compiler dependency closure.** Cargo

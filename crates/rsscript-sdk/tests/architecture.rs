@@ -1421,6 +1421,16 @@ fn rust_aot_lowering_is_explicitly_feature_gated() {
         .collect::<BTreeSet<_>>();
     assert!(sdk_aot.contains("execution"));
     assert!(sdk_aot.contains("rsscript_compiler/aot-rust"));
+    let sdk_compatibility = sdk["features"]["compatibility"]
+        .as_array()
+        .expect("SDK compatibility feature should be declared")
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .collect::<BTreeSet<_>>();
+    assert!(
+        !sdk_compatibility.contains("aot-rust"),
+        "compatibility must not implicitly select the experimental Rust AOT backend"
+    );
 
     let cli: toml::Value = toml::from_str(&read(&root.join("crates/rsscript-cli/Cargo.toml")))
         .expect("CLI manifest should parse");
