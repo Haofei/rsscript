@@ -1,30 +1,39 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use super::dependency::{
+use crate::dependency::{
     DependencyResolutionScope, ResolvedDependencyEdge, ResolvedDependencyGraph,
     resolve_dependency_graph,
 };
-use super::lock::effective_interface_hash;
-use super::review::review_package_dir_captured_with_features;
-use super::source_set::{
+use crate::lock::effective_interface_hash;
+use crate::review::{NativeRustReviewFn, review_package_dir_captured_with_features};
+use crate::source_set::{
     ManifestDependencyBudget, ManifestProviderChoice, load_package_manifest,
     load_package_with_features,
 };
-use super::{
-    PackageDependencyKind, PackageDependencySpec, PackageGraphCheck, PackageRisk, PackageTree,
-    PackageTreeNode, PackageTreeSummary, package_identity,
+use rsscript_package_model::{
+    PackageDependencyKind, PackageGraphCheck, PackageIdentity, PackageProviderImplementation,
+    PackageReviewFileKind, PackageRisk, PackageTree, PackageTreeNode, PackageTreeSummary,
+    PackageVirtual,
 };
 
-pub fn package_tree(package_dir: &Path) -> Result<PackageTree, String> {
-    let snapshot = super::authorization::snapshot_package_graph_inputs(package_dir)?;
-    let mut tree =
-        package_tree_captured(snapshot.root()).map_err(|error| snapshot.remap_error(error))?;
-    super::authorization::remap_tree(&snapshot, &mut tree);
-    Ok(tree)
+use crate::{Manifest, PackageDependencySpec, PackageSource};
+
+fn package_identity(manifest: &Manifest) -> PackageIdentity {
+    PackageIdentity {
+        name: manifest.package.name.clone(),
+        version: manifest.package.version.clone(),
+        edition: manifest.package.edition.clone(),
+    }
 }
 
-pub(super) fn package_tree_captured(package_dir: &Path) -> Result<PackageTree, String> {
+/// Build a package tree from captured project inputs. Native Rust wrapper
+/// inspection stays outside this boundary and is injected by the legacy
+/// compatibility host.
+pub fn package_tree_captured(
+    package_dir: &Path,
+    native_rust_review: NativeRustReviewFn,
+) -> Result<PackageTree, String> {
     let graph = resolve_dependency_graph(package_dir, DependencyResolutionScope::Development)?;
     let root = package_tree_node(
         &graph,
@@ -32,15 +41,20 @@ pub(super) fn package_tree_captured(package_dir: &Path) -> Result<PackageTree, S
         PackageDependencyKind::Root,
         None,
         &mut BTreeMap::new(),
+        native_rust_review,
     )?;
     let mut summary = PackageTreeSummary::default();
     collect_package_tree_summary(&root, &mut summary, &mut BTreeSet::new());
     Ok(PackageTree { root, summary })
 }
 
-pub(super) fn check_package_graph(package_dir: &Path) -> Result<PackageGraphCheck, String> {
+/// Validate graph-level review facts from captured project inputs.
+pub fn check_package_graph(
+    package_dir: &Path,
+    native_rust_review: NativeRustReviewFn,
+) -> Result<PackageGraphCheck, String> {
     let root_manifest = load_package_manifest(package_dir)?;
-    let tree = package_tree_captured(package_dir)?;
+    let tree = package_tree_captured(package_dir, native_rust_review)?;
     let mut packages_by_name: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     collect_package_graph_identities(&tree.root, &mut packages_by_name);
 
@@ -273,7 +287,10 @@ fn canonical_graph_source(source: &str) -> String {
     let Some(path) = source.strip_prefix("path+") else {
         return source.to_string();
     };
-    format!("path+{}", super::canonical_path_label(Path::new(path)))
+    format!(
+        "path+{}",
+        rsscript_project::canonical_project_path_label(Path::new(path))
+    )
 }
 
 fn package_tree_node(
@@ -282,6 +299,7 @@ fn package_tree_node(
     dependency_kind: PackageDependencyKind,
     incoming: Option<&ResolvedDependencyEdge>,
     cache: &mut BTreeMap<(String, PackageDependencyKind), PackageTreeNode>,
+    native_rust_review: NativeRustReviewFn,
 ) -> Result<PackageTreeNode, String> {
     let cache_key = (key.to_string(), dependency_kind);
     if let Some(cached) = cache.get(&cache_key) {
@@ -295,7 +313,11 @@ fn package_tree_node(
     let package_dir = &resolved.package_dir;
     let features = resolved.features.clone();
     let package = load_package_with_features(package_dir, Some(&features))?;
-    let review = review_package_dir_captured_with_features(package_dir, Some(&features))?;
+    let review = review_package_dir_captured_with_features(
+        package_dir,
+        Some(&features),
+        native_rust_review,
+    )?;
     let interface_effective_hash = effective_interface_hash(&package.sources, &features);
     let identity = package_identity(&package.manifest);
     let mut dependencies = Vec::new();
@@ -306,7 +328,14 @@ fn package_tree_node(
             edge.kind
         };
         dependencies.push(match &edge.target {
-            Some(target) => package_tree_node(graph, target, child_kind, Some(edge), cache)?,
+            Some(target) => package_tree_node(
+                graph,
+                target,
+                child_kind,
+                Some(edge),
+                cache,
+                native_rust_review,
+            )?,
             None => {
                 unresolved_dependency_node(edge.spec.clone(), child_kind, unresolved_reasons(edge))
             }
@@ -319,7 +348,7 @@ fn package_tree_node(
         name: identity.name,
         version: Some(identity.version),
         requirement: spec.and_then(|spec| spec.requirement.clone()),
-        source: super::package_path_source(package_dir),
+        source: rsscript_project::project_path_source(package_dir),
         risk: review.risk,
         features,
         native: review.native_rust.is_some(),
@@ -391,14 +420,12 @@ fn unresolved_dependency_node(
     }
 }
 
-fn package_provider_implementations(
-    manifest: &super::Manifest,
-) -> Vec<super::PackageProviderImplementation> {
+fn package_provider_implementations(manifest: &Manifest) -> Vec<PackageProviderImplementation> {
     manifest
         .implements
         .iter()
         .map(
-            |(interface_package, implementation)| super::PackageProviderImplementation {
+            |(interface_package, implementation)| PackageProviderImplementation {
                 interface_package: interface_package.clone(),
                 version: implementation.version.clone(),
                 interface_features: implementation.interface_features.clone(),
@@ -408,23 +435,23 @@ fn package_provider_implementations(
         .collect()
 }
 
-fn package_virtual(manifest: &super::Manifest) -> Option<super::PackageVirtual> {
+fn package_virtual(manifest: &Manifest) -> Option<PackageVirtual> {
     manifest
         .virtual_package
         .as_ref()
-        .map(|virtual_package| super::PackageVirtual {
+        .map(|virtual_package| PackageVirtual {
             has_default: virtual_package.has_default,
             provider: virtual_package.provider.clone(),
         })
 }
 
-fn package_is_interface_only(sources: &[super::PackageSource]) -> bool {
+fn package_is_interface_only(sources: &[PackageSource]) -> bool {
     let has_interface = sources
         .iter()
-        .any(|source| source.kind == super::PackageReviewFileKind::Interface);
+        .any(|source| source.kind == PackageReviewFileKind::Interface);
     let has_source = sources
         .iter()
-        .any(|source| source.kind == super::PackageReviewFileKind::Source);
+        .any(|source| source.kind == PackageReviewFileKind::Source);
     has_interface && !has_source
 }
 

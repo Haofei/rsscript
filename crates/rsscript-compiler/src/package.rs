@@ -46,7 +46,27 @@ mod check;
 mod dependency {
     pub(super) use rsscript_package_review::*;
 }
-mod graph;
+// Legacy composition only: graph evidence is package-review-owned. The
+// compiler supplies the captured-input authorization and native wrapper seam.
+mod graph {
+    use std::path::Path;
+
+    use rsscript_package_model::{PackageGraphCheck, PackageTree};
+
+    pub(super) fn package_tree_captured(package_dir: &Path) -> Result<PackageTree, String> {
+        rsscript_package_review::package_tree_captured(
+            package_dir,
+            super::native::package_native_rust_review,
+        )
+    }
+
+    pub(super) fn check_package_graph(package_dir: &Path) -> Result<PackageGraphCheck, String> {
+        rsscript_package_review::check_package_graph(
+            package_dir,
+            super::native::package_native_rust_review,
+        )
+    }
+}
 // Legacy composition only: package lock semantics and hashing are owned by
 // `rsscript-package-review`; the compiler supplies native-wrapper callbacks.
 mod lock {
@@ -55,8 +75,7 @@ mod lock {
     use rsscript_package_model::{PackageLock, PackageLockDiff};
 
     pub(super) use rsscript_package_review::{
-        compare_locked_packages, effective_interface_hash, package_lock_diff_reasons,
-        parse_package_lock, read_package_lock,
+        compare_locked_packages, package_lock_diff_reasons, parse_package_lock, read_package_lock,
     };
     pub(super) const PACKAGE_LOCK_MAX_BYTES: u64 = rsscript_package_review::PACKAGE_LOCK_MAX_BYTES;
 
@@ -145,11 +164,14 @@ pub use authorization::{
     prepare_package_for_execution,
 };
 pub use check::check_package_dir;
-use dependency::{
-    PackageDependencySpec, collect_dependency_interface_sources,
-    collect_dependency_lowering_sources,
-};
-pub use graph::package_tree;
+use dependency::{collect_dependency_interface_sources, collect_dependency_lowering_sources};
+pub fn package_tree(package_dir: &Path) -> Result<PackageTree, String> {
+    let snapshot = authorization::snapshot_package_graph_inputs(package_dir)?;
+    let mut tree = graph::package_tree_captured(snapshot.root())
+        .map_err(|error| snapshot.remap_error(error))?;
+    authorization::remap_tree(&snapshot, &mut tree);
+    Ok(tree)
+}
 pub(super) use lock_format::package_lock_toml;
 pub use metadata::package_lowering_input;
 pub(crate) use native::package_native_plugin_build_dependencies;
@@ -212,14 +234,6 @@ pub(super) fn dedup_diagnostics(diagnostics: &mut Vec<Diagnostic>) {
             diagnostic.span.length,
         ))
     });
-}
-
-fn package_identity(manifest: &Manifest) -> PackageIdentity {
-    PackageIdentity {
-        name: manifest.package.name.clone(),
-        version: manifest.package.version.clone(),
-        edition: manifest.package.edition.clone(),
-    }
 }
 
 #[cfg(test)]

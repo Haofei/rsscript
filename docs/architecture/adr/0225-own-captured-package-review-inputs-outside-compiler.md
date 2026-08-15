@@ -60,6 +60,12 @@ are review-owned as well. The one native-sensitive operation is an explicit
 rooted-path resolver callback; compiler compatibility retains only that adapter
 and snapshot remapping rather than lock semantics or hashing implementation.
 
+Package graph construction and graph-level review validation are also
+review-owned. They consume the project-captured manifest graph and receive the
+legacy native Rust inspection only as the same explicit callback. Compiler
+compatibility now only authorizes the captured input and remaps snapshot paths
+for its legacy public result.
+
 The compiler's opt-in `package` compatibility feature has a private forwarding
 module during the staged migration so existing authorization, native, lock, and
 review callers retain their established behavior. The reviewed compiler default
@@ -67,8 +73,8 @@ closure remains unchanged and does not select this crate.
 
 ## Consequences
 
-This is the first physical S05.3 migration step, not its completion. Review
-execution, risk/policy, lock/check/diff, and public compatibility composition
-must move next before the forwarding module can be removed. Architecture tests
-assert that the source-set file cannot return under `rsscript-compiler` and
-that its loader continues to consume project-owned bounded capture APIs.
+This is a staged physical S05.3 migration. The remaining package check and
+final public compatibility composition must move before the forwarding module
+can be removed. Architecture tests assert that captured review implementation
+files cannot return under `rsscript-compiler`, while compiler compatibility
+continues to consume project-owned bounded capture APIs.

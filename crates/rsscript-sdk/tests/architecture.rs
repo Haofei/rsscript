@@ -2069,6 +2069,23 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
             && lock.contains("rsscript_project::project_path_source"),
         "package lock must own hashing/comparison and receive native path resolution explicitly"
     );
+    let graph_path = root.join("crates/rsscript-package-review/src/graph.rs");
+    assert!(
+        graph_path.is_file()
+            && !root
+                .join("crates/rsscript-compiler/src/package/graph.rs")
+                .exists(),
+        "package graph evidence must be physically owned by the package-review boundary"
+    );
+    let graph = read(&graph_path);
+    assert!(
+        graph.contains("pub fn package_tree_captured")
+            && graph.contains("pub fn check_package_graph")
+            && graph.contains("NativeRustReviewFn")
+            && graph.contains("rsscript_project::project_path_source")
+            && !graph.contains("authorization::"),
+        "package graph evaluation must consume captured review input and receive native inspection explicitly"
+    );
     assert!(
         dependency.contains("load_package_from_manifest_source")
             && !dependency.contains("load_package_with_features("),
@@ -2082,6 +2099,12 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
             && !package_module.contains("fn read_bounded_sorted_entries")
             && !package_module.contains("fn open_regular_file_within_root"),
         "compiler compatibility code must consume project-owned generic I/O primitives instead of reimplementing bounded traversal"
+    );
+    assert!(
+        package_module.contains("rsscript_package_review::package_tree_captured")
+            && package_module.contains("snapshot_package_graph_inputs")
+            && package_module.contains("remap_tree"),
+        "compiler package graph compatibility must only authorize captured input and remap public paths"
     );
 }
 
