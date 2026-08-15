@@ -1264,6 +1264,98 @@ fn main() -> Int {
 }
 
 #[test]
+fn direct_checked_hir_resource_scope_cleans_up_before_try_short_circuit() {
+    let interface = r#"
+module Host
+pub resource File
+pub fn open() -> File
+"#;
+    let source = r#"
+fn main() -> Result<Int, String> {
+    with Host.open() as file {
+        let failure: Result<Unit, String> = Err("boom")
+        failure?
+    }
+    return Ok(42)
+}
+"#;
+    let validated = analyze_source_with_interfaces_result(
+        "mir-resource-try.rss",
+        source,
+        &[("host.rssi", interface)],
+    )
+    .into_validated()
+    .expect("resource short-circuit source should validate");
+    let compiled = compile_validated_to_ir(&validated);
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("resource short-circuit lowers directly from checked HIR");
+    assert!(
+        mir.functions()
+            .iter()
+            .flat_map(|function| function.blocks())
+            .flat_map(|block| block.instructions())
+            .any(|instruction| matches!(
+                instruction,
+                MirInstruction::TryResult { cleanup, .. } if cleanup.len() == 1
+            )),
+        "the direct MIR TryResult must carry the lexical resource cleanup edge"
+    );
+    mir.verify()
+        .expect("resource short-circuit cleanup remains verifier-visible");
+
+    struct CountedResource(Arc<AtomicU64>);
+    impl ProviderResource for CountedResource {
+        fn cleanup(&mut self) -> Result<(), ProviderError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    fn binding(cleanups: Arc<AtomicU64>) -> ExternalFunction {
+        ExternalFunction::new_contextual(move |context, _| {
+            context.register_resource(CountedResource(Arc::clone(&cleanups)))?;
+            Ok(NativeValue::Native {
+                type_name: "File".to_owned(),
+                id: 1,
+            })
+        })
+    }
+
+    let legacy_cleanups = Arc::new(AtomicU64::new(0));
+    let legacy = reg_vm_compile_validated(&validated)
+        .expect("legacy resource short-circuit fixture compiles")
+        .eval_main_with_args_and_external_bindings(
+            std::iter::empty::<String>(),
+            [("Host.open", binding(Arc::clone(&legacy_cleanups)))],
+        )
+        .expect("legacy resource short-circuit fixture executes");
+    let direct_cleanups = Arc::new(AtomicU64::new(0));
+    let direct = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("direct resource short-circuit MIR emits verified bytecode")
+    .eval_main_with_args_and_external_bindings(
+        std::iter::empty::<String>(),
+        [("Host.open", binding(Arc::clone(&direct_cleanups)))],
+    )
+    .expect("direct resource short-circuit MIR executes");
+
+    assert_eq!(legacy.value, "Err { value: boom }");
+    assert_eq!(direct.value, legacy.value);
+    assert_eq!(direct.stdout, legacy.stdout);
+    assert_eq!(direct.stderr, legacy.stderr);
+    assert_eq!(direct.usage, legacy.usage);
+    assert_eq!(legacy_cleanups.load(Ordering::SeqCst), 1);
+    assert_eq!(direct_cleanups.load(Ordering::SeqCst), 1);
+    assert_eq!(legacy.usage.resources_created, 1);
+    assert_eq!(legacy.usage.resources_cleaned, 1);
+    assert_eq!(legacy.usage.resources_live_at_return, 0);
+}
+
+#[test]
 fn direct_checked_hir_awaited_external_provider_matches_legacy_vm() {
     let source = "async fn main() -> Int { return await Host.async_value() }";
     let interface = "pub async fn Host.async_value() -> Int\n";

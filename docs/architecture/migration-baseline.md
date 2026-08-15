@@ -928,6 +928,13 @@ mechanical acceptance condition holds.
       `return`, `break`, and `continue`; managed early-return and loop-break
       scopes are covered by MIR verification. Provider errors and cancellation
       still rely on runtime cleanup and remain follow-up work.
+    - [x] **M03.2d — Emit error short-circuit cleanup edges.** A checked
+      `Result` `?` inside a managed `with` scope now carries the complete
+      lexical resource stack in verifier-visible `TryResult::cleanup`. The
+      direct HIR → MIR → verified-bytecode path returns the same `Err`, streams,
+      usage, and exact-once Provider cleanup count as the legacy VM. Provider
+      failures and cancellation that occur outside a language short-circuit
+      remain runtime-finalization concerns.
   - [ ] **M03.3 — Add structured-concurrency instructions.** Model spawn, await,
     join, cancel, and select with lexical task-group ownership.
     - [x] **M03.3a — Establish typed task lifecycle primitives.** MIR now owns
@@ -1060,6 +1067,12 @@ mechanical acceptance condition holds.
       resource budget and requires both paths to retain a report with the same
       `ResourceExhausted` Provider failure and usage. Move-failure comparison
       remains follow-up work.
+    - [x] **M05.2c — Compare resource cleanup on `?` failure.** A direct checked
+      HIR fixture opens a counted Provider resource, constructs `Err`, and
+      short-circuits through `?`. Legacy and direct verified-bytecode execution
+      must return the same failure, stdout/stderr, and complete usage report;
+      each run must release exactly one resource. Provider failure/cancellation
+      parity remains follow-up work.
   - [ ] **M05.3 — Add async/provider differential fixtures.** Compare task
     cancellation, external-call order, deadlines, and Provider traces.
     - [x] **M05.3a — Compare awaited async Provider calls.** A cooperative
