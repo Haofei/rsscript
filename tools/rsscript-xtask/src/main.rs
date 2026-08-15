@@ -138,6 +138,12 @@ struct MigrationVerifyArguments {
     dry_run: bool,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct MigrationWorkArguments {
+    item_id: String,
+    json: bool,
+}
+
 #[derive(Debug, Serialize, PartialEq, Eq)]
 struct MigrationStatus {
     schema: &'static str,
@@ -172,6 +178,10 @@ struct MigrationQueueTask {
     id: String,
     priority: u16,
     depends_on: Vec<String>,
+    #[serde(default)]
+    scope: Vec<String>,
+    #[serde(default)]
+    acceptance: Vec<String>,
     verification: Vec<String>,
 }
 
@@ -199,6 +209,26 @@ struct MigrationBlockedItem {
     blocked_by: Vec<String>,
 }
 
+/// A self-contained work packet for one focused migration slice. It is
+/// derived from the checklist and curated queue rather than becoming a second
+/// mutable TODO source.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct MigrationWorkPacket {
+    schema: &'static str,
+    checklist_source: &'static str,
+    queue_source: &'static str,
+    id: String,
+    title: String,
+    checklist_line: usize,
+    priority: u16,
+    state: &'static str,
+    depends_on: Vec<String>,
+    blocked_by: Vec<String>,
+    scope: Vec<String>,
+    acceptance: Vec<String>,
+    verification: Vec<String>,
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let mut arguments = std::env::args().skip(1);
     match arguments.next().as_deref() {
@@ -206,11 +236,55 @@ fn main() -> Result<(), Box<dyn Error>> {
         Some("migration-status") => run_migration_status(parse_migration_status_arguments(arguments)?),
         Some("migration-next") => run_migration_next(),
         Some("migration-next-json") => run_migration_next_json(),
+        Some("migration-work") => run_migration_work(parse_migration_work_arguments(arguments)?),
         Some("migration-verify") => run_migration_verify(parse_migration_verify_arguments(arguments)?),
         _ => Err(
-            "usage:\n  cargo run -p rsscript-xtask --release -- core-metrics [--iterations N] [--output FILE] [--check SLO]\n  cargo run -p rsscript-xtask -- migration-status [--json] [--open] [--require ITEM]\n  cargo run -p rsscript-xtask -- migration-next\n  cargo run -p rsscript-xtask -- migration-next-json\n  cargo run -p rsscript-xtask -- migration-verify ITEM [--dry-run]"
+            "usage:\n  cargo run -p rsscript-xtask --release -- core-metrics [--iterations N] [--output FILE] [--check SLO]\n  cargo run -p rsscript-xtask -- migration-status [--json] [--open] [--require ITEM]\n  cargo run -p rsscript-xtask -- migration-next\n  cargo run -p rsscript-xtask -- migration-next-json\n  cargo run -p rsscript-xtask -- migration-work ITEM [--json]\n  cargo run -p rsscript-xtask -- migration-verify ITEM [--dry-run]"
                 .into(),
         ),
+    }
+}
+
+fn run_migration_work(arguments: MigrationWorkArguments) -> Result<(), Box<dyn Error>> {
+    let packet = migration_work_packet(&arguments.item_id)?;
+    if arguments.json {
+        println!("{}", serde_json::to_string_pretty(&packet)?);
+        return Ok(());
+    }
+    println!(
+        "Migration work packet: {} — {} [priority {}, {}]",
+        packet.id, packet.title, packet.priority, packet.state
+    );
+    println!(
+        "Checklist: {}:{}",
+        packet.checklist_source, packet.checklist_line
+    );
+    print_packet_list("Prerequisites", &packet.depends_on);
+    if !packet.blocked_by.is_empty() {
+        print_packet_list("Blocked by", &packet.blocked_by);
+    }
+    print_packet_list("Expected change scope", &packet.scope);
+    print_packet_list("Mechanical acceptance", &packet.acceptance);
+    print_packet_list("Verification", &packet.verification);
+    if packet.state == "ready" {
+        println!(
+            "Handoff: cargo run -p rsscript-xtask -- migration-verify {}",
+            packet.id
+        );
+    } else {
+        println!("Handoff: complete the blocking checklist items before this slice.");
+    }
+    Ok(())
+}
+
+fn print_packet_list(label: &str, values: &[String]) {
+    if values.is_empty() {
+        println!("{label}: none");
+        return;
+    }
+    println!("{label}:");
+    for value in values {
+        println!("  - {value}");
     }
 }
 
@@ -361,6 +435,13 @@ fn migration_ready_queue() -> Result<MigrationReadyQueue, Box<dyn Error>> {
             )
             .into());
         }
+        if task.scope.is_empty() || task.acceptance.is_empty() {
+            return Err(format!(
+                "migration queue task `{}` must declare non-empty scope and mechanical acceptance",
+                task.id
+            )
+            .into());
+        }
         for command in &task.verification {
             parse_verification_command(command)?;
         }
@@ -407,6 +488,80 @@ fn migration_ready_queue() -> Result<MigrationReadyQueue, Box<dyn Error>> {
         source: "docs/architecture/migration-work-queue.json",
         ready,
         blocked,
+    })
+}
+
+fn migration_work_packet(item_id: &str) -> Result<MigrationWorkPacket, Box<dyn Error>> {
+    let root = workspace_root();
+    let status = migration_status(&fs::read_to_string(
+        root.join("docs/architecture/migration-baseline.md"),
+    )?)?;
+    let manifest: MigrationQueueManifest = serde_json::from_slice(&fs::read(
+        root.join("docs/architecture/migration-work-queue.json"),
+    )?)?;
+    if manifest.schema != MIGRATION_QUEUE_SCHEMA {
+        return Err(format!(
+            "unsupported migration work queue schema `{}`",
+            manifest.schema
+        )
+        .into());
+    }
+    let task = manifest
+        .tasks
+        .iter()
+        .find(|task| task.id == item_id)
+        .ok_or_else(|| format!("migration work item `{item_id}` is not in the curated queue"))?;
+    if task.scope.is_empty() || task.acceptance.is_empty() {
+        return Err(format!(
+            "migration work item `{item_id}` must declare non-empty scope and mechanical acceptance"
+        )
+        .into());
+    }
+    let checklist = status
+        .items
+        .iter()
+        .find(|item| item.id == item_id)
+        .ok_or_else(|| {
+            format!("migration work item `{item_id}` is not declared in the checklist")
+        })?;
+    if checklist.completed {
+        return Err(format!(
+            "migration work item `{item_id}` is already complete; remove it from the curated queue"
+        )
+        .into());
+    }
+
+    let ready = migration_ready_queue()?;
+    let blocked_by = ready
+        .blocked
+        .iter()
+        .find(|item| item.id == item_id)
+        .map(|item| item.blocked_by.clone())
+        .unwrap_or_default();
+    let state = if ready.ready.iter().any(|item| item.id == item_id) {
+        "ready"
+    } else if !blocked_by.is_empty() {
+        "blocked"
+    } else {
+        return Err(format!(
+            "migration work item `{item_id}` is neither ready nor blocked; validate its queue dependencies"
+        )
+        .into());
+    };
+    Ok(MigrationWorkPacket {
+        schema: "rsscript.migration_work_packet.v1",
+        checklist_source: "docs/architecture/migration-baseline.md",
+        queue_source: "docs/architecture/migration-work-queue.json",
+        id: task.id.clone(),
+        title: checklist.title.clone(),
+        checklist_line: checklist.line,
+        priority: task.priority,
+        state,
+        depends_on: task.depends_on.clone(),
+        blocked_by,
+        scope: task.scope.clone(),
+        acceptance: task.acceptance.clone(),
+        verification: task.verification.clone(),
     })
 }
 
@@ -486,6 +641,22 @@ fn parse_migration_verify_arguments(
         }
     }
     Ok(MigrationVerifyArguments { item_id, dry_run })
+}
+
+fn parse_migration_work_arguments(
+    mut arguments: impl Iterator<Item = String>,
+) -> Result<MigrationWorkArguments, Box<dyn Error>> {
+    let item_id = arguments
+        .next()
+        .ok_or("migration-work requires a migration item ID")?;
+    let mut json = false;
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--json" => json = true,
+            _ => return Err(format!("unknown migration-work argument: {argument}").into()),
+        }
+    }
+    Ok(MigrationWorkArguments { item_id, json })
 }
 
 fn run_migration_status(arguments: MigrationStatusArguments) -> Result<(), Box<dyn Error>> {
@@ -1020,6 +1191,45 @@ mod tests {
         let error = parse_migration_verify_arguments(std::iter::empty())
             .expect_err("an item ID is required");
         assert!(error.to_string().contains("requires a migration item ID"));
+    }
+
+    #[test]
+    fn migration_work_arguments_require_one_item_id_and_support_json() {
+        assert_eq!(
+            parse_migration_work_arguments(["S05.1".into(), "--json".into()].into_iter())
+                .expect("valid migration work invocation"),
+            MigrationWorkArguments {
+                item_id: "S05.1".into(),
+                json: true,
+            }
+        );
+        let error = parse_migration_work_arguments(std::iter::empty())
+            .expect_err("a work item ID is required");
+        assert!(error.to_string().contains("requires a migration item ID"));
+    }
+
+    #[test]
+    fn published_migration_work_packet_is_bounded_and_actionable() {
+        let packet = migration_work_packet("S05.1").expect("published work packet");
+        assert_eq!(packet.schema, "rsscript.migration_work_packet.v1");
+        assert_eq!(packet.state, "ready");
+        assert!(!packet.scope.is_empty());
+        assert!(!packet.acceptance.is_empty());
+        assert!(!packet.verification.is_empty());
+        assert!(
+            packet
+                .scope
+                .iter()
+                .any(|path| path.contains("rsscript-project"))
+        );
+
+        let runner = migration_work_packet("A09.2").expect("published runner work packet");
+        assert!(matches!(runner.state, "ready" | "blocked"));
+        if runner.state == "blocked" {
+            assert!(!runner.blocked_by.is_empty());
+        } else {
+            assert!(runner.blocked_by.is_empty());
+        }
     }
 
     #[test]

@@ -114,6 +114,14 @@ verification commands for each ready slice. This keeps the full checklist as
 the single source of truth while making the next independently mergeable work
 visible without manually re-sorting every open parent milestone.
 
+`migration-work ITEM` derives a reviewable work packet from that same queue:
+its prerequisite state, expected path scope, mechanical acceptance facts, and
+focused verification commands. It is intentionally read-only; the packet does
+not create a second TODO list or mark an item complete. Use `--json` when an
+automation agent needs the same bounded work contract. Every queued slice must
+declare non-empty scope and acceptance facts, which prevents a broad parent
+milestone from being treated as an unbounded implementation request.
+
 `migration-verify ITEM` runs the curated Cargo acceptance commands for one
 ready frontier item. It rejects blocked, unknown, and completed items, and it
 cannot change checklist state; a task is still checked only after its stated

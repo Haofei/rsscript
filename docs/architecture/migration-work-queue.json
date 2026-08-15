@@ -5,6 +5,17 @@
       "id": "S05.1",
       "priority": 20,
       "depends_on": [],
+      "scope": [
+        "crates/rsscript-project/**",
+        "crates/rsscript-compiler/src/package/**",
+        "crates/rsscript-sdk/tests/architecture.rs",
+        "docs/architecture/migration-baseline.md"
+      ],
+      "acceptance": [
+        "Project capture owns bounded, confined manifest and source-tree reads.",
+        "Compiler package assembly consumes captured bytes and does not reimplement traversal.",
+        "The remaining legacy dependency/review/native resolver is explicitly documented until migrated."
+      ],
       "verification": [
         "cargo test -p rsscript-project --locked",
         "cargo test -p rsscript-sdk --features project --lib --locked"
@@ -14,6 +25,17 @@
       "id": "A09.2",
       "priority": 80,
       "depends_on": ["A09.1a", "A09.1b"],
+      "scope": [
+        "crates/rsscript-runner/**",
+        "crates/rss-process-guard/**",
+        "crates/rsscript-cli/**",
+        "docs/security/**"
+      ],
+      "acceptance": [
+        "The Linux reference runner applies its declared process-isolation controls before execution.",
+        "Runner control failures are reported separately from VM termination reasons.",
+        "Tests exercise the supported Linux control path and fail closed when controls are unavailable."
+      ],
       "verification": [
         "cargo test -p rss-process-guard --locked",
         "cargo test -p rsscript-cli --features execution --locked"
@@ -23,6 +45,16 @@
       "id": "E02.1",
       "priority": 90,
       "depends_on": ["A06", "A07"],
+      "scope": [
+        "examples/embedded-report-pipeline/**",
+        "crates/rsscript-sdk/tests/artifact_bundle.rs",
+        "docs/getting-started/**"
+      ],
+      "acceptance": [
+        "The example compiles, verifies, links explicit providers, executes with limits, and emits an execution report.",
+        "The same artifact is exercised with replaceable provider implementations.",
+        "The example documents its snapshot and artifact identity."
+      ],
       "verification": [
         "cargo test -p embedded-report-pipeline --locked",
         "cargo test -p rsscript-sdk --test artifact_bundle --locked"
