@@ -625,7 +625,7 @@ an arbitrary shell executor.
     rebuild it fail-closed. This gives the LSP a precise shared dependency-graph
     cache without prematurely claiming source-body incrementality for a
     whole-program compilation artifact.
-  - [ ] **S03.4 — Thread cancellation and deadlines through every query.** Add
+  - [x] **S03.4 — Thread cancellation and deadlines through every query.** Add
     cancellation, deadline, and diagnostic-budget tests for cold and cached
     paths. Session parse and local HIR queries now check the shared operation
     context before and after cache access for source and interface inputs. The
@@ -637,10 +637,13 @@ an arbitrary shell executor.
     direct source and interface module-header queries now expose the same
     before/after-cache operation-aware form; workspace type-fact queries
     propagate the same operation through their HIR
-    dependency; language-service document
-    diagnostics now apply the same rule across dependency closure, lint, and
-    cached-result paths; resolve/type dependency precision remains to be
-    migrated.
+    dependency; language-service document diagnostics, formatting, lint,
+    symbol-index, and document-symbol requests now apply the same rule across
+    cold and cached paths. Frontend diagnostic exhaustion remains covered by
+    the semantic budget's terminal-completion test; request diagnostic budgets
+    are tested on both cold and cached LSP results without truncating the
+    session-owned result. Resolve/type dependency precision remains a query
+    granularity concern, not an operation-boundary escape hatch.
   - [ ] **S03.5 — Migrate CLI/package/test callers.** All frontend consumers use
     the session API; direct analyzer construction becomes private. The normal
     CLI `check`, `fix`, and `fmt` commands now consume session-owned semantics,
