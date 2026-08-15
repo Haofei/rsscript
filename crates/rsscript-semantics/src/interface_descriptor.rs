@@ -259,16 +259,28 @@ impl InterfaceDescriptorV1 {
         resources.sort_by(|left, right| left.name.cmp(&right.name));
         records.sort_by(|left, right| left.name.cmp(&right.name));
         sums.sort_by(|left, right| left.name.cmp(&right.name));
-        let local_types = resources
+        // Resource identity is distinct from ordinary named records/sums at a
+        // Provider boundary.  Keep a separate local set so a function such as
+        // `pub fn open() -> File` is emitted as `WireType::Resource`, not as a
+        // structurally similar `WireType::Named`.  Otherwise bindgen and the
+        // compiler derive different signature hashes for the same `.rssi`.
+        let local_resources = resources
             .iter()
             .map(|resource| local_type_name(&resource.name))
-            .chain(records.iter().map(|record| local_type_name(&record.name)))
+            .collect::<BTreeSet<_>>();
+        let local_types = records
+            .iter()
+            .map(|record| local_type_name(&record.name))
             .chain(sums.iter().map(|sum| local_type_name(&sum.name)))
             .collect::<BTreeSet<_>>();
         for record in &mut records {
             for field in &mut record.fields {
-                field.ty =
-                    qualify_local_interface_type(field.ty.clone(), module.as_deref(), &local_types);
+                field.ty = qualify_local_interface_type(
+                    field.ty.clone(),
+                    module.as_deref(),
+                    &local_types,
+                    &local_resources,
+                );
             }
         }
         for sum in &mut sums {
@@ -278,6 +290,7 @@ impl InterfaceDescriptorV1 {
                         field.ty.clone(),
                         module.as_deref(),
                         &local_types,
+                        &local_resources,
                     );
                 }
             }
@@ -288,12 +301,14 @@ impl InterfaceDescriptorV1 {
                     parameter.ty.clone(),
                     module.as_deref(),
                     &local_types,
+                    &local_resources,
                 );
             }
             function.signature.result = qualify_local_interface_type(
                 function.signature.result.clone(),
                 module.as_deref(),
                 &local_types,
+                &local_resources,
             );
             function.signature_hash = function.signature.hash();
         }
@@ -379,48 +394,99 @@ fn qualify_local_interface_type(
     ty: WireType,
     module: Option<&str>,
     local_types: &BTreeSet<String>,
+    local_resources: &BTreeSet<String>,
 ) -> WireType {
     match ty {
         WireType::List { element } => WireType::List {
-            element: Box::new(qualify_local_interface_type(*element, module, local_types)),
+            element: Box::new(qualify_local_interface_type(
+                *element,
+                module,
+                local_types,
+                local_resources,
+            )),
         },
         WireType::Map { key, value } => WireType::Map {
-            key: Box::new(qualify_local_interface_type(*key, module, local_types)),
-            value: Box::new(qualify_local_interface_type(*value, module, local_types)),
+            key: Box::new(qualify_local_interface_type(
+                *key,
+                module,
+                local_types,
+                local_resources,
+            )),
+            value: Box::new(qualify_local_interface_type(
+                *value,
+                module,
+                local_types,
+                local_resources,
+            )),
         },
         WireType::Option { value } => WireType::Option {
-            value: Box::new(qualify_local_interface_type(*value, module, local_types)),
+            value: Box::new(qualify_local_interface_type(
+                *value,
+                module,
+                local_types,
+                local_resources,
+            )),
         },
         WireType::Result { ok, error } => WireType::Result {
-            ok: Box::new(qualify_local_interface_type(*ok, module, local_types)),
-            error: Box::new(qualify_local_interface_type(*error, module, local_types)),
+            ok: Box::new(qualify_local_interface_type(
+                *ok,
+                module,
+                local_types,
+                local_resources,
+            )),
+            error: Box::new(qualify_local_interface_type(
+                *error,
+                module,
+                local_types,
+                local_resources,
+            )),
         },
         WireType::Tuple { elements } => WireType::Tuple {
             elements: elements
                 .into_iter()
-                .map(|element| qualify_local_interface_type(element, module, local_types))
+                .map(|element| {
+                    qualify_local_interface_type(element, module, local_types, local_resources)
+                })
                 .collect(),
         },
         WireType::Named {
             package,
             name,
             arguments,
-        } => WireType::Named {
-            package: package.or_else(|| {
-                local_types
-                    .contains(&name)
+        } => {
+            let local_resource = package.is_none() && local_resources.contains(&name);
+            let package = package.or_else(|| {
+                (local_types.contains(&name) || local_resource)
                     .then(|| module.map(str::to_string))
                     .flatten()
-            }),
-            name,
-            arguments: arguments
+            });
+            let arguments = arguments
                 .into_iter()
-                .map(|argument| qualify_local_interface_type(argument, module, local_types))
-                .collect(),
-        },
+                .map(|argument| {
+                    qualify_local_interface_type(argument, module, local_types, local_resources)
+                })
+                .collect();
+            if local_resource {
+                let canonical = package
+                    .as_deref()
+                    .map_or_else(|| name.clone(), |package| format!("{package}.{name}"));
+                WireType::Resource { name: canonical }
+            } else {
+                WireType::Named {
+                    package,
+                    name,
+                    arguments,
+                }
+            }
+        }
         WireType::Qualified { qualifier, value } => WireType::Qualified {
             qualifier,
-            value: Box::new(qualify_local_interface_type(*value, module, local_types)),
+            value: Box::new(qualify_local_interface_type(
+                *value,
+                module,
+                local_types,
+                local_resources,
+            )),
         },
         other => other,
     }
@@ -462,6 +528,22 @@ mod tests {
         assert_eq!(
             descriptor.to_json_bytes().unwrap(),
             descriptor.to_json_bytes().unwrap()
+        );
+    }
+
+    #[test]
+    fn descriptor_preserves_resources_as_resource_wire_types() {
+        let descriptor = InterfaceDescriptorV1::from_interface_source(
+            "session.rssi",
+            "module host.session\npub resource Session\npub fn open() -> Session\n",
+        )
+        .expect("valid resource interface");
+        assert_eq!(
+            descriptor.functions[0].signature.result,
+            WireType::Resource {
+                name: "host.session.Session".into(),
+            },
+            "a descriptor must not degrade a declared resource to a named value type"
         );
     }
 

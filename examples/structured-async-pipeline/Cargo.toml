@@ -6,3 +6,9 @@ publish = false
 
 [dependencies]
 rsscript_compiler = { package = "rsscript-sdk", path = "../../crates/rsscript-sdk", features = ["execution"] }
+rsscript-abi-model = { path = "../../crates/rsscript-abi-model" }
+rsscript-provider-api = { path = "../../crates/rsscript-provider-api" }
+
+[build-dependencies]
+rsscript-provider-bindgen = { path = "../../crates/rsscript-provider-bindgen" }
+rsscript-semantics = { path = "../../crates/rsscript-semantics" }

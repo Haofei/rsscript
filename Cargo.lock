@@ -2478,7 +2478,11 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 name = "structured-async-pipeline"
 version = "0.1.0"
 dependencies = [
+ "rsscript-abi-model",
+ "rsscript-provider-api",
+ "rsscript-provider-bindgen",
  "rsscript-sdk",
+ "rsscript-semantics",
 ]
 
 [[package]]

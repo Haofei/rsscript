@@ -584,7 +584,7 @@ fn checked_external_imports(
         let symbol = checked_external_symbol(signature)?;
         imports
             .entry(symbol.as_str().to_owned())
-            .or_insert((symbol, checked_external_signature(signature)?));
+            .or_insert((symbol, checked_external_signature(hir, signature)?));
     }
     Ok(imports.into_values().collect())
 }
@@ -607,6 +607,7 @@ fn checked_external_symbol(
 }
 
 fn checked_external_signature(
+    hir: &checked::Hir,
     signature: &checked::FunctionSig,
 ) -> Result<FunctionSignature, MirLoweringError> {
     Ok(FunctionSignature {
@@ -621,7 +622,7 @@ fn checked_external_signature(
                         checked::ParamEffect::Mut => DataEffect::Mut,
                         checked::ParamEffect::Take => DataEffect::Take,
                     },
-                    ty: checked_type_to_wire(&parameter.ty, &signature.name)?,
+                    ty: checked_external_type_to_wire(hir, signature, &parameter.ty)?,
                     retained: signature.retained_params.contains(&parameter.name),
                 })
             })
@@ -629,7 +630,7 @@ fn checked_external_signature(
         result: signature
             .return_ty
             .as_ref()
-            .map(|ty| checked_type_to_wire(ty, &signature.name))
+            .map(|ty| checked_external_type_to_wire(hir, signature, ty))
             .transpose()?
             .unwrap_or(WireType::Unit),
         asynchronous: signature.is_async,
@@ -4357,6 +4358,49 @@ fn checked_type_to_wire(
             }
         }
     };
+    Ok(apply_checked_qualifiers(ty, base))
+}
+
+/// Convert an external call contract using both the resolved type and the HIR
+/// declaration kind.  `ResolvedType` intentionally stores a canonical type
+/// identity, but it does not duplicate whether that identity was declared as
+/// an opaque resource.  The Artifact ABI must retain that distinction: a
+/// resource is a generation-safe Provider handle, not an ordinary named
+/// record.  This keeps compiler imports byte-for-byte compatible with the
+/// descriptor generated from the same `.rssi` interface.
+fn checked_external_type_to_wire(
+    hir: &checked::Hir,
+    signature: &checked::FunctionSig,
+    ty: &rsscript_semantics::ResolvedType,
+) -> Result<WireType, MirLoweringError> {
+    let ResolvedTypeKind::Named { name, arguments } = &ty.kind else {
+        return checked_type_to_wire(ty, &signature.name);
+    };
+    if !arguments.is_empty() || hir.type_kind(name) != Some(checked::HirTypeKind::Resource) {
+        return checked_type_to_wire(ty, &signature.name);
+    }
+    let Some(namespace) = signature.namespace.as_deref() else {
+        return Err(MirLoweringError::Unsupported {
+            function: signature.name.clone(),
+            construct: "external resource type without namespace",
+        });
+    };
+    // Module isolation represents `host.session.Session` internally as
+    // `host_session__Session`.  The external function namespace remains the
+    // authoritative ABI module spelling, so use it to recover the resource's
+    // public type name rather than publishing the private mangled identity.
+    let local_name = name
+        .rsplit_once("__")
+        .map_or(name.as_str(), |(_, tail)| tail);
+    Ok(apply_checked_qualifiers(
+        ty,
+        WireType::Resource {
+            name: format!("{namespace}.{local_name}"),
+        },
+    ))
+}
+
+fn apply_checked_qualifiers(ty: &rsscript_semantics::ResolvedType, base: WireType) -> WireType {
     let base = if ty.qualifiers.owned && !ty.qualifiers.noescape {
         WireType::Qualified {
             qualifier: WireQualifier::Owned,
@@ -4373,14 +4417,14 @@ fn checked_type_to_wire(
     } else {
         base
     };
-    Ok(if ty.qualifiers.fresh {
+    if ty.qualifiers.fresh {
         WireType::Qualified {
             qualifier: WireQualifier::Fresh,
             value: Box::new(base),
         }
     } else {
         base
-    })
+    }
 }
 
 /// Resource declarations are represented as semantic named types until an

@@ -381,17 +381,19 @@ fn render_record_wrapper(
 }
 
 fn resource_wrapper_name(resource: &str) -> String {
-    let mut output = resource
-        .split('.')
-        .flat_map(str::chars)
-        .map(|character| {
-            if character.is_ascii_alphanumeric() {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
+    // Resource names are qualified language identifiers.  Generate a Rust
+    // public type rather than preserving the qualification's lower-case
+    // module spelling (for example `host.fs.File` becomes
+    // `HostFsFileHandle`).  This also folds separator variants into one stable
+    // type name and avoids lint warnings in generated Provider contracts.
+    let mut output = String::new();
+    for segment in resource.split(|character: char| !character.is_ascii_alphanumeric()) {
+        let mut characters = segment.chars();
+        if let Some(first) = characters.next() {
+            output.push(first.to_ascii_uppercase());
+            output.extend(characters);
+        }
+    }
     if output.is_empty()
         || output
             .chars()
@@ -590,18 +592,18 @@ fn render_signature(signature: &FunctionSignature) -> String {
         .iter()
         .map(|parameter| {
             format!(
-                "rsscript_abi_model::ParameterSignature {{ name: {:?}.into(), effect: rsscript_abi_model::DataEffect::{:?}, ty: {:?}.into(), retained: {} }}",
+                "rsscript_abi_model::ParameterSignature {{ name: {:?}.into(), effect: rsscript_abi_model::DataEffect::{:?}, ty: {}, retained: {} }}",
                 parameter.name,
                 parameter.effect,
-                wire_type_source(&parameter.ty),
+                render_wire_type(&parameter.ty),
                 parameter.retained
             )
         })
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "rsscript_abi_model::FunctionSignature {{ parameters: vec![{parameters}], result: {:?}.into(), asynchronous: {} }}",
-        wire_type_source(&signature.result),
+        "rsscript_abi_model::FunctionSignature {{ parameters: vec![{parameters}], result: {}, asynchronous: {} }}",
+        render_wire_type(&signature.result),
         signature.asynchronous
     )
 }
@@ -732,7 +734,6 @@ fn wire_type_source(ty: &WireType) -> String {
     }
 }
 
-#[allow(dead_code)]
 fn render_wire_type(ty: &WireType) -> String {
     match ty {
         WireType::Unit => "rsscript_abi_model::WireType::Unit".into(),
@@ -844,8 +845,8 @@ mod tests {
         assert!(rust.contains("pub trait GeneratedProviderContract"));
         assert!(rust.contains("fn get(&self, name: String) -> Result<Option<String>"));
         assert!(rust.contains("host.env.get"));
-        assert!(rust.contains("ty: \"String\".into()"));
-        assert!(rust.contains("result: \"Option<String>\".into()"));
+        assert!(rust.contains("ty: rsscript_abi_model::WireType::String"));
+        assert!(rust.contains("result: rsscript_abi_model::WireType::Option"));
         assert!(rust.contains("pub fn register<T>("));
         assert!(rust.contains("registry.register_provider(&descriptor(), implementations)"));
         assert!(rust.contains("pub struct MockProvider"));
@@ -873,7 +874,7 @@ mod tests {
             cleanup: GeneratedCleanup::RuntimeRegistered,
         });
         assert!(
-            rust.contains("pub struct hostfsFileHandle(pub rsscript_provider_api::ResourceHandle)")
+            rust.contains("pub struct HostFsFileHandle(pub rsscript_provider_api::ResourceHandle)")
         );
         assert!(rust.contains("ResourceHandle::from_native_id"));
         assert!(rust.contains("pub fn from_wire("));
@@ -883,7 +884,10 @@ mod tests {
         assert!(rust.contains("pub fn into_wire("));
         assert!(rust.contains("self.0.to_wire(resource_type)"));
         assert!(rust.contains("pub const TYPE_NAME: &'static str = \"host.fs.File\""));
-        assert!(rust.contains("fn open(&self, path: String) -> Result<hostfsFileHandle"));
+        assert!(rust.contains("fn open(&self, path: String) -> Result<HostFsFileHandle"));
+        assert!(rust.contains(
+            "result: rsscript_abi_model::WireType::Resource { name: \"host.fs.File\".into() }"
+        ));
     }
 
     #[test]
@@ -926,8 +930,8 @@ mod tests {
                 reentrant: true,
                 cleanup: GeneratedCleanup::None,
             });
-        assert!(generated.contains("ty: \"String\".into()"));
-        assert!(generated.contains("result: \"Option<Int>\".into()"));
+        assert!(generated.contains("ty: rsscript_abi_model::WireType::String"));
+        assert!(generated.contains("result: rsscript_abi_model::WireType::Option"));
         assert!(!generated.contains("ty: \"rsscript_abi_model::WireType"));
     }
 
@@ -950,8 +954,8 @@ mod tests {
             });
         assert!(generated.contains("entries: Vec<(String, char)>"));
         assert!(generated.contains("-> Result<char"));
-        assert!(generated.contains("ty: \"Map<String, Char>\".into()"));
-        assert!(generated.contains("result: \"Char\".into()"));
+        assert!(generated.contains("ty: rsscript_abi_model::WireType::Map"));
+        assert!(generated.contains("result: rsscript_abi_model::WireType::Char"));
     }
 
     #[test]

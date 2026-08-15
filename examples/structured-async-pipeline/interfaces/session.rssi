@@ -1,0 +1,4 @@
+module host.session
+
+pub resource Session
+pub fn open() -> Session

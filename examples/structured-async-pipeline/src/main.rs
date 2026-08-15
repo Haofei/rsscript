@@ -1,23 +1,109 @@
 #![forbid(unsafe_code)]
 
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use rsscript_abi_model::{ExternalSymbol, WireResourceTypeId, WireValue};
 use rsscript_compiler::{
     artifact::ArtifactVerifier,
     compile::{Compiler, FrontendInputSnapshot},
     operation::CancellationToken,
+    provider_api::{ProviderError, ProviderFunction, ProviderRegistry, WireInterpreterFn},
     report::TerminationReason,
     runtime::{ExecutionRequest, RunLimits, Runtime, TracePolicy},
 };
+use rsscript_provider_api::ProviderResource;
 
 const SOURCE: &str = include_str!("../script/main.rss");
+const SESSION_INTERFACE: &str = include_str!("../interfaces/session.rssi");
+
+include!(concat!(env!("OUT_DIR"), "/provider_contract.rs"));
+
+#[derive(Debug)]
+struct CountedSession {
+    cleanups: Arc<AtomicU64>,
+    fail_cleanup: bool,
+}
+
+impl ProviderResource for CountedSession {
+    fn cleanup(&mut self) -> Result<(), ProviderError> {
+        self.cleanups.fetch_add(1, Ordering::SeqCst);
+        if self.fail_cleanup {
+            Err(ProviderError::internal(
+                "intentional session cleanup failure",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn session_functions(
+    cleanups: Arc<AtomicU64>,
+    fail_cleanup: bool,
+) -> BTreeMap<ExternalSymbol, ProviderFunction<WireInterpreterFn>> {
+    let function = descriptor()
+        .functions
+        .into_iter()
+        .next()
+        .expect("generated session descriptor must contain open");
+    // The generated descriptor has one resource in the signature-scoped type
+    // table. This numeric identity is part of the typed wire contract; the
+    // Provider never returns the resource's source spelling in WireValue.
+    let resource_type = WireResourceTypeId::new(0);
+    BTreeMap::from([(
+        function.symbol,
+        ProviderFunction {
+            signature: function.signature,
+            callable: WireInterpreterFn::new_contextual(move |context, arguments| {
+                if !arguments.is_empty() {
+                    return Err(ProviderError::invalid_argument("open expects no arguments"));
+                }
+                let handle = context.register_resource(CountedSession {
+                    cleanups: Arc::clone(&cleanups),
+                    fail_cleanup,
+                })?;
+                Ok(WireValue::Resource {
+                    handle: handle.to_wire(resource_type),
+                })
+            }),
+        },
+    )])
+}
+
+fn runtime_with_session(cleanups: Arc<AtomicU64>, fail_cleanup: bool) -> Runtime {
+    let mut providers = ProviderRegistry::default();
+    providers
+        .register(&descriptor(), session_functions(cleanups, fail_cleanup))
+        .expect("generated session Provider must register against its descriptor");
+    Runtime::new(providers)
+}
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let input = FrontendInputSnapshot::single("main.rss", SOURCE);
+    let input = FrontendInputSnapshot::from_sources(
+        [("main.rss", SOURCE)],
+        [("session.rssi", SESSION_INTERFACE)],
+    );
     let artifact = Compiler.compile_snapshot(&input)?;
     let admitted = ArtifactVerifier.verify(artifact)?.admit_trusted_input();
+    assert_eq!(
+        admitted.external_imports(),
+        &[rsscript_abi_model::ExternalImport {
+            symbol: ExternalSymbol::new("host.session.open")
+                .expect("generated session symbol is valid"),
+            signature: descriptor().functions[0].signature.clone(),
+            signature_hash: descriptor().functions[0].signature.hash(),
+            abi_version: rsscript_abi_model::RUNTIME_ABI_VERSION,
+        }],
+        "compiler Artifact imports and generated Provider descriptor must share one structural contract"
+    );
 
-    // The program imports no external symbols, so the empty registry is a
-    // complete link. A missing Provider would fail here, before execution.
-    let runtime = Runtime::default();
+    // Provider selection is host-owned. The Artifact requires `host.session`
+    // but remains unchanged as this in-memory resource implementation is
+    // replaced by a production implementation with the same descriptor.
+    let cleanups = Arc::new(AtomicU64::new(0));
+    let runtime = runtime_with_session(Arc::clone(&cleanups), false);
     let linked = runtime.link(&admitted)?;
     let report = linked.execute(
         ExecutionRequest::default()
@@ -34,7 +120,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Err(failure.into());
     }
     assert_eq!(report.stdout, "user\nprofile\n");
-    assert!(report.provider_call_traces.is_empty());
+    assert_eq!(report.provider_call_traces.len(), 1);
+    assert_eq!(report.usage.resources_created, 1);
+    assert_eq!(report.usage.resources_cleaned, 1);
+    assert_eq!(cleanups.load(Ordering::SeqCst), 1);
 
     // Reuse the exact same linked Artifact with a host-owned cancellation
     // request. This makes the execution boundary concrete: cancellation is a
@@ -53,6 +142,21 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     assert!(cancelled.stdout.is_empty());
     assert!(cancelled.provider_call_traces.is_empty());
 
+    // Cleanup faults are preserved as execution evidence instead of being
+    // discarded by a convenience API. The resource is still finalized exactly
+    // once and the report accounts for the failed cleanup separately.
+    let failed_cleanups = Arc::new(AtomicU64::new(0));
+    let failed_runtime = runtime_with_session(Arc::clone(&failed_cleanups), true);
+    let cleanup_failure = failed_runtime.link(&admitted)?.execute(
+        ExecutionRequest::default()
+            .limits(RunLimits::bounded())
+            .trace(TracePolicy::MetadataOnly),
+    );
+    assert_eq!(failed_cleanups.load(Ordering::SeqCst), 1);
+    assert_eq!(cleanup_failure.usage.resources_created, 1);
+    assert_eq!(cleanup_failure.usage.resources_cleaned, 0);
+    assert_eq!(cleanup_failure.usage.resource_cleanup_failures, 1);
+
     println!("artifact digest: {}", report.artifact_digest);
     println!("termination: {}", report.termination_reason().as_str());
     println!("steps: {}", report.usage.steps_consumed);
@@ -61,6 +165,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "cancelled termination: {} (steps: {})",
         cancelled.termination_reason().as_str(),
         cancelled.usage.steps_consumed
+    );
+    println!(
+        "cleanup failure accounting: {} failed cleanup(s)",
+        cleanup_failure.usage.resource_cleanup_failures
     );
     Ok(())
 }

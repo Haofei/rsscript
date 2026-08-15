@@ -1674,12 +1674,13 @@ fn rust_aot_lowering_is_explicitly_feature_gated() {
     assert!(sdk_aot.contains("dep:rsscript-aot-backend"));
     assert!(!sdk_aot.contains("rsscript_compiler/aot-rust"));
     assert!(!sdk_aot.contains("rsscript_compiler/legacy-exec-ir"));
-    let aot_backend: toml::Value = toml::from_str(&read(
-        &root.join("experiments/aot-backend/Cargo.toml"),
-    ))
-    .expect("experimental AOT backend manifest should parse");
+    let aot_backend: toml::Value =
+        toml::from_str(&read(&root.join("experiments/aot-backend/Cargo.toml")))
+            .expect("experimental AOT backend manifest should parse");
     assert!(
-        aot_backend["dependencies"].get("rsscript-lowering").is_none(),
+        aot_backend["dependencies"]
+            .get("rsscript-lowering")
+            .is_none(),
         "the experimental AOT backend must not retain source-shaped executable-IR lowering"
     );
     let sdk_compatibility = sdk["features"]["compatibility"]
@@ -3550,12 +3551,7 @@ fn embedding_facade_exposes_only_product_level_objects() {
             "missing stable façade object `{object}`"
         );
     }
-    for forbidden in [
-        "JitPlan",
-        "RegInstr",
-        "ReviewFinding",
-        "reir",
-    ] {
+    for forbidden in ["JitPlan", "RegInstr", "ReviewFinding", "reir"] {
         assert!(
             !source.contains(forbidden),
             "stable embedding façade must not expose `{forbidden}`"
@@ -3679,8 +3675,8 @@ fn mir_codegen_is_a_vm_independent_verified_bytecode_boundary() {
     );
     let checked_external_signature = function_source(&lowering, "fn checked_external_signature(");
     assert!(
-        checked_external_signature.contains("checked_type_to_wire"),
-        "direct MIR external import signatures must consume structural semantic types"
+        checked_external_signature.contains("checked_external_type_to_wire"),
+        "direct MIR external import signatures must consume structural semantic types, including declared resource identity"
     );
     assert!(
         !checked_external_signature.contains("WireType::parse"),

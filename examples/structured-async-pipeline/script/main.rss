@@ -1,5 +1,7 @@
 module async.pipeline
 
+use host.session.*
+
 async fn fetch_user() -> Result<String, String> {
     return Ok("user")
 }
@@ -17,6 +19,12 @@ fn main() -> Result<Unit, String> {
         let resolved_profile = await profile?
         Output.write(message: read resolved_user)
         Output.write(message: read resolved_profile)
+    }
+
+    // Resources cannot live across an await.  This lexical scope therefore
+    // starts only after the task group has drained, making its exact-once
+    // cleanup independent of the asynchronous child lifetime.
+    with open() as session {
     }
     return Ok(Unit)
 }
