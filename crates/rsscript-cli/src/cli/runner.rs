@@ -308,6 +308,9 @@ fn runner_isolation_requirements(profile: RunnerProfileV1) -> StrictIsolationReq
         RunnerProfileV1::NoProvidersNamespaced => baseline
             .require(StrictIsolationControl::UserNamespace)
             .require(StrictIsolationControl::MountNamespace),
+        RunnerProfileV1::NoProvidersSeccompFiltered => {
+            baseline.require(StrictIsolationControl::SeccompFilter)
+        }
         RunnerProfileV1::NoProviders
         | RunnerProfileV1::NoProvidersFilesystemIsolated
         | RunnerProfileV1::LogOnly => baseline,
@@ -342,7 +345,9 @@ fn spawn_runner(
     {
         if matches!(
             profile,
-            RunnerProfileV1::NoProvidersNamespaced | RunnerProfileV1::NoProvidersNetworkIsolated
+            RunnerProfileV1::NoProvidersNamespaced
+                | RunnerProfileV1::NoProvidersNetworkIsolated
+                | RunnerProfileV1::NoProvidersSeccompFiltered
         ) {
             return spawn_guarded_child_strict_with(
                 command,
@@ -548,7 +553,8 @@ fn profiled_registry(profile: RunnerProfileV1) -> Result<ProviderRegistry, Strin
         RunnerProfileV1::NoProviders
         | RunnerProfileV1::NoProvidersNamespaced
         | RunnerProfileV1::NoProvidersNetworkIsolated
-        | RunnerProfileV1::NoProvidersFilesystemIsolated => Ok(ProviderRegistry::default()),
+        | RunnerProfileV1::NoProvidersFilesystemIsolated
+        | RunnerProfileV1::NoProvidersSeccompFiltered => Ok(ProviderRegistry::default()),
         // This preinstalled profile deliberately discards messages. It proves
         // exact allowlist linkage without granting filesystem, network,
         // process, credential, or ambient-environment authority to the child.
@@ -762,6 +768,15 @@ mod tests {
                 .expect("ordinary profile root")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn seccomp_profile_requires_a_kernel_filter_without_request_authority() {
+        let requirements =
+            runner_isolation_requirements(RunnerProfileV1::NoProvidersSeccompFiltered);
+        assert!(requirements.requires(StrictIsolationControl::SeccompFilter));
+        profiled_registry(RunnerProfileV1::NoProvidersSeccompFiltered)
+            .expect("seccomp profile must not require provider installation");
     }
 
     #[test]

@@ -2075,9 +2075,16 @@ an arbitrary shell executor.
         back to the ambient filesystem. This establishes the host-rooted
         adapter; a future filesystem Provider profile must still define its
         own host-owned root and allowed operations.
-      - [ ] **A09.2d.b — Add the syscall filter adapter.** Install the profile's
-        minimal seccomp policy before Artifact parsing, including an explicit
-        compatibility/fail-closed decision for unavailable kernels.
+      - [x] **A09.2d.b — Add the syscall filter adapter.** The explicit
+        `no_providers_seccomp_filtered` profile installs a fixed Linux x86-64
+        BPF filter in the guarded child's `pre_exec` path, before the runner
+        binary parses any protocol or Artifact bytes. It rejects socket entry
+        points and selected process-control syscalls while preserving ordinary
+        loader/runtime calls; the child rechecks `no_new_privs` and seccomp mode
+        before Artifact decoding. Unsupported kernels, architectures, or denied
+        filter installation reject the run instead of falling back to ambient
+        syscall authority. This is a narrow defence-in-depth deny-list, not a
+        complete syscall sandbox.
     - [ ] **A09.2e — Add cgroup-v2 controls.** Attach child process trees to a
       dedicated cgroup where supported, report unavailable delegation clearly,
       and keep the runner's VM termination separate from containment failures.

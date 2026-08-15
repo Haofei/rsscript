@@ -236,9 +236,17 @@ pub const fn strict_isolation_support(control: StrictIsolationControl) -> LimitS
             | StrictIsolationControl::UserNamespace
             | StrictIsolationControl::MountNamespace
             | StrictIsolationControl::NetworkNamespace => LimitSupport::Enforced,
-            StrictIsolationControl::SeccompFilter | StrictIsolationControl::CgroupV2 => {
-                LimitSupport::Unsupported
+            StrictIsolationControl::SeccompFilter => {
+                #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+                {
+                    LimitSupport::Enforced
+                }
+                #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+                {
+                    LimitSupport::Unsupported
+                }
             }
+            StrictIsolationControl::CgroupV2 => LimitSupport::Unsupported,
         };
     }
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
@@ -427,6 +435,143 @@ fn close_raw_fd(descriptor: i64) -> io::Result<()> {
     } else {
         Err(io::Error::last_os_error())
     }
+}
+
+/// Install the runner's narrow seccomp filter for the current Linux process.
+///
+/// The filter rejects ambient network socket creation/use and process-control
+/// syscalls while leaving ordinary runtime, allocator, and dynamic-loader
+/// syscalls available. It is intentionally a defence-in-depth deny-list, not
+/// a claim of complete syscall or container isolation. The caller must select
+/// it explicitly and treat an unsupported kernel as a hard error.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub fn install_current_process_runner_seccomp_filter() -> io::Result<()> {
+    const BPF_LD_W_ABS: u16 = 0x20;
+    const BPF_JMP_JEQ_K: u16 = 0x15;
+    const BPF_RET_K: u16 = 0x06;
+    const SECCOMP_MODE_FILTER: libc::c_ulong = 1;
+    const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
+    const SECCOMP_DATA_NR_OFFSET: u32 = 0;
+    const DENY_ERRNO: u32 = SECCOMP_RET_ERRNO | (libc::EPERM as u32);
+
+    const fn instruction(code: u16, jt: u8, jf: u8, k: u32) -> SeccompFilter {
+        SeccompFilter { code, jt, jf, k }
+    }
+    const fn deny(syscall: libc::c_long) -> [SeccompFilter; 2] {
+        [
+            instruction(BPF_JMP_JEQ_K, 0, 1, syscall as u32),
+            instruction(BPF_RET_K, 0, 0, DENY_ERRNO),
+        ]
+    }
+
+    // Keep this list deliberately small and auditable. The pre-exec installer
+    // must leave `execve` and the dynamic loader's ordinary syscalls available
+    // so the runner can start; the filter instead removes socket entry points
+    // and kernel interfaces that would widen process authority after launch.
+    const FILTER: [SeccompFilter; 40] = [
+        instruction(BPF_LD_W_ABS, 0, 0, SECCOMP_DATA_NR_OFFSET),
+        deny(libc::SYS_socket)[0],
+        deny(libc::SYS_socket)[1],
+        deny(libc::SYS_socketpair)[0],
+        deny(libc::SYS_socketpair)[1],
+        deny(libc::SYS_connect)[0],
+        deny(libc::SYS_connect)[1],
+        deny(libc::SYS_bind)[0],
+        deny(libc::SYS_bind)[1],
+        deny(libc::SYS_listen)[0],
+        deny(libc::SYS_listen)[1],
+        deny(libc::SYS_accept)[0],
+        deny(libc::SYS_accept)[1],
+        deny(libc::SYS_accept4)[0],
+        deny(libc::SYS_accept4)[1],
+        deny(libc::SYS_sendto)[0],
+        deny(libc::SYS_sendto)[1],
+        deny(libc::SYS_sendmsg)[0],
+        deny(libc::SYS_sendmsg)[1],
+        deny(libc::SYS_recvfrom)[0],
+        deny(libc::SYS_recvfrom)[1],
+        deny(libc::SYS_recvmsg)[0],
+        deny(libc::SYS_recvmsg)[1],
+        deny(libc::SYS_shutdown)[0],
+        deny(libc::SYS_shutdown)[1],
+        deny(libc::SYS_ptrace)[0],
+        deny(libc::SYS_ptrace)[1],
+        deny(libc::SYS_bpf)[0],
+        deny(libc::SYS_bpf)[1],
+        deny(libc::SYS_perf_event_open)[0],
+        deny(libc::SYS_perf_event_open)[1],
+        deny(libc::SYS_kexec_load)[0],
+        deny(libc::SYS_kexec_load)[1],
+        deny(libc::SYS_init_module)[0],
+        deny(libc::SYS_init_module)[1],
+        deny(libc::SYS_finit_module)[0],
+        deny(libc::SYS_finit_module)[1],
+        deny(libc::SYS_delete_module)[0],
+        deny(libc::SYS_delete_module)[1],
+        instruction(BPF_RET_K, 0, 0, 0x7fff_0000),
+    ];
+
+    let no_new_privileges = unsafe { libc::prctl(libc::PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) };
+    if no_new_privileges != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "seccomp runner filter requires no_new_privs=1",
+        ));
+    }
+    let program = SeccompProgram {
+        length: u16::try_from(FILTER.len()).expect("static filter length fits u16"),
+        filter: FILTER.as_ptr(),
+    };
+    // SAFETY: `program` points to the fixed, bounded BPF program above for the
+    // duration of the syscall. The kernel validates every instruction before
+    // installing this irreversible filter.
+    if unsafe {
+        libc::prctl(
+            libc::PR_SET_SECCOMP,
+            SECCOMP_MODE_FILTER,
+            (&raw const program).cast::<libc::c_void>(),
+            0,
+            0,
+        )
+    } == 0
+    {
+        Ok(())
+    } else {
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::EINVAL | libc::ENOSYS | libc::EOPNOTSUPP) => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!("runner seccomp filter is unavailable: {error}"),
+            )),
+            _ => Err(error),
+        }
+    }
+}
+
+/// The reference BPF layout is currently implemented only for Linux x86-64.
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+pub fn install_current_process_runner_seccomp_filter() -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "runner seccomp filter is available only on Linux x86-64",
+    ))
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct SeccompFilter {
+    code: u16,
+    jt: u8,
+    jf: u8,
+    k: u32,
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[repr(C)]
+struct SeccompProgram {
+    length: u16,
+    filter: *const SeccompFilter,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -623,17 +768,28 @@ pub fn verify_strict_child_context_with(
     requirements.require_fully_enforced()?;
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
-        if !requirements.requires(StrictIsolationControl::NoNewPrivileges) {
+        let checks_no_new_privileges = requirements
+            .requires(StrictIsolationControl::NoNewPrivileges)
+            || requirements.requires(StrictIsolationControl::SeccompFilter);
+        if !checks_no_new_privileges {
             return Ok(());
         }
         let status = std::fs::read_to_string("/proc/self/status")?;
-        if parse_no_new_privileges(&status) == Some(true) {
-            return Ok(());
+        if parse_no_new_privileges(&status) != Some(true) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "strict child context requires Linux no_new_privs=1",
+            ));
         }
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "strict child context requires Linux no_new_privs=1",
-        ));
+        if requirements.requires(StrictIsolationControl::SeccompFilter)
+            && parse_seccomp_filter(&status) != Some(true)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "strict child context requires an installed seccomp filter",
+            ));
+        }
+        Ok(())
     }
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
     Ok(())
@@ -646,6 +802,18 @@ fn parse_no_new_privileges(status: &str) -> Option<bool> {
         match value {
             "0" => Some(false),
             "1" => Some(true),
+            _ => None,
+        }
+    })
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn parse_seccomp_filter(status: &str) -> Option<bool> {
+    status.lines().find_map(|line| {
+        let value = line.strip_prefix("Seccomp:")?.trim();
+        match value {
+            "0" | "1" => Some(false),
+            "2" => Some(true),
             _ => None,
         }
     })
@@ -669,6 +837,7 @@ fn configure_strict_platform(
         && !requirements.requires(StrictIsolationControl::UserNamespace)
         && !requirements.requires(StrictIsolationControl::MountNamespace)
         && !requirements.requires(StrictIsolationControl::NetworkNamespace)
+        && !requirements.requires(StrictIsolationControl::SeccompFilter)
     {
         return Ok(());
     }
@@ -680,10 +849,14 @@ fn configure_strict_platform(
     unsafe {
         command.pre_exec(move || {
             configure_linux_namespaces(requirements)?;
-            if requirements.requires(StrictIsolationControl::NoNewPrivileges)
+            if (requirements.requires(StrictIsolationControl::NoNewPrivileges)
+                || requirements.requires(StrictIsolationControl::SeccompFilter))
                 && libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
             {
                 return Err(io::Error::last_os_error());
+            }
+            if requirements.requires(StrictIsolationControl::SeccompFilter) {
+                install_current_process_runner_seccomp_filter()?;
             }
             Ok(())
         });
@@ -1396,6 +1569,7 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
     #[test]
     fn unavailable_strict_control_fails_before_child_spawn() {
         let mut command = if cfg!(windows) {
@@ -1420,7 +1594,7 @@ mod tests {
             },
             requirements,
         )
-        .expect_err("unimplemented strict control must fail closed");
+        .expect_err("unsupported strict control must fail closed");
         assert_eq!(error.kind(), io::ErrorKind::Unsupported);
         assert!(error.to_string().contains("seccomp filter"));
     }
@@ -1448,6 +1622,62 @@ mod tests {
             .expect("read child status");
         assert!(child.wait().expect("child should exit").success());
         assert_eq!(stdout.trim(), "NoNewPrivs:\t1");
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn seccomp_filter_is_enforced_or_fails_closed_before_runner_code() {
+        const CHILD: &str = "RSSCRIPT_SECCOMP_FILTER_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let requirements = StrictIsolationRequirements::linux_runner()
+                .require(StrictIsolationControl::SeccompFilter);
+            verify_strict_child_context_with(requirements)
+                .expect("strict child must observe installed seccomp filter");
+            // SAFETY: this direct syscall has no pointer arguments. The test
+            // checks the filter's observable deny result without creating a
+            // socket or interacting with the host network.
+            let socket = unsafe { libc::syscall(libc::SYS_socket, libc::AF_INET, 1, 0) };
+            assert_eq!(socket, -1, "seccomp must reject socket creation");
+            assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::EPERM));
+            assert!(
+                unsafe { libc::getpid() } > 0,
+                "ordinary syscalls remain available"
+            );
+            return;
+        }
+
+        let requirements = StrictIsolationRequirements::linux_runner()
+            .require(StrictIsolationControl::SeccompFilter);
+        let mut command = Command::new(std::env::current_exe().expect("test executable"));
+        command
+            .args([
+                "--exact",
+                "tests::seccomp_filter_is_enforced_or_fails_closed_before_runner_code",
+            ])
+            .env(CHILD, "1");
+        match spawn_guarded_child_strict_with(
+            &mut command,
+            ProcessLimits::generated_program(),
+            requirements,
+        ) {
+            Ok(child) => {
+                assert!(child.wait().expect("seccomp child should exit").success());
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::Unsupported
+                        | io::ErrorKind::PermissionDenied
+                        // User-mode Linux emulators can reject `prctl` before
+                        // the kernel reaches the filter verifier. That is an
+                        // unavailable boundary, not permission to continue.
+                        | io::ErrorKind::InvalidInput
+                ) =>
+            {
+                eprintln!("seccomp unavailable or denied: {error}");
+            }
+            Err(error) => panic!("seccomp filter must install or fail closed: {error}"),
+        }
     }
 
     #[cfg(any(target_os = "linux", target_os = "android"))]

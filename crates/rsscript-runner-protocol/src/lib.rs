@@ -43,6 +43,11 @@ pub enum RunnerProfileV1 {
     /// filesystem root. The runner applies a Linux Landlock allowlist before
     /// Artifact parsing; the request cannot choose or widen that root.
     NoProvidersFilesystemIsolated,
+    /// Reference fail-closed profile with no Providers and a narrow Linux
+    /// seccomp deny-list installed before runner code begins. It rejects
+    /// ambient socket entry points and selected process-control syscalls;
+    /// unsupported kernels or architectures reject the launch.
+    NoProvidersSeccompFiltered,
     /// Reference allowlisted profile with only `host.log.emit` installed.
     ///
     /// The sink is selected by the runner host and has no filesystem, network,
@@ -100,6 +105,15 @@ impl RunnerProfileV1 {
                 version: 1,
                 descriptor_digest:
                     "sha256:096864fb62a41bcf0aac402fd117e4b24bc6c9393e4ba1a2bde964cde0e5592f"
+                        .to_string(),
+            },
+            // sha256 of the versioned no-Provider profile descriptor plus its
+            // Linux x86-64 runner seccomp requirement.
+            Self::NoProvidersSeccompFiltered => RunnerProfileIdentityV1 {
+                id: "rsscript.runner.no_providers_seccomp_filtered".to_string(),
+                version: 1,
+                descriptor_digest:
+                    "sha256:0fe43ddf8e26c4e21d7ccf61f3f558105e6b147890cd4b2d09af45223ceeeef7"
                         .to_string(),
             },
             // sha256 of the versioned profile descriptor containing the
@@ -575,6 +589,21 @@ mod tests {
         let json = serde_json::to_value(request).expect("request JSON");
         assert_eq!(json["profile"], "no_providers_filesystem_isolated");
         for forbidden in ["provider", "root", "path", "filesystem", "authority"] {
+            assert!(
+                json.get(forbidden).is_none(),
+                "profile must not inject {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn seccomp_profile_carries_no_syscall_policy_or_provider_input() {
+        let request =
+            RunnerRequestV1::with_profile(Vec::new(), RunnerProfileV1::NoProvidersSeccompFiltered)
+                .expect("request");
+        let json = serde_json::to_value(request).expect("request JSON");
+        assert_eq!(json["profile"], "no_providers_seccomp_filtered");
+        for forbidden in ["provider", "syscall", "seccomp", "authority", "policy"] {
             assert!(
                 json.get(forbidden).is_none(),
                 "profile must not inject {forbidden}"

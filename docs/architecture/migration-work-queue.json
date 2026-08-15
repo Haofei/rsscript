@@ -2,9 +2,9 @@
   "schema": "rsscript.migration_queue.v1",
   "tasks": [
     {
-      "id": "A09.2d.b",
+      "id": "A09.2e",
       "priority": 80,
-      "depends_on": ["A09.2d.a"],
+      "depends_on": ["A09.2d.b"],
       "scope": [
         "crates/process-guard/**",
         "crates/rsscript-cli/**",
@@ -12,8 +12,8 @@
         "docs/threat-model.md"
       ],
       "acceptance": [
-        "A profile which requires a syscall filter installs it before runner code can parse an Artifact.",
-        "Kernel policy which makes the syscall filter unavailable is reported as an isolation failure before execution.",
+        "A strict profile attaches the child process tree to a dedicated cgroup-v2 boundary before runner execution where delegation is available.",
+        "Unavailable cgroup delegation is reported as an isolation failure before execution.",
         "The Linux adapter has focused supported-path and fail-closed coverage."
       ],
       "verification": [
