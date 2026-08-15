@@ -695,6 +695,13 @@ mechanical acceptance condition holds.
     run, diff, and package check capture the immutable project snapshot through
     the SDK loader path. The remaining legacy directory review/inspection path
     is an explicit `package-inspect` feature, and AOT extends that feature.
+    The architecture suite now additionally executes `cargo tree` with the
+    compiler's reviewed default feature closure and rejects bytecode, VM,
+    Provider, workspace-loader, artifact-store, filesystem-locking, process,
+    and JIT adapters. It also checks that the compiler default feature set
+    remains empty. Compatibility package/AOT implementations still live
+    physically under compiler, so the full migration acceptance condition
+    remains open.
 
 ### 2. Typed CFG MIR
 

@@ -55,6 +55,30 @@ fn cargo_metadata(root: &Path) -> serde_json::Value {
     serde_json::from_slice(&output.stdout).expect("cargo metadata output should be JSON")
 }
 
+fn cargo_tree(root: &Path, package: &str) -> String {
+    let output = Command::new(env!("CARGO"))
+        .args([
+            "tree",
+            "--locked",
+            "-p",
+            package,
+            "--no-default-features",
+            "-e",
+            "normal",
+            "--prefix",
+            "none",
+        ])
+        .current_dir(root)
+        .output()
+        .expect("cargo tree should start");
+    assert!(
+        output.status.success(),
+        "cargo tree for `{package}` failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).expect("cargo tree output must be UTF-8")
+}
+
 fn metadata_direct_dependencies(metadata: &serde_json::Value, package: &str) -> BTreeSet<String> {
     metadata["packages"]
         .as_array()
@@ -181,6 +205,43 @@ fn cargo_metadata_enforces_composition_dependency_direction() {
                 "composition root must remain a dependency leaf; `{name}` depends on it"
             );
         }
+    }
+}
+
+#[test]
+fn reviewed_compiler_closure_excludes_host_and_persistence_adapters() {
+    let root = workspace_root();
+    let compiler_manifest = read(&root.join("crates/rsscript-compiler/Cargo.toml"));
+    let manifest: toml::Value =
+        toml::from_str(&compiler_manifest).expect("compiler manifest must remain valid TOML");
+    assert!(
+        manifest["features"]["default"]
+            .as_array()
+            .is_some_and(Vec::is_empty),
+        "the reviewed compiler must not enable lowering, packages, or host adapters by default"
+    );
+
+    let tree = cargo_tree(&root, "rsscript-compiler");
+    for forbidden in [
+        "rsscript-artifact-store",
+        "rsscript-bytecode",
+        "rsscript-codegen-vm",
+        "rsscript-lowering",
+        "rsscript-mir",
+        "rsscript-provider-api",
+        "rsscript-vm",
+        "rsscript-workspace-loader",
+        "rss-native-abi",
+        "rss-process-guard",
+        "vm-jit",
+        "fs2",
+        "rustix",
+        "tempfile",
+    ] {
+        assert!(
+            !tree.lines().any(|line| line.starts_with(forbidden)),
+            "the default compiler dependency closure must not include `{forbidden}`:\n{tree}"
+        );
     }
 }
 
