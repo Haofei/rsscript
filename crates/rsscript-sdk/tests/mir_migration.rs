@@ -584,6 +584,31 @@ fn main() -> Int {
 "#,
     },
     MigrationCase {
+        name: "buffer_clear",
+        capability: "resolved mutable buffer clear",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn main() -> Int {
+    let mut buffer = Buffer.new(size: 8)
+    Buffer.clear(buffer: mut buffer)
+    return Buffer.len(buffer: read buffer)
+}
+"#,
+    },
+    MigrationCase {
+        name: "string_builder_mutations",
+        capability: "resolved mutable string-builder push and consuming finish",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn main() -> String {
+    local builder = StringBuilder.new()
+    let value = "rss"
+    StringBuilder.push(builder: mut builder, value: read value)
+    return StringBuilder.finish(builder: take builder)
+}
+"#,
+    },
+    MigrationCase {
         name: "typed_json_decode",
         capability: "typed JSON decode builtins and record layouts",
         stage: MigrationStage::DualPath,
@@ -631,6 +656,18 @@ const EVIDENCE_OVERRIDES: &[MigrationEvidenceOverride] = &[
         case: "sorted_set_mutations",
         evidence: MigrationEvidence::VerifiedBytecode {
             reference_interpreter_gap: "the test-only MIR interpreter does not model SortedSet.new or ordered-set runtime representation",
+        },
+    },
+    MigrationEvidenceOverride {
+        case: "buffer_clear",
+        evidence: MigrationEvidence::VerifiedBytecode {
+            reference_interpreter_gap: "the test-only MIR interpreter does not model Buffer.new or managed byte-buffer runtime representation",
+        },
+    },
+    MigrationEvidenceOverride {
+        case: "string_builder_mutations",
+        evidence: MigrationEvidence::VerifiedBytecode {
+            reference_interpreter_gap: "the test-only MIR interpreter does not model StringBuilder allocation or consuming finish runtime representation",
         },
     },
 ];
@@ -1321,6 +1358,97 @@ fn main() -> Int {
     assert_eq!(direct.stdout, legacy.stdout);
     assert_eq!(direct.stderr, legacy.stderr);
     assert_eq!(direct.usage, legacy.usage);
+}
+
+#[test]
+fn direct_checked_hir_buffer_and_string_builder_mutations_preserve_effect_contracts() {
+    let buffer_source = r#"
+fn main() -> Int {
+    let mut buffer = Buffer.new(size: 8)
+    Buffer.clear(buffer: mut buffer)
+    return Buffer.len(buffer: read buffer)
+}
+"#;
+    let buffer = compile_source_to_ir("direct-hir-buffer-clear.rss", buffer_source)
+        .expect("Buffer clear fixture compiles");
+    let buffer_mir = buffer
+        .checked_hir_mir()
+        .expect("Buffer.clear should lower directly from checked HIR");
+    assert!(
+        buffer_mir
+            .functions()
+            .iter()
+            .flat_map(|function| function.blocks())
+            .flat_map(|block| block.instructions())
+            .any(|instruction| matches!(instruction, MirInstruction::BufferClear { .. })),
+        "direct MIR must preserve Buffer.clear as an explicit mutable-place operation"
+    );
+    let direct_buffer = reg_vm_compile_mir(
+        &buffer_mir,
+        buffer.source_hash(),
+        buffer.interface_catalog_digest(),
+    )
+    .expect("Buffer clear MIR emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("Buffer clear bytecode executes");
+    let legacy_buffer = reg_vm_eval_source_main("direct-hir-buffer-clear.rss", buffer_source)
+        .expect("legacy Buffer clear path executes");
+    assert_eq!(legacy_buffer.value, "0");
+    assert_eq!(direct_buffer.value, legacy_buffer.value);
+    assert_eq!(direct_buffer.usage, legacy_buffer.usage);
+
+    let builder_source = r#"
+fn main() -> String {
+    local builder = StringBuilder.new()
+    let value = "rss"
+    StringBuilder.push(builder: mut builder, value: read value)
+    return StringBuilder.finish(builder: take builder)
+}
+"#;
+    let builder = compile_source_to_ir("direct-hir-string-builder.rss", builder_source)
+        .expect("StringBuilder fixture compiles");
+    let builder_mir = builder
+        .checked_hir_mir()
+        .expect("StringBuilder updates should lower directly from checked HIR");
+    let instructions = builder_mir
+        .functions()
+        .iter()
+        .flat_map(|function| function.blocks())
+        .flat_map(|block| block.instructions())
+        .collect::<Vec<_>>();
+    assert!(
+        instructions
+            .iter()
+            .any(|instruction| matches!(instruction, MirInstruction::StringBuilderPush { .. })),
+        "direct MIR must preserve StringBuilder.push as an explicit mutable-place operation"
+    );
+    assert!(
+        instructions
+            .iter()
+            .any(|instruction| matches!(instruction, MirInstruction::StringBuilderFinish { .. })),
+        "direct MIR must preserve StringBuilder.finish as an explicit consuming operation"
+    );
+    assert!(
+        instructions
+            .iter()
+            .any(|instruction| matches!(instruction, MirInstruction::TakePlace { .. })),
+        "StringBuilder.finish must retain the checked take transition in MIR"
+    );
+    let direct_builder = reg_vm_compile_mir(
+        &builder_mir,
+        builder.source_hash(),
+        builder.interface_catalog_digest(),
+    )
+    .expect("StringBuilder MIR emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("StringBuilder bytecode executes");
+    let legacy_builder = reg_vm_eval_source_main("direct-hir-string-builder.rss", builder_source)
+        .expect("legacy StringBuilder path executes");
+    assert_eq!(legacy_builder.value, "rss");
+    assert_eq!(direct_builder.value, legacy_builder.value);
+    assert_eq!(direct_builder.stdout, legacy_builder.stdout);
+    assert_eq!(direct_builder.stderr, legacy_builder.stderr);
+    assert_eq!(direct_builder.usage, legacy_builder.usage);
 }
 
 #[test]

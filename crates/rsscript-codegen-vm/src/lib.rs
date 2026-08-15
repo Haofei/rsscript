@@ -639,6 +639,38 @@ fn lower_instruction(
                 ("value", json!(value_reg(function, *value))),
             ],
         )),
+        MirInstruction::BufferClear {
+            destination,
+            buffer,
+        } => code.push(instr(
+            "BufferClear",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("buffer", json!(place_reg(*buffer))),
+            ],
+        )),
+        MirInstruction::StringBuilderPush {
+            destination,
+            builder,
+            value,
+        } => code.push(instr(
+            "StringBuilderPush",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("builder", json!(place_reg(*builder))),
+                ("value", json!(value_reg(function, *value))),
+            ],
+        )),
+        MirInstruction::StringBuilderFinish {
+            destination,
+            builder,
+        } => code.push(instr(
+            "StringBuilderFinish",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("builder", json!(value_reg(function, *builder))),
+            ],
+        )),
         MirInstruction::MapGet {
             destination,
             map,

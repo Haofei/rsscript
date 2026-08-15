@@ -1870,6 +1870,50 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                     value,
                 });
             }
+            "clear" if signature.namespace.as_deref() == Some("Buffer") => {
+                if receiver.is_some() || args.len() != 1 {
+                    return self.unsupported("Buffer.clear with invalid checked call shape");
+                }
+                let buffer = self.lower_mutable_builtin_place(&args[0].value)?;
+                self.emit(MirInstruction::BufferClear {
+                    destination,
+                    buffer,
+                });
+            }
+            "push" if signature.namespace.as_deref() == Some("StringBuilder") => {
+                if receiver.is_some() || args.len() != 2 {
+                    return self.unsupported("StringBuilder.push with invalid checked call shape");
+                }
+                let mut ordered = args.iter().collect::<Vec<_>>();
+                ordered.sort_by_key(|argument| argument.evaluation_index);
+                let builder = self.lower_mutable_builtin_place(&ordered[0].value)?;
+                let value = self.lower_expression(&ordered[1].value)?;
+                self.emit(MirInstruction::StringBuilderPush {
+                    destination,
+                    builder,
+                    value,
+                });
+            }
+            "finish" if signature.namespace.as_deref() == Some("StringBuilder") => {
+                if receiver.is_some() || args.len() != 1 {
+                    return self
+                        .unsupported("StringBuilder.finish with invalid checked call shape");
+                }
+                let checked::HirExpr::Effect {
+                    effect: checked::ParamEffect::Take,
+                    value,
+                    ..
+                } = &args[0].value
+                else {
+                    return self
+                        .unsupported("StringBuilder.finish without checked take argument effect");
+                };
+                let builder = self.lower_take(value)?;
+                self.emit(MirInstruction::StringBuilderFinish {
+                    destination,
+                    builder,
+                });
+            }
             "get" if signature.namespace.as_deref() == Some("Map") => {
                 if receiver.is_some() || args.len() != 2 {
                     return self.unsupported("Map.get with invalid checked call shape");

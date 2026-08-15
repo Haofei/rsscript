@@ -1073,6 +1073,14 @@ mechanical acceptance condition holds.
       bytecode fixture covers duplicate detection, removal, and clear. Its
       reference-interpreter exception is explicit because the small oracle does
       not model `SortedSet` runtime representation.
+    - [x] **M03.4o — Lower buffer and string-builder mutation boundaries.**
+      `Buffer.clear(mut buffer)` becomes `BufferClear` over a mutable `PlaceId`.
+      `StringBuilder.push(mut builder, value)` and consuming
+      `StringBuilder.finish(take builder)` become explicit MIR operations; the
+      latter first records the checked `TakePlace` transition. Direct/legacy
+      bytecode fixtures prove buffer mutation and completed string output. Both
+      retain named reference-interpreter exceptions for their unmodeled runtime
+      representations.
 - [ ] **M04 — Lower checked HIR to MIR exactly once.** Backend code cannot
   inspect syntax AST or reconstruct semantic facts. MIR verification rejects
   unresolved calls, invalid ownership state, incomplete cleanup, and malformed
@@ -1335,6 +1343,12 @@ mechanical acceptance condition holds.
       mutable ordered-set places and resolved values to their existing
       verifier-checked v1 instructions. Direct parity checks cover membership
       results and retention facts without executable-IR recovery.
+    - [x] **V02.3p — Emit buffer and string-builder mutation operations.**
+      `BufferClear`, `StringBuilderPush`, and `StringBuilderFinish` map their
+      resolved mutable-place or consumed-value operands to existing
+      verifier-checked v1 instructions. The direct corpus proves clear, push,
+      consuming finish, and the preceding take transition against the legacy
+      VM.
   - [x] **V02.4 — Switch reviewed builds to the compiler bytecode boundary.**
     SDK source, interface, and package builds delegate checked HIR → MIR →
     `codegen-vm` Artifact emission to the compiler's VM-free `bytecode`

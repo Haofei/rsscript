@@ -276,6 +276,22 @@ pub enum MirInstruction {
         set: PlaceId,
         value: ValueId,
     },
+    /// Clear a resolved mutable buffer place.
+    BufferClear {
+        destination: ValueId,
+        buffer: PlaceId,
+    },
+    /// Append one string value to a resolved mutable string builder place.
+    StringBuilderPush {
+        destination: ValueId,
+        builder: PlaceId,
+        value: ValueId,
+    },
+    /// Consume a string builder value and return its completed string.
+    StringBuilderFinish {
+        destination: ValueId,
+        builder: ValueId,
+    },
     /// Read a value from a resolved mutable map. The result remains an
     /// `Option` so absence is explicit in the typed control-flow graph rather
     /// than hidden in a source-level `Map.get` spelling.
@@ -1374,6 +1390,9 @@ fn instruction_definitions(instruction: &MirInstruction) -> Vec<ValueId> {
         | MirInstruction::SortedSetClear { destination, .. }
         | MirInstruction::SortedSetInsert { destination, .. }
         | MirInstruction::SortedSetRemove { destination, .. }
+        | MirInstruction::BufferClear { destination, .. }
+        | MirInstruction::StringBuilderPush { destination, .. }
+        | MirInstruction::StringBuilderFinish { destination, .. }
         | MirInstruction::MapGet { destination, .. }
         | MirInstruction::MapClear { destination, .. }
         | MirInstruction::MapInsert { destination, .. }
@@ -1441,6 +1460,8 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         MirInstruction::SortedMapRemove { key, .. } => vec![*key],
         MirInstruction::SortedSetInsert { value, .. }
         | MirInstruction::SortedSetRemove { value, .. } => vec![*value],
+        MirInstruction::StringBuilderPush { value, .. }
+        | MirInstruction::StringBuilderFinish { builder: value, .. } => vec![*value],
         MirInstruction::MapGet { map, key, .. } => vec![*map, *key],
         MirInstruction::MapInsert { key, value, .. }
         | MirInstruction::MapInsertOld { key, value, .. } => vec![*key, *value],
@@ -1487,7 +1508,8 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         | MirInstruction::DequePopBack { .. }
         | MirInstruction::DequePopFront { .. }
         | MirInstruction::SortedMapClear { .. }
-        | MirInstruction::SortedSetClear { .. } => Vec::new(),
+        | MirInstruction::SortedSetClear { .. }
+        | MirInstruction::BufferClear { .. } => Vec::new(),
         MirInstruction::TryResult { source, .. } => vec![*source],
     }
 }
@@ -1643,6 +1665,10 @@ fn transfer_move_state(
         MirInstruction::SortedSetClear { set, .. }
         | MirInstruction::SortedSetInsert { set, .. }
         | MirInstruction::SortedSetRemove { set, .. } => check_live(*set, moved_places),
+        MirInstruction::BufferClear { buffer, .. }
+        | MirInstruction::StringBuilderPush {
+            builder: buffer, ..
+        } => check_live(*buffer, moved_places),
         MirInstruction::MapInsert { map, .. }
         | MirInstruction::MapInsertOld { map, .. }
         | MirInstruction::MapRemove { map, .. } => check_live(*map, moved_places),
@@ -1688,6 +1714,7 @@ fn transfer_move_state(
         | MirInstruction::UnwrapOption { .. }
         | MirInstruction::ListGet { .. }
         | MirInstruction::MapGet { .. }
+        | MirInstruction::StringBuilderFinish { .. }
         | MirInstruction::GetField { .. }
         | MirInstruction::ListLen { .. }
         | MirInstruction::Binary { .. }
@@ -1906,6 +1933,31 @@ fn verify_instruction(
             check_live_place(*set, moved_places)?;
             define(*destination, defined)?;
             used.push(*value);
+            Ok(())
+        }
+        MirInstruction::BufferClear {
+            destination,
+            buffer,
+        } => {
+            check_live_place(*buffer, moved_places)?;
+            define(*destination, defined)
+        }
+        MirInstruction::StringBuilderPush {
+            destination,
+            builder,
+            value,
+        } => {
+            check_live_place(*builder, moved_places)?;
+            define(*destination, defined)?;
+            used.push(*value);
+            Ok(())
+        }
+        MirInstruction::StringBuilderFinish {
+            destination,
+            builder,
+        } => {
+            define(*destination, defined)?;
+            used.push(*builder);
             Ok(())
         }
         MirInstruction::MapClear { destination, map } => {

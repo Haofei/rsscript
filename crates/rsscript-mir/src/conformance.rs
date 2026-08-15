@@ -883,7 +883,10 @@ impl<'a> Interpreter<'a> {
                     | MirInstruction::SortedMapRemove { .. }
                     | MirInstruction::SortedSetClear { .. }
                     | MirInstruction::SortedSetInsert { .. }
-                    | MirInstruction::SortedSetRemove { .. } => {
+                    | MirInstruction::SortedSetRemove { .. }
+                    | MirInstruction::BufferClear { .. }
+                    | MirInstruction::StringBuilderPush { .. }
+                    | MirInstruction::StringBuilderFinish { .. } => {
                         return Err(MirExecutionError::UnsupportedBuiltinCall);
                     }
                     MirInstruction::MapGet {
