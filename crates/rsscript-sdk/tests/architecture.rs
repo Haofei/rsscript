@@ -1188,10 +1188,11 @@ fn language_engine_does_not_read_the_operating_system() {
     for boundary in [
         "CompilationSession",
         "workspace_module_graph",
-        "frontend.format_",
-        "frontend.lint_",
-        "frontend.symbol_index_",
-        "frontend.document_symbols_",
+        "format_file_with_operation",
+        "lint_file_with_operation",
+        "symbol_index_file_with_operation",
+        "document_symbols_file_with_operation",
+        "operation_for_request",
     ] {
         assert!(
             language_service.contains(boundary),

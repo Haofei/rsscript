@@ -333,51 +333,115 @@ impl LanguageService {
     }
 
     pub fn format(&mut self, path: &str) -> Option<String> {
-        let document = self.documents.get(path)?.clone();
+        self.format_with(path, LanguageRequest::default())
+            .ok()
+            .flatten()
+    }
+
+    /// Format a document through the shared session query while honoring the
+    /// request cancellation and deadline boundary. The convenience
+    /// [`format`](Self::format) method intentionally retains its historical
+    /// best-effort shape for editor integrations that do not surface request
+    /// failures.
+    pub fn format_with(
+        &mut self,
+        path: &str,
+        request: LanguageRequest<'_>,
+    ) -> Result<Option<String>, LanguageServiceError> {
+        check_request(request)?;
+        let Some(document) = self.documents.get(path).cloned() else {
+            return Ok(None);
+        };
+        let operation = operation_for_request(request);
         let before = self.frontend.stats();
         let value = match document.kind {
-            DocumentKind::Source => self.frontend.format_file(path),
-            DocumentKind::Interface => self.frontend.format_interface(path),
-        }?;
+            DocumentKind::Source => self.frontend.format_file_with_operation(path, &operation),
+            DocumentKind::Interface => self
+                .frontend
+                .format_interface_with_operation(path, &operation),
+        }
+        .map_err(LanguageServiceError::from)?;
         let after = self.frontend.stats();
         self.record_session_cache_result(
             QueryKind::Format,
             after.format_cache_hits > before.format_cache_hits,
         );
-        Some(value.to_string())
+        operation.check().map_err(LanguageServiceError::from)?;
+        Ok(value.map(|value| value.to_string()))
     }
 
     pub fn symbols(&mut self, path: &str) -> Option<SymbolIndex> {
-        let document = self.documents.get(path)?.clone();
+        self.symbols_with(path, LanguageRequest::default())
+            .ok()
+            .flatten()
+    }
+
+    /// Query a document symbol index through the same operation-aware session
+    /// boundary as semantic diagnostics.
+    pub fn symbols_with(
+        &mut self,
+        path: &str,
+        request: LanguageRequest<'_>,
+    ) -> Result<Option<SymbolIndex>, LanguageServiceError> {
+        check_request(request)?;
+        let Some(document) = self.documents.get(path).cloned() else {
+            return Ok(None);
+        };
+        let operation = operation_for_request(request);
         let before = self.frontend.stats();
         let value = match document.kind {
-            DocumentKind::Source => self.frontend.symbol_index_file(path),
-            DocumentKind::Interface => self.frontend.symbol_index_interface(path),
-        }?;
+            DocumentKind::Source => self
+                .frontend
+                .symbol_index_file_with_operation(path, &operation),
+            DocumentKind::Interface => self
+                .frontend
+                .symbol_index_interface_with_operation(path, &operation),
+        }
+        .map_err(LanguageServiceError::from)?;
         let after = self.frontend.stats();
         self.record_session_cache_result(
             QueryKind::Symbols,
             after.symbol_cache_hits > before.symbol_cache_hits,
         );
-        Some(value.as_ref().clone())
+        operation.check().map_err(LanguageServiceError::from)?;
+        Ok(value.map(|value| value.as_ref().clone()))
     }
 
     pub fn document_symbols(&mut self, path: &str) -> Vec<RssDocumentSymbol> {
+        self.document_symbols_with(path, LanguageRequest::default())
+            .unwrap_or_default()
+    }
+
+    /// Query document symbols while honoring the same cancellation/deadline
+    /// contract as the rest of the language service.
+    pub fn document_symbols_with(
+        &mut self,
+        path: &str,
+        request: LanguageRequest<'_>,
+    ) -> Result<Vec<RssDocumentSymbol>, LanguageServiceError> {
+        check_request(request)?;
         let Some(document) = self.documents.get(path).cloned() else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
+        let operation = operation_for_request(request);
         let before = self.frontend.stats();
         let value = match document.kind {
-            DocumentKind::Source => self.frontend.document_symbols_file(path),
-            DocumentKind::Interface => self.frontend.document_symbols_interface(path),
+            DocumentKind::Source => self
+                .frontend
+                .document_symbols_file_with_operation(path, &operation),
+            DocumentKind::Interface => self
+                .frontend
+                .document_symbols_interface_with_operation(path, &operation),
         }
+        .map_err(LanguageServiceError::from)?
         .unwrap_or_else(|| Arc::from([]));
         let after = self.frontend.stats();
         self.record_session_cache_result(
             QueryKind::DocumentSymbols,
             after.document_symbol_cache_hits > before.document_symbol_cache_hits,
         );
-        value.to_vec()
+        operation.check().map_err(LanguageServiceError::from)?;
+        Ok(value.to_vec())
     }
 
     fn lint_with_operation(
@@ -391,8 +455,10 @@ impl LanguageService {
         };
         let before = self.frontend.stats();
         let value = match document.kind {
-            DocumentKind::Source => self.frontend.lint_file(path),
-            DocumentKind::Interface => self.frontend.lint_interface(path),
+            DocumentKind::Source => self.frontend.lint_file_with_operation(path, operation)?,
+            DocumentKind::Interface => self
+                .frontend
+                .lint_interface_with_operation(path, operation)?,
         }
         .unwrap_or_else(|| Arc::from([]));
         let after = self.frontend.stats();
@@ -477,6 +543,14 @@ impl LanguageService {
             kind: document.kind,
             text: file.text_arc(),
         })
+    }
+}
+
+fn operation_for_request(request: LanguageRequest<'_>) -> OperationContext {
+    OperationContext {
+        cancellation: request.cancellation.cloned(),
+        deadline: request.deadline,
+        ..OperationContext::default()
     }
 }
 
@@ -1028,5 +1102,57 @@ mod tests {
             Err(LanguageServiceError::DeadlineExceeded)
         );
         assert_eq!(service.stats().cache_hits, 0);
+    }
+
+    #[test]
+    fn editor_result_queries_share_the_request_operation_boundary() {
+        let mut service = service();
+        service.set_file(
+            "main.rss",
+            1,
+            DocumentKind::Source,
+            "fn main() -> Unit { return Unit }\n",
+        );
+        service.format("main.rss");
+        service.symbols("main.rss");
+        service.document_symbols("main.rss");
+
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        let cancelled_request = LanguageRequest {
+            cancellation: Some(&cancelled),
+            ..LanguageRequest::default()
+        };
+        assert_eq!(
+            service.format_with("main.rss", cancelled_request),
+            Err(LanguageServiceError::Cancelled)
+        );
+        assert!(matches!(
+            service.symbols_with("main.rss", cancelled_request),
+            Err(LanguageServiceError::Cancelled)
+        ));
+        assert!(matches!(
+            service.document_symbols_with("main.rss", cancelled_request),
+            Err(LanguageServiceError::Cancelled)
+        ));
+
+        let expired_request = LanguageRequest {
+            deadline: Some(MonotonicDeadline::at(
+                std::time::Instant::now() - Duration::from_millis(1),
+            )),
+            ..LanguageRequest::default()
+        };
+        assert_eq!(
+            service.format_with("main.rss", expired_request),
+            Err(LanguageServiceError::DeadlineExceeded)
+        );
+        assert!(matches!(
+            service.symbols_with("main.rss", expired_request),
+            Err(LanguageServiceError::DeadlineExceeded)
+        ));
+        assert!(matches!(
+            service.document_symbols_with("main.rss", expired_request),
+            Err(LanguageServiceError::DeadlineExceeded)
+        ));
     }
 }

@@ -12,11 +12,11 @@ use rsscript_syntax::{
 };
 
 use crate::hir::Hir;
-use crate::{
-    document_symbols_from_program, symbol_index_from_program, RssDocumentSymbol, SemanticTypeFacts,
-    SymbolIndex,
-};
 use crate::{InterfaceDescriptorError, InterfaceDescriptorV1};
+use crate::{
+    RssDocumentSymbol, SemanticTypeFacts, SymbolIndex, document_symbols_from_program,
+    symbol_index_from_program,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrontendStopReason {
@@ -889,12 +889,16 @@ impl CompilationSession {
         path: &str,
         operation: &OperationContext,
     ) -> Result<Option<Arc<[Diagnostic]>>, OperationAbort> {
+        operation.check()?;
         let snapshot = self.source_snapshot();
         let Some(file) = snapshot.files().iter().find(|file| file.path() == path) else {
             return Ok(None);
         };
-        self.semantic_diagnostics_snapshot_file(SessionFileRole::Source, file, operation)
-            .map(Some)
+        let diagnostics = self
+            .semantic_diagnostics_snapshot_file(SessionFileRole::Source, file, operation)
+            .map(Some)?;
+        operation.check()?;
+        Ok(diagnostics)
     }
 
     /// Resolve, type-check, and build HIR for one source document through the
@@ -906,12 +910,16 @@ impl CompilationSession {
         path: &str,
         operation: &OperationContext,
     ) -> Result<Option<Arc<AnalysisResult>>, OperationAbort> {
+        operation.check()?;
         let snapshot = self.source_snapshot();
         let Some(file) = snapshot.files().iter().find(|file| file.path() == path) else {
             return Ok(None);
         };
-        self.semantic_analysis_snapshot_file(SessionFileRole::Source, file, operation)
-            .map(Some)
+        let analysis = self
+            .semantic_analysis_snapshot_file(SessionFileRole::Source, file, operation)
+            .map(Some)?;
+        operation.check()?;
+        Ok(analysis)
     }
 
     /// Diagnose one interface document through the same dependency-precise
@@ -921,12 +929,16 @@ impl CompilationSession {
         path: &str,
         operation: &OperationContext,
     ) -> Result<Option<Arc<[Diagnostic]>>, OperationAbort> {
+        operation.check()?;
         let snapshot = self.interface_snapshot();
         let Some(file) = snapshot.files().iter().find(|file| file.path() == path) else {
             return Ok(None);
         };
-        self.semantic_diagnostics_snapshot_file(SessionFileRole::Interface, file, operation)
-            .map(Some)
+        let diagnostics = self
+            .semantic_diagnostics_snapshot_file(SessionFileRole::Interface, file, operation)
+            .map(Some)?;
+        operation.check()?;
+        Ok(diagnostics)
     }
 
     /// Resolve, type-check, and build HIR for one interface document through
@@ -936,12 +948,16 @@ impl CompilationSession {
         path: &str,
         operation: &OperationContext,
     ) -> Result<Option<Arc<AnalysisResult>>, OperationAbort> {
+        operation.check()?;
         let snapshot = self.interface_snapshot();
         let Some(file) = snapshot.files().iter().find(|file| file.path() == path) else {
             return Ok(None);
         };
-        self.semantic_analysis_snapshot_file(SessionFileRole::Interface, file, operation)
-            .map(Some)
+        let analysis = self
+            .semantic_analysis_snapshot_file(SessionFileRole::Interface, file, operation)
+            .map(Some)?;
+        operation.check()?;
+        Ok(analysis)
     }
 
     /// Return the parsed workspace module graph for the current immutable
@@ -1076,6 +1092,28 @@ impl CompilationSession {
         Ok(diagnostics)
     }
 
+    /// Return syntax-only diagnostics for one interface-file revision.
+    pub fn syntax_diagnostics_interface(&mut self, path: &str) -> Option<Arc<[Diagnostic]>> {
+        let snapshot = self.interface_snapshot();
+        let file = snapshot.files().iter().find(|file| file.path() == path)?;
+        self.syntax_diagnostics_snapshot_file(SessionFileRole::Interface, file)
+    }
+
+    /// Interface syntax diagnostics obey the same operation boundary as every
+    /// other session-owned query. This matters for editor requests that only
+    /// touch an interface document and would otherwise bypass cancellation on
+    /// a cached result.
+    pub fn syntax_diagnostics_interface_with_operation(
+        &mut self,
+        path: &str,
+        operation: &OperationContext,
+    ) -> Result<Option<Arc<[Diagnostic]>>, OperationAbort> {
+        operation.check()?;
+        let diagnostics = self.syntax_diagnostics_interface(path);
+        operation.check()?;
+        Ok(diagnostics)
+    }
+
     /// Format one source revision through the session-owned editor cache.
     /// Formatting is syntax-only, but its result still belongs to the same
     /// immutable file identity as parse, HIR, lint, and symbols so editor
@@ -1091,6 +1129,32 @@ impl CompilationSession {
         let snapshot = self.interface_snapshot();
         let file = snapshot.files().iter().find(|file| file.path() == path)?;
         self.format_snapshot_file(SessionFileRole::Interface, file)
+    }
+
+    /// Format one source revision while observing cancellation and deadline
+    /// both before a cache lookup and before returning a cached value.
+    pub fn format_file_with_operation(
+        &mut self,
+        path: &str,
+        operation: &OperationContext,
+    ) -> Result<Option<Arc<str>>, OperationAbort> {
+        operation.check()?;
+        let formatted = self.format_file(path);
+        operation.check()?;
+        Ok(formatted)
+    }
+
+    /// Operation-aware interface formatting with the same cache boundary as
+    /// source formatting.
+    pub fn format_interface_with_operation(
+        &mut self,
+        path: &str,
+        operation: &OperationContext,
+    ) -> Result<Option<Arc<str>>, OperationAbort> {
+        operation.check()?;
+        let formatted = self.format_interface(path);
+        operation.check()?;
+        Ok(formatted)
     }
 
     /// Return lint diagnostics for one source revision. Unlike complete
@@ -1111,6 +1175,30 @@ impl CompilationSession {
         self.lint_snapshot_file(SessionFileRole::Interface, file)
     }
 
+    /// Operation-aware source lint query.
+    pub fn lint_file_with_operation(
+        &mut self,
+        path: &str,
+        operation: &OperationContext,
+    ) -> Result<Option<Arc<[Diagnostic]>>, OperationAbort> {
+        operation.check()?;
+        let diagnostics = self.lint_file(path);
+        operation.check()?;
+        Ok(diagnostics)
+    }
+
+    /// Operation-aware interface lint query.
+    pub fn lint_interface_with_operation(
+        &mut self,
+        path: &str,
+        operation: &OperationContext,
+    ) -> Result<Option<Arc<[Diagnostic]>>, OperationAbort> {
+        operation.check()?;
+        let diagnostics = self.lint_interface(path);
+        operation.check()?;
+        Ok(diagnostics)
+    }
+
     /// Return syntax-derived symbols for one source revision from the shared
     /// session. Semantic consumers can layer richer facts over this stable
     /// document query without reparsing the text.
@@ -1126,6 +1214,30 @@ impl CompilationSession {
         self.symbol_index_snapshot_file(SessionFileRole::Interface, file)
     }
 
+    /// Operation-aware source symbol-index query.
+    pub fn symbol_index_file_with_operation(
+        &mut self,
+        path: &str,
+        operation: &OperationContext,
+    ) -> Result<Option<Arc<SymbolIndex>>, OperationAbort> {
+        operation.check()?;
+        let symbols = self.symbol_index_file(path);
+        operation.check()?;
+        Ok(symbols)
+    }
+
+    /// Operation-aware interface symbol-index query.
+    pub fn symbol_index_interface_with_operation(
+        &mut self,
+        path: &str,
+        operation: &OperationContext,
+    ) -> Result<Option<Arc<SymbolIndex>>, OperationAbort> {
+        operation.check()?;
+        let symbols = self.symbol_index_interface(path);
+        operation.check()?;
+        Ok(symbols)
+    }
+
     /// Return document symbols for one source revision from the session-owned
     /// parse-derived cache.
     pub fn document_symbols_file(&mut self, path: &str) -> Option<Arc<[RssDocumentSymbol]>> {
@@ -1138,6 +1250,30 @@ impl CompilationSession {
         let snapshot = self.interface_snapshot();
         let file = snapshot.files().iter().find(|file| file.path() == path)?;
         self.document_symbols_snapshot_file(SessionFileRole::Interface, file)
+    }
+
+    /// Operation-aware source document-symbol query.
+    pub fn document_symbols_file_with_operation(
+        &mut self,
+        path: &str,
+        operation: &OperationContext,
+    ) -> Result<Option<Arc<[RssDocumentSymbol]>>, OperationAbort> {
+        operation.check()?;
+        let symbols = self.document_symbols_file(path);
+        operation.check()?;
+        Ok(symbols)
+    }
+
+    /// Operation-aware interface document-symbol query.
+    pub fn document_symbols_interface_with_operation(
+        &mut self,
+        path: &str,
+        operation: &OperationContext,
+    ) -> Result<Option<Arc<[RssDocumentSymbol]>>, OperationAbort> {
+        operation.check()?;
+        let symbols = self.document_symbols_interface(path);
+        operation.check()?;
+        Ok(symbols)
     }
 
     /// Parse one interface revision through the same cache. File IDs are
@@ -2232,6 +2368,94 @@ fn main() -> Int {
     }
 
     #[test]
+    fn editor_queries_reject_cancelled_and_expired_cached_requests() {
+        use std::time::{Duration, Instant};
+
+        let mut session = CompilationSession::default();
+        session
+            .set_file("main.rss", "fn main() -> Unit { return Unit }\n")
+            .expect("source enters session");
+        session
+            .set_interface("host.rssi", "module host\npub fn emit() -> Unit\n")
+            .expect("interface enters session");
+
+        // Warm every cache that is exposed to editor clients. Operation-aware
+        // queries must reject a later cancelled/expired request rather than
+        // letting these cached values escape.
+        session.format_file("main.rss");
+        session.format_interface("host.rssi");
+        session.lint_file("main.rss");
+        session.lint_interface("host.rssi");
+        session.symbol_index_file("main.rss");
+        session.symbol_index_interface("host.rssi");
+        session.document_symbols_file("main.rss");
+        session.document_symbols_interface("host.rssi");
+        session.syntax_diagnostics_interface("host.rssi");
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let cancelled = OperationContext {
+            cancellation: Some(cancellation),
+            ..OperationContext::default()
+        };
+        assert_eq!(
+            session.format_file_with_operation("main.rss", &cancelled),
+            Err(OperationAbort::Cancelled)
+        );
+        assert_eq!(
+            session.format_interface_with_operation("host.rssi", &cancelled),
+            Err(OperationAbort::Cancelled)
+        );
+        assert_eq!(
+            session.lint_file_with_operation("main.rss", &cancelled),
+            Err(OperationAbort::Cancelled)
+        );
+        assert_eq!(
+            session.lint_interface_with_operation("host.rssi", &cancelled),
+            Err(OperationAbort::Cancelled)
+        );
+        assert!(matches!(
+            session.symbol_index_file_with_operation("main.rss", &cancelled),
+            Err(OperationAbort::Cancelled)
+        ));
+        assert!(matches!(
+            session.symbol_index_interface_with_operation("host.rssi", &cancelled),
+            Err(OperationAbort::Cancelled)
+        ));
+        assert!(matches!(
+            session.document_symbols_file_with_operation("main.rss", &cancelled),
+            Err(OperationAbort::Cancelled)
+        ));
+        assert!(matches!(
+            session.document_symbols_interface_with_operation("host.rssi", &cancelled),
+            Err(OperationAbort::Cancelled)
+        ));
+        assert_eq!(
+            session.syntax_diagnostics_interface_with_operation("host.rssi", &cancelled),
+            Err(OperationAbort::Cancelled)
+        );
+
+        let expired = OperationContext {
+            deadline: Some(MonotonicDeadline::at(
+                Instant::now() - Duration::from_millis(1),
+            )),
+            ..OperationContext::default()
+        };
+        assert_eq!(
+            session.format_file_with_operation("main.rss", &expired),
+            Err(OperationAbort::DeadlineExceeded)
+        );
+        assert!(matches!(
+            session.symbol_index_file_with_operation("main.rss", &expired),
+            Err(OperationAbort::DeadlineExceeded)
+        ));
+        assert!(matches!(
+            session.document_symbols_file_with_operation("main.rss", &expired),
+            Err(OperationAbort::DeadlineExceeded)
+        ));
+    }
+
+    #[test]
     fn compilation_session_caches_syntax_diagnostics_by_revision() {
         let mut session = CompilationSession::default();
         session
@@ -2254,9 +2478,11 @@ fn main() -> Int {
             .syntax_diagnostics_file("main.rss")
             .expect("replacement source exists");
         assert!(!Arc::ptr_eq(&first, &replacement));
-        assert!(replacement
-            .iter()
-            .any(|diagnostic| diagnostic.severity.is_error()));
+        assert!(
+            replacement
+                .iter()
+                .any(|diagnostic| diagnostic.severity.is_error())
+        );
 
         let cancellation = CancellationToken::new();
         cancellation.cancel();
@@ -2325,9 +2551,11 @@ fn main() -> Int {
             .semantic_diagnostics_file_with_operation("main.rss", &operation)
             .unwrap()
             .expect("source exists");
-        assert!(first
-            .iter()
-            .all(|diagnostic| !diagnostic.severity.is_error()));
+        assert!(
+            first
+                .iter()
+                .all(|diagnostic| !diagnostic.severity.is_error())
+        );
         let second = session
             .semantic_diagnostics_file_with_operation("main.rss", &operation)
             .unwrap()
@@ -2359,9 +2587,11 @@ fn main() -> Int {
             .unwrap()
             .expect("source exists");
         assert!(!Arc::ptr_eq(&first, &changed));
-        assert!(changed
-            .iter()
-            .any(|diagnostic| diagnostic.severity.is_error()));
+        assert!(
+            changed
+                .iter()
+                .any(|diagnostic| diagnostic.severity.is_error())
+        );
         assert_eq!(session.stats().semantic_document_diagnostic_cache_misses, 2);
     }
 
@@ -2387,12 +2617,14 @@ fn main() -> Int {
             .unwrap()
             .expect("source exists");
         assert!(first.database().hir().function_body("main").is_some());
-        assert!(first
-            .database()
-            .hir()
-            .semantic_types()
-            .functions()
-            .any(|(name, _)| name == "main"));
+        assert!(
+            first
+                .database()
+                .hir()
+                .semantic_types()
+                .functions()
+                .any(|(name, _)| name == "main")
+        );
         let second = session
             .semantic_analysis_file_with_operation("main.rss", &operation)
             .unwrap()
@@ -2420,10 +2652,12 @@ fn main() -> Int {
             .unwrap()
             .expect("source exists");
         assert!(!Arc::ptr_eq(&first, &changed));
-        assert!(changed
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.severity.is_error()));
+        assert!(
+            changed
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.severity.is_error())
+        );
         assert_eq!(session.stats().semantic_document_analysis_cache_misses, 2);
         assert_eq!(session.stats().semantic_document_analysis_cache_hits, 2);
     }
@@ -2482,10 +2716,12 @@ fn main() -> Int {
             .unwrap()
             .expect("source exists");
         assert!(!Arc::ptr_eq(&first, &changed));
-        assert!(changed
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.severity.is_error()));
+        assert!(
+            changed
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.severity.is_error())
+        );
     }
 
     #[test]
@@ -2506,10 +2742,12 @@ fn main() -> Int {
             .workspace_analysis_with_operation(&operation)
             .unwrap();
         assert!(Arc::ptr_eq(&first, &second));
-        assert!(session
-            .workspace_validated_with_operation(&operation)
-            .unwrap()
-            .is_ok());
+        assert!(
+            session
+                .workspace_validated_with_operation(&operation)
+                .unwrap()
+                .is_ok()
+        );
         assert_eq!(session.stats().workspace_analysis_cache_misses, 1);
         assert_eq!(session.stats().workspace_analysis_cache_hits, 2);
 

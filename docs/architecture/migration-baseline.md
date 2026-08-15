@@ -589,10 +589,11 @@ an arbitrary shell executor.
     revision-invalidated workspace query with cancellation/deadline handling.
     Syntax-only formatter/editor diagnostics are likewise cached by
     role/file/revision in the session-owned source store, including replacement
-    invalidation and cancellation/deadline checks. Formatter output, syntax
-    symbol indexes, and document-symbol trees now use that same session-owned
-    role/file/revision boundary, so editor clients do not retain a second
-    revision cache for any source-derived query. Complete workspace diagnostics
+    invalidation and cancellation/deadline checks. Formatter output, lint,
+    syntax symbol indexes, and document-symbol trees now expose the same
+    operation-aware session boundary, so an already-cached editor result cannot
+    escape a cancelled or expired request and editor clients do not retain a
+    second revision cache for any source-derived query. Complete workspace diagnostics
     also use a session-owned, immutable source/interface snapshot cache with
     revision invalidation. Their explicit
     `CompilationSession::semantic_workspace_diagnostics_with_operation` query
