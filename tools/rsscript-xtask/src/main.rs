@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
@@ -508,6 +508,9 @@ fn migration_ready_queue() -> Result<MigrationReadyQueue, Box<dyn Error>> {
             )
             .into());
         }
+        for scope in &task.scope {
+            validate_migration_scope(&root, scope)?;
+        }
         for command in &task.verification {
             parse_verification_command(command)?;
         }
@@ -555,6 +558,31 @@ fn migration_ready_queue() -> Result<MigrationReadyQueue, Box<dyn Error>> {
         ready,
         blocked,
     })
+}
+
+/// Reject stale work-packet paths before they become an implementation plan.
+///
+/// Scope remains intentionally declarative and accepts a trailing glob such as
+/// `crates/rsscript-vm/**`, but its non-glob anchor must resolve inside the
+/// repository. This catches package renames and proposed crates that were
+/// never created without turning the queue into a general glob engine.
+fn validate_migration_scope(root: &Path, scope: &str) -> Result<(), Box<dyn Error>> {
+    let anchor = scope
+        .split_once('*')
+        .map_or(scope, |(prefix, _)| prefix)
+        .trim_end_matches('/');
+    if anchor.is_empty() || Path::new(anchor).is_absolute() {
+        return Err(format!("migration scope `{scope}` must have a relative path anchor").into());
+    }
+    let path = root.join(anchor);
+    if !path.exists() {
+        return Err(format!(
+            "migration scope `{scope}` has no repository path anchor `{}`",
+            path.display()
+        )
+        .into());
+    }
+    Ok(())
 }
 
 fn migration_work_packet(item_id: &str) -> Result<MigrationWorkPacket, Box<dyn Error>> {
@@ -1466,6 +1494,17 @@ mod tests {
         for command in ["", "echo test", "cargo clean", "cargo test; rm -rf test"] {
             assert!(parse_verification_command(command).is_err(), "{command}");
         }
+    }
+
+    #[test]
+    fn migration_scopes_must_name_existing_relative_anchors() {
+        let root = workspace_root();
+        validate_migration_scope(&root, "crates/process-guard/**").expect("existing glob anchor");
+        validate_migration_scope(&root, "docs/threat-model.md").expect("existing file anchor");
+        let missing = validate_migration_scope(&root, "crates/not-a-real-package/**")
+            .expect_err("stale scope must fail before work begins");
+        assert!(missing.to_string().contains("no repository path anchor"));
+        assert!(validate_migration_scope(&root, "/tmp/**").is_err());
     }
 
     #[test]
