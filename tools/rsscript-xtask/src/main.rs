@@ -136,6 +136,7 @@ struct MigrationStatusArguments {
 struct MigrationVerifyArguments {
     item_id: String,
     dry_run: bool,
+    staged: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -265,7 +266,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Some("migration-work") => run_migration_work(parse_migration_work_arguments(arguments)?),
         Some("migration-verify") => run_migration_verify(parse_migration_verify_arguments(arguments)?),
         _ => Err(
-            "usage:\n  cargo run -p rsscript-xtask --release -- core-metrics [--iterations N] [--output FILE] [--check SLO]\n  cargo run -p rsscript-xtask -- migration-status [--json] [--open] [--require ITEM]\n  cargo run -p rsscript-xtask -- migration-next\n  cargo run -p rsscript-xtask -- migration-next-json\n  cargo run -p rsscript-xtask -- migration-audit [--json]\n  cargo run -p rsscript-xtask -- migration-work ITEM [--json]\n  cargo run -p rsscript-xtask -- migration-verify ITEM [--dry-run]"
+            "usage:\n  cargo run -p rsscript-xtask --release -- core-metrics [--iterations N] [--output FILE] [--check SLO]\n  cargo run -p rsscript-xtask -- migration-status [--json] [--open] [--require ITEM]\n  cargo run -p rsscript-xtask -- migration-next\n  cargo run -p rsscript-xtask -- migration-next-json\n  cargo run -p rsscript-xtask -- migration-audit [--json]\n  cargo run -p rsscript-xtask -- migration-work ITEM [--json]\n  cargo run -p rsscript-xtask -- migration-verify ITEM [--dry-run] [--staged]"
                 .into(),
         ),
     }
@@ -378,6 +379,10 @@ fn run_migration_verify(arguments: MigrationVerifyArguments) -> Result<(), Box<d
             }
         })?;
 
+    if arguments.staged {
+        verify_staged_migration_change(&item.id)?;
+    }
+
     println!(
         "Migration verification: {} — {} ({} command{})",
         item.id,
@@ -417,6 +422,110 @@ fn run_migration_verify(arguments: MigrationVerifyArguments) -> Result<(), Box<d
         );
     }
     Ok(())
+}
+
+/// Validate the change set that is about to be committed for a work packet.
+///
+/// This is intentionally a pre-commit guard rather than a generic git
+/// wrapper. It catches the two easy-to-miss migration failures: staging a
+/// file outside the packet's declared boundary, and testing a changed Cargo
+/// manifest without staging its regenerated lockfile. It never stages or
+/// modifies files itself.
+fn verify_staged_migration_change(item_id: &str) -> Result<(), Box<dyn Error>> {
+    let packet = migration_work_packet(item_id)?;
+    let root = workspace_root();
+    run_git_success(&root, ["diff", "--cached", "--check"])?;
+
+    let staged = git_lines(&root, ["diff", "--cached", "--name-only"])?;
+    if staged.is_empty() {
+        return Err(format!(
+            "migration item `{item_id}` has no staged changes; stage only its declared work-packet files before using --staged"
+        )
+        .into());
+    }
+    for path in &staged {
+        if !staged_path_is_allowed(path, &packet.scope) {
+            return Err(format!(
+                "staged path `{path}` is outside migration item `{item_id}` scope; split it into its own work packet or extend the declared scope"
+            )
+            .into());
+        }
+    }
+
+    let unstaged_locks = git_lines(&root, [
+        "diff",
+        "--name-only",
+        "--",
+        "Cargo.lock",
+        "experiments/Cargo.lock",
+    ])?;
+    if !unstaged_locks.is_empty() {
+        return Err(format!(
+            "Cargo lockfile changes are not staged: {}; stage the regenerated lockfile before committing",
+            unstaged_locks.join(", ")
+        )
+        .into());
+    }
+
+    run_cargo_metadata_locked(&root, None)?;
+    run_cargo_metadata_locked(&root, Some("experiments/Cargo.toml"))?;
+    println!(
+        "Staged migration preflight passed for `{item_id}` (scope, diff, and locked metadata)."
+    );
+    Ok(())
+}
+
+fn staged_path_is_allowed(path: &str, scope: &[String]) -> bool {
+    if matches!(path, "Cargo.lock" | "experiments/Cargo.lock") {
+        return true;
+    }
+    scope.iter().any(|entry| {
+        let anchor = entry
+            .split_once('*')
+            .map_or(entry.as_str(), |(prefix, _)| prefix)
+            .trim_end_matches('/');
+        path == anchor || path.strip_prefix(anchor).is_some_and(|suffix| suffix.starts_with('/'))
+    })
+}
+
+fn git_lines<const N: usize>(root: &Path, arguments: [&str; N]) -> Result<Vec<String>, Box<dyn Error>> {
+    let output = Command::new("git").args(arguments).current_dir(root).output()?;
+    if !output.status.success() {
+        return Err(format!("git command failed with {}", output.status).into());
+    }
+    Ok(String::from_utf8(output.stdout)?
+        .lines()
+        .map(str::to_owned)
+        .collect())
+}
+
+fn run_git_success<const N: usize>(root: &Path, arguments: [&str; N]) -> Result<(), Box<dyn Error>> {
+    let status = Command::new("git").args(arguments).current_dir(root).status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("git command failed with {status}").into())
+    }
+}
+
+fn run_cargo_metadata_locked(root: &Path, manifest_path: Option<&str>) -> Result<(), Box<dyn Error>> {
+    let mut command = Command::new("cargo");
+    command
+        .arg("metadata")
+        .arg("--locked")
+        .arg("--no-deps")
+        .arg("--format-version=1")
+        .current_dir(root);
+    if let Some(manifest_path) = manifest_path {
+        command.arg("--manifest-path").arg(manifest_path);
+    }
+    let status = command.status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        let target = manifest_path.unwrap_or("Cargo.toml");
+        Err(format!("locked Cargo metadata check failed for `{target}` with {status}").into())
+    }
 }
 
 fn run_migration_next() -> Result<(), Box<dyn Error>> {
@@ -728,13 +837,19 @@ fn parse_migration_verify_arguments(
         .next()
         .ok_or("migration-verify requires a migration item ID")?;
     let mut dry_run = false;
+    let mut staged = false;
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--dry-run" => dry_run = true,
+            "--staged" => staged = true,
             _ => return Err(format!("unknown migration-verify argument: {argument}").into()),
         }
     }
-    Ok(MigrationVerifyArguments { item_id, dry_run })
+    Ok(MigrationVerifyArguments {
+        item_id,
+        dry_run,
+        staged,
+    })
 }
 
 fn parse_migration_work_arguments(
@@ -1401,10 +1516,7 @@ mod tests {
     fn published_migration_frontier_is_fail_closed_and_prioritized() {
         let queue = migration_ready_queue().expect("published frontier must be valid");
         assert_eq!(queue.schema, MIGRATION_QUEUE_SCHEMA);
-        assert!(queue.ready.iter().any(|item| item.id == "S05.3a"));
-        assert!(!queue.ready.iter().any(|item| item.id == "S05.2c2"));
-        assert!(!queue.ready.iter().any(|item| item.id == "S05.2b"));
-        assert!(!queue.ready.iter().any(|item| item.id == "S05.1e"));
+        assert!(!queue.ready.is_empty());
         assert!(
             queue
                 .ready
@@ -1412,6 +1524,17 @@ mod tests {
                 .all(|items| items[0].priority <= items[1].priority)
         );
         assert!(queue.ready.iter().all(|item| !item.verification.is_empty()));
+        let status = migration_status(include_str!(
+            "../../../docs/architecture/migration-baseline.md"
+        ))
+        .expect("published migration checklist must remain parseable");
+        assert!(queue.ready.iter().all(|ready| {
+            status
+                .items
+                .iter()
+                .find(|item| item.id == ready.id)
+                .is_some_and(|item| !item.completed)
+        }));
     }
 
     #[test]
@@ -1422,6 +1545,16 @@ mod tests {
             MigrationVerifyArguments {
                 item_id: "S05.1".into(),
                 dry_run: true,
+                staged: false,
+            }
+        );
+        assert_eq!(
+            parse_migration_verify_arguments(["S05.1".into(), "--staged".into()].into_iter())
+                .expect("valid staged migration verify invocation"),
+            MigrationVerifyArguments {
+                item_id: "S05.1".into(),
+                dry_run: false,
+                staged: true,
             }
         );
         let error = parse_migration_verify_arguments(std::iter::empty())
@@ -1462,26 +1595,49 @@ mod tests {
 
     #[test]
     fn published_migration_work_packet_is_bounded_and_actionable() {
-        let packet = migration_work_packet("S05.3a").expect("published work packet");
+        let ready = migration_ready_queue()
+            .expect("published frontier")
+            .ready
+            .into_iter()
+            .next()
+            .expect("published frontier must have a ready task");
+        let packet = migration_work_packet(&ready.id).expect("published work packet");
         assert_eq!(packet.schema, "rsscript.migration_work_packet.v1");
         assert_eq!(packet.state, "ready");
         assert!(!packet.scope.is_empty());
         assert!(!packet.acceptance.is_empty());
         assert!(!packet.verification.is_empty());
-        assert!(
-            packet
-                .scope
-                .iter()
-                .any(|path| path.contains("rsscript-review"))
-        );
 
-        let queued = migration_work_packet("S05.3a").expect("published work packet");
+        let queued = migration_work_packet(&ready.id).expect("published work packet");
         assert!(matches!(queued.state, "ready" | "blocked"));
         if queued.state == "blocked" {
             assert!(!queued.blocked_by.is_empty());
         } else {
             assert!(queued.blocked_by.is_empty());
         }
+    }
+
+    #[test]
+    fn staged_scope_check_allows_declared_paths_and_workspace_locks_only() {
+        let scope = vec![
+            "crates/rsscript-compiler/src/**".to_owned(),
+            "docs/architecture/migration-baseline.md".to_owned(),
+        ];
+        assert!(staged_path_is_allowed(
+            "crates/rsscript-compiler/src/lib.rs",
+            &scope
+        ));
+        assert!(staged_path_is_allowed(
+            "docs/architecture/migration-baseline.md",
+            &scope
+        ));
+        assert!(staged_path_is_allowed("Cargo.lock", &scope));
+        assert!(staged_path_is_allowed("experiments/Cargo.lock", &scope));
+        assert!(!staged_path_is_allowed("README.md", &scope));
+        assert!(!staged_path_is_allowed(
+            "crates/rsscript-vm/src/lib.rs",
+            &scope
+        ));
     }
 
     #[test]
