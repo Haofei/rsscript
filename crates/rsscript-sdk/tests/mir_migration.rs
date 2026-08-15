@@ -13,8 +13,9 @@ use rsscript_compiler::{
     validate_sources_with_interfaces,
 };
 use rsscript_mir::conformance::{
-    MigrationCase, MigrationEvidence, MigrationEvidenceOverride, MigrationStage, execute_named,
-    migration_evidence_for, require_declared_migration_evidence,
+    LegacyFallbackCase, MigrationCase, MigrationEvidence, MigrationEvidenceOverride,
+    MigrationStage, execute_named, migration_evidence_for, require_declared_legacy_fallbacks,
+    require_declared_migration_evidence,
 };
 use rsscript_mir::{
     BasicBlock, BlockId, FunctionId, MirCallTarget, MirFunction, MirFunctionDebug,
@@ -605,6 +606,93 @@ const EVIDENCE_OVERRIDES: &[MigrationEvidenceOverride] = &[
         },
     },
 ];
+
+/// The migration framework keeps the remaining compatibility bridge small and
+/// explicit. These are source-level language capabilities that compile today,
+/// execute only through `legacy-exec-ir`, and have a next typed-MIR boundary.
+/// A migration removes an entry only after adding a matching `DualPath` case
+/// above; it may not simply broaden a catch-all Unsupported fallback.
+const LEGACY_FALLBACKS: &[LegacyFallbackCase] = &[
+    LegacyFallbackCase {
+        name: "capturing_closure_value",
+        capability: "first-class capturing closure values",
+        construct: "checked HIR closure",
+        next_boundary: "typed closure environment, call target, and capture ownership MIR",
+        source: r#"
+fn main() -> Unit {
+    let offset = 1
+    let add = fn(value) captures(read offset) {
+        return value + offset
+    }
+    return Unit
+}
+"#,
+    },
+    LegacyFallbackCase {
+        name: "dynamic_protocol_dispatch",
+        capability: "runtime Dyn protocol dispatch",
+        construct: "dynamic protocol dispatch",
+        next_boundary: "typed dynamic-dispatch call target and runtime witness MIR",
+        source: r#"
+protocol Greeter {
+    fn greet(self: read Self) -> fresh String
+}
+
+struct English { value: Int }
+
+fn English.greet(self: read English) -> fresh String {
+    if self.value > 0 { return "hello" }
+    return "hi"
+}
+
+impl Greeter for English { greet = English.greet }
+
+fn say(who: read Dyn<Greeter>) -> fresh String {
+    return Greeter.greet(self: read who)
+}
+
+fn main() -> String {
+    local english = English(value: 1)
+    local greeter: Dyn<Greeter> = Dyn<Greeter>.from(value: take english)
+    return say(who: read greeter)
+}
+"#,
+    },
+];
+
+#[test]
+fn legacy_fallbacks_are_a_checked_and_actionable_migration_ledger() {
+    require_declared_legacy_fallbacks(LEGACY_FALLBACKS).unwrap_or_else(|error| {
+        panic!("the legacy executable-IR bridge requires an explicit ledger: {error}")
+    });
+
+    for case in LEGACY_FALLBACKS {
+        let compiled = compile_source_to_ir(&format!("{}.rss", case.name), case.source)
+            .unwrap_or_else(|diagnostics| {
+                panic!(
+                    "legacy fallback {} must remain a valid checked program for {}: {diagnostics:#?}",
+                    case.name, case.capability
+                )
+            });
+        let error = compiled.checked_hir_mir().expect_err(&format!(
+            "legacy fallback {} must move to DualPath when direct MIR succeeds",
+            case.name
+        ));
+        match error {
+            rsscript_lowering::MirLoweringError::Unsupported { construct, .. } => {
+                assert_eq!(
+                    construct, case.construct,
+                    "legacy fallback {} changed its direct-MIR boundary; update its registry entry or migrate it",
+                    case.name
+                );
+            }
+            rsscript_lowering::MirLoweringError::Invalid(error) => panic!(
+                "legacy fallback {} reached an invalid MIR state instead of its declared migration boundary: {error}",
+                case.name
+            ),
+        }
+    }
+}
 
 #[test]
 fn dual_path_cases_match_the_legacy_vm() {

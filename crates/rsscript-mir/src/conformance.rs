@@ -35,6 +35,134 @@ pub struct MigrationCase {
     pub source: &'static str,
 }
 
+/// A deliberately named, source-level capability that still needs the legacy
+/// executable-IR bridge.
+///
+/// This is a migration ledger rather than a permissive fallback list. Every
+/// entry has a checked source fixture, the precise direct-MIR rejection it
+/// currently reaches, and a concrete next lowering boundary. That makes the
+/// remaining bridge visible to CI and gives each removal-sized TODO a stable
+/// regression test before it joins [`MigrationCase`] on the dual path.
+#[derive(Debug, Clone, Copy)]
+pub struct LegacyFallbackCase {
+    pub name: &'static str,
+    pub capability: &'static str,
+    pub construct: &'static str,
+    pub next_boundary: &'static str,
+    pub source: &'static str,
+}
+
+/// Structural failure in the explicit legacy-fallback ledger.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LegacyFallbackGateError {
+    EmptyLedger,
+    EmptyName,
+    EmptyCapability { name: &'static str },
+    EmptyConstruct { name: &'static str },
+    EmptyNextBoundary { name: &'static str },
+    EmptySource { name: &'static str },
+    DuplicateName { name: &'static str },
+    DuplicateCapability { capability: &'static str },
+    DuplicateConstruct { construct: &'static str },
+}
+
+impl fmt::Display for LegacyFallbackGateError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyLedger => formatter.write_str("legacy MIR fallback ledger is empty"),
+            Self::EmptyName => formatter.write_str("legacy MIR fallback has an empty name"),
+            Self::EmptyCapability { name } => {
+                write!(
+                    formatter,
+                    "legacy MIR fallback `{name}` has an empty capability"
+                )
+            }
+            Self::EmptyConstruct { name } => {
+                write!(
+                    formatter,
+                    "legacy MIR fallback `{name}` has an empty construct"
+                )
+            }
+            Self::EmptyNextBoundary { name } => write!(
+                formatter,
+                "legacy MIR fallback `{name}` has no next lowering boundary"
+            ),
+            Self::EmptySource { name } => {
+                write!(
+                    formatter,
+                    "legacy MIR fallback `{name}` has an empty source fixture"
+                )
+            }
+            Self::DuplicateName { name } => {
+                write!(
+                    formatter,
+                    "legacy MIR fallback ledger repeats case `{name}`"
+                )
+            }
+            Self::DuplicateCapability { capability } => write!(
+                formatter,
+                "legacy MIR fallback ledger repeats capability `{capability}`"
+            ),
+            Self::DuplicateConstruct { construct } => write!(
+                formatter,
+                "legacy MIR fallback ledger repeats direct-lowering construct `{construct}`"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for LegacyFallbackGateError {}
+
+/// Reject an incomplete or ambiguous inventory of capability-level legacy
+/// fallbacks.
+///
+/// The normal execution adapter may use the bridge only while this ledger has
+/// entries. The migration test must compile every source fixture and confirm
+/// that it reaches exactly the registered checked-HIR rejection. Once a
+/// capability gains direct MIR lowering, move it to the dual-path corpus and
+/// delete its ledger entry in the same change.
+pub fn require_declared_legacy_fallbacks(
+    cases: &[LegacyFallbackCase],
+) -> Result<(), LegacyFallbackGateError> {
+    if cases.is_empty() {
+        return Err(LegacyFallbackGateError::EmptyLedger);
+    }
+    let mut names = BTreeSet::new();
+    let mut capabilities = BTreeSet::new();
+    let mut constructs = BTreeSet::new();
+    for case in cases {
+        if case.name.trim().is_empty() {
+            return Err(LegacyFallbackGateError::EmptyName);
+        }
+        if case.capability.trim().is_empty() {
+            return Err(LegacyFallbackGateError::EmptyCapability { name: case.name });
+        }
+        if case.construct.trim().is_empty() {
+            return Err(LegacyFallbackGateError::EmptyConstruct { name: case.name });
+        }
+        if case.next_boundary.trim().is_empty() {
+            return Err(LegacyFallbackGateError::EmptyNextBoundary { name: case.name });
+        }
+        if case.source.trim().is_empty() {
+            return Err(LegacyFallbackGateError::EmptySource { name: case.name });
+        }
+        if !names.insert(case.name) {
+            return Err(LegacyFallbackGateError::DuplicateName { name: case.name });
+        }
+        if !capabilities.insert(case.capability) {
+            return Err(LegacyFallbackGateError::DuplicateCapability {
+                capability: case.capability,
+            });
+        }
+        if !constructs.insert(case.construct) {
+            return Err(LegacyFallbackGateError::DuplicateConstruct {
+                construct: case.construct,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// The executable evidence required for a migrated capability.
 ///
 /// The default requirement is deliberately the strongest one: the checked-HIR
@@ -1150,6 +1278,14 @@ mod tests {
         source: "fn main() -> Int { return 1 }",
     };
 
+    const FALLBACK: LegacyFallbackCase = LegacyFallbackCase {
+        name: "closure",
+        capability: "capturing closure",
+        construct: "checked HIR closure",
+        next_boundary: "typed closure MIR",
+        source: "fn main() -> Unit { return Unit }",
+    };
+
     #[test]
     fn replacement_gate_requires_a_complete_unique_dual_path_manifest() {
         assert_eq!(require_dual_path_parity(&[CASE]), Ok(()));
@@ -1180,6 +1316,33 @@ mod tests {
                 stage: MigrationStage::MirOnly,
                 ..
             })
+        ));
+    }
+
+    #[test]
+    fn legacy_fallback_ledger_requires_unique_actionable_entries() {
+        assert_eq!(require_declared_legacy_fallbacks(&[FALLBACK]), Ok(()));
+        assert!(matches!(
+            require_declared_legacy_fallbacks(&[]),
+            Err(LegacyFallbackGateError::EmptyLedger)
+        ));
+        assert!(matches!(
+            require_declared_legacy_fallbacks(&[FALLBACK, FALLBACK]),
+            Err(LegacyFallbackGateError::DuplicateName { .. })
+        ));
+        assert!(matches!(
+            require_declared_legacy_fallbacks(&[LegacyFallbackCase {
+                next_boundary: "",
+                ..FALLBACK
+            }]),
+            Err(LegacyFallbackGateError::EmptyNextBoundary { .. })
+        ));
+        assert!(matches!(
+            require_declared_legacy_fallbacks(&[LegacyFallbackCase {
+                construct: "",
+                ..FALLBACK
+            }]),
+            Err(LegacyFallbackGateError::EmptyConstruct { .. })
         ));
     }
 

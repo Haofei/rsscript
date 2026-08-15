@@ -1133,6 +1133,15 @@ mechanical acceptance condition holds.
       stdout, stderr, and execution-usage accounting between legacy and
       MIR-produced bytecode. Error, cleanup, and async/provider report parity
       remain follow-up work.
+    - [x] **M05.1c — Make compatibility fallback work visible and actionable.**
+      The MIR conformance support now supplies a separately validated legacy
+      fallback ledger: each entry has a unique checked source fixture, exact
+      direct-MIR rejection, and named next typed-MIR boundary. The migration
+      corpus verifies the initial capturing-closure and dynamic-protocol cases
+      reach their declared boundary. A capability moves from this ledger to the
+      dual-path corpus only in the commit that implements its direct lowering;
+      this prevents the compatibility adapter's `Unsupported` branch from
+      becoming an unbounded, unaudited work queue.
   - [ ] **M05.2 — Add ownership/resource differential fixtures.** Compare move
     failures, retain behavior, cleanup counts, and resource limits.
     - [x] **M05.2a — Compare retaining external calls.** A checked
