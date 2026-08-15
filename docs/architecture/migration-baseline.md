@@ -644,38 +644,25 @@ an arbitrary shell executor.
     are tested on both cold and cached LSP results without truncating the
     session-owned result. Resolve/type dependency precision remains a query
     granularity concern, not an operation-boundary escape hatch.
-  - [ ] **S03.5 — Migrate CLI/package/test callers.** All frontend consumers use
-    the session API; direct analyzer construction becomes private. The normal
-    CLI `check`, `fix`, and `fmt` commands now consume session-owned semantics,
-    syntax, and diagnostics directly, so the default `rsscript-cli` dependency
-    closure no longer includes the compiler compatibility facade. The default
-    core-aware single-file `check` path now also captures its source and explicit
-    interfaces in `CompilationSession` before reading the cached complete
-    analysis query. The shared compatibility-corpus VM and diagnostic helpers
-    now also construct a session for ordinary non-empty, unique logical paths;
-    only empty or duplicate interface paths retain their explicit legacy
-    analyzer route because that route intentionally asserts historical
-    diagnostic behavior. The reviewed SDK snapshot check APIs use that same cached
-    analysis query under every SDK feature combination, while
-    `Compiler::compile_snapshot` and its operation-aware form use the
-    session-owned validated query for normal non-empty logical paths; only the
-    historical empty-path in-memory compatibility case retains direct analysis.
-    The CLI `fix` workflow now follows the same session-owned
-    analysis route, preserving duplicate-interface diagnostics through its
-    explicit legacy fallback. `--no-core` checks now use the same session
-    query with an explicit `WithoutCore` interface policy, so Core injection
-    cannot leak back through a session default; only deliberately duplicate
-    interface paths retain a direct compatibility fallback so established
-    diagnostics do not change. Package lowering, neutral package analysis,
-    review evidence, and package-interface environment checks now capture their
-    sources and dependency interfaces in the same `CompilationSession` query;
-    Core catalog entries are supplied once by the session rather than manually
-    duplicated into a `without_core` analyzer call. Experimental Rust AOT
-    lowering now uses that same session-owned validation snapshot for both
-    single-source and package inputs. The compiler's direct in-memory
-    `compile_source_to_ir` convenience now captures its input through the
-    session before constructing compiler output. Remaining test callers are
-    still explicit migration work.
+- [ ] **S03.5 — Migrate CLI/package/test callers.** All frontend consumers use
+    the session API; direct analyzer construction becomes private. This is a
+    parent milestone: its remaining work is split below so a superficial caller
+    migration cannot change the historical standard-prelude semantics.
+  - [ ] **S03.5a — Model the standard prelude as a session policy.** Add an
+    explicit session policy with exact parity to legacy
+    `FullWithStandardPackages` analysis. It must reject incompatible explicit
+    interface injection rather than silently substituting a different Core
+    interface set, and operation-aware queries must preserve that policy on
+    cold and cached paths. Prove parity with the compatibility corpus before
+    changing any ordinary SDK or test caller.
+  - [ ] **S03.5b — Migrate ordinary SDK and test callers.** Once S03.5a is
+    complete, route normal non-empty, unique logical paths through the matching
+    session policy. Preserve cancellation, deadlines, and diagnostic budgets;
+    keep direct analyzer construction only in an explicit compatibility fixture.
+  - [ ] **S03.5c — Quarantine the exceptional legacy fixtures.** Document and
+    isolate empty-path and duplicate-interface cases whose asserted historical
+    diagnostics cannot be represented by the normal session input model. Those
+    fixtures must not be reusable by production callers.
 - [x] **S04 — Make language service consume semantic queries directly.** It
   must not depend on the compiler compatibility façade, package persistence,
   VM, SDK, or Providers; revision invalidation and request cancellation require
