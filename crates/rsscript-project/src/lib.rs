@@ -96,8 +96,9 @@ pub fn capture_project_manifest(
 ///
 /// A missing `rsspkg.toml` remains an unresolved dependency rather than an
 /// I/O failure so package-semantic callers can retain their existing
-/// diagnostics. When a manifest is present, the returned root is canonical,
-/// non-link, and ready for a bounded project capture. Compiler and review
+/// diagnostics. When a manifest is present, its root is checked to be a
+/// canonical non-link directory, while the returned path preserves the
+/// manifest spelling needed by legacy lockfile identity. Compiler and review
 /// code must not reproduce this path joining and filesystem probing.
 pub fn resolve_project_path_dependency(
     package_dir: &Path,
@@ -116,7 +117,10 @@ pub fn resolve_project_path_dependency(
             "project dependency manifest rejects symlinks or reparse points: {}",
             manifest.display()
         )),
-        Ok(_) => canonical_capture_root(&candidate).map(Some),
+        Ok(_) => {
+            canonical_capture_root(&candidate)?;
+            Ok(Some(candidate))
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(format!(
             "failed to inspect project dependency manifest {}: {error}",
@@ -2069,7 +2073,12 @@ mod tests {
         assert_eq!(
             resolve_project_path_dependency(&package, "../dependency")
                 .expect("resolve present dependency"),
-            Some(dependency.canonicalize().expect("canonical dependency"))
+            Some(
+                package
+                    .canonicalize()
+                    .expect("canonical package")
+                    .join("../dependency")
+            )
         );
         assert_eq!(
             resolve_project_path_dependency(&package, "../missing")
