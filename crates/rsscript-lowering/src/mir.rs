@@ -399,7 +399,7 @@ fn checked_external_imports(
         let checked::CallResolution::Resolved { signature, .. } = &call.resolution else {
             continue;
         };
-        if !signature.is_external {
+        if !signature.is_external || is_catalog_builtin(signature) {
             continue;
         }
         let symbol = checked_external_symbol(signature)?;
@@ -1141,7 +1141,13 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         if matches!(kind, checked::ResolvedCalleeKind::Constructor { .. }) {
             return self.unsupported("non-record checked HIR constructor");
         }
-        if signature.is_builtin {
+        // Core interfaces mark their signatures as builtins directly. The
+        // explicit async standard package exposes the same deterministic VM
+        // operations as `.rssi` declarations, however, so its checked
+        // signatures are interface-shaped. A catalog hit is the canonical
+        // identity in both forms: route it through `BuiltinId` rather than
+        // creating a fictitious Provider import for a VM-owned operation.
+        if signature.is_builtin || is_catalog_builtin(signature) {
             return self.lower_builtin_call(callee, signature, receiver, args);
         }
         // `MirCallTarget` deliberately has no dynamic-protocol variant yet.
@@ -2462,9 +2468,14 @@ fn requires_legacy_builtin_metadata(signature: &checked::FunctionSig) -> bool {
             | (Some("Channel"), _)
             | (Some("Sender"), _)
             | (Some("Receiver"), _)
-            | (Some("CancellationSource"), _)
-            | (Some("CancellationToken"), _)
     )
+}
+
+fn is_catalog_builtin(signature: &checked::FunctionSig) -> bool {
+    signature
+        .namespace
+        .as_deref()
+        .is_some_and(|namespace| rsscript_mir::builtin_id(namespace, &signature.name).is_some())
 }
 
 fn is_json_decode_builtin(signature: &checked::FunctionSig) -> bool {

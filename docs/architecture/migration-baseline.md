@@ -965,6 +965,12 @@ mechanical acceptance condition holds.
       rejects duplicate or non-live selected tasks, and the migration suite
       compares the direct verified-bytecode execution with the legacy VM.
       Cancellation syntax remains fail-closed follow-up work.
+    - [x] **M03.3e — Lower cooperative cancellation intrinsics.** The explicit
+      async standard-package interface resolves `CancellationSource.new`,
+      `.token`, `.cancel`, and `CancellationToken.is_cancelled` to catalog-owned
+      `BuiltinId` operations rather than synthetic Provider imports. The direct
+      HIR → MIR → verified-bytecode path preserves the same cooperative state,
+      streams, and usage as the legacy VM.
   - [ ] **M03.4 — Add resolved builtin and external-call instructions.** Include
     signature/effect/retention identity and no unresolved callee text.
     - [x] **M03.4a — Execute resolved external calls through MIR bytecode.** A
@@ -984,11 +990,16 @@ mechanical acceptance condition holds.
       JSON decode now carries its concrete target as a verifier-checked MIR
       `TypeId`; only the v1 encoder projects that typed operand onto its legacy
       `CallTypedIntrinsic` string field. Argument capture,
-      channel/cancellation builtins, and dynamic protocol dispatch still reject
-      direct MIR lowering rather than erasing their scheduler or dispatch
-      contracts into bytecode. The explicit migration-only executable-IR bridge
-      remains responsible for those forms until MIR introduces their typed
-      operands.
+      channel builtins and dynamic protocol dispatch still reject direct MIR
+      lowering rather than erasing their scheduler or dispatch contracts into
+      bytecode. The explicit migration-only executable-IR bridge remains
+      responsible for those forms until MIR introduces their typed operands.
+    - [x] **M03.4d — Admit catalog-backed async builtins.** Direct catalog
+      membership, rather than the legacy `is_builtin` flag alone, now determines
+      whether an interface-shaped standard-library call is lowered as a
+      `BuiltinId`. This keeps VM-owned cancellation operations out of Artifact
+      Provider imports while preserving their resolved effects and argument
+      modes in MIR.
 - [ ] **M04 — Lower checked HIR to MIR exactly once.** Backend code cannot
   inspect syntax AST or reconstruct semantic facts. MIR verification rejects
   unresolved calls, invalid ownership state, incomplete cleanup, and malformed
@@ -1014,7 +1025,8 @@ mechanical acceptance condition holds.
       internal and external async calls also lower without the compatibility
       IR: typed task handles feed `Select`, then an explicit winner-index CFG
       ladder binds and runs exactly one arm. Cancellation syntax remains
-      follow-up direct-lowering work.
+      follow-up direct-lowering work except for the cooperative standard-package
+      source/token/cancel/poll operations covered by M03.3e.
   - [x] **M04.2 — Verify MIR ownership, resources, and task scopes.** The
     construction verifier runs ownership-mode, move/drop, resource-lifetime,
     resource-cleanup-over-CFG, and structured-task-close passes. Targeted

@@ -417,7 +417,7 @@ binding = [
   { namespace = "CancellationSource", name = "cancel", vm_id = "CancellationSourceCancel", runtime_target = "rsscript_runtime::cancellation_source_cancel", lowering = "direct" },
   { namespace = "CancellationSource", name = "new", vm_id = "CancellationSourceNew", runtime_target = "rsscript_runtime::cancellation_source_new", lowering = "direct" },
   { namespace = "CancellationSource", name = "token", vm_id = "CancellationSourceToken", runtime_target = "rsscript_runtime::cancellation_source_token", lowering = "direct" },
-  { namespace = "CancellationToken", name = "is_cancelled", vm_id = "CancellationTokenIsCancelled", runtime_target = "rsscript_runtime::cancellation_token_is_cancelled", lowering = "special" },
+  { namespace = "CancellationToken", name = "is_cancelled", vm_id = "CancellationTokenIsCancelled", runtime_target = "rsscript_runtime::cancellation_token_is_cancelled", lowering = "direct" },
   { namespace = "Dyn", name = "from", vm_id = "DynFrom", lowering = "direct" },
   { namespace = "Channel", name = "bounded", vm_id = "ChannelBounded", runtime_target = "rsscript_runtime::channel_bounded", lowering = "direct" },
   { namespace = "Channel", name = "message", vm_id = "ChannelBounded", runtime_target = "rsscript_runtime::channel_bounded", lowering = "direct" },

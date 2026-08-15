@@ -9,7 +9,8 @@
 
 use rsscript_abi_model::WireType;
 use rsscript_compiler::{
-    compile_source_to_ir, compile_validated_to_ir, validate_sources_with_interfaces,
+    compile_source_to_ir, compile_validated_to_ir, standard_package_interfaces,
+    validate_sources_with_interfaces,
 };
 use rsscript_mir::conformance::{
     MigrationCase, MigrationEvidence, MigrationEvidenceOverride, MigrationStage, execute_named,
@@ -599,6 +600,71 @@ fn main() -> String {
     .eval_main_with_args(std::iter::empty::<String>())
     .expect("direct builtin bytecode executes");
     assert_eq!(output.value, "REPORT");
+}
+
+#[test]
+fn direct_checked_hir_cancellation_builtins_preserve_cooperative_state() {
+    let source = r#"
+fn main() -> Bool {
+    local source = CancellationSource.new()
+    let token = CancellationSource.token(source: read source)
+    if CancellationToken.is_cancelled(token: read token) {
+        return false
+    }
+    CancellationSource.cancel(source: mut source)
+    return CancellationToken.is_cancelled(token: read token)
+}
+"#;
+    let validated = validate_sources_with_interfaces(
+        &[("direct-hir-cancellation.rss", source)],
+        standard_package_interfaces(),
+    )
+    .expect("cancellation builtin fixture validates with the explicit async package interfaces");
+    let compiled = compile_validated_to_ir(&validated);
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("cancellation builtins should not require executable IR");
+    let cancellation_calls = mir
+        .functions()
+        .iter()
+        .flat_map(|function| function.blocks())
+        .flat_map(|block| block.instructions())
+        .filter(|instruction| {
+            matches!(
+                instruction,
+                MirInstruction::Call {
+                    target: MirCallTarget::Builtin { .. },
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(
+        cancellation_calls, 5,
+        "direct MIR must preserve source/token/cancel/is_cancelled calls as catalog builtins"
+    );
+    let direct_executable = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("cancellation MIR emits verified bytecode");
+    assert!(
+        direct_executable.bytecode_artifact().imports.is_empty(),
+        "VM-owned cancellation builtins must not appear as Provider imports"
+    );
+    let direct = direct_executable
+        .eval_main_with_args(std::iter::empty::<String>())
+        .expect("cancellation bytecode executes");
+    let legacy = reg_vm_compile_validated(&validated)
+        .expect("legacy cancellation bytecode compiles")
+        .eval_main_with_args(std::iter::empty::<String>())
+        .expect("legacy cancellation bytecode executes");
+    assert_eq!(legacy.value, "true");
+    assert_eq!(direct.value, legacy.value);
+    assert_eq!(direct.stdout, legacy.stdout);
+    assert_eq!(direct.stderr, legacy.stderr);
+    assert_eq!(direct.usage, legacy.usage);
 }
 
 #[test]
