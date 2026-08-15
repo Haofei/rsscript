@@ -447,6 +447,24 @@ pub enum MirInstruction {
         target: MirCallTarget,
         arguments: Vec<MirCallArgument>,
     },
+    /// Materialize a first-class closure from a resolved synthetic function and
+    /// explicit capture arguments. Capture ownership stays verifier-visible
+    /// rather than implicit in a backend-specific environment.
+    MakeClosure {
+        destination: ValueId,
+        function: FunctionId,
+        captures: Vec<MirCallArgument>,
+    },
+    /// Invoke a first-class closure value. Its checked function ABI is carried
+    /// as typed data because the concrete target is selected from the runtime
+    /// value rather than a source spelling.
+    CallClosure {
+        destination: ValueId,
+        closure: ValueId,
+        parameter_types: Box<[TypeId]>,
+        parameter_modes: Box<[MirParameterMode]>,
+        arguments: Vec<MirCallArgument>,
+    },
     Discard {
         value: ValueId,
     },
@@ -676,6 +694,27 @@ pub enum MirParameterMode {
     Take,
 }
 
+/// Typed ownership contract for one synthetic closure-environment slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MirClosureCapture {
+    ty: TypeId,
+    mode: MirParameterMode,
+}
+
+impl MirClosureCapture {
+    pub fn new(ty: TypeId, mode: MirParameterMode) -> Self {
+        Self { ty, mode }
+    }
+
+    pub fn ty(&self) -> TypeId {
+        self.ty
+    }
+
+    pub fn mode(&self) -> MirParameterMode {
+        self.mode
+    }
+}
+
 impl MirFunctionDebug {
     pub fn new(name: impl Into<String>, places: Vec<String>) -> Self {
         Self {
@@ -715,6 +754,7 @@ impl MirFunctionDebug {
 pub struct MirFunction {
     id: FunctionId,
     signature: MirFunctionSignature,
+    captures: Vec<MirClosureCapture>,
     place_count: u32,
     value_count: u32,
     blocks: Vec<BasicBlock>,
@@ -731,6 +771,28 @@ impl MirFunction {
         Self {
             id,
             signature,
+            captures: Vec::new(),
+            place_count,
+            value_count,
+            blocks,
+        }
+    }
+
+    /// Construct a synthetic closure body. Capture slots precede ordinary
+    /// parameter slots in the place table, matching the VM call ABI while
+    /// keeping their type and ownership facts in MIR.
+    pub fn with_captures(
+        id: FunctionId,
+        signature: MirFunctionSignature,
+        captures: Vec<MirClosureCapture>,
+        place_count: u32,
+        value_count: u32,
+        blocks: Vec<BasicBlock>,
+    ) -> Self {
+        Self {
+            id,
+            signature,
+            captures,
             place_count,
             value_count,
             blocks,
@@ -743,6 +805,10 @@ impl MirFunction {
 
     pub fn signature(&self) -> &MirFunctionSignature {
         &self.signature
+    }
+
+    pub fn captures(&self) -> &[MirClosureCapture] {
+        &self.captures
     }
 
     pub fn place_count(&self) -> u32 {
@@ -1258,6 +1324,23 @@ fn verify_function(
             modes: function.signature.parameter_modes().len(),
         });
     }
+    if (function.place_count as usize)
+        < function.captures.len() + function.signature.parameter_types().len()
+    {
+        return Err(MirValidationError::ClosureFrameTooSmall {
+            function: function.id,
+            required: function.captures.len() + function.signature.parameter_types().len(),
+            actual: function.place_count as usize,
+        });
+    }
+    for capture in function.captures() {
+        if capture.ty().index() >= type_count {
+            return Err(MirValidationError::InvalidClosureCaptureType {
+                function: function.id,
+                ty: capture.ty(),
+            });
+        }
+    }
 
     let mut defined = BTreeSet::new();
     let mut used = Vec::new();
@@ -1411,6 +1494,8 @@ fn instruction_definitions(instruction: &MirInstruction) -> Vec<ValueId> {
         | MirInstruction::Manage { destination, .. }
         | MirInstruction::Binary { destination, .. }
         | MirInstruction::Call { destination, .. }
+        | MirInstruction::MakeClosure { destination, .. }
+        | MirInstruction::CallClosure { destination, .. }
         | MirInstruction::Await { destination, .. }
         | MirInstruction::TryResult { destination, .. } => vec![*destination],
         MirInstruction::Select { winner, value, .. } => vec![*winner, *value],
@@ -1484,6 +1569,25 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
                 | MirCallArgument::BorrowMut(_)
                 | MirCallArgument::Take(_) => None,
             })
+            .collect(),
+        MirInstruction::MakeClosure { captures, .. } => captures
+            .iter()
+            .filter_map(|capture| match capture {
+                MirCallArgument::Value(value) => Some(*value),
+                MirCallArgument::BorrowRead(_)
+                | MirCallArgument::BorrowMut(_)
+                | MirCallArgument::Take(_) => None,
+            })
+            .collect(),
+        MirInstruction::CallClosure {
+            closure, arguments, ..
+        } => std::iter::once(*closure)
+            .chain(arguments.iter().filter_map(|argument| match argument {
+                MirCallArgument::Value(value) => Some(*value),
+                MirCallArgument::BorrowRead(_)
+                | MirCallArgument::BorrowMut(_)
+                | MirCallArgument::Take(_) => None,
+            }))
             .collect(),
         MirInstruction::Spawn { arguments, .. } => arguments
             .iter()
@@ -1677,7 +1781,12 @@ fn transfer_move_state(
         MirInstruction::MapInsert { map, .. }
         | MirInstruction::MapInsertOld { map, .. }
         | MirInstruction::MapRemove { map, .. } => check_live(*map, moved_places),
-        MirInstruction::Call { arguments, .. } => {
+        MirInstruction::Call { arguments, .. }
+        | MirInstruction::MakeClosure {
+            captures: arguments,
+            ..
+        }
+        | MirInstruction::CallClosure { arguments, .. } => {
             for argument in arguments {
                 match argument {
                     MirCallArgument::Value(_) => {}
@@ -2201,6 +2310,108 @@ fn verify_instruction(
             }
             Ok(())
         }
+        MirInstruction::MakeClosure {
+            destination,
+            function: target,
+            captures,
+        } => {
+            define(*destination, defined)?;
+            let Some(callee) = functions.get(target.index()) else {
+                return Err(MirValidationError::InvalidFunctionTarget {
+                    function: function.id,
+                    target: *target,
+                });
+            };
+            if captures.len() != callee.captures().len() {
+                return Err(MirValidationError::ClosureCaptureArityMismatch {
+                    function: function.id,
+                    target: *target,
+                    expected: callee.captures().len(),
+                    actual: captures.len(),
+                });
+            }
+            for (index, (argument, capture)) in captures.iter().zip(callee.captures()).enumerate() {
+                let actual = argument.mode();
+                if !call_argument_compatible(actual, capture.mode()) {
+                    return Err(MirValidationError::ClosureCaptureModeMismatch {
+                        function: function.id,
+                        target: *target,
+                        capture: index,
+                        expected: capture.mode(),
+                        actual,
+                    });
+                }
+                match argument {
+                    MirCallArgument::Value(value) => used.push(*value),
+                    MirCallArgument::BorrowRead(place) | MirCallArgument::BorrowMut(place) => {
+                        check_live_place(*place, moved_places)?;
+                    }
+                    MirCallArgument::Take(place) => {
+                        check_live_place(*place, moved_places)?;
+                        moved_places.insert(*place);
+                    }
+                }
+            }
+            Ok(())
+        }
+        MirInstruction::CallClosure {
+            destination,
+            closure,
+            parameter_types,
+            parameter_modes,
+            arguments,
+        } => {
+            define(*destination, defined)?;
+            used.push(*closure);
+            if parameter_types.len() != parameter_modes.len() {
+                return Err(MirValidationError::ClosureParameterModeCount {
+                    function: function.id,
+                    types: parameter_types.len(),
+                    modes: parameter_modes.len(),
+                });
+            }
+            for ty in parameter_types {
+                if ty.index() >= type_count {
+                    return Err(MirValidationError::InvalidClosureParameterType {
+                        function: function.id,
+                        ty: *ty,
+                    });
+                }
+            }
+            if arguments.len() != parameter_modes.len() {
+                return Err(MirValidationError::CallArityMismatch {
+                    function: function.id,
+                    expected: parameter_modes.len(),
+                    actual: arguments.len(),
+                });
+            }
+            for (parameter, (argument, expected)) in arguments
+                .iter()
+                .zip(parameter_modes.iter().copied())
+                .enumerate()
+            {
+                let actual = argument.mode();
+                if !call_argument_compatible(actual, expected) {
+                    return Err(MirValidationError::CallArgumentModeMismatch {
+                        function: function.id,
+                        parameter,
+                        expected,
+                        actual,
+                    });
+                }
+                match argument {
+                    MirCallArgument::Value(value) => used.push(*value),
+                    MirCallArgument::BorrowRead(place) | MirCallArgument::BorrowMut(place) => {
+                        check_live_place(*place, moved_places)?;
+                    }
+                    MirCallArgument::Take(place) => {
+                        check_live_place(*place, moved_places)?;
+                        moved_places.insert(*place);
+                    }
+                }
+            }
+            Ok(())
+        }
         MirInstruction::Spawn {
             target, arguments, ..
         } => {
@@ -2351,6 +2562,15 @@ pub enum MirValidationError {
         types: usize,
         modes: usize,
     },
+    ClosureFrameTooSmall {
+        function: FunctionId,
+        required: usize,
+        actual: usize,
+    },
+    InvalidClosureCaptureType {
+        function: FunctionId,
+        ty: TypeId,
+    },
     FunctionIdMismatch {
         expected: usize,
         actual: usize,
@@ -2444,6 +2664,28 @@ pub enum MirValidationError {
     DynamicDispatchSignatureMismatch {
         function: FunctionId,
         target: FunctionId,
+    },
+    ClosureCaptureArityMismatch {
+        function: FunctionId,
+        target: FunctionId,
+        expected: usize,
+        actual: usize,
+    },
+    ClosureCaptureModeMismatch {
+        function: FunctionId,
+        target: FunctionId,
+        capture: usize,
+        expected: MirParameterMode,
+        actual: MirCallArgumentMode,
+    },
+    ClosureParameterModeCount {
+        function: FunctionId,
+        types: usize,
+        modes: usize,
+    },
+    InvalidClosureParameterType {
+        function: FunctionId,
+        ty: TypeId,
     },
     InvalidExternalTarget {
         function: FunctionId,
@@ -3573,6 +3815,52 @@ mod tests {
                 Vec::new(),
             ),
             Err(MirValidationError::DynamicDispatchSignatureMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn closure_environment_contract_is_checked_before_codegen() {
+        let closure = MirFunction::with_captures(
+            FunctionId::new(0),
+            MirFunctionSignature::new(Vec::new(), TypeId::new(0), false),
+            vec![MirClosureCapture::new(
+                TypeId::new(0),
+                MirParameterMode::Read,
+            )],
+            1,
+            0,
+            vec![BasicBlock::new(
+                BlockId::new(0),
+                Vec::new(),
+                MirTerminator::Return(None),
+            )],
+        );
+        let caller = MirFunction::new(
+            FunctionId::new(1),
+            signature(),
+            1,
+            1,
+            vec![BasicBlock::new(
+                BlockId::new(0),
+                vec![MirInstruction::MakeClosure {
+                    destination: ValueId::new(0),
+                    function: FunctionId::new(0),
+                    captures: Vec::new(),
+                }],
+                MirTerminator::Return(Some(ValueId::new(0))),
+            )],
+        );
+        assert!(matches!(
+            MirModule::new(
+                vec![WireType::Unit],
+                vec![closure, caller],
+                vec![
+                    MirFunctionDebug::new("closure", vec!["capture".into()]),
+                    MirFunctionDebug::new("main", vec!["capture".into()]),
+                ],
+                Vec::new(),
+            ),
+            Err(MirValidationError::ClosureCaptureArityMismatch { .. })
         ));
     }
 }

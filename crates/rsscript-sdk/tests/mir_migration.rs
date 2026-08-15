@@ -18,9 +18,9 @@ use rsscript_mir::conformance::{
     require_declared_migration_evidence,
 };
 use rsscript_mir::{
-    BasicBlock, BlockId, FunctionId, MirCallTarget, MirFunction, MirFunctionDebug,
-    MirFunctionSignature, MirInstruction, MirLiteral, MirModule, MirParameterMode, MirTerminator,
-    TaskGroupId, TaskId, TypeId, ValueId,
+    BasicBlock, BlockId, FunctionId, MirCallTarget, MirClosureCapture, MirFunction,
+    MirFunctionDebug, MirFunctionSignature, MirInstruction, MirLiteral, MirModule,
+    MirParameterMode, MirTerminator, TaskGroupId, TaskId, TypeId, ValueId,
 };
 use rsscript_sdk::{
     AsyncInterpreterFn, BlockingBehavior, CancellationBehavior, CancellationToken, Compiler,
@@ -3522,6 +3522,102 @@ fn spawned_mir_task_executes_through_verified_bytecode_vm() {
     .eval_main_with_args(std::iter::empty::<String>())
     .expect("task bytecode executes in the VM");
     assert_eq!(output.value, "7");
+}
+
+#[test]
+fn capturing_closure_mir_executes_through_verified_bytecode_vm() {
+    let int = WireType::Int {
+        bits: 64,
+        signed: true,
+    };
+    let mir = MirModule::new(
+        vec![int],
+        vec![
+            MirFunction::with_captures(
+                FunctionId::new(0),
+                MirFunctionSignature::new(vec![TypeId::new(0)], TypeId::new(0), false),
+                vec![MirClosureCapture::new(
+                    TypeId::new(0),
+                    MirParameterMode::Read,
+                )],
+                2,
+                3,
+                vec![BasicBlock::new(
+                    BlockId::new(0),
+                    vec![
+                        MirInstruction::ReadPlace {
+                            destination: ValueId::new(0),
+                            place: rsscript_mir::PlaceId::new(0),
+                        },
+                        MirInstruction::ReadPlace {
+                            destination: ValueId::new(1),
+                            place: rsscript_mir::PlaceId::new(1),
+                        },
+                        MirInstruction::Binary {
+                            destination: ValueId::new(2),
+                            op: rsscript_mir::MirBinaryOp::Add,
+                            left: ValueId::new(0),
+                            right: ValueId::new(1),
+                        },
+                    ],
+                    MirTerminator::Return(Some(ValueId::new(2))),
+                )],
+            ),
+            MirFunction::new(
+                FunctionId::new(1),
+                MirFunctionSignature::new(vec![], TypeId::new(0), false),
+                1,
+                4,
+                vec![BasicBlock::new(
+                    BlockId::new(0),
+                    vec![
+                        MirInstruction::LoadLiteral {
+                            destination: ValueId::new(0),
+                            value: MirLiteral::Int(40),
+                        },
+                        MirInstruction::WritePlace {
+                            place: rsscript_mir::PlaceId::new(0),
+                            value: ValueId::new(0),
+                        },
+                        MirInstruction::MakeClosure {
+                            destination: ValueId::new(1),
+                            function: FunctionId::new(0),
+                            captures: vec![rsscript_mir::MirCallArgument::BorrowRead(
+                                rsscript_mir::PlaceId::new(0),
+                            )],
+                        },
+                        MirInstruction::LoadLiteral {
+                            destination: ValueId::new(2),
+                            value: MirLiteral::Int(2),
+                        },
+                        MirInstruction::CallClosure {
+                            destination: ValueId::new(3),
+                            closure: ValueId::new(1),
+                            parameter_types: vec![TypeId::new(0)].into_boxed_slice(),
+                            parameter_modes: vec![MirParameterMode::Read].into_boxed_slice(),
+                            arguments: vec![rsscript_mir::MirCallArgument::Value(ValueId::new(2))],
+                        },
+                    ],
+                    MirTerminator::Return(Some(ValueId::new(3))),
+                )],
+            ),
+        ],
+        vec![
+            MirFunctionDebug::new("<closure:0>", vec!["offset".into(), "value".into()]),
+            MirFunctionDebug::new("main", vec!["offset".into()]),
+        ],
+        vec![],
+    )
+    .expect("capturing closure MIR verifies");
+    let output = reg_vm_compile_mir(
+        &mir,
+        &format!("sha256:{}", "a".repeat(64)),
+        &format!("sha256:{}", "b".repeat(64)),
+    )
+    .expect("capturing closure MIR emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("capturing closure bytecode executes in the VM");
+    assert_eq!(output.value, "42");
 }
 
 #[test]

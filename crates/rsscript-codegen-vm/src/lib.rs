@@ -201,7 +201,10 @@ fn wire_function(mir: &MirModule, function: &MirFunction) -> Result<Value, Codeg
     let mut code = Vec::new();
     for (index, mode) in function.signature().parameter_modes().iter().enumerate() {
         if *mode == MirParameterMode::Read {
-            code.push(instr("DeepCopy", [("reg", json!(index))]));
+            code.push(instr(
+                "DeepCopy",
+                [("reg", json!(function.captures().len() + index))],
+            ));
         }
     }
     let mut starts = BTreeMap::new();
@@ -236,7 +239,7 @@ fn wire_function(mir: &MirModule, function: &MirFunction) -> Result<Value, Codeg
         .collect::<Map<_, _>>();
     Ok(json!({
         "name": function_name(mir, function)?, "params": function.signature().parameter_types().len(),
-        "captures": 0, "regs": function.place_count() as usize + function.value_count() as usize + task_count(function) + 1,
+        "captures": function.captures().len(), "regs": function.place_count() as usize + function.value_count() as usize + task_count(function) + 1,
         "local_regs": locals, "code": code,
     }))
 }
@@ -1008,6 +1011,59 @@ fn lower_instruction(
                     ));
                 }
             }
+        }
+        MirInstruction::MakeClosure {
+            destination,
+            function: target,
+            captures,
+        } => {
+            let captures = captures
+                .iter()
+                .map(|capture| match capture {
+                    MirCallArgument::Value(value) => Ok(value_reg(function, *value)),
+                    MirCallArgument::BorrowRead(place)
+                    | MirCallArgument::BorrowMut(place)
+                    | MirCallArgument::Take(place) => Ok(place_reg(*place)),
+                })
+                .collect::<Result<Vec<_>, CodegenError>>()?;
+            code.push(instr(
+                "MakeClosure",
+                [
+                    ("dst", json!(value_reg(function, *destination))),
+                    ("function", json!(target.index())),
+                    ("captures", json!(captures)),
+                ],
+            ));
+        }
+        MirInstruction::CallClosure {
+            destination,
+            closure,
+            arguments,
+            ..
+        } => {
+            let mut args = Vec::with_capacity(arguments.len());
+            let mut mut_args = Vec::new();
+            for (index, argument) in arguments.iter().enumerate() {
+                match argument {
+                    MirCallArgument::Value(value) => args.push(value_reg(function, *value)),
+                    MirCallArgument::BorrowRead(place) | MirCallArgument::Take(place) => {
+                        args.push(place_reg(*place));
+                    }
+                    MirCallArgument::BorrowMut(place) => {
+                        args.push(place_reg(*place));
+                        mut_args.push(index);
+                    }
+                }
+            }
+            code.push(instr(
+                "CallClosure",
+                [
+                    ("dst", json!(value_reg(function, *destination))),
+                    ("closure", json!(value_reg(function, *closure))),
+                    ("args", json!(args)),
+                    ("mut_args", json!(mut_args)),
+                ],
+            ));
         }
         MirInstruction::Discard { .. } => {}
     };

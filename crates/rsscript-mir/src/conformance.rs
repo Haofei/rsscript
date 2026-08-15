@@ -494,6 +494,7 @@ pub enum MirExecutionError {
     UnsupportedExternalCall,
     UnsupportedBuiltinCall,
     UnsupportedDynamicDispatch,
+    UnsupportedClosure,
     UnsupportedStructuredConcurrency,
     RecursionLimit,
     StepLimit,
@@ -1141,6 +1142,9 @@ impl<'a> Interpreter<'a> {
                             places[caller_place] = outcome.places[callee_parameter].clone();
                         }
                         values[destination.index()] = Some(outcome.value);
+                    }
+                    MirInstruction::MakeClosure { .. } | MirInstruction::CallClosure { .. } => {
+                        return Err(MirExecutionError::UnsupportedClosure);
                     }
                     MirInstruction::Discard { value } => {
                         let _ = value_at(&values, *value)?;
