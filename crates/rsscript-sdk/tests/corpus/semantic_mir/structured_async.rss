@@ -1,0 +1,11 @@
+async fn worker() -> Int {
+    return 42
+}
+
+fn main() -> Int {
+    task_group {
+        async let task = worker()
+        let value = await task
+        return value
+    }
+}

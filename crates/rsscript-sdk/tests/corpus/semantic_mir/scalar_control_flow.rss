@@ -1,0 +1,8 @@
+fn main() -> Int {
+    let value = 40
+    if value < 41 {
+        return 0
+    } else {
+        return value + 2
+    }
+}

@@ -1,0 +1,4 @@
+kind = "valid"
+diagnostics_sha256 = "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+hir_sha256 = "sha256:4eebec8e84390bbb753bb0f1cf7ea74391c66a118e992d33e570af0bfab9b5c7"
+mir_sha256 = "sha256:239db6483f2afcb13825a7fe2d9bd6b2fef391439338049354ac3c9e7b7e860f"

@@ -137,5 +137,10 @@ path = "tests/mir_migration.rs"
 required-features = ["compatibility"]
 
 [[test]]
+name = "semantic_mir_corpus"
+path = "tests/semantic_mir_corpus.rs"
+required-features = ["compatibility"]
+
+[[test]]
 name = "public_api_architecture"
 path = "tests/public_api_architecture.rs"

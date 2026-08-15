@@ -2346,8 +2346,15 @@ an arbitrary shell executor.
   cross-platform deterministic builds, Provider ABI compatibility, resource
   cleanup state machines, and interpreter/experimental-backend differential
   tests.
-  - [ ] **E03.1 — Add source/semantic/MIR golden corpus.** Freeze diagnostics,
-    normalized HIR/MIR, and lowering failures separately.
+  - [x] **E03.1 — Add source/semantic/MIR golden corpus.** The checked-in
+    `semantic_mir` corpus now freezes diagnostics, a canonical ordered HIR
+    projection, and a canonical MIR projection for scalar control flow and
+    structured async, plus a failure-only unknown-callee diagnostic fixture.
+    The projections deliberately sort semantic lookup facts and map numeric
+    MIR type IDs back to structural wire types, so randomized hash-map/type
+    interning order cannot create a false golden change. Additional lowering
+    failures can be added as source fixtures without conflating them with
+    diagnostics or executable MIR evidence.
   - [ ] **E03.2 — Add Artifact/Provider compatibility corpus.** Cover old readers,
     ABI mismatch, replacement Providers, and deterministic bundles.
   - [ ] **E03.3 — Add execution state-machine corpus.** Cover budgets,
