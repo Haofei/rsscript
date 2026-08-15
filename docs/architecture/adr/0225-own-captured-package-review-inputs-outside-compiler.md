@@ -66,6 +66,11 @@ legacy native Rust inspection only as the same explicit callback. Compiler
 compatibility now only authorizes the captured input and remaps snapshot paths
 for its legacy public result.
 
+The final package check composition is review-owned too: it combines review,
+graph, lock, and policy facts and receives native inspection and native-path
+resolution as explicit compatibility callbacks. The compiler public check entry
+now contains only snapshot authorization and path remapping.
+
 The compiler's opt-in `package` compatibility feature has a private forwarding
 module during the staged migration so existing authorization, native, lock, and
 review callers retain their established behavior. The reviewed compiler default
@@ -73,8 +78,8 @@ closure remains unchanged and does not select this crate.
 
 ## Consequences
 
-This is a staged physical S05.3 migration. The remaining package check and
-final public compatibility composition must move before the forwarding module
-can be removed. Architecture tests assert that captured review implementation
-files cannot return under `rsscript-compiler`, while compiler compatibility
-continues to consume project-owned bounded capture APIs.
+This completes the review/check implementation migration. The remaining S05.3
+work is a final audit and reduction of the compiler's compatibility forwarding
+surface. Architecture tests assert that captured review implementation files
+cannot return under `rsscript-compiler`, while compiler compatibility continues
+to consume project-owned bounded capture APIs.

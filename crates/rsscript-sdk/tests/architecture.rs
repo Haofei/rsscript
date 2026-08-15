@@ -2106,6 +2106,29 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
             && package_module.contains("remap_tree"),
         "compiler package graph compatibility must only authorize captured input and remap public paths"
     );
+    let check_path = root.join("crates/rsscript-package-review/src/check.rs");
+    assert!(
+        check_path.is_file()
+            && !root
+                .join("crates/rsscript-compiler/src/package/check.rs")
+                .exists(),
+        "package check composition must be physically owned by the package-review boundary"
+    );
+    let check = read(&check_path);
+    assert!(
+        check.contains("pub fn check_package_dir_captured")
+            && check.contains("NativeRustCheckFn")
+            && check.contains("NativeRustReviewFn")
+            && check.contains("NativeRustPathFn")
+            && !check.contains("authorization::"),
+        "package check must combine neutral review facts through explicit native compatibility callbacks"
+    );
+    assert!(
+        package_module.contains("rsscript_package_review::check_package_dir_captured")
+            && package_module.contains("snapshot_package_graph_inputs")
+            && package_module.contains("remap_check"),
+        "compiler package check compatibility must only authorize captured input and remap public paths"
+    );
 }
 
 #[test]

@@ -8,6 +8,7 @@
 mod analysis;
 mod await_facts;
 mod bindings;
+mod check;
 mod contract;
 mod dependency;
 mod diff;
@@ -22,6 +23,7 @@ mod source_set;
 pub use analysis::*;
 pub use await_facts::*;
 pub use bindings::*;
+pub use check::*;
 pub use contract::*;
 pub use dependency::*;
 pub use diff::*;

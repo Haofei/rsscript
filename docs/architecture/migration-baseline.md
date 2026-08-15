@@ -885,8 +885,8 @@ an arbitrary shell executor.
     inspection as an explicit narrow callback. Package semantic diff consumes
     that review boundary through the same explicit callback. Compiler package
     compatibility retains only adapters and snapshot/remapping façades while
-    check and the public compatibility façade continue their staged
-    migration.
+    check and the public compatibility façade are now limited to staged
+    callback and snapshot/remapping adapters.
     - [x] **S05.3a — Extract neutral risk facts and calculation.** The review
       risk lattice and its pure evidence evaluator now live in
       `rsscript-review-core`. Compiler compatibility code collects neutral

@@ -24,10 +24,8 @@
 )]
 // Compatibility package/review tooling keeps its lint debt local to this module.
 
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use crate::diagnostic::Diagnostic;
 #[cfg(test)]
 pub(super) use rsscript_project::relative_project_path_label as relative_path;
 pub(crate) use rsscript_project::{
@@ -42,7 +40,30 @@ mod analysis {
     pub(super) use rsscript_package_review::analyze_package_dir_captured;
 }
 mod authorization;
-mod check;
+// Legacy composition only: the neutral package check is review-owned. The
+// compiler supplies its opt-in native wrapper callbacks and snapshot remapping.
+mod check {
+    use std::path::Path;
+
+    use rsscript_package_model::PackageCheck;
+
+    pub(super) fn check_package_dir_captured(package_dir: &Path) -> Result<PackageCheck, String> {
+        rsscript_package_review::check_package_dir_captured(
+            package_dir,
+            super::native::package_native_rust_review,
+            super::native::confined_native_rust_path,
+            super::native::check_package_native_rust,
+        )
+    }
+
+    pub fn check_package_dir(package_dir: &Path) -> Result<PackageCheck, String> {
+        let snapshot = super::authorization::snapshot_package_graph_inputs(package_dir)?;
+        let mut check = check_package_dir_captured(snapshot.root())
+            .map_err(|error| snapshot.remap_error(error))?;
+        super::authorization::remap_check(&snapshot, &mut check);
+        Ok(check)
+    }
+}
 mod dependency {
     pub(super) use rsscript_package_review::*;
 }
@@ -51,17 +72,10 @@ mod dependency {
 mod graph {
     use std::path::Path;
 
-    use rsscript_package_model::{PackageGraphCheck, PackageTree};
+    use rsscript_package_model::PackageTree;
 
     pub(super) fn package_tree_captured(package_dir: &Path) -> Result<PackageTree, String> {
         rsscript_package_review::package_tree_captured(
-            package_dir,
-            super::native::package_native_rust_review,
-        )
-    }
-
-    pub(super) fn check_package_graph(package_dir: &Path) -> Result<PackageGraphCheck, String> {
-        rsscript_package_review::check_package_graph(
             package_dir,
             super::native::package_native_rust_review,
         )
@@ -74,9 +88,7 @@ mod lock {
 
     use rsscript_package_model::{PackageLock, PackageLockDiff};
 
-    pub(super) use rsscript_package_review::{
-        compare_locked_packages, package_lock_diff_reasons, parse_package_lock, read_package_lock,
-    };
+    pub(super) use rsscript_package_review::parse_package_lock;
     pub(super) const PACKAGE_LOCK_MAX_BYTES: u64 = rsscript_package_review::PACKAGE_LOCK_MAX_BYTES;
 
     pub(super) fn lock_package_dir_captured(package_dir: &Path) -> Result<PackageLock, String> {
@@ -105,9 +117,6 @@ mod lock {
 mod lock_format;
 mod metadata;
 mod native;
-mod policy {
-    pub(super) use rsscript_package_review::*;
-}
 // Legacy composition only: review evidence is package-review-owned. Native
 // Rust inspection remains an opt-in compiler compatibility adapter.
 mod review {
@@ -220,20 +229,6 @@ fn collect_regular_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), St
         .map(|file| file.path),
     );
     Ok(())
-}
-
-pub(super) fn dedup_diagnostics(diagnostics: &mut Vec<Diagnostic>) {
-    let mut seen = BTreeSet::new();
-    diagnostics.retain(|diagnostic| {
-        seen.insert((
-            diagnostic.code.clone(),
-            diagnostic.summary.clone(),
-            diagnostic.span.file.clone(),
-            diagnostic.span.line,
-            diagnostic.span.column,
-            diagnostic.span.length,
-        ))
-    });
 }
 
 #[cfg(test)]

@@ -1,33 +1,44 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 
-use super::graph::check_package_graph;
-use super::lock::{
-    compare_locked_packages, lock_package_dir_captured, package_lock_diff_reasons,
-    read_package_lock,
+use rsscript_diagnostics::Diagnostic;
+use rsscript_package_model::{
+    PackageCheck, PackageCheckLock, PackageLock, PackageNativeRustCheck, PackageNativeRustReview,
+    PackageRisk,
 };
-use super::native::check_package_native_rust;
-use super::policy::{
+
+use crate::graph::check_package_graph;
+use crate::lock::{
+    NativeRustPathFn, compare_locked_packages, lock_package_dir_captured,
+    package_lock_diff_reasons, read_package_lock,
+};
+use crate::policy::{
     collect_manifest_review_policy_diagnostics, collect_manifest_review_policy_violations,
     package_review_policy_has_high_risk_violation, package_review_policy_ok,
 };
-use super::source_set::load_package;
-use super::{PackageCheck, PackageCheckLock, PackageLock, PackageRisk, dedup_diagnostics};
+use crate::review::{NativeRustReviewFn, review_package_dir_captured_with_features};
+use crate::source_set::load_package;
 
-pub fn check_package_dir(package_dir: &Path) -> Result<PackageCheck, String> {
-    let snapshot = super::authorization::snapshot_package_graph_inputs(package_dir)?;
-    let mut check =
-        check_package_dir_captured(snapshot.root()).map_err(|error| snapshot.remap_error(error))?;
-    super::authorization::remap_check(&snapshot, &mut check);
-    Ok(check)
-}
+/// Legacy native-wrapper validation remains host-specific. The neutral check
+/// combines its result with review, graph, lock, and policy evidence.
+pub type NativeRustCheckFn =
+    fn(&Path, Option<&PackageNativeRustReview>) -> Result<Option<PackageNativeRustCheck>, String>;
 
-pub(super) fn check_package_dir_captured(package_dir: &Path) -> Result<PackageCheck, String> {
+/// Combine package review facts without taking ownership of native wrapper
+/// inspection or native-path authority.
+pub fn check_package_dir_captured(
+    package_dir: &Path,
+    native_rust_review: NativeRustReviewFn,
+    native_rust_path: NativeRustPathFn,
+    native_rust_check: NativeRustCheckFn,
+) -> Result<PackageCheck, String> {
     let package = load_package(package_dir)?;
-    let review = super::review::review_package_dir_captured_with_features(package_dir, None)?;
-    let current_lock = lock_package_dir_captured(package_dir)?;
-    let graph = check_package_graph(package_dir)?;
+    let review = review_package_dir_captured_with_features(package_dir, None, native_rust_review)?;
+    let current_lock =
+        lock_package_dir_captured(package_dir, native_rust_review, native_rust_path)?;
+    let graph = check_package_graph(package_dir, native_rust_review)?;
     let lock = check_package_lock(package_dir, &current_lock)?;
-    let native_rust = check_package_native_rust(package_dir, review.native_rust.as_ref())?;
+    let native_rust = native_rust_check(package_dir, review.native_rust.as_ref())?;
 
     let mut reasons = review.reasons.clone();
     reasons.extend(graph.reasons.clone());
@@ -97,6 +108,20 @@ pub(super) fn check_package_dir_captured(package_dir: &Path) -> Result<PackageCh
         native_rust,
         diagnostics,
     })
+}
+
+fn dedup_diagnostics(diagnostics: &mut Vec<Diagnostic>) {
+    let mut seen = BTreeSet::new();
+    diagnostics.retain(|diagnostic| {
+        seen.insert((
+            diagnostic.code.clone(),
+            diagnostic.summary.clone(),
+            diagnostic.span.file.clone(),
+            diagnostic.span.line,
+            diagnostic.span.column,
+            diagnostic.span.length,
+        ))
+    });
 }
 
 fn check_package_lock(
