@@ -798,9 +798,13 @@ visible without manually re-sorting every open parent milestone.
   - [x] **M01.1 — Define index/newtype IDs and ownership tables.** Initial
     frontend-free IDs are owned by `rsscript-mir`; they are local to one MIR
     module, non-string, deterministic, and cannot be mixed by type.
-  - [ ] **M01.2 — Lower semantic names and `WireType` references into IDs.**
-    Backend inputs contain resolved function, external symbol, builtin, and
-    resource identities only.
+  - [x] **M01.2 — Lower semantic names and `WireType` references into IDs.**
+    Backend instruction operands now contain resolved `FunctionId`,
+    `ExternalSymbolId`, `BuiltinId`, `ResourceTypeId`, and `TypeId` values
+    only. `WireType` remains a module-owned canonical type table, while
+    function names, external ABI symbols, and source locations remain debug or
+    import side-table evidence rather than executable call targets. The MIR
+    verifier and `rsscript-codegen-vm` consume this ID-based representation.
     - [x] **M01.2a — Add the initial module type table.** Function parameter and
       result types are interned as `TypeId` values during the executable-IR
       bridge; builtin and resource identities remain follow-up work.
