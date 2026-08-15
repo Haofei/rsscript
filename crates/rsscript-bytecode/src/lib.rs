@@ -671,7 +671,8 @@ fn verify_executable_payload(
     context.check()?;
     verify_function_map(unit, "resource_drop_functions", functions, false)?;
     verify_type_metadata(unit, limits)?;
-    verify_variant_layout_metadata(unit, limits)?;
+    let variant_cases = verify_variant_layout_metadata(unit, limits)?;
+    verify_variant_instruction_layouts(functions, &variant_cases)?;
     verify_native_signatures(unit, functions, limits)?;
     verify_source_map(unit, functions, total_instructions)?;
     let declared_imports = imports
@@ -876,9 +877,9 @@ fn verify_type_metadata(
 fn verify_variant_layout_metadata(
     unit: &serde_json::Map<String, serde_json::Value>,
     limits: BytecodeLimits,
-) -> Result<(), BytecodeError> {
+) -> Result<Option<BTreeMap<String, BTreeSet<String>>>, BytecodeError> {
     let Some(layouts) = unit.get("variant_layouts") else {
-        return Ok(());
+        return Ok(None);
     };
     let layouts = layouts
         .as_object()
@@ -886,6 +887,7 @@ fn verify_variant_layout_metadata(
     if layouts.len() > limits.max_functions {
         return Err(BytecodeError::LimitExceeded("variant type count"));
     }
+    let mut cases = BTreeMap::new();
     for (key, value) in layouts {
         let layout = value
             .as_object()
@@ -951,12 +953,88 @@ fn verify_variant_layout_metadata(
                 let type_name = field["type_name"].as_str().ok_or_else(|| {
                     invalid_payload(format!("variant layout `{key}` field type is not a string"))
                 })?;
-                if field_name.is_empty() || type_name.is_empty() || !field_names.insert(field_name)
+                if field_name.is_empty()
+                    || type_name.is_empty()
+                    || !field_names.insert(field_name.to_owned())
                 {
                     return Err(invalid_payload(format!(
                         "variant layout `{key}` has an empty or duplicate field `{field_name}`"
                     )));
                 }
+            }
+            if cases.insert(variant_name.to_owned(), field_names).is_some() {
+                return Err(invalid_payload(format!(
+                    "variant case `{variant_name}` occurs in multiple layouts"
+                )));
+            }
+        }
+    }
+    Ok(Some(cases))
+}
+
+/// Once a v1 Artifact opts into named-sum layouts, its executable instructions
+/// must use that exact declared case shape. This is deliberately optional for
+/// old Artifacts that predate the table, but fail-closed for new producers so
+/// a report never assigns numeric wire identity to a different runtime shape.
+fn verify_variant_instruction_layouts(
+    functions: &[serde_json::Value],
+    cases: &Option<BTreeMap<String, BTreeSet<String>>>,
+) -> Result<(), BytecodeError> {
+    let Some(cases) = cases else {
+        return Ok(());
+    };
+    for (function_id, function) in functions.iter().enumerate() {
+        let code = function
+            .get("code")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| {
+                invalid_payload(format!("function {function_id} code is not an array"))
+            })?;
+        for (ip, instruction) in code.iter().enumerate() {
+            let Some(fields) = instruction
+                .get("MakeVariant")
+                .and_then(serde_json::Value::as_object)
+            else {
+                continue;
+            };
+            let layout = fields
+                .get("layout")
+                .and_then(serde_json::Value::as_object)
+                .ok_or_else(|| invalid_payload(format!(
+                    "function {function_id} instruction {ip} MakeVariant layout is not an object"
+                )))?;
+            let case = layout
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| invalid_payload(format!(
+                    "function {function_id} instruction {ip} MakeVariant layout name is not a string"
+                )))?;
+            // `Result` remains a language primitive in v1 and uses the legacy
+            // `MakeVariant` representation without a named sum layout.
+            if matches!(case, "Ok" | "Err") && !cases.contains_key(case) {
+                continue;
+            }
+            let expected = cases.get(case).ok_or_else(|| {
+                invalid_payload(format!(
+                    "function {function_id} instruction {ip} constructs undeclared variant `{case}`"
+                ))
+            })?;
+            let names = layout
+                .get("field_names")
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(|| invalid_payload(format!(
+                    "function {function_id} instruction {ip} MakeVariant field_names is not an array"
+                )))?
+                .iter()
+                .map(|value| value.as_str().map(str::to_owned))
+                .collect::<Option<BTreeSet<_>>>()
+                .ok_or_else(|| invalid_payload(format!(
+                    "function {function_id} instruction {ip} MakeVariant field name is not a string"
+                )))?;
+            if &names != expected {
+                return Err(invalid_payload(format!(
+                    "function {function_id} instruction {ip} variant `{case}` fields disagree with its declared layout"
+                )));
             }
         }
     }
@@ -2350,6 +2428,52 @@ mod tests {
         let first_section_data = BYTECODE_MAGIC.len() + 2 + SECTION_HEADER_BYTES;
         assert_ne!(bytes.get(first_section_data), Some(&b'{'));
         BytecodeVerifier::default().verify(&bytes).unwrap();
+    }
+
+    #[test]
+    fn named_variant_instructions_must_match_the_declared_layout_table() {
+        let payload = |case: &str| {
+            encode_executable_payload(&serde_json::json!({
+                "functions": [{
+                    "name": "main", "params": 0, "captures": 0, "regs": 1,
+                    "local_regs": {},
+                    "code": [
+                        {"MakeVariant": {"dst": 0, "layout": {"name": case, "field_names": []}, "fields": []}},
+                        {"Return": {"src": 0}}
+                    ]
+                }],
+                "function_ids": {"main": 0},
+                "resource_drop_functions": {},
+                "types": {},
+                "variant_layouts": {
+                    "State": {"name": "State", "variants": [
+                        {"name": "Ready", "fields": []}
+                    ]}
+                },
+                "native_signatures": {"main": {"params": [], "return_type": "State"}},
+                "closure_identity_observable": false
+            }))
+            .expect("payload")
+        };
+        let artifact = |payload| {
+            BytecodeArtifact::new(
+                LANGUAGE_SEMANTICS_VERSION,
+                "0.1.0",
+                TEST_CATALOG_DIGEST,
+                RUNTIME_ABI_VERSION,
+                TEST_SOURCE_DIGEST,
+                vec![],
+                payload,
+            )
+            .expect("artifact")
+        };
+        BytecodeVerifier::default()
+            .verify(&artifact(payload("Ready")).to_bytes().unwrap())
+            .expect("declared case is valid");
+        assert!(matches!(
+            BytecodeVerifier::default().verify(&artifact(payload("Missing")).to_bytes().unwrap()),
+            Err(BytecodeError::InvalidPayload(message)) if message.contains("undeclared variant `Missing`")
+        ));
     }
 
     #[test]
