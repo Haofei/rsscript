@@ -1,4 +1,5 @@
 use super::*;
+use crate::serde_json;
 
 const NATIVE_VALUE_MAX_DEPTH: usize = 128;
 const NATIVE_VALUE_MAX_NODES: usize = 1_000_000;

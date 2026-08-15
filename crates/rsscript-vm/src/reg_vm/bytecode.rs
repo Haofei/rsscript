@@ -4,6 +4,8 @@ use std::rc::Rc;
 use rsscript_bytecode::{BytecodeArtifact, BytecodeError, VerifiedBytecode};
 use serde::{Deserialize, Serialize};
 
+use crate::serde_json;
+
 use super::*;
 
 #[derive(Serialize, Deserialize)]

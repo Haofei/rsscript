@@ -7,6 +7,7 @@ pub mod diagnostic {
 mod eval_types;
 mod fnv;
 mod reg_vm;
+pub(crate) use rsscript_corelib::structured_data::serde_json;
 mod text_util {
     pub(crate) use rsscript_text::*;
 }

@@ -3,6 +3,7 @@ use crate::reg_vm::runtime_values::*;
 use crate::reg_vm::value_access::*;
 use crate::reg_vm::value_convert::*;
 use crate::reg_vm::value_ops::*;
+use crate::serde_json;
 
 impl RegVm {
     #[allow(clippy::mutable_key_type)]

@@ -4,6 +4,7 @@
 
 use std::rc::Rc;
 
+use crate::serde_json;
 use crate::vm_value::{TypedVec, ValueMap, VmStruct, VmValue};
 
 use super::value_access::{value_none, value_some};

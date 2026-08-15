@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::serde_json;
 
 impl RegVm {
     /// Recompute the exact reachable value-storage set defined by the VM model.

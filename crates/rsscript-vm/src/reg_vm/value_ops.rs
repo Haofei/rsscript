@@ -4,6 +4,7 @@
 //! these via `use value_ops::*`.
 
 use super::*;
+use crate::serde_json;
 
 /// A folder closure recognized as a single numeric binary op over its two
 /// parameters: `op` is the arithmetic operator and `lhs_is_state` says whether

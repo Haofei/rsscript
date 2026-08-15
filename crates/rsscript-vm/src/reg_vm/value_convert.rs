@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use crate::eval_types::{EvalError, NativeValue};
+use crate::serde_json;
 use crate::vm_value::{TypedVec, ValueMap, VmMapKey, VmStruct, VmValue, vm_value_node_id};
 
 use super::*;

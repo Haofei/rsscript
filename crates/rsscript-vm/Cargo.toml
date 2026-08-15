@@ -15,7 +15,6 @@ rsscript-operation = { path = "../rsscript-operation" }
 rsscript-provider-api = { path = "../rsscript-provider-api", features = ["compatibility"] }
 rsscript-text = { path = "../rsscript-text" }
 serde = { version = "1", features = ["derive", "rc"] }
-serde_json = { version = "1", features = ["preserve_order"] }
 vm-jit = { path = "../../experiments/vm-jit", optional = true }
 
 [features]

@@ -1068,7 +1068,6 @@ fn vm_runtime_dependency_inventory_prevents_library_implementation_regressions()
         "rsscript-provider-api",
         "rsscript-text",
         "serde",
-        "serde_json",
         "vm-jit",
     ]);
     assert_eq!(
@@ -1077,7 +1076,7 @@ fn vm_runtime_dependency_inventory_prevents_library_implementation_regressions()
     );
     for required in [
         "rsscript-corelib",
-        "serde_json",
+        "legacy JSON adapter",
         "P06.2/P06.4",
         "must not directly add algorithm crates",
     ] {

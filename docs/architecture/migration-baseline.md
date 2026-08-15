@@ -1687,7 +1687,7 @@ an arbitrary shell executor.
     remains a Core execution optimization, while native compilation, OSR, and
     deopt remain explicitly experimental. SDK architecture tests inspect the
     default layout and Cargo closure to prevent regression.
-- [ ] **V06 — Split VM primitives from deterministic core library.** VM Core
+- [x] **V06 — Split VM primitives from deterministic core library.** VM Core
   keeps frames, registers, scheduler, cancellation, resource table, limits,
   dispatch, and external calls. JSON/YAML, regex, compression, encoding, hashes,
   date utilities, and collection algorithms move behind a versioned builtin
@@ -1701,7 +1701,7 @@ an arbitrary shell executor.
     continues to charge builtin calls separately from Provider calls. Catalog
     tests reject duplicate bindings and unknown direct IDs, and interface
     discovery rejects duplicate public declarations.
-  - [ ] **V06.2 — Move pure library families incrementally.** Start with encoding
+  - [x] **V06.2 — Move pure library families incrementally.** Start with encoding
     and collection helpers, then JSON/YAML, regex, compression, hashes, and date
     utilities while preserving differential results.
     - [x] **V06.2.1 — Extract deterministic encoding algorithms.** Base64, Hex,
@@ -1734,9 +1734,15 @@ an arbitrary shell executor.
       deterministic conversion to an owned JSON tree now live in
       `rsscript-corelib::structured_data`; the VM adapts the resulting tree into
       its current legacy JSON value representation. `serde_yaml_ng` is no longer
-      a direct VM dependency. The remaining `serde_json` dependency is explicitly
-      owned by that legacy VM value representation and is removed only with P06's
-      canonical WireValue cutover.
+      a direct VM dependency. The legacy JSON representation is now likewise
+      imported only through `rsscript-corelib::structured_data`; P06's canonical
+      WireValue cutover still removes the dynamic representation itself.
+    - [x] **V06.2.1g — Isolate the legacy JSON implementation dependency.**
+      `VmValue::Json` continues to be a P06 compatibility representation, but
+      its JSON parser/value implementation now arrives exclusively through the
+      deterministic corelib structured-data boundary. `rsscript-vm` no longer
+      declares `serde_json` directly, and its dependency inventory/architecture
+      gate reject restoring that implementation edge.
     - [x] **V06.2.2 — Extract collection algorithms.** Move non-primitive list,
       map, set, and deque transformations behind the same pure-library boundary
       without moving ownership-sensitive mutation primitives out of the VM.
@@ -1762,13 +1768,18 @@ an arbitrary shell executor.
         perform ownership-sensitive allocation/cost accounting. No additional
         collection operation can cross this boundary without coupling corelib to
         VM values or changing its execution semantics.
-  - [ ] **V06.3 — Reduce VM dependencies to execution primitives.** Verify VM
-    Core no longer directly depends on library implementation crates.
+  - [x] **V06.3 — Reduce VM dependencies to execution primitives.** The VM
+    Core no longer directly depends on library implementation crates. Its legacy
+    JSON adapter is supplied by the one-way deterministic-corelib boundary,
+    rather than a direct `serde_json` dependency; P06 remains responsible for
+    eliminating the compatibility representation, not for maintaining its
+    implementation dependency.
     - [x] **V06.3a — Freeze the reviewed VM runtime dependency inventory.**
       `vm-runtime-dependency-inventory.md` records each normal dependency,
       explicitly separates Core execution contracts from deterministic corelib,
-      and binds the sole remaining legacy JSON adapter to P06. Architecture
-      tests reject any unreviewed direct VM runtime dependency.
+      and binds the legacy JSON representation's removal to P06. Architecture
+      tests reject any unreviewed direct VM runtime dependency, including a
+      direct `serde_json` regression.
 - [x] **V07 — Classify the intrinsic catalog.** The versioned
   `rsscript.builtin_registry.v2` classifies every catalog-owned direct call as
   either a `VmPrimitive` (allocation/ownership, task/channel, output, or

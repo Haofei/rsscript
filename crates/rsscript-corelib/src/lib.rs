@@ -366,6 +366,11 @@ pub mod compression {
 /// text and returns an owned JSON tree; language-value adaptation, resource
 /// accounting, and Provider exposure remain execution-backend responsibilities.
 pub mod structured_data {
+    /// The deterministic JSON representation used by structured-data
+    /// algorithms. Execution backends import this through corelib rather than
+    /// depending on the implementation crate directly.
+    pub use serde_json;
+
     pub fn yaml_to_json(value: &str) -> Result<serde_json::Value, String> {
         let value: serde_yaml_ng::Value =
             serde_yaml_ng::from_str(value).map_err(|error| error.to_string())?;

@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 use crate::eval_types::NativeValue;
 use crate::fnv::FnvHasher;
+use crate::serde_json;
 
 /// VM `Map` value (key -> value), keyed with Rust's per-process randomized
 /// hasher so adversarial scripts cannot precompute one global collision set.
