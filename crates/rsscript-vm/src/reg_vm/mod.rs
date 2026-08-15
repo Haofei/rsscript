@@ -46,6 +46,7 @@ use rsscript_corelib::{
         base64_decode, base64_encode, hex_decode as core_hex_decode, hex_encode as core_hex_encode,
         url_decode_component, url_encode_component,
     },
+    regex::CompiledRegex,
 };
 use sha2::{Digest, Sha256};
 use sha3::{

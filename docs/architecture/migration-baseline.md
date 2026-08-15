@@ -1675,6 +1675,10 @@ an arbitrary shell executor.
       dependency. The VM retains only value adaptation, result construction and
       execution-budget accounting; existing encoding parity coverage stays on
       the normal verified-bytecode path.
+    - [x] **V06.2.1b — Extract deterministic regex algorithms.** Regex compile,
+      match, capture, find, replace, and split now use `rsscript-corelib`'s
+      `CompiledRegex`; the VM owns only its language value representation and
+      error/result conversion. `regex` is no longer a direct VM dependency.
     - [ ] **V06.2.2 — Extract collection algorithms.** Move non-primitive list,
       map, set, and deque transformations behind the same pure-library boundary
       without moving ownership-sensitive mutation primitives out of the VM.

@@ -1871,6 +1871,7 @@ dependencies = [
  "base64",
  "hex",
  "percent-encoding",
+ "regex",
 ]
 
 [[package]]
@@ -2164,7 +2165,6 @@ dependencies = [
  "chrono",
  "flate2",
  "hmac",
- "regex",
  "rsscript-abi-model",
  "rsscript-build-support",
  "rsscript-bytecode",

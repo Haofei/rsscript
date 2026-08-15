@@ -184,14 +184,13 @@ pub(super) fn expect_row_fields_ref(value: &VmValue) -> Result<Vec<String>, Eval
     }
 }
 
-pub(super) fn expect_regex_ref(value: &VmValue) -> Result<regex::Regex, EvalError> {
+pub(super) fn expect_regex_ref(value: &VmValue) -> Result<CompiledRegex, EvalError> {
     match value {
         VmValue::Struct(data) if data.name().as_ref() == "Regex" => {
             let pattern = data
                 .get("pattern")
                 .ok_or_else(|| EvalError::Runtime("Regex value is missing pattern.".to_string()))?;
-            regex::Regex::new(expect_string_ref(pattern)?)
-                .map_err(|error| EvalError::Runtime(error.to_string()))
+            CompiledRegex::compile(expect_string_ref(pattern)?).map_err(EvalError::Runtime)
         }
         other => Err(EvalError::Runtime(format!(
             "expected Regex, got `{}`.",

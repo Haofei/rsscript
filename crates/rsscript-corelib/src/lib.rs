@@ -130,9 +130,55 @@ pub mod collections {
     }
 }
 
+/// Regex compilation and matching are deterministic library operations. The
+/// execution backend owns its language-level Regex value and maps errors into
+/// the language Result/Error representation.
+pub mod regex {
+    #[derive(Debug, Clone)]
+    pub struct CompiledRegex(::regex::Regex);
+
+    impl CompiledRegex {
+        pub fn compile(pattern: &str) -> Result<Self, String> {
+            ::regex::Regex::new(pattern)
+                .map(Self)
+                .map_err(|error| error.to_string())
+        }
+
+        pub fn is_match(&self, value: &str) -> bool {
+            self.0.is_match(value)
+        }
+
+        pub fn find(&self, value: &str) -> Option<String> {
+            self.0
+                .find(value)
+                .map(|matched| matched.as_str().to_owned())
+        }
+
+        pub fn captures(&self, value: &str) -> Vec<String> {
+            self.0
+                .captures(value)
+                .map(|captures| {
+                    captures
+                        .iter()
+                        .filter_map(|matched| matched.map(|matched| matched.as_str().to_owned()))
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+
+        pub fn replace_all(&self, value: &str, replacement: &str) -> String {
+            self.0.replace_all(value, replacement).to_string()
+        }
+
+        pub fn split(&self, value: &str) -> Vec<String> {
+            self.0.split(value).map(str::to_owned).collect()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{collections::*, encoding::*};
+    use super::{collections::*, encoding::*, regex::CompiledRegex};
 
     #[test]
     fn encoding_algorithms_are_deterministic_and_round_trip() {
@@ -187,5 +233,22 @@ mod tests {
         ));
         assert_eq!(map_keys(&left).len(), 2);
         assert_eq!(map_values(&left).len(), 2);
+    }
+
+    #[test]
+    fn regex_operations_preserve_capture_and_replacement_semantics() {
+        let regex = CompiledRegex::compile(r"(rss)-(\d+)").unwrap();
+        assert!(regex.is_match("rss-42"));
+        assert_eq!(regex.find("x rss-42 y"), Some("rss-42".to_owned()));
+        assert_eq!(
+            regex.captures("rss-42"),
+            vec!["rss-42".to_owned(), "rss".to_owned(), "42".to_owned()]
+        );
+        assert_eq!(regex.replace_all("rss-42", "$2:$1"), "42:rss");
+        assert_eq!(
+            regex.split("rss-42 rss-7"),
+            vec!["".to_owned(), " ".to_owned(), "".to_owned()]
+        );
+        assert!(CompiledRegex::compile("(").is_err());
     }
 }

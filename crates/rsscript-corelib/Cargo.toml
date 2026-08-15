@@ -10,3 +10,4 @@ publish = false
 base64 = "0.22"
 hex = "0.4"
 percent-encoding = "2"
+regex = "1"

@@ -881,6 +881,8 @@ fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
     let list = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/list.rs"));
     let deque = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/deque.rs"));
     let set = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/set.rs"));
+    let regex = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/regex.rs"));
+    let value_access = read(&root.join("crates/rsscript-vm/src/reg_vm/value_access.rs"));
 
     assert!(corelib_manifest.contains("name = \"rsscript-corelib\""));
     for forbidden in ["rsscript-vm", "rsscript-provider", "rsscript-bytecode"] {
@@ -908,6 +910,9 @@ fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
         "pub fn map_is_subset",
         "pub fn map_keys",
         "pub fn map_values",
+        "pub struct CompiledRegex",
+        "pub fn captures",
+        "pub fn replace_all",
     ] {
         assert!(
             corelib.contains(required),
@@ -915,7 +920,7 @@ fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
         );
     }
     assert!(vm_manifest.contains("rsscript-corelib"));
-    for removed in ["base64 =", "hex =", "percent-encoding ="] {
+    for removed in ["base64 =", "hex =", "percent-encoding =", "regex ="] {
         assert!(
             !vm_manifest.contains(removed),
             "VM manifest must not directly own encoding implementation dependency `{removed}`"
@@ -927,6 +932,8 @@ fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
     assert!(intrinsics.contains("base64_decode(text)"));
     assert!(hex.contains("core_hex_decode(text)"));
     assert!(url.contains("url_decode_component(value)"));
+    assert!(regex.contains("CompiledRegex::compile(pattern)"));
+    assert!(value_access.contains("Result<CompiledRegex, EvalError>"));
     for required in [
         "core_list_dedup(list.borrow().iter())",
         "core_list_reverse(list.borrow().iter())",

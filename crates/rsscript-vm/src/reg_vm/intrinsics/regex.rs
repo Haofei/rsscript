@@ -19,15 +19,9 @@ impl RegVm {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let captures = regex
                     .captures(value)
-                    .map(|captures| {
-                        captures
-                            .iter()
-                            .filter_map(|matched| {
-                                matched.map(|matched| VmValue::string(matched.as_str()))
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
+                    .into_iter()
+                    .map(VmValue::string)
+                    .collect::<Vec<_>>();
                 self.account_bytes(
                     captures
                         .iter()
@@ -41,9 +35,9 @@ impl RegVm {
             }
             RegIntrinsic::RegexCompile => {
                 let pattern = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(match regex::Regex::new(pattern) {
+                Ok(match CompiledRegex::compile(pattern) {
                     Ok(_) => value_ok(regex_value(pattern)),
-                    Err(error) => value_err(regex_error_value(error.to_string())),
+                    Err(error) => value_err(regex_error_value(error)),
                 })
             }
             RegIntrinsic::RegexErrorMessage => {
@@ -54,7 +48,7 @@ impl RegVm {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let result = regex
                     .find(value)
-                    .map(|matched| VmValue::some(VmValue::string(matched.as_str())))
+                    .map(|matched| VmValue::some(VmValue::string(matched)))
                     .unwrap_or(VmValue::OptionNone);
                 self.account_fresh_value_storage(&result)?;
                 Ok(result)
@@ -68,12 +62,12 @@ impl RegVm {
                 let regex = expect_regex_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let replacement = expect_string_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
-                self.fresh_string(regex.replace_all(value, replacement).to_string())
+                self.fresh_string(regex.replace_all(value, replacement))
             }
             RegIntrinsic::RegexSplit => {
                 let regex = expect_regex_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let parts = regex.split(value).map(str::to_string).collect::<Vec<_>>();
+                let parts = regex.split(value);
                 self.account_bytes(parts.iter().map(String::len).sum())?;
                 self.fresh_list(TypedVec::from_values(
                     parts.into_iter().map(VmValue::string).collect(),
