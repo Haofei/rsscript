@@ -828,9 +828,12 @@ visible without manually re-sorting every open parent milestone.
 - [ ] **M02 — Define an owned CFG MIR.** Functions contain basic blocks,
   instructions, and terminators; MIR does not depend on syntax and contains no
   unresolved or `Unknown` execution node.
-  - [ ] **M02.1 — Introduce `MirModule`, `MirFunction`, `BasicBlock`,
-    `Instruction`, and `Terminator`.** Only the lowerer and verifier may
-    construct valid modules.
+  - [x] **M02.1 — Introduce `MirModule`, `MirFunction`, `BasicBlock`,
+    `Instruction`, and `Terminator`.** The owned model has private state and
+    structural validation, while lowering produces `VerifiedMir` and
+    `rsscript-codegen-vm` accepts that verified phase exclusively. Test-only
+    raw construction must cross `MirModule::into_verified` before codegen, so
+    no backend can accept an unchecked CFG.
     - [x] **M02.1a — Add the initial owned model.** The model has private fields
       and construction runs structural verification. Serialization and a more
       restricted construction boundary remain follow-up work.

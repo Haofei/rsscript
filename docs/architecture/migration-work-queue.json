@@ -20,15 +20,6 @@
       ]
     },
     {
-      "id": "M02.1",
-      "priority": 40,
-      "depends_on": ["M01.1"],
-      "verification": [
-        "cargo test -p rsscript-mir --locked",
-        "cargo test -p rsscript-sdk --test mir_migration --locked"
-      ]
-    },
-    {
       "id": "A04.1",
       "priority": 60,
       "depends_on": ["A04.1a"],
