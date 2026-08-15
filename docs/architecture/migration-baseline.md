@@ -575,8 +575,13 @@ visible without manually re-sorting every open parent milestone.
     query as the historical single-document API, while still using the session
     cache and operation boundary; this preserves protocol and generic facts
     until the package merge query owns them without a compatibility branch.
-    Resolve/type and dependency-precise semantic-diagnostic invalidation remain
-    open. The syntax-only `WorkspaceModuleGraph` now preserves its cached graph
+    Source and interface document diagnostics now key their semantic cache by
+    the document revision plus the transitive interface closure selected by its
+    parsed imports. Consequently, an unrelated interface edit remains a cache
+    hit for an open document, while a direct or transitive imported interface
+    edit recomputes its diagnostics. Whole-workspace resolve/type analysis and
+    workspace-wide diagnostic invalidation remain open. The syntax-only
+    `WorkspaceModuleGraph` now preserves its cached graph
     across implementation-only source edits and interface signature edits when
     a file's declared modules/imports are unchanged; module/import edits still
     rebuild it fail-closed. This gives the LSP a precise shared dependency-graph

@@ -321,6 +321,7 @@ pub struct CompilationSession {
     workspace_hir_cache: Option<Arc<Hir>>,
     workspace_type_cache: Option<Arc<SemanticTypeFacts>>,
     workspace_analysis_cache: Option<Arc<AnalysisResult>>,
+    semantic_document_diagnostic_cache: BTreeMap<SemanticDocumentCacheKey, Arc<[Diagnostic]>>,
     syntax_diagnostic_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<[Diagnostic]>>,
     lint_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<[Diagnostic]>>,
     format_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<str>>,
@@ -354,6 +355,8 @@ pub struct CompilationSession {
     workspace_module_graph_cache_misses: u64,
     workspace_diagnostic_cache_hits: u64,
     workspace_diagnostic_cache_misses: u64,
+    semantic_document_diagnostic_cache_hits: u64,
+    semantic_document_diagnostic_cache_misses: u64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -382,6 +385,26 @@ pub struct CompilationSessionStats {
     pub workspace_module_graph_cache_misses: u64,
     pub workspace_diagnostic_cache_hits: u64,
     pub workspace_diagnostic_cache_misses: u64,
+    /// Hits for one-file semantic diagnostics keyed by the source revision and
+    /// its resolved interface closure.
+    pub semantic_document_diagnostic_cache_hits: u64,
+    /// Misses for one-file semantic diagnostics keyed by the source revision
+    /// and its resolved interface closure.
+    pub semantic_document_diagnostic_cache_misses: u64,
+}
+
+/// Immutable dependency key for a document-level semantic query.
+///
+/// A source file's semantic diagnostics depend on its own revision plus the
+/// revisions of the interface files reachable through parsed `use` imports.
+/// Keeping that closure in the key makes unrelated interface edits cache hits
+/// without allowing an edited imported contract to serve stale diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct SemanticDocumentCacheKey {
+    role: SessionFileRole,
+    file_id: FileId,
+    revision: SourceRevision,
+    visible_interfaces: Vec<(FileId, SourceRevision)>,
 }
 
 /// Parsed module and import facts for one immutable document revision.
@@ -565,6 +588,7 @@ impl CompilationSession {
             self.invalidate_hir_cache(SessionFileRole::Source, update.file_id);
             self.invalidate_syntax_diagnostic_cache(SessionFileRole::Source, update.file_id);
             self.invalidate_editor_cache(SessionFileRole::Source, update.file_id);
+            self.invalidate_semantic_document_cache_for_source(update.file_id);
             self.workspace_hir_cache = None;
             self.workspace_type_cache = None;
             self.workspace_analysis_cache = None;
@@ -584,6 +608,7 @@ impl CompilationSession {
             self.invalidate_hir_cache(SessionFileRole::Source, update.file_id);
             self.invalidate_syntax_diagnostic_cache(SessionFileRole::Source, update.file_id);
             self.invalidate_editor_cache(SessionFileRole::Source, update.file_id);
+            self.invalidate_semantic_document_cache_for_source(update.file_id);
             self.workspace_hir_cache = None;
             self.workspace_type_cache = None;
             self.workspace_analysis_cache = None;
@@ -613,6 +638,7 @@ impl CompilationSession {
             self.invalidate_hir_cache(SessionFileRole::Interface, update.file_id);
             self.invalidate_syntax_diagnostic_cache(SessionFileRole::Interface, update.file_id);
             self.invalidate_editor_cache(SessionFileRole::Interface, update.file_id);
+            self.invalidate_semantic_document_cache_for_interface(update.file_id);
             self.workspace_hir_cache = None;
             self.workspace_type_cache = None;
             self.workspace_analysis_cache = None;
@@ -632,6 +658,7 @@ impl CompilationSession {
             self.invalidate_hir_cache(SessionFileRole::Interface, update.file_id);
             self.invalidate_syntax_diagnostic_cache(SessionFileRole::Interface, update.file_id);
             self.invalidate_editor_cache(SessionFileRole::Interface, update.file_id);
+            self.invalidate_semantic_document_cache_for_interface(update.file_id);
             self.workspace_hir_cache = None;
             self.workspace_type_cache = None;
             self.workspace_analysis_cache = None;
@@ -800,6 +827,38 @@ impl CompilationSession {
         operation.check()?;
         self.workspace_diagnostic_cache = Some(Arc::clone(&diagnostics));
         Ok(diagnostics)
+    }
+
+    /// Diagnose one source document through the session-owned semantic query
+    /// cache. The cache key contains only this source revision and the
+    /// interface closure selected by its parsed imports, so changing an
+    /// unrelated interface cannot invalidate an editor request for this file.
+    pub fn semantic_diagnostics_file_with_operation(
+        &mut self,
+        path: &str,
+        operation: &OperationContext,
+    ) -> Result<Option<Arc<[Diagnostic]>>, OperationAbort> {
+        let snapshot = self.source_snapshot();
+        let Some(file) = snapshot.files().iter().find(|file| file.path() == path) else {
+            return Ok(None);
+        };
+        self.semantic_diagnostics_snapshot_file(SessionFileRole::Source, file, operation)
+            .map(Some)
+    }
+
+    /// Diagnose one interface document through the same dependency-precise
+    /// semantic query cache used for source files.
+    pub fn semantic_diagnostics_interface_with_operation(
+        &mut self,
+        path: &str,
+        operation: &OperationContext,
+    ) -> Result<Option<Arc<[Diagnostic]>>, OperationAbort> {
+        let snapshot = self.interface_snapshot();
+        let Some(file) = snapshot.files().iter().find(|file| file.path() == path) else {
+            return Ok(None);
+        };
+        self.semantic_diagnostics_snapshot_file(SessionFileRole::Interface, file, operation)
+            .map(Some)
     }
 
     /// Return the parsed workspace module graph for the current immutable
@@ -1257,6 +1316,9 @@ impl CompilationSession {
             workspace_module_graph_cache_misses: self.workspace_module_graph_cache_misses,
             workspace_diagnostic_cache_hits: self.workspace_diagnostic_cache_hits,
             workspace_diagnostic_cache_misses: self.workspace_diagnostic_cache_misses,
+            semantic_document_diagnostic_cache_hits: self.semantic_document_diagnostic_cache_hits,
+            semantic_document_diagnostic_cache_misses: self
+                .semantic_document_diagnostic_cache_misses,
         }
     }
 
@@ -1322,6 +1384,86 @@ impl CompilationSession {
             .retain(|(cached_role, cached_id, _), _| *cached_role != role || *cached_id != file_id);
         self.document_symbol_cache
             .retain(|(cached_role, cached_id, _), _| *cached_role != role || *cached_id != file_id);
+    }
+
+    fn invalidate_semantic_document_cache_for_source(&mut self, file_id: FileId) {
+        self.semantic_document_diagnostic_cache
+            .retain(|key, _| key.role != SessionFileRole::Source || key.file_id != file_id);
+    }
+
+    fn invalidate_semantic_document_cache_for_interface(&mut self, file_id: FileId) {
+        self.semantic_document_diagnostic_cache.retain(|key, _| {
+            !(key.role == SessionFileRole::Interface && key.file_id == file_id)
+                && !key
+                    .visible_interfaces
+                    .iter()
+                    .any(|(dependency_id, _)| *dependency_id == file_id)
+        });
+    }
+
+    fn semantic_diagnostics_snapshot_file(
+        &mut self,
+        role: SessionFileRole,
+        file: &SourceFileSnapshot,
+        operation: &OperationContext,
+    ) -> Result<Arc<[Diagnostic]>, OperationAbort> {
+        operation.check()?;
+        let graph = self.workspace_module_graph_with_operation(operation)?;
+        let root_imports = match role {
+            SessionFileRole::Source => graph.source(file.path()),
+            SessionFileRole::Interface => graph.interface(file.path()),
+        }
+        .map(|node| node.imports().to_vec())
+        .unwrap_or_default();
+        let visible_paths = graph.visible_interface_paths(file.path(), root_imports);
+        let interfaces = self
+            .interface_snapshot()
+            .files()
+            .iter()
+            .filter(|candidate| candidate.path() != file.path())
+            .filter(|candidate| visible_paths.contains(candidate.path()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let key = SemanticDocumentCacheKey {
+            role,
+            file_id: file.file_id(),
+            revision: file.revision(),
+            visible_interfaces: interfaces
+                .iter()
+                .map(|dependency| (dependency.file_id(), dependency.revision()))
+                .collect(),
+        };
+        if let Some(diagnostics) = self.semantic_document_diagnostic_cache.get(&key) {
+            self.semantic_document_diagnostic_cache_hits = self
+                .semantic_document_diagnostic_cache_hits
+                .saturating_add(1);
+            operation.check()?;
+            return Ok(Arc::clone(diagnostics));
+        }
+
+        let interface_slices = interfaces
+            .iter()
+            .map(|dependency| (dependency.path(), dependency.text()))
+            .collect::<Vec<_>>();
+        let diagnostics: Arc<[Diagnostic]> =
+            crate::analyze_source_with_interfaces_result_with_operation(
+                file.path(),
+                file.text(),
+                &interface_slices,
+                operation,
+            )
+            .into_diagnostics()
+            .into_iter()
+            .filter(|diagnostic| diagnostic.span.file == file.path())
+            .collect::<Vec<_>>()
+            .into();
+        operation.check()?;
+        self.semantic_document_diagnostic_cache_misses = self
+            .semantic_document_diagnostic_cache_misses
+            .saturating_add(1);
+        self.semantic_document_diagnostic_cache
+            .insert(key, Arc::clone(&diagnostics));
+        Ok(diagnostics)
     }
 
     fn syntax_diagnostics_snapshot_file(
@@ -1972,6 +2114,71 @@ fn main() -> Int {
             "the unchanged query must be served from the session cache"
         );
         assert_eq!(session.stats().workspace_diagnostic_cache_misses, 2);
+    }
+
+    #[test]
+    fn document_semantic_diagnostics_track_only_visible_interface_revisions() {
+        let mut session = CompilationSession::default();
+        session
+            .set_file(
+                "main.rss",
+                "module app\nuse host.*\nfn main() -> Int { return value() }\n",
+            )
+            .unwrap();
+        session
+            .set_interface("host.rssi", "module host\npub fn value() -> Int\n")
+            .unwrap();
+        session
+            .set_interface("other.rssi", "module other\npub fn ignored() -> Int\n")
+            .unwrap();
+        let operation = OperationContext::default();
+
+        let first = session
+            .semantic_diagnostics_file_with_operation("main.rss", &operation)
+            .unwrap()
+            .expect("source exists");
+        assert!(
+            first
+                .iter()
+                .all(|diagnostic| !diagnostic.severity.is_error())
+        );
+        let second = session
+            .semantic_diagnostics_file_with_operation("main.rss", &operation)
+            .unwrap()
+            .expect("source exists");
+        assert!(Arc::ptr_eq(&first, &second));
+
+        // The source imports `host`, not `other`, so this edit must retain the
+        // same document query result while broad workspace diagnostics remain
+        // free to recompute independently.
+        session
+            .set_interface("other.rssi", "module other\npub fn ignored() -> String\n")
+            .unwrap();
+        let unrelated = session
+            .semantic_diagnostics_file_with_operation("main.rss", &operation)
+            .unwrap()
+            .expect("source exists");
+        assert!(Arc::ptr_eq(&first, &unrelated));
+        assert_eq!(session.stats().semantic_document_diagnostic_cache_misses, 1);
+        assert_eq!(session.stats().semantic_document_diagnostic_cache_hits, 2);
+
+        // An imported contract changes the closure key and must force a fresh
+        // check; the resulting return type mismatch proves the new contract is
+        // the one observed by the document query.
+        session
+            .set_interface("host.rssi", "module host\npub fn value() -> String\n")
+            .unwrap();
+        let changed = session
+            .semantic_diagnostics_file_with_operation("main.rss", &operation)
+            .unwrap()
+            .expect("source exists");
+        assert!(!Arc::ptr_eq(&first, &changed));
+        assert!(
+            changed
+                .iter()
+                .any(|diagnostic| diagnostic.severity.is_error())
+        );
+        assert_eq!(session.stats().semantic_document_diagnostic_cache_misses, 2);
     }
 
     #[test]

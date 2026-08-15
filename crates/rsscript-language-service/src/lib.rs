@@ -259,11 +259,8 @@ impl LanguageService {
             ..OperationContext::default()
         };
         let mut diagnostics = self
-            .semantic_workspace_diagnostics(&operation, true)?
-            .iter()
-            .filter(|diagnostic| diagnostic.span.file == path)
-            .cloned()
-            .collect::<Vec<_>>();
+            .semantic_document_diagnostics(path, &operation, true)?
+            .to_vec();
         diagnostics.extend(
             self.lint_with_operation(path, &operation)
                 .map_err(LanguageServiceError::from)?,
@@ -289,6 +286,45 @@ impl LanguageService {
         let after = self.frontend.stats();
         if record_query_stats {
             if after.workspace_diagnostic_cache_hits > before.workspace_diagnostic_cache_hits {
+                self.cache_hits += 1;
+                self.record_hit(QueryKind::Diagnostics);
+            } else {
+                self.cache_misses += 1;
+                self.record_miss(QueryKind::Diagnostics);
+            }
+        }
+        Ok(diagnostics)
+    }
+
+    /// Query source or interface diagnostics through the session's
+    /// dependency-precise document query. This deliberately does not filter a
+    /// cached whole-workspace result: an unrelated interface edit must not
+    /// force a document diagnostic recomputation in the editor.
+    fn semantic_document_diagnostics(
+        &mut self,
+        path: &str,
+        operation: &OperationContext,
+        record_query_stats: bool,
+    ) -> Result<Arc<[Diagnostic]>, LanguageServiceError> {
+        let Some(document) = self.documents.get(path).cloned() else {
+            return Ok(Arc::from([]));
+        };
+        let before = self.frontend.stats();
+        let diagnostics = match document.kind {
+            DocumentKind::Source => self
+                .frontend
+                .semantic_diagnostics_file_with_operation(path, operation),
+            DocumentKind::Interface => self
+                .frontend
+                .semantic_diagnostics_interface_with_operation(path, operation),
+        }
+        .map_err(LanguageServiceError::from)?
+        .unwrap_or_else(|| Arc::from([]));
+        let after = self.frontend.stats();
+        if record_query_stats {
+            if after.semantic_document_diagnostic_cache_hits
+                > before.semantic_document_diagnostic_cache_hits
+            {
                 self.cache_hits += 1;
                 self.record_hit(QueryKind::Diagnostics);
             } else {
@@ -605,7 +641,7 @@ mod tests {
     }
 
     #[test]
-    fn unrelated_interface_edit_recomputes_session_semantic_diagnostics() {
+    fn unrelated_interface_edit_reuses_document_semantic_diagnostics() {
         let mut service = service();
         service.set_file(
             "host.rssi",
@@ -633,8 +669,8 @@ mod tests {
             "module other\npub fn ignored() -> String\n",
         );
         service.diagnostics("main.rss");
-        assert_eq!(service.query_stats(QueryKind::Diagnostics).misses, 2);
-        assert_eq!(service.query_stats(QueryKind::Diagnostics).hits, 0);
+        assert_eq!(service.query_stats(QueryKind::Diagnostics).misses, 1);
+        assert_eq!(service.query_stats(QueryKind::Diagnostics).hits, 1);
     }
 
     #[test]
