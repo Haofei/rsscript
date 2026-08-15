@@ -819,16 +819,16 @@ an arbitrary shell executor.
       revalidation. Compiler authorization calls it only after determining the
       reviewed native inputs and translates the published paths into lowering
       metadata.
-    - [ ] **S05.2c — Move remaining package lock and generated-artifact
+    - [x] **S05.2c — Move remaining package lock and generated-artifact
       persistence.** Keep compiler compatibility responsible only for deciding
       artifact contents; move filesystem publication and cache ownership behind
       explicit adapter APIs.
-      - [x] **S05.2c1 — Extract generated Rust package publication.** The
+      - [x] **S05.2c.a — Extract generated Rust package publication.** The
         experimental AOT lowerer now passes generated file contents to
         `rsscript-artifact-store`; confined creation, atomic replace,
         unchanged-file preservation, and stale-main removal no longer live in
         compiler code.
-      - [x] **S05.2c2 — Extract generated lockfile publication.** Native
+      - [x] **S05.2c.b — Extract generated lockfile publication.** Native
         Cargo.lock generation now computes content in compiler compatibility
         code and delegates its atomic, no-follow staging write to
         `rsscript-artifact-store`; package-lock capture remains project-owned.
