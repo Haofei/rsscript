@@ -146,6 +146,37 @@ pub fn remap_rustc_diagnostic_json_lines(
     Ok(diagnostics)
 }
 
+/// Parses structured diagnostics emitted by a generated AOT program on stderr.
+pub fn parse_runtime_diagnostics(stderr: &str) -> Vec<Diagnostic> {
+    stderr
+        .lines()
+        .filter_map(parse_runtime_diagnostic_line)
+        .collect()
+}
+
+fn parse_runtime_diagnostic_line(line: &str) -> Option<Diagnostic> {
+    const PREFIX: &str = "RSSCRIPT_RUNTIME_DIAGNOSTIC:";
+    let start = line.find(PREFIX)? + PREFIX.len();
+    let wire: RuntimeDiagnosticJson = serde_json::from_str(&line[start..]).ok()?;
+    let code = wire
+        .code
+        .unwrap_or_else(|| code::RUNTIME_DIAGNOSTIC.to_string());
+    let span = Span {
+        file: wire.file,
+        line: wire.line,
+        column: wire.column,
+        length: wire.length,
+    };
+    let mut diagnostic = match wire.severity.as_deref() {
+        Some("warning") => Diagnostic::warning(&code, wire.summary, span, wire.label),
+        _ => Diagnostic::error(&code, wire.summary, span, wire.label),
+    };
+    if let Some(kind) = wire.kind {
+        diagnostic = diagnostic.with_cause(format!("runtime error kind: {kind}"));
+    }
+    Some(diagnostic)
+}
+
 fn best_source_map_entry<'a>(
     source_map: &'a [RustSourceMapEntry],
     file: &str,
@@ -229,9 +260,25 @@ struct RustcJsonSpan {
     is_primary: bool,
 }
 
+#[derive(serde::Deserialize)]
+struct RuntimeDiagnosticJson {
+    code: Option<String>,
+    severity: Option<String>,
+    summary: String,
+    file: String,
+    line: usize,
+    column: usize,
+    length: usize,
+    label: String,
+    kind: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{RustSourceMapEntry, parse_source_map_json, remap_rustc_diagnostic_json};
+    use super::{
+        RustSourceMapEntry, parse_runtime_diagnostics, parse_source_map_json,
+        remap_rustc_diagnostic_json,
+    };
     use rsscript_diagnostics::Span;
 
     #[test]
@@ -292,5 +339,23 @@ mod tests {
     #[test]
     fn source_map_parser_rejects_invalid_json() {
         assert!(parse_source_map_json("not json").is_err());
+    }
+
+    #[test]
+    fn runtime_diagnostics_keep_kind_and_warning_severity() {
+        let diagnostics = parse_runtime_diagnostics(
+            "prefix RSSCRIPT_RUNTIME_DIAGNOSTIC:{\"severity\":\"warning\",\"summary\":\"slow\",\"file\":\"main.rss\",\"line\":2,\"column\":3,\"length\":1,\"label\":\"wait\",\"kind\":\"deadline\"}\n",
+        );
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].severity,
+            rsscript_diagnostics::Severity::Warning
+        );
+        assert!(
+            diagnostics[0]
+                .causes
+                .iter()
+                .any(|cause| cause == "runtime error kind: deadline")
+        );
     }
 }

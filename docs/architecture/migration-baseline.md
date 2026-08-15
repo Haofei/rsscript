@@ -897,6 +897,13 @@ an arbitrary shell executor.
         - [ ] **S05.4b2b — Move AST/HIR-to-Rust lowering.** Move the remaining
           source lowerer, coverage accounting, and lowerer implementation out
           of compiler after its input boundary is explicit.
+          - [x] **S05.4b2b1 — Move runtime diagnostic parsing.** The
+            generated-program stderr parser now belongs to `rsscript-aot-model`;
+            compiler keeps only a forwarding bridge and preserves structured
+            warning/error/runtime-kind diagnostics.
+          - [ ] **S05.4b2b2 — Move the source lowerer.** Move the remaining
+            source lowering and coverage implementation after the backend input
+            contract no longer exposes compiler-private structures.
     - [ ] **S05.4c — Split runtime ABI catalog use.** Leave Core consumers with
       a neutral intrinsic catalog and move generated-Rust target discovery and
       AOT runtime validation into the experiment-owned backend.
