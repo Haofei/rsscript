@@ -28,8 +28,6 @@ mod lexer {
 mod lint;
 #[cfg(feature = "package")]
 mod package;
-#[cfg(feature = "package")]
-mod runtime_abi;
 #[cfg(all(test, feature = "selfhost-parity"))]
 mod selfhost_parity;
 mod semantic;

@@ -1,12 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::runtime_abi;
-use crate::syntax::ast::{Block, Callee, Expr, Item, Stmt};
+use crate::runtime_catalog;
+use rsscript_syntax::ast::{Block, Callee, Expr, Item, Stmt};
 
-use super::{PackageReviewFileKind, PackageSource};
+use crate::PackageSource;
+use rsscript_package_model::PackageReviewFileKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum AwaitBoundary {
+pub enum AwaitBoundary {
     RuntimePending,
     NativePending,
     RssCall,
@@ -14,17 +15,17 @@ pub(super) enum AwaitBoundary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct CollectedAwaitSite {
-    pub(super) function: String,
-    pub(super) callee: Option<String>,
-    pub(super) boundary: AwaitBoundary,
-    pub(super) live_across_await: Vec<String>,
-    pub(super) span: crate::diagnostic::Span,
+pub struct CollectedAwaitSite {
+    pub function: String,
+    pub callee: Option<String>,
+    pub boundary: AwaitBoundary,
+    pub live_across_await: Vec<String>,
+    pub span: rsscript_diagnostics::Span,
 }
 
-pub(super) fn collect_package_await_sites(
+pub fn collect_package_await_sites(
     sources: &[PackageSource],
-    database: &crate::semantic::SemanticDatabase,
+    database: &rsscript_semantics::SemanticDatabase,
 ) -> Vec<CollectedAwaitSite> {
     let context = collect_await_site_context(database.source_programs());
     let mut await_sites = database
@@ -81,14 +82,12 @@ pub(super) fn collect_package_await_sites(
     await_sites
 }
 
-pub(super) struct AwaitSiteContext {
+pub struct AwaitSiteContext {
     async_native_callees: BTreeSet<String>,
     async_rss_callees: BTreeSet<String>,
 }
 
-pub(super) fn collect_await_site_context(
-    programs: &[crate::syntax::ast::Program],
-) -> AwaitSiteContext {
+pub fn collect_await_site_context(programs: &[rsscript_syntax::ast::Program]) -> AwaitSiteContext {
     let mut context = AwaitSiteContext {
         async_native_callees: BTreeSet::new(),
         async_rss_callees: BTreeSet::new(),
@@ -107,7 +106,7 @@ pub(super) fn collect_await_site_context(
     context
 }
 
-pub(super) fn collect_await_sites_in_block(
+pub fn collect_await_sites_in_block(
     function: &str,
     block: &Block,
     context: &AwaitSiteContext,
@@ -125,7 +124,7 @@ pub(super) fn collect_await_sites_in_block(
     sites
 }
 
-pub(super) fn collect_await_sites_from_stmt(
+pub fn collect_await_sites_from_stmt(
     function: &str,
     statement: &Stmt,
     live_after: &BTreeSet<String>,
@@ -383,7 +382,7 @@ pub(super) fn collect_await_sites_from_stmt(
     }
 }
 
-pub(super) fn collect_await_sites_from_block(
+pub fn collect_await_sites_from_block(
     function: &str,
     block: &Block,
     continuation_uses: &BTreeSet<String>,
@@ -409,7 +408,7 @@ pub(super) fn collect_await_sites_from_block(
     }
 }
 
-pub(super) fn collect_await_sites_from_expr(
+pub fn collect_await_sites_from_expr(
     function: &str,
     expr: &Expr,
     live_after: &BTreeSet<String>,
@@ -592,7 +591,7 @@ pub(super) fn collect_await_sites_from_expr(
     }
 }
 
-pub(super) fn block_live_after_statements(
+pub fn block_live_after_statements(
     block: &Block,
     continuation_uses: &BTreeSet<String>,
 ) -> Vec<BTreeSet<String>> {
@@ -606,7 +605,7 @@ pub(super) fn block_live_after_statements(
     live_after
 }
 
-pub(super) fn collect_task_group_async_let_callees(
+pub fn collect_task_group_async_let_callees(
     block: &Block,
     pending_callees: &mut BTreeMap<String, String>,
 ) {
@@ -621,7 +620,7 @@ pub(super) fn collect_task_group_async_let_callees(
     }
 }
 
-pub(super) fn collect_stmt_uses(statement: &Stmt, uses: &mut BTreeSet<String>) {
+pub fn collect_stmt_uses(statement: &Stmt, uses: &mut BTreeSet<String>) {
     match statement {
         Stmt::Let(stmt) => {
             if let Some(value) = &stmt.value {
@@ -689,7 +688,7 @@ pub(super) fn collect_stmt_uses(statement: &Stmt, uses: &mut BTreeSet<String>) {
     }
 }
 
-pub(super) fn collect_block_uses(block: &Block, uses: &mut BTreeSet<String>) {
+pub fn collect_block_uses(block: &Block, uses: &mut BTreeSet<String>) {
     let mut block_uses = BTreeSet::new();
     for statement in block.statements.iter().rev() {
         collect_stmt_uses(statement, &mut block_uses);
@@ -698,7 +697,7 @@ pub(super) fn collect_block_uses(block: &Block, uses: &mut BTreeSet<String>) {
     uses.extend(block_uses);
 }
 
-pub(super) fn collect_expr_uses(expr: &Expr, uses: &mut BTreeSet<String>) {
+pub fn collect_expr_uses(expr: &Expr, uses: &mut BTreeSet<String>) {
     match expr {
         Expr::Ident(name, _) => {
             if !is_builtin_value_ident(name) {
@@ -747,11 +746,11 @@ pub(super) fn collect_expr_uses(expr: &Expr, uses: &mut BTreeSet<String>) {
     }
 }
 
-pub(super) fn is_builtin_value_ident(name: &str) -> bool {
+pub fn is_builtin_value_ident(name: &str) -> bool {
     matches!(name, "Unit" | "true" | "false")
 }
 
-pub(super) fn await_boundary(callee: Option<&str>, context: &AwaitSiteContext) -> AwaitBoundary {
+pub fn await_boundary(callee: Option<&str>, context: &AwaitSiteContext) -> AwaitBoundary {
     let Some(callee) = callee else {
         return AwaitBoundary::Unknown;
     };
@@ -767,14 +766,11 @@ pub(super) fn await_boundary(callee: Option<&str>, context: &AwaitSiteContext) -
     AwaitBoundary::Unknown
 }
 
-pub(super) fn runtime_intrinsic_label(callee: &str) -> bool {
-    let Some((namespace, name)) = callee.rsplit_once('.') else {
-        return false;
-    };
-    runtime_abi::lookup_runtime_intrinsic(namespace, name).is_some()
+pub fn runtime_intrinsic_label(callee: &str) -> bool {
+    runtime_catalog::is_runtime_intrinsic(callee)
 }
 
-pub(super) fn remove_stmt_bindings(statement: &Stmt, uses: &mut BTreeSet<String>) {
+pub fn remove_stmt_bindings(statement: &Stmt, uses: &mut BTreeSet<String>) {
     match statement {
         Stmt::Let(stmt) => {
             uses.remove(&stmt.name);
@@ -821,10 +817,7 @@ pub(super) fn remove_stmt_bindings(statement: &Stmt, uses: &mut BTreeSet<String>
     }
 }
 
-pub(super) fn awaited_callee(
-    expr: &Expr,
-    pending_callees: &BTreeMap<String, String>,
-) -> Option<String> {
+pub fn awaited_callee(expr: &Expr, pending_callees: &BTreeMap<String, String>) -> Option<String> {
     match expr {
         Expr::Call { callee, .. } => Some(callee_label(callee)),
         Expr::Ident(name, _) => pending_callees.get(name).cloned(),

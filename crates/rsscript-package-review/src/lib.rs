@@ -5,10 +5,13 @@
 //! normal in-memory frontend path: callers capture project input before asking
 //! the compiler for semantic facts.
 
+mod await_facts;
 mod contract;
 mod execution_facts;
+mod runtime_catalog;
 mod source_set;
 
+pub use await_facts::*;
 pub use contract::*;
 pub use execution_facts::*;
 pub use source_set::*;

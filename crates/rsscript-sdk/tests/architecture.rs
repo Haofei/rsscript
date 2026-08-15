@@ -1915,6 +1915,14 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
                 .exists(),
         "package resource/task execution facts must be physically owned by the package-review boundary"
     );
+    let await_facts_path = root.join("crates/rsscript-package-review/src/await_facts.rs");
+    assert!(
+        await_facts_path.is_file()
+            && !root
+                .join("crates/rsscript-compiler/src/package/review/review_await.rs")
+                .exists(),
+        "package await-site facts must be physically owned by the package-review boundary"
+    );
     let manifest_loader = function_source(&source_set, "pub fn load_package_manifest_with_source(");
     assert!(
         manifest_loader.contains("capture_project_manifest(package_dir, MANIFEST_MAX_BYTES)"),

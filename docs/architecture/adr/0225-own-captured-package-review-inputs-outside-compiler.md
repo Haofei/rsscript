@@ -21,6 +21,10 @@ on `rsscript-project` for confined/no-follow capture and on
 `rsscript-package-model` for versioned file-kind identity; it has no compiler
 dependency.
 
+The await collector receives a read-only runtime-intrinsic identity table
+generated from the shared catalog. That removes the last production use of the
+compiler-local `runtime_abi` module without coupling review evidence to the VM.
+
 The compiler's opt-in `package` compatibility feature has a private forwarding
 module during the staged migration so existing authorization, native, lock, and
 review callers retain their established behavior. The reviewed compiler default
