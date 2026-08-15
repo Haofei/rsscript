@@ -1730,6 +1730,7 @@ version = "0.1.0"
 dependencies = [
  "rsscript-aot-model",
  "rsscript-artifact-store",
+ "rsscript-build-support",
  "rsscript-project",
  "tempfile",
 ]
