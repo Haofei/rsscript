@@ -86,6 +86,7 @@ fn wire_unit(mir: &MirModule) -> Result<Value, CodegenError> {
     let mut native_signatures = BTreeMap::new();
     let mut types = BTreeMap::new();
     let mut functions = Vec::new();
+    let mut source_map = Vec::new();
     for function in mir.functions() {
         let name = function_name(mir, function)?.to_owned();
         if ids.insert(name.clone(), function.id().index()).is_some() {
@@ -98,7 +99,9 @@ fn wire_unit(mir: &MirModule) -> Result<Value, CodegenError> {
                 "return_type": legacy_signature_type(mir.ty(function.signature().result()).expect("validated result type")),
             }),
         );
-        functions.push(wire_function(mir, function)?);
+        let emitted = wire_function(mir, function)?;
+        source_map.extend(emitted.source_map);
+        functions.push(emitted.function);
     }
     for layout in mir.type_layouts() {
         if types
@@ -126,6 +129,7 @@ fn wire_unit(mir: &MirModule) -> Result<Value, CodegenError> {
         "types": types,
         "native_signatures": native_signatures,
         "closure_identity_observable": false,
+        "source_map": source_map,
     }))
 }
 
@@ -197,8 +201,25 @@ fn legacy_signature_type(ty: &rsscript_abi_model::WireType) -> String {
     }
 }
 
-fn wire_function(mir: &MirModule, function: &MirFunction) -> Result<Value, CodegenError> {
+struct EmittedWireFunction {
+    function: Value,
+    source_map: Vec<Value>,
+}
+
+fn wire_function(
+    mir: &MirModule,
+    function: &MirFunction,
+) -> Result<EmittedWireFunction, CodegenError> {
     let mut code = Vec::new();
+    let mut source_map = Vec::new();
+    let debug = mir
+        .function_debug(function.id())
+        .expect("validated MIR debug table");
+    let instruction_sources = debug
+        .instruction_sources()
+        .iter()
+        .map(|entry| ((entry.block(), entry.instruction_index()), entry.source()))
+        .collect::<BTreeMap<_, _>>();
     for (index, mode) in function.signature().parameter_modes().iter().enumerate() {
         if *mode == MirParameterMode::Read {
             code.push(instr(
@@ -211,8 +232,21 @@ fn wire_function(mir: &MirModule, function: &MirFunction) -> Result<Value, Codeg
     let mut patches = Vec::new();
     for block in function.blocks() {
         starts.insert(block.id(), code.len());
-        for instruction in block.instructions() {
+        for (instruction_index, instruction) in block.instructions().iter().enumerate() {
+            let first = code.len();
             lower_instruction(mir, function, instruction, &mut code)?;
+            if let Some(source) = instruction_sources.get(&(block.id(), instruction_index as u32)) {
+                for instruction in first..code.len() {
+                    source_map.push(json!({
+                        "function": function.id().index(),
+                        "instruction": instruction,
+                        "file": source.file(),
+                        "line": source.line(),
+                        "column": source.column(),
+                        "length": source.length(),
+                    }));
+                }
+            }
         }
         lower_terminator(function, block.terminator(), &mut code, &mut patches)?;
     }
@@ -229,19 +263,20 @@ fn wire_function(mir: &MirModule, function: &MirFunction) -> Result<Value, Codeg
             ))?;
         fields.insert(field.to_owned(), json!(ip));
     }
-    let locals = mir
-        .function_debug(function.id())
-        .expect("validated MIR debug table")
+    let locals = debug
         .places()
         .iter()
         .enumerate()
         .map(|(index, name)| (name.clone(), json!(index)))
         .collect::<Map<_, _>>();
-    Ok(json!({
-        "name": function_name(mir, function)?, "params": function.signature().parameter_types().len(),
-        "captures": function.captures().len(), "regs": function.place_count() as usize + function.value_count() as usize + task_count(function) + 1,
-        "local_regs": locals, "code": code,
-    }))
+    Ok(EmittedWireFunction {
+        function: json!({
+            "name": function_name(mir, function)?, "params": function.signature().parameter_types().len(),
+            "captures": function.captures().len(), "regs": function.place_count() as usize + function.value_count() as usize + task_count(function) + 1,
+            "local_regs": locals, "code": code,
+        }),
+        source_map,
+    })
 }
 
 fn lower_instruction(
@@ -1338,8 +1373,8 @@ mod tests {
     use rsscript_abi_model::{CORE_LIBRARY_ABI_VERSION, RUNTIME_ABI_VERSION, WireType};
     use rsscript_bytecode::BytecodeVerifier;
     use rsscript_mir::{
-        BasicBlock, FunctionId, MirFunctionDebug, MirFunctionSignature, ResourceTypeId,
-        TaskGroupId, TypeId,
+        BasicBlock, FunctionId, MirFunctionDebug, MirFunctionSignature, MirInstructionSource,
+        MirSourceLocation, ResourceTypeId, TaskGroupId, TypeId,
     };
 
     #[test]
@@ -1375,7 +1410,15 @@ mod tests {
                     MirTerminator::Return(Some(ValueId::new(2))),
                 )],
             )],
-            vec![MirFunctionDebug::new("main", vec![])],
+            vec![
+                MirFunctionDebug::new("main", vec![]).with_instruction_sources(vec![
+                    MirInstructionSource::new(
+                        BlockId::new(0),
+                        0,
+                        MirSourceLocation::new("main.rss", 1, 1, 2),
+                    ),
+                ]),
+            ],
             vec![],
         )
         .unwrap();
@@ -1391,6 +1434,20 @@ mod tests {
         assert_eq!(
             artifact.header.core_library_abi_version,
             CORE_LIBRARY_ABI_VERSION
+        );
+        let payload: serde_json::Value =
+            rsscript_bytecode::decode_executable_payload(&artifact.payload)
+                .expect("decode source-mapped payload");
+        assert_eq!(
+            payload["source_map"],
+            serde_json::json!([{
+                "function": 0,
+                "instruction": 0,
+                "file": "main.rss",
+                "line": 1,
+                "column": 1,
+                "length": 2,
+            }])
         );
         BytecodeVerifier::default()
             .verify(&artifact.to_bytes().unwrap())

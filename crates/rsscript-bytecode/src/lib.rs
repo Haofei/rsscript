@@ -491,7 +491,7 @@ fn verify_executable_payload(
     let unit = value
         .as_object()
         .ok_or_else(|| invalid_payload("unit is not an object"))?;
-    require_object_fields(
+    require_object_fields_with_optional(
         unit,
         &[
             "functions",
@@ -501,6 +501,7 @@ fn verify_executable_payload(
             "native_signatures",
             "closure_identity_observable",
         ],
+        &["source_map"],
         "unit",
     )?;
     let functions = unit["functions"]
@@ -589,6 +590,7 @@ fn verify_executable_payload(
     verify_function_map(unit, "resource_drop_functions", functions, false)?;
     verify_type_metadata(unit, limits)?;
     verify_native_signatures(unit, functions, limits)?;
+    verify_source_map(unit, functions, total_instructions)?;
     let declared_imports = imports
         .iter()
         .map(|import| import.symbol.as_str().to_string())
@@ -597,6 +599,73 @@ fn verify_executable_payload(
         return Err(invalid_payload(format!(
             "external call table mismatch: instructions={called_imports:?}, imports={declared_imports:?}"
         )));
+    }
+    Ok(())
+}
+
+/// Validate the optional v1 source-map side table. It is debug-only data: it
+/// cannot alter control flow, but it must still point at a real decoded
+/// instruction so inspection tools never attribute evidence to arbitrary code.
+fn verify_source_map(
+    unit: &serde_json::Map<String, serde_json::Value>,
+    functions: &[serde_json::Value],
+    total_instructions: usize,
+) -> Result<(), BytecodeError> {
+    let Some(entries) = unit.get("source_map") else {
+        return Ok(());
+    };
+    let entries = entries
+        .as_array()
+        .ok_or_else(|| invalid_payload("source_map is not an array"))?;
+    if entries.len() > total_instructions {
+        return Err(BytecodeError::LimitExceeded("source map entries"));
+    }
+    let mut mapped = BTreeSet::new();
+    for (index, entry) in entries.iter().enumerate() {
+        let entry = entry
+            .as_object()
+            .ok_or_else(|| invalid_payload(format!("source_map entry {index} is not an object")))?;
+        require_object_fields(
+            entry,
+            &[
+                "function",
+                "instruction",
+                "file",
+                "line",
+                "column",
+                "length",
+            ],
+            &format!("source_map entry {index}"),
+        )?;
+        let function = json_usize(&entry["function"], "source map function")?;
+        let instruction = json_usize(&entry["instruction"], "source map instruction")?;
+        let code = functions
+            .get(function)
+            .and_then(|function| function.get("code"))
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| {
+                invalid_payload(format!(
+                    "source_map entry {index} references missing function {function}"
+                ))
+            })?;
+        if instruction >= code.len() {
+            return Err(invalid_payload(format!(
+                "source_map entry {index} references missing instruction {instruction}"
+            )));
+        }
+        if !mapped.insert((function, instruction)) {
+            return Err(invalid_payload(format!(
+                "source_map entry {index} duplicates function {function} instruction {instruction}"
+            )));
+        }
+        if entry["file"].as_str().is_none_or(str::is_empty) {
+            return Err(invalid_payload(format!(
+                "source_map entry {index} has invalid file"
+            )));
+        }
+        for field in ["line", "column", "length"] {
+            let _ = json_usize(&entry[field], field)?;
+        }
     }
     Ok(())
 }
@@ -1520,6 +1589,27 @@ fn require_object_fields(
     Ok(())
 }
 
+fn require_object_fields_with_optional(
+    object: &serde_json::Map<String, serde_json::Value>,
+    required: &[&str],
+    optional: &[&str],
+    context: &str,
+) -> Result<(), BytecodeError> {
+    let actual = object.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    let required = required.iter().copied().collect::<BTreeSet<_>>();
+    let allowed = required
+        .iter()
+        .copied()
+        .chain(optional.iter().copied())
+        .collect::<BTreeSet<_>>();
+    if !required.is_subset(&actual) || !actual.is_subset(&allowed) {
+        return Err(invalid_payload(format!(
+            "{context} fields differ: actual={actual:?}, required={required:?}, allowed={allowed:?}"
+        )));
+    }
+    Ok(())
+}
+
 fn invalid_payload(message: impl Into<String>) -> BytecodeError {
     BytecodeError::InvalidPayload(message.into())
 }
@@ -2383,6 +2473,49 @@ mod tests {
             BytecodeVerifier::default().verify(&artifact.to_bytes().unwrap()),
             Err(BytecodeError::InvalidPayload(message))
                 if message.contains("reads uninitialized register 0")
+        ));
+    }
+
+    #[test]
+    fn verifier_accepts_only_well_formed_optional_source_map_entries() {
+        let mut payload = serde_json::json!({
+            "functions": [{
+                "name": "main", "params": 0, "captures": 0, "regs": 1,
+                "local_regs": {}, "code": [
+                    {"LoadUnit": {"dst": 0}},
+                    {"Return": {"src": 0}}
+                ]
+            }],
+            "function_ids": {"main": 0}, "resource_drop_functions": {},
+            "types": {},
+            "native_signatures": {"main": {"params": [], "return_type": "Unit"}},
+            "closure_identity_observable": false,
+            "source_map": [{
+                "function": 0, "instruction": 0, "file": "main.rss",
+                "line": 1, "column": 1, "length": 2
+            }]
+        });
+        let artifact_for = |payload: &serde_json::Value| {
+            BytecodeArtifact::new(
+                "0.1.0",
+                "0.1.0",
+                TEST_CATALOG_DIGEST,
+                RUNTIME_ABI_VERSION,
+                TEST_SOURCE_DIGEST,
+                vec![],
+                encode_executable_payload(payload).expect("source-map payload"),
+            )
+            .expect("source-map artifact")
+        };
+        BytecodeVerifier::default()
+            .verify(&artifact_for(&payload).to_bytes().expect("source-map bytes"))
+            .expect("well-formed source map verifies");
+
+        payload["source_map"][0]["instruction"] = serde_json::json!(2);
+        assert!(matches!(
+            BytecodeVerifier::default()
+                .verify(&artifact_for(&payload).to_bytes().expect("bad source-map bytes")),
+            Err(BytecodeError::InvalidPayload(message)) if message.contains("source_map entry 0 references missing instruction")
         ));
     }
 

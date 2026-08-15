@@ -14,6 +14,8 @@ struct WireUnit {
     types: BTreeMap<String, RegTypeInfo>,
     native_signatures: BTreeMap<String, RegNativeSignature>,
     closure_identity_observable: bool,
+    #[serde(default)]
+    _source_map: Vec<serde_json::Value>,
 }
 
 #[derive(Serialize, Deserialize)]

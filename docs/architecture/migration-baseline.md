@@ -1498,7 +1498,7 @@ an arbitrary shell executor.
 - [x] **V01 — Remove compiler-to-VM dependency.** Cargo architecture tests
   reject compiler dependencies on the VM and the VM cannot depend on compiler,
   syntax, semantics, or lowering internals.
-- [ ] **V02 — Extract `rsscript-codegen-vm`.** The sole bytecode-emission path is
+- [x] **V02 — Extract `rsscript-codegen-vm`.** The sole bytecode-emission path is
   `VerifiedMir -> BytecodeModule`; source, HIR, package, and SDK entry points are
   forbidden in the codegen crate.
   - [x] **V02.1 — Create a MIR-only codegen crate.** Its manifest may depend on
@@ -1509,15 +1509,23 @@ an arbitrary shell executor.
     Its public artifact emitter now requires `VerifiedMir`, making the MIR
     verifier admission explicit rather than relying on callers to invoke
     `MirModule::verify` by convention.
-  - [ ] **V02.2 — Lower the scalar MIR subset to bytecode.** Preserve source maps
-    and deterministic module ordering.
+  - [x] **V02.2 — Lower the scalar MIR subset to bytecode.** Preserve source maps
+    and deterministic module ordering. The code generator emits a canonical
+    optional v1 source-map side table from verifier-checked MIR instruction
+    origins; the bytecode verifier rejects dangling, duplicate, malformed, or
+    non-canonical map entries while old v1 Artifacts without the optional table
+    remain readable. Function/type/import emission uses ordered maps and the
+    canonical migration baseline proves repeated immutable inputs are byte
+    identical.
     - [x] **V02.2a — Prove the transitional VM-local adapter.** The current
       MIR-only adapter emits the scalar CFG and direct-call subset through the
       existing verified bytecode envelope. It is deliberately housed in the VM
       only until `rsscript-codegen-vm` can own the wire model without exposing
       VM-private register structures.
-  - [ ] **V02.3 — Lower resources, async, builtins, and external calls.** Add
-    codegen fixtures for every Core MIR instruction.
+  - [x] **V02.3 — Lower resources, async, builtins, and external calls.** Add
+    codegen fixtures for every Core MIR instruction. The checked child corpus
+    below covers the supported Core instruction set; unsupported future MIR
+    nodes fail closed at codegen rather than selecting a second execution path.
     - [x] **V02.3a — Emit the linear resource lifetime subset.** Resource
       acquisition carries its defined source value and emits `Move`; release
       emits `ResourceDrop`, with the ordinary bytecode verifier covering the

@@ -78,7 +78,7 @@ fn canonical_compilation_and_diagnostics_are_migration_baselines() {
     );
     assert_eq!(
         sha256(&first_bytes),
-        "2d84a928f777da04f8c964ca5c3cf07fdd9e4ae0b79d62155e5c69ec6873f6ee",
+        "1dd2f94f264f0453806e61019fc3f1764bc2d55d06ecbda950be22fb64eec81d",
         "an intentional Artifact encoding or lowering change must update this digest"
     );
 
@@ -309,8 +309,7 @@ fn apply_static_boundary_mutation(bytes: &mut [u8], fixture: &MalformedBoundaryF
         "set_byte" => bytes[fixture.offset] = fixture.value as u8,
         "xor_byte" => bytes[fixture.offset] ^= fixture.value as u8,
         "set_be_u64" => {
-            bytes[fixture.offset..fixture.offset + 8]
-                .copy_from_slice(&fixture.value.to_be_bytes());
+            bytes[fixture.offset..fixture.offset + 8].copy_from_slice(&fixture.value.to_be_bytes());
         }
         other => panic!("unknown malformed-fixture operation `{other}`"),
     }
@@ -325,9 +324,7 @@ fn checked_in_v2_payload_and_malformed_instruction_fixture_remain_fail_closed() 
     ))
     .expect("malformed v2 fixture manifest is valid TOML");
     let payload = STANDARD
-        .decode(
-            include_str!("../../rsscript-bytecode/fixtures/v2/reference.payload.base64").trim(),
-        )
+        .decode(include_str!("../../rsscript-bytecode/fixtures/v2/reference.payload.base64").trim())
         .expect("checked-in v2 payload uses valid base64");
     BytecodeV2Verifier::default()
         .verify_payload(&payload)
