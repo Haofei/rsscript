@@ -362,9 +362,23 @@ pub mod compression {
     }
 }
 
+/// Deterministic structured-data transcoding. This module accepts explicit
+/// text and returns an owned JSON tree; language-value adaptation, resource
+/// accounting, and Provider exposure remain execution-backend responsibilities.
+pub mod structured_data {
+    pub fn yaml_to_json(value: &str) -> Result<serde_json::Value, String> {
+        let value: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(value).map_err(|error| error.to_string())?;
+        serde_json::to_value(value).map_err(|error| error.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{collections::*, compression, crypto, date, encoding::*, regex::CompiledRegex};
+    use super::{
+        collections::*, compression, crypto, date, encoding::*, regex::CompiledRegex,
+        structured_data,
+    };
     use std::io::Write;
 
     #[test]
@@ -479,5 +493,14 @@ mod tests {
             b"rsscript corelib"
         );
         assert!(compression::gzip_decompress(b"not gzip").is_err());
+    }
+
+    #[test]
+    fn yaml_transcoding_uses_explicit_input_only() {
+        let value =
+            structured_data::yaml_to_json("name: rsscript\nitems:\n  - 1\n  - true\n").unwrap();
+        assert_eq!(value["name"], "rsscript");
+        assert_eq!(value["items"], serde_json::json!([1, true]));
+        assert!(structured_data::yaml_to_json("bad: [").is_err());
     }
 }

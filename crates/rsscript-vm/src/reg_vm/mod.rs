@@ -60,6 +60,7 @@ use rsscript_corelib::{
         url_decode_component, url_encode_component,
     },
     regex::CompiledRegex,
+    structured_data::yaml_to_json as core_yaml_to_json,
 };
 
 use self::calls::PureClosurePlan;

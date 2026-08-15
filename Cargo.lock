@@ -1875,6 +1875,8 @@ dependencies = [
  "hmac",
  "percent-encoding",
  "regex",
+ "serde_json",
+ "serde_yaml_ng",
  "sha2",
  "sha3",
 ]
@@ -2177,7 +2179,6 @@ dependencies = [
  "rsscript-text",
  "serde",
  "serde_json",
- "serde_yaml_ng",
  "sha2",
  "toml",
  "vm-jit",

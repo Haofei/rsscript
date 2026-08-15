@@ -75,11 +75,9 @@ pub(super) fn row_field_string_value(fields: Vec<String>, index: i64) -> Result<
 }
 
 pub(super) fn yaml_parse_json_value(text: &str) -> Result<VmValue, VmValue> {
-    let value: serde_yaml_ng::Value =
-        serde_yaml_ng::from_str(text).map_err(|error| json_error_value(error.to_string()))?;
-    serde_json::to_value(value)
+    core_yaml_to_json(text)
         .map(|value| VmValue::Json(Rc::new(value)))
-        .map_err(|error| json_error_value(error.to_string()))
+        .map_err(json_error_value)
 }
 
 pub(super) fn split_text_lines(value: &str) -> Vec<String> {

@@ -1695,6 +1695,13 @@ an arbitrary shell executor.
       byte-value/error adaptation and its existing allocation accounting. The
       `flate2` implementation dependency is no longer part of the runtime VM
       closure.
+    - [x] **V06.2.1f — Extract YAML-to-JSON transcoding.** YAML parsing and its
+      deterministic conversion to an owned JSON tree now live in
+      `rsscript-corelib::structured_data`; the VM adapts the resulting tree into
+      its current legacy JSON value representation. `serde_yaml_ng` is no longer
+      a direct VM dependency. The remaining `serde_json` dependency is explicitly
+      owned by that legacy VM value representation and is removed only with P06's
+      canonical WireValue cutover.
     - [x] **V06.2.2 — Extract collection algorithms.** Move non-primitive list,
       map, set, and deque transformations behind the same pure-library boundary
       without moving ownership-sensitive mutation primitives out of the VM.
