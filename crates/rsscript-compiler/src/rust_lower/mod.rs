@@ -29,12 +29,12 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use crate::analyzer::{validate_source, validate_sources_with_interfaces_without_core};
 use crate::diagnostic::Diagnostic;
-use crate::interfaces::{builtin_interfaces, default_interfaces, standard_package_interfaces};
+use crate::interfaces::{default_interfaces, standard_package_interfaces};
 use crate::runtime_abi;
 use crate::syntax::ast::Program;
 use crate::syntax::parse_source;
+use rsscript_semantics::{CompilationSession, ValidatedProgram};
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct CoverageBucket {
     pub all: Vec<String>,
@@ -226,7 +226,7 @@ pub fn lower_source_to_rust_with_map(
     file: &str,
     source: &str,
 ) -> Result<LoweredRust, Vec<Diagnostic>> {
-    let validated = validate_source(file, source)?;
+    let validated = validated_session_sources(&[(file.to_string(), source.to_string())], &[])?;
     let database = validated.database();
     let program = database.program();
     let lowering_diagnostics = validate_executable_declarations(&program, &BTreeMap::new());
@@ -291,17 +291,7 @@ pub fn lower_sources_to_rust_package_with_options(
     interfaces: &[(String, String)],
     native_dependencies: &[NativeRustDependency],
 ) -> Result<GeneratedRustPackage, Vec<Diagnostic>> {
-    let mut interface_refs = builtin_interfaces().collect::<Vec<_>>();
-    interface_refs.extend(
-        interfaces
-            .iter()
-            .map(|(path, contents)| (path.as_str(), contents.as_str())),
-    );
-    let source_refs = sources
-        .iter()
-        .map(|(path, contents)| (path.as_str(), contents.as_str()))
-        .collect::<Vec<_>>();
-    let validated = validate_sources_with_interfaces_without_core(&source_refs, &interface_refs)?;
+    let validated = validated_session_sources(sources, interfaces)?;
     let database = validated.database();
     let program = database.program();
     let external_bindings = native_dependencies
@@ -364,6 +354,27 @@ pub fn lower_sources_to_rust_package_with_options(
         main_rs,
         source_map_json,
     })
+}
+
+/// AOT is experimental, but it must consume the same immutable frontend
+/// snapshot and validation boundary as the supported compiler paths. Core
+/// interfaces are session-owned; callers supply only package/standard extras.
+fn validated_session_sources(
+    sources: &[(String, String)],
+    interfaces: &[(String, String)],
+) -> Result<ValidatedProgram, Vec<Diagnostic>> {
+    let mut session = CompilationSession::default();
+    for (path, contents) in interfaces {
+        session
+            .set_interface(path, contents)
+            .expect("AOT inputs use normalized unique interface paths");
+    }
+    for (path, contents) in sources {
+        session
+            .set_file(path, contents)
+            .expect("AOT inputs use normalized unique source paths");
+    }
+    session.workspace_validated()
 }
 
 fn program_uses_serde_derives(program: &crate::syntax::ast::Program) -> bool {

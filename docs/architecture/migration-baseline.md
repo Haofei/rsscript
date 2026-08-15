@@ -585,8 +585,10 @@ mechanical acceptance condition holds.
     review evidence, and package-interface environment checks now capture their
     sources and dependency interfaces in the same `CompilationSession` query;
     Core catalog entries are supplied once by the session rather than manually
-    duplicated into a `without_core` analyzer call. Remaining test/AOT callers
-    are still explicit migration work.
+    duplicated into a `without_core` analyzer call. Experimental Rust AOT
+    lowering now uses that same session-owned validation snapshot for both
+    single-source and package inputs. Remaining test callers are still
+    explicit migration work.
 - [ ] **S04 — Make language service consume semantic queries directly.** It
   must not depend on the compiler compatibility façade, package persistence,
   VM, SDK, or Providers; revision invalidation and request cancellation require
