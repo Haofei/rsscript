@@ -65,10 +65,16 @@ pub(super) fn compute_jit_eligibility<T: Borrow<RegFunction>>(functions: &[T]) -
             if !non_suspending[index] {
                 continue;
             }
-            let ok = functions[index].borrow().code.iter().all(|instr| match instr {
-                RegInstr::CallKnown { function, .. } => *function < n && non_suspending[*function],
-                other => jit_supported_instruction(other),
-            });
+            let ok = functions[index]
+                .borrow()
+                .code
+                .iter()
+                .all(|instr| match instr {
+                    RegInstr::CallKnown { function, .. } => {
+                        *function < n && non_suspending[*function]
+                    }
+                    other => jit_supported_instruction(other),
+                });
             if !ok {
                 non_suspending[index] = false;
                 changed = true;

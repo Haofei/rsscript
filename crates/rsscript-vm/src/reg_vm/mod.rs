@@ -80,7 +80,6 @@ mod value_convert;
 mod value_ops;
 use execution_plan::*;
 pub(crate) use model::*;
-use tier::JitState;
 #[cfg(feature = "native-jit")]
 use native::*;
 pub use planning::JitPlan;
@@ -88,6 +87,7 @@ use planning::*;
 use resources::*;
 use runtime_resources::*;
 use runtime_values::*;
+use tier::JitState;
 use value_access::*;
 use value_convert::*;
 use value_ops::*;
@@ -1003,11 +1003,14 @@ impl RegVmExecutable {
             &plan,
         )?;
         let value = vm.run_program("main")?;
+        let jit_state = &vm.jit_state;
         if let Some(native) = &mut vm.native
             && native.collect_stats
         {
-            native.stats.add_profile_feedback(&self.unit);
-            native.stats.add_native_decline_reasons(&self.unit);
+            native.stats.add_profile_feedback(&self.unit, jit_state);
+            native
+                .stats
+                .add_native_decline_reasons(&self.unit, jit_state);
         }
         // Telemetry: `RSS_JIT_STATS=1` prints where native-tier attempts went, so
         // the next coverage win is measurable.
@@ -1024,7 +1027,7 @@ impl RegVmExecutable {
         let report_lines = if let Some(native) = &vm.native
             && native.report
         {
-            let lines = jit_missed_opt_report(&self.unit, native);
+            let lines = jit_missed_opt_report(&self.unit, &vm.jit_state, native);
             if std::env::var_os("RSS_JIT_REPORT").is_some() {
                 for line in &lines {
                     eprintln!("{line}");
@@ -1864,14 +1867,14 @@ struct NativeState {
     /// `OsrExit` deopts are successful entries and reset this counter.
     osr_bail_counts: HashMap<OsrVersionKey, u32>,
     /// Native self-recursion cache (native-call-ABI slice 3; generalized in Phase 2):
-    /// per-function (`*const RegFunction` key) compiled `CallSelf` entry, with the
+    /// per-function stable ordinal key compiled `CallSelf` entry, with the
     /// compiled parameter `NativeTy`s and return `NativeTy` so the dispatcher
     /// marshals scalar args (Int/Bool/Float) and wraps the result. `None` = known
     /// not natively self-recursion-compilable (fall back to the tier-0 i64 executor
     /// for i64-only bodies, or the full interpreter for non-i64 bodies).
     self_recursive_native: HashMap<usize, Option<(vm_jit::CompiledId, Vec<NativeTy>, NativeTy)>>,
     /// Native mutual-recursion cache (native-call-ABI slice 4; generalized to scalar
-    /// Float in the Phase 2 follow-up): per-function (`*const RegFunction` key)
+    /// Float in the Phase 2 follow-up): per-function stable ordinal key
     /// compiled group-member `(CompiledId, param_tys, ret)`. The dispatcher marshals
     /// each scalar arg (Int/Bool/Float) and wraps the `i64` result per `ret`, exactly
     /// like the self-recursion cache. Compiling any member of a recursive cycle
@@ -2134,19 +2137,16 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
             .unwrap_or_else(|| "none".to_string())
     }
 
-    fn add_native_decline_reasons(&mut self, unit: &RegUnit) {
-        self.native_decline_reasons = native_decline_reason_counts(unit);
+    fn add_native_decline_reasons(&mut self, unit: &RegUnit, jit_state: &JitState) {
+        self.native_decline_reasons = native_decline_reason_counts(unit, jit_state);
     }
 
-    fn add_profile_feedback(&mut self, unit: &RegUnit) {
+    fn add_profile_feedback(&mut self, unit: &RegUnit, jit_state: &JitState) {
         let mut sites = 0u64;
         let mut taken = 0u64;
         let mut fallthrough = 0u64;
         for func in &unit.functions {
-            let Ok(profile) = func.profile.try_borrow() else {
-                continue;
-            };
-            let Some(profile) = profile.as_ref() else {
+            let Some(profile) = jit_state.profile(func) else {
                 continue;
             };
             for (_, feedback) in profile.branch_feedback_sites() {
@@ -2243,11 +2243,15 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
 ///
 /// One block per function (deduped by construction — each function is visited once).
 #[cfg(feature = "native-jit")]
-fn jit_missed_opt_report(unit: &RegUnit, native: &NativeState) -> Vec<String> {
+fn jit_missed_opt_report(
+    unit: &RegUnit,
+    jit_state: &JitState,
+    native: &NativeState,
+) -> Vec<String> {
     let mut out = vec![format!("jit-report: summary\n  {}", native.stats.summary())];
-    let native_decline_counts = native_decline_reason_counts(unit);
+    let native_decline_counts = native_decline_reason_counts(unit, jit_state);
     for func in &unit.functions {
-        let profile_lines = jit_profile_report_lines(unit, func);
+        let profile_lines = jit_profile_report_lines(unit, jit_state, func);
         // Skip the synthetic/placeholder/trivial bodies: a body that is only the
         // lowerer's defensive `LoadUnit; Return` (≤ 2 instructions, no real work) is
         // not a "hot region" worth a block unless it accumulated profile feedback.
@@ -2256,11 +2260,16 @@ fn jit_missed_opt_report(unit: &RegUnit, native: &NativeState) -> Vec<String> {
         if func.code.len() <= 2 && profile_lines.is_empty() {
             continue;
         }
-        let key = Rc::as_ptr(func) as usize;
+        let key = jit_state.function_ordinal(func);
         let mut block = vec![format!("jit-report: fn `{}`", func.name)];
 
         // --- Native-tier verdict --------------------------------------------------
-        match translate_to_native_jit(unit, func) {
+        match translate_to_native_jit(
+            unit,
+            func,
+            jit_state.profile(func),
+            jit_state.call_count(func),
+        ) {
             Some(_) => {
                 if native.report_native_ok.contains(&key) {
                     block.push("  native: ok".to_string());
@@ -2278,7 +2287,7 @@ fn jit_missed_opt_report(unit: &RegUnit, native: &NativeState) -> Vec<String> {
                 }
             }
             None => {
-                let reason = native_decline_reason(unit, func);
+                let reason = native_decline_reason(unit, jit_state, func);
                 block.push(format!("  not native: {reason}"));
             }
         }
@@ -2366,15 +2375,22 @@ fn jit_cost_model_decline_summary_block(stats: &NativeStats) -> String {
 }
 
 #[cfg(feature = "native-jit")]
-fn native_decline_reason_counts(unit: &RegUnit) -> BTreeMap<String, u64> {
+fn native_decline_reason_counts(unit: &RegUnit, jit_state: &JitState) -> BTreeMap<String, u64> {
     let mut counts = BTreeMap::<String, u64>::new();
     for func in &unit.functions {
-        let profile_lines = jit_profile_report_lines(unit, func);
+        let profile_lines = jit_profile_report_lines(unit, jit_state, func);
         if func.code.len() <= 2 && profile_lines.is_empty() {
             continue;
         }
-        if translate_to_native_jit(unit, func).is_none() {
-            let reason = native_decline_reason(unit, func);
+        if translate_to_native_jit(
+            unit,
+            func,
+            jit_state.profile(func),
+            jit_state.call_count(func),
+        )
+        .is_none()
+        {
+            let reason = native_decline_reason(unit, jit_state, func);
             *counts.entry(reason).or_default() += 1;
         }
     }
@@ -2402,11 +2418,12 @@ fn jit_native_decline_summary_block(counts: BTreeMap<String, u64>) -> String {
 }
 
 #[cfg(feature = "native-jit")]
-fn jit_profile_report_lines(unit: &RegUnit, func: &RegFunction) -> Vec<String> {
-    let Ok(profile) = func.profile.try_borrow() else {
-        return vec!["  profile: unavailable (profile borrow busy)".to_string()];
-    };
-    let Some(profile) = profile.as_ref() else {
+fn jit_profile_report_lines(
+    unit: &RegUnit,
+    jit_state: &JitState,
+    func: &RegFunction,
+) -> Vec<String> {
+    let Some(profile) = jit_state.profile(func) else {
         return Vec::new();
     };
     let function_name = |id: usize| {
@@ -2445,9 +2462,21 @@ fn jit_profile_report_lines(unit: &RegUnit, func: &RegFunction) -> Vec<String> {
         if !feedback.captures_all_scalar {
             line.push_str(" scalar-captures=false");
         }
-        if let Some(target) = monomorphic_closure_inline_target(unit, func, ip) {
+        if let Some(target) = monomorphic_closure_inline_target(
+            unit,
+            func,
+            Some(profile),
+            jit_state.call_count(func),
+            ip,
+        ) {
             line.push_str(&format!(" guard={}", function_name(target)));
-        } else if let Some(targets) = polymorphic_closure_inline_targets(unit, func, ip) {
+        } else if let Some(targets) = polymorphic_closure_inline_targets(
+            unit,
+            func,
+            Some(profile),
+            jit_state.call_count(func),
+            ip,
+        ) {
             let arm_count = targets.len();
             let order = targets
                 .into_iter()
@@ -2495,14 +2524,21 @@ fn jit_profile_report_lines(unit: &RegUnit, func: &RegFunction) -> Vec<String> {
 /// scans the (leaf-inlined) reachable body for the first non-subset instruction —
 /// reporting the intrinsic-level cause from the registry. Read-only.
 #[cfg(feature = "native-jit")]
-fn native_decline_reason(unit: &RegUnit, func: &RegFunction) -> String {
+fn native_decline_reason(unit: &RegUnit, jit_state: &JitState, func: &RegFunction) -> String {
     if func.captures != 0 {
         return "function has captures (closure body, not a native leaf)".to_string();
     }
     // Re-run leaf inlining + aggregate scalar-replacement exactly as translation does,
     // so the reason reflects the FINAL body the native subset check sees. If any pass
     // bails, report that — these are the structural reasons the real pass declines on.
-    let Some((code, _n_regs, _ip_map)) = native_inline_leaf_calls(unit, func, false, None) else {
+    let Some((code, _n_regs, _ip_map)) = native_inline_leaf_calls(
+        unit,
+        func,
+        jit_state.profile(func),
+        jit_state.call_count(func),
+        false,
+        None,
+    ) else {
         return "contains a non-inlinable call (callee not native-inlinable)".to_string();
     };
     let region_exit = native_whole_function_region_exit(&code);
@@ -6459,7 +6495,7 @@ impl NativeState {
 
     /// Record a consecutive failure against one shape version. Reaching the
     /// threshold negative-caches only that version; invariant translation
-    /// failures remain the sole owner of function-global `native_status`.
+    /// failures remain the sole owner of evaluation-local JIT native status.
     fn record_bail(&mut self, version_key: &NativeVersionKey) {
         let count = self.bail_counts.entry(version_key.clone()).or_insert(0);
         *count += 1;

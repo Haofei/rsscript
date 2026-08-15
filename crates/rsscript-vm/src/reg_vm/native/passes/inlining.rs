@@ -274,21 +274,25 @@ pub(in crate::reg_vm) fn loop_local_sinkable_closures(
 pub(in crate::reg_vm) fn native_inline_leaf_calls(
     unit: &RegUnit,
     func: &RegFunction,
+    profile: Option<&FunctionProfile>,
+    call_count: u32,
     j3: bool,
     loop_region: Option<(usize, usize)>,
 ) -> Option<(Vec<RegInstr>, usize, Vec<usize>)> {
-    native_inline_leaf_calls_inner(unit, func, j3, loop_region, &|_| false)
+    native_inline_leaf_calls_inner(unit, func, profile, call_count, j3, loop_region, &|_| false)
 }
 
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn native_inline_leaf_calls_preserving_known_calls(
     unit: &RegUnit,
     func: &RegFunction,
+    profile: Option<&FunctionProfile>,
+    call_count: u32,
     j3: bool,
     loop_region: Option<(usize, usize)>,
     preserve_call_known: &std::collections::HashSet<usize>,
 ) -> Option<(Vec<RegInstr>, usize, Vec<usize>)> {
-    native_inline_leaf_calls_inner(unit, func, j3, loop_region, &|i| {
+    native_inline_leaf_calls_inner(unit, func, profile, call_count, j3, loop_region, &|i| {
         preserve_call_known.contains(&i)
     })
 }
@@ -297,6 +301,8 @@ pub(in crate::reg_vm) fn native_inline_leaf_calls_preserving_known_calls(
 fn native_inline_leaf_calls_inner(
     unit: &RegUnit,
     func: &RegFunction,
+    profile: Option<&FunctionProfile>,
+    call_count: u32,
     j3: bool,
     loop_region: Option<(usize, usize)>,
     preserve_call_known: &dyn Fn(usize) -> bool,
@@ -322,8 +328,10 @@ fn native_inline_leaf_calls_inner(
         RegInstr::CallClosure { closure, .. } => {
             in_region(i)
                 && (sinkable.sink_calls.contains_key(closure)
-                    || monomorphic_closure_inline_target(unit, func, i).is_some()
-                    || polymorphic_closure_inline_targets(unit, func, i).is_some())
+                    || monomorphic_closure_inline_target(unit, func, profile, call_count, i)
+                        .is_some()
+                    || polymorphic_closure_inline_targets(unit, func, profile, call_count, i)
+                        .is_some())
         }
         _ => false,
     });
@@ -939,7 +947,10 @@ fn native_inline_leaf_calls_inner(
                 closure,
                 args,
                 mut_args,
-            } if in_region(i) && monomorphic_closure_inline_target(unit, func, i).is_some() => {
+            } if in_region(i)
+                && monomorphic_closure_inline_target(unit, func, profile, call_count, i)
+                    .is_some() =>
+            {
                 // J2.1 profile-guided monomorphic inlining: J1 profiled this site as
                 // calling exactly one callee `k` (non-capturing, native-inlinable).
                 // Guard the closure's identity, then inline `k`'s body. On a callee
@@ -948,7 +959,7 @@ fn native_inline_leaf_calls_inner(
                 // inlined subset is side-effect-free. `mut_args` is always empty for
                 // an inlinable (side-effect-free) callee; the target check enforces it.
                 debug_assert!(mut_args.is_empty());
-                let k = monomorphic_closure_inline_target(unit, func, i)?;
+                let k = monomorphic_closure_inline_target(unit, func, profile, call_count, i)?;
                 let callee = unit.functions.get(k)?;
                 // Identity guard up front: bail before any inlined work if the
                 // observed closure isn't the speculated callee `k`.
@@ -1005,7 +1016,10 @@ fn native_inline_leaf_calls_inner(
                 closure,
                 args,
                 mut_args,
-            } if in_region(i) && polymorphic_closure_inline_targets(unit, func, i).is_some() => {
+            } if in_region(i)
+                && polymorphic_closure_inline_targets(unit, func, profile, call_count, i)
+                    .is_some() =>
+            {
                 // J2.2 polymorphic inline cache: J1 profiled this site as calling 2–3
                 // distinct callees, EVERY one non-capturing and native-inlinable. Read
                 // the closure's function id ONCE, then dispatch: `if id == Kj { inline
@@ -1015,7 +1029,8 @@ fn native_inline_leaf_calls_inner(
                 // side-effect-free, so re-running from the top on a miss is safe —
                 // identical discipline to J2.1's single-guard bail.
                 debug_assert!(mut_args.is_empty());
-                let targets = polymorphic_closure_inline_targets(unit, func, i)?;
+                let targets =
+                    polymorphic_closure_inline_targets(unit, func, profile, call_count, i)?;
                 // Scratch registers for the dispatch: the id (read once), a per-arm
                 // key constant, and the equality result. They live above every
                 // inlined callee's window, so no arm can clobber them.
@@ -1261,7 +1276,7 @@ fn native_inline_leaf_calls_inner(
     Some((new_code, next_reg, ip_map))
 }
 
-/// `RegFunction::native_status` value: the function is known not native-eligible.
+/// JIT side-table native-status value: the function is known not native-eligible.
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) const NATIVE_STATUS_NOT_ELIGIBLE: u8 = 1;
 pub(in crate::reg_vm) const NATIVE_STATUS_PROFILE_PENDING: u8 = 2;

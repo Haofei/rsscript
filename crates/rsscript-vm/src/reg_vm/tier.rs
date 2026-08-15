@@ -108,6 +108,7 @@ fn native_call_mut_args_supported(mut_args: &[usize], param_tys: &[NativeTy]) ->
 
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn native_scalar_callee_pending_on_branch_profile(
+    jit_state: &JitState,
     func: &RegFunction,
 ) -> bool {
     let has_branch =
@@ -121,7 +122,7 @@ pub(in crate::reg_vm) fn native_scalar_callee_pending_on_branch_profile(
                     )
                 })
             });
-    has_branch && func.branch_count.get() < PROFILE_WARMUP + PROFILE_BRANCH_MIN_SAMPLES
+    has_branch && jit_state.branch_count(func) < PROFILE_WARMUP + PROFILE_BRANCH_MIN_SAMPLES
 }
 
 #[cfg(feature = "native-jit")]
@@ -147,6 +148,7 @@ fn native_compiled_entry_call_descriptor(
 
 #[cfg(feature = "native-jit")]
 fn native_compile_direct_scalar_callee(
+    jit_state: &JitState,
     native: &mut NativeState,
     unit: &RegUnit,
     callee: &RegFunction,
@@ -165,7 +167,7 @@ fn native_compile_direct_scalar_callee(
     if native.whole_shape_count(callee_key) >= MAX_NATIVE_SHAPE_VERSIONS {
         return None;
     }
-    if native_scalar_callee_pending_on_branch_profile(callee) {
+    if native_scalar_callee_pending_on_branch_profile(jit_state, callee) {
         return None;
     }
     if !stack.insert(callee_key) {
@@ -173,12 +175,20 @@ fn native_compile_direct_scalar_callee(
     }
 
     let nested_call_sites =
-        native_compiled_call_sites_inner(native, unit, callee, callee_key, stack);
+        native_compiled_call_sites_inner(jit_state, native, unit, callee, callee_key, stack);
+    let profile = jit_state.profile(callee);
+    let call_count = jit_state.call_count(callee);
     let translated = if nested_call_sites.is_empty() {
-        translate_to_native_jit(unit, callee)
+        translate_to_native_jit(unit, callee, profile, call_count)
     } else {
-        translate_to_native_jit_with_compiled_callees(unit, callee, &nested_call_sites)
-            .or_else(|| translate_to_native_jit(unit, callee))
+        translate_to_native_jit_with_compiled_callees(
+            unit,
+            callee,
+            profile,
+            call_count,
+            &nested_call_sites,
+        )
+        .or_else(|| translate_to_native_jit(unit, callee, profile, call_count))
     };
     let Some((jit_fn, ret, params, string_literals, precise_resume_safe)) = translated else {
         stack.remove(&callee_key);
@@ -269,6 +279,7 @@ fn native_compile_direct_scalar_callee(
 
 #[cfg(feature = "native-jit")]
 fn native_compiled_call_sites(
+    jit_state: &JitState,
     native: &mut NativeState,
     unit: &RegUnit,
     func: &RegFunction,
@@ -276,11 +287,12 @@ fn native_compiled_call_sites(
 ) -> std::collections::HashMap<usize, NativeCompiledCallee> {
     let mut stack = std::collections::HashSet::new();
     stack.insert(self_key);
-    native_compiled_call_sites_inner(native, unit, func, self_key, &mut stack)
+    native_compiled_call_sites_inner(jit_state, native, unit, func, self_key, &mut stack)
 }
 
 #[cfg(feature = "native-jit")]
 fn native_compiled_call_sites_inner(
+    jit_state: &JitState,
     native: &mut NativeState,
     unit: &RegUnit,
     func: &RegFunction,
@@ -301,12 +313,12 @@ fn native_compiled_call_sites_inner(
         let Some(callee) = unit.functions.get(*function) else {
             continue;
         };
-        let callee_key = callee.as_ref() as *const RegFunction as usize;
+        let callee_key = jit_state.function_ordinal(callee);
         if callee_key == self_key {
             continue;
         }
         let Some(descriptor) =
-            native_compile_direct_scalar_callee(native, unit, callee, callee_key, stack)
+            native_compile_direct_scalar_callee(jit_state, native, unit, callee, callee_key, stack)
         else {
             continue;
         };
@@ -532,23 +544,25 @@ impl RegVm {
         // so skip all per-call tiering/cache/name-hash work and fall straight back
         // to the interpreter (keeps `jit-native` from being slower than the VM on
         // code the native tier can't take).
-        let native_status = func.native_status.get();
+        let native_status = self.jit_state.native_status(func);
         if native_status == NATIVE_STATUS_NOT_ELIGIBLE {
             return NativeAttempt::Fallback;
         }
         if native_status == NATIVE_STATUS_PROFILE_PENDING {
-            if func.call_count.get() < PROFILE_RECORD_LIMIT {
+            if self.jit_state.call_count(func) < PROFILE_RECORD_LIMIT {
                 return NativeAttempt::Fallback;
             }
             // The bounded profile is now immutable. Re-open translation once;
             // the result will become either a compiled cache entry or a stable
             // negative verdict.
-            func.native_status.set(0);
+            self.jit_state.set_native_status(func, 0);
         }
         // The unit is needed to resolve inlinable callees; clone the `Rc` so the
         // mutable `self.native` borrow below doesn't conflict.
         let unit = Rc::clone(&self.unit);
-        let native_key = func as *const RegFunction as usize;
+        let native_key = self.jit_state.function_ordinal(func);
+        let profile = self.jit_state.profile(func);
+        let call_count = self.jit_state.call_count(func);
         let shape = ShapeKey::from_values((0..func.params).map(|index| self.reg(base + index)));
         let version_key = NativeVersionKey {
             function: native_key,
@@ -592,17 +606,24 @@ impl RegVm {
                         }
                         return NativeAttempt::Fallback;
                     }
-                    let compiled_call_sites =
-                        native_compiled_call_sites(native, &unit, func, native_key);
+                    let compiled_call_sites = native_compiled_call_sites(
+                        &self.jit_state,
+                        native,
+                        &unit,
+                        func,
+                        native_key,
+                    );
                     let translated = if compiled_call_sites.is_empty() {
-                        translate_to_native_jit(&unit, func)
+                        translate_to_native_jit(&unit, func, profile, call_count)
                     } else {
                         translate_to_native_jit_with_compiled_callees(
                             &unit,
                             func,
+                            profile,
+                            call_count,
                             &compiled_call_sites,
                         )
-                        .or_else(|| translate_to_native_jit(&unit, func))
+                        .or_else(|| translate_to_native_jit(&unit, func, profile, call_count))
                     };
                     let entry = match translated {
                         Some((jit_fn, ret, params, string_literals, precise_resume_safe)) => {
@@ -630,7 +651,8 @@ impl RegVm {
                                 // still builds/hashes a ShapeKey only to rediscover
                                 // the same decline (notably tiny closure dispatchers
                                 // invoked from an interpreted loop).
-                                func.native_status.set(NATIVE_STATUS_NOT_ELIGIBLE);
+                                self.jit_state
+                                    .set_native_status(func, NATIVE_STATUS_NOT_ELIGIBLE);
                                 None
                             } else {
                                 let Some(admission) = begin_native_compile(native, 1) else {
@@ -727,9 +749,12 @@ impl RegVm {
                             // monomorphic decision, the verdict is NOT invariant —
                             // re-attempt on a later (warmer) call. Don't cache and
                             // don't mark NOT_ELIGIBLE; just fall back this once.
-                            if native_translation_pending_on_profile(&unit, func) {
+                            if native_translation_pending_on_profile(
+                                &unit, func, profile, call_count,
+                            ) {
                                 if matches!(effective_cost_mode(), CostMode::Enforce) {
-                                    func.native_status.set(NATIVE_STATUS_PROFILE_PENDING);
+                                    self.jit_state
+                                        .set_native_status(func, NATIVE_STATUS_PROFILE_PENDING);
                                 }
                                 return NativeAttempt::Fallback;
                             }
@@ -738,7 +763,8 @@ impl RegVm {
                             }
                             // Invariant verdict — cache it on the function so future
                             // calls take the cheap negative path above.
-                            func.native_status.set(NATIVE_STATUS_NOT_ELIGIBLE);
+                            self.jit_state
+                                .set_native_status(func, NATIVE_STATUS_NOT_ELIGIBLE);
                             None
                         }
                     };
@@ -865,7 +891,8 @@ impl RegVm {
                     // function properties. Once repeated dispatch proves that
                     // native entry cannot amortize for one ABI shape, avoid
                     // rebuilding/hashing shape keys for every later call.
-                    func.native_status.set(NATIVE_STATUS_NOT_ELIGIBLE);
+                    self.jit_state
+                        .set_native_status(func, NATIVE_STATUS_NOT_ELIGIBLE);
                     return NativeAttempt::Fallback;
                 }
             }
@@ -1355,7 +1382,7 @@ impl RegVm {
     /// byte-identical to interpretation, so triggering never changes a value.
     #[cfg(feature = "native-jit")]
     pub(super) fn resolve_osr_candidates(&mut self, func: &RegFunction) -> OsrCandidates {
-        let function = func as *const RegFunction as usize;
+        let function = self.jit_state.function_ordinal(func);
         if let Some(candidates) = self
             .native
             .as_ref()
@@ -1430,7 +1457,9 @@ impl RegVm {
         if let Some(native) = self.native.as_mut() {
             native.osr_dynamic_bail = false;
         }
-        let native_key = func as *const RegFunction as usize;
+        let native_key = self.jit_state.function_ordinal(func);
+        let profile = self.jit_state.profile(func);
+        let call_count = self.jit_state.call_count(func);
         let region_key = RegionKey {
             function: native_key,
             header: header_ip,
@@ -1593,6 +1622,7 @@ impl RegVm {
                         let identity_ip_map: Vec<usize> = (0..func.code.len()).collect();
                         translate_osr_loop_profiled(
                             func,
+                            profile,
                             &func.code,
                             func.regs,
                             func.params,
@@ -1727,11 +1757,6 @@ impl RegVm {
                             regs: eregs,
                             local_regs: HashMap::new(),
                             code: ecode,
-                            native_status: std::cell::Cell::new(0),
-                            call_count: std::cell::Cell::new(0),
-                            branch_count: std::cell::Cell::new(0),
-                            profile: RefCell::new(None),
-                            osr_state: std::cell::Cell::new(OsrTrigger::Unknown),
                         };
                         (Some(f_e), emap)
                     }
@@ -1746,7 +1771,14 @@ impl RegVm {
                 // bails OSR rather than misresume mid-fragment.
                 let real_code = &func.code;
                 mapped_osr_loop(&eff_func.code, &expand_map, header_ip).and_then(|lp_orig| {
-                native_inline_leaf_calls(&unit, eff_func, true, Some((lp_orig.header, lp_orig.exit))).and_then(
+                native_inline_leaf_calls(
+                    &unit,
+                    eff_func,
+                    if eff_owned.is_some() { None } else { profile },
+                    call_count,
+                    true,
+                    Some((lp_orig.header, lp_orig.exit)),
+                ).and_then(
                     |(inlined_code, n_regs0, ip_map0)| {
                     // OSR × stored-closure helper fusion: after the closure inline pass
                     // has introduced `NativeClosureId`/`NativeClosureCapture`, collapse
@@ -2013,6 +2045,7 @@ impl RegVm {
                             }
                             translate_osr_loop_profiled(
                                 func,
+                                profile,
                                 &code,
                                 n_regs,
                                 eff_func.params,
@@ -2173,7 +2206,14 @@ impl RegVm {
                 // cache unpopulated so a later (warmer) header hit retries; once the
                 // profile settles (or there is no pending site) the `None`/`Some`
                 // verdict is stable and we cache it.
-                if entry.is_some() || !native_translation_pending_on_profile(&unit, func) {
+                if entry.is_some()
+                    || !native_translation_pending_on_profile(
+                        &unit,
+                        func,
+                        self.jit_state.profile(func),
+                        self.jit_state.call_count(func),
+                    )
+                {
                     if entry.is_some() && native.collect_stats {
                         native.stats.shape_versions += 1;
                     }
@@ -2866,7 +2906,7 @@ impl RegVm {
                     if native.report {
                         native
                             .report_osr_ok
-                            .insert(func as *const RegFunction as usize);
+                            .insert(self.jit_state.function_ordinal(func));
                     }
                 }
                 scratch.restore(self.native.as_mut());

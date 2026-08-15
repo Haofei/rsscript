@@ -53,15 +53,12 @@ pub(in crate::reg_vm) fn native_whole_function_region_exit(code: &[RegInstr]) ->
 
 #[cfg(feature = "native-jit")]
 fn native_profile_guidance_with_analysis(
-    func: &RegFunction,
+    profile: Option<&FunctionProfile>,
     code: &[RegInstr],
     ip_map: &[usize],
     analysis: &NativeRegionAnalysis,
 ) -> NativeProfileGuidance {
-    let Ok(profile) = func.profile.try_borrow() else {
-        return NativeProfileGuidance::default();
-    };
-    let Some(profile) = profile.as_ref() else {
+    let Some(profile) = profile else {
         return NativeProfileGuidance::default();
     };
     analysis.profile_guidance(code, profile, ip_map)
@@ -69,7 +66,7 @@ fn native_profile_guidance_with_analysis(
 
 #[cfg(feature = "native-jit")]
 fn native_osr_profile_guidance(
-    func: &RegFunction,
+    profile: Option<&FunctionProfile>,
     code: &[RegInstr],
     n_regs: usize,
     lp: OsrLoop,
@@ -85,7 +82,7 @@ fn native_osr_profile_guidance(
     else {
         return NativeProfileGuidance::default();
     };
-    let mut guidance = native_profile_guidance_with_analysis(func, code, ip_map, &analysis);
+    let mut guidance = native_profile_guidance_with_analysis(profile, code, ip_map, &analysis);
     guidance.hot_branch_edges.retain(|ip, hot_target| {
         let cold_ip = match code.get(*ip) {
             Some(RegInstr::JumpIfBool { target, .. })
@@ -163,6 +160,8 @@ fn native_set_list_read_base_ty(
 pub(in crate::reg_vm) fn translate_to_native_jit(
     unit: &RegUnit,
     func: &RegFunction,
+    profile: Option<&FunctionProfile>,
+    call_count: u32,
 ) -> Option<(
     vm_jit::JitFunction,
     NativeTy,
@@ -170,13 +169,15 @@ pub(in crate::reg_vm) fn translate_to_native_jit(
     Vec<Rc<String>>,
     bool,
 )> {
-    translate_to_native_jit_with_compiled_callees(unit, func, &HashMap::new())
+    translate_to_native_jit_with_compiled_callees(unit, func, profile, call_count, &HashMap::new())
 }
 
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn translate_to_native_jit_with_compiled_callees(
     unit: &RegUnit,
     func: &RegFunction,
+    profile: Option<&FunctionProfile>,
+    call_count: u32,
     compiled_callees: &HashMap<usize, NativeCompiledCallee>,
 ) -> Option<(
     vm_jit::JitFunction,
@@ -188,6 +189,8 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_compiled_callees(
     translate_to_native_jit_with_calls(
         unit,
         func,
+        profile,
+        call_count,
         compiled_callees,
         &HashSet::new(),
         &HashMap::new(),
@@ -206,6 +209,8 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_compiled_callees(
 pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     unit: &RegUnit,
     func: &RegFunction,
+    profile: Option<&FunctionProfile>,
+    call_count: u32,
     compiled_callees: &HashMap<usize, NativeCompiledCallee>,
     self_call_sites: &HashSet<usize>,
     group_call_sites: &HashMap<usize, u32>,
@@ -234,6 +239,8 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     let (code, n_regs, mut ip_map) = native_inline_leaf_calls_preserving_known_calls(
         unit,
         func,
+        profile,
+        call_count,
         false,
         None,
         &preserve_call_known,
@@ -285,7 +292,8 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     // dead instructions become `Nop`.
     let analysis = NativeRegionAnalysis::compute_prefix(&code, n_regs, 0, code.len())?;
     let reachable = analysis.reachable_mask();
-    let profile_guidance = native_profile_guidance_with_analysis(func, &code, &ip_map, &analysis);
+    let profile_guidance =
+        native_profile_guidance_with_analysis(profile, &code, &ip_map, &analysis);
     let profile_hot_branch_edges = &profile_guidance.hot_branch_edges;
 
     // Every *reachable* instruction must be in the native subset.
@@ -2170,7 +2178,8 @@ pub(in crate::reg_vm) fn translate_osr_loop(
 
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn translate_osr_loop_profiled(
-    func: &RegFunction,
+    _func: &RegFunction,
+    profile: Option<&FunctionProfile>,
     code: &[RegInstr],
     n_regs: usize,
     n_params: usize,
@@ -2188,7 +2197,7 @@ pub(in crate::reg_vm) fn translate_osr_loop_profiled(
     Vec<bool>,
     Vec<Rc<String>>,
 )> {
-    let profile_guidance = native_osr_profile_guidance(func, code, n_regs, lp, ip_map);
+    let profile_guidance = native_osr_profile_guidance(profile, code, n_regs, lp, ip_map);
     translate_osr_loop_inner(
         code,
         n_regs,

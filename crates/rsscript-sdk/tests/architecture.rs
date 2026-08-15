@@ -758,6 +758,8 @@ fn jit_planning_state_is_kept_out_of_verified_program_objects() {
     let model = read(&root.join("crates/rsscript-vm/src/reg_vm/model.rs"));
     let bytecode = read(&root.join("crates/rsscript-vm/src/reg_vm/bytecode.rs"));
     let exec = read(&root.join("crates/rsscript-vm/src/reg_vm/exec.rs"));
+    let deopt = read(&root.join("crates/rsscript-vm/src/reg_vm/tier/deopt_resume.rs"));
+    let entry = read(&root.join("crates/rsscript-vm/src/reg_vm/tier/jit_entry.rs"));
 
     assert!(tier.contains("mod state;"));
     for required in [
@@ -772,7 +774,15 @@ fn jit_planning_state_is_kept_out_of_verified_program_objects() {
             "JIT state side table must retain `{required}`"
         );
     }
-    for forbidden in ["jit_analysis:", "jit_self_recursion_kind:"] {
+    for forbidden in [
+        "\n    jit_analysis:",
+        "\n    jit_self_recursion_kind:",
+        "\n    native_status:",
+        "\n    call_count:",
+        "\n    branch_count:",
+        "\n    profile:",
+        "\n    osr_state:",
+    ] {
         assert!(
             !model.contains(forbidden),
             "verified VM program model must not retain JIT planning field `{forbidden}`"
@@ -784,6 +794,21 @@ fn jit_planning_state_is_kept_out_of_verified_program_objects() {
     }
     assert!(exec.contains("JitState::for_verified_program"));
     assert!(exec.contains("self.jit_state.tier0_analysis"));
+    assert!(state.contains("native_status: u8"));
+    assert!(state.contains("call_count: u32"));
+    assert!(state.contains("branch_count: u32"));
+    assert!(state.contains("profile: Option<Box<FunctionProfile>>"));
+    for (name, source) in [
+        ("interpreter", exec),
+        ("native tier", tier),
+        ("deopt", deopt),
+        ("native entry", entry),
+    ] {
+        assert!(
+            !source.contains("as *const RegFunction"),
+            "{name} must address native state through JitState ordinals, not RegFunction pointers"
+        );
+    }
 }
 
 #[test]

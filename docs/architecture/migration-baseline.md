@@ -1637,9 +1637,14 @@ an arbitrary shell executor.
     evaluation constructs this side table from the verified executable digest;
     entries are keyed by that digest and a stable function ordinal. Tier-0
     eligibility and self-recursive scalar classification no longer live on
-    `RegFunction`. Profile, OSR, deopt, and native-code state remain V05.2 work.
-  - [ ] **V05.2 — Move profiles, OSR, deopt, and native code handles.** Remove
-    these fields from `RegFunction` and program types.
+    `RegFunction`.
+  - [x] **V05.2 — Move profiles, OSR, deopt, and native code handles.**
+    `JitState` owns native eligibility status, call/branch counters, and bounded
+    profile feedback for each evaluation. `NativeState` owns compiled handles,
+    OSR triggers, deopt state, and code caches, all keyed by stable function
+    ordinals rather than `RegFunction` pointers. `RegFunction` and decoded
+    bytecode now contain only immutable verified program data; default and
+    `native-jit` VM tests plus SDK architecture guards cover the boundary.
   - [ ] **V05.3 — Make Core VM build without JIT data structures.** Add a
     dependency and layout regression test.
 - [ ] **V06 — Split VM primitives from deterministic core library.** VM Core

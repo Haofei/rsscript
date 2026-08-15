@@ -79,36 +79,6 @@ pub(crate) struct RegFunction {
     pub(crate) regs: usize,
     pub(crate) local_regs: HashMap<String, Reg>,
     pub(crate) code: Vec<RegInstr>,
-    /// Cached native-tier verdict, an invariant property of the function:
-    /// `0` unknown, `1` known not native-eligible, `2` waiting for bounded
-    /// closure-profile sampling. Lets `try_native` skip all per-call
-    /// tiering/cache/name-hash work once a function is known to never compile,
-    /// while a profile-pending function retries exactly once after its sample
-    /// window freezes.
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
-    pub(crate) native_status: std::cell::Cell<u8>,
-    /// J1 dynamic-call counter, bumped ONLY inside [`record_call_site`] (the
-    /// `CallDynamic`/`CallClosure` handlers), never on the frame-entry path. Gates
-    /// the warm-up ([`PROFILE_WARMUP`]) and sampling-budget
-    /// ([`PROFILE_RECORD_LIMIT`]) phases; a function with no dynamic call site
-    /// never reaches the helper, so its counter stays `0` and it pays nothing.
-    /// Below `PROFILE_WARMUP` no profile is allocated.
-    pub(crate) call_count: std::cell::Cell<u32>,
-    /// J1 conditional-branch counter, bumped ONLY inside [`record_branch_site`].
-    /// Kept separate from `call_count` so branch feedback cannot perturb closure
-    /// speculation warm-up or OSR profile-progress checks.
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
-    pub(crate) branch_count: std::cell::Cell<u32>,
-    /// Lazily-allocated type-feedback profile, populated once `call_count`
-    /// or `branch_count` crosses [`PROFILE_WARMUP`]. `None` for cold functions
-    /// (zero allocation). Feeds J2/J4 compile decisions only — never a value
-    /// (determinism).
-    pub(crate) profile: RefCell<Option<Box<FunctionProfile>>>,
-    /// Legacy constructor slot retained while OSR trigger state lives in
-    /// [`NativeState`]. Keeping it here avoids coupling lowering-only function
-    /// construction to the native-JIT feature; evaluation never mutates it.
-    #[allow(dead_code)]
-    pub(crate) osr_state: std::cell::Cell<OsrTrigger>,
 }
 
 #[cfg(feature = "native-jit")]
@@ -160,8 +130,6 @@ impl OsrCandidates {
 #[cfg(feature = "native-jit")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OsrTrigger {
-    /// Constructor-only sentinel for the legacy [`RegFunction::osr_state`] slot.
-    Unknown,
     /// The interpreter accumulates this region's estimated per-iteration work. At
     /// [`OSR_BACKEDGE_THRESHOLD`] work units it fires `try_osr`. `probe_cc` is the
     /// function's dynamic-call count (`call_count`) as of the LAST `try_osr` probe
@@ -179,14 +147,6 @@ pub(crate) enum OsrTrigger {
     GaveUp,
 }
 
-/// Mirror of `OsrTrigger` that is always present (so the non-`native-jit`
-/// `RegFunction` constructor compiles). Only the `native-jit` build reads it.
-#[cfg(not(feature = "native-jit"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum OsrTrigger {
-    Unknown,
-}
-
 impl RegFunction {
     #[allow(dead_code)]
     pub(crate) fn placeholder(name: String) -> Self {
@@ -197,11 +157,6 @@ impl RegFunction {
             regs: 0,
             local_regs: HashMap::new(),
             code: Vec::new(),
-            native_status: std::cell::Cell::new(0),
-            call_count: std::cell::Cell::new(0),
-            branch_count: std::cell::Cell::new(0),
-            profile: RefCell::new(None),
-            osr_state: std::cell::Cell::new(OsrTrigger::Unknown),
         }
     }
 }

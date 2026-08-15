@@ -122,7 +122,9 @@ impl RegVm {
         if !self.native_limits_unarmed() || self.limits.max_depth != DEFAULT_MAX_DEPTH {
             return None;
         }
-        let key = func as *const RegFunction as usize;
+        let key = self.jit_state.function_ordinal(func);
+        let profile = self.jit_state.profile(func);
+        let call_count = self.jit_state.call_count(func);
         let (id, param_tys, ret) = {
             let native = self.native.as_mut()?;
             // Deopt-stress / forced-bail modes run the scalar/interpreter path so the
@@ -155,6 +157,8 @@ impl RegVm {
                         translate_to_native_jit_with_calls(
                             unit,
                             func,
+                            profile,
+                            call_count,
                             &std::collections::HashMap::new(),
                             &self_call_sites,
                             &std::collections::HashMap::new(),
@@ -285,7 +289,7 @@ impl RegVm {
         if args.len() != func.params {
             return None;
         }
-        let key = Rc::as_ptr(func) as usize;
+        let key = self.jit_state.function_ordinal(func);
         // Resolve the called member's native id, its parameter types (to marshal each
         // scalar arg) and its return type (to wrap the i64 result). Cached per member;
         // compiling any member compiles the whole group.
@@ -327,6 +331,8 @@ impl RegVm {
                         let (jit_fn, ret, param_tys, _l, _pr) = translate_to_native_jit_with_calls(
                             unit,
                             mfunc,
+                            self.jit_state.profile(mfunc),
+                            self.jit_state.call_count(mfunc),
                             &std::collections::HashMap::new(),
                             &std::collections::HashSet::new(),
                             &group_call_sites,
@@ -359,7 +365,7 @@ impl RegVm {
                     (Some(scc), Some((ids, member_sigs))) if ids.len() == scc.len() => {
                         let mut mine = None;
                         for (i, &member) in scc.iter().enumerate() {
-                            let mkey = Rc::as_ptr(&unit.functions[member]) as usize;
+                            let mkey = self.jit_state.function_ordinal(&unit.functions[member]);
                             let (param_tys, ret) = member_sigs[i].clone();
                             let entry = (ids[i], param_tys, ret);
                             native
@@ -376,7 +382,8 @@ impl RegVm {
                         match group {
                             Some(scc) => {
                                 for member in scc {
-                                    let mkey = Rc::as_ptr(&unit.functions[member]) as usize;
+                                    let mkey =
+                                        self.jit_state.function_ordinal(&unit.functions[member]);
                                     native.mutual_recursive_native.insert(mkey, None);
                                 }
                             }
@@ -477,15 +484,12 @@ impl RegVm {
         // candidate recognises; it handles arbitrary depth without touching the host
         // C stack. A non-i64 body (Float, or one using `match`/heap that the i64
         // machine cannot run) routes to the full interpreter (`Ok(None)`).
-        let returns_bool = match self_recursive_scalar_jit_candidate(
-            unit,
-            &mut self.jit_state,
-            function_id,
-        ) {
-            SelfRecursionKind::Ineligible => return Ok(None),
-            SelfRecursionKind::Int => false,
-            SelfRecursionKind::Bool => true,
-        };
+        let returns_bool =
+            match self_recursive_scalar_jit_candidate(unit, &mut self.jit_state, function_id) {
+                SelfRecursionKind::Ineligible => return Ok(None),
+                SelfRecursionKind::Int => false,
+                SelfRecursionKind::Bool => true,
+            };
 
         // Marshal the scalar value args to i64 (Bool as 0/1). Both Int and Bool
         // params are i64-representable by the tier-0 machine.
@@ -632,7 +636,8 @@ impl RegVm {
                     let taken = (stack[base + *cond] != 0) == *expected;
                     #[cfg(feature = "native-jit")]
                     if self.native.is_some() {
-                        record_branch_site(&func, frame.ip - 1, taken);
+                        self.jit_state
+                            .record_branch_site(&func, frame.ip - 1, taken);
                     }
                     if taken {
                         frames.last_mut().expect("active scalar frame").ip = *target;
@@ -649,7 +654,8 @@ impl RegVm {
                         eval_int_compare(*op, stack[base + *lhs], stack[base + *rhs]) == *expected;
                     #[cfg(feature = "native-jit")]
                     if self.native.is_some() {
-                        record_branch_site(&func, frame.ip - 1, taken);
+                        self.jit_state
+                            .record_branch_site(&func, frame.ip - 1, taken);
                     }
                     if taken {
                         frames.last_mut().expect("active scalar frame").ip = *target;

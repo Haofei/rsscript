@@ -1,44 +1,3 @@
-#[cfg(feature = "native-jit")]
-fn native_callee_direct_callable_structurally(
-    functions: &[RegFunction],
-    function: usize,
-    n_args: usize,
-    stack: &mut Vec<usize>,
-) -> bool {
-    if stack.contains(&function) {
-        return false;
-    }
-    let Some(callee) = functions.get(function) else {
-        return false;
-    };
-    if callee.captures != 0 || callee.params != n_args || callee.params > callee.regs {
-        return false;
-    }
-    stack.push(function);
-    let reachable = native_reachable_instructions(&callee.code);
-    let ok = callee.code.iter().enumerate().all(|(i, instr)| {
-        if !reachable[i] || native_subset_instruction(instr) {
-            return true;
-        }
-        let RegInstr::CallKnown {
-            function,
-            args,
-            mut_args,
-            ..
-        } = instr
-        else {
-            return false;
-        };
-        let Some(nested) = functions.get(*function) else {
-            return false;
-        };
-        (mut_args.is_empty() && native_callee_inlinable(nested, args.len()))
-            || native_callee_direct_callable_structurally(functions, *function, args.len(), stack)
-    });
-    stack.pop();
-    ok
-}
-
 /// Like [`native_callee_inlinable`] but permits a **capturing** closure callee
 /// (OSR × J2): every capture must be materialized as a scalar at the inline site
 /// (the gate enforces scalarity via the profile's `captures_all_scalar` bit), so
@@ -67,84 +26,6 @@ pub(in crate::reg_vm) fn native_capturing_callee_inlinable(
             )
             || native_offset_regs(instr, 0).is_some()
     })
-}
-
-/// A cheap structural prefilter for native eligibility. It is deliberately a
-/// necessary condition, not a full duplicate of [`translate_to_native_jit`]: false
-/// means translation cannot currently succeed, true means "try the real translator".
-#[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn native_may_translate_structurally(
-    functions: &[RegFunction],
-    func: &RegFunction,
-) -> bool {
-    if func.captures != 0 || func.params > func.regs {
-        return false;
-    }
-    let reachable = native_reachable_instructions(&func.code);
-    func.code.iter().enumerate().all(|(i, instr)| {
-        if !reachable[i] || native_subset_instruction(instr) {
-            return true;
-        }
-        match instr {
-            RegInstr::CallKnown {
-                function,
-                args,
-                mut_args,
-                ..
-            } => {
-                let Some(callee) = functions.get(*function) else {
-                    return false;
-                };
-                (mut_args.is_empty() && native_callee_inlinable(callee, args.len()))
-                    || native_callee_direct_callable_structurally(
-                        functions,
-                        *function,
-                        args.len(),
-                        &mut Vec::new(),
-                    )
-            }
-            // J2: a `CallClosure` whose closure is a native-readable handle (a param,
-            // or a stored closure fetched via `GetFieldSlot`/`ListGet`) and which has
-            // no `mut` write-backs *may* become inlinable once J1 profiles it as
-            // monomorphic/polymorphic. We can't resolve the callee cold (its identity
-            // is only known at runtime via the profile), so accept the shape here and
-            // let the real translator decide per-profile. This keeps the function off
-            // the predictably-ineligible fast-path so it can tier up after warming.
-            RegInstr::CallClosure {
-                closure, mut_args, ..
-            } => {
-                mut_args.is_empty()
-                    && native_readable_or_sinkable_closure_operand_candidate(func, *closure)
-            }
-            RegInstr::MakeClosure { .. } => true,
-            // J3/J4: aggregate ops *may* dissolve into the native subset via scalar
-            // replacement if the value is non-escaping with scalar payload/fields. We
-            // can't run the full escape analysis cheaply here (it needs the inlined
-            // body), so accept the shape and let the real translator decide. This
-            // keeps functions that construct/match Options, Results, user variants, or
-            // structs off the predictably-ineligible fast-path so they can tier up.
-            RegInstr::ListMap { .. } | RegInstr::ListFilter { .. } | RegInstr::ListFold { .. } => {
-                true
-            }
-            _ if is_option_op(instr) => true,
-            _ if is_variant_op(instr) => true,
-            RegInstr::MatchResult { .. } => true,
-            _ if is_make_struct_op(instr) => true,
-            _ => false,
-        }
-    })
-}
-
-/// Cache functions that are predictably outside the native subset before the VM
-/// starts running, so hot ineligible functions skip native tiering/translation on
-/// their first call instead of after one failed translation attempt.
-#[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn mark_predictably_native_ineligible(functions: &[RegFunction]) {
-    for func in functions {
-        if !native_may_translate_structurally(functions, func) {
-            func.native_status.set(NATIVE_STATUS_NOT_ELIGIBLE);
-        }
-    }
 }
 
 /// Inline `CallKnown`s to [`native_callee_inlinable`] callees into `func`,
@@ -229,6 +110,8 @@ pub(in crate::reg_vm) fn native_readable_or_sinkable_closure_operand_candidate(
 pub(in crate::reg_vm) fn monomorphic_closure_inline_target(
     unit: &RegUnit,
     func: &RegFunction,
+    profile: Option<&FunctionProfile>,
+    call_count: u32,
     i: usize,
 ) -> Option<usize> {
     let (closure, args, mut_args) = match func.code.get(i)? {
@@ -249,12 +132,11 @@ pub(in crate::reg_vm) fn monomorphic_closure_inline_target(
     // J1 profile: compile only after the bounded sampling window freezes. Before
     // then a one-callee observation can still mature into a polymorphic site, and
     // caching an early monomorphic native body would permanently hide that shape.
-    if func.call_count.get() < PROFILE_RECORD_LIMIT {
+    if call_count < PROFILE_RECORD_LIMIT {
         return None;
     }
     // Frozen profile: this site must have settled on exactly one callee.
-    let profile = func.profile.try_borrow().ok()?;
-    let feedback = profile.as_ref()?.call_sites.get(&i)?;
+    let feedback = profile?.call_sites.get(&i)?;
     if feedback.state() != MonoState::Monomorphic {
         return None;
     }
@@ -307,6 +189,8 @@ pub(in crate::reg_vm) fn monomorphic_closure_inline_target(
 pub(in crate::reg_vm) fn polymorphic_closure_inline_targets(
     unit: &RegUnit,
     func: &RegFunction,
+    profile: Option<&FunctionProfile>,
+    call_count: u32,
     i: usize,
 ) -> Option<Vec<usize>> {
     let (closure, args, mut_args) = match func.code.get(i)? {
@@ -324,11 +208,10 @@ pub(in crate::reg_vm) fn polymorphic_closure_inline_targets(
     }
     // J1 profile: compile only after the bounded sampling window freezes, so the
     // 2- or 3-target PIC is derived from a stable observed set.
-    if func.call_count.get() < PROFILE_RECORD_LIMIT {
+    if call_count < PROFILE_RECORD_LIMIT {
         return None;
     }
-    let profile = func.profile.try_borrow().ok()?;
-    let feedback = profile.as_ref()?.call_sites.get(&i)?;
+    let feedback = profile?.call_sites.get(&i)?;
     if feedback.state() != MonoState::Polymorphic {
         return None;
     }
@@ -379,9 +262,11 @@ pub(in crate::reg_vm) fn polymorphic_closure_inline_targets(
 pub(in crate::reg_vm) fn native_translation_pending_on_profile(
     _unit: &RegUnit,
     func: &RegFunction,
+    profile: Option<&FunctionProfile>,
+    call_count: u32,
 ) -> bool {
     // Frozen profile ⇒ no further state change ⇒ never pending.
-    if func.call_count.get() >= PROFILE_RECORD_LIMIT {
+    if call_count >= PROFILE_RECORD_LIMIT {
         return false;
     }
     func.code.iter().enumerate().any(|(i, instr)| match instr {
@@ -394,16 +279,11 @@ pub(in crate::reg_vm) fn native_translation_pending_on_profile(
             // Structurally could still settle on a qualifying mono/poly decision:
             // either no samples yet, or a non-megamorphic profile that hasn't frozen
             // (a mono site may stay mono or grow into a qualifying 2–3-callee poly
-            // site; a poly site may add a 3rd inlinable callee). Use a `try_borrow`
-            // to stay panic-free; a contended borrow conservatively counts as
-            // pending. A Megamorphic site is permanently disqualified.
-            match func.profile.try_borrow() {
-                Ok(profile) => match profile.as_ref().and_then(|p| p.call_sites.get(&i)) {
-                    None => true,
-                    Some(feedback) => feedback.state() != MonoState::Megamorphic,
-                },
-                Err(_) => true,
-            }
+            // site; a poly site may add a 3rd inlinable callee). A missing
+            // profile is conservatively pending; a megamorphic site is stable.
+            profile
+                .and_then(|profile| profile.call_sites.get(&i))
+                .is_none_or(|feedback| feedback.state() != MonoState::Megamorphic)
         }
         _ => false,
     })

@@ -2,21 +2,23 @@
   "schema": "rsscript.migration_queue.v1",
   "tasks": [
     {
-      "id": "V05.2",
+      "id": "V05.3",
       "priority": 10,
-      "depends_on": ["V05.1"],
+      "depends_on": ["V05.2"],
       "scope": [
         "crates/rsscript-vm/**",
-        "experiments/**",
+        "crates/rsscript-sdk/tests/architecture.rs",
+        "Cargo.toml",
         "docs/architecture/migration-baseline.md"
       ],
       "acceptance": [
-        "Native JIT profile, OSR/deopt, and code-handle state is held by an experiment-owned side table rather than RegFunction or RegUnit.",
-        "Native execution and differential tests retain the existing report and fallback behavior.",
-        "No RegFunction field is named profile, call_count, branch_count, native_status, or osr_state."
+        "A default `rsscript-vm` build has no native JIT runtime state in `RegFunction`, `RegUnit`, or evaluator layout.",
+        "The Core dependency closure does not enable or require the experimental `vm-jit` crate.",
+        "Architecture tests reject reintroducing native JIT fields into verified program objects or the default evaluator."
       ],
       "verification": [
-        "cargo test -p rsscript-vm --features native-jit --offline",
+        "cargo test -p rsscript-vm --no-default-features --offline",
+        "cargo tree -p rsscript-vm --no-default-features --offline",
         "cargo test -p rsscript-sdk --test architecture --features compatibility --offline"
       ]
     }

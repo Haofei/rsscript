@@ -971,7 +971,7 @@ impl RegVm {
     #[cfg(feature = "native-jit")]
     #[inline(always)]
     pub(super) fn record_native_branch_feedback(
-        &self,
+        &mut self,
         func: &RegFunction,
         instr: &RegInstr,
         base: usize,
@@ -983,7 +983,7 @@ impl RegVm {
         match instr {
             RegInstr::JumpIfBool { cond, expected, .. } => {
                 let taken = expect_bool_ref(self.reg(base + *cond))? == *expected;
-                record_branch_site(func, instr_ip, taken);
+                self.jit_state.record_branch_site(func, instr_ip, taken);
             }
             RegInstr::JumpIfIntCompare {
                 lhs,
@@ -995,7 +995,7 @@ impl RegVm {
                 let taken =
                     eval_numeric_compare(*op, self.reg(base + *lhs), self.reg(base + *rhs))?
                         == *expected;
-                record_branch_site(func, instr_ip, taken);
+                self.jit_state.record_branch_site(func, instr_ip, taken);
             }
             _ => {}
         }
@@ -1349,7 +1349,7 @@ impl RegVm {
                     })
                 // Inline negative check: skip the `try_native` call entirely for
                 // functions already known not native-eligible (just a `Cell` read).
-                && func.native_status.get() != NATIVE_STATUS_NOT_ELIGIBLE
+                && self.jit_state.native_status(&func) != NATIVE_STATUS_NOT_ELIGIBLE
             {
                 match self.try_native(&func, base) {
                     NativeAttempt::Completed(value) => {
@@ -1450,7 +1450,7 @@ impl RegVm {
                     .find(|candidate| candidate.header_ip == ip)
                 {
                     let region_key = RegionKey {
-                        function: Rc::as_ptr(&func) as usize,
+                        function: self.jit_state.function_ordinal(&func),
                         header: ip,
                     };
                     let trigger = self
@@ -1486,7 +1486,7 @@ impl RegVm {
                         if fire {
                             let prev_probe_cc = match trigger {
                                 Some(OsrTrigger::Counting { probe_cc, .. }) => probe_cc,
-                                _ => func.call_count.get(),
+                                _ => self.jit_state.call_count(&func),
                             };
                             self.frames.last_mut().expect("active frame").ip = ip;
                             if self.try_osr(&func, base, ip) {
@@ -1517,7 +1517,7 @@ impl RegVm {
                             // EAGER mode keeps firing every header hit (the cached `None`
                             // makes a stable retry cheap; a pending profile is re-probed).
                             if !osr_eager {
-                                let cc = func.call_count.get();
+                                let cc = self.jit_state.call_count(&func);
                                 if dynamic_osr_bail {
                                     if let Some(native) = self.native.as_mut() {
                                         native.osr_triggers.insert(
@@ -1529,7 +1529,12 @@ impl RegVm {
                                         );
                                     }
                                 } else if cc > prev_probe_cc
-                                    && native_translation_pending_on_profile(&self.unit, &func)
+                                    && native_translation_pending_on_profile(
+                                        &self.unit,
+                                        &func,
+                                        self.jit_state.profile(&func),
+                                        self.jit_state.call_count(&func),
+                                    )
                                 {
                                     if let Some(native) = self.native.as_mut() {
                                         native.osr_triggers.insert(
@@ -1693,7 +1698,8 @@ impl RegVm {
                             // unchanged — we only observe it. `ip` was already
                             // advanced past this instruction, so its index is
                             // `ip - 1`.
-                            record_call_site(&func, ip - 1, callee_id as u64, true);
+                            self.jit_state
+                                .record_call_site(&func, ip - 1, callee_id as u64, true);
                             let callee = Rc::clone(&unit.functions[callee_id]);
                             self.prepare_frame(next_base, callee.regs)?;
                             for (index, reg) in args.iter().enumerate() {
@@ -1867,7 +1873,7 @@ impl RegVm {
                             // does not change which closure runs; `ip` already
                             // points past this instruction, so its index is
                             // `ip - 1`.
-                            record_call_site(
+                            self.jit_state.record_call_site(
                                 &func,
                                 ip - 1,
                                 closure.function as u64,

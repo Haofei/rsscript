@@ -49,11 +49,6 @@ impl WireUnit {
                 regs: function.regs,
                 local_regs: function.local_regs.into_iter().collect(),
                 code: function.code,
-                native_status: std::cell::Cell::new(0),
-                call_count: std::cell::Cell::new(0),
-                branch_count: std::cell::Cell::new(0),
-                profile: std::cell::RefCell::new(None),
-                osr_state: std::cell::Cell::new(OsrTrigger::Unknown),
             })
             .collect::<Vec<_>>();
         RegUnit {

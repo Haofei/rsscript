@@ -1,14 +1,14 @@
 use super::super::*;
 /// Call count at which a function becomes "warm" and starts collecting a
-/// [`FunctionProfile`] (J1). Below this threshold a function allocates and
-/// records nothing — cold code pays only a single saturating `Cell<u32>`
-/// increment at frame entry. Tuned high enough that one-shot/setup functions
+/// [`FunctionProfile`] (J1). Below this threshold an evaluation allocates and
+/// records nothing — cold code pays only a single saturating counter increment
+/// in its `JitState`. Tuned high enough that one-shot/setup functions
 /// never profile, low enough that a genuinely hot dispatcher is observed within
 /// the first handful of native-tier warm-ups.
 pub(crate) const PROFILE_WARMUP: u32 = 50;
 
 /// Per-function dynamic-call count at which J1 stops sampling: once a function's
-/// `call_count` reaches this, [`record_call_site`] freezes (a single `Cell`
+/// `call_count` reaches this, `JitState::record_call_site` freezes (a single
 /// read + compare, then return) so a dynamic call driven by a hot loop has an
 /// essentially-free steady state. The window `PROFILE_WARMUP..PROFILE_RECORD_LIMIT`
 /// is more than enough samples to settle every site's mono/poly/mega state.
@@ -230,7 +230,7 @@ pub(crate) struct FunctionProfile {
 impl FunctionProfile {
     /// Record `callee_key` at the dynamic call site whose instruction index is
     /// `instr_idx`. Observation only — never affects dispatch or values.
-    fn record_call(&mut self, instr_idx: usize, callee_key: u64, captures_scalar: bool) {
+    pub(crate) fn record_call(&mut self, instr_idx: usize, callee_key: u64, captures_scalar: bool) {
         self.call_sites
             .entry(instr_idx)
             .or_default()
@@ -238,7 +238,7 @@ impl FunctionProfile {
     }
 
     #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
-    fn record_branch(&mut self, instr_idx: usize, taken: bool) {
+    pub(crate) fn record_branch(&mut self, instr_idx: usize, taken: bool) {
         self.branch_sites
             .entry(instr_idx)
             .or_default()
@@ -262,86 +262,6 @@ impl FunctionProfile {
         self.branch_sites
             .iter()
             .map(|(instr_idx, feedback)| (*instr_idx, feedback))
-    }
-}
-
-/// Warm-gated, bounded J1 type-feedback recording. Called ONLY from the
-/// `CallDynamic`/`CallClosure` interpreter handlers (the sole sites resolving a
-/// dynamic callee); nothing is added to `try_exec_pure`, the frame-entry path,
-/// or any branch/loop body, so the hot dispatch path is untouched.
-///
-/// Cost by phase, all driven off one `Cell<u32>` (`func.call_count`):
-/// - **cold** (`count < PROFILE_WARMUP`): a single saturating `Cell` bump, no
-///   allocation, no `RefCell` touch. A site executed only a few times (e.g. a
-///   `main` that calls a closure once) never profiles.
-/// - **warm-up crossing** (`count == PROFILE_WARMUP`): allocate the
-///   `FunctionProfile` once.
-/// - **sampling** (`PROFILE_WARMUP <= count < PROFILE_RECORD_LIMIT`): record the
-///   resolved `callee_key`.
-/// - **frozen** (`count >= PROFILE_RECORD_LIMIT`): a single `Cell` read +
-///   compare, then return. A site driven by a hot loop (the dynamic call IS the
-///   loop body) reaches this after a fixed sample budget, so its steady state
-///   costs essentially nothing — this is why it does not regress the interpreter.
-///
-/// `PROFILE_RECORD_LIMIT` samples are far more than enough to settle the
-/// mono/poly/mega classification J2 needs. Observation only: feeds J2 compile
-/// decisions, never a computed value and never control flow (determinism).
-pub(crate) fn record_call_site(
-    func: &RegFunction,
-    instr_idx: usize,
-    callee_key: u64,
-    captures_scalar: bool,
-) {
-    let count = func.call_count.get();
-    if count >= PROFILE_RECORD_LIMIT {
-        // Frozen: enough samples collected. Cheapest possible steady state.
-        return;
-    }
-    func.call_count.set(count.saturating_add(1));
-    if count < PROFILE_WARMUP {
-        // Still cold (one bump above is the whole cost).
-        if count + 1 == PROFILE_WARMUP {
-            // Allocate the profile exactly once, on the warm-up crossing.
-            if let Ok(mut slot) = func.profile.try_borrow_mut() {
-                if slot.is_none() {
-                    *slot = Some(Box::new(FunctionProfile::default()));
-                }
-            }
-        }
-        return;
-    }
-    // Warm and within the sample budget: record this observation.
-    if let Ok(mut slot) = func.profile.try_borrow_mut() {
-        if let Some(profile) = slot.as_mut() {
-            profile.record_call(instr_idx, callee_key, captures_scalar);
-        }
-    }
-}
-
-/// Warm-gated, bounded branch-feedback recording. This is deliberately separate
-/// from [`record_call_site`]: branch profiling must not advance the dynamic-call
-/// counter used by profile-guided closure inlining and OSR re-probe logic.
-#[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
-pub(crate) fn record_branch_site(func: &RegFunction, instr_idx: usize, taken: bool) {
-    let count = func.branch_count.get();
-    if count >= PROFILE_RECORD_LIMIT {
-        return;
-    }
-    func.branch_count.set(count.saturating_add(1));
-    if count < PROFILE_WARMUP {
-        if count + 1 == PROFILE_WARMUP {
-            if let Ok(mut slot) = func.profile.try_borrow_mut() {
-                if slot.is_none() {
-                    *slot = Some(Box::new(FunctionProfile::default()));
-                }
-            }
-        }
-        return;
-    }
-    if let Ok(mut slot) = func.profile.try_borrow_mut() {
-        if let Some(profile) = slot.as_mut() {
-            profile.record_branch(instr_idx, taken);
-        }
     }
 }
 

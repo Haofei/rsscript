@@ -28,6 +28,13 @@ pub(super) struct JitFunctionKey {
 struct JitFunctionState {
     tier0_analysis: Option<(bool, bool)>,
     self_recursion_kind: Option<SelfRecursionKind>,
+    /// All mutable native-tier feedback belongs to the evaluation, never to the
+    /// decoded verified function object.
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    native_status: u8,
+    call_count: u32,
+    branch_count: u32,
+    profile: Option<Box<FunctionProfile>>,
 }
 
 /// Side table for one evaluation of a verified program.
@@ -53,7 +60,9 @@ impl JitState {
         for ((ordinal, function), eligible) in unit.functions.iter().enumerate().zip(eligibility) {
             let key = JitFunctionKey {
                 program: program.clone(),
-                ordinal: ordinal.try_into().expect("verified function count fits u32"),
+                ordinal: ordinal
+                    .try_into()
+                    .expect("verified function count fits u32"),
             };
             keys_by_function_pointer.insert(Rc::as_ptr(function) as usize, key.clone());
             functions.insert(
@@ -81,6 +90,28 @@ impl JitState {
             .expect("every JIT function pointer has a stable function state")
     }
 
+    fn state_mut(&mut self, function: &RegFunction) -> &mut JitFunctionState {
+        let pointer = function as *const RegFunction as usize;
+        let key = self
+            .keys_by_function_pointer
+            .get(&pointer)
+            .expect("JIT state must be constructed from the decoded verified unit")
+            .clone();
+        self.functions
+            .get_mut(&key)
+            .expect("every JIT function pointer has a stable function state")
+    }
+
+    /// Stable, evaluation-local function identity for native side tables.
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    pub(crate) fn function_ordinal(&self, function: &RegFunction) -> usize {
+        let pointer = function as *const RegFunction as usize;
+        self.keys_by_function_pointer
+            .get(&pointer)
+            .expect("JIT state must be constructed from the decoded verified unit")
+            .ordinal as usize
+    }
+
     pub(crate) fn tier0_analysis(&self, function: &RegFunction) -> (bool, bool) {
         self.state(function).tier0_analysis.unwrap_or_else(|| {
             (
@@ -90,10 +121,7 @@ impl JitState {
         })
     }
 
-    pub(crate) fn self_recursion_kind(
-        &self,
-        function: &RegFunction,
-    ) -> Option<SelfRecursionKind> {
+    pub(crate) fn self_recursion_kind(&self, function: &RegFunction) -> Option<SelfRecursionKind> {
         self.state(function).self_recursion_kind
     }
 
@@ -111,6 +139,83 @@ impl JitState {
             .get_mut(key)
             .expect("every JIT function pointer has a stable function state")
             .self_recursion_kind = Some(kind);
+    }
+
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    pub(crate) fn native_status(&self, function: &RegFunction) -> u8 {
+        self.state(function).native_status
+    }
+
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    pub(crate) fn set_native_status(&mut self, function: &RegFunction, status: u8) {
+        self.state_mut(function).native_status = status;
+    }
+
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    pub(crate) fn call_count(&self, function: &RegFunction) -> u32 {
+        self.state(function).call_count
+    }
+
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    pub(crate) fn branch_count(&self, function: &RegFunction) -> u32 {
+        self.state(function).branch_count
+    }
+
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    pub(crate) fn profile(&self, function: &RegFunction) -> Option<&FunctionProfile> {
+        self.state(function).profile.as_deref()
+    }
+
+    /// Warm-gated, bounded dynamic-call feedback. It observes dispatch only and
+    /// never changes an interpreted value or branch decision.
+    pub(crate) fn record_call_site(
+        &mut self,
+        function: &RegFunction,
+        instr_idx: usize,
+        callee_key: u64,
+        captures_scalar: bool,
+    ) {
+        let state = self.state_mut(function);
+        if state.call_count >= PROFILE_RECORD_LIMIT {
+            return;
+        }
+        state.call_count = state.call_count.saturating_add(1);
+        if state.call_count <= PROFILE_WARMUP {
+            if state.call_count == PROFILE_WARMUP {
+                state
+                    .profile
+                    .get_or_insert_with(|| Box::new(FunctionProfile::default()));
+            }
+            return;
+        }
+        if let Some(profile) = state.profile.as_deref_mut() {
+            profile.record_call(instr_idx, callee_key, captures_scalar);
+        }
+    }
+
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    pub(crate) fn record_branch_site(
+        &mut self,
+        function: &RegFunction,
+        instr_idx: usize,
+        taken: bool,
+    ) {
+        let state = self.state_mut(function);
+        if state.branch_count >= PROFILE_RECORD_LIMIT {
+            return;
+        }
+        state.branch_count = state.branch_count.saturating_add(1);
+        if state.branch_count <= PROFILE_WARMUP {
+            if state.branch_count == PROFILE_WARMUP {
+                state
+                    .profile
+                    .get_or_insert_with(|| Box::new(FunctionProfile::default()));
+            }
+            return;
+        }
+        if let Some(profile) = state.profile.as_deref_mut() {
+            profile.record_branch(instr_idx, taken);
+        }
     }
 }
 
@@ -140,5 +245,27 @@ mod tests {
         assert_eq!(first_key.ordinal, 0);
         assert_eq!(second_key.ordinal, 0);
         assert_ne!(first_key.program, second_key.program);
+    }
+
+    #[test]
+    fn profile_feedback_is_isolated_per_evaluation() {
+        let unit = unit();
+        let function = &unit.functions[0];
+        let mut first = JitState::for_verified_program("sha256:first", &unit);
+        let second = JitState::for_verified_program("sha256:second", &unit);
+
+        for _ in 0..=PROFILE_WARMUP {
+            first.record_call_site(function, 7, 42, true);
+        }
+
+        assert_eq!(first.call_count(function), PROFILE_WARMUP + 1);
+        assert!(
+            first
+                .profile(function)
+                .and_then(|profile| profile.call_sites.get(&7))
+                .is_some()
+        );
+        assert_eq!(second.call_count(function), 0);
+        assert!(second.profile(function).is_none());
     }
 }

@@ -15,7 +15,7 @@ impl RegVm {
 
     #[cfg(feature = "native-jit")]
     fn native_compiled_id_for_func(&self, func: &RegFunction) -> Option<vm_jit::CompiledId> {
-        let key = func as *const RegFunction as usize;
+        let key = self.jit_state.function_ordinal(func);
         self.native
             .as_ref()
             .and_then(|native| {
