@@ -770,7 +770,10 @@ an arbitrary shell executor.
     checks now belong to `rsscript-project`; compiler dependency and native
     compatibility resolvers consume that boundary rather than joining or
     probing dependency directories themselves. The remaining S05.1 work is
-    migration of legacy review/native graph semantics from compiler.
+    migration of legacy review/native graph semantics from compiler. The
+    compiler dependency graph now also consumes a bounded, deduplicated
+    `ProjectManifestGraph` of already-captured manifest bytes; it keeps only
+    package-semantic parsing and feature selection.
     Manifest dependency discovery now parses the loader-owned
     `WorkspaceManifestV1` projection and admits only explicit local path
     dependencies into capture; version, git, and registry declarations cannot

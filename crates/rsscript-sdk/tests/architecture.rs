@@ -1521,6 +1521,14 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
             "compiler package compatibility must not probe dependency manifests directly"
         );
     }
+    assert!(
+        dependency.contains("capture_project_manifest_graph"),
+        "compiler dependency semantics must consume project-captured manifest bytes"
+    );
+    assert!(
+        !dependency.contains("load_package_manifest_with_source"),
+        "compiler dependency discovery must not reopen manifests after project capture"
+    );
     let package_module = read(&root.join("crates/rsscript-compiler/src/package.rs"));
     assert!(
         package_module.contains("collect_project_regular_files as collect_bounded_regular_files")

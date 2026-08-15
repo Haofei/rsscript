@@ -1,13 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use rsscript_project::resolve_project_path_dependency;
+use rsscript_project::{
+    ProjectManifestGraphLimits, capture_project_manifest_graph, resolve_project_path_dependency,
+};
 
 use crate::diagnostic::{Diagnostic, code};
 
 use super::source_set::{
-    Manifest, ManifestReviewFeaturePolicy, PackageSource, load_package_manifest,
-    load_package_manifest_with_source, load_package_with_features, resolve_package_features,
+    Manifest, ManifestReviewFeaturePolicy, PackageSource, load_package_with_features,
+    parse_package_manifest_source, resolve_package_features,
 };
 use super::{PackageReviewFileKind, canonical_path_label, toml_value_label};
 
@@ -55,8 +57,27 @@ pub(super) fn resolve_dependency_graph(
     package_dir: &Path,
     scope: DependencyResolutionScope,
 ) -> Result<ResolvedDependencyGraph, String> {
-    let root = canonical_path_label(package_dir);
-    let root_manifest = load_package_manifest(package_dir)?;
+    let captured =
+        capture_project_manifest_graph(package_dir, ProjectManifestGraphLimits::default())?;
+    // Keep the caller's root spelling for legacy package/lock identity. The
+    // project graph has already canonicalized it for capture safety and the
+    // source map below uses that canonical label for lookup.
+    let root_path = package_dir.to_path_buf();
+    let root = canonical_path_label(&root_path);
+    let manifest_sources = captured
+        .packages()
+        .iter()
+        .map(|package| {
+            (
+                canonical_path_label(package.root()),
+                package.manifest_source().to_string(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let root_source = manifest_sources
+        .get(&root)
+        .ok_or_else(|| format!("captured project manifest graph omitted root {root}"))?;
+    let root_manifest = parse_package_manifest_source(&root_path, root_source)?;
     let root_features = super::source_set::selected_root_package_features(&root_manifest);
     let mut graph = ResolvedDependencyGraph {
         root: root.clone(),
@@ -65,10 +86,11 @@ pub(super) fn resolve_dependency_graph(
     let mut expanded = BTreeSet::new();
     let mut stack = Vec::new();
     resolve_dependency_node(
-        package_dir,
+        &root_path,
         &root_features,
         true,
         scope,
+        &manifest_sources,
         &mut graph,
         &mut expanded,
         &mut stack,
@@ -81,6 +103,7 @@ fn resolve_dependency_node(
     requested_features: &[String],
     is_root: bool,
     scope: DependencyResolutionScope,
+    manifest_sources: &BTreeMap<String, String>,
     graph: &mut ResolvedDependencyGraph,
     expanded: &mut BTreeSet<String>,
     stack: &mut Vec<String>,
@@ -96,12 +119,18 @@ fn resolve_dependency_node(
     }
 
     if !graph.nodes.contains_key(&canonical) {
-        let (manifest_source, manifest) = load_package_manifest_with_source(package_dir)?;
+        let manifest_source = manifest_sources.get(&canonical).ok_or_else(|| {
+            format!(
+                "project manifest graph omitted resolved dependency root {}",
+                package_dir.display()
+            )
+        })?;
+        let manifest = parse_package_manifest_source(package_dir, manifest_source)?;
         graph.nodes.insert(
             canonical.clone(),
             ResolvedDependencyNode {
                 package_dir: package_dir.to_path_buf(),
-                manifest_source,
+                manifest_source: manifest_source.clone(),
                 manifest,
                 features: Vec::new(),
                 dependencies: Vec::new(),
@@ -146,14 +175,13 @@ fn resolve_dependency_node(
     for (spec, kind) in declared {
         let target = match &spec.path {
             Some(path) => {
-                if let Some(dependency_dir) =
-                    resolve_project_path_dependency(package_dir, path)?
-                {
+                if let Some(dependency_dir) = resolve_project_path_dependency(package_dir, path)? {
                     Some(resolve_dependency_node(
                         &dependency_dir,
                         &spec.features,
                         false,
                         scope,
+                        manifest_sources,
                         graph,
                         expanded,
                         stack,

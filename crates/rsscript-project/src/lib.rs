@@ -18,8 +18,8 @@ use std::path::{Component, Path, PathBuf};
 use rsscript_operation::OperationContext;
 use rsscript_semantics::FrontendInputSnapshot;
 use rsscript_workspace_loader::{
-    WorkspaceFileKind, WorkspaceLoadError, WorkspaceLoadErrorCode, WorkspaceLoader,
-    WorkspaceSnapshot,
+    WorkspaceDependencySection, WorkspaceFileKind, WorkspaceLoadError, WorkspaceLoadErrorCode,
+    WorkspaceLoader, WorkspaceManifestV1, WorkspaceSnapshot,
 };
 use sha2::{Digest, Sha256};
 
@@ -30,6 +30,8 @@ const PROJECT_CAPTURE_MAX_FILES: usize = 20_000;
 const PROJECT_CAPTURE_MAX_ENTRIES: usize = 40_000;
 const PROJECT_CAPTURE_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const PROJECT_CAPTURE_MAX_DEPTH: usize = 64;
+const PROJECT_MANIFEST_GRAPH_MAX_PACKAGES: usize = 4_096;
+const PROJECT_MANIFEST_GRAPH_MAX_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Private, bounded filesystem capture of a package graph.
 ///
@@ -64,6 +66,101 @@ pub struct CapturedPackageGraph {
 pub struct ProjectManifestSnapshot {
     root: PathBuf,
     source: String,
+}
+
+/// One project-owned local dependency declaration captured from a manifest.
+///
+/// This is intentionally a filesystem discovery fact, not a package-policy
+/// or feature-resolution model. Compiler compatibility code may interpret the
+/// raw manifest bytes, while project capture owns which local roots exist.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ProjectPathDependency {
+    name: String,
+    section: WorkspaceDependencySection,
+    declared_path: String,
+}
+
+impl ProjectPathDependency {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn section(&self) -> WorkspaceDependencySection {
+        self.section
+    }
+
+    pub fn declared_path(&self) -> &str {
+        &self.declared_path
+    }
+}
+
+/// One immutable manifest node in a captured local dependency graph.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectManifestGraphPackage {
+    root: PathBuf,
+    manifest_source: String,
+    path_dependencies: Vec<ProjectPathDependency>,
+}
+
+impl ProjectManifestGraphPackage {
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn manifest_source(&self) -> &str {
+        &self.manifest_source
+    }
+
+    pub fn path_dependencies(&self) -> &[ProjectPathDependency] {
+        &self.path_dependencies
+    }
+}
+
+/// Bounded input limits for [`capture_project_manifest_graph`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectManifestGraphLimits {
+    pub max_packages: usize,
+    pub max_manifest_bytes: u64,
+    pub max_total_manifest_bytes: u64,
+}
+
+impl Default for ProjectManifestGraphLimits {
+    fn default() -> Self {
+        Self {
+            max_packages: PROJECT_MANIFEST_GRAPH_MAX_PACKAGES,
+            max_manifest_bytes: MANIFEST_CAPTURE_MAX_BYTES,
+            max_total_manifest_bytes: PROJECT_MANIFEST_GRAPH_MAX_BYTES,
+        }
+    }
+}
+
+const MANIFEST_CAPTURE_MAX_BYTES: u64 = 1024 * 1024;
+
+/// Immutable raw-manifest capture for every available local path dependency.
+///
+/// The graph is rooted at a canonical package directory, sorted by canonical
+/// root, deduplicated across aliases, and bounded before compiler package
+/// semantics consume it. Registry, git, and version-only declarations remain
+/// absent by construction: they cannot make this loader read a host path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectManifestGraph {
+    root: PathBuf,
+    packages: Vec<ProjectManifestGraphPackage>,
+}
+
+impl ProjectManifestGraph {
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn packages(&self) -> &[ProjectManifestGraphPackage] {
+        &self.packages
+    }
+
+    pub fn package(&self, root: &Path) -> Option<&ProjectManifestGraphPackage> {
+        let root = root.canonicalize().ok()?;
+        self.packages.iter().find(|package| package.root == root)
+    }
 }
 
 impl ProjectManifestSnapshot {
@@ -127,6 +224,94 @@ pub fn resolve_project_path_dependency(
             manifest.display()
         )),
     }
+}
+
+/// Capture typed local dependency discovery and the raw manifests it selected.
+///
+/// Package syntax, feature resolution, review/risk, and native metadata are
+/// intentionally not interpreted here. This boundary supplies the immutable
+/// manifest graph that those compatibility consumers will progressively adopt.
+pub fn capture_project_manifest_graph(
+    package_dir: &Path,
+    limits: ProjectManifestGraphLimits,
+) -> Result<ProjectManifestGraph, String> {
+    if limits.max_packages == 0 {
+        return Err("project manifest graph requires a non-zero package limit".to_string());
+    }
+    let root_snapshot = capture_project_manifest(package_dir, limits.max_manifest_bytes)?;
+    let root = root_snapshot.root().to_path_buf();
+    let mut pending = vec![root.clone()];
+    let mut packages = BTreeMap::<PathBuf, ProjectManifestGraphPackage>::new();
+    let mut total_bytes = 0_u64;
+
+    while let Some(candidate) = pending.pop() {
+        let snapshot = capture_project_manifest(&candidate, limits.max_manifest_bytes)?;
+        let canonical_root = snapshot.root().to_path_buf();
+        if packages.contains_key(&canonical_root) {
+            continue;
+        }
+        if packages.len() >= limits.max_packages {
+            return Err(format!(
+                "project manifest graph exceeded package limit of {} at {}",
+                limits.max_packages,
+                canonical_root.display()
+            ));
+        }
+        let source_bytes = u64::try_from(snapshot.source().len()).map_err(|_| {
+            format!(
+                "project manifest graph manifest length overflow at {}",
+                canonical_root.display()
+            )
+        })?;
+        total_bytes = total_bytes.checked_add(source_bytes).ok_or_else(|| {
+            format!(
+                "project manifest graph byte accounting overflow at {}",
+                canonical_root.display()
+            )
+        })?;
+        if total_bytes > limits.max_total_manifest_bytes {
+            return Err(format!(
+                "project manifest graph exceeded total manifest byte limit of {} at {}",
+                limits.max_total_manifest_bytes,
+                canonical_root.display()
+            ));
+        }
+        let manifest = WorkspaceManifestV1::parse(snapshot.source()).map_err(|error| {
+            format!(
+                "failed to parse project manifest {}: {error}",
+                canonical_root.join("rsspkg.toml").display()
+            )
+        })?;
+        let path_dependencies = manifest
+            .path_dependencies()
+            .iter()
+            .map(|dependency| ProjectPathDependency {
+                name: dependency.name().to_string(),
+                section: dependency.section(),
+                declared_path: dependency.path().to_string(),
+            })
+            .collect::<Vec<_>>();
+        for dependency in path_dependencies.iter().rev() {
+            if let Some(root) =
+                resolve_project_path_dependency(&canonical_root, dependency.declared_path())?
+            {
+                pending.push(root);
+            }
+        }
+        packages.insert(
+            canonical_root.clone(),
+            ProjectManifestGraphPackage {
+                root: canonical_root,
+                manifest_source: snapshot.source().to_string(),
+                path_dependencies,
+            },
+        );
+    }
+
+    Ok(ProjectManifestGraph {
+        root,
+        packages: packages.into_values().collect(),
+    })
 }
 
 /// Capture one bounded, project-relative UTF-8 file without following links.
@@ -2085,6 +2270,65 @@ mod tests {
                 .expect("missing dependency is an unresolved package"),
             None
         );
+    }
+
+    #[test]
+    fn manifest_graph_captures_local_dependencies_once_and_ignores_remote_forms() {
+        let directory = tempfile::tempdir().expect("workspace");
+        let root = directory.path().join("root");
+        let dependency = directory.path().join("dependency");
+        std::fs::create_dir_all(&root).expect("root");
+        std::fs::create_dir_all(&dependency).expect("dependency");
+        std::fs::write(
+            root.join("rsspkg.toml"),
+            "[package]\nname = \"root\"\n\n[dependencies]\nlocal = { path = \"../dependency\" }\nregistry = \"1.0\"\nremote = { git = \"https://example.invalid/repo\" }\n",
+        )
+        .expect("root manifest");
+        std::fs::write(
+            dependency.join("rsspkg.toml"),
+            "[package]\nname = \"dependency\"\n\n[dependencies]\nroot = { path = \"../root\" }\n",
+        )
+        .expect("dependency manifest");
+
+        let graph = capture_project_manifest_graph(
+            &root,
+            ProjectManifestGraphLimits {
+                max_packages: 2,
+                max_manifest_bytes: 1024,
+                max_total_manifest_bytes: 2048,
+            },
+        )
+        .expect("bounded manifest graph");
+        assert_eq!(graph.root(), root.canonicalize().as_deref().expect("root"));
+        assert_eq!(graph.packages().len(), 2);
+        let root_package = graph.package(&root).expect("root package");
+        assert_eq!(root_package.path_dependencies().len(), 1);
+        assert_eq!(root_package.path_dependencies()[0].name(), "local");
+        assert_eq!(
+            root_package.path_dependencies()[0].section(),
+            WorkspaceDependencySection::Dependencies
+        );
+        assert!(graph.package(&dependency).is_some());
+    }
+
+    #[test]
+    fn manifest_graph_enforces_total_manifest_budget() {
+        let directory = tempfile::tempdir().expect("workspace");
+        std::fs::write(
+            directory.path().join("rsspkg.toml"),
+            "[package]\nname = \"root\"\n",
+        )
+        .expect("manifest");
+        let error = capture_project_manifest_graph(
+            directory.path(),
+            ProjectManifestGraphLimits {
+                max_packages: 1,
+                max_manifest_bytes: 1024,
+                max_total_manifest_bytes: 1,
+            },
+        )
+        .expect_err("aggregate manifest budget must be enforced");
+        assert!(error.contains("total manifest byte limit"), "{error}");
     }
 
     #[test]
