@@ -1861,9 +1861,12 @@ an arbitrary shell executor.
     - [x] **B04.3a — Exercise declared language ranges and container rejection.**
       The bytecode suite verifies an explicit N-1 compatibility range and
       rejects an unknown container major before decoding sections.
-  - [ ] **B05 — Preserve a versioned compatibility corpus.** Keep read-only v1
-  fixtures, malformed v1/v2 inputs, N-1 schema fixtures, deterministic
-  cross-platform bytes, and explicit unknown-version/section fail-closed tests.
+  - [x] **B05 — Preserve a versioned compatibility corpus.** Checked-in v1
+  execution Bundles and verifier-only v2 Artifacts remain readable without
+  recompiling source. Their malformed v1/v2 corpora cover version, every
+  required container section, typed opcode/table, and configured size limits;
+  deterministic cross-platform bytes and explicit unknown-version/section
+  fail-closed tests remain part of the Core gate.
   - [x] **B05.1 — Check in read-only v1 bundles and expected reports.** Retain
     loaders after v2 becomes the writer. The compatibility suite loads static
     success and step-budget-exhausted v1 Bundles through the public reader and
@@ -1879,8 +1882,11 @@ an arbitrary shell executor.
       proves a malformed container is rejected before its code section can be
       admitted. This is a tooling-reader fixture only: v1 remains the deployed
       compiler/VM schema.
-  - [ ] **B05.2 — Add malformed and compatibility fixture suites.** Cover every
-    section, table, opcode, version, and size boundary.
+  - [x] **B05.2 — Add malformed and compatibility fixture suites.** The static
+  v1/v2 corpus covers every required container section, table/operand class,
+  opcode schema, version, and size boundary. Schema-generated v2 tests cover
+  every numeric opcode layout while checked-in mutations exercise the
+  untrusted-reader boundary without rebuilding source.
     - [x] **B05.2a — Preserve a static malformed v1 boundary case.** A
       checked-in trailing-byte mutation is applied to the read-only reference
       bundle and must be rejected at the bundle boundary before verification or
