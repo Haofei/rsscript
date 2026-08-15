@@ -31,11 +31,13 @@ use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 
-use base64::Engine;
 use chrono::{DateTime, Datelike, NaiveDate, SecondsFormat, TimeZone, Timelike, Utc};
 use flate2::read::GzDecoder;
 use hmac::{Hmac, Mac};
-use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
+use rsscript_corelib::encoding::{
+    base64_decode, base64_encode, hex_decode as core_hex_decode, hex_encode as core_hex_encode,
+    url_decode_component, url_encode_component,
+};
 use sha2::{Digest, Sha256};
 use sha3::{
     Sha3_224, Sha3_256, Shake128,
@@ -109,12 +111,6 @@ pub fn with_native_cost_model_disabled<R>(f: impl FnOnce() -> R) -> R {
 }
 
 const MS_PER_DAY: i64 = 86_400_000;
-
-const URL_COMPONENT_SET: &percent_encoding::AsciiSet = &NON_ALPHANUMERIC
-    .remove(b'-')
-    .remove(b'_')
-    .remove(b'.')
-    .remove(b'~');
 
 // ============================================================================
 // Central intrinsic/effect registry (JIT descriptor table)

@@ -12,6 +12,7 @@ core = [
   "rsscript-bytecode",
   "rsscript-codegen-vm",
   "rsscript-compiler",
+  "rsscript-corelib",
   "rsscript-diagnostics",
   "rsscript-interface-catalog",
   "rsscript-language-service",

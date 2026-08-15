@@ -18,17 +18,16 @@ impl RegVm {
             RegIntrinsic::UrlDecodeComponent => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let result = json_result(
-                    percent_decode_str(value)
-                        .decode_utf8()
-                        .map(|value| VmValue::string(value.to_string()))
-                        .map_err(|error| decode_error_value(error.to_string())),
+                    url_decode_component(value)
+                        .map(VmValue::string)
+                        .map_err(decode_error_value),
                 );
                 self.account_fresh_value_storage(&result)?;
                 Ok(result)
             }
             RegIntrinsic::UrlEncodeComponent => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                self.fresh_string(utf8_percent_encode(value, URL_COMPONENT_SET).to_string())
+                self.fresh_string(url_encode_component(value))
             }
             RegIntrinsic::UrlFromString | RegIntrinsic::UrlToString => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;

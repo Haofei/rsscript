@@ -105,17 +105,15 @@ impl RegVm {
             RegIntrinsic::Base64Decode => {
                 let text = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(json_result(
-                    base64::engine::general_purpose::STANDARD
-                        .decode(text)
+                    base64_decode(text)
                         .map(|bytes| VmValue::Bytes(Rc::new(bytes)))
-                        .map_err(|error| decode_error_value(error.to_string())),
+                        .map_err(decode_error_value),
                 ))
             }
             RegIntrinsic::Base64DecodeString => {
                 let text = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let result = base64::engine::general_purpose::STANDARD
-                    .decode(text)
-                    .map_err(|error| decode_error_value(error.to_string()))
+                let result = base64_decode(text)
+                    .map_err(decode_error_value)
                     .and_then(|bytes| {
                         String::from_utf8(bytes)
                             .map(VmValue::string)
@@ -125,15 +123,11 @@ impl RegVm {
             }
             RegIntrinsic::Base64Encode => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::string(
-                    base64::engine::general_purpose::STANDARD.encode(value.as_bytes()),
-                ))
+                Ok(VmValue::string(base64_encode(value.as_bytes())))
             }
             RegIntrinsic::Base64EncodeBytes => {
                 let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::string(
-                    base64::engine::general_purpose::STANDARD.encode(value),
-                ))
+                Ok(VmValue::string(base64_encode(value)))
             }
             RegIntrinsic::BytesConcat
             | RegIntrinsic::BytesConsume

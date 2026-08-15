@@ -1669,6 +1669,15 @@ an arbitrary shell executor.
   - [ ] **V06.2 — Move pure library families incrementally.** Start with encoding
     and collection helpers, then JSON/YAML, regex, compression, hashes, and date
     utilities while preserving differential results.
+    - [x] **V06.2.1 — Extract deterministic encoding algorithms.** Base64, Hex,
+      and URL-component encode/decode implementations now live in
+      `rsscript-corelib`, which has no VM, bytecode, Provider, or host-state
+      dependency. The VM retains only value adaptation, result construction and
+      execution-budget accounting; existing encoding parity coverage stays on
+      the normal verified-bytecode path.
+    - [ ] **V06.2.2 — Extract collection algorithms.** Move non-primitive list,
+      map, set, and deque transformations behind the same pure-library boundary
+      without moving ownership-sensitive mutation primitives out of the VM.
   - [ ] **V06.3 — Reduce VM dependencies to execution primitives.** Verify VM
     Core no longer directly depends on library implementation crates.
 - [ ] **V07 — Classify the intrinsic catalog.** Every entry is exactly one of a

@@ -869,6 +869,50 @@ fn builtin_registry_is_versioned_and_keeps_library_calls_out_of_provider_dispatc
 }
 
 #[test]
+fn encoding_core_library_is_pure_and_the_vm_only_adapts_its_results() {
+    let root = workspace_root();
+    let corelib_manifest = read(&root.join("crates/rsscript-corelib/Cargo.toml"));
+    let corelib = read(&root.join("crates/rsscript-corelib/src/lib.rs"));
+    let vm_manifest = read(&root.join("crates/rsscript-vm/Cargo.toml"));
+    let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));
+    let intrinsics = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/mod.rs"));
+    let hex = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/hex.rs"));
+    let url = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/url.rs"));
+
+    assert!(corelib_manifest.contains("name = \"rsscript-corelib\""));
+    for forbidden in ["rsscript-vm", "rsscript-provider", "rsscript-bytecode"] {
+        assert!(
+            !corelib_manifest.contains(forbidden),
+            "pure core library must not depend on `{forbidden}`"
+        );
+    }
+    for required in [
+        "pub fn base64_decode",
+        "pub fn base64_encode",
+        "pub fn hex_decode",
+        "pub fn hex_encode",
+        "pub fn url_decode_component",
+        "pub fn url_encode_component",
+    ] {
+        assert!(
+            corelib.contains(required),
+            "core library is missing `{required}`"
+        );
+    }
+    assert!(vm_manifest.contains("rsscript-corelib"));
+    for removed in ["base64 =", "hex =", "percent-encoding ="] {
+        assert!(
+            !vm_manifest.contains(removed),
+            "VM manifest must not directly own encoding implementation dependency `{removed}`"
+        );
+    }
+    assert!(vm.contains("rsscript_corelib::encoding"));
+    assert!(intrinsics.contains("base64_decode(text)"));
+    assert!(hex.contains("core_hex_decode(text)"));
+    assert!(url.contains("url_decode_component(value)"));
+}
+
+#[test]
 fn register_vm_execution_policy_is_snapshotted_before_running() {
     let root = workspace_root();
     let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));

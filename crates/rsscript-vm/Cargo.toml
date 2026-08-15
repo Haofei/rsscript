@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 rsscript-abi-model = { path = "../rsscript-abi-model" }
 rsscript-bytecode = { path = "../rsscript-bytecode" }
+rsscript-corelib = { path = "../rsscript-corelib" }
 rsscript-diagnostics = { path = "../rsscript-diagnostics" }
 rsscript-operation = { path = "../rsscript-operation" }
 rsscript-provider-api = { path = "../rsscript-provider-api" }
@@ -19,12 +20,9 @@ serde_yaml_ng = "0.10"
 sha2 = "0.10"
 sha3 = "0.10"
 regex = "1"
-base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 flate2 = "1"
-hex = "0.4"
 hmac = "0.12"
-percent-encoding = "2"
 vm-jit = { path = "../../experiments/vm-jit", optional = true }
 
 [features]

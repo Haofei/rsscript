@@ -1,0 +1,12 @@
+[package]
+name = "rsscript-corelib"
+version = "0.1.0"
+edition = "2024"
+description = "Deterministic pure library algorithms shared by RSScript execution backends"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+base64 = "0.22"
+hex = "0.4"
+percent-encoding = "2"

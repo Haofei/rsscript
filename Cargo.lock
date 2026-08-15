@@ -1865,6 +1865,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsscript-corelib"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "hex",
+ "percent-encoding",
+]
+
+[[package]]
 name = "rsscript-diagnostics"
 version = "0.1.0"
 dependencies = [
@@ -2152,16 +2161,14 @@ version = "0.1.0"
 name = "rsscript-vm"
 version = "0.1.0"
 dependencies = [
- "base64",
  "chrono",
  "flate2",
- "hex",
  "hmac",
- "percent-encoding",
  "regex",
  "rsscript-abi-model",
  "rsscript-build-support",
  "rsscript-bytecode",
+ "rsscript-corelib",
  "rsscript-diagnostics",
  "rsscript-operation",
  "rsscript-provider-api",
