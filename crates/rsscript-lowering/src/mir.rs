@@ -269,19 +269,38 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<VerifiedMir, MirLo
         variants,
         dynamic_protocol_methods,
     };
+    // Synthetic closure bodies are appended after the fixed user/async-wrapper
+    // range. Allocate them from a shared registry so nested closures receive
+    // stable typed function identities before their parents emit MakeClosure.
+    let mut closures = ClosureRegistry::new(
+        (functions.len() + async_external_wrappers.len() + async_builtin_wrappers.len()) as u32,
+    );
     let mut lowered = Vec::with_capacity(functions.len());
     let mut debug = Vec::with_capacity(functions.len());
     for ((index, (name, block, signature)), mir_signature) in
         functions.iter().enumerate().zip(signatures)
     {
+        let parameter_places = signature
+            .params
+            .iter()
+            .enumerate()
+            .map(|(index, parameter)| {
+                (
+                    parameter.name.clone(),
+                    mir_signature.parameter_types()[index],
+                )
+            })
+            .collect();
         let output = CheckedHirLowerer::new(
             FunctionId::new(index as u32),
-            name,
+            *name,
             block,
-            signature,
             mir_signature,
+            parameter_places,
+            Vec::new(),
             targets.clone(),
             &mut types,
+            &mut closures,
         )
         .lower()?;
         lowered.push(output.function);
@@ -294,6 +313,10 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<VerifiedMir, MirLo
     for wrapper in async_builtin_wrappers {
         lowered.push(wrapper.function);
         debug.push(wrapper.debug);
+    }
+    for closure in closures.into_sorted() {
+        lowered.push(closure.function);
+        debug.push(closure.debug);
     }
     let imports = external_imports
         .into_iter()
@@ -941,25 +964,115 @@ fn checked_parameter_modes(signature: &checked::FunctionSig) -> Vec<MirParameter
         .collect()
 }
 
+/// Lower a checked structural function value to the typed callable ABI used by
+/// `MakeClosure` and `CallClosure`. This intentionally unwraps only the
+/// function node itself; each parameter and result still passes through the
+/// same structural wire conversion as ordinary MIR function signatures.
+fn checked_closure_signature(
+    types: &mut TypeTable,
+    ty: &rsscript_semantics::ResolvedType,
+    function_name: &str,
+) -> Result<MirFunctionSignature, MirLoweringError> {
+    let ResolvedTypeKind::Function {
+        parameters,
+        parameter_effects,
+        return_type,
+    } = &ty.kind
+    else {
+        return Err(MirLoweringError::Unsupported {
+            function: function_name.to_owned(),
+            construct: "non-function checked HIR closure contract",
+        });
+    };
+    if parameters.len() != parameter_effects.len() {
+        return Err(MirLoweringError::Unsupported {
+            function: function_name.to_owned(),
+            construct: "malformed checked HIR closure parameter effects",
+        });
+    }
+    let parameter_types = parameters
+        .iter()
+        .map(|parameter| checked_type_to_wire(parameter, function_name).map(|ty| types.intern(ty)))
+        .collect::<Result<Vec<_>, _>>()?;
+    let parameter_modes = parameter_effects
+        .iter()
+        .map(
+            |effect| match effect.unwrap_or(rsscript_semantics::ResolvedParamEffect::Read) {
+                rsscript_semantics::ResolvedParamEffect::Read => MirParameterMode::Read,
+                rsscript_semantics::ResolvedParamEffect::Mut => MirParameterMode::Mut,
+                rsscript_semantics::ResolvedParamEffect::Take => MirParameterMode::Take,
+            },
+        )
+        .collect();
+    let result = return_type
+        .as_deref()
+        .map(|result| checked_type_to_wire(result, function_name))
+        .transpose()?
+        .unwrap_or(WireType::Unit);
+    Ok(MirFunctionSignature::with_modes(
+        parameter_types,
+        parameter_modes,
+        types.intern(result),
+        false,
+    ))
+}
+
 struct LoweredFunction {
     function: MirFunction,
     debug: MirFunctionDebug,
 }
 
+/// Owns synthetic closure functions while a checked-HIR module is lowered.
+/// The ordinary function and async-wrapper ranges are fixed before body
+/// lowering, so this registry is the one allocator for all nested closure
+/// identities. Sorting by the typed ID before module construction keeps the
+/// verifier's index-based function table deterministic.
+struct ClosureRegistry {
+    next_id: u32,
+    functions: Vec<LoweredFunction>,
+}
+
+impl ClosureRegistry {
+    fn new(next_id: u32) -> Self {
+        Self {
+            next_id,
+            functions: Vec::new(),
+        }
+    }
+
+    fn allocate(&mut self) -> FunctionId {
+        let id = FunctionId::new(self.next_id);
+        self.next_id += 1;
+        id
+    }
+
+    fn push(&mut self, function: LoweredFunction) {
+        self.functions.push(function);
+    }
+
+    fn into_sorted(mut self) -> Vec<LoweredFunction> {
+        self.functions
+            .sort_by_key(|function| function.function.id().index());
+        self.functions
+    }
+}
+
 /// Direct checked-HIR lowering for the initial subset. Keeping this
 /// separate from `FunctionLowerer` makes the temporary compatibility boundary
 /// auditable: this implementation never constructs or reads `ExecutableIr`.
-struct CheckedHirLowerer<'source, 'types> {
+struct CheckedHirLowerer<'source, 'types, 'closures> {
     id: FunctionId,
-    function_name: &'source str,
+    function_name: String,
     body: &'source checked::HirBlock,
-    signature: &'source checked::FunctionSig,
     mir_signature: MirFunctionSignature,
+    captures: Vec<rsscript_mir::MirClosureCapture>,
     targets: CallTargets,
     types: &'types mut TypeTable,
+    closures: &'closures mut ClosureRegistry,
     blocks: Vec<BlockDraft>,
     current: BlockId,
     places: HashMap<String, PlaceId>,
+    place_types: HashMap<String, TypeId>,
     place_names: Vec<String>,
     next_value: u32,
     tasks: HashMap<String, TaskId>,
@@ -968,27 +1081,31 @@ struct CheckedHirLowerer<'source, 'types> {
     resource_scopes: Vec<PlaceId>,
 }
 
-impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
+impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
     fn new(
         id: FunctionId,
-        function_name: &'source str,
+        function_name: impl Into<String>,
         body: &'source checked::HirBlock,
-        signature: &'source checked::FunctionSig,
         mir_signature: MirFunctionSignature,
+        initial_places: Vec<(String, TypeId)>,
+        captures: Vec<rsscript_mir::MirClosureCapture>,
         targets: CallTargets,
         types: &'types mut TypeTable,
+        closures: &'closures mut ClosureRegistry,
     ) -> Self {
         let mut lowerer = Self {
             id,
-            function_name,
+            function_name: function_name.into(),
             body,
-            signature,
             mir_signature,
+            captures,
             targets,
             types,
+            closures,
             blocks: vec![BlockDraft::new()],
             current: BlockId::new(0),
             places: HashMap::new(),
+            place_types: HashMap::new(),
             place_names: Vec::new(),
             next_value: 0,
             tasks: HashMap::new(),
@@ -996,8 +1113,8 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             loops: Vec::new(),
             resource_scopes: Vec::new(),
         };
-        for parameter in &lowerer.signature.params {
-            lowerer.place(&parameter.name);
+        for (name, ty) in initial_places {
+            lowerer.place_with_type(&name, ty);
         }
         lowerer
     }
@@ -1025,9 +1142,10 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             })
             .collect();
         Ok(LoweredFunction {
-            function: MirFunction::new(
+            function: MirFunction::with_captures(
                 self.id,
                 self.mir_signature,
+                self.captures,
                 self.place_names.len() as u32,
                 self.next_value,
                 blocks,
@@ -1050,10 +1168,17 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             checked::HirStmt::Let {
                 name,
                 value,
+                ty,
                 is_async: false,
                 ..
             } => {
                 let place = self.place(name);
+                if let Some(ty) = ty {
+                    if let Ok(wire) = checked_type_to_wire(ty, &self.function_name) {
+                        let ty = self.types.intern(wire);
+                        self.place_types.insert(name.clone(), ty);
+                    }
+                }
                 if let Some(value) = value {
                     let value = self.lower_expression(value)?;
                     self.emit(MirInstruction::WritePlace { place, value });
@@ -1308,7 +1433,13 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                 });
                 Ok(destination)
             }
-            checked::HirExpr::Closure { .. } => self.unsupported("checked HIR closure"),
+            checked::HirExpr::Closure {
+                params,
+                captures,
+                ty,
+                body,
+                ..
+            } => self.lower_closure(params, captures, ty.as_ref(), body),
             checked::HirExpr::Field { base, name, .. } => {
                 let base = self.lower_expression(base)?;
                 let destination = self.value();
@@ -1322,6 +1453,81 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             checked::HirExpr::Match { value, arms, .. } => self.lower_match_expression(value, arms),
             checked::HirExpr::Unknown(_) => self.unsupported("unknown checked HIR expression"),
         }
+    }
+
+    /// Lower an owned checked closure into a synthetic MIR function plus an
+    /// explicit verifier-visible environment. The source closure never leaks
+    /// into a backend: its ABI is the structural HIR `Fn` contract and every
+    /// captured local is represented by a typed ownership-mode argument.
+    fn lower_closure(
+        &mut self,
+        params: &[String],
+        captures: &[checked::HirClosureCapture],
+        ty: Option<&rsscript_semantics::ResolvedType>,
+        body: &checked::HirBlock,
+    ) -> Result<ValueId, MirLoweringError> {
+        let ty = ty.ok_or_else(|| MirLoweringError::Unsupported {
+            function: self.function_name.to_owned(),
+            construct: "checked HIR closure without structural Fn contract",
+        })?;
+        let signature = checked_closure_signature(self.types, ty, &self.function_name)?;
+        if signature.parameter_types().len() != params.len() {
+            return self.unsupported("checked HIR closure parameter/contract arity mismatch");
+        }
+
+        let mut initial_places = Vec::with_capacity(captures.len() + params.len());
+        let mut mir_captures = Vec::with_capacity(captures.len());
+        let mut capture_arguments = Vec::with_capacity(captures.len());
+        for capture in captures {
+            let place = self.lookup_place(&capture.name)?;
+            let ty = self.place_type(&capture.name)?;
+            let mode = match capture.effect {
+                checked::ParamEffect::Read => MirParameterMode::Read,
+                checked::ParamEffect::Mut => MirParameterMode::Mut,
+                checked::ParamEffect::Take => MirParameterMode::Take,
+            };
+            initial_places.push((capture.name.clone(), ty));
+            mir_captures.push(rsscript_mir::MirClosureCapture::new(ty, mode));
+            capture_arguments.push(match mode {
+                MirParameterMode::Read => MirCallArgument::BorrowRead(place),
+                MirParameterMode::Mut => MirCallArgument::BorrowMut(place),
+                MirParameterMode::Take => MirCallArgument::Take(place),
+            });
+        }
+        for (name, ty) in params
+            .iter()
+            .cloned()
+            .zip(signature.parameter_types().iter().copied())
+        {
+            if initial_places.iter().any(|(existing, _)| existing == &name) {
+                return self.unsupported("checked HIR closure capture shadows parameter");
+            }
+            initial_places.push((name, ty));
+        }
+
+        let id = self.closures.allocate();
+        let closure_name = format!("{}::<closure:{}>", self.function_name, id.index());
+        let output = CheckedHirLowerer::new(
+            id,
+            closure_name,
+            body,
+            signature,
+            initial_places,
+            mir_captures,
+            self.targets.clone(),
+            self.types,
+            self.closures,
+        )
+        .lower()?;
+        self.closures.push(output);
+
+        let destination = self.value();
+        self.emit(MirInstruction::MakeClosure {
+            destination,
+            function: id,
+            captures: capture_arguments,
+        });
+        Ok(destination)
     }
 
     /// Lower boolean `&&`/`||` as explicit CFG rather than a binary opcode.
@@ -1519,7 +1725,7 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         let wire_type = signature
             .return_ty
             .as_ref()
-            .map(|ty| checked_type_to_wire(ty, self.function_name))
+            .map(|ty| checked_type_to_wire(ty, &self.function_name))
             .transpose()?
             .ok_or_else(|| MirLoweringError::Unsupported {
                 function: self.function_name.to_owned(),
@@ -2593,7 +2799,7 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                     None
                 }
                 rsscript_syntax::ast::MatchPattern::Literal { value: literal, .. } => {
-                    let literal = match_literal(literal, self.function_name)?;
+                    let literal = match_literal(literal, &self.function_name)?;
                     let expected = self.literal(literal)?;
                     let condition = self.value();
                     self.emit(MirInstruction::Binary {
@@ -2675,7 +2881,7 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                     None
                 }
                 rsscript_syntax::ast::MatchPattern::Literal { value: literal, .. } => {
-                    let expected = self.literal(match_literal(literal, self.function_name)?)?;
+                    let expected = self.literal(match_literal(literal, &self.function_name)?)?;
                     let condition = self.value();
                     self.emit(MirInstruction::Binary {
                         destination: condition,
@@ -3060,7 +3266,7 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         let Some(resource_type) = resource_type else {
             return self.unsupported("checked HIR resource scope without structural type");
         };
-        let wire = checked_type_to_wire(resource_type, self.function_name)?;
+        let wire = checked_type_to_wire(resource_type, &self.function_name)?;
         let Some(resource_type) = self.intern_resource_wire_type(wire) else {
             return self.unsupported("checked HIR resource scope is not a resource type");
         };
@@ -3156,6 +3362,22 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         self.places.insert(name.to_owned(), place);
         self.place_names.push(name.to_owned());
         place
+    }
+
+    fn place_with_type(&mut self, name: &str, ty: TypeId) -> PlaceId {
+        let place = self.place(name);
+        self.place_types.insert(name.to_owned(), ty);
+        place
+    }
+
+    fn place_type(&self, name: &str) -> Result<TypeId, MirLoweringError> {
+        self.place_types
+            .get(name)
+            .copied()
+            .ok_or_else(|| MirLoweringError::Unsupported {
+                function: self.function_name.to_owned(),
+                construct: "checked HIR closure capture without a resolved local type",
+            })
     }
 
     fn lookup_place(&self, name: &str) -> Result<PlaceId, MirLoweringError> {
@@ -3905,9 +4127,10 @@ fn is_list_type(type_name: &str) -> bool {
 
 /// Convert semantic type facts into the provider-neutral wire representation
 /// without round-tripping through a rendered type string. This keeps source
-/// spelling and formatting changes out of MIR identity. Function values have
-/// no wire ABI representation yet, so direct lowering rejects them instead of
-/// silently encoding a synthetic named type.
+/// spelling and formatting changes out of MIR identity. Function values are
+/// lowered through the dedicated structural closure ABI above; arbitrary
+/// function values in ordinary wire positions still fail closed rather than
+/// silently becoming synthetic named types.
 fn checked_type_to_wire(
     ty: &rsscript_semantics::ResolvedType,
     function_name: &str,

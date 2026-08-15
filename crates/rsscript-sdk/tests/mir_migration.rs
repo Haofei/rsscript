@@ -13,9 +13,8 @@ use rsscript_compiler::{
     validate_sources_with_interfaces,
 };
 use rsscript_mir::conformance::{
-    LegacyFallbackCase, MigrationCase, MigrationEvidence, MigrationEvidenceOverride,
-    MigrationStage, execute_named, migration_evidence_for, require_declared_legacy_fallbacks,
-    require_declared_migration_evidence,
+    MigrationCase, MigrationEvidence, MigrationEvidenceOverride, MigrationStage, execute_named,
+    migration_evidence_for, require_declared_migration_evidence,
 };
 use rsscript_mir::{
     BasicBlock, BlockId, FunctionId, MirCallTarget, MirClosureCapture, MirFunction,
@@ -650,6 +649,20 @@ fn main() -> String {
 }
 "#,
     },
+    MigrationCase {
+        name: "capturing_closure_value",
+        capability: "first-class capturing closure construction",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn main() -> Unit {
+    let offset = 1
+    let add = fn(value) captures(read offset) {
+        return value + offset
+    }
+    return Unit
+}
+"#,
+    },
 ];
 
 /// The reference interpreter intentionally remains a small oracle for pure
@@ -705,62 +718,13 @@ const EVIDENCE_OVERRIDES: &[MigrationEvidenceOverride] = &[
             reference_interpreter_gap: "the test-only MIR interpreter has no Dyn protocol value representation or closed-world dispatch model",
         },
     },
+    MigrationEvidenceOverride {
+        case: "capturing_closure_value",
+        evidence: MigrationEvidence::VerifiedBytecode {
+            reference_interpreter_gap: "the test-only MIR interpreter intentionally has no first-class closure environment or closure-call value representation",
+        },
+    },
 ];
-
-/// The migration framework keeps the remaining compatibility bridge small and
-/// explicit. These are source-level language capabilities that compile today,
-/// execute only through `legacy-exec-ir`, and have a next typed-MIR boundary.
-/// A migration removes an entry only after adding a matching `DualPath` case
-/// above; it may not simply broaden a catch-all Unsupported fallback.
-const LEGACY_FALLBACKS: &[LegacyFallbackCase] = &[LegacyFallbackCase {
-    name: "capturing_closure_value",
-    capability: "first-class capturing closure values",
-    construct: "checked HIR closure",
-    next_boundary: "typed closure environment, call target, and capture ownership MIR",
-    source: r#"
-fn main() -> Unit {
-    let offset = 1
-    let add = fn(value) captures(read offset) {
-        return value + offset
-    }
-    return Unit
-}
-"#,
-}];
-
-#[test]
-fn legacy_fallbacks_are_a_checked_and_actionable_migration_ledger() {
-    require_declared_legacy_fallbacks(LEGACY_FALLBACKS).unwrap_or_else(|error| {
-        panic!("the legacy executable-IR bridge requires an explicit ledger: {error}")
-    });
-
-    for case in LEGACY_FALLBACKS {
-        let compiled = compile_source_to_ir(&format!("{}.rss", case.name), case.source)
-            .unwrap_or_else(|diagnostics| {
-                panic!(
-                    "legacy fallback {} must remain a valid checked program for {}: {diagnostics:#?}",
-                    case.name, case.capability
-                )
-            });
-        let error = compiled.checked_hir_mir().expect_err(&format!(
-            "legacy fallback {} must move to DualPath when direct MIR succeeds",
-            case.name
-        ));
-        match error {
-            rsscript_lowering::MirLoweringError::Unsupported { construct, .. } => {
-                assert_eq!(
-                    construct, case.construct,
-                    "legacy fallback {} changed its direct-MIR boundary; update its registry entry or migrate it",
-                    case.name
-                );
-            }
-            rsscript_lowering::MirLoweringError::Invalid(error) => panic!(
-                "legacy fallback {} reached an invalid MIR state instead of its declared migration boundary: {error}",
-                case.name
-            ),
-        }
-    }
-}
 
 #[test]
 fn dual_path_cases_match_the_legacy_vm() {
