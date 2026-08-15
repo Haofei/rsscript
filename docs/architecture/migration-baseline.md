@@ -832,7 +832,7 @@ visible without manually re-sorting every open parent milestone.
     Direct checked-HIR lowering records the originating function-body location
     in `MirFunctionDebug`; executable operations remain typed-ID-only, and the
     legacy compatibility bridge simply leaves unavailable locations absent.
-- [ ] **M02 — Define an owned CFG MIR.** Functions contain basic blocks,
+- [x] **M02 — Define an owned CFG MIR.** Functions contain basic blocks,
   instructions, and terminators; MIR does not depend on syntax and contains no
   unresolved or `Unknown` execution node.
   - [x] **M02.1 — Introduce `MirModule`, `MirFunction`, `BasicBlock`,
@@ -844,8 +844,11 @@ visible without manually re-sorting every open parent milestone.
     - [x] **M02.1a — Add the initial owned model.** The model has private fields
       and construction runs structural verification. Serialization and a more
       restricted construction boundary remain follow-up work.
-  - [ ] **M02.2 — Lower the pure scalar subset.** Cover constants, locals,
-    arithmetic, calls, returns, branches, loops, and explicit block edges.
+  - [x] **M02.2 — Lower the pure scalar subset.** Direct checked-HIR lowering
+    covers constants, locals, arithmetic, calls, returns, branches, loops, and
+    explicit block edges. The verified-bytecode migration corpus executes each
+    construct, and the architecture guard rejects syntax/semantic dependencies
+    or an `Unknown` execution escape hatch from the owned MIR model.
     - [x] **M02.2a — Bridge the initial scalar subset.** The executable-IR
       bridge lowers literals, local bindings, assignment, binary expressions,
       direct internal calls, returns, branches, loops, break, and continue;
