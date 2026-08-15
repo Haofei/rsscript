@@ -51,6 +51,10 @@ inspection callback plus captured-snapshot path remapping. That prevents native
 wrapper support from pulling parser, semantic evidence, policy, or package
 review presentation back into compiler-owned source modules.
 
+The compatibility package diff now consumes the review-owned engine directly.
+It receives the same explicit native inspection callback, so manifest/interface
+comparison and review evidence no longer live in a compiler package module.
+
 The compiler's opt-in `package` compatibility feature has a private forwarding
 module during the staged migration so existing authorization, native, lock, and
 review callers retain their established behavior. The reviewed compiler default

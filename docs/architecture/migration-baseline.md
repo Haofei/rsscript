@@ -876,15 +876,16 @@ an arbitrary shell executor.
     to dedicated project/review/AOT crates before this item can close.
     The captured manifest/source-set representation and package contract
     extractor, native binding descriptor validation, neutral package analysis,
-    resource/task execution-fact collection, await-site collector, review-policy evaluator and diagnostics, dependency/feature resolver, and the main package review evidence engine are now physically owned by
+    resource/task execution-fact collection, await-site collector, review-policy evaluator and diagnostics, dependency/feature resolver, the main package review evidence engine, and package semantic diff are now physically owned by
     `rsscript-package-review`; its extractor directly uses the semantic
     `CompilationSession` and syntax boundary, while async classification uses a
     read-only table generated from the shared intrinsic catalog rather than
     compiler `runtime_abi`. Dependency diagnostics also use project-owned
     bounded manifest reads. The review engine accepts the legacy native-Rust
-    inspection as an explicit narrow callback; compiler package compatibility
-    retains only that adapter and the snapshot/remapping façade while lock,
-    check/diff, and the public compatibility façade continue their staged
+    inspection as an explicit narrow callback. Package semantic diff consumes
+    that review boundary through the same explicit callback. Compiler package
+    compatibility retains only adapters and snapshot/remapping façades while
+    lock, check, and the public compatibility façade continue their staged
     migration.
     - [x] **S05.3a — Extract neutral risk facts and calculation.** The review
       risk lattice and its pure evidence evaluator now live in

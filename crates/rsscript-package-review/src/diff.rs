@@ -1,31 +1,73 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use crate::diagnostic::code;
-use crate::syntax::ast::TypeKind;
+use rsscript_diagnostics::code;
 use rsscript_review_source::{ReviewFinding, ReviewRisk, review_sources};
+use rsscript_syntax::ast::TypeKind;
 
-use super::contract::{
+use crate::contract::{
     collect_package_function_contracts, collect_package_type_contracts,
     package_added_function_contract_is_high_risk, package_added_type_contract_is_high_risk,
     package_function_contract_boundary_changed, package_function_contracts_for_source,
     package_function_contracts_match, package_type_contract_boundary_changed,
     package_type_contracts_for_source, package_type_contracts_match,
 };
-use super::source_set::{ManifestNativeRust, PackageSource, load_package};
-use super::{
-    Manifest, PackageDiff, PackageExternalBindingChange, PackageExternalBindingChangeKind,
+use crate::source_set::{Manifest, ManifestNativeRust, PackageSource, load_package};
+use crate::{NativeRustReviewFn, review_package_dir_captured_with_features};
+use rsscript_package_model::{
+    PackageDiff, PackageExternalBindingChange, PackageExternalBindingChangeKind, PackageIdentity,
     PackageInterfaceChange, PackageInterfaceChangeKind, PackageManifestChange,
     PackageReviewAwaitBoundary, PackageReviewAwaitSite, PackageReviewFileKind, PackageRisk,
-    feature_values_label, package_feature_may_change_boundary_risk, package_identity,
-    package_risk_label, review_package_dir, toml_value_label,
 };
 
-pub fn diff_package_dirs(old_dir: &Path, new_dir: &Path) -> Result<PackageDiff, String> {
+fn package_identity(manifest: &Manifest) -> PackageIdentity {
+    PackageIdentity {
+        name: manifest.package.name.clone(),
+        version: manifest.package.version.clone(),
+        edition: manifest.package.edition.clone(),
+    }
+}
+
+fn toml_value_label(value: &toml::Value) -> String {
+    value.to_string()
+}
+
+fn feature_values_label(values: &[String]) -> String {
+    if values.is_empty() {
+        "[]".to_string()
+    } else {
+        values.join(", ")
+    }
+}
+
+fn package_feature_may_change_boundary_risk(name: &str, values: &[String]) -> bool {
+    let has_marker = |token: &str| {
+        let normalized = token.to_ascii_lowercase();
+        ["native", "unsafe", "ffi", "build", "proc", "macro", "link"]
+            .iter()
+            .any(|marker| normalized.contains(marker))
+    };
+    has_marker(name) || values.iter().any(|value| has_marker(value))
+}
+
+fn package_risk_label(risk: PackageRisk) -> &'static str {
+    match risk {
+        PackageRisk::Low => "low",
+        PackageRisk::Elevated => "elevated",
+        PackageRisk::High => "high",
+        PackageRisk::Unknown => "unknown",
+    }
+}
+
+pub fn diff_package_dirs_with_native_review(
+    old_dir: &Path,
+    new_dir: &Path,
+    native_rust_review: NativeRustReviewFn,
+) -> Result<PackageDiff, String> {
     let old_package = load_package(old_dir)?;
     let new_package = load_package(new_dir)?;
-    let old_review = review_package_dir(old_dir)?;
-    let new_review = review_package_dir(new_dir)?;
+    let old_review = review_package_dir_captured_with_features(old_dir, None, native_rust_review)?;
+    let new_review = review_package_dir_captured_with_features(new_dir, None, native_rust_review)?;
 
     let mut manifest_changes = Vec::new();
     compare_package_identity(

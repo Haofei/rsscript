@@ -2040,6 +2040,20 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
             && !review.contains("load_package_with_features("),
         "review package assembly must share project-captured manifest bytes with dependency semantics"
     );
+    let diff_path = root.join("crates/rsscript-package-review/src/diff.rs");
+    assert!(
+        diff_path.is_file()
+            && !root
+                .join("crates/rsscript-compiler/src/package/diff.rs")
+                .exists(),
+        "package review diff must be physically owned by the package-review boundary"
+    );
+    let diff = read(&diff_path);
+    assert!(
+        diff.contains("diff_package_dirs_with_native_review")
+            && diff.contains("review_package_dir_captured_with_features"),
+        "package diff must consume review-owned evidence and take native inspection explicitly"
+    );
     assert!(
         dependency.contains("load_package_from_manifest_source")
             && !dependency.contains("load_package_with_features("),

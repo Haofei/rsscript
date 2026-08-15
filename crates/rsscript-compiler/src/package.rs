@@ -41,15 +41,9 @@ mod analysis {
 }
 mod authorization;
 mod check;
-// Contract extraction is review-owned. Keep only a private compatibility
-// forwarding module until package review execution migrates completely.
-mod contract {
-    pub(super) use rsscript_package_review::*;
-}
 mod dependency {
     pub(super) use rsscript_package_review::*;
 }
-mod diff;
 mod graph;
 mod lock;
 mod lock_format;
@@ -95,6 +89,13 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
     authorization::remap_review(&snapshot, &mut review);
     Ok(review)
 }
+pub fn diff_package_dirs(old_dir: &Path, new_dir: &Path) -> Result<PackageDiff, String> {
+    rsscript_package_review::diff_package_dirs_with_native_review(
+        old_dir,
+        new_dir,
+        native::package_native_rust_review,
+    )
+}
 pub use authorization::{
     ExecutablePackageSnapshot, PreparedPackage, WorkspaceSnapshot, load_workspace_snapshot,
     load_workspace_snapshot_with_operation, prepare_executable_package,
@@ -105,7 +106,6 @@ use dependency::{
     PackageDependencySpec, collect_dependency_interface_sources,
     collect_dependency_lowering_sources,
 };
-pub use diff::diff_package_dirs;
 pub use graph::package_tree;
 pub use lock::{diff_package_locks, lock_package_dir};
 pub(super) use lock_format::package_lock_toml;
@@ -192,10 +192,6 @@ fn package_identity(manifest: &Manifest) -> PackageIdentity {
         version: manifest.package.version.clone(),
         edition: manifest.package.edition.clone(),
     }
-}
-
-fn toml_value_label(value: &toml::Value) -> String {
-    value.to_string()
 }
 
 fn feature_values_label(values: &[String]) -> String {
