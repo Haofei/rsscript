@@ -2056,9 +2056,13 @@ an arbitrary shell executor.
       setup fail before `exec`; Linux coverage accepts only those installed or
       fail-closed outcomes. This is namespace isolation only,
       not yet a rooted filesystem policy.
-    - [ ] **A09.2c — Add network namespace controls.** Install a private
-      network namespace only for profiles that require it, with a capability
-      check and explicit failure rather than an implied network restriction.
+    - [x] **A09.2c — Add network namespace controls.** The explicit
+      `no_providers_network_isolated` profile enters `CLONE_NEWNET` only after
+      user-namespace mapping, so it gains namespace-scoped setup privilege
+      without relying on ambient host privilege. A successful child exposes
+      only loopback; kernel/container policy that forbids the setup rejects the
+      launch before `exec`. This is a private network namespace, not a claim
+      that every future HTTP profile has an endpoint policy.
     - [ ] **A09.2d — Add filesystem and syscall controls.** Add rooted
       filesystem and seccomp adapters whose required rules are installed before
       Artifact parsing; keep unavailable controls fail-closed.

@@ -2,9 +2,9 @@
   "schema": "rsscript.migration_queue.v1",
   "tasks": [
     {
-      "id": "A09.2c",
+      "id": "A09.2d",
       "priority": 80,
-      "depends_on": ["A09.2b"],
+      "depends_on": ["A09.2c"],
       "scope": [
         "crates/process-guard/**",
         "crates/rsscript-cli/**",
@@ -12,9 +12,9 @@
         "docs/threat-model.md"
       ],
       "acceptance": [
-        "A profile which requires a network namespace installs it before runner code can parse an Artifact.",
-        "Kernel policy which makes the network adapter unavailable is reported as an isolation failure before execution.",
-        "The Linux adapter has focused supported-path and fail-closed coverage."
+        "A profile which requires rooted filesystem or syscall controls installs them before runner code can parse an Artifact.",
+        "Kernel policy which makes either adapter unavailable is reported as an isolation failure before execution.",
+        "The Linux adapters have focused supported-path and fail-closed coverage."
       ],
       "verification": [
         "cargo test -p rss-process-guard --locked",

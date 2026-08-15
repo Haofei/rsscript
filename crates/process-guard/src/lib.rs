@@ -232,10 +232,11 @@ pub const fn strict_isolation_support(control: StrictIsolationControl) -> LimitS
         return match control {
             StrictIsolationControl::NoNewPrivileges
             | StrictIsolationControl::UserNamespace
-            | StrictIsolationControl::MountNamespace => LimitSupport::Enforced,
-            StrictIsolationControl::NetworkNamespace
-            | StrictIsolationControl::SeccompFilter
-            | StrictIsolationControl::CgroupV2 => LimitSupport::Unsupported,
+            | StrictIsolationControl::MountNamespace
+            | StrictIsolationControl::NetworkNamespace => LimitSupport::Enforced,
+            StrictIsolationControl::SeccompFilter | StrictIsolationControl::CgroupV2 => {
+                LimitSupport::Unsupported
+            }
         };
     }
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
@@ -484,6 +485,7 @@ fn configure_strict_platform(
     if !requirements.requires(StrictIsolationControl::NoNewPrivileges)
         && !requirements.requires(StrictIsolationControl::UserNamespace)
         && !requirements.requires(StrictIsolationControl::MountNamespace)
+        && !requirements.requires(StrictIsolationControl::NetworkNamespace)
     {
         return Ok(());
     }
@@ -510,7 +512,8 @@ fn configure_strict_platform(
 fn configure_linux_namespaces(requirements: StrictIsolationRequirements) -> io::Result<()> {
     let user = requirements.requires(StrictIsolationControl::UserNamespace);
     let mount = requirements.requires(StrictIsolationControl::MountNamespace);
-    if !user && !mount {
+    let network = requirements.requires(StrictIsolationControl::NetworkNamespace);
+    if !user && !mount && !network {
         return Ok(());
     }
 
@@ -531,6 +534,17 @@ fn configure_linux_namespaces(requirements: StrictIsolationRequirements) -> io::
     }
     if mount {
         make_mount_propagation_private()?;
+    }
+    if network {
+        // Enter this namespace only after user-namespace mapping. That gives
+        // the child the namespace-scoped capability required by Linux instead
+        // of relying on ambient host privileges. A disabled user namespace or
+        // network namespace is returned to `Command::spawn` as a hard error.
+        // SAFETY: no pointers are passed and the flag names only a new network
+        // namespace for the current pre-exec child.
+        if unsafe { libc::unshare(libc::CLONE_NEWNET) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
     }
     Ok(())
 }
@@ -1212,7 +1226,7 @@ mod tests {
             command.args(["-c", "exit 0"]);
         }
         let requirements =
-            StrictIsolationRequirements::none().require(StrictIsolationControl::NetworkNamespace);
+            StrictIsolationRequirements::none().require(StrictIsolationControl::SeccompFilter);
         let error = spawn_guarded_child_strict_with(
             &mut command,
             ProcessLimits {
@@ -1225,7 +1239,7 @@ mod tests {
         )
         .expect_err("unimplemented strict control must fail closed");
         assert_eq!(error.kind(), io::ErrorKind::Unsupported);
-        assert!(error.to_string().contains("network namespace"));
+        assert!(error.to_string().contains("seccomp filter"));
     }
 
     #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -1276,18 +1290,19 @@ mod tests {
 
     #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]
-    fn user_and_mount_namespace_adapter_is_enforced_or_fails_closed() {
+    fn user_mount_and_network_namespace_adapter_is_enforced_or_fails_closed() {
         use std::io::Read;
         use std::process::Stdio;
 
         let requirements = StrictIsolationRequirements::linux_runner()
             .require(StrictIsolationControl::UserNamespace)
-            .require(StrictIsolationControl::MountNamespace);
+            .require(StrictIsolationControl::MountNamespace)
+            .require(StrictIsolationControl::NetworkNamespace);
         let mut command = Command::new("sh");
         command
             .args([
                 "-c",
-                "grep '^NoNewPrivs:' /proc/self/status; cat /proc/self/uid_map",
+                "grep '^NoNewPrivs:' /proc/self/status; cat /proc/self/uid_map; ls -1 /sys/class/net",
             ])
             .stdout(Stdio::piped());
         match spawn_guarded_child_strict_with(
@@ -1312,6 +1327,11 @@ mod tests {
                         .next()
                         .is_some_and(|line| line.starts_with("         0")),
                     "user namespace map must expose an inside uid 0 entry: {stdout:?}"
+                );
+                assert_eq!(
+                    lines.collect::<Vec<_>>(),
+                    vec!["lo"],
+                    "a new network namespace must not retain host interfaces: {stdout:?}"
                 );
             }
             Err(error) => {

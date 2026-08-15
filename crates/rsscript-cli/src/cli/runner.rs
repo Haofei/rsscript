@@ -295,6 +295,10 @@ fn format_runner_disconnect_error(
 fn runner_isolation_requirements(profile: RunnerProfileV1) -> StrictIsolationRequirements {
     let baseline = StrictIsolationRequirements::linux_runner();
     match profile {
+        RunnerProfileV1::NoProvidersNetworkIsolated => baseline
+            .require(StrictIsolationControl::UserNamespace)
+            .require(StrictIsolationControl::MountNamespace)
+            .require(StrictIsolationControl::NetworkNamespace),
         RunnerProfileV1::NoProvidersNamespaced => baseline
             .require(StrictIsolationControl::UserNamespace)
             .require(StrictIsolationControl::MountNamespace),
@@ -313,7 +317,10 @@ fn spawn_runner(
     }
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
     {
-        if profile == RunnerProfileV1::NoProvidersNamespaced {
+        if matches!(
+            profile,
+            RunnerProfileV1::NoProvidersNamespaced | RunnerProfileV1::NoProvidersNetworkIsolated
+        ) {
             return spawn_guarded_child_strict_with(
                 command,
                 limits,
@@ -491,9 +498,9 @@ fn profiled_registry(profile: RunnerProfileV1) -> Result<ProviderRegistry, Strin
     match profile {
         // Provider implementations and all authority remain host-owned. The
         // reference profile intentionally fails closed for external imports.
-        RunnerProfileV1::NoProviders | RunnerProfileV1::NoProvidersNamespaced => {
-            Ok(ProviderRegistry::default())
-        }
+        RunnerProfileV1::NoProviders
+        | RunnerProfileV1::NoProvidersNamespaced
+        | RunnerProfileV1::NoProvidersNetworkIsolated => Ok(ProviderRegistry::default()),
         // This preinstalled profile deliberately discards messages. It proves
         // exact allowlist linkage without granting filesystem, network,
         // process, credential, or ambient-environment authority to the child.
@@ -679,6 +686,15 @@ mod tests {
         assert!(requirements.requires(StrictIsolationControl::MountNamespace));
         profiled_registry(RunnerProfileV1::NoProvidersNamespaced)
             .expect("namespaced profile must not require provider installation");
+    }
+
+    #[test]
+    fn network_profile_requires_a_private_network_before_execution() {
+        let requirements =
+            runner_isolation_requirements(RunnerProfileV1::NoProvidersNetworkIsolated);
+        assert!(requirements.requires(StrictIsolationControl::UserNamespace));
+        assert!(requirements.requires(StrictIsolationControl::MountNamespace));
+        assert!(requirements.requires(StrictIsolationControl::NetworkNamespace));
     }
 
     #[test]

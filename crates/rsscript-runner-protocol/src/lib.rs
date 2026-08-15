@@ -35,6 +35,10 @@ pub enum RunnerProfileV1 {
     /// required Linux user/mount namespace boundary. Hosts that cannot install
     /// those controls reject the launch before the runner parses an Artifact.
     NoProvidersNamespaced,
+    /// Reference fail-closed profile with no Providers plus user, mount, and
+    /// network namespaces. The child starts without the host network namespace;
+    /// a host that cannot enforce that boundary rejects the launch.
+    NoProvidersNetworkIsolated,
     /// Reference allowlisted profile with only `host.log.emit` installed.
     ///
     /// The sink is selected by the runner host and has no filesystem, network,
@@ -74,6 +78,15 @@ impl RunnerProfileV1 {
                 version: 1,
                 descriptor_digest:
                     "sha256:75a022141b604c70f400232a509942e5b232f9a2b11a4d8f42c47b3ae797bcbb"
+                        .to_string(),
+            },
+            // sha256 of the versioned no-Provider profile descriptor plus its
+            // user/mount/network namespace requirement.
+            Self::NoProvidersNetworkIsolated => RunnerProfileIdentityV1 {
+                id: "rsscript.runner.no_providers_network_isolated".to_string(),
+                version: 1,
+                descriptor_digest:
+                    "sha256:a44a14fe53c94d34f46b99cb2fe3176a614c5574abab276aaf3a607c348b9e8b"
                         .to_string(),
             },
             // sha256 of the versioned profile descriptor containing the
@@ -517,6 +530,21 @@ mod tests {
         let json = serde_json::to_value(request).expect("request JSON");
         assert_eq!(json["profile"], "no_providers_namespaced");
         for forbidden in ["provider", "library", "credential", "authority", "root"] {
+            assert!(
+                json.get(forbidden).is_none(),
+                "profile must not inject {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn network_isolated_profile_is_host_selected_without_network_configuration() {
+        let request =
+            RunnerRequestV1::with_profile(Vec::new(), RunnerProfileV1::NoProvidersNetworkIsolated)
+                .expect("request");
+        let json = serde_json::to_value(request).expect("request JSON");
+        assert_eq!(json["profile"], "no_providers_network_isolated");
+        for forbidden in ["provider", "endpoint", "network", "credential", "authority"] {
             assert!(
                 json.get(forbidden).is_none(),
                 "profile must not inject {forbidden}"
