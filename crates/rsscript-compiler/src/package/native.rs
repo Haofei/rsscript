@@ -6,6 +6,8 @@ use std::path::{Component, Path, PathBuf};
 #[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use rsscript_project::resolve_project_path_dependency;
+
 use super::NativeRustDependency;
 
 use super::dependency::package_dependency_spec;
@@ -107,10 +109,9 @@ fn collect_package_native_plugin_build_dependencies(
         let Some(path) = &spec.path else {
             continue;
         };
-        let dependency_dir = package_dir.join(path);
-        if !dependency_dir.join("rsspkg.toml").exists() {
+        let Some(dependency_dir) = resolve_project_path_dependency(package_dir, path)? else {
             continue;
-        }
+        };
         let dependency_manifest = load_package_manifest(&dependency_dir)?;
         let selected_features = resolve_package_features(&dependency_manifest, &spec.features);
         let dependency_package =
@@ -183,10 +184,9 @@ fn collect_package_native_rust_dependencies(
         let Some(path) = &spec.path else {
             continue;
         };
-        let dependency_dir = package_dir.join(path);
-        if !dependency_dir.join("rsspkg.toml").exists() {
+        let Some(dependency_dir) = resolve_project_path_dependency(package_dir, path)? else {
             continue;
-        }
+        };
         let dependency_manifest = load_package_manifest(&dependency_dir)?;
         let selected_features = resolve_package_features(&dependency_manifest, &spec.features);
         let dependency_package =

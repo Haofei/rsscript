@@ -1505,6 +1505,22 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
             && !source_loader.contains("read_bounded_utf8_file"),
         "compiler package source assembly must consume project-captured source bytes rather than traverse directories"
     );
+    let dependency = read(&root.join("crates/rsscript-compiler/src/package/dependency.rs"));
+    let native = read(&root.join("crates/rsscript-compiler/src/package/native.rs"));
+    for resolver in [&dependency, &native] {
+        assert!(
+            resolver.contains("resolve_project_path_dependency"),
+            "package dependency roots must be resolved by rsscript-project"
+        );
+        assert!(
+            !resolver.contains("package_dir.join(path)"),
+            "compiler package compatibility must not reimplement path-dependency joining"
+        );
+        assert!(
+            !resolver.contains("dependency_dir.join(\"rsspkg.toml\").exists()"),
+            "compiler package compatibility must not probe dependency manifests directly"
+        );
+    }
     let package_module = read(&root.join("crates/rsscript-compiler/src/package.rs"));
     assert!(
         package_module.contains("collect_project_regular_files as collect_bounded_regular_files")

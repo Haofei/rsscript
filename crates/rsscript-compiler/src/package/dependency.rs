@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use rsscript_project::resolve_project_path_dependency;
+
 use crate::diagnostic::{Diagnostic, code};
 
 use super::source_set::{
@@ -144,8 +146,9 @@ fn resolve_dependency_node(
     for (spec, kind) in declared {
         let target = match &spec.path {
             Some(path) => {
-                let dependency_dir = package_dir.join(path);
-                if dependency_dir.join("rsspkg.toml").exists() {
+                if let Some(dependency_dir) =
+                    resolve_project_path_dependency(package_dir, path)?
+                {
                     Some(resolve_dependency_node(
                         &dependency_dir,
                         &spec.features,

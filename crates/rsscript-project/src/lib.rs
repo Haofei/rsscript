@@ -91,6 +91,40 @@ pub fn capture_project_manifest(
     Ok(ProjectManifestSnapshot { root, source })
 }
 
+/// Resolve one manifest-declared local package dependency at the project I/O
+/// boundary.
+///
+/// A missing `rsspkg.toml` remains an unresolved dependency rather than an
+/// I/O failure so package-semantic callers can retain their existing
+/// diagnostics. When a manifest is present, the returned root is canonical,
+/// non-link, and ready for a bounded project capture. Compiler and review
+/// code must not reproduce this path joining and filesystem probing.
+pub fn resolve_project_path_dependency(
+    package_dir: &Path,
+    declared_path: &str,
+) -> Result<Option<PathBuf>, String> {
+    let package_root = canonical_capture_root(package_dir)?;
+    let declared = Path::new(declared_path);
+    let candidate = if declared.is_absolute() {
+        declared.to_path_buf()
+    } else {
+        package_root.join(declared)
+    };
+    let manifest = candidate.join("rsspkg.toml");
+    match fs::symlink_metadata(&manifest) {
+        Ok(metadata) if is_link_like(&metadata) => Err(format!(
+            "project dependency manifest rejects symlinks or reparse points: {}",
+            manifest.display()
+        )),
+        Ok(_) => canonical_capture_root(&candidate).map(Some),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!(
+            "failed to inspect project dependency manifest {}: {error}",
+            manifest.display()
+        )),
+    }
+}
+
 /// Capture one bounded, project-relative UTF-8 file without following links.
 ///
 /// This is intentionally a narrow project-boundary primitive for immutable
@@ -2015,6 +2049,33 @@ mod tests {
         std::fs::write(&outside, "[package]\nname = \"outside\"\n").expect("outside manifest");
         symlink(&outside, directory.path().join("rsspkg.toml")).expect("manifest link");
         assert!(capture_project_manifest(directory.path(), 1024).is_err());
+    }
+
+    #[test]
+    fn project_boundary_resolves_only_present_local_dependency_roots() {
+        let directory = tempfile::tempdir().expect("workspace");
+        let package = directory.path().join("package");
+        let dependency = directory.path().join("dependency");
+        std::fs::create_dir_all(&package).expect("package root");
+        std::fs::create_dir_all(&dependency).expect("dependency root");
+        std::fs::write(package.join("rsspkg.toml"), "[package]\nname = \"root\"\n")
+            .expect("package manifest");
+        std::fs::write(
+            dependency.join("rsspkg.toml"),
+            "[package]\nname = \"dependency\"\n",
+        )
+        .expect("dependency manifest");
+
+        assert_eq!(
+            resolve_project_path_dependency(&package, "../dependency")
+                .expect("resolve present dependency"),
+            Some(dependency.canonicalize().expect("canonical dependency"))
+        );
+        assert_eq!(
+            resolve_project_path_dependency(&package, "../missing")
+                .expect("missing dependency is an unresolved package"),
+            None
+        );
     }
 
     #[test]

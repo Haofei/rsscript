@@ -766,8 +766,11 @@ an arbitrary shell executor.
     source kind. The generic bounded regular-file scanner and no-follow UTF-8
     reader used by compatibility native/review flows are now project-owned as
     well; compiler compatibility code only supplies its domain-specific
-    exclusions. The remaining S05.1 work is typed dependency discovery and
-    removal of the legacy review/native package resolver from the compiler.
+    exclusions. Local path-dependency root resolution and manifest-presence
+    checks now belong to `rsscript-project`; compiler dependency and native
+    compatibility resolvers consume that boundary rather than joining or
+    probing dependency directories themselves. The remaining S05.1 work is
+    migration of legacy review/native graph semantics from compiler.
     Manifest dependency discovery now parses the loader-owned
     `WorkspaceManifestV1` projection and admits only explicit local path
     dependencies into capture; version, git, and registry declarations cannot
