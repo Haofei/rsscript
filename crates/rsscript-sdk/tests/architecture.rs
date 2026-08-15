@@ -1473,6 +1473,20 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
         !snapshot.contains("fs::"),
         "compiler graph-snapshot composition must not reopen or mutate files directly"
     );
+    let source_set = read(&root.join("crates/rsscript-compiler/src/package/source_set.rs"));
+    let manifest_loader = function_source(
+        &source_set,
+        "pub(super) fn load_package_manifest_with_source(",
+    );
+    assert!(
+        manifest_loader.contains("capture_project_manifest(package_dir, MANIFEST_MAX_BYTES)"),
+        "compiler manifest semantics must consume project-captured manifest bytes"
+    );
+    assert!(
+        !manifest_loader.contains("canonical_package_root")
+            && !manifest_loader.contains("read_bounded_utf8_file"),
+        "compiler manifest semantic parsing must not reopen the project manifest"
+    );
 }
 
 #[test]

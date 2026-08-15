@@ -737,7 +737,10 @@ an arbitrary shell executor.
     create-only metadata operations now own captured manifest/lock rewriting;
     compiler compatibility computes dependency semantics but does not reopen or
     mutate files inside that private graph. This keeps project graph I/O
-    reusable without widening the pure compiler input API.
+    reusable without widening the pure compiler input API. Raw root-manifest
+    capture is likewise project-owned: `ProjectManifestSnapshot` performs
+    bounded no-follow reads while compiler retains only package-schema parsing
+    and feature/dependency semantics.
     Manifest dependency discovery now parses the loader-owned
     `WorkspaceManifestV1` projection and admits only explicit local path
     dependencies into capture; version, git, and registry declarations cannot

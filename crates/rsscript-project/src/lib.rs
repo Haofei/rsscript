@@ -55,6 +55,42 @@ pub struct CapturedPackageGraph {
     root: PathBuf,
 }
 
+/// Bounded raw manifest input captured from a non-link project root.
+///
+/// Parsing package-specific fields intentionally belongs to a higher layer;
+/// this type only establishes the filesystem boundary and preserves the exact
+/// bytes that parser consumed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectManifestSnapshot {
+    root: PathBuf,
+    source: String,
+}
+
+impl ProjectManifestSnapshot {
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+}
+
+/// Capture `rsspkg.toml` from one project root without following links.
+///
+/// The caller supplies the byte bound appropriate to its manifest schema.
+/// This is deliberately raw input: package manifest decoding, feature
+/// resolution, review, and native policy remain outside the project boundary.
+pub fn capture_project_manifest(
+    package_dir: &Path,
+    max_bytes: u64,
+) -> Result<ProjectManifestSnapshot, String> {
+    let root = canonical_capture_root(package_dir)?;
+    let manifest_path = root.join("rsspkg.toml");
+    let source = read_regular_utf8_no_follow(&manifest_path, max_bytes, "project manifest")?;
+    Ok(ProjectManifestSnapshot { root, source })
+}
+
 impl CapturedProjectGraph {
     pub fn root(&self) -> &Path {
         &self.root
@@ -523,6 +559,80 @@ fn canonical_capture_root(path: &Path) -> Result<PathBuf, String> {
     fs::canonicalize(path).map_err(|error| {
         format!(
             "failed to canonicalize project capture root {}: {error}",
+            path.display()
+        )
+    })
+}
+
+fn read_regular_utf8_no_follow(path: &Path, max_bytes: u64, label: &str) -> Result<String, String> {
+    #[cfg(unix)]
+    let mut file = {
+        use rustix::fs::{Mode, OFlags};
+
+        let descriptor = rustix::fs::open(
+            path,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|error| {
+            format!(
+                "failed to open {label} {} without following links: {error}",
+                path.display()
+            )
+        })?;
+        File::from(descriptor)
+    };
+    #[cfg(not(unix))]
+    let mut file = {
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+            options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        }
+        options.open(path).map_err(|error| {
+            format!(
+                "failed to open {label} {} without following links: {error}",
+                path.display()
+            )
+        })?
+    };
+    let metadata = file.metadata().map_err(|error| {
+        format!(
+            "failed to inspect opened {label} {}: {error}",
+            path.display()
+        )
+    })?;
+    if is_link_like(&metadata) || !metadata.is_file() {
+        return Err(format!(
+            "{label} requires a regular non-link file: {}",
+            path.display()
+        ));
+    }
+    if metadata.len() > max_bytes {
+        return Err(format!(
+            "{label} {} exceeded byte limit of {max_bytes}",
+            path.display()
+        ));
+    }
+    let capacity = usize::try_from(metadata.len().min(max_bytes))
+        .map_err(|_| format!("{label} is too large for this platform: {}", path.display()))?;
+    let mut bytes = Vec::with_capacity(capacity);
+    Read::by_ref(&mut file)
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("failed to read {label} {}: {error}", path.display()))?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(format!(
+            "{label} {} exceeded byte limit of {max_bytes} while reading",
+            path.display()
+        ));
+    }
+    String::from_utf8(bytes).map_err(|error| {
+        format!(
+            "failed to read {label} {} as UTF-8: {error}",
             path.display()
         )
     })
@@ -1069,6 +1179,38 @@ fn frontend_snapshot_digest(snapshot: &FrontendInputSnapshot) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_manifest_capture_is_bounded_and_preserves_the_parser_input() {
+        let directory = tempfile::tempdir().expect("workspace");
+        std::fs::write(
+            directory.path().join("rsspkg.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .expect("manifest");
+        let snapshot = capture_project_manifest(directory.path(), 1024).expect("capture manifest");
+        assert_eq!(
+            snapshot.root(),
+            directory
+                .path()
+                .canonicalize()
+                .expect("canonical workspace root")
+        );
+        assert!(snapshot.source().contains("name = \"fixture\""));
+        assert!(capture_project_manifest(directory.path(), 4).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn project_manifest_capture_rejects_a_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("workspace");
+        let outside = directory.path().join("outside.toml");
+        std::fs::write(&outside, "[package]\nname = \"outside\"\n").expect("outside manifest");
+        symlink(&outside, directory.path().join("rsspkg.toml")).expect("manifest link");
+        assert!(capture_project_manifest(directory.path(), 1024).is_err());
+    }
 
     #[test]
     fn project_graph_capture_is_private_bounded_and_maps_paths_back() {

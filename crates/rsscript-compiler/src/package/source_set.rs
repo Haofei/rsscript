@@ -3,6 +3,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
+use rsscript_project::capture_project_manifest;
 use serde::Deserialize;
 
 use crate::package::PackageReviewFileKind;
@@ -323,14 +324,10 @@ pub(super) fn load_package_with_features(
     package_dir: &Path,
     selected_features: Option<&[String]>,
 ) -> Result<LoadedPackage, String> {
-    let package_root = canonical_package_root(package_dir)?;
+    let captured_manifest = capture_project_manifest(package_dir, MANIFEST_MAX_BYTES)?;
+    let package_root = captured_manifest.root().to_path_buf();
     let manifest_path = package_dir.join("rsspkg.toml");
-    let (physical_manifest_source, _) = read_bounded_utf8_file(
-        &package_root,
-        &package_root.join("rsspkg.toml"),
-        MANIFEST_MAX_BYTES,
-        "package manifest",
-    )?;
+    let physical_manifest_source = captured_manifest.source().to_string();
     let manifest: Manifest = toml::from_str(&physical_manifest_source)
         .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))?;
     let snapshot_manifest_source = package_root.join(SNAPSHOT_MANIFEST_SOURCE_FILE);
@@ -401,14 +398,9 @@ pub(super) fn load_package_manifest(package_dir: &Path) -> Result<Manifest, Stri
 pub(super) fn load_package_manifest_with_source(
     package_dir: &Path,
 ) -> Result<(String, Manifest), String> {
-    let package_root = canonical_package_root(package_dir)?;
+    let captured_manifest = capture_project_manifest(package_dir, MANIFEST_MAX_BYTES)?;
     let manifest_path = package_dir.join("rsspkg.toml");
-    let (manifest_source, _) = read_bounded_utf8_file(
-        &package_root,
-        &package_root.join("rsspkg.toml"),
-        MANIFEST_MAX_BYTES,
-        "package manifest",
-    )?;
+    let manifest_source = captured_manifest.source().to_string();
     let manifest = toml::from_str(&manifest_source)
         .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))?;
     Ok((manifest_source, manifest))
