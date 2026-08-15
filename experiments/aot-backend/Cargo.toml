@@ -15,7 +15,6 @@ rsscript-aot-model = { path = "../aot-model" }
 rsscript-artifact-store = { path = "../../crates/rsscript-artifact-store" }
 rsscript-diagnostics = { path = "../../crates/rsscript-diagnostics" }
 rsscript-interface-catalog = { path = "../../crates/rsscript-interface-catalog" }
-rsscript-lowering = { path = "../../crates/rsscript-lowering", features = ["legacy-exec-ir"] }
 rsscript-project = { path = "../../crates/rsscript-project" }
 rsscript-semantics = { path = "../../crates/rsscript-semantics" }
 rsscript-syntax = { path = "../../crates/rsscript-syntax" }

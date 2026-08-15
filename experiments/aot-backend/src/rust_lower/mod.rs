@@ -398,10 +398,8 @@ fn lower_validated_program_to_rust_with_map(
     database: &crate::semantic::SemanticDatabase,
     external_bindings: BTreeMap<String, String>,
 ) -> LoweredRust {
-    let executable = rsscript_lowering::lower_validated_hir(database.hir());
     RustLowerer::new_validated(
         database.program(),
-        &executable,
         database.hir().semantic_types(),
         external_bindings,
         database.interface_programs(),

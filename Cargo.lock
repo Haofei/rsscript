@@ -1733,7 +1733,6 @@ dependencies = [
  "rsscript-build-support",
  "rsscript-diagnostics",
  "rsscript-interface-catalog",
- "rsscript-lowering",
  "rsscript-project",
  "rsscript-semantics",
  "rsscript-syntax",

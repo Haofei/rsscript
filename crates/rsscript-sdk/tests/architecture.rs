@@ -1674,6 +1674,14 @@ fn rust_aot_lowering_is_explicitly_feature_gated() {
     assert!(sdk_aot.contains("dep:rsscript-aot-backend"));
     assert!(!sdk_aot.contains("rsscript_compiler/aot-rust"));
     assert!(!sdk_aot.contains("rsscript_compiler/legacy-exec-ir"));
+    let aot_backend: toml::Value = toml::from_str(&read(
+        &root.join("experiments/aot-backend/Cargo.toml"),
+    ))
+    .expect("experimental AOT backend manifest should parse");
+    assert!(
+        aot_backend["dependencies"].get("rsscript-lowering").is_none(),
+        "the experimental AOT backend must not retain source-shaped executable-IR lowering"
+    );
     let sdk_compatibility = sdk["features"]["compatibility"]
         .as_array()
         .expect("SDK compatibility feature should be declared")
@@ -4632,7 +4640,7 @@ fn executable_backends_consume_validated_frontend_results() {
     assert!(
         compile_validated.contains("compile_validated_to_ir")
             && compile_validated.contains("emit_ir(&compiled)"),
-        "register VM lowering must consume checked executable IR"
+        "register VM lowering must consume checked compiler output"
     );
     let vm_sources = [
         read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs")),
@@ -4665,9 +4673,10 @@ fn executable_backends_consume_validated_frontend_results() {
         "lowering declaration projections must reuse parsed semantic inputs"
     );
     assert!(
-        rust_lower.contains("lower_validated_hir")
+        !rust_lower.contains("lower_validated_hir")
+            && rust_lower.contains("database.hir().semantic_types()")
             && rust_lower.contains("RustLowerer::new_validated"),
-        "Rust AOT lowering must consume the same checked executable IR"
+        "Rust AOT lowering must consume validated semantic facts without executable-IR projection"
     );
 
     let lowering_manifest: toml::Value =
