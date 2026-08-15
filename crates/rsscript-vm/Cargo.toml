@@ -17,7 +17,6 @@ rsscript-text = { path = "../rsscript-text" }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml_ng = "0.10"
-flate2 = "1"
 vm-jit = { path = "../../experiments/vm-jit", optional = true }
 
 [features]

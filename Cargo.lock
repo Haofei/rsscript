@@ -1870,6 +1870,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "chrono",
+ "flate2",
  "hex",
  "hmac",
  "percent-encoding",
@@ -2166,7 +2167,6 @@ version = "0.1.0"
 name = "rsscript-vm"
 version = "0.1.0"
 dependencies = [
- "flate2",
  "rsscript-abi-model",
  "rsscript-build-support",
  "rsscript-bytecode",

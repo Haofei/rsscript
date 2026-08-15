@@ -1690,6 +1690,11 @@ an arbitrary shell executor.
       accounting only; `sha2`, `sha3`, and `hmac` are no longer direct runtime
       VM dependencies. Key acquisition remains an explicit Provider or host
       concern, not a Core-library capability.
+    - [x] **V06.2.1e — Extract deterministic compression transforms.** Gzip
+      decompression now uses `rsscript-corelib::compression`; the VM owns only
+      byte-value/error adaptation and its existing allocation accounting. The
+      `flate2` implementation dependency is no longer part of the runtime VM
+      closure.
     - [ ] **V06.2.2 — Extract collection algorithms.** Move non-primitive list,
       map, set, and deque transformations behind the same pure-library boundary
       without moving ownership-sensitive mutation primitives out of the VM.

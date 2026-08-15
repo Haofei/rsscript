@@ -27,11 +27,10 @@
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 
-use flate2::read::GzDecoder;
 use rsscript_corelib::{
     collections::{
         dedup as core_list_dedup, deque_to_vec as core_deque_to_vec,
@@ -40,6 +39,7 @@ use rsscript_corelib::{
         map_union as core_map_union, map_values as core_map_values, reverse as core_list_reverse,
         skip as core_list_skip, slice as core_list_slice, take as core_list_take,
     },
+    compression::gzip_decompress as core_gzip_decompress,
     crypto::{
         hmac_sha256_hex as core_hmac_sha256_hex, sha3_224 as core_sha3_224,
         sha3_256 as core_sha3_256, sha256_hex as core_sha256_hex, shake128 as core_shake128,

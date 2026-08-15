@@ -336,9 +336,25 @@ pub mod crypto {
     }
 }
 
+/// Deterministic byte transformations. The caller supplies all input and owns
+/// output budgeting; this module never reads files, clocks, or host state.
+pub mod compression {
+    use std::io::Read;
+
+    pub fn gzip_decompress(value: &[u8]) -> Result<Vec<u8>, String> {
+        let mut decoder = flate2::read::GzDecoder::new(value);
+        let mut out = Vec::new();
+        decoder
+            .read_to_end(&mut out)
+            .map(|_| out)
+            .map_err(|error| error.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{collections::*, crypto, date, encoding::*, regex::CompiledRegex};
+    use super::{collections::*, compression, crypto, date, encoding::*, regex::CompiledRegex};
+    use std::io::Write;
 
     #[test]
     fn encoding_algorithms_are_deterministic_and_round_trip() {
@@ -438,5 +454,17 @@ mod tests {
             crypto::hmac_sha256_hex(b"key", b"rsscript"),
             "b8eea96b9c160cf61f841cac85540ab416eb5d58ebd4ade171ff9da3c7884927"
         );
+    }
+
+    #[test]
+    fn gzip_decompression_is_a_pure_byte_transform() {
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(b"rsscript corelib").unwrap();
+        let encoded = encoder.finish().unwrap();
+        assert_eq!(
+            compression::gzip_decompress(&encoded).unwrap(),
+            b"rsscript corelib"
+        );
+        assert!(compression::gzip_decompress(b"not gzip").is_err());
     }
 }

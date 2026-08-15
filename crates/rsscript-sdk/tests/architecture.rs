@@ -922,6 +922,7 @@ fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
         "pub fn sha3_256",
         "pub fn shake128",
         "pub fn hmac_sha256_hex",
+        "pub fn gzip_decompress",
     ] {
         assert!(
             corelib.contains(required),
@@ -942,6 +943,7 @@ fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
         "sha2 =",
         "sha3 =",
         "hmac =",
+        "flate2 =",
     ] {
         assert!(
             !vm_runtime_dependencies.contains(removed),
@@ -954,6 +956,7 @@ fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
     assert!(intrinsics.contains("base64_decode(text)"));
     assert!(intrinsics.contains("core_sha256_hex(value)"));
     assert!(intrinsics.contains("core_hmac_sha256_hex(key, value)"));
+    assert!(intrinsics.contains("core_gzip_decompress(value)"));
     assert!(hex.contains("core_hex_decode(text)"));
     assert!(url.contains("url_decode_component(value)"));
     assert!(regex.contains("CompiledRegex::compile(pattern)"));

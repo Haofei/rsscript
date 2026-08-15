@@ -429,13 +429,10 @@ impl RegVm {
             }
             RegIntrinsic::GzipDecompressBytes => {
                 let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let mut decoder = GzDecoder::new(value);
-                let mut out = Vec::new();
                 Ok(json_result(
-                    decoder
-                        .read_to_end(&mut out)
-                        .map(|_| VmValue::Bytes(Rc::new(out)))
-                        .map_err(|error| decode_error_value(error.to_string())),
+                    core_gzip_decompress(value)
+                        .map(|out| VmValue::Bytes(Rc::new(out)))
+                        .map_err(decode_error_value),
                 ))
             }
             RegIntrinsic::HexDecode | RegIntrinsic::HexEncode | RegIntrinsic::HexEncodeString => {
