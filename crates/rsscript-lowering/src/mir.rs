@@ -1790,6 +1790,47 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
                     self.emit(MirInstruction::Retain { place });
                 }
             }
+            "clear" if signature.namespace.as_deref() == Some("SortedMap") => {
+                if receiver.is_some() || args.len() != 1 {
+                    return self.unsupported("SortedMap.clear with invalid checked call shape");
+                }
+                let map = self.lower_mutable_builtin_place(&args[0].value)?;
+                self.emit(MirInstruction::SortedMapClear { destination, map });
+            }
+            "insert" if signature.namespace.as_deref() == Some("SortedMap") => {
+                if receiver.is_some() || args.len() != 3 {
+                    return self.unsupported("SortedMap.insert with invalid checked call shape");
+                }
+                let mut ordered = args.iter().collect::<Vec<_>>();
+                ordered.sort_by_key(|argument| argument.evaluation_index);
+                let map = self.lower_mutable_builtin_place(&ordered[0].value)?;
+                let (key, retained_key) = self.lower_retained_builtin_value(&ordered[1].value)?;
+                let (value, retained_value) =
+                    self.lower_retained_builtin_value(&ordered[2].value)?;
+                self.emit(MirInstruction::SortedMapInsert {
+                    destination,
+                    map,
+                    key,
+                    value,
+                });
+                for place in [retained_key, retained_value].into_iter().flatten() {
+                    self.emit(MirInstruction::Retain { place });
+                }
+            }
+            "remove" if signature.namespace.as_deref() == Some("SortedMap") => {
+                if receiver.is_some() || args.len() != 2 {
+                    return self.unsupported("SortedMap.remove with invalid checked call shape");
+                }
+                let mut ordered = args.iter().collect::<Vec<_>>();
+                ordered.sort_by_key(|argument| argument.evaluation_index);
+                let map = self.lower_mutable_builtin_place(&ordered[0].value)?;
+                let key = self.lower_expression(&ordered[1].value)?;
+                self.emit(MirInstruction::SortedMapRemove {
+                    destination,
+                    map,
+                    key,
+                });
+            }
             "get" if signature.namespace.as_deref() == Some("Map") => {
                 if receiver.is_some() || args.len() != 2 {
                     return self.unsupported("Map.get with invalid checked call shape");

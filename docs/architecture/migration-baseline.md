@@ -1059,6 +1059,13 @@ mechanical acceptance condition holds.
       direct/legacy bytecode fixture proves front/back ordering and option
       results. Its reference-interpreter exception is explicit because the
       oracle does not model `Deque` runtime representation.
+    - [x] **M03.4m — Lower special mutable ordered-map updates without legacy
+      intrinsics.** `SortedMap.insert`, `remove`, and `clear` become dedicated
+      MIR operations over a mutable `PlaceId`; insertion retains checked `read`
+      key/value locals explicitly. The direct/legacy bytecode fixture proves
+      replacement, option removal, and cleanup of the mutable map. Its named
+      reference-interpreter exception is explicit because the small oracle does
+      not model `SortedMap` runtime representation.
 - [ ] **M04 — Lower checked HIR to MIR exactly once.** Backend code cannot
   inspect syntax AST or reconstruct semantic facts. MIR verification rejects
   unresolved calls, invalid ownership state, incomplete cleanup, and malformed
@@ -1301,6 +1308,12 @@ mechanical acceptance condition holds.
       map explicit mutable deque places and values to verifier-checked v1
       instructions. Direct parity checks cover ordered mutations, option
       results, and retention facts.
+    - [x] **V02.3n — Emit resolved mutable ordered-map updates.**
+      `SortedMapClear`, `SortedMapInsert`, and `SortedMapRemove` map explicit
+      mutable ordered-map places and resolved values to their existing
+      verifier-checked v1 instructions. Direct parity checks cover replacement,
+      option results, and key/value retention facts without source-shaped
+      executable-IR recovery.
   - [x] **V02.4 — Switch reviewed builds to the compiler bytecode boundary.**
     SDK source, interface, and package builds delegate checked HIR → MIR →
     `codegen-vm` Artifact emission to the compiler's VM-free `bytecode`

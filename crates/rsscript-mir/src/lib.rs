@@ -240,6 +240,25 @@ pub enum MirInstruction {
         deque: PlaceId,
         value: ValueId,
     },
+    /// Clear a resolved mutable ordered-map place.
+    SortedMapClear {
+        destination: ValueId,
+        map: PlaceId,
+    },
+    /// Insert a key/value pair into a resolved mutable ordered-map place.
+    SortedMapInsert {
+        destination: ValueId,
+        map: PlaceId,
+        key: ValueId,
+        value: ValueId,
+    },
+    /// Remove a key from a resolved mutable ordered-map place and return the
+    /// removed value as an `Option`.
+    SortedMapRemove {
+        destination: ValueId,
+        map: PlaceId,
+        key: ValueId,
+    },
     /// Read a value from a resolved mutable map. The result remains an
     /// `Option` so absence is explicit in the typed control-flow graph rather
     /// than hidden in a source-level `Map.get` spelling.
@@ -1332,6 +1351,9 @@ fn instruction_definitions(instruction: &MirInstruction) -> Vec<ValueId> {
         | MirInstruction::DequePopFront { destination, .. }
         | MirInstruction::DequePushBack { destination, .. }
         | MirInstruction::DequePushFront { destination, .. }
+        | MirInstruction::SortedMapClear { destination, .. }
+        | MirInstruction::SortedMapInsert { destination, .. }
+        | MirInstruction::SortedMapRemove { destination, .. }
         | MirInstruction::MapGet { destination, .. }
         | MirInstruction::MapClear { destination, .. }
         | MirInstruction::MapInsert { destination, .. }
@@ -1395,6 +1417,8 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         }
         MirInstruction::DequePushBack { value, .. }
         | MirInstruction::DequePushFront { value, .. } => vec![*value],
+        MirInstruction::SortedMapInsert { key, value, .. } => vec![*key, *value],
+        MirInstruction::SortedMapRemove { key, .. } => vec![*key],
         MirInstruction::MapGet { map, key, .. } => vec![*map, *key],
         MirInstruction::MapInsert { key, value, .. }
         | MirInstruction::MapInsertOld { key, value, .. } => vec![*key, *value],
@@ -1439,7 +1463,8 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         | MirInstruction::SetClear { .. }
         | MirInstruction::DequeClear { .. }
         | MirInstruction::DequePopBack { .. }
-        | MirInstruction::DequePopFront { .. } => Vec::new(),
+        | MirInstruction::DequePopFront { .. }
+        | MirInstruction::SortedMapClear { .. } => Vec::new(),
         MirInstruction::TryResult { source, .. } => vec![*source],
     }
 }
@@ -1589,6 +1614,9 @@ fn transfer_move_state(
         | MirInstruction::DequePopFront { deque, .. }
         | MirInstruction::DequePushBack { deque, .. }
         | MirInstruction::DequePushFront { deque, .. } => check_live(*deque, moved_places),
+        MirInstruction::SortedMapClear { map, .. }
+        | MirInstruction::SortedMapInsert { map, .. }
+        | MirInstruction::SortedMapRemove { map, .. } => check_live(*map, moved_places),
         MirInstruction::MapInsert { map, .. }
         | MirInstruction::MapInsertOld { map, .. }
         | MirInstruction::MapRemove { map, .. } => check_live(*map, moved_places),
@@ -1807,6 +1835,32 @@ fn verify_instruction(
             check_live_place(*deque, moved_places)?;
             define(*destination, defined)?;
             used.push(*value);
+            Ok(())
+        }
+        MirInstruction::SortedMapClear { destination, map } => {
+            check_live_place(*map, moved_places)?;
+            define(*destination, defined)
+        }
+        MirInstruction::SortedMapInsert {
+            destination,
+            map,
+            key,
+            value,
+        } => {
+            check_live_place(*map, moved_places)?;
+            define(*destination, defined)?;
+            used.push(*key);
+            used.push(*value);
+            Ok(())
+        }
+        MirInstruction::SortedMapRemove {
+            destination,
+            map,
+            key,
+        } => {
+            check_live_place(*map, moved_places)?;
+            define(*destination, defined)?;
+            used.push(*key);
             Ok(())
         }
         MirInstruction::MapClear { destination, map } => {

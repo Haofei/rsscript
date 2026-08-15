@@ -575,6 +575,39 @@ fn lower_instruction(
                 ("value", json!(value_reg(function, *value))),
             ],
         )),
+        MirInstruction::SortedMapClear { destination, map } => code.push(instr(
+            "SortedMapClear",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("map", json!(place_reg(*map))),
+            ],
+        )),
+        MirInstruction::SortedMapInsert {
+            destination,
+            map,
+            key,
+            value,
+        } => code.push(instr(
+            "SortedMapInsert",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("map", json!(place_reg(*map))),
+                ("key", json!(value_reg(function, *key))),
+                ("value", json!(value_reg(function, *value))),
+            ],
+        )),
+        MirInstruction::SortedMapRemove {
+            destination,
+            map,
+            key,
+        } => code.push(instr(
+            "SortedMapRemove",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("map", json!(place_reg(*map))),
+                ("key", json!(value_reg(function, *key))),
+            ],
+        )),
         MirInstruction::MapGet {
             destination,
             map,

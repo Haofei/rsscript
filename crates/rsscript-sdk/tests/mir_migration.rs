@@ -540,6 +540,27 @@ fn main() -> Int {
 "#,
     },
     MigrationCase {
+        name: "sorted_map_mutations",
+        capability: "resolved mutable ordered-map updates with retention and option results",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn main() -> Int {
+    let mut values = SortedMap.new<Int, Int>()
+    let key = 1
+    let initial = 4
+    let replacement = 7
+    SortedMap.insert<Int, Int>(map: mut values, key: read key, value: read initial)
+    SortedMap.insert<Int, Int>(map: mut values, key: read key, value: read replacement)
+    let removed = match SortedMap.remove<Int, Int>(map: mut values, key: read key) {
+        Some(value) => { value }
+        None => { return 0 }
+    }
+    SortedMap.clear<Int, Int>(map: mut values)
+    return removed
+}
+"#,
+    },
+    MigrationCase {
         name: "typed_json_decode",
         capability: "typed JSON decode builtins and record layouts",
         stage: MigrationStage::DualPath,
@@ -575,6 +596,12 @@ const EVIDENCE_OVERRIDES: &[MigrationEvidenceOverride] = &[
         case: "deque_mutations",
         evidence: MigrationEvidence::VerifiedBytecode {
             reference_interpreter_gap: "the test-only MIR interpreter does not model Deque.new or deque runtime representation",
+        },
+    },
+    MigrationEvidenceOverride {
+        case: "sorted_map_mutations",
+        evidence: MigrationEvidence::VerifiedBytecode {
+            reference_interpreter_gap: "the test-only MIR interpreter does not model SortedMap.new or ordered-map runtime representation",
         },
     },
 ];
@@ -1043,6 +1070,71 @@ fn main() -> Int {
     let legacy = reg_vm_eval_source_main("direct-hir-deque-mutations.rss", source)
         .expect("legacy Deque mutation path executes");
     assert_eq!(legacy.value, "3");
+    assert_eq!(direct.value, legacy.value);
+    assert_eq!(direct.stdout, legacy.stdout);
+    assert_eq!(direct.stderr, legacy.stderr);
+    assert_eq!(direct.usage, legacy.usage);
+}
+
+#[test]
+fn direct_checked_hir_sorted_map_mutations_preserve_retention_and_option_contracts() {
+    let source = r#"
+fn main() -> Int {
+    let mut values = SortedMap.new<Int, Int>()
+    let key = 1
+    let initial = 4
+    let replacement = 7
+    SortedMap.insert<Int, Int>(map: mut values, key: read key, value: read initial)
+    SortedMap.insert<Int, Int>(map: mut values, key: read key, value: read replacement)
+    let removed = match SortedMap.remove<Int, Int>(map: mut values, key: read key) {
+        Some(value) => { value }
+        None => { return 0 }
+    }
+    SortedMap.clear<Int, Int>(map: mut values)
+    return removed
+}
+"#;
+    let compiled = compile_source_to_ir("direct-hir-sorted-map-mutations.rss", source)
+        .expect("SortedMap mutation fixture compiles");
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("SortedMap mutations should lower directly from checked HIR");
+    let instructions = mir
+        .functions()
+        .iter()
+        .flat_map(|function| function.blocks())
+        .flat_map(|block| block.instructions())
+        .collect::<Vec<_>>();
+    for expected in ["SortedMapInsert", "SortedMapRemove", "SortedMapClear"] {
+        assert!(
+            instructions
+                .iter()
+                .any(|instruction| match (expected, instruction) {
+                    ("SortedMapInsert", MirInstruction::SortedMapInsert { .. })
+                    | ("SortedMapRemove", MirInstruction::SortedMapRemove { .. })
+                    | ("SortedMapClear", MirInstruction::SortedMapClear { .. }) => true,
+                    _ => false,
+                }),
+            "direct MIR must preserve {expected} as an explicit mutable-place operation"
+        );
+    }
+    assert!(
+        instructions
+            .iter()
+            .any(|instruction| matches!(instruction, MirInstruction::Retain { .. })),
+        "SortedMap insertion must retain read-local keys and values explicitly"
+    );
+    let direct = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("SortedMap mutation MIR emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("SortedMap mutation bytecode executes");
+    let legacy = reg_vm_eval_source_main("direct-hir-sorted-map-mutations.rss", source)
+        .expect("legacy SortedMap mutation path executes");
+    assert_eq!(legacy.value, "7");
     assert_eq!(direct.value, legacy.value);
     assert_eq!(direct.stdout, legacy.stdout);
     assert_eq!(direct.stderr, legacy.stderr);

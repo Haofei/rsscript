@@ -749,7 +749,10 @@ impl<'a> Interpreter<'a> {
                     | MirInstruction::DequePopBack { .. }
                     | MirInstruction::DequePopFront { .. }
                     | MirInstruction::DequePushBack { .. }
-                    | MirInstruction::DequePushFront { .. } => {
+                    | MirInstruction::DequePushFront { .. }
+                    | MirInstruction::SortedMapClear { .. }
+                    | MirInstruction::SortedMapInsert { .. }
+                    | MirInstruction::SortedMapRemove { .. } => {
                         return Err(MirExecutionError::UnsupportedBuiltinCall);
                     }
                     MirInstruction::MapGet {
