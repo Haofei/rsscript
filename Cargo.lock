@@ -1896,6 +1896,7 @@ dependencies = [
  "rsscript-operation",
  "rsscript-semantics",
  "rsscript-workspace-loader",
+ "rustix",
  "sha2",
  "tempfile",
 ]

@@ -11,7 +11,9 @@
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
-use std::path::Path;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
+use std::path::{Component, Path, PathBuf};
 
 use rsscript_operation::OperationContext;
 use rsscript_semantics::FrontendInputSnapshot;
@@ -23,6 +25,557 @@ use sha2::{Digest, Sha256};
 
 pub use rsscript_artifact::PackageIdentityV1 as PackageIdentity;
 pub use rsscript_workspace_loader::WorkspaceSourceFile;
+
+const PROJECT_CAPTURE_MAX_FILES: usize = 20_000;
+const PROJECT_CAPTURE_MAX_ENTRIES: usize = 40_000;
+const PROJECT_CAPTURE_MAX_BYTES: u64 = 512 * 1024 * 1024;
+const PROJECT_CAPTURE_MAX_DEPTH: usize = 64;
+
+/// Private, bounded filesystem capture of a package graph.
+///
+/// The temporary directory remains owned by this value, so a compiler or
+/// review adapter can safely consume the captured paths without reopening the
+/// original package graph. This is intentionally a project boundary rather
+/// than a compiler facility: it performs OS I/O and rejects link-like entries.
+#[derive(Debug)]
+pub struct CapturedProjectGraph {
+    _directory: tempfile::TempDir,
+    root: PathBuf,
+    paths: Vec<(PathBuf, PathBuf)>,
+}
+
+impl CapturedProjectGraph {
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Captured path corresponding to an original package root.
+    pub fn captured_path(&self, original: &Path) -> Option<&Path> {
+        let original = original
+            .canonicalize()
+            .unwrap_or_else(|_| original.to_path_buf());
+        self.paths
+            .iter()
+            .find(|(candidate, _)| {
+                candidate
+                    .canonicalize()
+                    .unwrap_or_else(|_| candidate.clone())
+                    == original
+            })
+            .map(|(_, captured)| captured.as_path())
+    }
+
+    /// Map a captured path back to its source graph path for diagnostics and
+    /// human presentation. No mutable checkout path is exposed.
+    pub fn original_path(&self, captured_path: &Path) -> Option<PathBuf> {
+        let captured_path = captured_path
+            .canonicalize()
+            .unwrap_or_else(|_| captured_path.to_path_buf());
+        self.paths.iter().find_map(|(original, captured)| {
+            let captured = captured
+                .canonicalize()
+                .unwrap_or_else(|_| captured.to_path_buf());
+            captured_path.strip_prefix(&captured).ok().map(|relative| {
+                if relative.as_os_str().is_empty() {
+                    original.clone()
+                } else {
+                    original.join(relative)
+                }
+            })
+        })
+    }
+
+    pub fn path_mappings(&self) -> &[(PathBuf, PathBuf)] {
+        &self.paths
+    }
+}
+
+/// Capture the given package roots into one private temporary graph.
+///
+/// Roots are canonicalized, deduplicated, copied in deterministic order, and
+/// mirrored below a private `packages/` directory. The caller supplies only
+/// names to exclude from every copied directory; no caller-controlled copy
+/// callback can weaken the confinement or resource bounds.
+pub fn capture_project_graph(
+    roots: impl IntoIterator<Item = PathBuf>,
+    excluded_entry_names: impl IntoIterator<Item = impl AsRef<str>>,
+    operation: Option<&OperationContext>,
+) -> Result<CapturedProjectGraph, String> {
+    check_capture_operation(operation)?;
+    let excluded = excluded_entry_names
+        .into_iter()
+        .map(|name| name.as_ref().to_owned())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut roots = roots
+        .into_iter()
+        .map(|original| canonical_capture_root(&original).map(|canonical| (original, canonical)))
+        .collect::<Result<Vec<_>, _>>()?;
+    roots.sort_by(|(_, left), (_, right)| left.cmp(right));
+    roots.dedup_by(|(_, left), (_, right)| left == right);
+    if roots.is_empty() {
+        return Err("project graph capture requires at least one package root".to_string());
+    }
+
+    let directory = tempfile::Builder::new()
+        .prefix("rsscript-project-graph-")
+        .tempdir()
+        .map_err(|error| format!("failed to create private project graph snapshot: {error}"))?;
+    set_private_directory_permissions(directory.path())?;
+    let packages_root = directory.path().join("packages");
+    fs::create_dir_all(&packages_root).map_err(|error| {
+        format!(
+            "failed to create project graph snapshot root {}: {error}",
+            packages_root.display()
+        )
+    })?;
+    set_private_directory_permissions(&packages_root)?;
+
+    let mut paths = Vec::with_capacity(roots.len());
+    for (original, root) in roots {
+        check_capture_operation(operation)?;
+        let destination = mirrored_capture_path(&packages_root, &root)?;
+        copy_project_directory(&root, &destination, &excluded, operation)?;
+        paths.push((original, destination));
+    }
+    Ok(CapturedProjectGraph {
+        _directory: directory,
+        root: packages_root,
+        paths,
+    })
+}
+
+#[derive(Debug)]
+struct CaptureBudget {
+    files: usize,
+    entries: usize,
+    bytes: u64,
+}
+
+impl CaptureBudget {
+    fn check_operation(&self, operation: Option<&OperationContext>) -> Result<(), String> {
+        check_capture_operation(operation)
+    }
+
+    fn add_entry(
+        &mut self,
+        operation: Option<&OperationContext>,
+        path: &Path,
+    ) -> Result<(), String> {
+        self.check_operation(operation)?;
+        self.entries = self.entries.checked_add(1).ok_or_else(|| {
+            format!(
+                "project graph capture directory entry count overflow while visiting {}",
+                path.display()
+            )
+        })?;
+        if self.entries > PROJECT_CAPTURE_MAX_ENTRIES {
+            return Err(format!(
+                "project graph capture exceeded directory entry limit of {PROJECT_CAPTURE_MAX_ENTRIES} at {}",
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+
+    fn add_file(
+        &mut self,
+        operation: Option<&OperationContext>,
+        bytes: u64,
+        path: &Path,
+    ) -> Result<(), String> {
+        self.check_operation(operation)?;
+        self.files = self.files.checked_add(1).ok_or_else(|| {
+            format!(
+                "project graph capture file count overflow while visiting {}",
+                path.display()
+            )
+        })?;
+        self.bytes = self.bytes.checked_add(bytes).ok_or_else(|| {
+            format!(
+                "project graph capture byte count overflow while visiting {}",
+                path.display()
+            )
+        })?;
+        if self.files > PROJECT_CAPTURE_MAX_FILES {
+            return Err(format!(
+                "project graph capture exceeded file count limit of {PROJECT_CAPTURE_MAX_FILES} at {}",
+                path.display()
+            ));
+        }
+        if self.bytes > PROJECT_CAPTURE_MAX_BYTES {
+            return Err(format!(
+                "project graph capture exceeded total byte limit of {PROJECT_CAPTURE_MAX_BYTES} at {}",
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+
+    fn check_depth(
+        &self,
+        operation: Option<&OperationContext>,
+        depth: usize,
+        path: &Path,
+    ) -> Result<(), String> {
+        self.check_operation(operation)?;
+        if depth > PROJECT_CAPTURE_MAX_DEPTH {
+            return Err(format!(
+                "project graph capture exceeded directory depth limit of {PROJECT_CAPTURE_MAX_DEPTH} at {}",
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn check_capture_operation(operation: Option<&OperationContext>) -> Result<(), String> {
+    operation.map_or(Ok(()), |operation| {
+        operation
+            .check()
+            .map_err(|abort| format!("project graph capture stopped: {abort:?}"))
+    })
+}
+
+fn canonical_capture_root(path: &Path) -> Result<PathBuf, String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "failed to inspect project capture root {}: {error}",
+            path.display()
+        )
+    })?;
+    if !metadata.is_dir() || is_link_like(&metadata) {
+        return Err(format!(
+            "project graph capture requires a non-link directory root: {}",
+            path.display()
+        ));
+    }
+    fs::canonicalize(path).map_err(|error| {
+        format!(
+            "failed to canonicalize project capture root {}: {error}",
+            path.display()
+        )
+    })
+}
+
+fn mirrored_capture_path(root: &Path, source: &Path) -> Result<PathBuf, String> {
+    let mut destination = root.to_path_buf();
+    for component in source.components() {
+        match component {
+            Component::Prefix(prefix) => destination.push(capture_path_component(
+                &prefix.as_os_str().to_string_lossy(),
+            )),
+            Component::RootDir => destination.push("root"),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(format!(
+                    "project graph capture root must be canonical: {}",
+                    source.display()
+                ));
+            }
+            Component::Normal(component) => {
+                destination.push(capture_path_component(&component.to_string_lossy()))
+            }
+        }
+    }
+    Ok(destination)
+}
+
+fn capture_path_component(component: &str) -> String {
+    let mut encoded = String::with_capacity(component.len());
+    for byte in component.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_') {
+            encoded.push(byte as char);
+        } else {
+            use std::fmt::Write as _;
+            let _ = write!(encoded, "_{byte:02x}");
+        }
+    }
+    if encoded.is_empty() {
+        "_".to_string()
+    } else {
+        encoded
+    }
+}
+
+fn copy_project_directory(
+    source: &Path,
+    destination: &Path,
+    excluded: &std::collections::BTreeSet<String>,
+    operation: Option<&OperationContext>,
+) -> Result<(), String> {
+    let root = canonical_capture_root(source)?;
+    let mut budget = CaptureBudget {
+        files: 0,
+        entries: 0,
+        bytes: 0,
+    };
+    copy_project_directory_inner(
+        &root,
+        &root,
+        destination,
+        excluded,
+        operation,
+        0,
+        &mut budget,
+    )
+}
+
+fn copy_project_directory_inner(
+    root: &Path,
+    source: &Path,
+    destination: &Path,
+    excluded: &std::collections::BTreeSet<String>,
+    operation: Option<&OperationContext>,
+    depth: usize,
+    budget: &mut CaptureBudget,
+) -> Result<(), String> {
+    budget.check_depth(operation, depth, source)?;
+    let metadata = capture_path_metadata(root, source)?;
+    if metadata.is_file() {
+        let (input, metadata) = open_capture_file_within_root(root, source)?;
+        budget.add_file(operation, metadata.len(), source)?;
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
+            set_private_directory_permissions(parent)?;
+        }
+        copy_capture_file(input, source, destination, metadata.len())?;
+        return Ok(());
+    }
+    if !metadata.is_dir() {
+        return Err(format!(
+            "project graph capture only accepts regular files and directories: {}",
+            source.display()
+        ));
+    }
+    fs::create_dir_all(destination)
+        .map_err(|error| format!("failed to create {}: {error}", destination.display()))?;
+    set_private_directory_permissions(destination)?;
+    let mut entries = fs::read_dir(source)
+        .map_err(|error| format!("failed to read {}: {error}", source.display()))?
+        .map(|entry| {
+            entry.map_err(|error| format!("failed to read entry in {}: {error}", source.display()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for entry in &entries {
+        budget.add_entry(operation, &entry.path())?;
+    }
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let name = entry.file_name();
+        if excluded.contains(&name.to_string_lossy().to_string()) {
+            continue;
+        }
+        let path = entry.path();
+        let target = destination.join(&name);
+        copy_project_directory_inner(root, &path, &target, excluded, operation, depth + 1, budget)?;
+    }
+    Ok(())
+}
+
+fn capture_path_metadata(root: &Path, path: &Path) -> Result<fs::Metadata, String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "failed to inspect project capture path {}: {error}",
+            path.display()
+        )
+    })?;
+    if is_link_like(&metadata) {
+        return Err(format!(
+            "project graph capture rejects symlinks or reparse points: {}",
+            path.display()
+        ));
+    }
+    ensure_capture_path_within_root(root, path)?;
+    Ok(metadata)
+}
+
+fn ensure_capture_path_within_root(root: &Path, path: &Path) -> Result<(), String> {
+    let canonical = fs::canonicalize(path).map_err(|error| {
+        format!(
+            "failed to canonicalize project capture path {}: {error}",
+            path.display()
+        )
+    })?;
+    if canonical.strip_prefix(root).is_ok() {
+        Ok(())
+    } else {
+        Err(format!(
+            "project graph capture path escapes its root: {}",
+            path.display()
+        ))
+    }
+}
+
+fn open_capture_file_within_root(root: &Path, path: &Path) -> Result<(File, fs::Metadata), String> {
+    let relative = path.strip_prefix(root).map_err(|_| {
+        format!(
+            "project graph capture path escapes its root: {}",
+            path.display()
+        )
+    })?;
+    #[cfg(unix)]
+    {
+        use rustix::fs::{Mode, OFlags};
+
+        let root_fd = rustix::fs::open(
+            root,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|error| {
+            format!(
+                "failed to open project capture root {}: {error}",
+                root.display()
+            )
+        })?;
+        let mut current = File::from(root_fd);
+        let mut components = relative.components().peekable();
+        while let Some(component) = components.next() {
+            let Component::Normal(component) = component else {
+                return Err(format!(
+                    "project graph capture path is not confined: {}",
+                    path.display()
+                ));
+            };
+            let flags = if components.peek().is_some() {
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC
+            } else {
+                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC
+            };
+            let fd =
+                rustix::fs::openat(&current, component, flags, Mode::empty()).map_err(|error| {
+                    format!(
+                        "failed to open confined project capture path {}: {error}",
+                        path.display()
+                    )
+                })?;
+            current = File::from(fd);
+        }
+        let metadata = current
+            .metadata()
+            .map_err(|error| format!("failed to inspect opened {}: {error}", path.display()))?;
+        if !metadata.is_file() || is_link_like(&metadata) {
+            return Err(format!(
+                "project graph capture requires a regular file: {}",
+                path.display()
+            ));
+        }
+        Ok((current, metadata))
+    }
+    #[cfg(not(unix))]
+    {
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+            options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        }
+        let file = options.open(path).map_err(|error| {
+            format!(
+                "failed to open project capture path {}: {error}",
+                path.display()
+            )
+        })?;
+        let metadata = file
+            .metadata()
+            .map_err(|error| format!("failed to inspect opened {}: {error}", path.display()))?;
+        if !metadata.is_file() || is_link_like(&metadata) {
+            return Err(format!(
+                "project graph capture requires a regular file: {}",
+                path.display()
+            ));
+        }
+        Ok((file, metadata))
+    }
+}
+
+fn copy_capture_file(
+    mut input: File,
+    source: &Path,
+    destination: &Path,
+    expected: u64,
+) -> Result<(), String> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let mut output = options
+        .open(destination)
+        .map_err(|error| format!("failed to create {}: {error}", destination.display()))?;
+    let metadata = output
+        .metadata()
+        .map_err(|error| format!("failed to inspect {}: {error}", destination.display()))?;
+    if !metadata.is_file() || is_link_like(&metadata) {
+        let _ = fs::remove_file(destination);
+        return Err(format!(
+            "project graph capture destination is not a regular file: {}",
+            destination.display()
+        ));
+    }
+    let copied = std::io::copy(
+        &mut Read::by_ref(&mut input).take(expected.saturating_add(1)),
+        &mut output,
+    )
+    .map_err(|error| {
+        format!(
+            "failed to copy {} to {}: {error}",
+            source.display(),
+            destination.display()
+        )
+    })?;
+    if copied != expected {
+        let _ = fs::remove_file(destination);
+        return Err(format!(
+            "project graph capture input changed while copying: {}",
+            source.display()
+        ));
+    }
+    output.flush().map_err(|error| {
+        format!(
+            "failed to flush copied file {}: {error}",
+            destination.display()
+        )
+    })
+}
+
+fn is_link_like(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    false
+}
+
+#[cfg(unix)]
+fn set_private_directory_permissions(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+        .map_err(|error| format!("failed to protect {}: {error}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn set_private_directory_permissions(_path: &Path) -> Result<(), String> {
+    Ok(())
+}
 
 /// Native dependency metadata captured as part of an immutable project graph.
 ///
@@ -245,6 +798,56 @@ fn frontend_snapshot_digest(snapshot: &FrontendInputSnapshot) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_graph_capture_is_private_bounded_and_maps_paths_back() {
+        let directory = tempfile::tempdir().expect("workspace");
+        let package = directory.path().join("package");
+        std::fs::create_dir_all(package.join("nested")).expect("package directories");
+        std::fs::write(
+            package.join("main.rss"),
+            "fn main() -> Unit { return Unit }",
+        )
+        .expect("source");
+        std::fs::write(package.join("nested/input.txt"), "captured").expect("input");
+        std::fs::write(package.join("target"), "excluded").expect("excluded input");
+
+        let graph = capture_project_graph([package.clone()], ["target"], None)
+            .expect("bounded graph capture");
+        let captured = graph
+            .captured_path(&package)
+            .expect("original package has a captured path");
+        assert_eq!(
+            std::fs::read_to_string(captured.join("nested/input.txt")).expect("captured contents"),
+            "captured"
+        );
+        assert!(!captured.join("target").exists());
+        assert_eq!(
+            graph.original_path(&captured.join("nested/input.txt")),
+            Some(package.join("nested/input.txt"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn project_graph_capture_rejects_links_without_reading_their_target() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("workspace");
+        let package = directory.path().join("package");
+        let outside = directory.path().join("outside");
+        std::fs::create_dir_all(&package).expect("package directory");
+        std::fs::write(&outside, "outside").expect("outside input");
+        symlink(&outside, package.join("link")).expect("fixture link");
+
+        let error = capture_project_graph([package], std::iter::empty::<&str>(), None)
+            .expect_err("links are not a valid package capture input");
+        assert!(error.contains("rejects symlinks"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(outside).expect("outside contents"),
+            "outside"
+        );
+    }
 
     #[test]
     fn frontend_digest_excludes_test_files_but_retains_logical_source_identity() {

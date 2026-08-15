@@ -10,7 +10,8 @@ rsscript-artifact = { path = "../rsscript-artifact" }
 rsscript-operation = { path = "../rsscript-operation" }
 rsscript-semantics = { path = "../rsscript-semantics" }
 rsscript-workspace-loader = { path = "../rsscript-workspace-loader" }
+rustix = { version = "1.1", features = ["fs"] }
 sha2 = "0.10"
+tempfile = "3"
 
 [dev-dependencies]
-tempfile = "3"

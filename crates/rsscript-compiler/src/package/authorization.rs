@@ -4,6 +4,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use fs2::FileExt;
+use rsscript_project::{CapturedProjectGraph, capture_project_graph};
 use sha2::{Digest, Sha256};
 
 use super::analysis::analyze_package_dir_captured;
@@ -12,15 +13,14 @@ use super::dependency::{DependencyResolutionScope, resolve_dependency_graph};
 use super::{
     NativePluginBuildDependency, PackageAnalysis, PackageCheck, PackageLock, PackageLoweringInput,
     PackageReview, PackageTree, PackageTreeNode, TreeLimits, collect_bounded_regular_files,
-    copy_package_directory, copy_package_directory_with_operation, package_lock_toml,
-    package_lowering_input, package_native_plugin_build_dependencies, package_path_source,
+    package_lock_toml, package_lowering_input, package_native_plugin_build_dependencies,
+    package_path_source,
 };
 
 #[derive(Debug)]
 pub(super) struct PackageGraphSnapshot {
-    _directory: tempfile::TempDir,
+    captured: CapturedProjectGraph,
     root: PathBuf,
-    paths: Vec<(PathBuf, PathBuf)>,
 }
 
 impl PackageGraphSnapshot {
@@ -29,21 +29,7 @@ impl PackageGraphSnapshot {
     }
 
     pub(super) fn original_path(&self, snapshot_path: &Path) -> Option<PathBuf> {
-        let snapshot_path = snapshot_path
-            .canonicalize()
-            .unwrap_or_else(|_| snapshot_path.to_path_buf());
-        self.paths.iter().find_map(|(original, captured)| {
-            let captured = captured
-                .canonicalize()
-                .unwrap_or_else(|_| captured.to_path_buf());
-            snapshot_path.strip_prefix(&captured).ok().map(|relative| {
-                if relative.as_os_str().is_empty() {
-                    original.clone()
-                } else {
-                    original.join(relative)
-                }
-            })
-        })
+        self.captured.original_path(snapshot_path)
     }
 
     fn remap_path_label(&self, value: &str) -> String {
@@ -59,7 +45,7 @@ impl PackageGraphSnapshot {
     }
 
     pub(super) fn remap_error(&self, error: String) -> String {
-        let mut paths = self.paths.iter().collect::<Vec<_>>();
+        let mut paths = self.captured.path_mappings().iter().collect::<Vec<_>>();
         paths.sort_by_key(|(_, captured)| std::cmp::Reverse(captured.as_os_str().len()));
         paths
             .into_iter()
@@ -467,40 +453,38 @@ fn snapshot_package_graph_inputs_inner(
     check_operation(operation)?;
     let graph = resolve_dependency_graph(package_dir, DependencyResolutionScope::Development)?;
     check_operation(operation)?;
-    let directory = tempfile::Builder::new()
-        .prefix("rsscript-package-graph-")
-        .tempdir()
-        .map_err(|error| format!("failed to create private package graph snapshot: {error}"))?;
-    set_package_snapshot_permissions(directory.path())?;
-
-    let packages_root = directory.path().join("packages");
-    fs::create_dir_all(&packages_root).map_err(|error| {
-        format!(
-            "failed to create package graph snapshot root {}: {error}",
-            packages_root.display()
-        )
-    })?;
-    set_package_snapshot_permissions(&packages_root)?;
+    let captured = capture_project_graph(
+        graph.nodes.values().map(|node| node.package_dir.clone()),
+        [
+            ".git",
+            "target",
+            "vendor",
+            ".rsscript-artifacts.lock",
+            super::source_set::SNAPSHOT_MANIFEST_SOURCE_FILE,
+        ],
+        operation,
+    )?;
 
     let mut destinations = BTreeMap::new();
     for (key, node) in &graph.nodes {
         check_operation(operation)?;
         destinations.insert(
             key.clone(),
-            mirrored_snapshot_path(&packages_root, &node.package_dir)?,
+            captured
+                .captured_path(&node.package_dir)
+                .map(Path::to_path_buf)
+                .ok_or_else(|| {
+                    format!(
+                        "project graph capture omitted package root {}",
+                        node.package_dir.display()
+                    )
+                })?,
         );
     }
 
     for (key, node) in &graph.nodes {
         check_operation(operation)?;
         let destination = &destinations[key];
-        if !destination.join("rsspkg.toml").is_file() {
-            if let Some(operation) = operation {
-                copy_package_directory_with_operation(&node.package_dir, destination, operation)?;
-            } else {
-                copy_package_directory(&node.package_dir, destination)?;
-            }
-        }
         validate_captured_manifest(node, destination)?;
         fs::write(
             destination.join(super::source_set::SNAPSHOT_MANIFEST_SOURCE_FILE),
@@ -522,45 +506,7 @@ fn snapshot_package_graph_inputs_inner(
         .get(&graph.root)
         .cloned()
         .ok_or_else(|| "package graph snapshot did not contain its root package".to_string())?;
-    let paths = graph
-        .nodes
-        .iter()
-        .map(|(key, node)| (node.package_dir.clone(), destinations[key].clone()))
-        .collect();
-    Ok(PackageGraphSnapshot {
-        _directory: directory,
-        root,
-        paths,
-    })
-}
-
-fn mirrored_snapshot_path(root: &Path, source: &Path) -> Result<PathBuf, String> {
-    let source = source.canonicalize().map_err(|error| {
-        format!(
-            "failed to canonicalize package snapshot source {}: {error}",
-            source.display()
-        )
-    })?;
-    let mut destination = root.to_path_buf();
-    for component in source.components() {
-        match component {
-            std::path::Component::Prefix(prefix) => {
-                destination.push(snapshot_path_component(
-                    &prefix.as_os_str().to_string_lossy(),
-                ));
-            }
-            std::path::Component::RootDir => destination.push("root"),
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                return Err(format!(
-                    "canonical package snapshot source contains a parent component: {}",
-                    source.display()
-                ));
-            }
-            std::path::Component::Normal(component) => destination.push(component),
-        }
-    }
-    Ok(destination)
+    Ok(PackageGraphSnapshot { captured, root })
 }
 
 fn validate_captured_manifest(
@@ -577,19 +523,6 @@ fn validate_captured_manifest(
         ));
     }
     Ok(())
-}
-
-fn snapshot_path_component(value: &str) -> String {
-    value
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect()
 }
 
 fn rewrite_snapshot_manifests(
@@ -990,19 +923,6 @@ fn set_private_directory_permissions(path: &Path) -> Result<(), String> {
         .map_err(|error| format!("failed to protect {}: {error}", path.display()))
 }
 
-#[cfg(unix)]
-fn set_package_snapshot_permissions(path: &Path) -> Result<(), String> {
-    set_private_directory_permissions(path)
-}
-
-#[cfg(not(unix))]
-fn set_package_snapshot_permissions(_path: &Path) -> Result<(), String> {
-    // tempfile creates a per-user private directory where the platform backend
-    // supports it. Native loading still requires the stronger ACL verification
-    // enforced by set_private_directory_permissions.
-    Ok(())
-}
-
 #[cfg(not(unix))]
 fn set_private_directory_permissions(path: &Path) -> Result<(), String> {
     Err(format!(
@@ -1111,8 +1031,7 @@ mod tests {
     fn successful_check_is_the_only_authorized_package_constructor() {
         let root = pure_package_fixture();
         let lock = lock_package_dir(&root).expect("fixture lock");
-        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock))
-            .expect("fixture lockfile");
+        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock)).expect("fixture lockfile");
 
         let package = prepare_executable_package(&root).expect("checked fixture should authorize");
         assert_eq!(
@@ -1170,8 +1089,7 @@ mod tests {
     fn authorization_checks_the_captured_source_not_a_later_checkout_mutation() {
         let root = pure_package_fixture();
         let lock = lock_package_dir(&root).expect("fixture lock");
-        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock))
-            .expect("fixture lockfile");
+        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock)).expect("fixture lockfile");
 
         let original_root = root.canonicalize().expect("canonical fixture");
         let snapshot =
@@ -1196,8 +1114,7 @@ mod tests {
     fn captured_read_operations_ignore_later_checkout_mutation() {
         let root = pure_package_fixture();
         let lock = lock_package_dir(&root).expect("fixture lock");
-        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock))
-            .expect("fixture lockfile");
+        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock)).expect("fixture lockfile");
 
         let snapshot = snapshot_package_graph_inputs(&root).expect("package graph snapshot");
         fs::write(
@@ -1258,8 +1175,7 @@ mod tests {
         )
         .expect("root dependency manifest");
         let lock = lock_package_dir(&root).expect("fixture dependency lock");
-        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock))
-            .expect("fixture lockfile");
+        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock)).expect("fixture lockfile");
 
         let review = review_package_dir(&root).expect("public review");
         let check = check_package_dir(&root).expect("public check");
@@ -1348,8 +1264,7 @@ mod tests {
         )
         .expect("root dependency manifest");
         let lock = lock_package_dir(&root).expect("fixture dependency lock");
-        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock))
-            .expect("fixture lockfile");
+        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock)).expect("fixture lockfile");
 
         let original_root = root.canonicalize().expect("canonical fixture");
         let snapshot =
@@ -1395,8 +1310,7 @@ mod tests {
         let root = pure_package_fixture();
         add_native_dependency(&root);
         let lock = lock_package_dir(&root).expect("fixture lock");
-        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock))
-            .expect("fixture lockfile");
+        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock)).expect("fixture lockfile");
 
         let package =
             prepare_executable_package(&root).expect("checked native fixture should authorize");
@@ -1420,8 +1334,7 @@ mod tests {
         let root = pure_package_fixture();
         add_native_dependency(&root);
         let lock = lock_package_dir(&root).expect("fixture lock");
-        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock))
-            .expect("fixture lockfile");
+        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock)).expect("fixture lockfile");
 
         let package =
             prepare_executable_package(&root).expect("checked native fixture should authorize");
@@ -1447,8 +1360,7 @@ mod tests {
         let root = pure_package_fixture();
         add_native_dependency(&root);
         let lock = lock_package_dir(&root).expect("fixture lock");
-        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock))
-            .expect("fixture lockfile");
+        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock)).expect("fixture lockfile");
 
         let package =
             prepare_executable_package(&root).expect("checked native fixture should authorize");
@@ -1477,8 +1389,7 @@ mod tests {
         let root = pure_package_fixture();
         add_native_dependency(&root);
         let lock = lock_package_dir(&root).expect("fixture lock");
-        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock))
-            .expect("fixture lockfile");
+        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock)).expect("fixture lockfile");
 
         let first = prepare_executable_package(&root).expect("first authorization");
         let second = prepare_executable_package(&root).expect("second authorization");
@@ -1500,8 +1411,7 @@ mod tests {
         let root = pure_package_fixture();
         add_native_dependency(&root);
         let lock = lock_package_dir(&root).expect("fixture lock");
-        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock))
-            .expect("fixture lockfile");
+        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock)).expect("fixture lockfile");
 
         let error = prepare_executable_package(&root)
             .expect_err("external provider verification must require private cache enforcement");
@@ -1525,8 +1435,7 @@ mod tests {
         )
         .expect("fixture unlocked registry dependency");
         let lock = lock_package_dir(&root).expect("fixture RSS lock");
-        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock))
-            .expect("fixture lockfile");
+        fs::write(root.join("rsspkg.lock"), package_lock_toml(&lock)).expect("fixture lockfile");
 
         let error = prepare_executable_package(&root)
             .expect_err("native package without Cargo.lock must fail closed");

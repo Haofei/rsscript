@@ -25,8 +25,10 @@
 // Compatibility package/review tooling keeps its lint debt local to this module.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+#[cfg(not(unix))]
+use std::fs::OpenOptions;
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 use crate::diagnostic::Diagnostic;
@@ -171,68 +173,6 @@ fn collect_regular_files_inner(
     Ok(())
 }
 
-fn copy_package_directory(source: &Path, destination: &Path) -> Result<(), String> {
-    copy_package_directory_with_limits(source, destination, TreeLimits::default())
-}
-
-fn copy_package_directory_with_operation(
-    source: &Path,
-    destination: &Path,
-    operation: &rsscript_operation::OperationContext,
-) -> Result<(), String> {
-    let root = canonical_checked_root(source, "package copy")?;
-    let mut budget = TreeBudget::with_operation(TreeLimits::default(), operation);
-    copy_package_directory_inner(&root, source, destination, 0, &mut budget)
-}
-
-fn copy_package_directory_with_limits(
-    source: &Path,
-    destination: &Path,
-    limits: TreeLimits,
-) -> Result<(), String> {
-    let root = canonical_checked_root(source, "package copy")?;
-    let mut budget = TreeBudget::with_limits(limits);
-    copy_package_directory_inner(&root, source, destination, 0, &mut budget)
-}
-
-fn copy_package_directory_inner(
-    root: &Path,
-    source: &Path,
-    destination: &Path,
-    depth: usize,
-    budget: &mut TreeBudget,
-) -> Result<(), String> {
-    budget.check_depth(depth, "package copy", source)?;
-    let metadata = package_path_metadata(source, "package copy")?;
-    ensure_package_path_within_root(root, source, "package copy")?;
-    if metadata.is_file() {
-        let (input, opened_metadata) = open_regular_file_within_root(root, source, "package copy")?;
-        budget.add_file(opened_metadata.len(), "package copy", source)?;
-        if let Some(parent) = destination.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
-        }
-        copy_regular_file_bounded(input, source, destination, opened_metadata.len())?;
-        return Ok(());
-    }
-    if !metadata.is_dir() {
-        return Ok(());
-    }
-    fs::create_dir_all(destination)
-        .map_err(|error| format!("failed to create {}: {error}", destination.display()))?;
-    let entries = read_bounded_sorted_entries(source, "package copy", budget)?;
-    for entry in entries {
-        let path = entry.path();
-        let name = entry.file_name();
-        if should_skip_vendor_copy_entry(&name.to_string_lossy()) {
-            continue;
-        }
-        let target = destination.join(name);
-        copy_package_directory_inner(root, &path, &target, depth + 1, budget)?;
-    }
-    Ok(())
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct TreeLimits {
     pub max_files: usize,
@@ -269,19 +209,6 @@ impl TreeBudget {
             entries: 0,
             bytes: 0,
             operation: None,
-        }
-    }
-
-    fn with_operation(
-        limits: TreeLimits,
-        operation: &rsscript_operation::OperationContext,
-    ) -> Self {
-        Self {
-            limits,
-            files: 0,
-            entries: 0,
-            bytes: 0,
-            operation: Some(operation.clone()),
         }
     }
 
@@ -371,64 +298,6 @@ fn read_bounded_sorted_entries(
     }
     bounded.sort_by_key(|entry| entry.file_name());
     Ok(bounded)
-}
-
-fn copy_regular_file_bounded(
-    mut input: File,
-    source: &Path,
-    destination: &Path,
-    expected: u64,
-) -> Result<(), String> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    }
-    let mut output = options
-        .open(destination)
-        .map_err(|error| format!("failed to create {}: {error}", destination.display()))?;
-    let output_metadata = output
-        .metadata()
-        .map_err(|error| format!("failed to inspect {}: {error}", destination.display()))?;
-    if !output_metadata.is_file() || is_package_link_like(&output_metadata) {
-        let _ = fs::remove_file(destination);
-        return Err(format!(
-            "package copy destination is not a regular file: {}",
-            destination.display()
-        ));
-    }
-    let copied = std::io::copy(
-        &mut Read::by_ref(&mut input).take(expected.saturating_add(1)),
-        &mut output,
-    )
-    .map_err(|error| {
-        format!(
-            "failed to copy {} to {}: {error}",
-            source.display(),
-            destination.display()
-        )
-    })?;
-    if copied > expected {
-        let _ = fs::remove_file(destination);
-        return Err(format!(
-            "package copy source grew while being copied: {}",
-            source.display()
-        ));
-    }
-    output.flush().map_err(|error| {
-        format!(
-            "failed to flush copied file {}: {error}",
-            destination.display()
-        )
-    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -742,17 +611,6 @@ pub(super) fn ensure_package_path_within_root(
     }
 }
 
-fn should_skip_vendor_copy_entry(name: &str) -> bool {
-    matches!(
-        name,
-        ".git"
-            | "target"
-            | "vendor"
-            | ".rsscript-artifacts.lock"
-            | source_set::SNAPSHOT_MANIFEST_SOURCE_FILE
-    )
-}
-
 pub(super) fn dedup_diagnostics(diagnostics: &mut Vec<Diagnostic>) {
     let mut seen = BTreeSet::new();
     diagnostics.retain(|diagnostic| {
@@ -991,52 +849,6 @@ mod preparation_limit_tests {
             .expect_err("oversized manifest must be rejected");
         assert!(error.contains("byte limit of 4"), "{error}");
         fs::remove_dir_all(root).expect("fixture cleanup");
-    }
-
-    #[test]
-    fn package_copy_fails_before_copying_file_beyond_budget() {
-        let source = test_dir("copy-source");
-        let destination = test_dir("copy-destination");
-        fs::create_dir_all(&source).expect("source directory");
-        fs::write(source.join("large"), b"12345").expect("source file");
-
-        let error = copy_package_directory_with_limits(
-            &source,
-            &destination,
-            TreeLimits {
-                max_files: 10,
-                max_entries: 10,
-                max_bytes: 4,
-                max_depth: 10,
-            },
-        )
-        .expect_err("oversized package copy must fail");
-        assert!(error.contains("total byte limit"), "{error}");
-        assert!(!destination.join("large").exists());
-        let _ = fs::remove_dir_all(source);
-        let _ = fs::remove_dir_all(destination);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn package_copy_does_not_follow_substituted_destination_file() {
-        use std::os::unix::fs::symlink;
-
-        let source = test_dir("copy-link-source");
-        let destination = test_dir("copy-link-destination");
-        let outside = test_dir("copy-link-outside");
-        fs::create_dir_all(&source).expect("source directory");
-        fs::create_dir_all(&destination).expect("destination directory");
-        fs::write(source.join("file"), b"inside").expect("source file");
-        fs::write(&outside, b"outside").expect("outside file");
-        symlink(&outside, destination.join("file")).expect("destination symlink");
-
-        copy_package_directory(&source, &destination)
-            .expect_err("copy destination symlink must be rejected");
-        assert_eq!(fs::read(&outside).expect("outside read"), b"outside");
-        let _ = fs::remove_dir_all(source);
-        let _ = fs::remove_dir_all(destination);
-        let _ = fs::remove_file(outside);
     }
 
     #[cfg(unix)]

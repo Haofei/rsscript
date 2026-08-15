@@ -696,6 +696,12 @@ visible without manually re-sorting every open parent milestone.
     now physically owns `PackageLoweringInput` and `NativeRustDependency`; the
     compiler keeps compatibility re-exports only, while experimental AOT
     lowering consumes the project-owned capture model rather than defining it.
+    Its private `CapturedProjectGraph` now also owns the temporary-directory
+    lifetime, canonical path mirroring, bounded no-follow recursive copy, and
+    captured-to-original diagnostic mapping for compatibility package graphs;
+    compiler authorization only resolves package semantics and composes that
+    capture boundary. This keeps project graph I/O reusable without widening
+    the pure compiler input API.
     Manifest dependency discovery now parses the loader-owned
     `WorkspaceManifestV1` projection and admits only explicit local path
     dependencies into capture; version, git, and registry declarations cannot

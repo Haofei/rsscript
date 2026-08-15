@@ -1390,6 +1390,11 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
         "the project capture boundary must own native dependency and lowering-input identity"
     );
     assert!(
+        project.contains("pub struct CapturedProjectGraph")
+            && project.contains("pub fn capture_project_graph"),
+        "the project capture boundary must own private graph capture and its temporary-directory lifetime"
+    );
+    assert!(
         package_types.contains("pub use rsscript_project::{NativeRustDependency, PackageLoweringInput};"),
         "compiler compatibility may only re-export the project-owned capture models"
     );
@@ -1414,6 +1419,18 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
     assert!(
         lowerer.contains("pub use crate::package::NativeRustDependency;"),
         "the Rust lowerer may retain a compatibility re-export while it consumes project input"
+    );
+
+    let authorization = read(&root.join("crates/rsscript-compiler/src/package/authorization.rs"));
+    assert!(
+        authorization.contains("use rsscript_project::{CapturedProjectGraph, capture_project_graph};")
+            && authorization.contains("let captured = capture_project_graph("),
+        "compiler package compatibility must compose the project-owned graph capture boundary"
+    );
+    assert!(
+        !authorization.contains("fn copy_package_directory")
+            && !authorization.contains("set_package_snapshot_permissions"),
+        "compiler authorization must not reintroduce private graph-directory or recursive-copy implementation"
     );
 }
 
