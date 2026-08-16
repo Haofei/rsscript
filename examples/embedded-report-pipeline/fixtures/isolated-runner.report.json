@@ -1,5 +1,13 @@
 {
-  "termination_reason": "completed",
+  "schema": "rsscript.execution_report.v2",
+  "outcome": {
+    "kind": "completed",
+    "wire_value": {
+      "kind": "string",
+      "value": "embedded runner report"
+    },
+    "display_value": "embedded runner report"
+  },
   "usage": {
     "steps_consumed": 2,
     "allocation_bytes_consumed": 0,
@@ -19,10 +27,8 @@
     "tasks_peak_live": 1,
     "tasks_live_at_return": 0
   },
-  "value": "embedded runner report",
   "stdout": "",
   "stderr": "",
   "provider_call_count": 0,
-  "diagnostic_count": 0,
-  "failure": null
+  "diagnostic_count": 0
 }

@@ -1,5 +1,15 @@
 {
-  "termination_reason": "completed",
+  "schema": "rsscript.execution_report.v2",
+  "outcome": {
+    "kind": "completed",
+    "wire_value": {
+      "kind": "variant",
+      "type_id": 2,
+      "variant_id": 0,
+      "payload": { "kind": "unit" }
+    },
+    "display_value": "Ok { value: Unit }"
+  },
   "usage": {
     "steps_consumed": 19,
     "allocation_bytes_consumed": 48,
@@ -19,10 +29,8 @@
     "tasks_peak_live": 3,
     "tasks_live_at_return": 0
   },
-  "value": "Ok { value: Unit }",
   "stdout": "user\nprofile\n",
   "stderr": "",
   "provider_call_count": 0,
-  "diagnostic_count": 0,
-  "failure": null
+  "diagnostic_count": 0
 }

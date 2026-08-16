@@ -15,13 +15,14 @@ the SDK is intended to provide.
 
 The reviewed report owns one `ExecutionOutcome`:
 
-* `Completed { value, display_value }`; or
+* `Completed { wire_value, display_value }`; or
 * `Failed(RuntimeError)`.
 
 The report derives its termination reason and optional success/failure accessors
-from that enum. The existing `rsscript.execution_report.v1` JSON projection is
-serialized explicitly and remains unchanged so runner and machine consumers do
-not need to migrate merely because the Rust API becomes phase-safe.
+from that enum. The reviewed JSON contract is
+`rsscript.execution_report.v2`, which serializes the same mutually exclusive
+outcome. The historical v1 projection is retained only as a read-only
+compatibility fixture; runner and machine consumers use v2.
 
 ## Consequences
 

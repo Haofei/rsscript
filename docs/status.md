@@ -86,7 +86,7 @@ compiles, verifies, links, and executes a Provider-free `task_group` under
 bounded limits, then exposes the complete execution report. It makes the
 structured-async path executable without implying that bounded in-process
 execution is a sandbox.
-Execution reports now have a strict checked-in v1 schema and representative
+Execution reports now have a strict checked-in v2 schema and representative
 success/failure fixtures. A reusable conformance crate validates every official
 Provider's descriptor, ABI linkage, import resolution, and runtime-owned
 cancellation/deadline gate. Core product metrics are separate from JIT

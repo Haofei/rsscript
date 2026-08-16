@@ -39,7 +39,12 @@ const RUNNER_STDERR_LIMIT: usize = 1024 * 1024;
 const RUNNER_PROCESS_OVERHEAD_BYTES: u64 = 256 * 1024 * 1024;
 const RUNNER_FILESYSTEM_ROOT_ENV: &str = "RSSCRIPT_RUNNER_FILESYSTEM_ROOT";
 
-pub(crate) fn run_isolated(path: &str, program_args: &[&str], json: bool) -> ExitCode {
+pub(crate) fn run_isolated(
+    path: &str,
+    program_args: &[&str],
+    json: bool,
+    profile: RunnerProfileV1,
+) -> ExitCode {
     let bundle = match build_bundle(path) {
         Ok(bundle) => bundle,
         Err(error) => {
@@ -47,11 +52,12 @@ pub(crate) fn run_isolated(path: &str, program_args: &[&str], json: bool) -> Exi
             return ExitCode::from(1);
         }
     };
-    let request = match RunnerRequestV1::new(
+    let request = match RunnerRequestV1::with_profile(
         program_args
             .iter()
             .map(|value| (*value).to_string())
             .collect(),
+        profile,
     ) {
         Ok(request) => request,
         Err(error) => {
@@ -641,12 +647,16 @@ fn finish_report(report: serde_json::Value, json: bool) -> ExitCode {
     } else {
         print!("{}", report["stdout"].as_str().unwrap_or_default());
         eprint!("{}", report["stderr"].as_str().unwrap_or_default());
-        println!("{}", report["value"].as_str().unwrap_or_default());
-        if let Some(message) = report["failure"]["message"].as_str() {
+        if let Some(value) = report["outcome"]["display_value"].as_str() {
+            println!("{value}");
+        }
+        if let Some(message) = report["outcome"]["failure"]["message"].as_str() {
             eprintln!("{message}");
         }
     }
-    if report["termination_reason"] == "completed" {
+    if report["schema"] == "rsscript.execution_report.v2"
+        && report["outcome"]["kind"] == "completed"
+    {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
@@ -970,7 +980,8 @@ fn main() -> Unit {
         );
         assert_eq!(accepted.runner_termination, RunnerTerminationV1::Completed);
         let report = accepted.report.expect("completed runner report");
-        assert_eq!(report["termination_reason"], "completed");
+        assert_eq!(report["schema"], "rsscript.execution_report.v2");
+        assert_eq!(report["outcome"]["kind"], "completed");
         assert_eq!(
             report["provider_call_traces"].as_array().map(Vec::len),
             Some(1)

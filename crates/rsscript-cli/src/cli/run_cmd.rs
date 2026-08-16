@@ -20,6 +20,7 @@ use super::{
 use super::{print_usage, required_flag_value};
 #[cfg(feature = "aot-rust")]
 use crate::cli::process::{BoundedProcessKind, run_bounded, run_bounded_with_limits};
+use rsscript_runner_protocol::RunnerProfileV1;
 
 #[cfg(feature = "aot-rust")]
 const CLI_AOT_WALL_TIME: Duration = Duration::from_secs(10 * 60);
@@ -33,6 +34,7 @@ struct RunOptions<'a> {
     release: bool,
     dry_run: bool,
     trusted_in_process: bool,
+    profile: RunnerProfileV1,
     path: Option<&'a str>,
     out_dir: Option<&'a str>,
     program_args: Vec<&'a str>,
@@ -44,6 +46,7 @@ fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
     let mut release = false;
     let mut dry_run = false;
     let mut trusted_in_process = false;
+    let mut profile = RunnerProfileV1::default();
     let mut path = None;
     let mut out_dir = None;
     let mut program_args = Vec::new();
@@ -63,6 +66,11 @@ fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
             dry_run = true;
         } else if arg == "--trusted-in-process" {
             trusted_in_process = true;
+        } else if arg == "--profile" {
+            index += 1;
+            let name = required_flag_value(args, index, "--profile")?;
+            profile = RunnerProfileV1::parse_name(name)
+                .ok_or_else(|| format!("unknown runner profile `{name}`."))?;
         } else if arg == "--out-dir" {
             index += 1;
             out_dir = Some(required_flag_value(args, index, "--out-dir")?);
@@ -82,6 +90,7 @@ fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
         release,
         dry_run,
         trusted_in_process,
+        profile,
         path,
         out_dir,
         program_args,
@@ -102,6 +111,12 @@ fn validate_run_options(options: &RunOptions<'_>) -> Result<(), String> {
     }
     if options.aot && options.trusted_in_process {
         return Err("`--trusted-in-process` cannot be combined with `--aot`.".to_string());
+    }
+    if options.trusted_in_process && options.profile != RunnerProfileV1::default() {
+        return Err(
+            "`--profile` selects an isolated runner profile and cannot be combined with `--trusted-in-process`."
+                .to_string(),
+        );
     }
     Ok(())
 }
@@ -131,7 +146,7 @@ pub(crate) fn run_input(args: &[String]) -> ExitCode {
     if options.trusted_in_process {
         return super::runner::run_trusted_in_process(path, &options.program_args, options.json);
     }
-    super::runner::run_isolated(path, &options.program_args, options.json)
+    super::runner::run_isolated(path, &options.program_args, options.json, options.profile)
 }
 
 /// Experimental generated-Rust execution path. It is deliberately excluded
@@ -510,6 +525,10 @@ mod tests {
         assert!(!options.release);
         assert!(!options.dry_run);
         assert!(!options.trusted_in_process);
+        assert_eq!(
+            options.profile,
+            rsscript_runner_protocol::RunnerProfileV1::NoProviders
+        );
         assert_eq!(options.path, Some("demo.rss"));
         assert_eq!(options.program_args, vec!["input"]);
     }
@@ -632,5 +651,21 @@ mod tests {
         assert!(options.trusted_in_process);
         let invalid = args(&["--aot", "--trusted-in-process", "demo.rss"]);
         assert!(super::parse_run_args(&invalid).is_err());
+    }
+
+    #[test]
+    fn isolated_run_accepts_a_preinstalled_profile_only() {
+        let values = args(&["--profile", "log-only", "demo.rss"]);
+        let options = super::parse_run_args(&values).expect("profile option");
+        assert_eq!(
+            options.profile,
+            rsscript_runner_protocol::RunnerProfileV1::LogOnly
+        );
+
+        let unknown = args(&["--profile", "arbitrary-library", "demo.rss"]);
+        assert!(super::parse_run_args(&unknown).is_err());
+
+        let trusted = args(&["--trusted-in-process", "--profile", "log-only", "demo.rss"]);
+        assert!(super::parse_run_args(&trusted).is_err());
     }
 }

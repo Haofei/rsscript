@@ -75,6 +75,42 @@ pub struct RunnerProfileIdentityV1 {
 }
 
 impl RunnerProfileV1 {
+    /// All profiles implemented by this version of the reference runner.
+    ///
+    /// These are host-selected presets, not request-provided capability
+    /// objects. The protocol never serializes provider paths, credentials,
+    /// filesystem roots, endpoints, or other authority-bearing configuration.
+    pub const ALL: [Self; 7] = [
+        Self::NoProviders,
+        Self::NoProvidersNamespaced,
+        Self::NoProvidersNetworkIsolated,
+        Self::NoProvidersFilesystemIsolated,
+        Self::NoProvidersSeccompFiltered,
+        Self::NoProvidersCgroupV2,
+        Self::LogOnly,
+    ];
+
+    /// Stable CLI/config spelling for a preinstalled runner profile.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::NoProviders => "no-providers",
+            Self::NoProvidersNamespaced => "no-providers-namespaced",
+            Self::NoProvidersNetworkIsolated => "no-providers-network-isolated",
+            Self::NoProvidersFilesystemIsolated => "no-providers-filesystem-isolated",
+            Self::NoProvidersSeccompFiltered => "no-providers-seccomp-filtered",
+            Self::NoProvidersCgroupV2 => "no-providers-cgroup-v2",
+            Self::LogOnly => "log-only",
+        }
+    }
+
+    /// Parse a stable preset name without accepting any authority-bearing
+    /// configuration from a runner request.
+    pub fn parse_name(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|profile| profile.name() == value)
+    }
+
     pub fn identity(self) -> RunnerProfileIdentityV1 {
         match self {
             Self::NoProviders => RunnerProfileIdentityV1 {
@@ -534,6 +570,14 @@ mod tests {
                 "protocol must not inject {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn profile_names_are_closed_and_round_trip_to_presets() {
+        for profile in RunnerProfileV1::ALL {
+            assert_eq!(RunnerProfileV1::parse_name(profile.name()), Some(profile));
+        }
+        assert_eq!(RunnerProfileV1::parse_name("untrusted-library"), None);
     }
 
     #[test]

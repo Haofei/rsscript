@@ -24,6 +24,8 @@ mod fmt;
 #[cfg(all(feature = "execution", feature = "aot-rust"))]
 mod process;
 #[cfg(feature = "execution")]
+mod profile;
+#[cfg(feature = "execution")]
 mod run_cmd;
 #[cfg(feature = "execution")]
 mod runner;
@@ -49,6 +51,8 @@ pub fn run() -> ExitCode {
         "fmt" => fmt::run_fmt(&args[2..]),
         #[cfg(feature = "execution")]
         "inspect" => artifact::run_inspect(&args[2..]),
+        #[cfg(feature = "execution")]
+        "profile" => profile::run_profile(&args[2..]),
         #[cfg(feature = "execution")]
         "verify" => artifact::run_verify(&args[2..]),
         #[cfg(feature = "execution")]
@@ -456,7 +460,8 @@ const USAGE: &str = r#"usage:
   rss fmt <file.rss>  # writes formatted source to stdout
   rss inspect <imports|bytecode> [--json] <file-or-artifact-or-package>
   rss inspect <analysis|resources|async|call-graph> [--json] <package-directory>
-  rss run [--json] <file-package-or-bundle> [-- <args>...]  # isolated runner + verified VM
+  rss profile [--json] [profile-name]  # inspect host-selected runner presets
+  rss run [--json] [--profile <profile-name>] <file-package-or-bundle> [-- <args>...]  # isolated runner + verified VM
   rss run --trusted-in-process [--json] <file-package-or-bundle> [-- <args>...]"#;
 
 #[cfg(feature = "aot-rust")]

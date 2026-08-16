@@ -26,6 +26,11 @@ cannot name a dynamic library, Provider implementation path, credential, root
 directory, or network allowlist; those authorities belong to a runner profile
 constructed by the host.
 
+The CLI exposes the same closed set of preinstalled presets through `rss profile
+[--json] [profile-name]` and `rss run --profile <profile-name> …`. Selecting a
+profile can never supply authority-bearing configuration; `rss profile` prints
+only its stable name, non-secret identity, version, and descriptor digest.
+
 The child receives process-tree, CPU, address-space, open-file, and file-size
 limits where the platform supports them. This is defense in depth, not a
 security-sandbox claim. Production isolation for untrusted input still requires

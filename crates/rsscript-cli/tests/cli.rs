@@ -28,14 +28,13 @@ fn stable_runner_projection(report: &serde_json::Value) -> serde_json::Value {
     // This checked-in projection freezes the report semantics the product
     // promises across the isolated parent/child protocol.
     serde_json::json!({
-        "termination_reason": report["termination_reason"],
+        "schema": report["schema"],
+        "outcome": report["outcome"],
         "usage": report["usage"],
-        "value": report["value"],
         "stdout": report["stdout"],
         "stderr": report["stderr"],
         "provider_call_count": report["provider_call_traces"].as_array().map(Vec::len),
         "diagnostic_count": report["diagnostics"].as_array().map(Vec::len),
-        "failure": report["failure"],
     })
 }
 

@@ -75,7 +75,8 @@ rss fmt <file>
 rss build [--out <artifact.rssbundle>] [--analysis-out <analysis.json>] <file-or-package>
 rss verify <artifact.rssbundle>
 rss diff [--json|--markdown] <old-input> <new-input>
-rss run [--json] <file-package-or-bundle> [-- <args>...]  # isolated process
+rss profile [--json] [profile-name]
+rss run [--json] [--profile <profile-name>] <file-package-or-bundle> [-- <args>...]  # isolated process
 rss run --trusted-in-process [--json] <file-package-or-bundle> [-- <args>...]
 rss inspect <imports|bytecode|analysis|resources|async|call-graph> <input>
 ```
