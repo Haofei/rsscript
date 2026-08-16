@@ -3,6 +3,11 @@
 RSScript publishes four independent versioned contracts. Compatibility is
 checked before Provider linking or execution.
 
+The language specification filename is a document revision, not a fifth runtime
+version. `RSScript_v0.7_Spec.md` is currently the normative text for the
+`0.1.x` language-semantics line below; Artifact, runtime, and Provider versions
+remain independent compatibility contracts.
+
 | Contract | Current line | Compatibility rule |
 | --- | --- | --- |
 | Language | `0.1.x` | A compiler/runtime accepts only its own pre-1.0 minor line. |

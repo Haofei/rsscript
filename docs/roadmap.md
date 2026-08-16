@@ -27,28 +27,28 @@ language specification and tests remain authoritative for existing behavior.
    Cargo metadata tests now reject any VM dependency on compiler, syntax,
    semantics, or lowering internals.
 
-## Current priority: conformance and boundary hardening
+## Current priority: product-contract convergence
 
-The checked migration baseline and package maturity inventory live in
-[`architecture/migration-baseline.md`](architecture/migration-baseline.md) and
-[`architecture/workspace-tiers.toml`](architecture/workspace-tiers.toml).
-The baseline's **Review convergence TODO** is the authoritative itemized
-checklist and defines the mechanical completion criteria for this migration.
+The compiler-purity migration is complete. Its checked baseline is retained as
+historical evidence, not as the active roadmap. The active work is to make the
+existing Core path smaller, explicit, and usable without exposing migration
+adapters.
 
-1. Preserve the checked diagnostics, Artifact, execution, cancellation, and
-   Provider baselines while responsibilities move.
-2. Move remaining ownership/resource/call checks behind the semantic query
-   boundary. Immutable snapshots, `SemanticDatabase`, `AnalysisResult`, and
-   `ValidatedProgram` are now owned by `rsscript-semantics`.
-3. Continue reducing compatibility-crate API and crate-wide lint exceptions.
-4. Extend the query-level language-service cache only with measured editor
-   workloads; formatting, lint, symbols, dependency discovery, and semantic
-   diagnostics now invalidate independently.
-5. Use the exact reachable-value live-memory metric and cumulative allocation
-   quota together in workload tuning; extend the model only when a new VM-owned
-   value kind is introduced. Provider-owned memory remains Provider telemetry.
-6. Promote a feature only through the maturity matrix; do not add syntax while a
-   Core row remains partial.
+1. Retire compatibility-only SDK and Provider paths behind an announced,
+   tested removal plan. New embedding and Provider examples must use canonical
+   `WireValue` APIs only.
+2. Keep experiments one-way consumers of Core contracts. AOT, JIT, REIR, and
+   self-hosting must not become default SDK, VM, CLI, or release dependencies.
+3. Make one bytecode contract executable at a time. `rsscript.bytecode.v2` is a
+   verifier-only prototype until an ADR-defined VM cutover; v1 remains the sole
+   deployed execution schema.
+4. Keep host deployment choices outside language validity and Artifact identity.
+   The runner's host-selected profile performs admission, Provider installation,
+   limits, and isolation; its non-secret identity is recorded in the response.
+5. Maintain a short golden path: capture, build, verify, inspect, default
+   isolated run, and machine-readable execution report.
+6. Promote any feature only through the maturity matrix and measured workloads;
+   do not add syntax while a Core row remains partial.
 
 ## Frozen scope
 

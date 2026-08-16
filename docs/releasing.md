@@ -11,11 +11,11 @@ Supported binary targets are:
 
 | Target | Runner | Assets |
 | --- | --- | --- |
-| `x86_64-unknown-linux-gnu` | Ubuntu 24.04 | `rss`, `reir` |
-| `aarch64-apple-darwin` | macOS 14 | `rss`, `reir` |
-| `x86_64-pc-windows-msvc` | Windows 2025 | `rss.exe`, `reir.exe` |
+| `x86_64-unknown-linux-gnu` | Ubuntu 24.04 | `rss` |
+| `aarch64-apple-darwin` | macOS 14 | `rss` |
+| `x86_64-pc-windows-msvc` | Windows 2025 | `rss.exe` |
 
-Tags must exactly match the `rsscript-cli` and `reir` Cargo versions. Accepted
+Tags must exactly match the `rsscript-cli` Cargo version. Accepted
 forms are `vX.Y.Z`, `vX.Y.Z-alpha.N`, `vX.Y.Z-beta.N`, and `vX.Y.Z-rc.N`.
 Pre-release tags are marked as GitHub pre-releases and never become `latest`.
 

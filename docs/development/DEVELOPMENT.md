@@ -1,8 +1,8 @@
 # Development Rules
 
-RSScript development is spec-first and self-hosted-validation-driven. The goal is not to
-accumulate many small fixtures; the goal is to make the language capable of
-reviewing and eventually implementing its own core tooling.
+RSScript development is spec-first and product-contract-driven. The goal is not
+to accumulate fixtures or backend experiments; it is to keep one small,
+deterministic compilation and execution path correct and auditable.
 
 ## Implementation Discipline
 
@@ -13,12 +13,12 @@ reviewing and eventually implementing its own core tooling.
    the feature. Do not encode a one-off lowering shortcut, fixture-only bypass,
    or runtime fallback that preserves a different language model.
 
-2. Treat self-hosted validation and implementation as one loop.
+2. Treat self-hosted validation as Research evidence, not as a product driver.
 
-   A useful self-hosted validation file should model a real RSScript tool concern: review-map
-   classification, diagnostics, package contract review, source-map remapping,
-   lowering facts, or package risk. If self-hosted validation reveals an unsupported shape, fix
-   the parser/checker/lowering/runtime layer that is actually missing.
+   A useful self-hosted validation file may model a real RSScript tool concern:
+   diagnostics, source-map remapping, lowering facts, or package analysis. It
+   must not expand source syntax, Core ABI, or the formal release path merely to
+   improve self-host parity.
 
 3. Do not treat unknown as safe.
 
@@ -64,10 +64,9 @@ reviewing and eventually implementing its own core tooling.
    semantic boundaries.
 3. Rust lowering, source maps, and rustc diagnostic remapping for already
    supported source constructs.
-4. Self-hosted validation programs that implement RSScript review/package/diagnostic logic in
-   RSScript and keep review-map unknown low.
-5. Review map and semantic diff quality.
-6. Package manager surface area after the underlying language behavior is hard.
+4. Semantic-fact and execution-report quality.
+5. Provider conformance and isolated-runner boundary hardening.
+6. Research validation only when it protects an existing Core invariant.
 
 ## Testing Loop
 
@@ -80,7 +79,7 @@ set process-wide JIT configuration.
 docker compose run --rm dev cargo test -p rsscript-compiler --no-run
 docker compose run --rm dev cargo test -p rsscript-compiler
 docker compose run --rm dev cargo clippy -p rsscript-sdk --tests -- -D warnings
-docker compose run --rm dev cargo test -p rsscript-compiler --features native-jit --no-run
+docker compose run --rm dev cargo test --manifest-path experiments/Cargo.toml -p vm-jit --no-run
 ```
 
 If a broad target fails, run the specific failing test while editing. After the
@@ -114,7 +113,7 @@ Before committing a semantic change, run the full local gate:
 
 ```sh
 docker compose run --rm dev cargo clippy -p rsscript-sdk --tests -- -D warnings
-docker compose run --rm dev cargo test -p rsscript-compiler --features native-jit --no-run
+docker compose run --rm dev cargo test --manifest-path experiments/Cargo.toml -p vm-jit --no-run
 docker compose run --rm dev cargo test -p rsscript-compiler
 git diff --check
 ```

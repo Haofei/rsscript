@@ -42,7 +42,7 @@ jobs:
             exit 1
           }
           EXPECTED="${GITHUB_REF_NAME#v}"
-          for PACKAGE in rsscript-cli reir; do
+          for PACKAGE in rsscript-cli; do
             ACTUAL="$(cargo metadata --locked --no-deps --format-version 1 | jq -r ".packages[] | select(.name == \"$PACKAGE\") | .version // empty")"
             [ -n "$ACTUAL" ] || {
               echo "::error::release package $PACKAGE does not exist"
@@ -59,14 +59,6 @@ jobs:
           cargo fmt --all -- --check
           cargo clippy --locked --workspace --all-targets -- -D warnings
           cargo test --locked --workspace --all-targets
-
-      - name: Validate native JIT
-        run: cargo nextest run --locked -p rsscript-sdk --features native-jit --no-fail-fast
-
-      - name: Validate generated backend parity
-        run: |
-          RSSCRIPT_FULL_BACKEND_PARITY=1 cargo test --locked -p rsscript-sdk --test runtime -- --test-threads=1
-          RSSCRIPT_FULL_BACKEND_PARITY=1 cargo test --locked -p rsscript-sdk --test differential -- --test-threads=1
 
   release-build:
     needs: [release-validation]
@@ -104,10 +96,8 @@ jobs:
           SUFFIX: ${{ matrix.suffix }}
         run: |
           cargo build --locked --frozen --release --target "$TARGET" --bin rss -p rsscript-cli --features host-tools
-          cargo build --locked --frozen --release --target "$TARGET" --bin reir -p reir
           mkdir -p dist
           cp "target/$TARGET/release/rss$SUFFIX" "dist/rss-$TARGET$SUFFIX"
-          cp "target/$TARGET/release/reir$SUFFIX" "dist/reir-$TARGET$SUFFIX"
           PYTHON="$(command -v python3 || command -v python)" || {
             echo "::error::Python 3 is required to create portable checksums"
             exit 1
@@ -120,7 +110,6 @@ jobs:
             rustc -Vv
           } > "dist/BUILD-INFO-$TARGET.txt"
           "dist/rss-$TARGET$SUFFIX" --help >/dev/null
-          "dist/reir-$TARGET$SUFFIX" --help >/dev/null
           "$PYTHON" - "$TARGET" "$SUFFIX" <<'PY'
           import hashlib
           import pathlib
@@ -130,7 +119,6 @@ jobs:
           directory = pathlib.Path("dist")
           names = [
               f"rss-{target}{suffix}",
-              f"reir-{target}{suffix}",
               f"BUILD-INFO-{target}.txt",
           ]
           lines = []
@@ -173,14 +161,12 @@ jobs:
             grep -Fx "commit=$GITHUB_SHA" "$INFO"
           done
           test "$(find . -maxdepth 1 -type f -name 'rss-*' | wc -l)" -eq 3
-          test "$(find . -maxdepth 1 -type f -name 'reir-*' | wc -l)" -eq 3
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
           subject-path: |
             dist/rss-*
-            dist/reir-*
             dist/BUILD-INFO-*.txt
             dist/SHA256SUMS-*
 

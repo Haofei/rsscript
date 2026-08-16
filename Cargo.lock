@@ -1630,16 +1630,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "reir"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "sha2",
- "toml",
-]
-
-[[package]]
 name = "reqwest"
 version = "0.12.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2120,14 +2110,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rsscript-review-reir"
-version = "0.1.0"
-dependencies = [
- "reir",
- "serde_json",
-]
-
-[[package]]
 name = "rsscript-review-source"
 version = "0.1.0"
 dependencies = [
@@ -2156,7 +2138,6 @@ dependencies = [
  "base64",
  "jsonschema",
  "proptest",
- "reir",
  "rsscript-abi-model",
  "rsscript-aot-backend",
  "rsscript-artifact",
@@ -2172,7 +2153,6 @@ dependencies = [
  "rsscript-project",
  "rsscript-provider-api",
  "rsscript-review",
- "rsscript-review-reir",
  "rsscript-semantics",
  "rsscript-vm",
  "serde",

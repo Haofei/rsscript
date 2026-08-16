@@ -17,16 +17,15 @@ The platform-neutral language cut is active:
   snapshots now derive analysis directly from captured semantic inputs instead
   of converting a risk-oriented package review.
 
-The `rsscript-compiler` implementation contains analyzer orchestration and
-package tooling; the optional Rust AOT projection is physically owned by
-`experiments/aot-backend`. The reference VM is physically
-owned by `rsscript-vm`, consumes the frontend-independent owned model from
-`rsscript-exec-ir`, and has no Cargo dependency on compiler, syntax, semantics,
-or HIR lowering crates. `rsscript-lowering` is now the one-way projection from
-validated HIR into that owned execution model; `vm_adapter` lives in the SDK as
-the single optional composition point for source-to-VM convenience APIs. Stable embedders use the small
-`rsscript-sdk` façade instead of those implementation modules; the compiler
-does not depend back on that façade.
+The `rsscript-compiler` implementation owns frontend orchestration; filesystem
+capture, persistence, review presentation, and Rust AOT live outside its normal
+closure. The reference VM is physically owned by `rsscript-vm`, consumes only
+verified `rsscript.bytecode.v1`, and has no Cargo dependency on compiler,
+syntax, semantics, MIR, or lowering crates. Validated HIR lowers through the
+owned, typed `rsscript-mir` CFG and `rsscript-codegen-vm`; `vm_adapter` is the
+SDK's optional composition point for source-to-VM convenience APIs. Stable
+embedders use the reviewed `rsscript-sdk` façade instead of implementation
+modules; the compiler does not depend back on that façade.
 Native plugin loading and guarded child-process execution have been removed
 from the compiler; the CLI composition root owns its bounded AOT subprocesses.
 The experimental Rust AOT lowering path no longer special-cases filesystem,
@@ -60,11 +59,12 @@ bounded parse budget are now owned by the independent `rsscript-syntax` and
 parameter effects, package-wide semantic type facts, Typed HIR, call binding, and
 HIR construction are now owned by `rsscript-semantics`. The platform-neutral core
 and standard-package interface sources are owned by the data-only
-`rsscript-interface-catalog`. These are re-exported through the compatibility
-façade while the remaining checks are migrated. `rsscript-exec-ir` owns the
-provider-neutral, lifetime-independent `ExecutableIr`; the VM and Rust AOT path
-both receive this checked representation, and JIT remains downstream of the VM
-unit. Runtime-core
+`rsscript-interface-catalog`. Canonical SDK modules expose the reviewed API;
+compatibility exports remain explicitly feature-gated during their removal
+window. `rsscript-mir` owns the
+provider-neutral, lifetime-independent typed CFG; `rsscript-codegen-vm` lowers
+verified MIR to bytecode, while experimental backends consume stable Core
+contracts from outside the Core dependency graph. Runtime-core
 now compiles without filesystem, environment, process, network, entropy, or
 temporary-directory modules and its default feature set is network-free. The
 concrete filesystem, environment, process, HTTP, time, entropy, logging, and CLI

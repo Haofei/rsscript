@@ -421,6 +421,29 @@ fn root_workspace_excludes_experimental_packages() {
 }
 
 #[test]
+fn sdk_development_closure_does_not_compile_experimental_integrations() {
+    let root = workspace_root();
+    let manifest = read(&root.join("crates/rsscript-sdk/Cargo.toml"));
+    let lockfile = read(&root.join("Cargo.lock"));
+    let dev_dependencies = manifest
+        .split("[dev-dependencies]")
+        .nth(1)
+        .and_then(|section| section.split("[[test]]").next())
+        .expect("SDK manifest must contain a bounded dev-dependency section");
+
+    assert!(
+        !dev_dependencies.contains("../../experiments/"),
+        "the SDK test closure must not pull experiments; integration tests belong to the experiments workspace"
+    );
+    for package in ["name = \"reir\"", "name = \"rsscript-review-reir\""] {
+        assert!(
+            !lockfile.contains(package),
+            "Core lockfile must not retain SDK-only experimental package `{package}`"
+        );
+    }
+}
+
+#[test]
 fn research_fixtures_are_owned_by_the_experiments_boundary() {
     let root = workspace_root();
     let experiment_manifest = read(&root.join("experiments/Cargo.toml"));
@@ -2147,24 +2170,18 @@ fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
                 .contains("rsscript_package_review::package_sources_with_dependency_interfaces"),
         "compiler source-list compatibility must delegate presentation to the package-review boundary"
     );
-    let mut remaining_compiler_package_files = std::fs::read_dir(
-        root.join("crates/rsscript-compiler/src/package"),
-    )
-    .expect("compiler package directory")
-    .map(|entry| {
-        entry
-            .expect("compiler package entry")
-            .file_name()
-            .into_string()
-            .expect("UTF-8 compiler package filename")
-    })
-    .collect::<Vec<_>>();
-    remaining_compiler_package_files.sort();
-    assert_eq!(
-        remaining_compiler_package_files,
-        vec!["authorization.rs", "metadata.rs", "native.rs"],
-        "compiler package compatibility may retain only authorization, legacy lowering metadata, and trusted native-wrapper adapters"
-    );
+    for forbidden in [
+        "package::review",
+        "package::policy",
+        "package::source_set",
+        "package::graph",
+        "package::lock",
+    ] {
+        assert!(
+            !package_module.contains(forbidden),
+            "compiler package compatibility must not expose retired `{forbidden}` behavior"
+        );
+    }
     for removed in ["mod policy;", "mod review;", "mod source_set;"] {
         assert!(
             !package_module.contains(removed),
@@ -5797,8 +5814,12 @@ fn github_workflows_follow_current_workspace_boundaries() {
     }
 
     let release = read(&workflow_dir.join("release.yml"));
-    assert!(release.contains("for PACKAGE in rsscript-cli reir"));
-    assert!(!release.contains("for PACKAGE in rsscript reir"));
+    assert!(release.contains("for PACKAGE in rsscript-cli; do"));
+    assert!(!release.contains("for PACKAGE in rsscript-cli reir"));
+    assert!(
+        !release.contains("Validate native JIT") && !release.contains("--bin reir -p reir"),
+        "the Core release path must not validate or package experimental backends"
+    );
     for target in [
         "x86_64-unknown-linux-gnu",
         "aarch64-apple-darwin",
