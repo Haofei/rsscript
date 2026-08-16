@@ -2139,7 +2139,6 @@ dependencies = [
  "jsonschema",
  "proptest",
  "rsscript-abi-model",
- "rsscript-aot-backend",
  "rsscript-artifact",
  "rsscript-artifact-store",
  "rsscript-build-support",

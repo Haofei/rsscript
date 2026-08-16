@@ -95,7 +95,7 @@ pub fn exercise_front_end(file: &str, source: &str) -> bool {
         .iter()
         .any(|diagnostic| diagnostic.severity == rsscript_sdk::Severity::Error);
     if accepted {
-        let _ = rsscript_sdk::lower_source_to_rust(file, source);
+        let _ = rsscript_aot_backend::lower_source_to_rust(file, source);
     }
     accepted
 }
@@ -117,7 +117,7 @@ pub fn assert_fails_closed(file: &str, mutated: &crate::mutate::MutatedProgram) 
         mutated.source,
     );
     assert!(
-        rsscript_sdk::lower_source_to_rust(file, &mutated.source).is_err(),
+        rsscript_aot_backend::lower_source_to_rust(file, &mutated.source).is_err(),
         "mutation `{}` was rejected by the checker but still lowered to Rust \
          (the defect reached the backend)\n--- source ---\n{}",
         mutated.mutation,

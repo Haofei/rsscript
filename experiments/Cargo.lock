@@ -759,6 +759,7 @@ dependencies = [
 name = "rss-testgen"
 version = "0.1.0"
 dependencies = [
+ "rsscript-aot-backend",
  "rsscript-sdk",
 ]
 
@@ -897,6 +898,8 @@ dependencies = [
  "rsscript-lowering",
  "rsscript-mir",
  "rsscript-operation",
+ "rsscript-package-model",
+ "rsscript-package-review",
  "rsscript-project",
  "rsscript-review-core",
  "rsscript-review-source",
@@ -970,6 +973,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsscript-package-model"
+version = "0.1.0"
+dependencies = [
+ "rsscript-artifact",
+ "rsscript-build-support",
+ "rsscript-diagnostics",
+ "rsscript-project",
+ "rsscript-review-core",
+ "rsscript-review-source",
+ "serde",
+ "serde_json",
+ "sha2",
+ "toml",
+]
+
+[[package]]
+name = "rsscript-package-review"
+version = "0.1.0"
+dependencies = [
+ "rsscript-abi-model",
+ "rsscript-build-support",
+ "rsscript-diagnostics",
+ "rsscript-interface-catalog",
+ "rsscript-package-model",
+ "rsscript-project",
+ "rsscript-review-core",
+ "rsscript-review-source",
+ "rsscript-semantics",
+ "rsscript-syntax",
+ "serde",
+ "sha2",
+ "toml",
+]
+
+[[package]]
 name = "rsscript-project"
 version = "0.1.0"
 dependencies = [
@@ -996,8 +1034,9 @@ dependencies = [
 name = "rsscript-review"
 version = "0.1.0"
 dependencies = [
- "rsscript-compiler",
+ "rsscript-package-model",
  "rsscript-review-core",
+ "rsscript-review-source",
  "serde_json",
  "toml",
 ]
@@ -1035,7 +1074,6 @@ name = "rsscript-sdk"
 version = "0.1.0"
 dependencies = [
  "rsscript-abi-model",
- "rsscript-aot-backend",
  "rsscript-artifact",
  "rsscript-artifact-store",
  "rsscript-build-support",

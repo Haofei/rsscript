@@ -2260,16 +2260,14 @@ fn rust_aot_lowering_is_explicitly_feature_gated() {
         !sdk_execution.contains("rsscript_compiler/aot-rust"),
         "reviewed SDK execution must not select AOT by default"
     );
-    let sdk_aot = sdk["features"]["aot-rust"]
-        .as_array()
-        .expect("SDK aot-rust feature should be declared")
-        .iter()
-        .filter_map(toml::Value::as_str)
-        .collect::<BTreeSet<_>>();
-    assert!(sdk_aot.contains("execution"));
-    assert!(sdk_aot.contains("dep:rsscript-aot-backend"));
-    assert!(!sdk_aot.contains("rsscript_compiler/aot-rust"));
-    assert!(!sdk_aot.contains("legacy-exec-ir"));
+    assert!(
+        sdk["features"].get("aot-rust").is_none(),
+        "the reviewed SDK must not expose an experimental AOT feature"
+    );
+    assert!(
+        sdk["dependencies"].get("rsscript-aot-backend").is_none(),
+        "the reviewed SDK must not depend on the experimental AOT backend"
+    );
     let aot_backend: toml::Value =
         toml::from_str(&read(&root.join("experiments/aot-backend/Cargo.toml")))
             .expect("experimental AOT backend manifest should parse");
@@ -2292,6 +2290,28 @@ fn rust_aot_lowering_is_explicitly_feature_gated() {
     assert!(
         !sdk_compatibility.contains("legacy-exec-ir"),
         "compatibility must not restore a deleted executable IR path"
+    );
+
+    let testgen: toml::Value = toml::from_str(&read(
+        &root.join("experiments/rss-testgen/Cargo.toml"),
+    ))
+    .expect("experiment test-generator manifest should parse");
+    assert!(
+        testgen["dependencies"].get("rsscript-aot-backend").is_some(),
+        "the AOT experiment must depend on its owning backend directly"
+    );
+    let testgen_sdk = testgen["dependencies"]["rsscript-sdk"]
+        .as_table()
+        .expect("experiment SDK dependency should remain explicit");
+    let testgen_sdk_features = testgen_sdk["features"]
+        .as_array()
+        .expect("experiment SDK dependency must declare features")
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .collect::<BTreeSet<_>>();
+    assert!(
+        !testgen_sdk_features.contains("aot-rust"),
+        "experiments must not re-enter AOT through the stable SDK"
     );
 
     let cli: toml::Value = toml::from_str(&read(&root.join("crates/rsscript-cli/Cargo.toml")))

@@ -42,7 +42,6 @@ project = [
     "execution",
     "dep:rsscript-project",
 ]
-aot-rust = ["execution", "dep:rsscript-aot-backend"]
 native-jit = ["compatibility", "rsscript-vm/native-jit"]
 # Explicit verifier-only experiment. It does not enable a v2 VM execution
 # path or make `rsscript.bytecode.v2` part of the SDK's reviewed contract.
@@ -51,7 +50,6 @@ bytecode-v2-prototype = ["compatibility", "rsscript-bytecode/v2-prototype"]
 [dependencies]
 rsscript-abi-model = { path = "../rsscript-abi-model", optional = true }
 rsscript-artifact = { path = "../rsscript-artifact", optional = true }
-rsscript-aot-backend = { path = "../../experiments/aot-backend", optional = true }
 rsscript-artifact-store = { path = "../rsscript-artifact-store", optional = true }
 rsscript_compiler = { package = "rsscript-compiler", path = "../rsscript-compiler", default-features = false, features = ["language-service"] }
 rsscript-operation = { path = "../rsscript-operation" }
@@ -81,11 +79,6 @@ sha1 = "0.10"
 proptest = "1"
 tempfile = "3"
 toml = "0.8"
-
-[[test]]
-name = "static"
-path = "tests/static.rs"
-required-features = ["compatibility", "aot-rust"]
 
 [[test]]
 name = "architecture"
