@@ -10,9 +10,9 @@ same change.
 The stable façade is exposed through the explicit `compile`, `artifact`,
 `provider_api`, `runtime`, `report`, `analysis`, and `operation` modules.
 New embedding documentation and first-party applications use these modules.
-The transitional root exports are available only through the explicit
-`compatibility` feature while the MIR differential corpus migrates; they are
-not part of the default or `execution` SDK surface.
+The historical root-level compatibility feature has been retired. New embeds
+use only the explicit reviewed modules, which are the complete default and
+`execution` SDK surface.
 
 Filesystem/package capture is an explicit `project` feature. The independent
 `rsscript-project` crate owns the OS-captured workspace-to-frontend-snapshot
@@ -64,33 +64,22 @@ snapshot path during migration.
   asynchronous wire-callable wrappers provide in-memory deterministic
   test/diagnostic replay only; they neither persist values nor establish an
   authorization or security decision.
-  Legacy `NativeInterpreterFn`/`NativeValue` are not re-exported from this
-  reviewed façade; compatibility adapters must opt into the SDK
-  `compatibility` surface or depend directly on the low-level Provider crate.
+  The reviewed VM and façade use only `WireValue`; historical dynamic Provider
+  adapters, where still needed by external migration tooling, live outside the
+  VM execution closure.
 - Runtime lifecycle: `Runtime`, `LinkedArtifact`, `ExecutionRequest`, bounded
   `RunLimits`, `ExecutionReport`, `ExecutionOutcome`, termination reason,
   usage, and diagnostics. The reviewed Rust report exposes exactly one terminal
-  outcome: a completed textual result or a structured failure. Its retained v1
-  JSON `native_value` projection is private compatibility serialization, not a
-  value type new embedders can read or construct.
+  outcome: a completed textual result or a structured failure. Provider and
+  return values cross this boundary only as canonical `WireValue` data.
 - Shared operation control: cancellation tokens, monotonic deadlines, and
   operation contexts.
 
-## Compatibility-only APIs
+## Historical compatibility APIs
 
-The `reg_vm_*` helpers, `RegVmExecutable`, legacy `NativeInterpreterFn` and
-`NativeValue`, package review/risk types, and raw bytecode helpers are retained
-only behind `compatibility` while the MIR
-migration runs its old/new differential corpus. They are deliberately hidden
-from the reviewed default surface and must not be used as new embedding entry
-points.
-
-## Feature-gated experimental APIs
-
-Native JIT entry points and `NativeStats` exist only under the `native-jit`
-feature. They must never be exported by the default or `execution` SDK feature
-set. AOT, REIR, review/risk, opcode, register, and compiler-internal APIs are
-not part of this inventory.
+Native JIT entry points and `NativeStats` are retired from the SDK and VM Cargo
+closures. AOT, REIR, review/risk, opcode, register, and compiler-internal APIs
+are not part of this inventory.
 
 ## Compatibility check
 
@@ -101,9 +90,7 @@ The normalization treats a façade export as a set: whitespace, declaration
 order, and flat brace-group member order cannot turn a `rustfmt` run into a
 spurious public-API change. CI rejects additions, removals, and reexports that
 are not accompanied by an intentional inventory and snapshot update. CI runs that suite for the default
-product path and for `execution`; the native JIT suite is maintained in the
-experiments workflow. `sdk-api-compatibility.yml` additionally runs pinned
+product path and for `execution`. `sdk-api-compatibility.yml` additionally runs pinned
 `cargo-semver-checks` against the target-branch commit for both reviewed
 feature closures. This branch baseline provides a generated API-diff gate
-before a crates.io release exists; compatibility and native-JIT features are
-intentionally excluded.
+before a crates.io release exists.

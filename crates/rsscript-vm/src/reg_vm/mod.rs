@@ -32,8 +32,8 @@ use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 
 use rsscript_abi_model::{
-    WireRecordFieldLayout, WireRecordLayout, WireType, WireValue, WireVariantCaseLayout,
-    WireVariantLayout,
+    FunctionSignature, WireCallTypeTable, WireRecordFieldLayout, WireRecordLayout, WireType,
+    WireValue, WireVariantCaseLayout, WireVariantLayout,
 };
 use rsscript_corelib::{
     collections::{
@@ -70,8 +70,8 @@ use rsscript_corelib::{
 use self::calls::PureClosurePlan;
 use crate::eval_types::{
     AsyncProviderCallContext, EvalError, EvalExecutionReport, EvalOutput, ExternalFunction,
-    NativeValue, ProviderCallContext, ProviderCallMode, ProviderError, ProviderFuture,
-    ProviderResourceRegistry, WireMutationProviderFuture, WireMutationResult, WireProviderFuture,
+    ProviderCallContext, ProviderCallMode, ProviderError, ProviderResourceRegistry,
+    WireMutationProviderFuture, WireMutationResult, WireProviderFuture,
 };
 #[cfg(feature = "native-jit")]
 use crate::text_util::string_pad_len;
@@ -570,11 +570,9 @@ impl RegVmExecutable {
     }
 
     /// Return the canonical result value for `main` when its v1 declaration
-    /// contains enough structural type information to do so. This is an
-    /// explicit compatibility bridge: older v1 Artifacts may omit record or
-    /// named-variant side tables. Unsupported values return `None` instead of
-    /// leaking a dynamic stringly typed value through the reviewed SDK report.
-    fn main_result_wire_value(&self, value: NativeValue) -> Option<WireValue> {
+    /// contains enough structural type information to do so. Unsupported
+    /// values return `None`; the report never fabricates dynamic identities.
+    fn main_result_wire_value(&self, value: VmValue) -> Option<WireValue> {
         let result = self
             .unit
             .native_signatures
@@ -621,8 +619,16 @@ impl RegVmExecutable {
                     .collect(),
             })
             .collect();
-        crate::eval_types::native_result_to_wire(value, &result, record_layouts, variant_layouts)
-            .ok()
+        let signature = FunctionSignature {
+            parameters: Vec::new(),
+            result: result.clone(),
+            asynchronous: false,
+        };
+        let types = WireCallTypeTable::for_signature(&signature)
+            .and_then(|types| types.with_record_layouts(record_layouts))
+            .and_then(|types| types.with_variant_layouts(variant_layouts))
+            .ok()?;
+        wire_value_from_vm_value(value, &result, &types).ok()
     }
 
     fn prepare_vm(
@@ -1117,13 +1123,11 @@ impl RegVmExecutable {
             .unwrap_or_default();
         vm.cleanup_provider_resources()?;
         let display_value = value.display();
-        let native_value = value.native_value();
         Ok((
             EvalOutput {
                 usage: vm.usage(),
                 value: display_value.clone(),
                 display_value,
-                native_value,
                 stdout: vm.stdout,
                 stderr: vm.stderr,
                 provider_call_traces: vm.provider_trace.snapshot(),
@@ -1167,12 +1171,10 @@ impl RegVmExecutable {
         let value = vm.run_program("main")?;
         vm.cleanup_provider_resources()?;
         let display_value = value.display();
-        let native_value = value.native_value();
         Ok(EvalOutput {
             usage: vm.usage(),
             value: display_value.clone(),
             display_value,
-            native_value,
             stdout: vm.stdout,
             stderr: vm.stderr,
             provider_call_traces: vm.provider_trace.snapshot(),
@@ -1228,12 +1230,10 @@ impl RegVmExecutable {
         flush_result?;
         vm.cleanup_provider_resources()?;
         let display_value = value.display();
-        let native_value = value.native_value();
         Ok(EvalOutput {
             usage: vm.usage(),
             value: display_value.clone(),
             display_value,
-            native_value,
             stdout: vm.stdout,
             stderr: vm.stderr,
             provider_call_traces: vm.provider_trace.snapshot(),
@@ -1258,12 +1258,10 @@ impl RegVmExecutable {
         let value = vm.run_program("main")?;
         vm.cleanup_provider_resources()?;
         let display_value = value.display();
-        let native_value = value.native_value();
         Ok(EvalOutput {
             usage: vm.usage(),
             value: display_value.clone(),
             display_value,
-            native_value,
             stdout: vm.stdout,
             stderr: vm.stderr,
             provider_call_traces: vm.provider_trace.snapshot(),
@@ -1312,12 +1310,7 @@ impl RegVmExecutable {
         match result {
             Ok(value) => {
                 let display_value = value.display();
-                // `NativeValue` remains an internal compatibility bridge while
-                // old VM values are retired.  Execution reports retain only
-                // the canonical wire result and never expose this projection.
-                let wire_value = value
-                    .native_value()
-                    .and_then(|value| self.main_result_wire_value(value));
+                let wire_value = self.main_result_wire_value(value.clone());
                 Ok(EvalExecutionReport {
                     usage,
                     value: Some(display_value.clone()),
@@ -1360,12 +1353,10 @@ impl RegVmExecutable {
         let value = vm.run_program("main")?;
         vm.cleanup_provider_resources()?;
         let display_value = value.display();
-        let native_value = value.native_value();
         Ok(EvalOutput {
             usage: vm.usage(),
             value: display_value.clone(),
             display_value,
-            native_value,
             stdout: vm.stdout,
             stderr: vm.stderr,
             provider_call_traces: vm.provider_trace.snapshot(),
@@ -1429,16 +1420,6 @@ enum Wait {
         handles: Vec<TaskId>,
         winner_dst: usize,
         value_dst: usize,
-    },
-    /// An asynchronous Provider call. The future is polled by the cooperative
-    /// scheduler; it never blocks the VM thread. Mutation targets are absolute
-    /// registers in the parked task and are written only after a successful
-    /// completion envelope has been validated.
-    Provider {
-        future: ProviderFuture,
-        result: Option<Result<NativeValue, ProviderError>>,
-        key: String,
-        mutation_targets: Vec<usize>,
     },
     /// A descriptor-linked asynchronous Provider call whose callable receives
     /// canonical wire values. The register VM only adapts the completed value

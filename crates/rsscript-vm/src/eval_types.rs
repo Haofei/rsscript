@@ -13,11 +13,10 @@ pub use rsscript_abi_model::{
     WireValue,
 };
 pub use rsscript_provider_api::{
-    AsyncInterpreterFn, AsyncProviderCallContext, AsyncWireInterpreterFn,
-    AsyncWireMutationInterpreterFn, BlockingBehavior, CancellationBehavior, HostCallContext,
-    NativeInterpreterFn, NativeValue, ProviderCallContext, ProviderCallMode, ProviderCallTrace,
-    ProviderCallable, ProviderDescriptor, ProviderError, ProviderErrorCode, ProviderErrorMapping,
-    ProviderFunction, ProviderFunctionDescriptor, ProviderFuture, ProviderInvocationContract,
+    AsyncProviderCallContext, AsyncWireInterpreterFn, AsyncWireMutationInterpreterFn,
+    BlockingBehavior, CancellationBehavior, HostCallContext, ProviderCallContext, ProviderCallMode,
+    ProviderCallTrace, ProviderCallable, ProviderDescriptor, ProviderError, ProviderErrorCode,
+    ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor, ProviderInvocationContract,
     ProviderLoadError, ProviderResource, ProviderResourceRegistry, ProviderResourceTable,
     ProviderTraceSink, ResolvedProviderFunction, ResourceCleanupContract, ResourceHandle,
     WireInterpreterFn, WireMutationInterpreterFn, WireMutationProviderFuture, WireMutationResult,
@@ -53,6 +52,7 @@ impl ProviderTraceCollector {
 /// This protects the reference VM when the host uses unwind panics. It is not
 /// a process-isolation guarantee: abort panics and native faults still require
 /// the isolated runner boundary.
+#[cfg(any())]
 struct PanicContainedProviderFuture {
     inner: ProviderFuture,
 }
@@ -105,12 +105,14 @@ impl Future for PanicContainedWireMutationProviderFuture {
     }
 }
 
+#[cfg(any())]
 impl PanicContainedProviderFuture {
     fn new(inner: ProviderFuture) -> Self {
         Self { inner }
     }
 }
 
+#[cfg(any())]
 impl Future for PanicContainedProviderFuture {
     type Output = Result<NativeValue, ProviderError>;
 
@@ -150,6 +152,7 @@ fn check_payload_budget(
 /// the Provider without fabricating an Artifact-wide table. Named records and
 /// variants use descriptor-supplied layouts. JSON remains a named extension
 /// codec rather than an implicit dynamic escape hatch.
+#[cfg(any())]
 fn native_to_wire(
     value: NativeValue,
     expected: &WireType,
@@ -376,6 +379,7 @@ fn native_to_wire(
 /// retain their canonical numeric identities; named values fail closed instead
 /// of fabricating string identities in [`WireValue`].  The Artifact-wide type
 /// table will eventually make those remaining layouts available to this path.
+#[cfg(any())]
 pub(crate) fn native_result_to_wire(
     value: NativeValue,
     result: &WireType,
@@ -396,6 +400,7 @@ pub(crate) fn native_result_to_wire(
     native_to_wire(value, result, &types)
 }
 
+#[cfg(any())]
 fn wire_to_native(
     value: WireValue,
     expected: &WireType,
@@ -636,6 +641,7 @@ fn wire_to_native(
     }
 }
 
+#[cfg(any())]
 fn type_id(
     types: &WireCallTypeTable,
     expected: &WireType,
@@ -645,6 +651,7 @@ fn type_id(
     })
 }
 
+#[cfg(any())]
 fn resource_type_id(
     types: &WireCallTypeTable,
     expected: &WireType,
@@ -654,11 +661,13 @@ fn resource_type_id(
     })
 }
 
+#[cfg(any())]
 fn native_record_name_matches(name: &str, ty: &WireType) -> bool {
     let canonical = native_record_name(ty);
     canonical == name || matches!(ty, WireType::Named { name: local, .. } if local == name)
 }
 
+#[cfg(any())]
 fn native_record_name(ty: &WireType) -> String {
     let WireType::Named { package, name, .. } = ty else {
         return String::new();
@@ -675,6 +684,7 @@ struct NonReentrantCallPermit {
     active: Arc<AtomicBool>,
 }
 
+#[cfg(any())]
 #[derive(Clone)]
 enum AsyncProviderCallable {
     Native(AsyncInterpreterFn),
@@ -698,10 +708,12 @@ pub struct ExternalFunction {
 }
 
 impl ExternalFunction {
+    #[cfg(any())]
     pub fn from_fn(function: rsscript_provider_api::NativeHostFn) -> Self {
         NativeInterpreterFn::from_fn(function).into()
     }
 
+    #[cfg(any())]
     pub fn new(
         function: impl Fn(Vec<NativeValue>) -> Result<NativeValue, ProviderError>
         + Send
@@ -711,6 +723,7 @@ impl ExternalFunction {
         NativeInterpreterFn::new(function).into()
     }
 
+    #[cfg(any())]
     pub fn new_contextual(
         function: impl for<'a> Fn(
             &mut ProviderCallContext<'a>,
@@ -723,6 +736,7 @@ impl ExternalFunction {
         NativeInterpreterFn::new_contextual(function).into()
     }
 
+    #[cfg(any())]
     pub fn new_async<F, Fut>(function: F) -> Self
     where
         F: Fn(AsyncProviderCallContext, Vec<NativeValue>) -> Fut + Send + Sync + 'static,
@@ -733,6 +747,20 @@ impl ExternalFunction {
 
     pub fn contract(&self) -> Option<&ProviderInvocationContract> {
         self.contract.as_ref()
+    }
+
+    /// The descriptor-scoped type table used by the VM's direct wire boundary.
+    /// Only linked Provider functions expose it, so execution cannot invent
+    /// record, variant, or resource identities from display strings.
+    pub(crate) fn wire_types(&self) -> Result<WireCallTypeTable, ProviderError> {
+        let contract = self.contract().ok_or_else(|| {
+            ProviderError::unavailable("Provider function must be linked before execution")
+        })?;
+        wire_type_table(
+            &contract.descriptor.signature,
+            &contract.record_layouts,
+            &contract.variant_layouts,
+        )
     }
 
     pub fn host_context(&self) -> &HostCallContext {
@@ -750,6 +778,7 @@ impl ExternalFunction {
     /// Whether this linked function can use the canonical synchronous wire
     /// dispatcher. Native and asynchronous callables deliberately remain on
     /// their explicit compatibility/scheduler paths.
+    #[cfg(any())]
     pub(crate) const fn is_wire_sync(&self) -> bool {
         matches!(self.callable, ProviderCallable::WireSync(_))
     }
@@ -757,6 +786,7 @@ impl ExternalFunction {
     /// Whether this linked function uses the canonical synchronous mutation
     /// dispatcher. A wire mutation result carries explicit write-back values;
     /// it is never encoded as a dynamic list envelope for the Provider.
+    #[cfg(any())]
     pub(crate) const fn is_wire_sync_mut(&self) -> bool {
         matches!(self.callable, ProviderCallable::WireSyncMut(_))
     }
@@ -777,6 +807,7 @@ impl ExternalFunction {
     /// Convert legacy VM boundary values to the exact descriptor-scoped wire
     /// signature without invoking a Provider. This is the last compatibility
     /// edge for register values; the Provider itself receives only `WireValue`.
+    #[cfg(any())]
     pub(crate) fn wire_args_from_native(
         &self,
         args: Vec<NativeValue>,
@@ -803,6 +834,7 @@ impl ExternalFunction {
 
     /// Decode a canonical wire result at the VM compatibility edge. This is
     /// intentionally not exposed through the reviewed Provider SDK.
+    #[cfg(any())]
     pub(crate) fn wire_result_to_native(
         &self,
         value: WireValue,
@@ -821,6 +853,7 @@ impl ExternalFunction {
     /// Validate a canonical mutation result against the exact linked signature
     /// and convert it into the register VM's temporary compatibility envelope.
     /// No Provider code sees or constructs that envelope.
+    #[cfg(any())]
     pub(crate) fn wire_mutation_result_to_native_envelope(
         &self,
         value: WireMutationResult,
@@ -885,6 +918,7 @@ impl ExternalFunction {
         }))
     }
 
+    #[cfg(any())]
     pub fn call_with_context(
         &self,
         context: &mut ProviderCallContext<'_>,
@@ -1264,6 +1298,7 @@ impl ExternalFunction {
         result
     }
 
+    #[cfg(any())]
     pub fn start_async(
         &self,
         mut context: AsyncProviderCallContext,
@@ -1426,6 +1461,7 @@ impl ExternalFunction {
     /// its arguments or result through `NativeValue`. This is intentionally a
     /// separate scheduler entry point: the legacy async dispatcher remains
     /// available only for compatibility callables and mutation envelopes.
+    #[allow(unreachable_patterns)] // Legacy Provider variants are feature-gated upstream.
     pub(crate) fn start_wire_async(
         &self,
         mut context: AsyncProviderCallContext,
@@ -1449,11 +1485,10 @@ impl ExternalFunction {
         context.symbol = contract.descriptor.symbol.as_str().to_string();
         let callable = match &self.callable {
             ProviderCallable::WireAsync(callable) => callable.clone(),
-            ProviderCallable::Async(_)
-            | ProviderCallable::Sync(_)
-            | ProviderCallable::WireSync(_)
+            ProviderCallable::WireSync(_)
             | ProviderCallable::WireSyncMut(_)
-            | ProviderCallable::WireAsyncMut(_) => {
+            | ProviderCallable::WireAsyncMut(_)
+            | _ => {
                 return Box::pin(async {
                     Err(ProviderError::unavailable(
                         "non-wire async Provider cannot enter the wire async dispatcher",
@@ -1555,6 +1590,7 @@ impl ExternalFunction {
     /// Start an asynchronous canonical wire mutation Provider. The scheduler
     /// receives explicit wire write-backs and only the register VM's legacy
     /// boundary later materializes its temporary mutation envelope.
+    #[allow(unreachable_patterns)] // Legacy Provider variants are feature-gated upstream.
     pub(crate) fn start_wire_mut_async(
         &self,
         mut context: AsyncProviderCallContext,
@@ -1578,11 +1614,10 @@ impl ExternalFunction {
         context.symbol = contract.descriptor.symbol.as_str().to_string();
         let callable = match &self.callable {
             ProviderCallable::WireAsyncMut(callable) => callable.clone(),
-            ProviderCallable::Async(_)
-            | ProviderCallable::Sync(_)
-            | ProviderCallable::WireSync(_)
+            ProviderCallable::WireSync(_)
             | ProviderCallable::WireSyncMut(_)
-            | ProviderCallable::WireAsync(_) => {
+            | ProviderCallable::WireAsync(_)
+            | _ => {
                 return Box::pin(async {
                     Err(ProviderError::unavailable(
                         "non-wire-mutation async Provider cannot enter the wire mutation dispatcher",
@@ -1748,12 +1783,14 @@ fn wire_type_table(
         })
 }
 
+#[cfg(any())]
 impl From<rsscript_provider_api::NativeHostFn> for ExternalFunction {
     fn from(function: rsscript_provider_api::NativeHostFn) -> Self {
         Self::from_fn(function)
     }
 }
 
+#[cfg(any())]
 impl From<NativeInterpreterFn> for ExternalFunction {
     fn from(callable: NativeInterpreterFn) -> Self {
         Self {
@@ -1765,6 +1802,7 @@ impl From<NativeInterpreterFn> for ExternalFunction {
     }
 }
 
+#[cfg(any())]
 impl From<AsyncInterpreterFn> for ExternalFunction {
     fn from(callable: AsyncInterpreterFn) -> Self {
         Self {
@@ -1787,6 +1825,7 @@ impl From<AsyncWireInterpreterFn> for ExternalFunction {
     }
 }
 
+#[cfg(any())]
 impl From<ExternalFunction> for NativeInterpreterFn {
     fn from(function: ExternalFunction) -> Self {
         match function.callable {
@@ -1912,7 +1951,6 @@ pub struct EvalOutput {
     pub usage: ExecutionUsage,
     pub value: String,
     pub display_value: String,
-    pub native_value: Option<NativeValue>,
     pub stdout: String,
     pub stderr: String,
     pub provider_call_traces: Vec<ProviderCallTrace>,
@@ -2024,7 +2062,7 @@ impl CoverageBucket {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod provider_contract_tests {
     use super::*;
     use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationId};

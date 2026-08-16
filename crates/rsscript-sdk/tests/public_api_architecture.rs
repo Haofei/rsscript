@@ -193,13 +193,7 @@ fn removed_root_aliases_cannot_return() {
 #[test]
 fn public_api_inventory_covers_the_current_migration_surface() {
     let inventory = inventory();
-    for required in [
-        "## Stable façade",
-        "## Compatibility-only APIs",
-        "## Feature-gated experimental APIs",
-        "`reg_vm_*`",
-        "`native-jit`",
-    ] {
+    for required in ["## Stable façade", "## Historical compatibility APIs"] {
         assert!(
             inventory.contains(required),
             "SDK API inventory must classify `{required}`"
@@ -236,25 +230,16 @@ fn public_api_inventory_covers_the_current_migration_surface() {
         );
     }
     assert!(
-        source.contains("#[cfg(feature = \"native-jit\")]\npub use rsscript_vm::NativeStats"),
-        "native JIT statistics must remain feature-gated"
+        !source.contains("native-jit"),
+        "the reviewed SDK must not expose the retired native JIT experiment"
     );
+    let manifest =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
+            .expect("SDK manifest should be readable");
     assert!(
-        source.contains("#[cfg(feature = \"native-jit\")]\npub use vm_adapter"),
-        "native JIT execution helpers must remain feature-gated"
+        !manifest.contains("compatibility = ["),
+        "the retired root-level compatibility feature must not return"
     );
-    for legacy_export in [
-        "pub use rsscript_compiler::compatibility::{",
-        "pub use rsscript_bytecode::{",
-        "pub use rsscript_vm::{",
-        "pub use vm_adapter::{",
-    ] {
-        let gated = format!("#[cfg(feature = \"compatibility\")]\n{legacy_export}");
-        assert!(
-            source.contains(&gated),
-            "legacy root export must require the compatibility feature: {legacy_export}"
-        );
-    }
 }
 
 #[test]

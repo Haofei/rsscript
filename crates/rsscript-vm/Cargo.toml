@@ -12,14 +12,9 @@ rsscript-bytecode = { path = "../rsscript-bytecode" }
 rsscript-corelib = { path = "../rsscript-corelib" }
 rsscript-diagnostics = { path = "../rsscript-diagnostics" }
 rsscript-operation = { path = "../rsscript-operation" }
-rsscript-provider-api = { path = "../rsscript-provider-api", features = ["compatibility"] }
+rsscript-provider-api = { path = "../rsscript-provider-api" }
 rsscript-text = { path = "../rsscript-text" }
 serde = { version = "1", features = ["derive", "rc"] }
-vm-jit = { path = "../../experiments/vm-jit", optional = true }
-
-[features]
-default = []
-native-jit = ["dep:vm-jit"]
 
 [build-dependencies]
 rsscript-build-support = { path = "../rsscript-build-support" }
@@ -27,3 +22,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 toml = "0.8"
+
+[lints.rust]
+# The retired native-tier source is deliberately retained outside Cargo's
+# feature graph while the labs crate is disentangled.  Keep its historical cfg
+# markers quiet without reintroducing a public VM feature or an experiments
+# dependency into the Core manifest.
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("native-jit"))'] }

@@ -207,7 +207,6 @@ impl RegVm {
                     Some(Wait::Select { handles, .. }) => handles
                         .iter()
                         .any(|h| self.tasks.get(h).is_some_and(|s| s.done.is_some())),
-                    Some(Wait::Provider { result, .. }) => result.is_some(),
                     Some(Wait::WireProvider { result, .. }) => result.is_some(),
                     Some(Wait::WireMutationProvider { result, .. }) => result.is_some(),
                     None => false,
@@ -227,12 +226,6 @@ impl RegVm {
         let waker = Waker::from(Arc::new(SchedulerWake(std::thread::current())));
         let mut context = Context::from_waker(&waker);
         for slot in self.tasks.values_mut() {
-            if let Some(Wait::Provider { future, result, .. }) = slot.wait.as_mut()
-                && result.is_none()
-                && let Poll::Ready(value) = future.as_mut().poll(&mut context)
-            {
-                *result = Some(value);
-            }
             if let Some(Wait::WireProvider { future, result, .. }) = slot.wait.as_mut()
                 && result.is_none()
                 && let Poll::Ready(value) = future.as_mut().poll(&mut context)
@@ -252,8 +245,7 @@ impl RegVm {
         self.tasks.values().any(|slot| {
             matches!(
                 slot.wait,
-                Some(Wait::Provider { result: None, .. })
-                    | Some(Wait::WireProvider { result: None, .. })
+                Some(Wait::WireProvider { result: None, .. })
                     | Some(Wait::WireMutationProvider { result: None, .. })
             )
         })
@@ -376,22 +368,6 @@ impl RegVm {
                 self.write_saved_reg(tid, winner_dst, VmValue::Int(index as i64));
                 self.complete_wait_at(tid, value_dst, value);
             }
-            Wait::Provider {
-                result,
-                key,
-                mutation_targets,
-                ..
-            } => {
-                let raw = result
-                    .expect("Provider future was ready")
-                    .map_err(EvalError::Provider)?;
-                let (value, mutated) =
-                    self.decode_external_result(&key, raw, mutation_targets.len())?;
-                for (register, mutated_value) in mutation_targets.into_iter().zip(mutated) {
-                    self.write_saved_reg(tid, register, mutated_value);
-                }
-                self.complete_wait(tid, value);
-            }
             Wait::WireProvider {
                 result,
                 key,
@@ -406,13 +382,18 @@ impl RegVm {
                         "reg VM wire provider function `{key}` disappeared while suspended"
                     ))
                 })?;
-                let raw = function
-                    .wire_result_to_native(wire)
-                    .map_err(EvalError::Provider)?;
-                let (value, mutated) =
-                    self.decode_external_result(&key, raw, mutation_targets.len())?;
-                for (register, mutated_value) in mutation_targets.into_iter().zip(mutated) {
-                    self.write_saved_reg(tid, register, mutated_value);
+                let contract = function.contract().ok_or_else(|| {
+                    EvalError::Runtime(format!(
+                        "reg VM wire provider function `{key}` has no linked contract"
+                    ))
+                })?;
+                let types = function.wire_types().map_err(EvalError::Provider)?;
+                let value =
+                    vm_value_from_wire_value(wire, &contract.descriptor.signature.result, &types)?;
+                if !mutation_targets.is_empty() {
+                    return Err(EvalError::Runtime(
+                        "non-mutation Provider result cannot write back mut parameters".into(),
+                    ));
                 }
                 self.complete_wait(tid, value);
             }
@@ -430,11 +411,39 @@ impl RegVm {
                         "reg VM wire mutation provider function `{key}` disappeared while suspended"
                     ))
                 })?;
-                let raw = function
-                    .wire_mutation_result_to_native_envelope(wire)
-                    .map_err(EvalError::Provider)?;
-                let (value, mutated) =
-                    self.decode_external_result(&key, raw, mutation_targets.len())?;
+                let contract = function.contract().ok_or_else(|| {
+                    EvalError::Runtime(format!(
+                        "reg VM wire mutation provider function `{key}` has no linked contract"
+                    ))
+                })?;
+                let types = function.wire_types().map_err(EvalError::Provider)?;
+                let value = vm_value_from_wire_value(
+                    wire.result,
+                    &contract.descriptor.signature.result,
+                    &types,
+                )?;
+                let mutation_types = contract
+                    .descriptor
+                    .signature
+                    .parameters
+                    .iter()
+                    .filter(|parameter| parameter.effect == rsscript_abi_model::DataEffect::Mut)
+                    .map(|parameter| &parameter.ty)
+                    .collect::<Vec<_>>();
+                if wire.mutated.len() != mutation_targets.len()
+                    || mutation_types.len() != mutation_targets.len()
+                {
+                    return Err(EvalError::Runtime(
+                        "wire mutation Provider result does not contain every mut write-back"
+                            .into(),
+                    ));
+                }
+                let mutated = wire
+                    .mutated
+                    .into_iter()
+                    .zip(mutation_types)
+                    .map(|(value, ty)| vm_value_from_wire_value(value, ty, &types))
+                    .collect::<Result<Vec<_>, _>>()?;
                 for (register, mutated_value) in mutation_targets.into_iter().zip(mutated) {
                     self.write_saved_reg(tid, register, mutated_value);
                 }

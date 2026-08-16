@@ -1,7 +1,10 @@
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, HashSet};
+#[cfg(any())]
+use std::collections::BTreeMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
+#[cfg(any())]
 use crate::eval_types::NativeValue;
 use crate::fnv::FnvHasher;
 use crate::serde_json;
@@ -908,6 +911,7 @@ impl VmMapKey {
         self.0.display()
     }
 
+    #[cfg(any())]
     pub(crate) fn native_value(&self) -> Option<NativeValue> {
         self.0.native_value()
     }
@@ -1271,10 +1275,12 @@ impl VmValue {
         rendered
     }
 
+    #[cfg(any())]
     pub(crate) fn native_value(&self) -> Option<NativeValue> {
         self.native_value_inner(&mut HashSet::new())
     }
 
+    #[cfg(any())]
     fn native_value_inner(&self, active: &mut HashSet<usize>) -> Option<NativeValue> {
         let node = vm_value_node_id(self);
         if let Some(node) = node
@@ -1356,6 +1362,7 @@ impl VmValue {
     }
 }
 
+#[cfg(any())]
 fn native_fields(
     data: &VmStruct,
     active: &mut HashSet<usize>,

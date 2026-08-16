@@ -907,20 +907,14 @@ fn jit_planning_state_is_kept_out_of_verified_program_objects() {
 #[test]
 fn default_vm_layout_excludes_native_jit_feedback_and_dependencies() {
     let root = workspace_root();
-    let model = read(&root.join("crates/rsscript-vm/src/reg_vm/model.rs"));
-    let state = read(&root.join("crates/rsscript-vm/src/reg_vm/tier/state.rs"));
-    let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));
-
-    assert!(model.contains("#[cfg(feature = \"native-jit\")]\nmod profile;"));
-    for field in ["native_status", "call_count", "branch_count", "profile"] {
-        assert!(
-            state.contains(&format!("#[cfg(feature = \"native-jit\")]\n    {field}:")),
-            "default VM layout must not retain native JIT `{field}` feedback"
-        );
-    }
+    let manifest = read(&root.join("crates/rsscript-vm/Cargo.toml"));
     assert!(
-        vm.contains("#[cfg(feature = \"native-jit\")]\n    native: Option<NativeState>"),
-        "the evaluator's machine-code state must be native-JIT feature gated"
+        !manifest.contains("vm-jit ="),
+        "the Core VM must not retain an optional Cargo edge to the JIT lab"
+    );
+    assert!(
+        !manifest.contains("native-jit ="),
+        "the Core VM must not expose a native-JIT feature"
     );
 
     let closure = cargo_tree(&root, "rsscript-vm");
@@ -1104,27 +1098,20 @@ fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
 #[test]
 fn vm_runtime_dependency_inventory_prevents_library_implementation_regressions() {
     let root = workspace_root();
-    let vm_manifest = read(&root.join("crates/rsscript-vm/Cargo.toml"));
+    let vm_manifest: toml::Value =
+        toml::from_str(&read(&root.join("crates/rsscript-vm/Cargo.toml")))
+            .expect("VM manifest should parse");
     let inventory = read(&root.join("docs/architecture/vm-runtime-dependency-inventory.md"));
-    let dependencies = vm_manifest
-        .split("[dependencies]\n")
-        .nth(1)
-        .and_then(|section| section.split("\n[features]").next())
-        .expect("VM manifest must expose a normal dependency section");
-    let declared = dependencies
-        .lines()
-        .filter_map(|line| line.split_once('=').map(|(name, _)| name.trim()))
-        .collect::<BTreeSet<_>>();
-    let expected = BTreeSet::from([
-        "rsscript-abi-model",
-        "rsscript-bytecode",
-        "rsscript-corelib",
-        "rsscript-diagnostics",
-        "rsscript-operation",
-        "rsscript-provider-api",
-        "rsscript-text",
-        "serde",
-        "vm-jit",
+    let declared = normal_dependency_packages(&vm_manifest);
+    let expected = BTreeSet::from_iter([
+        "rsscript-abi-model".to_owned(),
+        "rsscript-bytecode".to_owned(),
+        "rsscript-corelib".to_owned(),
+        "rsscript-diagnostics".to_owned(),
+        "rsscript-operation".to_owned(),
+        "rsscript-provider-api".to_owned(),
+        "rsscript-text".to_owned(),
+        "serde".to_owned(),
     ]);
     assert_eq!(
         declared, expected,
@@ -2292,12 +2279,13 @@ fn rust_aot_lowering_is_explicitly_feature_gated() {
         "compatibility must not restore a deleted executable IR path"
     );
 
-    let testgen: toml::Value = toml::from_str(&read(
-        &root.join("experiments/rss-testgen/Cargo.toml"),
-    ))
-    .expect("experiment test-generator manifest should parse");
+    let testgen: toml::Value =
+        toml::from_str(&read(&root.join("experiments/rss-testgen/Cargo.toml")))
+            .expect("experiment test-generator manifest should parse");
     assert!(
-        testgen["dependencies"].get("rsscript-aot-backend").is_some(),
+        testgen["dependencies"]
+            .get("rsscript-aot-backend")
+            .is_some(),
         "the AOT experiment must depend on its owning backend directly"
     );
     let testgen_sdk = testgen["dependencies"]["rsscript-sdk"]
@@ -5101,8 +5089,8 @@ fn abi_and_provider_crates_keep_one_way_dependencies() {
     );
     let vm_manifest = read(&root.join("crates/rsscript-vm/Cargo.toml"));
     assert!(
-        vm_manifest.contains("rsscript-provider-api = { path = \"../rsscript-provider-api\", features = [\"compatibility\"] }"),
-        "the register VM must explicitly own its legacy Provider-value adapter"
+        !vm_manifest.contains("features = [\"compatibility\"]"),
+        "the register VM must use only the canonical Provider wire API"
     );
     let native_source = read(&root.join("experiments/native-abi/src/lib.rs"));
     assert!(

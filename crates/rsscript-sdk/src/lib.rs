@@ -79,8 +79,6 @@ pub use rsscript_review::{
     format_package_metadata_json, format_package_review_human, format_package_review_json,
     format_package_review_markdown, format_package_tree_human, format_package_tree_json,
 };
-#[cfg(feature = "native-jit")]
-pub use rsscript_vm::NativeStats;
 #[cfg(feature = "execution")]
 #[cfg(not(feature = "compatibility"))]
 #[allow(unused_imports)]
@@ -133,13 +131,6 @@ pub use vm_adapter::{
     reg_vm_eval_source_main_with_args_and_external_bindings,
     reg_vm_eval_source_main_with_args_and_external_bindings_and_limits,
     reg_vm_eval_source_main_with_args_streaming_stdout, reg_vm_eval_source_main_with_limits,
-};
-#[cfg(feature = "native-jit")]
-pub use vm_adapter::{
-    reg_vm_eval_source_main_native, reg_vm_eval_source_main_native_force_all_safepoints,
-    reg_vm_eval_source_main_native_force_deopt, reg_vm_eval_source_main_native_force_safepoint,
-    reg_vm_eval_source_main_native_osr, reg_vm_eval_source_main_native_osr_report,
-    reg_vm_eval_source_main_native_precise, with_native_cost_model_disabled,
 };
 
 /// Frontend-only editor API consumed by `rsscript-language-service`.
@@ -2115,6 +2106,7 @@ mod tests {
     use provider::{
         BlockingBehavior, CancellationBehavior, DataEffect, ExternalSymbol, FunctionSignature,
         ParameterSignature, ProviderCallMode, ProviderFunctionDescriptor, RUNTIME_ABI_VERSION,
+        WireInterpreterFn, WireValue,
     };
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
@@ -3046,9 +3038,9 @@ fn main() -> Result<Int, String> {
                     symbol,
                     ProviderFunction {
                         signature: incompatible,
-                        callable: NativeInterpreterFn::new(move |_| {
+                        callable: WireInterpreterFn::new(move |_| {
                             called_by_provider.store(true, Ordering::SeqCst);
-                            Ok(NativeValue::Unit)
+                            Ok(WireValue::Unit)
                         }),
                     },
                 )]),
@@ -3118,7 +3110,7 @@ fn main() -> Result<Int, String> {
                     symbol,
                     ProviderFunction {
                         signature,
-                        callable: NativeInterpreterFn::new(|_| Ok(NativeValue::Unit)),
+                        callable: WireInterpreterFn::new(|_| Ok(WireValue::Unit)),
                     },
                 )]),
             )
@@ -3154,7 +3146,7 @@ fn main() -> Result<Int, String> {
                     failure_symbol,
                     ProviderFunction {
                         signature: failure_signature,
-                        callable: NativeInterpreterFn::new(|_| {
+                        callable: WireInterpreterFn::new(|_| {
                             Err(provider::ProviderError::invalid_argument(
                                 "rejected by provider",
                             ))
@@ -3230,7 +3222,7 @@ fn main() -> Result<Int, String> {
                     symbol,
                     ProviderFunction {
                         signature,
-                        callable: NativeInterpreterFn::new(|_| {
+                        callable: WireInterpreterFn::new(|_| {
                             let mut error = provider::ProviderError::invalid_argument(
                                 "secret-token=do-not-report",
                             );
@@ -3315,11 +3307,11 @@ fn main() -> Result<Int, String> {
                     symbol,
                     ProviderFunction {
                         signature,
-                        callable: NativeInterpreterFn::new_contextual(|context, _| {
+                        callable: WireInterpreterFn::new_contextual(|context, _| {
                             assert!(context.host_context.has_label("log.emit"));
                             assert_eq!(context.provider_id, "test.log");
                             assert_eq!(context.symbol, "host.log.emit");
-                            Ok(NativeValue::Unit)
+                            Ok(WireValue::Unit)
                         }),
                     },
                 )]),

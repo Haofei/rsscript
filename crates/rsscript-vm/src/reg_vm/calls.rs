@@ -1,9 +1,13 @@
 use super::*;
+#[cfg(any())]
 use crate::serde_json;
 
+#[cfg(any())]
 const NATIVE_VALUE_MAX_DEPTH: usize = 128;
+#[cfg(any())]
 const NATIVE_VALUE_MAX_NODES: usize = 1_000_000;
 
+#[cfg(any())]
 fn native_json_storage_estimate(
     value: &serde_json::Value,
     depth: usize,
@@ -45,6 +49,7 @@ fn native_json_storage_estimate(
     })
 }
 
+#[cfg(any())]
 fn native_value_storage_estimate_inner(
     value: &NativeValue,
     depth: usize,
@@ -113,11 +118,13 @@ fn native_value_storage_estimate_inner(
     })
 }
 
+#[cfg(any())]
 fn native_value_storage_estimate(value: &NativeValue) -> Result<usize, EvalError> {
     let mut nodes = 0;
     native_value_storage_estimate_inner(value, 0, &mut nodes)
 }
 
+#[cfg(any())]
 fn compact_native_json(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::String(value) => value.shrink_to_fit(),
@@ -143,6 +150,7 @@ fn compact_native_json(value: &mut serde_json::Value) {
     }
 }
 
+#[cfg(any())]
 fn compact_native_json_values(value: &mut NativeValue) {
     match value {
         NativeValue::Json(value) => compact_native_json(value),
@@ -297,6 +305,11 @@ enum PureFoldSymbol {
     },
 }
 
+enum SyncProviderResult {
+    Value(WireValue),
+    Mutation(WireMutationResult),
+}
+
 impl RegVm {
     pub(super) fn call_external_symbol(
         &mut self,
@@ -311,9 +324,21 @@ impl RegVm {
                 "reg VM native function `{key}` has no host binding."
             )));
         };
+        let contract = function.contract().ok_or_else(|| {
+            EvalError::Runtime(format!("Provider function `{key}` was not linked"))
+        })?;
+        if contract.descriptor.signature.parameters.len() != args.len() {
+            return Err(EvalError::Runtime(format!(
+                "Provider function `{key}` argument count does not match its linked signature"
+            )));
+        }
+        let wire_types = function.wire_types().map_err(EvalError::Provider)?;
         let arg_values = args
             .iter()
-            .map(|reg| native_value_from_vm_value(self.reg(base + *reg).clone()))
+            .zip(&contract.descriptor.signature.parameters)
+            .map(|(reg, parameter)| {
+                wire_value_from_vm_value(self.reg(base + *reg).clone(), &parameter.ty, &wire_types)
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let cancellation = self.limits.cancel.clone();
         let deadline = self.limits.deadline;
@@ -328,7 +353,7 @@ impl RegVm {
         let call_id = rsscript_operation::OperationId(self.provider_calls);
         let trace = std::sync::Arc::clone(&self.provider_trace);
         let blocking_allowed = self.limits.allow_blocking_provider_calls;
-        let raw = self
+        let wire_result = self
             .provider_resources
             .with_table(|resources| {
                 let mut context = ProviderCallContext {
@@ -346,17 +371,14 @@ impl RegVm {
                     blocking_allowed,
                     async_allowed: false,
                 };
-                if mut_args.is_empty() && function.is_wire_sync() {
-                    let wire_args = function.wire_args_from_native(arg_values)?;
-                    let wire_result = function.call_wire_with_context(&mut context, wire_args)?;
-                    function.wire_result_to_native(wire_result)
-                } else if !mut_args.is_empty() && function.is_wire_sync_mut() {
-                    let wire_args = function.wire_args_from_native(arg_values)?;
-                    let wire_result =
-                        function.call_wire_mut_with_context(&mut context, wire_args)?;
-                    function.wire_mutation_result_to_native_envelope(wire_result)
+                if mut_args.is_empty() {
+                    function
+                        .call_wire_with_context(&mut context, arg_values)
+                        .map(SyncProviderResult::Value)
                 } else {
-                    function.call_with_context(&mut context, arg_values)
+                    function
+                        .call_wire_mut_with_context(&mut context, arg_values)
+                        .map(SyncProviderResult::Mutation)
                 }
             })
             .map_err(EvalError::Provider)?;
@@ -365,7 +387,53 @@ impl RegVm {
             .iter()
             .map(|position| base + args[*position])
             .collect::<Vec<_>>();
-        let (result, mutated) = self.decode_external_result(key, raw, mutation_targets.len())?;
+        let (result, mutated) = match wire_result {
+            SyncProviderResult::Value(value) => {
+                if !mutation_targets.is_empty() {
+                    return Err(EvalError::Runtime(
+                        "non-mutation Provider result cannot write back mut parameters".into(),
+                    ));
+                }
+                (
+                    vm_value_from_wire_value(
+                        value,
+                        &contract.descriptor.signature.result,
+                        &wire_types,
+                    )?,
+                    Vec::new(),
+                )
+            }
+            SyncProviderResult::Mutation(value) => {
+                let mutation_types = contract
+                    .descriptor
+                    .signature
+                    .parameters
+                    .iter()
+                    .filter(|parameter| parameter.effect == rsscript_abi_model::DataEffect::Mut)
+                    .map(|parameter| &parameter.ty)
+                    .collect::<Vec<_>>();
+                if value.mutated.len() != mutation_targets.len()
+                    || mutation_types.len() != mutation_targets.len()
+                {
+                    return Err(EvalError::Runtime(
+                        "wire mutation Provider result does not contain every mut write-back"
+                            .into(),
+                    ));
+                }
+                let result = vm_value_from_wire_value(
+                    value.result,
+                    &contract.descriptor.signature.result,
+                    &wire_types,
+                )?;
+                let mutated = value
+                    .mutated
+                    .into_iter()
+                    .zip(mutation_types)
+                    .map(|(value, ty)| vm_value_from_wire_value(value, ty, &wire_types))
+                    .collect::<Result<Vec<_>, _>>()?;
+                (result, mutated)
+            }
+        };
         for (register, value) in mutation_targets.into_iter().zip(mutated) {
             self.set_reg(register, value);
         }
@@ -390,9 +458,21 @@ impl RegVm {
                 "provider function `{key}` is not linked as async."
             )));
         }
+        let contract = function.contract().ok_or_else(|| {
+            EvalError::Runtime(format!("Provider function `{key}` was not linked"))
+        })?;
+        if contract.descriptor.signature.parameters.len() != args.len() {
+            return Err(EvalError::Runtime(format!(
+                "Provider function `{key}` argument count does not match its linked signature"
+            )));
+        }
+        let wire_types = function.wire_types().map_err(EvalError::Provider)?;
         let arg_values = args
             .iter()
-            .map(|reg| native_value_from_vm_value(self.reg(base + *reg).clone()))
+            .zip(&contract.descriptor.signature.parameters)
+            .map(|(reg, parameter)| {
+                wire_value_from_vm_value(self.reg(base + *reg).clone(), &parameter.ty, &wire_types)
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let context = AsyncProviderCallContext {
             cancellation: self.limits.cancel.clone(),
@@ -418,35 +498,27 @@ impl RegVm {
             .map(|position| base + args[*position])
             .collect();
         if mut_args.is_empty() && function.is_wire_async() {
-            let wire_args = function
-                .wire_args_from_native(arg_values)
-                .map_err(EvalError::Provider)?;
             return Ok(Wait::WireProvider {
-                future: function.start_wire_async(context, wire_args),
+                future: function.start_wire_async(context, arg_values),
                 result: None,
                 key: key.to_string(),
                 mutation_targets,
             });
         }
         if !mut_args.is_empty() && function.is_wire_async_mut() {
-            let wire_args = function
-                .wire_args_from_native(arg_values)
-                .map_err(EvalError::Provider)?;
             return Ok(Wait::WireMutationProvider {
-                future: function.start_wire_mut_async(context, wire_args),
+                future: function.start_wire_mut_async(context, arg_values),
                 result: None,
                 key: key.to_string(),
                 mutation_targets,
             });
         }
-        Ok(Wait::Provider {
-            future: function.start_async(context, arg_values),
-            result: None,
-            key: key.to_string(),
-            mutation_targets,
-        })
+        Err(EvalError::Runtime(format!(
+            "Provider function `{key}` does not expose the required canonical async callable"
+        )))
     }
 
+    #[cfg(any())]
     pub(super) fn decode_external_result(
         &mut self,
         key: &str,

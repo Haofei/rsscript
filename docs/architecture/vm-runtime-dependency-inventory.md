@@ -11,12 +11,14 @@ become part of the VM trusted computing base.
 | `rsscript-abi-model`, `rsscript-bytecode`, `rsscript-diagnostics`, `rsscript-operation`, `rsscript-provider-api`, `rsscript-text` | Core execution boundary | Versioned ABI, verified program, diagnostics, operation controls, Provider dispatch, and text utilities. | Stable Core contracts; not scheduled for removal. |
 | `rsscript-corelib` | Deterministic builtin boundary | Encoding, regex, date, hash/HMAC, gzip, JSON/YAML structured-data representation, and generic collection algorithms. The legacy JSON adapter is re-exported only through `structured_data`, so the VM has no direct implementation-crate dependency. | Remains the one-way pure-library dependency; P06.2/P06.4 remove the legacy dynamic representation itself. |
 | `serde` | VM model serialization | Serialization derives for the VM's verified-program and value-model support types. | Re-evaluate only if the VM model’s serialization contract changes. |
-| `vm-jit` (optional) | Experimental native tier | Feature-gated JIT implementation; excluded from the default Core VM closure. | Remains experimental or moves to an external lab. |
 
 The VM must not directly add algorithm crates for encoding, regex, time/date,
 compression, hashing, HMAC, or YAML. Such code belongs in `rsscript-corelib`
 when it is deterministic and independent of VM values; host-visible services
 remain Provider calls.
+
+The native JIT lab is not a VM dependency or Cargo feature. It remains outside
+the Core dependency closure and may consume stable Core contracts only.
 
 This inventory describes dependencies only. It does not make the in-process VM
 a security isolation boundary; see the threat model for trust and runner

@@ -9,23 +9,6 @@ autotests = false
 
 [features]
 default = []
-# Transitional root-level exports for the migration corpus and downstream
-# callers that have not yet moved to the reviewed façade modules. New embeds
-# must use `compile`, `artifact`, `provider_api`, `runtime`, `report`, and
-# `operation` instead.
-compatibility = [
-    "execution",
-    "rsscript_compiler/package",
-    "dep:rsscript-artifact-store",
-    "dep:rsscript-bytecode",
-    "dep:rsscript-codegen-vm",
-    "dep:rsscript-interface-catalog",
-    "dep:rsscript-lowering",
-    "dep:rsscript-mir",
-    "dep:rsscript-provider-api",
-    "dep:rsscript-review",
-    "dep:rsscript-vm",
-]
 execution = [
     "dep:rsscript-abi-model",
     "dep:rsscript-artifact",
@@ -42,10 +25,15 @@ project = [
     "execution",
     "dep:rsscript-project",
 ]
-native-jit = ["compatibility", "rsscript-vm/native-jit"]
 # Explicit verifier-only experiment. It does not enable a v2 VM execution
 # path or make `rsscript.bytecode.v2` part of the SDK's reviewed contract.
-bytecode-v2-prototype = ["compatibility", "rsscript-bytecode/v2-prototype"]
+bytecode-v2-prototype = ["execution", "rsscript-bytecode/v2-prototype"]
+
+[lints.rust]
+# The removed root compatibility façade remains source-archived until its
+# migration corpus moves into the dedicated conformance workspace. It is not a
+# Cargo feature and therefore cannot be enabled by SDK consumers.
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("compatibility"))'] }
 
 [dependencies]
 rsscript-abi-model = { path = "../rsscript-abi-model", optional = true }
@@ -83,57 +71,12 @@ toml = "0.8"
 [[test]]
 name = "architecture"
 path = "tests/architecture.rs"
-required-features = ["compatibility"]
-
-[[test]]
-name = "runtime"
-path = "tests/runtime.rs"
-required-features = ["compatibility"]
-
-[[test]]
-name = "schema_contracts"
-path = "tests/schema_contracts.rs"
-required-features = ["compatibility"]
-
-[[test]]
-name = "differential"
-path = "tests/differential.rs"
-required-features = ["compatibility"]
-
-[[test]]
-name = "soak"
-path = "tests/soak.rs"
-required-features = ["compatibility"]
-
-[[test]]
-name = "jit_cost_model"
-path = "tests/jit_cost_model.rs"
-required-features = ["native-jit"]
-
-[[test]]
-name = "jit_env"
-path = "tests/jit_env.rs"
-required-features = ["native-jit"]
+required-features = ["execution"]
 
 [[test]]
 name = "execution_report_schema"
 path = "tests/execution_report_schema.rs"
 required-features = ["execution"]
-
-[[test]]
-name = "migration_baseline"
-path = "tests/migration_baseline.rs"
-required-features = ["compatibility"]
-
-[[test]]
-name = "mir_migration"
-path = "tests/mir_migration.rs"
-required-features = ["compatibility"]
-
-[[test]]
-name = "semantic_mir_corpus"
-path = "tests/semantic_mir_corpus.rs"
-required-features = ["compatibility"]
 
 [[test]]
 name = "compatibility_corpus"

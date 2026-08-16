@@ -5,11 +5,462 @@
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use crate::eval_types::{EvalError, NativeValue};
+use crate::eval_types::EvalError;
 use crate::serde_json;
 use crate::vm_value::{TypedVec, ValueMap, VmMapKey, VmStruct, VmValue, vm_value_node_id};
+use rsscript_abi_model::{WireCallTypeTable, WireType, WireValue};
+use rsscript_provider_api::ResourceHandle;
 
 use super::*;
+
+/// Convert a register value directly into the descriptor-scoped Provider wire
+/// representation.  This is the only VM-to-host value boundary: Provider
+/// calls must not detour through the retired dynamic `NativeValue` model.
+pub(super) fn wire_value_from_vm_value(
+    value: VmValue,
+    expected: &WireType,
+    types: &WireCallTypeTable,
+) -> Result<WireValue, EvalError> {
+    wire_value_from_vm_value_inner(&value, expected, types, &mut HashSet::new())
+}
+
+fn wire_value_from_vm_value_inner(
+    value: &VmValue,
+    expected: &WireType,
+    types: &WireCallTypeTable,
+    active: &mut HashSet<usize>,
+) -> Result<WireValue, EvalError> {
+    let node = vm_value_node_id(value);
+    if let Some(node) = node {
+        if !active.insert(node) {
+            return Err(EvalError::Runtime(
+                "cyclic value cannot cross a Provider wire boundary".into(),
+            ));
+        }
+    }
+    let result = match (value, expected) {
+        (VmValue::Unit, WireType::Unit) => Ok(WireValue::Unit),
+        (VmValue::Bool(value), WireType::Bool) => Ok(WireValue::Bool { value: *value }),
+        (VmValue::Int(value), WireType::Int { .. }) => Ok(WireValue::Int { value: *value }),
+        (VmValue::Float(value), WireType::Float { .. }) => Ok(WireValue::Float { value: *value }),
+        (VmValue::String(value), WireType::String) => Ok(WireValue::String {
+            value: value.to_string(),
+        }),
+        (VmValue::Char(value), WireType::Char) => Ok(WireValue::Char { value: *value }),
+        (VmValue::Bytes(value), WireType::Bytes) => Ok(WireValue::Bytes {
+            value: value.as_ref().clone(),
+        }),
+        (VmValue::Managed(value), expected) => {
+            wire_value_from_vm_value_inner(&value.borrow(), expected, types, active)
+        }
+        (VmValue::Native(value), resource @ WireType::Resource { name })
+            if value.type_name.as_ref() == name =>
+        {
+            let resource_type = types.resource_type_id(resource).ok_or_else(|| {
+                EvalError::Runtime(
+                    "linked Provider signature is missing a resource type identity".into(),
+                )
+            })?;
+            Ok(WireValue::Resource {
+                handle: ResourceHandle::from_native_id(value.id).to_wire(resource_type),
+            })
+        }
+        (VmValue::List(values), WireType::List { element }) => {
+            let element_type = types.type_id(element).ok_or_else(|| {
+                EvalError::Runtime(
+                    "linked Provider signature is missing a list element identity".into(),
+                )
+            })?;
+            Ok(WireValue::List {
+                element_type,
+                values: values
+                    .borrow()
+                    .iter()
+                    .map(|value| wire_value_from_vm_value_inner(&value, element, types, active))
+                    .collect::<Result<_, _>>()?,
+            })
+        }
+        (VmValue::Deque(values), WireType::List { element }) => {
+            let element_type = types.type_id(element).ok_or_else(|| {
+                EvalError::Runtime(
+                    "linked Provider signature is missing a list element identity".into(),
+                )
+            })?;
+            Ok(WireValue::List {
+                element_type,
+                values: values
+                    .borrow()
+                    .iter()
+                    .map(|value| wire_value_from_vm_value_inner(value, element, types, active))
+                    .collect::<Result<_, _>>()?,
+            })
+        }
+        (VmValue::List(values), WireType::Tuple { elements }) => {
+            let values = values.borrow();
+            if values.len() != elements.len() {
+                return Err(EvalError::Runtime(
+                    "Provider tuple argument length does not match its linked signature".into(),
+                ));
+            }
+            Ok(WireValue::Tuple {
+                values: values
+                    .iter()
+                    .zip(elements)
+                    .map(|(value, ty)| wire_value_from_vm_value_inner(&value, ty, types, active))
+                    .collect::<Result<_, _>>()?,
+            })
+        }
+        (VmValue::Deque(values), WireType::Tuple { elements }) => {
+            let values = values.borrow();
+            if values.len() != elements.len() {
+                return Err(EvalError::Runtime(
+                    "Provider tuple argument length does not match its linked signature".into(),
+                ));
+            }
+            Ok(WireValue::Tuple {
+                values: values
+                    .iter()
+                    .zip(elements)
+                    .map(|(value, ty)| wire_value_from_vm_value_inner(value, ty, types, active))
+                    .collect::<Result<_, _>>()?,
+            })
+        }
+        (VmValue::Map(entries), WireType::Map { key, value }) => {
+            let key_type = types.type_id(key).ok_or_else(|| {
+                EvalError::Runtime("linked Provider signature is missing a map key identity".into())
+            })?;
+            let value_type = types.type_id(value).ok_or_else(|| {
+                EvalError::Runtime(
+                    "linked Provider signature is missing a map value identity".into(),
+                )
+            })?;
+            let entries = entries
+                .borrow()
+                .iter()
+                .map(|(entry_key, entry_value)| {
+                    Ok((
+                        wire_value_from_vm_value_inner(entry_key.value(), key, types, active)?,
+                        wire_value_from_vm_value_inner(entry_value, value, types, active)?,
+                    ))
+                })
+                .collect::<Result<_, EvalError>>()?;
+            Ok(WireValue::Map {
+                key_type,
+                value_type,
+                entries,
+            })
+        }
+        (VmValue::Struct(data), named @ WireType::Named { .. }) => {
+            let layout = types.record_layout(named).ok_or_else(|| {
+                EvalError::Runtime("linked Provider record layout is unavailable".into())
+            })?;
+            let values = data.iter().collect::<Vec<_>>();
+            if data.name().as_ref() != wire_type_name(named) || values.len() != layout.fields.len()
+            {
+                return Err(EvalError::Runtime(
+                    "Provider record argument does not match its linked layout".into(),
+                ));
+            }
+            let fields = values
+                .into_iter()
+                .zip(&layout.fields)
+                .map(|((field, value), layout)| {
+                    if field.as_ref() != layout.name {
+                        return Err(EvalError::Runtime(
+                            "Provider record field order does not match its linked layout".into(),
+                        ));
+                    }
+                    wire_value_from_vm_value_inner(value, &layout.ty, types, active)
+                })
+                .collect::<Result<_, _>>()?;
+            Ok(WireValue::Record {
+                type_id: types.type_id(named).ok_or_else(|| {
+                    EvalError::Runtime(
+                        "linked Provider signature is missing a record identity".into(),
+                    )
+                })?,
+                fields,
+            })
+        }
+        (VmValue::Variant(data), named @ WireType::Named { .. }) => {
+            let layout = types.variant_layout(named).ok_or_else(|| {
+                EvalError::Runtime("linked Provider variant layout is unavailable".into())
+            })?;
+            let (index, case) = layout
+                .variants
+                .iter()
+                .enumerate()
+                .find(|(_, case)| case.name == data.name().as_ref())
+                .ok_or_else(|| {
+                    EvalError::Runtime(
+                        "Provider variant is not declared by its linked layout".into(),
+                    )
+                })?;
+            let values = data.iter().collect::<Vec<_>>();
+            if values.len() != case.fields.len() {
+                return Err(EvalError::Runtime(
+                    "Provider variant argument does not match its linked layout".into(),
+                ));
+            }
+            let fields = values
+                .into_iter()
+                .zip(&case.fields)
+                .map(|((field, value), layout)| {
+                    if field.as_ref() != layout.name {
+                        return Err(EvalError::Runtime(
+                            "Provider variant field order does not match its linked layout".into(),
+                        ));
+                    }
+                    wire_value_from_vm_value_inner(value, &layout.ty, types, active)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let payload = match fields.len() {
+                0 => None,
+                1 => Some(Box::new(fields.into_iter().next().expect("one field"))),
+                _ => Some(Box::new(WireValue::Tuple { values: fields })),
+            };
+            Ok(WireValue::Variant {
+                type_id: types.type_id(named).ok_or_else(|| {
+                    EvalError::Runtime(
+                        "linked Provider signature is missing a variant identity".into(),
+                    )
+                })?,
+                variant_id: rsscript_abi_model::WireVariantId::new(index as u32),
+                payload,
+            })
+        }
+        (VmValue::OptionSomeHeap(value), option @ WireType::Option { value: element }) => {
+            Ok(WireValue::Variant {
+                type_id: types.type_id(option).ok_or_else(|| {
+                    EvalError::Runtime(
+                        "linked Provider signature is missing an option identity".into(),
+                    )
+                })?,
+                variant_id: WireCallTypeTable::option_some_variant(),
+                payload: Some(Box::new(wire_value_from_vm_value_inner(
+                    value, element, types, active,
+                )?)),
+            })
+        }
+        (VmValue::OptionSomeScalar(value), option @ WireType::Option { value: element }) => {
+            Ok(WireValue::Variant {
+                type_id: types.type_id(option).ok_or_else(|| {
+                    EvalError::Runtime(
+                        "linked Provider signature is missing an option identity".into(),
+                    )
+                })?,
+                variant_id: WireCallTypeTable::option_some_variant(),
+                payload: Some(Box::new(wire_value_from_vm_value_inner(
+                    &value.to_value(),
+                    element,
+                    types,
+                    active,
+                )?)),
+            })
+        }
+        (VmValue::OptionNone, option @ WireType::Option { .. }) => Ok(WireValue::Variant {
+            type_id: types.type_id(option).ok_or_else(|| {
+                EvalError::Runtime("linked Provider signature is missing an option identity".into())
+            })?,
+            variant_id: WireCallTypeTable::option_none_variant(),
+            payload: None,
+        }),
+        (
+            value,
+            WireType::Qualified {
+                value: expected, ..
+            },
+        ) => wire_value_from_vm_value_inner(value, expected, types, active),
+        _ => Err(EvalError::Runtime(
+            "VM value does not match its linked Provider wire type".into(),
+        )),
+    };
+    if let Some(node) = node {
+        active.remove(&node);
+    }
+    result
+}
+
+pub(super) fn vm_value_from_wire_value(
+    value: WireValue,
+    expected: &WireType,
+    types: &WireCallTypeTable,
+) -> Result<VmValue, EvalError> {
+    match (value, expected) {
+        (WireValue::Unit, WireType::Unit) => Ok(VmValue::Unit),
+        (WireValue::Bool { value }, WireType::Bool) => Ok(VmValue::Bool(value)),
+        (WireValue::Int { value }, WireType::Int { .. }) => Ok(VmValue::Int(value)),
+        (WireValue::Float { value }, WireType::Float { .. }) => Ok(VmValue::Float(value)),
+        (WireValue::String { value }, WireType::String) => Ok(VmValue::string(value)),
+        (WireValue::Char { value }, WireType::Char) => Ok(VmValue::Char(value)),
+        (WireValue::Bytes { value }, WireType::Bytes) => Ok(VmValue::Bytes(Rc::new(value))),
+        (WireValue::Resource { handle }, resource @ WireType::Resource { name }) => {
+            let expected_id = types.resource_type_id(resource).ok_or_else(|| {
+                EvalError::Runtime(
+                    "linked Provider signature is missing a resource type identity".into(),
+                )
+            })?;
+            if handle.resource_type != expected_id {
+                return Err(EvalError::Runtime(
+                    "Provider resource result has the wrong type identity".into(),
+                ));
+            }
+            Ok(VmValue::Native(Rc::new(VmNative {
+                type_name: Rc::from(name.as_str()),
+                id: ResourceHandle::from_wire(handle).to_native_id(),
+            })))
+        }
+        (
+            WireValue::List {
+                element_type,
+                values,
+            },
+            WireType::List { element },
+        ) => {
+            if element_type
+                != types.type_id(element).ok_or_else(|| {
+                    EvalError::Runtime(
+                        "linked Provider signature is missing a list element identity".into(),
+                    )
+                })?
+            {
+                return Err(EvalError::Runtime(
+                    "Provider list result has the wrong element identity".into(),
+                ));
+            }
+            let values = values
+                .into_iter()
+                .map(|value| vm_value_from_wire_value(value, element, types))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+                values,
+            )))))
+        }
+        (WireValue::Tuple { values }, WireType::Tuple { elements }) => {
+            if values.len() != elements.len() {
+                return Err(EvalError::Runtime(
+                    "Provider tuple result length does not match its linked signature".into(),
+                ));
+            }
+            let values = values
+                .into_iter()
+                .zip(elements)
+                .map(|(value, ty)| vm_value_from_wire_value(value, ty, types))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+                values,
+            )))))
+        }
+        (
+            WireValue::Map {
+                key_type,
+                value_type,
+                entries,
+            },
+            WireType::Map { key, value },
+        ) => {
+            if key_type
+                != types.type_id(key).ok_or_else(|| {
+                    EvalError::Runtime(
+                        "linked Provider signature is missing a map key identity".into(),
+                    )
+                })?
+                || value_type
+                    != types.type_id(value).ok_or_else(|| {
+                        EvalError::Runtime(
+                            "linked Provider signature is missing a map value identity".into(),
+                        )
+                    })?
+            {
+                return Err(EvalError::Runtime(
+                    "Provider map result has the wrong type identity".into(),
+                ));
+            }
+            let entries = entries
+                .into_iter()
+                .map(|(key_value, value_value)| {
+                    let key_value = vm_value_from_wire_value(key_value, key, types)?;
+                    Ok((
+                        map_key_from_value(&key_value)?.0,
+                        vm_value_from_wire_value(value_value, value, types)?,
+                    ))
+                })
+                .collect::<Result<ValueMap, EvalError>>()?;
+            Ok(VmValue::Map(Rc::new(RefCell::new(entries))))
+        }
+        (
+            WireValue::Variant {
+                type_id,
+                variant_id,
+                payload: None,
+            },
+            option @ WireType::Option { .. },
+        ) => {
+            if type_id
+                != types.type_id(option).ok_or_else(|| {
+                    EvalError::Runtime(
+                        "linked Provider signature is missing an option identity".into(),
+                    )
+                })?
+                || variant_id != WireCallTypeTable::option_none_variant()
+            {
+                return Err(EvalError::Runtime(
+                    "Provider option result has the wrong variant identity".into(),
+                ));
+            }
+            Ok(VmValue::OptionNone)
+        }
+        (
+            WireValue::Variant {
+                type_id,
+                variant_id,
+                payload: Some(payload),
+            },
+            option @ WireType::Option { value: element },
+        ) => {
+            if type_id
+                != types.type_id(option).ok_or_else(|| {
+                    EvalError::Runtime(
+                        "linked Provider signature is missing an option identity".into(),
+                    )
+                })?
+                || variant_id != WireCallTypeTable::option_some_variant()
+            {
+                return Err(EvalError::Runtime(
+                    "Provider option result has the wrong variant identity".into(),
+                ));
+            }
+            Ok(VmValue::some(vm_value_from_wire_value(
+                *payload, element, types,
+            )?))
+        }
+        (
+            value,
+            WireType::Qualified {
+                value: expected, ..
+            },
+        ) => vm_value_from_wire_value(value, expected, types),
+        _ => Err(EvalError::Runtime(
+            "Provider wire result does not match its linked signature".into(),
+        )),
+    }
+}
+
+fn wire_type_name(ty: &WireType) -> String {
+    match ty {
+        WireType::Named {
+            package: Some(package),
+            name,
+            ..
+        } => format!("{package}.{name}"),
+        WireType::Named {
+            package: None,
+            name,
+            ..
+        } => name.clone(),
+        _ => String::new(),
+    }
+}
 
 pub(super) fn regex_value(pattern: impl Into<String>) -> VmValue {
     let fields: Vec<(String, VmValue)> =
@@ -466,10 +917,12 @@ pub(super) fn deep_copy_struct(data: &Rc<VmStruct>) -> Rc<VmStruct> {
     Rc::new(VmStruct::with_layout(Rc::clone(&data.layout), fields))
 }
 
+#[cfg(any())]
 pub(super) fn native_value_from_vm_value(value: VmValue) -> Result<NativeValue, EvalError> {
     native_value_from_vm_value_inner(&value, &mut HashSet::new())
 }
 
+#[cfg(any())]
 fn native_value_from_vm_value_inner(
     value: &VmValue,
     active: &mut HashSet<usize>,
@@ -585,6 +1038,7 @@ fn native_value_from_vm_value_inner(
     converted
 }
 
+#[cfg(any())]
 pub(super) fn vm_value_from_native_value(value: NativeValue) -> Result<VmValue, EvalError> {
     Ok(match value {
         NativeValue::Unit => VmValue::Unit,
@@ -645,6 +1099,7 @@ pub(super) fn vm_value_from_native_value(value: NativeValue) -> Result<VmValue, 
     })
 }
 
+#[cfg(any())]
 pub(super) fn vm_map_key_from_native_value(value: NativeValue) -> Result<VmMapKey, EvalError> {
     let value = vm_value_from_native_value(value)?;
     map_key_from_value(&value)
@@ -657,7 +1112,7 @@ pub(super) fn vm_map_key_from_native_value(value: NativeValue) -> Result<VmMapKe
         })
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     //! VM <-> native value marshalling: every variant in both directions, the
     //! `Option` bridge, managed-unwrap, the closure rejection, and strict map-key
