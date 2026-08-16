@@ -121,9 +121,13 @@ and conformance rules in [`docs/provider-sdk.md`](docs/provider-sdk.md).
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
+
+These are the Core workspace checks. AOT, native JIT, REIR, and self-hosting
+are isolated experiments with their own manifests and must not be enabled by a
+normal Core verification command.
 
 The normative language description is in
 [`docs/spec/RSScript_v0.7_Spec.md`](docs/spec/RSScript_v0.7_Spec.md), and the layer

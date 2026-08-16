@@ -1,7 +1,8 @@
 # RSScript compatibility policy
 
-RSScript publishes four independent versioned contracts. Compatibility is
-checked before Provider linking or execution.
+RSScript publishes independent versioned execution contracts plus separately
+versioned evidence and transport schemas. Compatibility is checked before
+Provider linking or execution.
 
 The language specification filename is a document revision, not a fifth runtime
 version. `RSScript_v0.7_Spec.md` is currently the normative text for the
@@ -14,6 +15,11 @@ remain independent compatibility contracts.
 | Artifact schema | `rsscript.bytecode.v1` | Unknown schema versions and unknown required sections are rejected. Unknown optional sections may be skipped. |
 | Runtime ABI | `2` | Exact match is required. |
 | Provider signature | structural signature + hash | Exact ABI version and structural signature match are required at link time. |
+| Artifact Bundle | `rsscript.artifact_bundle.v1` | Bundle readers reject malformed, tampered, or unsupported required content. |
+| Package/source analysis | `rsscript.package_analysis.v1` / `rsscript.source_analysis.v1` | Typed evidence rejects unknown fields and is bound to the bundle digest. |
+| Semantic diff | `rsscript.semantic_diff.v1` | Policy-neutral facts are versioned separately from Artifact bytes. |
+| Execution report | `rsscript.execution_report.v2` | Consumers must reject unknown required report shape rather than infer a result. |
+| Runner protocol | `rsscript.runner_request.v1` / `rsscript.runner_response.v1` | Request framing is bounded; a response must prove the host-selected profile identity. |
 
 Patch releases may add diagnostics, optional Artifact sections, and compatible
 Provider SDK helpers. They may not reinterpret an existing instruction,

@@ -22,10 +22,10 @@ language specification and tests remain authoritative for existing behavior.
    report consumers.
 8. Established a versioned Core SLO/reporting gate and a three-platform release
    dry-run with checksums, provenance, and explicit pre-1.0 SDK distribution.
-9. Split the reference VM into `rsscript-vm`, established the independent owned
-   `rsscript-exec-ir` model, and made HIR lowering a one-way compiler projection.
-   Cargo metadata tests now reject any VM dependency on compiler, syntax,
-   semantics, or lowering internals.
+9. Split the reference VM into `rsscript-vm`, established the owned CFG
+   `rsscript-mir` model and `rsscript-codegen-vm` boundary, and made checked-HIR
+   lowering a one-way compiler projection. Cargo metadata tests now reject any
+   VM dependency on compiler, syntax, semantics, or lowering internals.
 
 ## Current priority: product-contract convergence
 

@@ -35,7 +35,7 @@ When documents disagree, use this order:
 
 | Specification | Scope |
 | --- | --- |
-| [RSScript v0.7](spec/RSScript_v0.7_Spec.md) | Language syntax and semantics |
+| [RSScript Spec Revision 7](spec/RSScript_v0.7_Spec.md) | Normative text for the `0.1.x` language-semantics line |
 | [Execution v0.1](spec/RSScript_Execution_Spec_v0.1.md) | Interpreter, JIT, AOT parity, limits, and host ABI |
 | [REIR v0.2](spec/Review_Evidence_IR_Spec_v0.2.md) | Review evidence model and reconciliation |
 
