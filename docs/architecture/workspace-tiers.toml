@@ -7,8 +7,6 @@ schema = 1
 core = [
   "rsscript-abi-model",
   "rsscript-artifact",
-  "rsscript-artifact-store",
-  "rsscript-build-support",
   "rsscript-bytecode",
   "rsscript-codegen-vm",
   "rsscript-compiler",
@@ -20,14 +18,8 @@ core = [
   "rsscript-mir",
   "rsscript-operation",
   "rsscript-package-model",
-  "rsscript-package-review",
   "rsscript-project",
-  "rsscript-review",
-  "rsscript-review-core",
-  "rsscript-review-source",
   "rsscript-provider-api",
-  "rsscript-provider-bindgen",
-  "rsscript-provider-conformance",
   "rsscript-runner-protocol",
   "rsscript-sdk",
   "rsscript-semantics",
@@ -60,6 +52,10 @@ providers = [
 ]
 
 integrations = [
+  "rsscript-package-review",
+  "rsscript-review",
+  "rsscript-review-core",
+  "rsscript-review-source",
 ]
 
 experimental = [
@@ -69,6 +65,10 @@ research = [
 ]
 
 tooling = [
+  "rsscript-artifact-store",
+  "rsscript-build-support",
+  "rsscript-provider-bindgen",
+  "rsscript-provider-conformance",
   "rsscript-xtask",
 ]
 
