@@ -1,26 +1,4 @@
 {
   "schema": "rsscript.migration_queue.v1",
-  "tasks": [
-    {
-      "id": "V06.3",
-      "priority": 10,
-      "depends_on": ["V06.2.2c"],
-      "scope": [
-        "crates/rsscript-vm/**",
-        "crates/rsscript-corelib/**",
-        "crates/rsscript-vm/Cargo.toml",
-        "crates/rsscript-sdk/tests/architecture.rs",
-        "docs/architecture/migration-baseline.md"
-      ],
-      "acceptance": [
-        "The VM runtime dependency inventory distinguishes execution primitives from temporary legacy value-model adapters.",
-        "Every direct deterministic implementation dependency is either moved to corelib or has a documented owner and removal dependency.",
-        "Architecture tests prevent a moved implementation dependency from returning to the VM runtime closure."
-      ],
-      "verification": [
-        "cargo test -p rsscript-vm --offline",
-        "cargo test -p rsscript-sdk --test architecture --features compatibility --offline"
-      ]
-    }
-  ]
+  "tasks": []
 }

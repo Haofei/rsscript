@@ -1516,7 +1516,6 @@ mod tests {
     fn published_migration_frontier_is_fail_closed_and_prioritized() {
         let queue = migration_ready_queue().expect("published frontier must be valid");
         assert_eq!(queue.schema, MIGRATION_QUEUE_SCHEMA);
-        assert!(!queue.ready.is_empty());
         assert!(
             queue
                 .ready
@@ -1535,6 +1534,14 @@ mod tests {
                 .find(|item| item.id == ready.id)
                 .is_some_and(|item| !item.completed)
         }));
+        // The queue intentionally becomes empty when the historical migration
+        // checklist closes.  Requiring a synthetic task would make the
+        // migration tooling reopen work solely to satisfy its own test.
+        if queue.ready.is_empty() {
+            let audit = migration_audit().expect("closed migration audit");
+            assert!(audit.open_leaf_items_not_queued.is_empty());
+            assert!(audit.open_parents_with_completed_children.is_empty());
+        }
     }
 
     #[test]
@@ -1595,12 +1602,16 @@ mod tests {
 
     #[test]
     fn published_migration_work_packet_is_bounded_and_actionable() {
-        let ready = migration_ready_queue()
+        let Some(ready) = migration_ready_queue()
             .expect("published frontier")
             .ready
             .into_iter()
             .next()
-            .expect("published frontier must have a ready task");
+        else {
+            let audit = migration_audit().expect("closed migration audit");
+            assert!(audit.open_leaf_items_not_queued.is_empty());
+            return;
+        };
         let packet = migration_work_packet(&ready.id).expect("published work packet");
         assert_eq!(packet.schema, "rsscript.migration_work_packet.v1");
         assert_eq!(packet.state, "ready");
