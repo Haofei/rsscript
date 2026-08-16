@@ -29,17 +29,11 @@ execution = [
 # normal artifact build, check, and runner path uses the SDK project loader and
 # does not compile the compiler's filesystem/review closure.
 package-inspect = ["execution", "rsscript-compiler/package"]
-aot-rust = [
-    "package-inspect",
-    "dep:rsscript-aot-backend",
-]
 host-tools = ["execution"]
-native-jit = ["rsscript-sdk/native-jit", "aot-rust"]
 grammar-tools = ["dep:rsscript-compiler"]
 
 [dependencies]
 rsscript-compiler = { path = "../rsscript-compiler", default-features = false, optional = true }
-rsscript-aot-backend = { path = "../../experiments/aot-backend", optional = true }
 rsscript-diagnostics = { path = "../rsscript-diagnostics" }
 rsscript-semantics = { path = "../rsscript-semantics" }
 rsscript-syntax = { path = "../rsscript-syntax" }
@@ -47,9 +41,5 @@ rsscript-sdk = { path = "../rsscript-sdk", optional = true, default-features = f
 rss-process-guard = { path = "../process-guard", optional = true }
 rsscript-runner-protocol = { path = "../rsscript-runner-protocol", optional = true }
 rsscript-provider-log = { path = "../../providers/log", optional = true }
-hex = "0.4"
 serde_json = "1"
-sha2 = "0.10"
 tempfile = "3"
-toml = "0.8"
-toml_edit = "0.22"

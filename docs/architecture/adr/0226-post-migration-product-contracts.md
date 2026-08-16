@@ -31,7 +31,8 @@ that ordinary embedders do not need.
    but must not be selected by the supported SDK execution, CLI execution,
    default VM, or release-validation closures. Architecture tests inspect those
    resolved dependency trees so an optional lab edge cannot silently re-enter
-   the product path.
+   the product path. The product CLI has no AOT or native-JIT feature; lab
+   tooling must depend on its owning experimental backend directly.
 6. Compatibility APIs are transitional. New code uses canonical SDK modules and
    `WireValue`; compatibility stays explicitly feature-gated while the removal
    corpus is migrated.

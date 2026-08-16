@@ -1715,31 +1715,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rsscript-aot-backend"
-version = "0.1.0"
-dependencies = [
- "rsscript-aot-model",
- "rsscript-artifact-store",
- "rsscript-build-support",
- "rsscript-diagnostics",
- "rsscript-interface-catalog",
- "rsscript-project",
- "rsscript-semantics",
- "rsscript-syntax",
- "rsscript-text",
- "serde_json",
-]
-
-[[package]]
-name = "rsscript-aot-model"
-version = "0.1.0"
-dependencies = [
- "rsscript-diagnostics",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "rsscript-artifact"
 version = "0.1.0"
 dependencies = [
@@ -1794,9 +1769,7 @@ dependencies = [
 name = "rsscript-cli"
 version = "0.1.0"
 dependencies = [
- "hex",
  "rss-process-guard",
- "rsscript-aot-backend",
  "rsscript-compiler",
  "rsscript-diagnostics",
  "rsscript-provider-log",
@@ -1805,10 +1778,7 @@ dependencies = [
  "rsscript-semantics",
  "rsscript-syntax",
  "serde_json",
- "sha2",
  "tempfile",
- "toml",
- "toml_edit",
 ]
 
 [[package]]

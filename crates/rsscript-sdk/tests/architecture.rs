@@ -2342,25 +2342,28 @@ fn rust_aot_lowering_is_explicitly_feature_gated() {
         !cli_package_inspect.contains("legacy-exec-ir"),
         "package inspection must not restore the deleted executable IR"
     );
-    let cli_aot = cli["features"]["aot-rust"]
-        .as_array()
-        .expect("CLI aot-rust feature should be declared")
-        .iter()
-        .filter_map(toml::Value::as_str)
-        .collect::<BTreeSet<_>>();
-    assert!(cli_aot.contains("package-inspect"));
-    assert!(cli_aot.contains("dep:rsscript-aot-backend"));
-    assert!(!cli_aot.contains("rsscript-compiler/aot-rust"));
+    assert!(
+        cli["features"].get("aot-rust").is_none(),
+        "the product CLI must not expose an experimental AOT feature"
+    );
+    assert!(
+        cli["features"].get("native-jit").is_none(),
+        "the product CLI must not expose an experimental native-JIT feature"
+    );
+    assert!(
+        cli["dependencies"].get("rsscript-aot-backend").is_none(),
+        "the product CLI must not depend on the experimental AOT backend"
+    );
 
     let run_command = read(&root.join("crates/rsscript-cli/src/cli/run_cmd.rs"));
     assert!(
-        run_command.contains("#[cfg(not(feature = \"aot-rust\"))]"),
-        "an ordinary CLI build must reject the unavailable experimental AOT path explicitly"
+        !run_command.contains("fn run_aot("),
+        "the product CLI must not retain an experimental AOT execution path"
     );
     let cli_help = read(&root.join("crates/rsscript-cli/src/cli/mod.rs"));
     assert!(
-        cli_help.contains("#[cfg(feature = \"aot-rust\")]\nconst AOT_USAGE"),
-        "experimental AOT help must be feature-gated rather than advertised by the default CLI"
+        !cli_help.contains("AOT_USAGE"),
+        "the product CLI help must not retain an experimental AOT path"
     );
 }
 

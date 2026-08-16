@@ -81,9 +81,9 @@ rss run --trusted-in-process [--json] <file-package-or-bundle> [-- <args>...]
 rss inspect <imports|bytecode|analysis|resources|async|call-graph> <input>
 ```
 
-The normal CLI execution build contains only the verified VM and isolated
-runner path. Rust AOT remains experimental and requires building the CLI with
-the explicit `aot-rust` feature before `rss run --aot …` is available.
+The product CLI execution build contains only the verified VM and isolated
+runner path. Rust AOT is an experiments-workspace backend and is not selectable
+through `rss run`.
 
 Building a package captures one immutable workspace snapshot. Every build emits
 a versioned Artifact Bundle containing verified bytecode, neutral analysis,
