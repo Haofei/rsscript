@@ -28,7 +28,10 @@ that ordinary embedders do not need.
    no signing hierarchy or language-level authorization system is introduced.
 5. AOT, JIT, REIR, native plugins, and self-hosting are external experimental,
    integration, or research consumers. They may depend on stable Core contracts
-   but must not be selected by default SDK, VM, CLI, or release validation.
+   but must not be selected by the supported SDK execution, CLI execution,
+   default VM, or release-validation closures. Architecture tests inspect those
+   resolved dependency trees so an optional lab edge cannot silently re-enter
+   the product path.
 6. Compatibility APIs are transitional. New code uses canonical SDK modules and
    `WireValue`; compatibility stays explicitly feature-gated while the removal
    corpus is migrated.

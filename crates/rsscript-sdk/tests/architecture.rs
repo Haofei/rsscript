@@ -444,6 +444,39 @@ fn sdk_development_closure_does_not_compile_experimental_integrations() {
 }
 
 #[test]
+fn reviewed_execution_closures_do_not_resolve_experimental_backends() {
+    let root = workspace_root();
+    // Core has a separate experiments workspace, but an optional dependency can
+    // still accidentally pull a lab back into the normal product path. Check
+    // the feature closures that power the supported embedding, CLI, and VM
+    // routes rather than merely checking default features or workspace members.
+    for (package, features) in [
+        ("rsscript-sdk", "execution"),
+        ("rsscript-cli", "execution"),
+        ("rsscript-vm", ""),
+    ] {
+        let closure = if features.is_empty() {
+            cargo_tree(&root, package)
+        } else {
+            cargo_tree_with_features(&root, package, features)
+        };
+        for forbidden in [
+            "rsscript-aot-backend ",
+            "rsscript-aot-model ",
+            "rsscript-aot-runtime ",
+            "vm-jit ",
+            "rss-native-abi ",
+            "experiments/",
+        ] {
+            assert!(
+                !closure.contains(forbidden),
+                "reviewed `{package}` closure ({features:?}) must not resolve experiment `{forbidden}`:\n{closure}"
+            );
+        }
+    }
+}
+
+#[test]
 fn research_fixtures_are_owned_by_the_experiments_boundary() {
     let root = workspace_root();
     let experiment_manifest = read(&root.join("experiments/Cargo.toml"));
