@@ -21,11 +21,13 @@ struct MalformedBoundaryFixture {
     expected: String,
 }
 
+#[cfg(feature = "bytecode-v2-prototype")]
 #[derive(Debug, serde::Deserialize)]
 struct V2MalformedFixtures {
     case: Vec<V2MalformedFixture>,
 }
 
+#[cfg(feature = "bytecode-v2-prototype")]
 #[derive(Debug, serde::Deserialize)]
 struct V2MalformedFixture {
     name: String,
@@ -35,11 +37,13 @@ struct V2MalformedFixture {
     expected: String,
 }
 
+#[cfg(feature = "bytecode-v2-prototype")]
 #[derive(Debug, serde::Deserialize)]
 struct V2ArtifactBoundaryFixtures {
     case: Vec<V2ArtifactBoundaryFixture>,
 }
 
+#[cfg(feature = "bytecode-v2-prototype")]
 #[derive(Debug, serde::Deserialize)]
 struct V2ArtifactBoundaryFixture {
     name: String,
@@ -322,6 +326,7 @@ fn apply_static_boundary_mutation(bytes: &mut [u8], fixture: &MalformedBoundaryF
     }
 }
 
+#[cfg(feature = "bytecode-v2-prototype")]
 #[test]
 fn checked_in_v2_payload_and_malformed_instruction_fixture_remain_fail_closed() {
     use rsscript_bytecode::v2::BytecodeV2Verifier;
@@ -356,6 +361,7 @@ fn checked_in_v2_payload_and_malformed_instruction_fixture_remain_fail_closed() 
     }
 }
 
+#[cfg(feature = "bytecode-v2-prototype")]
 #[test]
 fn checked_in_v2_artifact_boundary_fixture_remains_fail_closed() {
     use rsscript_bytecode::v2::BytecodeV2ArtifactVerifier;

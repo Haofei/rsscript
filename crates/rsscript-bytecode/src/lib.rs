@@ -12,12 +12,14 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+#[cfg(feature = "v2-prototype")]
 pub mod v2;
 
 pub const BYTECODE_SCHEMA: &str = "rsscript.bytecode.v1";
 /// Typed numeric Artifact schema. It is verifier-only until the v2 ISA covers
 /// the complete Core execution model; the reference VM intentionally accepts
 /// only the deployed v1 schema.
+#[cfg(feature = "v2-prototype")]
 pub const BYTECODE_V2_SCHEMA: &str = "rsscript.bytecode.v2";
 /// Version of the binary Artifact container envelope, independent of language
 /// semantics and instruction-set compatibility.
@@ -27,6 +29,7 @@ pub const SUPPORTED_LANGUAGE_SEMANTICS: &str = ">=0.1.0, <0.2.0";
 /// Version of the executable instruction-set encoding inside the v1 envelope.
 pub const BYTECODE_ISA_VERSION: u32 = 1;
 /// Instruction-set contract for [`BYTECODE_V2_SCHEMA`].
+#[cfg(feature = "v2-prototype")]
 pub const BYTECODE_V2_ISA_VERSION: u32 = 2;
 pub const BYTECODE_MAGIC: &[u8; 8] = b"RSSBC\0\x01\0";
 const SECTION_HEADER: u8 = 1;
@@ -92,6 +95,7 @@ impl BytecodeArtifact {
     /// Construct a typed numeric v2 Artifact. This does not make v2 a VM
     /// execution path: callers must use [`v2::BytecodeV2ArtifactVerifier`] and
     /// the reference VM continues to consume only v1 verified bytecode.
+    #[cfg(feature = "v2-prototype")]
     pub fn new_v2(
         language_version: impl Into<String>,
         compiler_version: impl Into<String>,

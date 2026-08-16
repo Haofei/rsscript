@@ -44,6 +44,9 @@ project = [
 ]
 aot-rust = ["execution", "dep:rsscript-aot-backend"]
 native-jit = ["compatibility", "rsscript-vm/native-jit"]
+# Explicit verifier-only experiment. It does not enable a v2 VM execution
+# path or make `rsscript.bytecode.v2` part of the SDK's reviewed contract.
+bytecode-v2-prototype = ["compatibility", "rsscript-bytecode/v2-prototype"]
 
 [dependencies]
 rsscript-abi-model = { path = "../rsscript-abi-model", optional = true }
