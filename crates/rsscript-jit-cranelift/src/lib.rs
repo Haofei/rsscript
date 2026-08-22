@@ -36,6 +36,10 @@
 //! Precise resume is admitted only when that transaction state is compatible with
 //! the safepoint. The interpreter remains the semantic source of truth.
 
+#![deny(unsafe_op_in_unsafe_fn)]
+#![deny(clippy::undocumented_unsafe_blocks)]
+#![deny(clippy::missing_safety_doc)]
+
 mod analysis;
 mod codegen;
 mod deopt;

@@ -1163,7 +1163,9 @@ fn register_vm_execution_policy_is_snapshotted_before_running() {
     let root = workspace_root();
     let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));
     assert!(vm.contains("mod execution_plan;"));
-    assert!(vm.contains("NativeExecutionPlan::from_environment("));
+    assert!(vm.contains("NativeExecutionPlan::for_diagnostics("));
+    assert!(!vm.contains("std::env::var_os(\"RSS_JIT_"));
+    assert!(!vm.contains("std::env::var(\"RSS_JIT_"));
     assert!(vm.contains("NativeState::new_with_plan(native)"));
 
     let plan = read(&root.join("crates/rsscript-vm/src/reg_vm/execution_plan.rs"));

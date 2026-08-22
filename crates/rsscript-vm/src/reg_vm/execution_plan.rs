@@ -71,6 +71,8 @@ pub(super) struct NativeExecutionPlan {
     pub(super) forced_safepoint: Option<u32>,
     pub(super) force_all_safepoints: bool,
     pub(super) allow_recursive_calls: bool,
+    pub(super) cost_model: NativeCostModel,
+    pub(super) osr_work_threshold: u32,
     pub(super) admission: NativeAdmissionPolicy,
 }
 
@@ -96,12 +98,30 @@ pub struct NativeJitOptions {
     pub max_code_bytes: u64,
     pub max_compile_millis: u64,
     pub optimize_work_threshold: u64,
+    pub cost_model: NativeCostModel,
+    pub osr_work_threshold: u32,
     /// Enables non-tail native recursion on the host C stack.
     ///
     /// This remains disabled by default because the current Cranelift backend
     /// cannot prove the live host stack bound. Tail recursion continues to lower
     /// to loops, and disabled recursive calls fall back to the interpreter.
     pub allow_recursive_calls: bool,
+}
+
+/// Host-selected profitability behavior for eligible native regions.
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeCostModel {
+    Off,
+    Report,
+    Enforce,
+}
+
+#[cfg(feature = "native-jit")]
+impl NativeCostModel {
+    pub(super) fn active(self) -> bool {
+        !matches!(self, Self::Off)
+    }
 }
 
 #[cfg(feature = "native-jit")]
@@ -114,6 +134,8 @@ impl Default for NativeJitOptions {
             max_code_bytes: 16 * 1024 * 1024,
             max_compile_millis: 2_000,
             optimize_work_threshold: 50_000,
+            cost_model: NativeCostModel::Enforce,
+            osr_work_threshold: 1_000,
             allow_recursive_calls: false,
         }
     }
@@ -133,6 +155,8 @@ impl NativeExecutionPlan {
             forced_safepoint: None,
             force_all_safepoints: false,
             allow_recursive_calls: options.allow_recursive_calls,
+            cost_model: options.cost_model,
+            osr_work_threshold: options.osr_work_threshold,
             admission: NativeAdmissionPolicy {
                 max_code_bytes: options.max_code_bytes,
                 max_compile_millis: options.max_compile_millis,
@@ -144,7 +168,7 @@ impl NativeExecutionPlan {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn from_environment(
+    pub(super) fn for_diagnostics(
         tier_up_threshold: u32,
         force_bail: bool,
         collect_stats: bool,
@@ -154,14 +178,11 @@ impl NativeExecutionPlan {
         forced_safepoint: Option<u32>,
         force_all_safepoints_override: bool,
     ) -> Self {
-        let baseline = std::env::var_os("RSS_JIT_BASELINE").is_some();
-        let osr_enabled = osr_override || std::env::var_os("RSS_JIT_OSR").is_some();
-        let precise_deopt = precise_deopt_override
-            || osr_enabled
-            || std::env::var_os("RSS_JIT_PRECISE_DEOPT").is_some();
-        let report = report_override || std::env::var_os("RSS_JIT_REPORT").is_some();
-        let force_all_safepoints = forced_safepoint.is_none()
-            && (force_all_safepoints_override || super::jit_native_deopt_every_from_env());
+        let baseline = false;
+        let osr_enabled = osr_override;
+        let precise_deopt = precise_deopt_override || osr_enabled;
+        let report = report_override;
+        let force_all_safepoints = forced_safepoint.is_none() && force_all_safepoints_override;
         Self {
             tier_up_threshold,
             force_bail,
@@ -176,29 +197,22 @@ impl NativeExecutionPlan {
             // developer tooling. They no longer opt production execution into
             // host-stack recursion implicitly.
             allow_recursive_calls: false,
-            admission: NativeAdmissionPolicy::from_environment(tier_up_threshold),
+            cost_model: NativeCostModel::Off,
+            osr_work_threshold: 1_000,
+            admission: NativeAdmissionPolicy::bounded(tier_up_threshold),
         }
     }
 }
 
 #[cfg(feature = "native-jit")]
 impl NativeAdmissionPolicy {
-    pub(super) fn from_environment(tier_up_threshold: u32) -> Self {
+    pub(super) fn bounded(tier_up_threshold: u32) -> Self {
         Self {
-            max_code_bytes: env_u64("RSS_JIT_MAX_CODE_BYTES", 16 * 1024 * 1024),
-            max_compile_millis: env_u64("RSS_JIT_MAX_COMPILE_MS", 2_000),
-            optimize_work_threshold: env_u64("RSS_JIT_OPT_THRESHOLD", 50_000)
-                .max(u64::from(tier_up_threshold) + 1),
+            max_code_bytes: 16 * 1024 * 1024,
+            max_compile_millis: 2_000,
+            optimize_work_threshold: 50_000_u64.max(u64::from(tier_up_threshold) + 1),
         }
     }
-}
-
-#[cfg(feature = "native-jit")]
-fn env_u64(name: &str, default: u64) -> u64 {
-    std::env::var(name)
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(default)
 }
 
 #[cfg(test)]

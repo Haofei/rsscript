@@ -13,13 +13,13 @@ fn rejects_out_of_range_register() {
         }],
     ))
     .unwrap_err();
-    assert!(err.0.contains("out of range"), "{}", err.0);
+    assert!(err.message.contains("out of range"), "{}", err.message);
 }
 
 #[test]
 fn rejects_out_of_range_jump_target() {
     let err = validate(&f(1, 1, vec![JitInstr::Jump { target: 9 }])).unwrap_err();
-    assert!(err.0.contains("target 9"), "{}", err.0);
+    assert!(err.message.contains("target 9"), "{}", err.message);
 }
 
 #[test]
@@ -27,7 +27,11 @@ fn rejects_out_of_range_cold_block_hint() {
     let mut prog = f(1, 1, vec![JitInstr::Return { src: 0 }]);
     prog.cold_blocks.push(3);
     let err = validate(&prog).unwrap_err();
-    assert!(err.0.contains("cold block instruction 3"), "{}", err.0);
+    assert!(
+        err.message.contains("cold block instruction 3"),
+        "{}",
+        err.message
+    );
 }
 
 #[test]
@@ -64,7 +68,7 @@ fn rejects_conditional_branch_without_fallthrough() {
         }],
     ))
     .unwrap_err();
-    assert!(err.0.contains("fall-through"), "{}", err.0);
+    assert!(err.message.contains("fall-through"), "{}", err.message);
 }
 
 #[test]
@@ -79,13 +83,13 @@ fn rejects_reg_types_length_mismatch() {
         cold_blocks: Vec::new(),
     };
     let err = validate(&bad).unwrap_err();
-    assert!(err.0.contains("reg_types length"), "{}", err.0);
+    assert!(err.message.contains("reg_types length"), "{}", err.message);
 }
 
 #[test]
 fn rejects_params_exceeding_regs() {
     let err = validate(&f(4, 2, vec![])).unwrap_err();
-    assert!(err.0.contains("n_params"), "{}", err.0);
+    assert!(err.message.contains("n_params"), "{}", err.message);
 }
 
 #[test]
@@ -101,7 +105,7 @@ fn rejects_excessive_combined_analysis_dimensions() {
     };
 
     let error = validate(&program).expect_err("analysis matrices must have a joint limit");
-    assert!(error.0.contains("analysis size"), "{}", error.0);
+    assert!(error.message.contains("analysis size"), "{}", error.message);
 }
 
 #[test]
@@ -122,7 +126,11 @@ fn rejects_inconsistent_return_types() {
         ],
     ))
     .unwrap_err();
-    assert!(err.0.contains("inconsistent result types"), "{}", err.0);
+    assert!(
+        err.message.contains("inconsistent result types"),
+        "{}",
+        err.message
+    );
 }
 
 #[test]
@@ -141,7 +149,7 @@ fn rejects_callself_result_type_mismatch() {
         ],
     ))
     .expect_err("CallSelf destination must match the function return type");
-    assert!(err.0.contains("CallSelf result"), "{}", err.0);
+    assert!(err.message.contains("CallSelf result"), "{}", err.message);
 }
 
 #[test]
@@ -159,7 +167,11 @@ fn rejects_callself_flat_parameters_until_lengths_are_supported() {
         ],
     ))
     .expect_err("CallSelf must not silently discard flat lengths");
-    assert!(err.0.contains("flat-array parameters"), "{}", err.0);
+    assert!(
+        err.message.contains("flat-array parameters"),
+        "{}",
+        err.message
+    );
 }
 
 #[test]
@@ -167,9 +179,9 @@ fn rejects_reachable_use_before_definition() {
     let err = validate(&f(0, 1, vec![JitInstr::Return { src: 0 }]))
         .expect_err("undefined register reads must not become zero");
     assert!(
-        err.0.contains("before it is definitely assigned"),
+        err.message.contains("before it is definitely assigned"),
         "{}",
-        err.0
+        err.message
     );
 }
 
@@ -234,9 +246,9 @@ fn rejects_map_match_payload_read_on_none_edge() {
         ))
         .expect_err("None edge must not define the fused match payload");
         assert!(
-            error.0.contains("before it is definitely assigned"),
+            error.message.contains("before it is definitely assigned"),
             "{name}: {}",
-            error.0
+            error.message
         );
     }
 
@@ -255,7 +267,7 @@ fn rejects_map_match_payload_read_on_none_edge() {
         ],
     ))
     .expect_err("a shared Some/None successor cannot assume a payload");
-    assert!(error.0.contains("before it is definitely assigned"));
+    assert!(error.message.contains("before it is definitely assigned"));
 }
 
 #[test]
@@ -274,7 +286,7 @@ fn rejects_zero_initialized_handle_scratch() {
     );
     program.zero_init_regs.push(0);
     let err = validate(&program).expect_err("a zero word is not a valid heap handle");
-    assert!(err.0.contains("scalar type"), "{}", err.0);
+    assert!(err.message.contains("scalar type"), "{}", err.message);
 }
 
 #[test]
@@ -294,7 +306,7 @@ fn rejects_duplicate_or_out_of_range_memo_slots() {
         ],
     );
     let err = validate(&out_of_range).expect_err("one memo site only has slot zero");
-    assert!(err.0.contains("out of range"), "{}", err.0);
+    assert!(err.message.contains("out of range"), "{}", err.message);
 
     let duplicate = ft(
         1,
@@ -316,7 +328,11 @@ fn rejects_duplicate_or_out_of_range_memo_slots() {
         ],
     );
     let err = validate(&duplicate).expect_err("memoization sites need distinct slots");
-    assert!(err.0.contains("shared by instructions"), "{}", err.0);
+    assert!(
+        err.message.contains("shared by instructions"),
+        "{}",
+        err.message
+    );
 }
 
 #[test]
@@ -336,7 +352,11 @@ fn rejects_handle_returning_memoized_helper() {
         ],
     ))
     .expect_err("memoization is restricted to non-allocating scalar results");
-    assert!(err.0.contains("result must be a scalar"), "{}", err.0);
+    assert!(
+        err.message.contains("result must be a scalar"),
+        "{}",
+        err.message
+    );
 }
 
 #[test]
@@ -355,7 +375,7 @@ fn rejects_bool_arithmetic_and_accepts_float_compare_branches() {
         ],
     ))
     .expect_err("Bool arithmetic is not numeric");
-    assert!(err.0.contains("Int or Float"), "{}", err.0);
+    assert!(err.message.contains("Int or Float"), "{}", err.message);
 
     validate(&ft(
         2,
@@ -405,7 +425,7 @@ fn rejects_bool_arithmetic_and_accepts_float_compare_branches() {
         ],
     ))
     .expect_err("comparison branches reject mixed numeric classes");
-    assert!(err.0.contains("classes differ"), "{}", err.0);
+    assert!(err.message.contains("classes differ"), "{}", err.message);
 }
 
 #[test]
@@ -475,7 +495,7 @@ fn recursive_stack_cap_never_exceeds_estimated_budget() {
 fn rejects_mutable_flat_returns() {
     for ty in [JitValueType::FlatIntMut, JitValueType::FlatFloatMut] {
         let err = validate(&ft(1, vec![ty], vec![JitInstr::Return { src: 0 }])).unwrap_err();
-        assert!(err.0.contains("flat-array"), "{}", err.0);
+        assert!(err.message.contains("flat-array"), "{}", err.message);
     }
 }
 
@@ -586,7 +606,7 @@ fn rejects_int_op_on_float_register() {
         }],
     ))
     .unwrap_err();
-    assert!(err.0.contains("must be Int"), "{}", err.0);
+    assert!(err.message.contains("must be Int"), "{}", err.message);
 }
 
 #[test]
@@ -603,7 +623,7 @@ fn rejects_mismatched_arith_classes() {
         }],
     ))
     .unwrap_err();
-    assert!(err.0.contains("classes differ"), "{}", err.0);
+    assert!(err.message.contains("classes differ"), "{}", err.message);
 }
 
 #[test]
@@ -620,7 +640,7 @@ fn rejects_handle_outside_heap_read_base() {
         }],
     ))
     .unwrap_err();
-    assert!(err.0.contains("Handle"), "{}", err.0);
+    assert!(err.message.contains("Handle"), "{}", err.message);
 }
 
 #[test]
@@ -636,7 +656,7 @@ fn rejects_non_handle_heap_read_base() {
         }],
     ))
     .unwrap_err();
-    assert!(err.0.contains("expected Handle"), "{}", err.0);
+    assert!(err.message.contains("expected Handle"), "{}", err.message);
 }
 
 #[test]
@@ -842,7 +862,11 @@ fn recursive_group_rejects_external_native_call_before_declaration() {
         ],
     );
     let err = m.compile_recursive_group(&[member]).unwrap_err();
-    assert!(err.0.contains("unsupported CallNative"), "{}", err.0);
+    assert!(
+        err.message.contains("unsupported CallNative"),
+        "{}",
+        err.message
+    );
     let after = m
         .compile(&ft(1, vec![Int], vec![JitInstr::Return { src: 0 }]))
         .expect("preflight rejection must not poison the module");

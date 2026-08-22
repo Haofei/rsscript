@@ -103,11 +103,11 @@ mod tier;
 mod value_access;
 mod value_convert;
 mod value_ops;
-#[cfg(feature = "native-jit")]
-pub use execution_plan::NativeJitOptions;
 use execution_plan::{ExecutionPlan, StdoutMode, TierPlan};
 #[cfg(feature = "native-jit")]
 use execution_plan::{NativeAdmissionPolicy, NativeExecutionPlan};
+#[cfg(feature = "native-jit")]
+pub use execution_plan::{NativeCostModel, NativeJitOptions};
 pub(crate) use model::*;
 #[cfg(feature = "native-jit")]
 use native::*;
@@ -120,22 +120,6 @@ use tier::JitState;
 use value_access::*;
 use value_convert::*;
 use value_ops::*;
-
-/// Run `f` with the native-tier profitability cost model DISABLED on the current
-/// thread, regardless of `RSS_JIT_COST_MODEL` (whose default is now `enforce`).
-/// Race-free across parallel tests because the override is thread-local and native
-/// compilation runs synchronously on the calling thread.
-///
-/// NOT part of the public API — this is internal JIT test machinery, exposed only so
-/// the out-of-crate native-mechanism integration tests can observe a region compile
-/// (e.g. a polymorphic closure inline cache) that the cost model would otherwise
-/// decline. Hidden from docs; do not depend on it from user code.
-#[doc(hidden)]
-#[cfg(feature = "native-jit")]
-pub fn with_native_cost_model_disabled<R>(f: impl FnOnce() -> R) -> R {
-    let _guard = CostModeGuard::new(CostMode::Off);
-    f()
-}
 
 // ============================================================================
 // Central intrinsic/effect registry (JIT descriptor table)
@@ -735,37 +719,23 @@ impl RegVmExecutable {
     /// exercises them.
     ///
     /// The default tier-up threshold is 0 (compile on first call), which keeps
-    /// the differential's full coverage. The `RSS_JIT_TIER_THRESHOLD` env var
-    /// overrides it with any valid `u32`: a function then only compiles to
-    /// baseline native after accumulating more than that many deterministic
-    /// interpreted-work units. This is the runtime knob for tuning/measuring
-    /// tier-up (see plan §3.4) and for production
-    /// deployments that want to defer native compilation for cold functions.
-    /// The differential never sets it, so its behavior is unchanged.
+    /// the differential's full coverage. Production hosts that want to defer
+    /// compilation use [`NativeJitOptions::tier_up_threshold`]; the VM never
+    /// reads process-global environment variables.
     #[cfg(feature = "native-jit")]
     pub fn eval_main_with_args_native(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<EvalOutput, EvalError> {
-        let tier_up_threshold = std::env::var("RSS_JIT_TIER_THRESHOLD")
-            .ok()
-            .and_then(|v| v.parse::<u32>().ok())
-            .unwrap_or(0);
         self.eval_main_with_args_native_inner(
-            args,
-            tier_up_threshold,
-            false,
-            std::env::var_os("RSS_JIT_STATS").is_some(),
+            args, 0, false, false,
             // J0.1: precise resume is the production DEFAULT. A native guard bail
             // reconstructs the live interpreter window (heap-aware: scalars restored,
             // heap/flat regs left to the frame) and resumes at the safepoint. It is
             // byte-identical to re-run-from-top (validated corpus-wide), which remains
             // the fallback when a heap write disables precise resume and is kept under
             // differential coverage by the force-deopt backend.
-            true,
-            false,
-            None,
-            false,
+            true, false, None, false,
         )
         .map(|(output, _stats)| output)
     }
@@ -777,21 +747,11 @@ impl RegVmExecutable {
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<(EvalOutput, NativeStats), EvalError> {
-        let tier_up_threshold = std::env::var("RSS_JIT_TIER_THRESHOLD")
-            .ok()
-            .and_then(|v| v.parse::<u32>().ok())
-            .unwrap_or(0);
         self.eval_main_with_args_native_inner(
-            args,
-            tier_up_threshold,
-            false,
-            true,
+            args, 0, false, true,
             // J0.1: precise resume is the production default (see
             // `eval_main_with_args_native`).
-            true,
-            false,
-            None,
-            false,
+            true, false, None, false,
         )
     }
 
@@ -849,7 +809,7 @@ impl RegVmExecutable {
     }
 
     /// Run `main` with the native tier AND J5.2 OSR forced on (deterministically,
-    /// independent of `RSS_JIT_OSR`): a function with a qualifying native-subset
+    /// independent of production options): a function with a qualifying native-subset
     /// hot loop runs that loop natively mid-function (OSR-entry at the header,
     /// OSR-exit/precise-resume at the post-loop ip). Must equal every other backend
     /// byte-for-byte. Test/validation + bench entry point.
@@ -859,21 +819,15 @@ impl RegVmExecutable {
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<EvalOutput, EvalError> {
         self.eval_main_with_args_native_inner(
-            args,
-            0,
-            false,
-            std::env::var_os("RSS_JIT_STATS").is_some(),
+            args, 0, false, false,
             // OSR-exit resumes via the precise-deopt path, so OSR implies precise.
-            true,
-            true,
-            None,
-            false,
+            true, true, None, false,
         )
         .map(|(output, _stats)| output)
     }
 
     /// Run `main` with the native tier AND J0.2 precise resume forced on,
-    /// regardless of `RSS_JIT_PRECISE_DEOPT`. Native code runs for real; when it
+    /// regardless of the production plan. Native code runs for real; when it
     /// bails at a real guard safepoint, the live interpreter register window is
     /// reconstructed and interpretation resumes AT the safepoint (instead of re-
     /// running the function from the top). The observable result must equal every
@@ -884,17 +838,8 @@ impl RegVmExecutable {
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<EvalOutput, EvalError> {
-        self.eval_main_with_args_native_inner(
-            args,
-            0,
-            false,
-            std::env::var_os("RSS_JIT_STATS").is_some(),
-            true,
-            false,
-            None,
-            false,
-        )
-        .map(|(output, _stats)| output)
+        self.eval_main_with_args_native_inner(args, 0, false, false, true, false, None, false)
+            .map(|(output, _stats)| output)
     }
 
     /// Run `main` with the native tier in **deopt stress mode**: the native code
@@ -906,17 +851,8 @@ impl RegVmExecutable {
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<EvalOutput, EvalError> {
-        self.eval_main_with_args_native_inner(
-            args,
-            0,
-            true,
-            std::env::var_os("RSS_JIT_STATS").is_some(),
-            false,
-            false,
-            None,
-            false,
-        )
-        .map(|(output, _stats)| output)
+        self.eval_main_with_args_native_inner(args, 0, true, false, false, false, None, false)
+            .map(|(output, _stats)| output)
     }
 
     /// Run `main` while forcing the selected native safepoint to deopt. Unlike
@@ -933,7 +869,7 @@ impl RegVmExecutable {
             args,
             0,
             false,
-            std::env::var_os("RSS_JIT_STATS").is_some(),
+            false,
             true,
             false,
             Some(safepoint),
@@ -943,29 +879,20 @@ impl RegVmExecutable {
     }
 
     /// Run `main` while forcing every generated native safepoint to deopt.
-    /// Unlike process-env `RSS_JIT_DEOPT_EVERY`, this is deterministic and safe
+    /// This explicit switch is deterministic and safe
     /// for in-process differential tests and fuzzers.
     #[cfg(feature = "native-jit")]
     pub fn eval_main_with_args_native_force_all_safepoints(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<EvalOutput, EvalError> {
-        self.eval_main_with_args_native_inner(
-            args,
-            0,
-            false,
-            std::env::var_os("RSS_JIT_STATS").is_some(),
-            true,
-            false,
-            None,
-            true,
-        )
-        .map(|(output, _stats)| output)
+        self.eval_main_with_args_native_inner(args, 0, false, false, true, false, None, true)
+            .map(|(output, _stats)| output)
     }
 
     /// Test/validation entry point for the lever-2 missed-optimization report. Runs
     /// `main` with the native tier + OSR forced on AND the report armed deterministically
-    /// (independent of the `RSS_JIT_REPORT` env var), returning the report block lines
+    /// returning the report block lines
     /// alongside the stats. The report is observational, so the `EvalOutput` is byte-
     /// identical to [`Self::eval_main_with_args_native_osr`]; this just also hands the
     /// caller the report so a test can assert the per-region reasons.
@@ -1069,7 +996,7 @@ impl RegVmExecutable {
         force_all_safepoints_override: bool,
         limits: VmLimits,
     ) -> Result<(EvalOutput, NativeStats, Vec<String>), EvalError> {
-        let native_plan = NativeExecutionPlan::from_environment(
+        let native_plan = NativeExecutionPlan::for_diagnostics(
             tier_up_threshold,
             force_bail,
             collect_stats,
@@ -1095,27 +1022,12 @@ impl RegVmExecutable {
                 .stats
                 .add_native_decline_reasons(&self.unit, jit_state);
         }
-        // Telemetry: `RSS_JIT_STATS=1` prints where native-tier attempts went, so
-        // the next coverage win is measurable.
-        if std::env::var_os("RSS_JIT_STATS").is_some()
-            && let Some(native) = &vm.native
-        {
-            eprintln!("{}", native.stats.summary());
-        }
-        // Lever 2: `RSS_JIT_REPORT=1` (or `report_override`) prints the per-hot-region
-        // missed-optimization report (why each function/loop did or didn't go
-        // native/OSR/…). Purely observational; emitted once after the run, deduped per
-        // function. When armed via the env var we print to stderr; the structured lines
-        // are always returned so a test/caller can assert them.
+        // Diagnostics are returned as structured values. Process-global logging
+        // belongs to the CLI/composition root, not the embeddable VM.
         let report_lines = if let Some(native) = &vm.native
             && native.report
         {
             let lines = jit_missed_opt_report(&self.unit, &vm.jit_state, native);
-            if std::env::var_os("RSS_JIT_REPORT").is_some() {
-                for line in &lines {
-                    eprintln!("{line}");
-                }
-            }
             lines
         } else {
             Vec::new()
@@ -1355,9 +1267,6 @@ impl RegVmExecutable {
             native
                 .stats
                 .add_native_decline_reasons(&self.unit, &vm.jit_state);
-            if std::env::var_os("RSS_JIT_STATS").is_some() {
-                eprintln!("{}", native.stats.summary());
-            }
         }
         #[cfg(feature = "native-jit")]
         let engine =
@@ -1946,7 +1855,7 @@ struct OsrVersionKey {
 struct NativeState {
     baseline_module: vm_jit::NativeModule,
     /// The speed-optimized tier. `None` is the explicit
-    /// `RSS_JIT_BASELINE` baseline-only mode.
+    /// baseline-only diagnostic mode.
     optimized_module: Option<vm_jit::NativeModule>,
     /// Process-local JIT work admission. This bounds code made available for
     /// dispatch across both modules. The provider-level budget above is the hard
@@ -1992,13 +1901,17 @@ struct NativeState {
     /// exercising the generated deopt payload and resume map instead of rejecting
     /// native execution before entry.
     forced_safepoint: Option<u32>,
-    /// Env-gated deopt stress mode (`RSS_JIT_DEOPT_EVERY`): when set, every
+    /// Explicit deopt stress mode: when set, every
     /// generated native safepoint bails unconditionally.
     force_all_safepoints: bool,
     /// Explicit host opt-in for non-tail recursion in generated machine code.
     /// Disabled by default because the backend's static frame estimate is not a
     /// proof of the live host stack available at the call site.
     allow_recursive_calls: bool,
+    /// Host-selected profitability behavior; never inferred from process state.
+    cost_model: NativeCostModel,
+    /// Interpreted work required before automatic OSR compilation.
+    osr_work_threshold: u32,
     /// Telemetry: where native-tier attempts go (so the next coverage win is
     /// measurable rather than guessed).
     stats: NativeStats,
@@ -2009,7 +1922,7 @@ struct NativeState {
     /// reconstructs the interpreter register window from the captured live values
     /// and resumes interpretation AT the safepoint's `resume_ip`, instead of
     /// re-running the function from the top. Default `false` ⇒ byte-identical
-    /// re-run-from-top (the safe baseline). Wired from `RSS_JIT_PRECISE_DEOPT`.
+    /// re-run-from-top (the safe baseline). Selected by the execution plan.
     precise_deopt: bool,
     /// J5.2 OSR (on-stack replacement): when set, a function with a qualifying
     /// native-subset hot loop (see [`detect_single_natural_loop`]) runs that loop
@@ -2017,7 +1930,7 @@ struct NativeState {
     /// register window to an OSR-compiled loop body, then resumes at the post-loop
     /// ip with the live-out window (OSR-exit / precise-deopt resume). Default
     /// execution uses the hot-backedge auto-trigger; this flag selects the eager
-    /// trigger used by `RSS_JIT_OSR` and deterministic test/bench entry points.
+    /// trigger used by deterministic test/bench entry points.
     osr_enabled: bool,
     /// Deterministically ranked OSR candidates per function. Each fixed-size value
     /// contains at most [`MAX_OSR_REGIONS_PER_FUNCTION`] headers, so a function's
@@ -2070,8 +1983,8 @@ struct NativeState {
     scratch_osr_flat_slots: Vec<(usize, NativeTy)>,
     scratch_osr_flat_mut_slots: Vec<(usize, usize)>,
     scratch_osr_heap_input_slots: Vec<(usize, usize)>,
-    /// Lever 2: `RSS_JIT_REPORT` missed-optimization report armed. Read ONCE from
-    /// the env at construction (mirrors `collect_stats`), so the hot path pays only
+    /// Missed-optimization report armed by an explicit diagnostic plan. Read once
+    /// at construction (mirrors `collect_stats`), so the hot path pays only
     /// a single hoisted bool read. When `false` the report machinery does nothing —
     /// no allocation, no recording, no print. Purely observational: it never gates
     /// any compile decision (the differential proves byte-identical behavior on/off).
@@ -2127,7 +2040,7 @@ pub struct NativeStats {
     /// Functions rejected by translation (outside the native subset).
     pub not_eligible: u64,
     /// Stable native translation decline reasons, grouped by the same explanation
-    /// used by the human `RSS_JIT_REPORT` missed-optimization report.
+    /// used by the structured missed-optimization report.
     pub native_decline_reasons: BTreeMap<String, u64>,
     /// Functions Cranelift compiled to machine code.
     pub compiled: u64,
@@ -2398,7 +2311,7 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
     }
 }
 
-/// Lever 2: the developer-facing missed-optimization report (`RSS_JIT_REPORT`).
+/// Developer-facing structured missed-optimization report.
 ///
 /// Walks every function in `unit` and re-derives — **observationally, read-only** —
 /// why each did or didn't go native / OSR / scalar-replace / inline / fold, with the
@@ -3761,20 +3674,7 @@ fn jit_verify_compiled_osr(
 
 #[cfg(feature = "native-jit")]
 fn jit_native_verify_is_strict() -> bool {
-    std::env::var_os("RSS_JIT_VERIFY").is_some()
-}
-
-#[cfg(feature = "native-jit")]
-fn jit_native_deopt_every_from_env_value(value: Option<&str>) -> bool {
-    value.is_some_and(|value| {
-        let value = value.trim();
-        !value.is_empty() && value != "0" && !value.eq_ignore_ascii_case("false")
-    })
-}
-
-#[cfg(feature = "native-jit")]
-fn jit_native_deopt_every_from_env() -> bool {
-    jit_native_deopt_every_from_env_value(std::env::var("RSS_JIT_DEOPT_EVERY").ok().as_deref())
+    cfg!(debug_assertions)
 }
 
 #[cfg(feature = "native-jit")]
@@ -6512,6 +6412,8 @@ impl NativeState {
             plan.forced_safepoint,
             plan.force_all_safepoints,
             plan.allow_recursive_calls,
+            plan.cost_model,
+            plan.osr_work_threshold,
             plan.admission,
         )
     }
@@ -6562,7 +6464,9 @@ impl NativeState {
             None,
             false,
             true,
-            NativeAdmissionPolicy::from_environment(tier_up_threshold),
+            NativeCostModel::Off,
+            1_000,
+            NativeAdmissionPolicy::bounded(tier_up_threshold),
         )
     }
 
@@ -6577,6 +6481,8 @@ impl NativeState {
         forced_safepoint: Option<u32>,
         force_all_safepoints: bool,
         allow_recursive_calls: bool,
+        cost_model: NativeCostModel,
+        osr_work_threshold: u32,
         admission_policy: NativeAdmissionPolicy,
     ) -> Result<Self, EvalError> {
         let max_code_bytes = admission_policy.max_code_bytes;
@@ -6636,6 +6542,8 @@ impl NativeState {
             forced_safepoint,
             force_all_safepoints,
             allow_recursive_calls,
+            cost_model,
+            osr_work_threshold,
             stats: NativeStats::default(),
             collect_stats,
             precise_deopt,

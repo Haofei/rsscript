@@ -1421,7 +1421,7 @@ impl RegVm {
             // retain the non-candidate never-taken branch. Candidate counters and
             // stable declines are keyed independently by `(function, header)`.
             //
-            // `osr_eager` (set by `RSS_JIT_OSR` / a test override) keeps the forced
+            // `osr_eager` (set by the host-owned execution plan) keeps the forced
             // path: threshold 0, so the FIRST header hit triggers `try_osr` — this
             // preserves the differential OSR backend and the deterministic
             // forced-OSR tests. NOTE: candidacy is NOT gated on `native_status`: OSR
@@ -1467,7 +1467,13 @@ impl RegVm {
                             match trigger {
                                 Some(OsrTrigger::Counting { count, probe_cc }) => {
                                     let next = accumulate_osr_work(count, candidate.iteration_work);
-                                    if next >= osr_backedge_threshold() {
+                                    let threshold = self
+                                        .native
+                                        .as_ref()
+                                        .map_or(OSR_BACKEDGE_THRESHOLD, |native| {
+                                            native.osr_work_threshold
+                                        });
+                                    if next >= threshold {
                                         true
                                     } else {
                                         if let Some(native) = self.native.as_mut() {

@@ -5,13 +5,15 @@ fn validated_compile_boundary_rejects_malformed_ir_before_codegen() {
         Ok(_) => panic!("malformed IR must not mint a validation proof"),
         Err(error) => error,
     };
-    assert!(error.0.contains("target 9"));
+    assert_eq!(error.kind, JitErrorKind::InvalidIr);
+    assert!(error.message.contains("target 9"));
 
     let mut module = module();
     let error = module
         .compile(&malformed)
         .expect_err("the compatibility entry must validate before codegen");
-    assert!(error.0.contains("target 9"));
+    assert_eq!(error.kind, JitErrorKind::InvalidIr);
+    assert!(error.message.contains("target 9"));
     assert_eq!(module.compiled_function_count(), 0);
 }
 

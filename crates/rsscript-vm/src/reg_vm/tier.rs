@@ -31,8 +31,8 @@ pub(crate) use state::JitState;
 /// translated (i.e. is ELIGIBLE native code). Returns `true` only when the gate is
 /// in `enforce` mode AND the region is unprofitable — the caller then keeps the
 /// function on the interpreter. In `off` mode this is a no-op (`false`); in
-/// `report` mode it records telemetry and logs (under `RSS_JIT_REPORT`) but always
-/// returns `false`, so execution is unchanged. Declining is correctness-safe, so
+/// `report` mode it records telemetry but always returns `false`, so execution is
+/// unchanged. Declining is correctness-safe, so
 /// this never affects the differential/eligibility contract.
 #[cfg(feature = "native-jit")]
 fn consult_profitability(
@@ -42,15 +42,11 @@ fn consult_profitability(
     region: &str,
     func_name: &str,
 ) -> bool {
-    let mode = effective_cost_mode();
+    let mode = native.cost_model;
     if !mode.active() {
         return false;
     }
     let p = native_region_profitability(jit_fn, has_backedge);
-    if matches!(mode, CostMode::Report) && std::env::var_os("RSS_JIT_REPORT").is_some() {
-        // Log EVERY scored region (kept and declined) so weights can be calibrated.
-        eprintln!("[cost-model] {} fn=`{func_name}`", p.summary(region));
-    }
     if !p.decline {
         return false;
     }
@@ -71,7 +67,7 @@ fn consult_profitability(
             .or_insert_with(|| p.reason(region));
     }
     // `report` observes but never changes execution; only `enforce` declines.
-    matches!(mode, CostMode::Enforce)
+    matches!(mode, NativeCostModel::Enforce)
 }
 
 #[cfg(feature = "native-jit")]
@@ -752,7 +748,7 @@ impl RegVm {
                             if native_translation_pending_on_profile(
                                 &unit, func, profile, call_count,
                             ) {
-                                if matches!(effective_cost_mode(), CostMode::Enforce) {
+                                if matches!(native.cost_model, NativeCostModel::Enforce) {
                                     self.jit_state
                                         .set_native_status(func, NATIVE_STATUS_PROFILE_PENDING);
                                 }

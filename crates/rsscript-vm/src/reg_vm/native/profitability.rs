@@ -2,7 +2,7 @@
 //!
 //! This is deliberately kept SEPARATE from native **eligibility**. Eligibility —
 //! "is this region valid native code?" — is answered by `translate_*` returning
-//! `Some`/`None`, and ~43 tests plus the `RSS_JIT_REPORT` path depend on that
+//! `Some`/`None`, and the differential/report paths depend on that
 //! meaning. Profitability — "this region *can* run native, but *should* it?" — is
 //! a distinct judgement made only by the tiering layer (`tier.rs`) AFTER a
 //! successful translation. Declining for profitability is always correctness-safe:
@@ -13,83 +13,12 @@
 //! interpreter's per-op dispatch (scalar ALU, direct flat-list reads) and debiting
 //! per-iteration boundary costs that native cannot amortise (host-helper crossings,
 //! polymorphic closure-dispatch guards). It is intentionally simple; the weights
-//! are calibrated against the perf-gate kernels via `RSS_JIT_COST_MODEL=report`.
+//! are calibrated against the perf-gate kernels through explicit host options.
 
 #![cfg(feature = "native-jit")]
 
 use crate::reg_vm::RegInstr;
 use vm_jit::{HostHelper, JitFunction, JitInstr};
-
-/// Tri-state env gate (`RSS_JIT_COST_MODEL`):
-/// - `enforce` (DEFAULT, i.e. unset): an unprofitable region stays on the
-///   interpreter, so the JIT does not compile native code that is ≈ the interpreter.
-/// - `report`: score every region and surface the verdict via telemetry/log, but
-///   NEVER change execution — lets us see what *would* decline before enforcing.
-/// - `off`: the cost model never runs; behaviour as before the model existed.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(in crate::reg_vm) enum CostMode {
-    Off,
-    Report,
-    Enforce,
-}
-
-impl CostMode {
-    pub(in crate::reg_vm) fn from_env() -> CostMode {
-        match std::env::var("RSS_JIT_COST_MODEL")
-            .ok()
-            .as_deref()
-            .map(str::trim)
-        {
-            Some("off") => CostMode::Off,
-            Some("report") => CostMode::Report,
-            // Default ON: an unset (or unrecognised) value enforces, so the JIT does
-            // not by default compile a region the cost model judges unprofitable
-            // (native ≈ interpreter). Explicit `off` opts out (e.g. native-mechanism
-            // tests that must see the region compile). See `effective_cost_mode` for
-            // the per-thread override used by those tests.
-            _ => CostMode::Enforce,
-        }
-    }
-
-    /// Whether the model should run at all (report or enforce).
-    pub(in crate::reg_vm) fn active(self) -> bool {
-        !matches!(self, CostMode::Off)
-    }
-}
-
-thread_local! {
-    /// Per-thread cost-mode override. `None` falls back to `CostMode::from_env`.
-    /// This is the RACE-FREE way for a test to pin a mode while OTHER tests run in
-    /// parallel in the same process (the process-global `RSS_JIT_COST_MODEL` env
-    /// would leak across threads). Native compilation/execution runs synchronously
-    /// on the calling thread, so a guard set before the eval call governs it.
-    static COST_MODE_OVERRIDE: std::cell::Cell<Option<CostMode>> =
-        const { std::cell::Cell::new(None) };
-}
-
-/// The cost mode in effect on this thread: the thread-local override if set, else
-/// the process env (`CostMode::from_env`, which now defaults to enforce).
-pub(in crate::reg_vm) fn effective_cost_mode() -> CostMode {
-    COST_MODE_OVERRIDE
-        .with(std::cell::Cell::get)
-        .unwrap_or_else(CostMode::from_env)
-}
-
-/// RAII guard pinning this thread's cost mode for its lifetime; restores the prior
-/// value on drop (including across panics).
-pub(in crate::reg_vm) struct CostModeGuard(Option<CostMode>);
-
-impl CostModeGuard {
-    pub(in crate::reg_vm) fn new(mode: CostMode) -> Self {
-        CostModeGuard(COST_MODE_OVERRIDE.with(|c| c.replace(Some(mode))))
-    }
-}
-
-impl Drop for CostModeGuard {
-    fn drop(&mut self) {
-        COST_MODE_OVERRIDE.with(|c| c.set(self.0));
-    }
-}
 
 // --- Credit weights (native-favourable per-op work) -------------------------
 const W_SCALAR_ALU: i64 = 2; // Add/Sub/Mul/.../Compare/Equal: native arithmetic vs VM dispatch
@@ -187,25 +116,6 @@ impl Profitability {
     pub(in crate::reg_vm) fn reason(&self, region: &str) -> String {
         format!(
             "unprofitable[{region}]: score={} scalar={} direct={} runtime_helper_calls={} closure_guard={} pic_sites={} native_calls={} backedge={} hot_instrs={}",
-            self.score,
-            self.scalar_ops,
-            self.direct_reads,
-            self.runtime_helper_calls,
-            self.closure_guards,
-            self.pic_sites,
-            self.native_calls,
-            self.has_backedge,
-            self.hot_instrs,
-        )
-    }
-
-    /// A verdict-neutral breakdown for `report`-mode logging of EVERY scored
-    /// region (kept and declined alike), so the weights/threshold can be
-    /// calibrated against the real per-kernel score distribution.
-    pub(in crate::reg_vm) fn summary(&self, region: &str) -> String {
-        format!(
-            "profit[{region}]: verdict={} score={} scalar={} direct={} runtime_helper_calls={} closure_guard={} pic_sites={} native_calls={} backedge={} hot_instrs={}",
-            if self.decline { "DECLINE" } else { "keep" },
             self.score,
             self.scalar_ops,
             self.direct_reads,

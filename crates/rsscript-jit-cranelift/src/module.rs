@@ -33,8 +33,49 @@ type CompiledAbi = unsafe extern "C" fn(
     *const i64,
 ) -> u8;
 
+/// Stable classification for native-tier failures. Hosts use the kind to decide
+/// whether interpreter fallback is expected or the module must be quarantined;
+/// human-readable text is diagnostic detail only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JitErrorKind {
+    InvalidIr,
+    UnsupportedInstruction,
+    UnsupportedAbi,
+    WrongModule,
+    InvalidCompiledId,
+    AdmissionRejected,
+    CodegenFailed,
+    FinalizationFailed,
+    ReentrantCall,
+    UnsafeArgument,
+    InternalInvariant,
+}
+
 #[derive(Debug)]
-pub struct JitError(pub String);
+pub struct JitError {
+    pub kind: JitErrorKind,
+    pub message: String,
+}
+
+impl JitError {
+    pub fn new(kind: JitErrorKind, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn invalid_ir(message: impl Into<String>) -> Self {
+        Self::new(JitErrorKind::InvalidIr, message)
+    }
+}
+
+// Migration helper for validation sites. New boundary code should select an
+// explicit kind with `JitError::new`.
+#[allow(non_snake_case)]
+pub(crate) fn JitError(message: String) -> JitError {
+    JitError::invalid_ir(message)
+}
 
 /// Logical language-call depth supplied by an embedding VM. Native stack depth
 /// is tracked separately by the internal ABI.
@@ -46,13 +87,18 @@ pub struct LogicalCallDepth {
 
 impl std::fmt::Display for JitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "vm-jit error: {}", self.0)
+        write!(f, "native JIT {:?}: {}", self.kind, self.message)
     }
 }
 impl std::error::Error for JitError {}
 
 fn err(context: &str, e: impl std::fmt::Display) -> JitError {
-    JitError(format!("{context}: {e}"))
+    let kind = if context == "finalize" {
+        JitErrorKind::FinalizationFailed
+    } else {
+        JitErrorKind::CodegenFailed
+    };
+    JitError::new(kind, format!("{context}: {e}"))
 }
 
 fn native_scalar_leaf_callable(function: &JitFunction, osr: bool, _returns_handle: bool) -> bool {
@@ -403,10 +449,18 @@ impl NativeModule {
         arena_bytes: u64,
     ) -> Result<Self, JitError> {
         let reservation = budget.reserve(arena_allocation_charge(arena_bytes)?)?;
-        let arena_bytes = usize::try_from(arena_bytes)
-            .map_err(|_| JitError("JIT arena size does not fit in usize".into()))?;
-        let arena = ArenaMemoryProvider::new_with_size(arena_bytes)
-            .map_err(|error| JitError(format!("JIT arena allocation: {error}")))?;
+        let arena_bytes = usize::try_from(arena_bytes).map_err(|_| {
+            JitError::new(
+                JitErrorKind::AdmissionRejected,
+                "JIT arena size does not fit in usize",
+            )
+        })?;
+        let arena = ArenaMemoryProvider::new_with_size(arena_bytes).map_err(|error| {
+            JitError::new(
+                JitErrorKind::AdmissionRejected,
+                format!("JIT arena allocation: {error}"),
+            )
+        })?;
         Self::new_with_opt_inner(helpers, baseline, arena, reservation)
     }
 

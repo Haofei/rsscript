@@ -1,4 +1,4 @@
-use crate::JitError;
+use crate::{JitError, JitErrorKind};
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -10,7 +10,12 @@ pub(super) fn arena_allocation_charge(bytes: u64) -> Result<u64, JitError> {
     bytes
         .checked_add(MAX_JIT_PAGE_BYTES - 1)
         .map(|rounded| rounded / MAX_JIT_PAGE_BYTES * MAX_JIT_PAGE_BYTES)
-        .ok_or_else(|| JitError("JIT arena allocation charge overflow".into()))
+        .ok_or_else(|| {
+            JitError::new(
+                JitErrorKind::AdmissionRejected,
+                "JIT arena allocation charge overflow",
+            )
+        })
 }
 
 /// Shared hard limit for executable-memory allocations made by one or more
@@ -62,7 +67,7 @@ impl ExecutableMemoryBudget {
                 bytes,
             })
             .map_err(|_| {
-                JitError(format!(
+                JitError::new(JitErrorKind::AdmissionRejected, format!(
                     "JIT executable-memory budget exceeded: requested {bytes} bytes with {} of {} bytes allocated",
                     self.allocated(),
                     self.limit()

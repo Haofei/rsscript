@@ -18,7 +18,8 @@ fn rejects_memoized_heap_writing_host_helper() {
     .expect_err("memoized heap-writing helper should be rejected");
 
     assert!(
-        err.0.contains("heap-writing helpers cannot be memoized"),
+        err.message
+            .contains("heap-writing helpers cannot be memoized"),
         "{err:?}"
     );
 }
@@ -240,13 +241,21 @@ fn rejects_malformed_memo_scopes() {
     let mut unscoped = nested_memo_program(false);
     unscoped.memo_scopes.clear();
     let error = validate(&unscoped).expect_err("every memo slot needs a scope");
-    assert!(error.0.contains("does not belong"), "{}", error.0);
+    assert!(
+        error.message.contains("does not belong"),
+        "{}",
+        error.message
+    );
 
     let mut interior_entry = nested_memo_program(false);
     interior_entry.code[0] = JitInstr::Jump { target: 5 };
     let error =
         validate(&interior_entry).expect_err("outside control flow cannot enter the interior");
-    assert!(error.0.contains("enters scope interior"), "{}", error.0);
+    assert!(
+        error.message.contains("enters scope interior"),
+        "{}",
+        error.message
+    );
 
     let mut conditional_backedge = nested_memo_program(false);
     conditional_backedge.code[9] = JitInstr::JumpIfIntCompare {
@@ -258,18 +267,18 @@ fn rejects_malformed_memo_scopes() {
     };
     let error = validate(&conditional_backedge).expect_err("conditional backedges are unsupported");
     assert!(
-        error.0.contains("must be an unconditional Jump"),
+        error.message.contains("must be an unconditional Jump"),
         "{}",
-        error.0
+        error.message
     );
 
     let mut bad_range = nested_memo_program(false);
     bad_range.memo_scopes[0].exit = bad_range.code.len() as u32;
     let error = validate(&bad_range).expect_err("scope exit must name an instruction");
     assert!(
-        error.0.contains("header < exit < code length"),
+        error.message.contains("header < exit < code length"),
         "{}",
-        error.0
+        error.message
     );
 }
 

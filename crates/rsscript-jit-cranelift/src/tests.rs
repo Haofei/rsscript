@@ -75,7 +75,7 @@ fn generic_host_call_rejects_private_map_match_output() {
         ],
     );
     let error = validate(&program).expect_err("typed match instruction owns found output");
-    assert!(error.0.contains("private found output"), "{error:?}");
+    assert!(error.message.contains("private found output"), "{error:?}");
 }
 
 #[test]
