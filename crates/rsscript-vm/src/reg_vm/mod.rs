@@ -1279,6 +1279,10 @@ impl RegVmExecutable {
                         native_calls: native.stats.native_calls,
                         native_bails: native.stats.native_bails,
                         osr_entries: native.stats.osr_entries,
+                        resident_code_bytes: native.stats.compiled_code_bytes,
+                        published_code_bytes: native.admission.admitted_code_bytes,
+                        rejected_resident_bytes: 0,
+                        reserved_arena_bytes: native.executable_memory_budget.allocated(),
                         compile_nanos: native.stats.compile_nanos,
                         run_nanos: native.stats.run_nanos,
                     }
@@ -1857,6 +1861,8 @@ struct NativeState {
     /// The speed-optimized tier. `None` is the explicit
     /// baseline-only diagnostic mode.
     optimized_module: Option<vm_jit::NativeModule>,
+    /// Shared hard executable-memory boundary for every tier in this run.
+    executable_memory_budget: vm_jit::ExecutableMemoryBudget,
     /// Process-local JIT work admission. This bounds code made available for
     /// dispatch across both modules. The provider-level budget above is the hard
     /// allocation boundary; this counter remains useful for telemetry.
@@ -6530,6 +6536,7 @@ impl NativeState {
                     .map_err(|e| EvalError::Runtime(e.to_string()))?,
                 )
             },
+            executable_memory_budget,
             admission: NativeAdmissionBudget {
                 max_code_bytes,
                 max_compile_nanos: u128::from(max_compile_millis) * 1_000_000,

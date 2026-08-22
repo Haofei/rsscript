@@ -909,6 +909,16 @@ pub enum ExecutionEngineTelemetry {
         native_calls: u64,
         native_bails: u64,
         osr_entries: u64,
+        /// Machine code currently resident in the JIT modules. The current
+        /// compile-once-publish policy makes this equal to published code.
+        resident_code_bytes: u64,
+        /// Machine code reachable through a VM dispatch cache.
+        published_code_bytes: u64,
+        /// Resident machine code rejected after finalization. This remains zero
+        /// under compile-once-publish and guards future admission changes.
+        rejected_resident_bytes: u64,
+        /// Executable address space reserved by all JIT arenas for this run.
+        reserved_arena_bytes: u64,
         compile_nanos: u128,
         run_nanos: u128,
     },

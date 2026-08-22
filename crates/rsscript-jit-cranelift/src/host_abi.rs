@@ -374,12 +374,6 @@ pub struct HostHelpers {
     pub deque_pop_back_float: DequePopBackFloatFn,
 }
 
-/// Version of the [`JitInstr`]/[`JitFunction`] IR this crate consumes. The
-/// producer (`rsscript`) translates its private bytecode into this stable,
-/// versioned surface, so the two crates are decoupled: a breaking IR change bumps
-/// this and the producer is updated in lock-step.
-pub const IR_VERSION: u32 = 25;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostFailureMode {
     CannotFail,

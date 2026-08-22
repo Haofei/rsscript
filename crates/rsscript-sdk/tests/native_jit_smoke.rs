@@ -46,10 +46,20 @@ fn phase_typed_sdk_can_select_trusted_native_execution() {
     assert_eq!(native.outcome(), reference.outcome());
     assert_eq!(native.stdout, reference.stdout);
     assert_eq!(native.stderr, reference.stderr);
-    assert!(matches!(
-        native.telemetry.engine,
-        rsscript_sdk::report::ExecutionEngineTelemetry::Native { .. }
-    ));
+    let rsscript_sdk::report::ExecutionEngineTelemetry::Native {
+        resident_code_bytes,
+        published_code_bytes,
+        rejected_resident_bytes,
+        reserved_arena_bytes,
+        ..
+    } = native.telemetry.engine
+    else {
+        panic!("trusted native execution must report native telemetry");
+    };
+    assert!(resident_code_bytes > 0);
+    assert_eq!(resident_code_bytes, published_code_bytes);
+    assert_eq!(rejected_resident_bytes, 0);
+    assert!(reserved_arena_bytes >= resident_code_bytes);
 }
 
 #[test]

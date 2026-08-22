@@ -8,15 +8,6 @@ fn validate(program: &JitFunction) -> Result<(), JitError> {
 }
 
 #[test]
-fn execution_spec_tracks_the_public_ir_version() {
-    let spec = include_str!("../../../docs/spec/RSScript_Execution_Spec_v0.1.md");
-    assert!(
-        spec.contains(&format!("`vm_jit::IR_VERSION`, currently `{IR_VERSION}`")),
-        "execution spec must name vm-jit's current public IR version"
-    );
-}
-
-#[test]
 fn call_frame_layout_is_versioned_and_stable() {
     assert_eq!(JIT_CALL_ABI_VERSION, 1);
     assert_eq!(

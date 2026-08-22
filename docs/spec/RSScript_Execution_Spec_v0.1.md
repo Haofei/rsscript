@@ -52,5 +52,7 @@ instruction; deployment metadata cannot weaken these language rules.
 Conformance anchors live in `tests/checker_frontend/async_resources.rs`,
 `tests/vm_eval_parity/async_concurrency.rs`, and the runtime resource tests.
 
-The optional JIT artifact format is versioned independently by
-`vm_jit::IR_VERSION`, currently `25`.
+The optional native JIT consumes an in-process, non-serialized IR and is released
+in lockstep with the VM. It is not an Artifact format and carries no independent
+compatibility promise. Its only FFI boundary is the explicitly versioned call
+frame described in [`native-jit-contract.md`](native-jit-contract.md).
