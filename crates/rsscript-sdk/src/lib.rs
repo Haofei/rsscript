@@ -226,7 +226,7 @@ pub mod runtime {
         NondeterminismPolicy, RunLimits, Runtime, TracePolicy,
     };
     #[cfg(feature = "native-jit")]
-    pub use rsscript_vm::NativeJitOptions;
+    pub use rsscript_vm::{NativeCostModel, NativeJitOptions};
 }
 
 #[cfg(feature = "execution")]

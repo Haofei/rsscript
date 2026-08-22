@@ -1021,6 +1021,66 @@ fn prepared_call_owns_abi_words_and_flat_borrow_proofs() {
 }
 
 #[test]
+fn scalar_machine_entry_runs_on_tiny_guarded_stacks() {
+    use JitValueType::Int;
+    let mut module = module();
+    let function = module
+        .compile(&ft(
+            2,
+            vec![Int, Int, Int],
+            vec![
+                JitInstr::Add {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                JitInstr::Return { src: 2 },
+            ],
+        ))
+        .unwrap();
+    let entry = module.test_raw_entry(function).unwrap();
+
+    for stack_bytes in [64 * 1024, 128 * 1024, 256 * 1024] {
+        std::thread::Builder::new()
+            .name(format!("jit-raw-stack-{stack_bytes}"))
+            .stack_size(stack_bytes)
+            .spawn(move || {
+                let args = [20_i64, 22];
+                let lens = [0_i64, 0];
+                let mut result = 0_i64;
+                let mut bail = 0_u8;
+                let mut safepoint = 0_i64;
+                let mut deopt = [0_i64; 3];
+                let mut frame = JitCallFrame {
+                    abi_version: JIT_CALL_ABI_VERSION,
+                    flags: 0,
+                    args: args.as_ptr(),
+                    lens: lens.as_ptr(),
+                    arg_count: args.len(),
+                    host_ctx: 0,
+                    limits: std::ptr::null(),
+                    result: &mut result,
+                    bail: &mut bail,
+                    safepoint: &mut safepoint,
+                    deopt: deopt.as_mut_ptr(),
+                    native_depth: 0,
+                    logical_depth: 0,
+                    logical_depth_limit: usize::MAX,
+                };
+                // SAFETY: the entry was compiled with the one-frame ABI, the
+                // module remains alive until all scoped joins complete, and every
+                // pointer in the frame references live local storage.
+                let status = unsafe { entry(&mut frame) };
+                assert_eq!(status, JitStatus::Completed);
+                assert_eq!(result, 42);
+            })
+            .expect("tiny-stack native worker starts")
+            .join()
+            .expect("scalar native entry must stay within the guarded stack");
+    }
+}
+
+#[test]
 fn native_call_can_pass_flat_float_arg_to_readonly_callee() {
     use JitValueType::{FlatFloat, Float, Int};
     let mut m = module();

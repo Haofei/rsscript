@@ -1,12 +1,10 @@
-/// The native ABI of every compiled function:
-/// `(args_ptr, n_args, lens_ptr, host_ctx, out_ptr, bail_ptr, safepoint_ptr,
-/// payload_ptr, native_call_depth, logical_call_depth, logical_depth_limit,
-/// limits_ptr) -> completed`.
-/// Returns `1` and writes the result to `*out` on success, or `0` (leaving `*out`
-/// untouched) to request fallback. `lens_ptr` points at an `i64` array parallel to
-/// `args`: for a TV2 flat-array param (`FlatInt`/`FlatFloat`) the args word holds
+/// The native ABI of every compiled function is one pointer to a versioned
+/// [`JitCallFrame`]. It returns [`JitStatus::Completed`] and writes through
+/// `frame.result` on success, or [`JitStatus::Deopt`] to request fallback.
+/// `frame.lens` points at an `i64` array parallel to `frame.args`: for a flat-array
+/// parameter (`FlatInt`/`FlatFloat`) the argument word holds
 /// the raw data pointer and the `lens` word holds the element count (for in-register
-/// bounds-checked direct reads); other params' `lens` words are unused. `bail_ptr`
+/// bounds-checked direct reads); other params' `lens` words are unused. `frame.bail`
 /// points at a `u8` flag the host helpers set when a heap read can't be satisfied;
 /// the generated code loads it after every helper call and branches to fallback
 /// immediately, so a bad read can't keep executing. `safepoint_ptr` points at a
@@ -18,7 +16,7 @@
 /// register's value on the bail edge only (slot `reg` receives that register's
 /// 8-byte word). Native-call bail edges also chain the callee safepoint id and
 /// payload after the caller register window.
-type CompiledAbi = unsafe extern "C" fn(*mut JitCallFrame) -> JitStatus;
+pub(crate) type CompiledAbi = unsafe extern "C" fn(*mut JitCallFrame) -> JitStatus;
 
 /// Stable classification for native-tier failures. Hosts use the kind to decide
 /// whether interpreter fallback is expected or the module must be quarantined;
@@ -472,6 +470,13 @@ impl NativeModule {
     #[cfg(test)]
     pub(crate) fn compiled_function_count(&self) -> usize {
         self.funcs.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_raw_entry(&self, id: CompiledId) -> Option<CompiledAbi> {
+        (id.module_id == self.id)
+            .then(|| self.funcs.get(id.index).map(|function| function.f))
+            .flatten()
     }
 
     /// Optimizing native tier (back-compat default): `opt_level="speed"`.
