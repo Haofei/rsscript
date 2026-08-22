@@ -11,6 +11,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
+use rsscript_sdk::compile::{Compiler, Severity};
 
 fuzz_target!(|data: &[u8]| {
     // RSScript source is text; non-UTF-8 input is the lexer's concern but the
@@ -21,14 +22,14 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
 
-    let diagnostics = rsscript_sdk::analyze_source("fuzz.rss", source);
+    let diagnostics = Compiler.check("fuzz.rss", source);
 
     // Only feed the lowerer programs the checker accepts: invalid programs must
     // never reach code generation (the "RSScript owns semantics" contract).
     let has_errors = diagnostics
         .iter()
-        .any(|diagnostic| diagnostic.severity == rsscript_sdk::Severity::Error);
+        .any(|diagnostic| diagnostic.severity == Severity::Error);
     if !has_errors {
-        let _ = rsscript_sdk::lower_source_to_rust("fuzz.rss", source);
+        let _ = Compiler.compile("fuzz.rss", source);
     }
 });

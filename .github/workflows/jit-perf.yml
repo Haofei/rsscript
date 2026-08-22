@@ -8,7 +8,6 @@ on:
       - ".github/workflows/jit-perf.yml"
       - "benchmarks/vm-jit/**"
       - "crates/rsscript-vm/src/reg_vm/**"
-      - "crates/rsscript-sdk/tests/jit_acceptance.rs"
       - "crates/rsscript-sdk/tests/native_jit_smoke.rs"
       - "experiments/vm-jit/**"
   push:
@@ -17,7 +16,6 @@ on:
       - ".github/workflows/jit-perf.yml"
       - "benchmarks/vm-jit/**"
       - "crates/rsscript-vm/src/reg_vm/**"
-      - "crates/rsscript-sdk/tests/jit_acceptance.rs"
       - "crates/rsscript-sdk/tests/native_jit_smoke.rs"
       - "experiments/vm-jit/**"
 

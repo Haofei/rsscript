@@ -550,16 +550,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
-name = "libloading"
-version = "0.8.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
-dependencies = [
- "cfg-if",
- "windows-link",
-]
-
-[[package]]
 name = "libm"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -743,27 +733,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rss-native-abi"
-version = "0.1.0"
-dependencies = [
- "libloading",
- "rsscript-abi-model",
- "rsscript-provider-api",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
-]
-
-[[package]]
-name = "rss-testgen"
-version = "0.1.0"
-dependencies = [
- "rsscript-aot-backend",
- "rsscript-sdk",
-]
-
-[[package]]
 name = "rsscript-abi-model"
 version = "0.1.0"
 dependencies = [
@@ -871,69 +840,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rsscript-codegen-vm"
-version = "0.1.0"
-dependencies = [
- "rsscript-abi-model",
- "rsscript-bytecode",
- "rsscript-mir",
- "serde_json",
-]
-
-[[package]]
-name = "rsscript-compiler"
-version = "0.1.0"
-dependencies = [
- "fs2",
- "hex",
- "libc",
- "rsscript-abi-model",
- "rsscript-artifact",
- "rsscript-artifact-store",
- "rsscript-build-support",
- "rsscript-bytecode",
- "rsscript-codegen-vm",
- "rsscript-diagnostics",
- "rsscript-interface-catalog",
- "rsscript-lowering",
- "rsscript-mir",
- "rsscript-operation",
- "rsscript-package-model",
- "rsscript-package-review",
- "rsscript-project",
- "rsscript-review-core",
- "rsscript-review-source",
- "rsscript-semantics",
- "rsscript-syntax",
- "rsscript-text",
- "rsscript-work-budget",
- "rustix",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "toml",
- "uuid",
-]
-
-[[package]]
-name = "rsscript-corelib"
-version = "0.1.0"
-dependencies = [
- "base64",
- "chrono",
- "flate2",
- "hex",
- "hmac",
- "percent-encoding",
- "regex",
- "serde_json",
- "serde_yaml_ng",
- "sha2",
- "sha3",
-]
-
-[[package]]
 name = "rsscript-diagnostics"
 version = "0.1.0"
 dependencies = [
@@ -947,64 +853,10 @@ name = "rsscript-interface-catalog"
 version = "0.1.0"
 
 [[package]]
-name = "rsscript-lowering"
-version = "0.1.0"
-dependencies = [
- "rsscript-abi-model",
- "rsscript-mir",
- "rsscript-semantics",
- "rsscript-syntax",
- "rsscript-text",
-]
-
-[[package]]
-name = "rsscript-mir"
-version = "0.1.0"
-dependencies = [
- "rsscript-abi-model",
- "rsscript-build-support",
-]
-
-[[package]]
 name = "rsscript-operation"
 version = "0.1.0"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "rsscript-package-model"
-version = "0.1.0"
-dependencies = [
- "rsscript-artifact",
- "rsscript-build-support",
- "rsscript-diagnostics",
- "rsscript-project",
- "rsscript-review-core",
- "rsscript-review-source",
- "serde",
- "serde_json",
- "sha2",
- "toml",
-]
-
-[[package]]
-name = "rsscript-package-review"
-version = "0.1.0"
-dependencies = [
- "rsscript-abi-model",
- "rsscript-build-support",
- "rsscript-diagnostics",
- "rsscript-interface-catalog",
- "rsscript-package-model",
- "rsscript-project",
- "rsscript-review-core",
- "rsscript-review-source",
- "rsscript-semantics",
- "rsscript-syntax",
- "serde",
- "sha2",
- "toml",
 ]
 
 [[package]]
@@ -1021,76 +873,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "rsscript-provider-api"
-version = "0.1.0"
-dependencies = [
- "rsscript-abi-model",
- "rsscript-operation",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "rsscript-review"
-version = "0.1.0"
-dependencies = [
- "rsscript-package-model",
- "rsscript-review-core",
- "rsscript-review-source",
- "serde_json",
- "toml",
-]
-
-[[package]]
-name = "rsscript-review-core"
-version = "0.1.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "rsscript-review-reir"
 version = "0.1.0"
 dependencies = [
  "reir",
  "serde_json",
-]
-
-[[package]]
-name = "rsscript-review-source"
-version = "0.1.0"
-dependencies = [
- "rsscript-diagnostics",
- "rsscript-interface-catalog",
- "rsscript-semantics",
- "rsscript-syntax",
- "rsscript-text",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "rsscript-sdk"
-version = "0.1.0"
-dependencies = [
- "rsscript-abi-model",
- "rsscript-artifact",
- "rsscript-artifact-store",
- "rsscript-build-support",
- "rsscript-bytecode",
- "rsscript-codegen-vm",
- "rsscript-compiler",
- "rsscript-interface-catalog",
- "rsscript-lowering",
- "rsscript-mir",
- "rsscript-operation",
- "rsscript-provider-api",
- "rsscript-review",
- "rsscript-semantics",
- "rsscript-vm",
- "serde",
- "serde_json",
- "sha2",
 ]
 
 [[package]]
@@ -1128,25 +915,6 @@ dependencies = [
 [[package]]
 name = "rsscript-text"
 version = "0.1.0"
-
-[[package]]
-name = "rsscript-vm"
-version = "0.1.0"
-dependencies = [
- "rsscript-abi-model",
- "rsscript-build-support",
- "rsscript-bytecode",
- "rsscript-corelib",
- "rsscript-diagnostics",
- "rsscript-operation",
- "rsscript-provider-api",
- "rsscript-text",
- "serde",
- "serde_json",
- "sha2",
- "toml",
- "vm-jit",
-]
 
 [[package]]
 name = "rsscript-work-budget"

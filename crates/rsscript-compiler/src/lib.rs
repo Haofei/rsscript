@@ -26,14 +26,12 @@ mod lexer {
     pub(crate) use rsscript_syntax::lexer::*;
 }
 mod lint;
-#[cfg(feature = "package")]
-mod package;
 #[cfg(all(test, feature = "selfhost-parity"))]
 mod selfhost_parity;
 mod semantic;
 mod symbols;
 pub mod syntax;
-#[cfg(all(test, feature = "package"))]
+#[cfg(all(test, feature = "selfhost-parity"))]
 mod test_interfaces;
 #[allow(dead_code)]
 mod text_util {
@@ -103,51 +101,6 @@ pub use rsscript_semantics::{
     validate_sources_with_interfaces_without_core,
 };
 
-/// Explicit migration-only APIs for package persistence and review presentation.
-///
-/// The reviewed compiler surface is source/interface analysis and provider-neutral
-/// lowering. These historical APIs remain available only to compatibility
-/// adapters and experimental tooling while their implementations move to their
-/// respective project, review, and AOT boundaries.
-#[cfg(feature = "package")]
-pub mod compatibility {
-    #[cfg(feature = "bytecode")]
-    pub use crate::compiler_output::{
-        BytecodeCompileError, compile_ir_to_bytecode, compile_validated_to_bytecode,
-    };
-    #[cfg(feature = "lowering")]
-    pub use crate::compiler_output::{
-        CompiledIr, compile_frontend_input_to_ir, compile_source_to_ir, compile_validated_to_ir,
-    };
-    #[cfg(feature = "package")]
-    pub use crate::package::{
-        ExecutablePackageSnapshot, PackageAnalysis, PackageAnalysisAwaitSite,
-        PackageAnalysisExport, PackageAnalysisExternalImport, PackageAnalysisFile,
-        PackageAnalysisProducer, PackageAnalysisSummary, PackageCheck, PackageCheckLock,
-        PackageDependencyKind, PackageDiff, PackageExternalBinding, PackageExternalBindingChange,
-        PackageExternalBindingChangeKind, PackageGraphCheck, PackageIdentity,
-        PackageInterfaceChange, PackageInterfaceChangeKind, PackageLock, PackageLockDiff,
-        PackageLockFieldChange, PackageLockMetadata, PackageLockPackage, PackageLockPackageChange,
-        PackageLoweringInput, PackageManifestChange, PackageMetadataMismatch,
-        PackageMetadataReport, PackageNativeRustAuthorDeclaration, PackageNativeRustCheck,
-        PackageNativeRustReview, PackageNativeRustSemanticReview, PackageNativeRustSourceScan,
-        PackageReview, PackageReviewAwaitBoundary, PackageReviewAwaitSite, PackageReviewDependency,
-        PackageReviewExport, PackageReviewFile, PackageReviewFileKind, PackageReviewMetadata,
-        PackageReviewSummary, PackageRisk, PackageSourceFile, PackageTree, PackageTreeNode,
-        PackageTreeSummary, PreparedPackage, WorkspaceSnapshot, analyze_package_dir,
-        check_package_dir, diff_package_dirs, diff_package_locks, load_workspace_snapshot,
-        load_workspace_snapshot_with_operation, lock_package_dir, package_lowering_input,
-        package_sources, package_sources_with_dependency_interfaces, package_tree,
-        prepare_executable_package, prepare_package_for_execution, review_package_dir,
-    };
-    #[cfg(feature = "package")]
-    pub use rsscript_review_source::{
-        ReviewFinding, ReviewFix, ReviewMap, ReviewMapCategorySummary, ReviewMapClassification,
-        ReviewMapFile, ReviewMapFileRisk, ReviewMapRegion, ReviewMapSummary, ReviewRisk,
-        format_review_human, format_review_json, format_review_map_human, format_review_map_json,
-        review_map_sources, review_sources,
-    };
-}
 pub use semantic::{
     AnalysisResult, FrontendCompletion, FrontendInputSnapshot, FrontendStopReason,
     SemanticDatabase, SourceFileSnapshot, SourceSnapshot, ValidatedProgram,

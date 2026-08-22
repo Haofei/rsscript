@@ -385,16 +385,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
-name = "errno"
-version = "0.3.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
-dependencies = [
- "libc",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "fancy-regex"
 version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -404,12 +394,6 @@ dependencies = [
  "regex-automata",
  "regex-syntax",
 ]
-
-[[package]]
-name = "fastrand"
-version = "2.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 
 [[package]]
 name = "find-msvc-tools"
@@ -458,40 +442,6 @@ checksum = "e076045bb43dac435333ed5f04caf35c7463631d0dae2deb2638d94dd0a5b872"
 dependencies = [
  "lazy_static",
  "num",
-]
-
-[[package]]
-name = "fs2"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
-dependencies = [
- "libc",
- "winapi",
-]
-
-[[package]]
-name = "futures-core"
-version = "0.3.33"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2cd50c473c80f6d7c3670a752354b8e569b1a7cbfdc0419ec88e5edad85e0dc7"
-
-[[package]]
-name = "futures-task"
-version = "0.3.33"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b231ed28831efb4a61a08580c4bc233ec56bc009f4cd8f52da2c3cb97df0c109"
-
-[[package]]
-name = "futures-util"
-version = "0.3.33"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a77a90a256fce34da66415271e30f94ee91c57b04b8a2c042d9cf3220179deaa"
-dependencies = [
- "futures-core",
- "futures-task",
- "pin-project-lite",
- "slab",
 ]
 
 [[package]]
@@ -721,7 +671,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "53b44bfcdb3f8d5837a46dae1ca9660a837176eee74a28b229bc626816589102"
 dependencies = [
  "cfg-if",
- "futures-util",
  "wasm-bindgen",
 ]
 
@@ -813,12 +762,6 @@ name = "libm"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
-
-[[package]]
-name = "linux-raw-sys"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
 name = "litemap"
@@ -1001,12 +944,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
-name = "pin-project-lite"
-version = "0.2.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
-
-[[package]]
 name = "potential_utf"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1147,44 +1084,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "rss-testgen"
-version = "0.1.0"
-dependencies = [
- "rsscript-sdk",
-]
-
-[[package]]
 name = "rsscript-abi-model"
 version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
  "sha2",
-]
-
-[[package]]
-name = "rsscript-aot-backend"
-version = "0.1.0"
-dependencies = [
- "rsscript-aot-model",
- "rsscript-artifact-store",
- "rsscript-build-support",
- "rsscript-diagnostics",
- "rsscript-interface-catalog",
- "rsscript-project",
- "rsscript-semantics",
- "rsscript-syntax",
- "rsscript-text",
- "serde_json",
-]
-
-[[package]]
-name = "rsscript-aot-model"
-version = "0.1.0"
-dependencies = [
- "rsscript-diagnostics",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -1197,20 +1102,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
-]
-
-[[package]]
-name = "rsscript-artifact-store"
-version = "0.1.0"
-dependencies = [
- "fs2",
- "hex",
- "libc",
- "rsscript-project",
- "rustix",
- "sha2",
- "tempfile",
- "uuid",
 ]
 
 [[package]]
@@ -1250,12 +1141,7 @@ dependencies = [
 name = "rsscript-compiler"
 version = "0.1.0"
 dependencies = [
- "fs2",
- "hex",
- "libc",
  "rsscript-abi-model",
- "rsscript-artifact",
- "rsscript-artifact-store",
  "rsscript-build-support",
  "rsscript-bytecode",
  "rsscript-codegen-vm",
@@ -1264,20 +1150,14 @@ dependencies = [
  "rsscript-lowering",
  "rsscript-mir",
  "rsscript-operation",
- "rsscript-project",
- "rsscript-review-core",
- "rsscript-review-source",
  "rsscript-semantics",
  "rsscript-syntax",
  "rsscript-text",
  "rsscript-work-budget",
- "rustix",
  "serde",
  "serde_json",
  "sha2",
- "tempfile",
  "toml",
- "uuid",
 ]
 
 [[package]]
@@ -1312,7 +1192,6 @@ version = "0.0.0"
 dependencies = [
  "jsonschema",
  "libfuzzer-sys",
- "rss-testgen",
  "rsscript-bytecode",
  "rsscript-runner-protocol",
  "rsscript-sdk",
@@ -1351,54 +1230,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "rsscript-project"
-version = "0.1.0"
-dependencies = [
- "rsscript-artifact",
- "rsscript-operation",
- "rsscript-semantics",
- "rsscript-workspace-loader",
- "rustix",
- "sha2",
- "tempfile",
-]
-
-[[package]]
 name = "rsscript-provider-api"
 version = "0.1.0"
 dependencies = [
  "rsscript-abi-model",
  "rsscript-operation",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "rsscript-review"
-version = "0.1.0"
-dependencies = [
- "rsscript-compiler",
- "rsscript-review-core",
- "serde_json",
- "toml",
-]
-
-[[package]]
-name = "rsscript-review-core"
-version = "0.1.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "rsscript-review-source"
-version = "0.1.0"
-dependencies = [
- "rsscript-diagnostics",
- "rsscript-interface-catalog",
- "rsscript-semantics",
- "rsscript-syntax",
- "rsscript-text",
  "serde",
  "serde_json",
 ]
@@ -1416,19 +1252,13 @@ name = "rsscript-sdk"
 version = "0.1.0"
 dependencies = [
  "rsscript-abi-model",
- "rsscript-aot-backend",
  "rsscript-artifact",
- "rsscript-artifact-store",
  "rsscript-build-support",
  "rsscript-bytecode",
- "rsscript-codegen-vm",
  "rsscript-compiler",
  "rsscript-interface-catalog",
- "rsscript-lowering",
- "rsscript-mir",
  "rsscript-operation",
  "rsscript-provider-api",
- "rsscript-review",
  "rsscript-semantics",
  "rsscript-vm",
  "serde",
@@ -1500,33 +1330,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "rsscript-workspace-loader"
-version = "0.1.0"
-dependencies = [
- "rsscript-operation",
- "serde",
- "sha2",
- "toml",
-]
-
-[[package]]
 name = "rustc-hash"
 version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6b1e7f9a428571be2dc5bc0505c13fb6bf936822b894ec87abf8a08a4e51742d"
-
-[[package]]
-name = "rustix"
-version = "1.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
-dependencies = [
- "bitflags 2.13.1",
- "errno",
- "libc",
- "linux-raw-sys",
- "windows-sys 0.61.2",
-]
 
 [[package]]
 name = "rustversion"
@@ -1662,12 +1469,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
 
 [[package]]
-name = "slab"
-version = "0.4.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
-
-[[package]]
 name = "smallvec"
 version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1744,19 +1545,6 @@ name = "target-lexicon"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
-
-[[package]]
-name = "tempfile"
-version = "3.27.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
-dependencies = [
- "fastrand",
- "getrandom 0.4.3",
- "once_cell",
- "rustix",
- "windows-sys 0.61.2",
-]
 
 [[package]]
 name = "tinystr"
@@ -1838,17 +1626,6 @@ name = "utf8_iter"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
-
-[[package]]
-name = "uuid"
-version = "1.24.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf3923a6f5c4c6382e0b653c4117f48d631ea17f38ed86e2a828e6f7412f5239"
-dependencies = [
- "getrandom 0.4.3",
- "js-sys",
- "wasm-bindgen",
-]
 
 [[package]]
 name = "uuid-simd"
@@ -1958,28 +1735,6 @@ dependencies = [
  "wasmtime-internal-core",
  "windows-sys 0.61.2",
 ]
-
-[[package]]
-name = "winapi"
-version = "0.3.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c839a674fcd7a98952e593242ea400abe93992746761e38641405d28b00f419"
-dependencies = [
- "winapi-i686-pc-windows-gnu",
- "winapi-x86_64-pc-windows-gnu",
-]
-
-[[package]]
-name = "winapi-i686-pc-windows-gnu"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6"
-
-[[package]]
-name = "winapi-x86_64-pc-windows-gnu"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "windows-link"

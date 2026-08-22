@@ -628,6 +628,8 @@ fn peel_checked_select_operation(operation: &checked::HirExpr) -> (&checked::Hir
     }
 }
 
+type DynamicProtocolMethods = BTreeMap<(String, String), Box<[(TypeId, FunctionId)]>>;
+
 #[derive(Clone)]
 struct CallTargets {
     functions: BTreeMap<String, FunctionId>,
@@ -635,7 +637,7 @@ struct CallTargets {
     async_external_wrappers: BTreeMap<String, FunctionId>,
     async_builtin_wrappers: BTreeMap<String, FunctionId>,
     variants: BTreeMap<String, VariantLayout>,
-    dynamic_protocol_methods: BTreeMap<(String, String), Box<[(TypeId, FunctionId)]>>,
+    dynamic_protocol_methods: DynamicProtocolMethods,
 }
 
 /// Synthetic async functions let `async let value = Host.call()` and
@@ -1039,6 +1041,10 @@ struct CheckedHirLowerer<'source, 'types, 'closures> {
 }
 
 impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the lowerer constructor makes every owned input and mutable identity table explicit"
+    )]
     fn new(
         id: FunctionId,
         function_name: impl Into<String>,
@@ -1138,11 +1144,11 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                     self.closure_abis
                         .insert(name.clone(), ClosureAbi::from(&signature));
                 }
-                if let Some(ty) = ty {
-                    if let Ok(wire) = checked_type_to_wire(ty, &self.function_name) {
-                        let ty = self.types.intern(wire);
-                        self.place_types.insert(name.clone(), ty);
-                    }
+                if let Some(ty) = ty
+                    && let Ok(wire) = checked_type_to_wire(ty, &self.function_name)
+                {
+                    let ty = self.types.intern(wire);
+                    self.place_types.insert(name.clone(), ty);
                 }
                 if let Some(value) = value {
                     let value = self.lower_expression(value)?;

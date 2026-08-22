@@ -510,6 +510,10 @@ pub fn collect_project_regular_files(
     operation: &str,
     skip: impl Fn(&Path, &str) -> bool,
 ) -> Result<Vec<ProjectRegularFile>, String> {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "bounded traversal keeps the root, current path, limits, operation, cycle set, budget, and output explicit"
+    )]
     fn visit(
         root: &Path,
         path: &Path,

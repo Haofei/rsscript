@@ -1,0 +1,9 @@
+# Security-sensitive boundaries require explicit repository-owner review.
+/crates/process-guard/ @Haofei
+/crates/rsscript-bytecode/ @Haofei
+/crates/rsscript-provider-api/ @Haofei
+/crates/rsscript-runner-protocol/ @Haofei
+/crates/rsscript-vm/ @Haofei
+/providers/ @Haofei
+/.github/workflows/ @Haofei
+/schemas/ @Haofei

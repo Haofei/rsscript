@@ -9,8 +9,7 @@ dependencies.
 | `selfhost/` | Research self-host parity workflow | Regression/parity evidence only; no feature expansion. |
 | `native-abi-fixture/` | Native-ABI experiment and security-sensitive checks | Contract fixture only; never a default Provider or Core dependency. |
 
-The repository-root `selfhost` and `packages/native-abi-fixture` paths are
-compatibility symlinks so existing feature-gated test harnesses can continue to
-locate immutable fixtures.  Do not add content through those aliases.  New or
-changed fixture material must be reviewed as experiment maintenance and must not
-be added to the root Cargo workspace or its default members.
+Feature-gated test harnesses address these physical paths directly. The retired
+repository-root `selfhost` and `packages/native-abi-fixture` compatibility
+aliases must not return. New or changed fixture material is experiment
+maintenance and must not enter the root Cargo workspace or its default members.

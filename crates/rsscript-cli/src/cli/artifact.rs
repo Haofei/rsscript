@@ -2,8 +2,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-#[cfg(feature = "package-inspect")]
-use rsscript_compiler::compatibility::{PackageAnalysis, analyze_package_dir};
 use rsscript_sdk::{
     analysis::SemanticDiffV1,
     artifact::{
@@ -255,65 +253,57 @@ fn inspect_analysis(view: &str, json_output: bool, input: &str) -> ExitCode {
     if view == "analysis" && Path::new(input).is_file() {
         return inspect_bundle_analysis(input);
     }
-    #[cfg(not(feature = "package-inspect"))]
-    {
-        if view != "analysis" {
-            return usage_error(format!(
-                "`rss inspect {view}` requires a package-analysis Bundle; legacy directory inspection requires the `package-inspect` feature"
-            ));
-        }
-        let build = match build_input(input) {
-            Ok(build) => build,
-            Err(error) => {
-                eprintln!("{error}");
-                return ExitCode::from(1);
-            }
-        };
-        let analysis = build.analysis_envelope().payload();
-        if json_output {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(analysis)
-                    .expect("versioned analysis evidence serializes")
-            );
-        } else {
-            println!(
-                "{}",
-                serde_json::to_string(analysis).expect("versioned analysis evidence serializes")
-            );
-        }
-        ExitCode::SUCCESS
-    }
-
-    #[cfg(feature = "package-inspect")]
-    inspect_package_directory_analysis(view, json_output, input)
-}
-
-#[cfg(feature = "package-inspect")]
-fn inspect_package_directory_analysis(view: &str, json_output: bool, input: &str) -> ExitCode {
-    if !is_package_directory(input) {
-        return usage_error(format!("`rss inspect {view}` requires a package directory"));
-    }
-    let analysis = match analyze_package_dir(Path::new(input)) {
-        Ok(analysis) => analysis,
+    let build = match build_input(input) {
+        Ok(build) => build,
         Err(error) => {
             eprintln!("{error}");
             return ExitCode::from(1);
         }
     };
+    let envelope = build.analysis_envelope();
+    let Some(analysis) = envelope.package_analysis() else {
+        if view != "analysis" {
+            return usage_error(format!(
+                "`rss inspect {view}` requires package analysis evidence"
+            ));
+        }
+        println!(
+            "{}",
+            if json_output {
+                serde_json::to_string_pretty(envelope.payload())
+            } else {
+                serde_json::to_string(envelope.payload())
+            }
+            .expect("versioned analysis evidence serializes")
+        );
+        return ExitCode::SUCCESS;
+    };
     if view == "analysis" {
         println!(
             "{}",
-            serde_json::to_string(&analysis).expect("package analysis JSON serialization")
+            if json_output {
+                serde_json::to_string_pretty(analysis)
+            } else {
+                serde_json::to_string(analysis)
+            }
+            .expect("package analysis JSON serialization")
         );
     } else if json_output {
         let value = match view {
-            "resources" => resource_json(&analysis),
-            "async" => json!({
+            "resources" => serde_json::json!({
+                "resource_apis": analysis.summary.resource_apis,
+                "lifetimes": analysis.resource_lifetimes,
+                "transfers": analysis.resource_transfers,
+            }),
+            "async" => serde_json::json!({
                 "async_apis": analysis.summary.async_apis,
                 "await_sites": analysis.await_sites,
+                "task_groups": analysis.task_groups,
             }),
-            "call-graph" => json!({ "external_calls": analysis.external_imports }),
+            "call-graph" => serde_json::json!({
+                "call_edges": analysis.call_edges,
+                "external_calls": analysis.external_imports,
+            }),
             _ => unreachable!(),
         };
         println!("{}", serde_json::to_string_pretty(&value).unwrap());
@@ -321,8 +311,11 @@ fn inspect_package_directory_analysis(view: &str, json_output: bool, input: &str
         match view {
             "resources" => {
                 println!("resource APIs: {}", analysis.summary.resource_apis);
-                for export in resource_exports(&analysis) {
-                    println!("{}: {}", export.name, export.semantic_facts.join(", "));
+                for lifetime in &analysis.resource_lifetimes {
+                    println!(
+                        "{}: {} -> {}",
+                        lifetime.function, lifetime.binding, lifetime.cleanup
+                    );
                 }
             }
             "async" => {
@@ -376,26 +369,6 @@ fn inspect_bundle_analysis(input: &str) -> ExitCode {
         serde_json::to_string_pretty(bundle.analysis()).expect("bundle analysis serializes")
     );
     ExitCode::SUCCESS
-}
-
-#[cfg(feature = "package-inspect")]
-fn resource_exports(
-    analysis: &PackageAnalysis,
-) -> impl Iterator<Item = &rsscript_compiler::compatibility::PackageAnalysisExport> {
-    analysis.exports.iter().filter(|export| {
-        export
-            .semantic_facts
-            .iter()
-            .any(|fact| fact.starts_with("resource "))
-    })
-}
-
-#[cfg(feature = "package-inspect")]
-fn resource_json(analysis: &PackageAnalysis) -> serde_json::Value {
-    json!({
-        "resource_apis": analysis.summary.resource_apis,
-        "exports": resource_exports(analysis).collect::<Vec<_>>(),
-    })
 }
 
 fn load_or_compile(input: &str) -> Result<BytecodeArtifact, String> {

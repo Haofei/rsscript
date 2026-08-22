@@ -368,7 +368,7 @@ fn selfhost_parity_is_an_explicit_research_feature_not_a_release_gate() {
     let release_workflow = read(&root.join(".github/workflows/release.yml"));
 
     assert!(
-        compiler_manifest.contains("selfhost-parity = [\"package\", \"dep:rsscript-vm\"]"),
+        compiler_manifest.contains("selfhost-parity = [\"bytecode\", \"dep:rsscript-vm\"]"),
         "the Research harness must require an explicit compiler feature"
     );
     assert!(
@@ -482,20 +482,16 @@ fn research_fixtures_are_owned_by_the_experiments_boundary() {
     let experiment_manifest = read(&root.join("experiments/Cargo.toml"));
     let root_manifest = read(&root.join("Cargo.toml"));
 
-    for (compatibility_path, owned_path) in [
+    for (retired_alias, owned_path) in [
         ("selfhost", "experiments/fixtures/selfhost"),
         (
             "packages/native-abi-fixture",
             "experiments/fixtures/native-abi-fixture",
         ),
     ] {
-        let compatibility = root.join(compatibility_path);
-        let metadata = std::fs::symlink_metadata(&compatibility).unwrap_or_else(|error| {
-            panic!("missing Research fixture compatibility path `{compatibility_path}`: {error}")
-        });
         assert!(
-            metadata.file_type().is_symlink(),
-            "`{compatibility_path}` must remain a compatibility symlink instead of a copied Core fixture"
+            !root.join(retired_alias).exists(),
+            "retired Research fixture alias `{retired_alias}` must not return at the Core root"
         );
         assert!(
             root.join(owned_path).is_dir(),
@@ -503,10 +499,8 @@ fn research_fixtures_are_owned_by_the_experiments_boundary() {
         );
     }
 
-    assert!(
-        root_manifest.contains("experiments/fixtures/native-abi-fixture/native/rust"),
-        "the root workspace must exclude the native fixture bridge"
-    );
+    assert!(root_manifest.contains("experiments/fixtures/native-abi-fixture/native/rust"));
+    assert!(!root_manifest.contains("packages/native-abi-fixture/native/rust"));
     assert!(
         experiment_manifest.contains("fixtures/native-abi-fixture/native/rust"),
         "the experiments workspace must also exclude the native fixture bridge"
@@ -695,33 +689,9 @@ fn intrinsic_catalog_is_the_only_generated_registry_source() {
 }
 
 #[test]
-fn cli_defaults_to_verified_vm_and_requires_explicit_aot() {
-    let root = workspace_root();
-    let run = read(&root.join("crates/rsscript-cli/src/cli/run_cmd.rs"));
-    let runner = read(&root.join("crates/rsscript-cli/src/cli/runner.rs"));
-    assert!(run.contains("super::runner::run_isolated"));
-    assert!(run.contains("options.trusted_in_process"));
-    assert!(runner.contains("ArtifactVerifier.verify_bytes"));
-    assert!(runner.contains("spawn_guarded_child_strict"));
-    assert!(runner.contains("verify_strict_child_context"));
-    assert!(runner.contains("validate_response_profile"));
-    assert!(runner.contains("command.current_dir(\"/\")"));
-    let process_guard = read(&root.join("crates/process-guard/src/lib.rs"));
-    assert!(process_guard.contains("PR_SET_NO_NEW_PRIVS"));
-    assert!(process_guard.contains("configure_strict_platform"));
-    assert!(process_guard.contains("pub fn verify_strict_child_context"));
-    assert!(run.contains("arg == \"--aot\""));
-    assert!(!run.contains("arg == \"--vm\""));
-
-    let selfhost = read(&root.join("docs/self-hosting.md"));
-    assert!(selfhost.contains("Self-hosting is frozen Research"));
-    assert!(selfhost.contains("Do not expand the C emitter"));
-}
-
-#[test]
 fn selfhost_known_type_sets_are_generated() {
     let root = workspace_root();
-    let checker = read(&root.join("selfhost/check.rss"));
+    let checker = read(&root.join("experiments/fixtures/selfhost/check.rss"));
     assert!(
         !checker.contains("fn is_builtin_type(") && !checker.contains("fn is_stdlib_type("),
         "self-host type knowledge must come from generated interface metadata"
@@ -734,7 +704,7 @@ fn selfhost_known_type_sets_are_generated() {
 #[test]
 fn selfhost_checker_entry_is_orchestration_only() {
     let root = workspace_root();
-    let checker = read(&root.join("selfhost/check.rss"));
+    let checker = read(&root.join("experiments/fixtures/selfhost/check.rss"));
     let declarations = checker
         .lines()
         .filter(|line| {
@@ -760,23 +730,23 @@ fn selfhost_checker_entry_is_orchestration_only() {
 
     for (path, module) in [
         (
-            "selfhost/checker/support.rss",
+            "experiments/fixtures/selfhost/checker/support.rss",
             "module selfhost.checker.support",
         ),
         (
-            "selfhost/checker/output.rss",
+            "experiments/fixtures/selfhost/checker/output.rss",
             "module selfhost.checker.output",
         ),
         (
-            "selfhost/checker/type_model.rss",
+            "experiments/fixtures/selfhost/checker/type_model.rss",
             "module selfhost.checker.type_model",
         ),
         (
-            "selfhost/checker/diagnostics/syntax_declarations.rss",
+            "experiments/fixtures/selfhost/checker/diagnostics/syntax_declarations.rss",
             "module selfhost.checker.diagnostics.syntax_declarations",
         ),
         (
-            "selfhost/checker/diagnostics/effects_calls.rss",
+            "experiments/fixtures/selfhost/checker/diagnostics/effects_calls.rss",
             "module selfhost.checker.diagnostics.effects_calls",
         ),
     ] {
@@ -1253,30 +1223,6 @@ fn package_name(manifest: &toml::Value) -> &str {
         .expect("workspace member should declare package.name")
 }
 
-fn function_source<'a>(source: &'a str, signature: &str) -> &'a str {
-    let start = source
-        .find(signature)
-        .unwrap_or_else(|| panic!("missing function signature `{signature}`"));
-    let body_start = source[start..]
-        .find('{')
-        .map(|offset| start + offset)
-        .unwrap_or_else(|| panic!("missing function body for `{signature}`"));
-    let mut depth = 0usize;
-    for (offset, character) in source[body_start..].char_indices() {
-        match character {
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return &source[start..=body_start + offset];
-                }
-            }
-            _ => {}
-        }
-    }
-    panic!("unterminated function body for `{signature}`");
-}
-
 #[test]
 fn register_vm_has_no_disabled_test_composition_tree() {
     let root = workspace_root();
@@ -1298,44 +1244,11 @@ fn register_vm_has_no_disabled_test_composition_tree() {
 }
 
 #[test]
-fn jit_acceptance_domains_remain_separate_modules() {
-    let root = workspace_root();
-    let aggregator = root.join("crates/rsscript-sdk/tests/jit_acceptance.rs");
-    let source = read(&aggregator);
-    let expected = ["core", "optimization", "limits"];
-
-    assert!(
-        source.lines().count() <= expected.len() + 12,
-        "jit_acceptance.rs must remain a composition root"
-    );
-    for domain in expected {
-        assert!(
-            source.contains(&format!("jit_acceptance/{domain}.rs")),
-            "JIT acceptance composition root is missing `{domain}`"
-        );
-        assert!(
-            root.join(format!(
-                "crates/rsscript-sdk/tests/jit_acceptance/{domain}.rs"
-            ))
-            .is_file(),
-            "JIT acceptance domain `{domain}` must have its own module"
-        );
-    }
-}
-
-#[test]
 fn selfhost_parity_domains_remain_separate_modules() {
     let root = workspace_root();
     let aggregator = root.join("crates/rsscript-compiler/src/selfhost_parity.rs");
     let source = read(&aggregator);
-    let expected = [
-        "lexer",
-        "parser",
-        "checker",
-        "package_contract",
-        "ast_oracle",
-        "ast_parity",
-    ];
+    let expected = ["lexer", "parser", "checker", "ast_oracle", "ast_parity"];
 
     assert!(
         source.lines().count() <= expected.len() + 10,
@@ -1625,121 +1538,6 @@ fn language_engine_does_not_read_the_operating_system() {
 }
 
 #[test]
-fn artifact_persistence_is_an_execution_only_adapter() {
-    let root = workspace_root();
-    let adapter_manifest: toml::Value = toml::from_str(&read(
-        &root.join("crates/rsscript-artifact-store/Cargo.toml"),
-    ))
-    .expect("artifact-store manifest should parse");
-    let dependencies = dependency_packages(&adapter_manifest);
-    assert_eq!(
-        dependencies,
-        BTreeSet::from([
-            "fs2".to_string(),
-            "hex".to_string(),
-            "libc".to_string(),
-            "rsscript-project".to_string(),
-            "rustix".to_string(),
-            "sha2".to_string(),
-            "tempfile".to_string(),
-            "uuid".to_string(),
-        ]),
-        "artifact persistence adapter may depend only on low-level project traversal and filesystem primitives"
-    );
-
-    let compiler_manifest: toml::Value =
-        toml::from_str(&read(&root.join("crates/rsscript-compiler/Cargo.toml")))
-            .expect("compiler manifest should parse");
-    assert!(
-        compiler_manifest["dependencies"]
-            .as_table()
-            .expect("compiler dependency table should exist")
-            .get("rsscript-artifact-store")
-            .and_then(|dependency| dependency.get("optional"))
-            .and_then(toml::Value::as_bool)
-            .unwrap_or(false),
-        "only the optional package compatibility adapter may depend on artifact persistence"
-    );
-    let package_feature = compiler_manifest["features"]["package"]
-        .as_array()
-        .expect("compiler package feature should be declared");
-    assert!(
-        package_feature
-            .iter()
-            .filter_map(toml::Value::as_str)
-            .any(|entry| entry == "dep:rsscript-artifact-store"),
-        "compiler package compatibility must delegate snapshot persistence to the adapter"
-    );
-    for dependency in ["fs2", "hex", "libc", "rustix", "tempfile"] {
-        assert!(
-            compiler_manifest["dependencies"]
-                .as_table()
-                .expect("compiler dependency table should exist")
-                .get(dependency)
-                .and_then(|dependency| dependency.get("optional"))
-                .and_then(toml::Value::as_bool)
-                .unwrap_or(false),
-            "compiler default closure must keep `{dependency}` behind package compatibility only"
-        );
-    }
-    let package = read(&root.join("crates/rsscript-compiler/src/package.rs"));
-    assert!(
-        !package.contains("pub use rsscript_artifact_store"),
-        "compiler package compatibility code must not make persistence a compiler API"
-    );
-    let compiler = read(&root.join("crates/rsscript-compiler/src/lib.rs"));
-    assert!(!compiler.contains("ArtifactStore,"));
-    assert!(!compiler.contains("write_package_artifact_atomic,"));
-    assert!(
-        !compiler.contains("package_metadata,"),
-        "compiler compatibility facade must not expose review persistence"
-    );
-    let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
-    assert!(sdk.contains("pub use rsscript_artifact_store::{"));
-    assert!(sdk.contains("ArtifactStore"));
-    assert!(
-        !root
-            .join("crates/rsscript-compiler/src/package/artifact_store.rs")
-            .exists(),
-        "the compiler must not retain a second persistence implementation"
-    );
-    let authorization = read(&root.join("crates/rsscript-compiler/src/package/authorization.rs"));
-    let adapter = read(&root.join("crates/rsscript-artifact-store/src/lib.rs"));
-    assert!(authorization.contains("rsscript_artifact_store"));
-    assert!(authorization.contains("NativeSnapshotStore::open_default"));
-    assert!(authorization.contains("snapshot_regular_tree("));
-    assert!(!authorization.contains("OpenOptions::new"));
-    assert!(!authorization.contains("set_private_directory_permissions"));
-    assert!(!authorization.contains("fn snapshot_tree("));
-    assert!(!authorization.contains("fn snapshot_file("));
-    assert!(!authorization.contains("fn make_tree_read_only("));
-    assert!(adapter.contains("pub fn snapshot_regular_tree("));
-    assert!(adapter.contains("pub struct NativeSnapshotStore"));
-    assert!(adapter.contains("pub fn publish("));
-    assert!(adapter.contains("pub fn regular_tree_digest("));
-    assert!(adapter.contains("pub fn seal_regular_tree_read_only("));
-    let aot_backend = read(&root.join("experiments/aot-backend/src/lib.rs"));
-    assert!(aot_backend.contains("GeneratedRustPackageFiles"));
-    assert!(aot_backend.contains("write_generated_rust_files("));
-    assert!(!aot_backend.contains("fn write_if_changed("));
-    assert!(!aot_backend.contains("fn remove_if_exists("));
-    assert!(adapter.contains("pub struct GeneratedRustPackageFiles"));
-    assert!(adapter.contains("pub fn write_generated_rust_package("));
-    let native = read(&root.join("crates/rsscript-compiler/src/package/native.rs"));
-    let generated_lock_start = native
-        .find("pub(super) fn prepare_native_cargo_lock")
-        .expect("native lock generation should remain explicit");
-    let generated_lock_end = native[generated_lock_start..]
-        .find("#[cfg(test)]")
-        .map(|offset| generated_lock_start + offset)
-        .expect("test-only native helpers should follow generated lock generation");
-    let generated_lock = &native[generated_lock_start..generated_lock_end];
-    assert!(generated_lock.contains("write_generated_cargo_lock("));
-    assert!(!generated_lock.contains("fs::write("));
-    assert!(adapter.contains("pub fn write_generated_cargo_lock("));
-}
-
-#[test]
 fn semantic_diff_is_an_artifact_contract_not_sdk_implementation() {
     let root = workspace_root();
     let artifact = read(&root.join("crates/rsscript-artifact/src/lib.rs"));
@@ -1842,529 +1640,6 @@ fn package_analysis_schema_is_an_artifact_contract_not_compiler_implementation()
 }
 
 #[test]
-fn reviewed_sdk_exposes_analysis_through_the_versioned_envelope() {
-    let root = workspace_root();
-    let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
-    assert!(sdk.contains("pub fn analysis_envelope(&self) -> &AnalysisEnvelopeV1"));
-    assert!(sdk.contains("pub fn package_analysis(&self) -> Option<&PackageAnalysisV1>"));
-    assert!(
-        sdk.contains(
-            "#[cfg(feature = \"compatibility\")]\n    #[doc(hidden)]\n    pub fn analysis"
-        )
-    );
-}
-
-#[test]
-fn native_package_dependency_model_is_not_owned_by_aot_lowering() {
-    let root = workspace_root();
-    let project = read(&root.join("crates/rsscript-project/src/lib.rs"));
-    let package_types = read(&root.join("crates/rsscript-package-model/src/lib.rs"));
-    assert!(
-        project.contains("pub struct NativeRustDependency")
-            && project.contains("pub struct PackageLoweringInput"),
-        "the project capture boundary must own native dependency and lowering-input identity"
-    );
-    assert!(
-        project.contains("pub struct CapturedProjectGraph")
-            && project.contains("pub fn capture_project_graph"),
-        "the project capture boundary must own private graph capture and its temporary-directory lifetime"
-    );
-    assert!(
-        project.contains("pub struct CapturedPackageGraph")
-            && project.contains("pub fn select_package_root")
-            && project.contains("pub fn remap_path_label")
-            && project.contains("pub fn remap_error"),
-        "the project capture boundary must own selected graph roots and generic private-path remapping"
-    );
-    assert!(
-        package_types
-            .contains("pub use rsscript_project::{NativeRustDependency, PackageLoweringInput};"),
-        "compiler compatibility may only re-export the project-owned capture models"
-    );
-
-    let native_loader = read(&root.join("crates/rsscript-compiler/src/package/native.rs"));
-    assert!(
-        native_loader.contains("use super::NativeRustDependency;"),
-        "native package loading must consume the package-owned dependency model"
-    );
-    assert!(
-        !native_loader.contains("crate::rust_lower::NativeRustDependency"),
-        "package loading must not depend on the experimental Rust lowerer"
-    );
-
-    let lower_types = read(&root.join("experiments/aot-backend/src/rust_lower/types.rs"));
-    assert!(
-        !lower_types.contains("pub struct NativeRustDependency"),
-        "the experimental Rust lowerer must not define package dependency identity"
-    );
-
-    let lowerer = read(&root.join("experiments/aot-backend/src/rust_lower/mod.rs"));
-    assert!(
-        lowerer.contains("pub use crate::package::NativeRustDependency;"),
-        "the Rust lowerer may retain a compatibility re-export while it consumes project input"
-    );
-
-    let authorization = read(&root.join("crates/rsscript-compiler/src/package/authorization.rs"));
-    assert!(
-        authorization.contains("CapturedPackageGraph")
-            && authorization.contains("let captured = capture_project_graph(")
-            && authorization
-                .contains("pub(super) type PackageGraphSnapshot = CapturedPackageGraph;")
-            && !authorization.contains("pub(super) struct PackageGraphSnapshot"),
-        "compiler package compatibility must compose the project-owned graph capture boundary"
-    );
-    assert!(
-        !authorization.contains("fn copy_package_directory")
-            && !authorization.contains("set_package_snapshot_permissions"),
-        "compiler authorization must not reintroduce private graph-directory or recursive-copy implementation"
-    );
-    for required in [
-        "pub fn read_captured_utf8",
-        "pub fn replace_captured_utf8",
-        "pub fn create_captured_utf8",
-    ] {
-        assert!(
-            project.contains(required),
-            "project capture must own private graph file I/O `{required}`"
-        );
-    }
-    let snapshot = function_source(&authorization, "fn snapshot_package_graph_inputs_inner(");
-    assert!(
-        authorization.contains("captured.read_captured_utf8")
-            && authorization.contains("captured.replace_captured_utf8")
-            && authorization.contains("captured.create_captured_utf8"),
-        "compiler compatibility may compute graph semantics, but private capture reads and writes must pass through rsscript-project"
-    );
-    assert!(
-        !snapshot.contains("fs::"),
-        "compiler graph-snapshot composition must not reopen or mutate files directly"
-    );
-    let source_set_path = root.join("crates/rsscript-package-review/src/source_set.rs");
-    assert!(
-        source_set_path.is_file()
-            && !root
-                .join("crates/rsscript-compiler/src/package/source_set.rs")
-                .exists(),
-        "captured package manifests and source sets must be physically owned by the package-review boundary"
-    );
-    let source_set = read(&source_set_path);
-    let contract_path = root.join("crates/rsscript-package-review/src/contract.rs");
-    assert!(
-        contract_path.is_file()
-            && !root
-                .join("crates/rsscript-compiler/src/package/contract.rs")
-                .exists(),
-        "package contract extraction must be physically owned by the package-review boundary"
-    );
-    let contract = read(&contract_path);
-    assert!(
-        contract.contains("use crate::session_analysis;")
-            && contract.contains("use rsscript_syntax::ast::"),
-        "package contract extraction must use the review-owned session and syntax boundaries directly"
-    );
-    let execution_facts_path = root.join("crates/rsscript-package-review/src/execution_facts.rs");
-    assert!(
-        execution_facts_path.is_file()
-            && !root
-                .join("crates/rsscript-compiler/src/package/analysis_execution.rs")
-                .exists(),
-        "package resource/task execution facts must be physically owned by the package-review boundary"
-    );
-    let package_analysis_path = root.join("crates/rsscript-package-review/src/analysis.rs");
-    assert!(
-        package_analysis_path.is_file()
-            && !root
-                .join("crates/rsscript-compiler/src/package/analysis.rs")
-                .exists(),
-        "neutral package analysis must be physically owned by the package-review boundary"
-    );
-    let package_analysis = read(&package_analysis_path);
-    assert!(
-        package_analysis.contains("CompilationSession")
-            && package_analysis.contains("rsscript_interface_catalog::CORE_INTERFACES")
-            && package_analysis.contains("fn interface_catalog_digest"),
-        "package analysis must consume semantic queries and the catalog-owned digest directly"
-    );
-    let await_facts_path = root.join("crates/rsscript-package-review/src/await_facts.rs");
-    assert!(
-        await_facts_path.is_file()
-            && !root
-                .join("crates/rsscript-compiler/src/package/review/review_await.rs")
-                .exists(),
-        "package await-site facts must be physically owned by the package-review boundary"
-    );
-    let policy_path = root.join("crates/rsscript-package-review/src/policy.rs");
-    assert!(
-        policy_path.is_file()
-            && !root
-                .join("crates/rsscript-compiler/src/package/policy.rs")
-                .exists(),
-        "package review policy must be physically owned by the package-review boundary"
-    );
-    let policy = read(&policy_path);
-    assert!(
-        policy.contains("read_project_utf8_file_bounded")
-            && policy.contains("collect_package_function_contracts"),
-        "review policy must use project-owned bounded diagnostic input and review-owned contracts"
-    );
-    let manifest_loader = function_source(&source_set, "pub fn load_package_manifest_with_source(");
-    assert!(
-        manifest_loader.contains("capture_project_manifest(package_dir, MANIFEST_MAX_BYTES)"),
-        "package-review manifest semantics must consume project-captured manifest bytes"
-    );
-    assert!(
-        !manifest_loader.contains("canonical_package_root")
-            && !manifest_loader.contains("read_bounded_utf8_file"),
-        "package-review manifest semantic parsing must not reopen the project manifest"
-    );
-    assert!(
-        project.contains("pub struct ProjectSourceCapture")
-            && project.contains("pub struct ProjectSourceCaptureLimits")
-            && project.contains("pub fn capture_project_utf8")
-            && project.contains("pub struct ProjectTreeLimits")
-            && project.contains("pub fn collect_project_regular_files")
-            && project.contains("pub fn read_project_utf8_file_bounded"),
-        "project must own bounded source-tree traversal, generic regular-file scanning, and captured snapshot reads"
-    );
-    let source_loader = function_source(&source_set, "fn read_package_sources_excluding(");
-    assert!(
-        source_loader.contains(".capture(roots, excluded_roots)")
-            && !source_loader.contains("canonical_package_root")
-            && !source_loader.contains("collect_rsscript_files_excluding")
-            && !source_loader.contains("read_bounded_utf8_file"),
-        "package-review source assembly must consume project-captured source bytes rather than traverse directories"
-    );
-    assert!(
-        source_set.contains("capture_optional_project_utf8")
-            && !source_set.contains("snapshot_manifest_source.is_file"),
-        "package-review assembly must delegate optional snapshot-manifest probing to rsscript-project"
-    );
-    let dependency_path = root.join("crates/rsscript-package-review/src/dependency.rs");
-    assert!(
-        dependency_path.is_file()
-            && !root
-                .join("crates/rsscript-compiler/src/package/dependency.rs")
-                .exists(),
-        "package dependency semantics must be physically owned by the package-review boundary"
-    );
-    let dependency = read(&dependency_path);
-    let native = read(&root.join("crates/rsscript-compiler/src/package/native.rs"));
-    for resolver in [&dependency, &native] {
-        assert!(
-            resolver.contains("resolve_project_path_dependency"),
-            "package dependency roots must be resolved by rsscript-project"
-        );
-        assert!(
-            !resolver.contains("package_dir.join(path)"),
-            "package compatibility must not reimplement path-dependency joining"
-        );
-        assert!(
-            !resolver.contains("dependency_dir.join(\"rsspkg.toml\").exists()"),
-            "package compatibility must not probe dependency manifests directly"
-        );
-    }
-    assert!(
-        dependency.contains("capture_project_manifest_graph"),
-        "package-review dependency semantics must consume project-captured manifest bytes"
-    );
-    assert!(
-        !dependency.contains("load_package_manifest_with_source"),
-        "package-review dependency discovery must not reopen manifests after project capture"
-    );
-    assert!(
-        native.contains("capture_project_manifest_graph")
-            && !native.contains("load_package_manifest")
-            && !native.contains("load_package_with_features"),
-        "native dependency resolution must consume project-captured manifests rather than reopen packages"
-    );
-    let review_path = root.join("crates/rsscript-package-review/src/review.rs");
-    assert!(
-        review_path.is_file()
-            && !root
-                .join("crates/rsscript-compiler/src/package/review.rs")
-                .exists(),
-        "package review execution must be physically owned by the package-review boundary"
-    );
-    let review = read(&review_path);
-    assert!(
-        review.contains("capture_project_manifest_graph")
-            && review.contains("load_package_from_manifest_source")
-            && review.contains("collect_dependency_interface_sources_from_manifest_graph")
-            && review.contains("package_feature_resolution_diagnostics_from_manifest_graph")
-            && !review.contains("load_package(")
-            && !review.contains("load_package_with_features("),
-        "review package assembly must share project-captured manifest bytes with dependency semantics"
-    );
-    let diff_path = root.join("crates/rsscript-package-review/src/diff.rs");
-    assert!(
-        diff_path.is_file()
-            && !root
-                .join("crates/rsscript-compiler/src/package/diff.rs")
-                .exists(),
-        "package review diff must be physically owned by the package-review boundary"
-    );
-    let diff = read(&diff_path);
-    assert!(
-        diff.contains("diff_package_dirs_with_native_review")
-            && diff.contains("review_package_dir_captured_with_features"),
-        "package diff must consume review-owned evidence and take native inspection explicitly"
-    );
-    let lock_path = root.join("crates/rsscript-package-review/src/lock.rs");
-    assert!(
-        lock_path.is_file()
-            && !root
-                .join("crates/rsscript-compiler/src/package/lock.rs")
-                .exists(),
-        "package lock semantics must be physically owned by the package-review boundary"
-    );
-    let lock = read(&lock_path);
-    assert!(
-        lock.contains("NativeRustPathFn")
-            && lock.contains("lock_package_dir_captured")
-            && lock.contains("rsscript_project::project_path_source"),
-        "package lock must own hashing/comparison and receive native path resolution explicitly"
-    );
-    let lock_format_path = root.join("crates/rsscript-package-review/src/lock_format.rs");
-    assert!(
-        lock_format_path.is_file()
-            && !root
-                .join("crates/rsscript-compiler/src/package/lock_format.rs")
-                .exists(),
-        "package lock serialization must be physically owned by the package-review boundary"
-    );
-    assert!(
-        read(&lock_format_path).contains("pub fn package_lock_toml"),
-        "package review must own canonical lock presentation"
-    );
-    let graph_path = root.join("crates/rsscript-package-review/src/graph.rs");
-    assert!(
-        graph_path.is_file()
-            && !root
-                .join("crates/rsscript-compiler/src/package/graph.rs")
-                .exists(),
-        "package graph evidence must be physically owned by the package-review boundary"
-    );
-    let graph = read(&graph_path);
-    assert!(
-        graph.contains("pub fn package_tree_captured")
-            && graph.contains("pub fn check_package_graph")
-            && graph.contains("NativeRustReviewFn")
-            && graph.contains("rsscript_project::project_path_source")
-            && !graph.contains("authorization::"),
-        "package graph evaluation must consume captured review input and receive native inspection explicitly"
-    );
-    assert!(
-        dependency.contains("load_package_from_manifest_source")
-            && !dependency.contains("load_package_with_features("),
-        "dependency source assembly must use manifests already captured for its resolved graph"
-    );
-    let package_module = read(&root.join("crates/rsscript-compiler/src/package.rs"));
-    assert!(
-        package_module.contains("collect_project_regular_files as collect_bounded_regular_files")
-            && package_module.contains("read_project_utf8_file_bounded as read_utf8_file_bounded")
-            && !package_module.contains("struct TreeBudget")
-            && !package_module.contains("fn read_bounded_sorted_entries")
-            && !package_module.contains("fn open_regular_file_within_root"),
-        "compiler compatibility code must consume project-owned generic I/O primitives instead of reimplementing bounded traversal"
-    );
-    assert!(
-        package_module.contains("rsscript_package_review::package_tree_captured")
-            && package_module.contains("snapshot_package_graph_inputs")
-            && package_module.contains("remap_tree"),
-        "compiler package graph compatibility must only authorize captured input and remap public paths"
-    );
-    let check_path = root.join("crates/rsscript-package-review/src/check.rs");
-    assert!(
-        check_path.is_file()
-            && !root
-                .join("crates/rsscript-compiler/src/package/check.rs")
-                .exists(),
-        "package check composition must be physically owned by the package-review boundary"
-    );
-    let check = read(&check_path);
-    assert!(
-        check.contains("pub fn check_package_dir_captured")
-            && check.contains("NativeRustCheckFn")
-            && check.contains("NativeRustReviewFn")
-            && check.contains("NativeRustPathFn")
-            && !check.contains("authorization::"),
-        "package check must combine neutral review facts through explicit native compatibility callbacks"
-    );
-    assert!(
-        package_module.contains("rsscript_package_review::check_package_dir_captured")
-            && package_module.contains("snapshot_package_graph_inputs")
-            && package_module.contains("remap_check"),
-        "compiler package check compatibility must only authorize captured input and remap public paths"
-    );
-    assert!(
-        package_module.contains("rsscript_package_review::package_sources(package_dir)")
-            && package_module
-                .contains("rsscript_package_review::package_sources_with_dependency_interfaces"),
-        "compiler source-list compatibility must delegate presentation to the package-review boundary"
-    );
-    for forbidden in [
-        "package::review",
-        "package::policy",
-        "package::source_set",
-        "package::graph",
-        "package::lock",
-    ] {
-        assert!(
-            !package_module.contains(forbidden),
-            "compiler package compatibility must not expose retired `{forbidden}` behavior"
-        );
-    }
-    for removed in ["mod policy;", "mod review;", "mod source_set;"] {
-        assert!(
-            !package_module.contains(removed),
-            "compiler package root must not recreate review implementation module `{removed}`"
-        );
-    }
-}
-
-#[test]
-fn rust_aot_lowering_is_explicitly_feature_gated() {
-    let root = workspace_root();
-    let manifest: toml::Value =
-        toml::from_str(&read(&root.join("crates/rsscript-compiler/Cargo.toml")))
-            .expect("compiler manifest should parse");
-    assert!(
-        manifest["features"].get("execution").is_none(),
-        "the compiler must not retain a broad execution compatibility feature"
-    );
-    assert!(
-        manifest["features"].get("aot-rust").is_none(),
-        "Core compiler must not expose the experimental Rust/AOT feature"
-    );
-
-    let compiler = read(&root.join("crates/rsscript-compiler/src/lib.rs"));
-    assert!(!compiler.contains("mod rust_lower;"));
-    assert!(!compiler.contains("legacy-exec-ir"));
-
-    let symbols = read(&root.join("crates/rsscript-compiler/src/symbols.rs"));
-    assert!(
-        !symbols.contains("crate::rust_lower::"),
-        "execution metadata must not require compiling the Rust/AOT lowerer"
-    );
-
-    let sdk: toml::Value = toml::from_str(&read(&root.join("crates/rsscript-sdk/Cargo.toml")))
-        .expect("SDK manifest should parse");
-    let sdk_execution = sdk["features"]["execution"]
-        .as_array()
-        .expect("SDK execution feature should be declared")
-        .iter()
-        .filter_map(toml::Value::as_str)
-        .collect::<BTreeSet<_>>();
-    assert!(
-        !sdk_execution.contains("rsscript_compiler/aot-rust"),
-        "reviewed SDK execution must not select AOT by default"
-    );
-    assert!(
-        sdk["features"].get("aot-rust").is_none(),
-        "the reviewed SDK must not expose an experimental AOT feature"
-    );
-    assert!(
-        sdk["dependencies"].get("rsscript-aot-backend").is_none(),
-        "the reviewed SDK must not depend on the experimental AOT backend"
-    );
-    let aot_backend: toml::Value =
-        toml::from_str(&read(&root.join("experiments/aot-backend/Cargo.toml")))
-            .expect("experimental AOT backend manifest should parse");
-    assert!(
-        aot_backend["dependencies"]
-            .get("rsscript-lowering")
-            .is_none(),
-        "the experimental AOT backend must not retain source-shaped executable-IR lowering"
-    );
-    assert!(
-        sdk["features"].get("compatibility").is_none(),
-        "the retired SDK compatibility feature must remain absent"
-    );
-
-    let testgen: toml::Value =
-        toml::from_str(&read(&root.join("experiments/rss-testgen/Cargo.toml")))
-            .expect("experiment test-generator manifest should parse");
-    assert!(
-        testgen["dependencies"]
-            .get("rsscript-aot-backend")
-            .is_some(),
-        "the AOT experiment must depend on its owning backend directly"
-    );
-    let testgen_sdk = testgen["dependencies"]["rsscript-sdk"]
-        .as_table()
-        .expect("experiment SDK dependency should remain explicit");
-    let testgen_sdk_features = testgen_sdk["features"]
-        .as_array()
-        .expect("experiment SDK dependency must declare features")
-        .iter()
-        .filter_map(toml::Value::as_str)
-        .collect::<BTreeSet<_>>();
-    assert!(
-        !testgen_sdk_features.contains("aot-rust"),
-        "experiments must not re-enter AOT through the stable SDK"
-    );
-
-    let cli: toml::Value = toml::from_str(&read(&root.join("crates/rsscript-cli/Cargo.toml")))
-        .expect("CLI manifest should parse");
-    let cli_execution = cli["features"]["execution"]
-        .as_array()
-        .expect("CLI execution feature should be declared")
-        .iter()
-        .filter_map(toml::Value::as_str)
-        .collect::<BTreeSet<_>>();
-    assert!(
-        !cli_execution.contains("rsscript-compiler/aot-rust"),
-        "ordinary CLI execution must not select the experimental Rust/AOT lowerer"
-    );
-    assert!(
-        !cli_execution.contains("rsscript-compiler/package"),
-        "ordinary CLI execution must not select compiler package/review compatibility"
-    );
-    let cli_package_inspect = cli["features"]["package-inspect"]
-        .as_array()
-        .expect("CLI package-inspect feature should be declared")
-        .iter()
-        .filter_map(toml::Value::as_str)
-        .collect::<BTreeSet<_>>();
-    assert!(cli_package_inspect.contains("execution"));
-    assert!(cli_package_inspect.contains("rsscript-compiler/package"));
-    assert!(
-        !cli_package_inspect.contains("legacy-exec-ir"),
-        "package inspection must not restore the deleted executable IR"
-    );
-    assert!(
-        cli["features"].get("aot-rust").is_none(),
-        "the product CLI must not expose an experimental AOT feature"
-    );
-    let cli_native = cli["features"]["native-jit"]
-        .as_array()
-        .expect("the product CLI must expose an explicit native-JIT feature");
-    assert!(
-        cli_native
-            .iter()
-            .any(|entry| entry.as_str() == Some("rsscript-sdk/native-jit")),
-        "the CLI native feature must compose through the phase-typed SDK"
-    );
-    let run_command = read(&root.join("crates/rsscript-cli/src/cli/run_cmd.rs"));
-    assert!(run_command.contains("`--native` requires explicit `--trusted-in-process`"));
-    assert!(
-        cli["dependencies"].get("rsscript-aot-backend").is_none(),
-        "the product CLI must not depend on the experimental AOT backend"
-    );
-
-    let run_command = read(&root.join("crates/rsscript-cli/src/cli/run_cmd.rs"));
-    assert!(
-        !run_command.contains("fn run_aot("),
-        "the product CLI must not retain an experimental AOT execution path"
-    );
-    let cli_help = read(&root.join("crates/rsscript-cli/src/cli/mod.rs"));
-    assert!(
-        !cli_help.contains("AOT_USAGE"),
-        "the product CLI help must not retain an experimental AOT path"
-    );
-}
-
-#[test]
 fn compilation_session_owns_workspace_type_facts() {
     let root = workspace_root();
     let database = read(&root.join("crates/rsscript-semantics/src/database.rs"));
@@ -2416,7 +1691,9 @@ fn linked_provider_contracts_reach_the_invocation_path() {
     let execution = read(&root.join("crates/rsscript-vm/src/eval_types.rs"));
     assert!(execution.contains("ExternalFunction::from_resolved"));
     assert!(execution.contains("requires a blocking execution lane"));
-    assert!(execution.contains("requires an async execution lane"));
+    assert!(execution.contains("non-wire async Provider cannot enter the wire async dispatcher"));
+    assert!(execution.contains("is_wire_async"));
+    assert!(execution.contains("is_wire_async_mut"));
     assert!(execution.contains("without registering a resource"));
 
     let vm_calls = read(&root.join("crates/rsscript-vm/src/reg_vm/calls.rs"));
@@ -2424,11 +1701,12 @@ fn linked_provider_contracts_reach_the_invocation_path() {
     assert!(!vm_calls.contains("blocking_allowed: true"));
     assert!(vm_calls.contains("async_allowed: false"));
     assert!(vm_calls.contains("AsyncProviderCallContext"));
-    assert!(vm_calls.contains("function.start_async"));
+    assert!(vm_calls.contains("function.start_wire_async"));
 
     let scheduler = read(&root.join("crates/rsscript-vm/src/reg_vm/scheduler.rs"));
     assert!(scheduler.contains("poll_provider_futures"));
-    assert!(scheduler.contains("Wait::Provider"));
+    assert!(scheduler.contains("Wait::WireProvider"));
+    assert!(scheduler.contains("Wait::WireMutationProvider"));
 }
 
 #[test]
@@ -3966,16 +3244,14 @@ fn session_owns_the_core_interface_policy() {
     assert!(cli_check.contains("CompilationSession::without_core()"));
 
     let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
-    assert!(sdk.contains("CompilationSession::with_standard_packages()"));
-    assert!(sdk.contains("fn analyze_standard_source_with_session"));
-    assert!(sdk.contains("mod legacy_frontend_fixtures"));
-    assert!(sdk.contains("enum SnapshotReason"));
+    assert!(sdk.contains("CompilationSession::default()"));
+    assert!(sdk.contains("fn analyze_snapshot_with_session"));
 
     let session_boundary = sdk
-        .split("fn validate_snapshot_with_session")
+        .split("fn analyze_snapshot_with_session")
         .nth(1)
-        .and_then(|rest| rest.split("mod legacy_frontend_fixtures").next())
-        .expect("reviewed session boundary and private legacy fixture module must exist");
+        .and_then(|rest| rest.split("fn session_for_snapshot").next())
+        .expect("reviewed snapshot session boundary must exist");
     for direct_analyzer_call in [
         "validate_sources_with_interfaces(",
         "analyze_sources_with_interfaces(",
@@ -4009,9 +3285,8 @@ fn production_frontend_callers_share_the_compilation_session_boundary() {
         );
     }
     for required in [
-        "CompilationSession::with_standard_packages()",
-        "fn analyze_standard_source_with_session",
-        "legacy_frontend_fixtures",
+        "CompilationSession::default()",
+        "fn analyze_snapshot_with_session",
     ] {
         assert!(
             sdk.contains(required),
@@ -4032,87 +3307,6 @@ fn production_frontend_callers_share_the_compilation_session_boundary() {
     assert!(
         project.contains("Compiler.compile_snapshot(snapshot.frontend())"),
         "project convenience compilation must pass its immutable frontend snapshot to the pure compiler"
-    );
-}
-
-#[test]
-fn compiler_legacy_package_review_and_aot_exports_are_quarantined() {
-    let root = workspace_root();
-    let compiler = read(&root.join("crates/rsscript-compiler/src/lib.rs"));
-    assert!(compiler.contains("pub mod compatibility"));
-    for legacy_root_export in [
-        "pub use package::{",
-        "pub use review::{",
-        "pub use rust_lower::{",
-    ] {
-        assert!(
-            !compiler.contains(legacy_root_export),
-            "compiler legacy API must be explicit compatibility-only: {legacy_root_export}"
-        );
-    }
-    assert!(compiler.contains("pub use crate::package::{"));
-    assert!(compiler.contains("pub use rsscript_review_source::{"));
-    assert!(!compiler.contains("pub use crate::rust_lower::{"));
-    assert!(compiler.contains("compile_frontend_input_to_ir"));
-    assert!(
-        !compiler.contains("compile_package_input_to_ir"),
-        "compiler lowering must accept the pure frontend snapshot rather than package compatibility input"
-    );
-
-    let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
-    assert!(sdk.contains("pub use rsscript_compiler::compatibility::{"));
-    assert!(sdk.contains("pub use rsscript_aot_backend::{"));
-    let cli_aot = read(&root.join("crates/rsscript-cli/src/cli/mod.rs"));
-    assert!(cli_aot.contains("use rsscript_aot_backend::{AotLoweringInput, lower_aot_input};"));
-}
-
-#[test]
-fn source_review_facts_live_outside_the_compiler_crate() {
-    let root = workspace_root();
-    let compiler_review = root.join("crates/rsscript-compiler/src/review");
-    assert!(
-        !compiler_review.join("mod.rs").exists()
-            && !compiler_review.join("diff.rs").exists()
-            && !compiler_review.join("facts_ast.rs").exists()
-            && !compiler_review.join("facts_hir.rs").exists()
-            && !compiler_review.join("map.rs").exists(),
-        "source-level review facts must not remain under the compiler implementation"
-    );
-
-    let manifest: toml::Value = toml::from_str(&read(
-        &root.join("crates/rsscript-review-source/Cargo.toml"),
-    ))
-    .expect("source review manifest should parse");
-    let dependencies = normal_dependency_packages(&manifest);
-    for forbidden in [
-        "rsscript-compiler",
-        "rsscript-vm",
-        "rsscript-project",
-        "rsscript-provider-api",
-    ] {
-        assert!(
-            !dependencies.contains(forbidden),
-            "source review must not depend on `{forbidden}`"
-        );
-    }
-    for required in [
-        "rsscript-syntax",
-        "rsscript-semantics",
-        "rsscript-diagnostics",
-    ] {
-        assert!(
-            dependencies.contains(required),
-            "source review must consume the neutral `{required}` boundary"
-        );
-    }
-
-    let compiler_manifest: toml::Value =
-        toml::from_str(&read(&root.join("crates/rsscript-compiler/Cargo.toml")))
-            .expect("compiler manifest should parse");
-    assert_eq!(
-        compiler_manifest["dependencies"]["rsscript-review-source"]["optional"].as_bool(),
-        Some(true),
-        "source review remains an explicit legacy package compatibility dependency"
     );
 }
 
@@ -4338,183 +3532,6 @@ fn vm_core_consumes_owned_ir_not_frontend_internals() {
 }
 
 #[test]
-fn mir_codegen_is_a_vm_independent_verified_bytecode_boundary() {
-    let root = workspace_root();
-    let codegen = read(&root.join("crates/rsscript-codegen-vm/src/lib.rs"));
-    for forbidden in ["rsscript_exec_ir", "ExecutableIr", "ExecutableStmt", "Hir"] {
-        assert!(
-            !codegen.contains(forbidden),
-            "MIR codegen must not reconstruct legacy frontend/executable state `{forbidden}`"
-        );
-    }
-    for required in ["MirModule", "MirInstruction", "MirTerminator", "CallKnown"] {
-        assert!(
-            codegen.contains(required),
-            "MIR codegen must lower verified MIR fact `{required}`"
-        );
-    }
-    assert!(
-        codegen.contains("mir: &VerifiedMir"),
-        "MIR codegen must accept only verifier-admitted MIR"
-    );
-    let lowering = read(&root.join("crates/rsscript-lowering/src/mir.rs"));
-    assert!(
-        lowering.contains("Result<VerifiedMir, MirLoweringError>"),
-        "the checked-HIR lowerer must return verifier-admitted MIR"
-    );
-    let checked_signature = function_source(&lowering, "fn checked_function_signature(");
-    assert!(
-        checked_signature.contains("checked_type_to_wire"),
-        "direct MIR signatures must consume structural semantic types"
-    );
-    assert!(
-        !checked_signature.contains("WireType::parse(&parameter.ty.to_string())"),
-        "direct MIR signatures must not round-trip semantic types through display strings"
-    );
-    let checked_external_signature = function_source(&lowering, "fn checked_external_signature(");
-    assert!(
-        checked_external_signature.contains("checked_external_type_to_wire"),
-        "direct MIR external import signatures must consume structural semantic types, including declared resource identity"
-    );
-    assert!(
-        !checked_external_signature.contains("WireType::parse"),
-        "direct MIR external imports must not parse rendered semantic types"
-    );
-    let checked_record_constructor = function_source(&lowering, "fn lower_record_constructor(");
-    assert!(
-        checked_record_constructor.contains("checked_type_to_wire"),
-        "direct MIR record constructors must consume structural result types"
-    );
-    assert!(
-        !checked_record_constructor.contains("WireType::parse"),
-        "direct MIR record constructors must not parse rendered semantic types"
-    );
-    let checked_for = function_source(&lowering, "fn lower_for(");
-    assert!(
-        checked_for.contains("iterable_type.root_name()"),
-        "direct MIR loop lowering must inspect the structural iterable type"
-    );
-    assert!(
-        !checked_for.contains("starts_with(\"List<\")"),
-        "direct MIR loop lowering must not reconstruct type facts from rendered text"
-    );
-    let checked_index = function_source(&lowering, "fn lower_expression(");
-    assert!(
-        checked_index.contains("base_type")
-            && checked_index.contains("ty.root_name() == Some(\"List\")"),
-        "direct MIR indexing must inspect the structural base type"
-    );
-    assert!(
-        !checked_index.contains("checked_hir_expression_type_name(base).is_some_and(is_list_type)"),
-        "direct MIR indexing must not reconstruct collection identity from a rendered type"
-    );
-    let checked_with = function_source(&lowering, "fn lower_with(");
-    assert!(
-        checked_with.contains("checked_type_to_wire(resource_type"),
-        "direct MIR resource lowering must consume the scoped structural type"
-    );
-    assert!(
-        !checked_with.contains("checked_hir_expression_type_name")
-            && !checked_with.contains("intern_resource_type"),
-        "direct MIR resource lowering must not reconstruct resource identity from display strings"
-    );
-    let manifest: toml::Value =
-        toml::from_str(&read(&root.join("crates/rsscript-codegen-vm/Cargo.toml"))).unwrap();
-    assert_eq!(
-        normal_dependency_packages(&manifest),
-        BTreeSet::from([
-            "rsscript-abi-model".to_string(),
-            "rsscript-bytecode".to_string(),
-            "rsscript-mir".to_string(),
-            "serde_json".to_string(),
-        ]),
-        "MIR codegen must stay independent from VM, compiler, syntax, package, and SDK"
-    );
-    let adapter = read(&root.join("crates/rsscript-sdk/src/vm_adapter.rs"));
-    let compile_mir = function_source(&adapter, "pub fn reg_vm_compile_mir");
-    let emit_mir = function_source(&adapter, "fn emit_mir");
-    assert!(
-        compile_mir.contains("emit_mir")
-            && emit_mir.contains("rsscript_codegen_vm::emit_artifact")
-            && emit_mir.contains("BytecodeVerifier::default")
-            && emit_mir.contains("RegVmExecutable::from_verified_bytecode"),
-        "SDK MIR compilation must pass through codegen, verifier, then the VM token boundary"
-    );
-
-    let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
-    for signature in [
-        "pub fn compile_snapshot(",
-        "pub fn compile_snapshot_with_operation(",
-    ] {
-        let build = function_source(&sdk, signature);
-        assert!(
-            build.contains("compile_validated_to_bytecode"),
-            "reviewed SDK build `{signature}` must emit an Artifact through the compiler bytecode boundary"
-        );
-        assert!(
-            !build.contains("vm_adapter") && !build.contains("reg_vm_compile"),
-            "reviewed SDK build `{signature}` must not call an SDK/VM compile helper"
-        );
-    }
-    for signature in [
-        "pub fn compile(&self, file: &str, source: &str)",
-        "pub fn compile_with_interfaces(",
-    ] {
-        let wrapper = function_source(&sdk, signature);
-        assert!(
-            wrapper.contains("compile_snapshot"),
-            "compatibility SDK compile helper `{signature}` must delegate to the immutable input snapshot"
-        );
-    }
-
-    let compiler_start = sdk
-        .find("impl Compiler {")
-        .expect("SDK Compiler implementation must exist");
-    let compiler_end = sdk[compiler_start..]
-        .find("#[cfg(feature = \"execution\")]\n#[derive(Debug)]\npub struct BuiltArtifact")
-        .map(|offset| compiler_start + offset)
-        .expect("SDK Compiler implementation must end before BuiltArtifact");
-    let compiler = &sdk[compiler_start..compiler_end];
-    for forbidden in [
-        "WorkspaceSnapshot",
-        "load_workspace_snapshot",
-        "compile_package",
-        "std::path::Path",
-    ] {
-        assert!(
-            !compiler.contains(forbidden),
-            "reviewed Compiler must remain an in-memory frontend boundary, not a project loader: `{forbidden}`"
-        );
-    }
-    let project = &sdk[sdk
-        .find("pub mod project {")
-        .expect("SDK project convenience module must exist")
-        ..compiler_start];
-    for required in [
-        "pub struct ProjectCompiler",
-        "pub use rsscript_project::ProjectSnapshot as CapturedProjectSnapshot",
-        "pub use rsscript_project::ProjectLoader",
-        "pub fn capture_frontend_from",
-        "pub fn capture_frontend_from_with_operation",
-        "pub fn build_captured",
-        "pub fn build_captured_with_operation",
-        "ProjectLoader::default()",
-        "pub fn compile_package",
-    ] {
-        assert!(
-            project.contains(required),
-            "project convenience adapter must own `{required}`"
-        );
-    }
-    assert!(
-        project.contains("pub mod legacy")
-            && project.contains("pub struct PackageCompatibility")
-            && project.contains("load_workspace_snapshot"),
-        "legacy package capture must remain isolated behind the compatibility module"
-    );
-}
-
-#[test]
 fn source_shaped_executable_ir_is_physically_deleted() {
     let root = workspace_root();
     let manifest: toml::Value = toml::from_str(&read(&root.join("crates/rsscript-vm/Cargo.toml")))
@@ -4553,36 +3570,6 @@ fn compiler_lowering_has_no_source_shaped_ir_compatibility_path() {
         toml::from_str(&read(&root.join("crates/rsscript-compiler/Cargo.toml")))
             .expect("compiler manifest should parse");
     assert!(compiler["features"].get("legacy-exec-ir").is_none());
-}
-
-#[test]
-fn checked_hir_mir_is_the_default_compiler_and_sdk_path() {
-    let root = workspace_root();
-    let compiler_output = read(&root.join("crates/rsscript-compiler/src/compiler_output.rs"));
-    let mir = function_source(&compiler_output, "pub fn mir(&self)");
-    assert!(mir.contains("self.checked_hir_mir()"));
-    assert!(
-        !mir.contains("lower_executable_ir_to_mir"),
-        "the default compiler MIR query must not retry the legacy executable-IR bridge"
-    );
-    assert!(
-        !compiler_output.contains("ExecutableIr") && !compiler_output.contains("legacy_executable"),
-        "compiler output must expose only checked HIR and verified MIR"
-    );
-
-    let adapter = read(&root.join("crates/rsscript-sdk/src/vm_adapter.rs"));
-    let emit = function_source(&adapter, "fn emit_ir(compiled: &CompiledIr)");
-    assert!(emit.contains("checked_hir_mir()"));
-    assert!(!emit.contains("emit_legacy_executable_ir"));
-    assert!(!adapter.contains("emit_legacy_compiled_artifact"));
-    assert!(
-        emit.contains("emit_mir(") && !emit.contains("compile_executable_ir"),
-        "SDK execution must use only verified MIR bytecode emission"
-    );
-    let artifact = function_source(&adapter, "pub(crate) fn emit_compiled_artifact(");
-    assert!(artifact.contains("checked_hir_mir()"));
-    assert!(artifact.contains("emit_mir_artifact("));
-    assert!(!artifact.contains("emit_legacy_compiled_artifact"));
 }
 
 #[test]
@@ -4677,12 +3664,10 @@ fn compiler_default_dependency_closure_is_host_neutral() {
         "the compiler must not select the VM outside the research-only selfhost feature"
     );
 
-    let package = manifest["features"]["package"]
-        .as_array()
-        .expect("compiler package feature should be declared")
-        .iter()
-        .filter_map(toml::Value::as_str)
-        .collect::<BTreeSet<_>>();
+    assert!(
+        manifest["features"].get("package").is_none(),
+        "the pure compiler must not retain a package/persistence compatibility feature"
+    );
     let lowering = manifest["features"]["lowering"]
         .as_array()
         .expect("compiler lowering feature should be declared")
@@ -4698,14 +3683,13 @@ fn compiler_default_dependency_closure_is_host_neutral() {
         .filter_map(toml::Value::as_str)
         .collect::<BTreeSet<_>>();
     assert!(selfhost.contains("dep:rsscript-vm"));
-    assert!(selfhost.contains("package"));
+    assert!(selfhost.contains("bytecode"));
     assert!(
         manifest["dependencies"]["rsscript-vm"]
             .get("features")
             .is_none(),
         "self-host parity must enter the VM only through verified bytecode"
     );
-    assert!(package.contains("bytecode"));
     let bytecode = manifest["features"]["bytecode"]
         .as_array()
         .expect("compiler bytecode feature should be declared")
@@ -4727,21 +3711,10 @@ fn compiler_default_dependency_closure_is_host_neutral() {
             "lowering feature must explicitly select `{dependency}`"
         );
     }
-    for dependency in [
-        "fs2", "hex", "libc", "rustix", "sha2", "tempfile", "toml", "uuid",
-    ] {
-        let specification = manifest["dependencies"][dependency]
-            .as_table()
-            .unwrap_or_else(|| panic!("compiler must declare `{dependency}`"));
-        assert_eq!(
-            specification.get("optional").and_then(toml::Value::as_bool),
-            Some(true),
-            "compiler default closure must not select package dependency `{dependency}`"
-        );
-        let feature = format!("dep:{dependency}");
+    for dependency in ["fs2", "hex", "libc", "rustix", "tempfile", "toml", "uuid"] {
         assert!(
-            package.contains(feature.as_str()),
-            "package feature must explicitly select package dependency `{dependency}`"
+            manifest["dependencies"].get(dependency).is_none(),
+            "pure compiler must not retain package/persistence dependency `{dependency}`"
         );
     }
     let sdk_execution = facade["features"]["execution"]
@@ -5076,12 +4049,11 @@ fn abi_and_provider_crates_keep_one_way_dependencies() {
         "provider API must consume the shared ABI model"
     );
     let provider_source = read(&root.join("crates/rsscript-provider-api/src/lib.rs"));
-    assert!(provider_source.contains(
-        "#[cfg(feature = \"compatibility\")]\n#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]\npub enum NativeValue"
-    ));
-    assert!(provider_source.contains(
-        "#[cfg(feature = \"compatibility\")]\n#[derive(Clone)]\npub struct NativeInterpreterFn"
-    ));
+    assert!(
+        !provider_source.contains("pub enum NativeValue")
+            && !provider_source.contains("pub struct NativeInterpreterFn"),
+        "the canonical Provider contract must not retain the retired dynamic compatibility API"
+    );
     assert!(
         provider_source.contains("pub details: Option<WireValue>"),
         "canonical Provider errors must not reopen a serde_json ABI escape hatch"
@@ -5092,8 +4064,8 @@ fn abi_and_provider_crates_keep_one_way_dependencies() {
     );
     let provider_manifest = read(&root.join("crates/rsscript-provider-api/Cargo.toml"));
     assert!(
-        provider_manifest.contains("compatibility = []"),
-        "legacy dynamic Provider values must require an explicit API feature"
+        !provider_manifest.contains("compatibility = []"),
+        "the retired Provider compatibility feature must remain deleted"
     );
     let vm_manifest = read(&root.join("crates/rsscript-vm/Cargo.toml"));
     assert!(
@@ -5249,89 +4221,6 @@ fn unsafe_boundary_crates_are_explicit_dependencies() {
         "unsafe implementation boundaries must remain crate boundaries:\n{}",
         violations.join("\n")
     );
-}
-
-#[test]
-fn executable_backends_consume_validated_frontend_results() {
-    let root = workspace_root();
-    let compiler_output = read(&root.join("crates/rsscript-compiler/src/compiler_output.rs"));
-    let compile_source = function_source(&compiler_output, "pub fn compile_source_to_ir");
-    assert!(
-        compile_source.contains("compile_frontend_input_to_ir"),
-        "single-source convenience lowering must delegate to the immutable frontend input boundary"
-    );
-    let compile_frontend = function_source(&compiler_output, "pub fn compile_frontend_input_to_ir");
-    assert!(
-        compile_frontend.contains("CompilationSession::default()")
-            && compile_frontend.contains("workspace_validated()")
-            && compile_frontend.contains("compile_validated_to_ir(&validated)"),
-        "compiler lowering must validate immutable frontend input before emitting owned IR"
-    );
-    let compile_adapter = read(&root.join("crates/rsscript-sdk/src/vm_adapter.rs"));
-    let compile_validated = function_source(&compile_adapter, "pub fn reg_vm_compile_validated");
-    assert!(
-        compile_validated.contains("compile_validated_to_ir")
-            && compile_validated.contains("emit_ir(&compiled)"),
-        "register VM lowering must consume checked compiler output"
-    );
-    let vm_sources = [
-        read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs")),
-        read(&root.join("crates/rsscript-vm/src/reg_vm/model.rs")),
-        read(&root.join("crates/rsscript-vm/src/reg_vm/bytecode.rs")),
-    ]
-    .join("\n");
-    for forbidden in ["crate::hir", "crate::syntax::ast", "typed_hir()"] {
-        assert!(
-            !vm_sources.contains(forbidden),
-            "VM instruction lowering must not consume frontend representation `{forbidden}`"
-        );
-    }
-    assert!(
-        !root.join("crates/rsscript-exec-ir").exists(),
-        "validated frontend results must flow through MIR, not a source-shaped executable crate"
-    );
-
-    let rust_lower = read(&root.join("experiments/aot-backend/src/rust_lower/mod.rs"));
-    let lower_source = function_source(&rust_lower, "pub fn lower_source_to_rust_with_map");
-    assert!(
-        lower_source.contains("validated_session_sources")
-            && lower_source.contains("validated.database()"),
-        "Rust source lowering must consume a ValidatedProgram"
-    );
-
-    let helpers = read(&root.join("experiments/aot-backend/src/rust_lower/helpers.rs"));
-    assert!(
-        !helpers.contains("parse_source"),
-        "lowering declaration projections must reuse parsed semantic inputs"
-    );
-    assert!(
-        !rust_lower.contains("lower_validated_hir")
-            && rust_lower.contains("database.hir().semantic_types()")
-            && rust_lower.contains("RustLowerer::new_validated"),
-        "Rust AOT lowering must consume validated semantic facts without executable-IR projection"
-    );
-
-    let lowering_manifest: toml::Value =
-        toml::from_str(&read(&root.join("crates/rsscript-lowering/Cargo.toml")))
-            .expect("lowering manifest should parse");
-    let dependencies = dependency_packages(&lowering_manifest);
-    assert!(dependencies.contains("rsscript-semantics"));
-    assert!(dependencies.contains("rsscript-mir"));
-    for forbidden in [
-        "rsscript",
-        "rsscript-runtime",
-        "rsscript-aot-runtime",
-        "rsscript-provider-api",
-        "rss-native-abi",
-        "rss-process-guard",
-        "reir",
-        "vm-jit",
-    ] {
-        assert!(
-            !dependencies.contains(forbidden),
-            "executable IR must not depend on `{forbidden}`"
-        );
-    }
 }
 
 #[test]
@@ -5754,36 +4643,12 @@ fn high_risk_state_machines_keep_dedicated_module_owners() {
 }
 
 #[test]
-fn workspace_analysis_does_not_flow_through_optional_review() {
-    let root = workspace_root();
-    let authorization = read(&root.join("crates/rsscript-compiler/src/package/authorization.rs"));
-    let authorization = authorization
-        .split("#[cfg(test)]")
-        .next()
-        .expect("production authorization source");
-    let analysis = read(&root.join("crates/rsscript-package-review/src/analysis.rs"));
-    let types = read(&root.join("crates/rsscript-package-model/src/lib.rs"));
-
-    assert!(authorization.contains("analyze_package_dir_captured"));
-    assert!(!authorization.contains("review_package_dir_captured_with_features"));
-    for forbidden in ["crate::review", "super::review", "PackageRisk"] {
-        assert!(
-            !analysis.contains(forbidden),
-            "neutral package analysis must not depend on `{forbidden}`"
-        );
-    }
-    assert!(
-        !types.contains("impl From<&PackageReview> for PackageAnalysis"),
-        "review output must not be the constructor for neutral package analysis"
-    );
-}
-
-#[test]
 fn selfhost_frontend_does_not_restore_retired_language_contracts() {
     let root = workspace_root();
-    let checker = read(&root.join("selfhost/check.rss"));
-    let syntax_declarations =
-        read(&root.join("selfhost/checker/diagnostics/syntax_declarations.rss"));
+    let checker = read(&root.join("experiments/fixtures/selfhost/check.rss"));
+    let syntax_declarations = read(
+        &root.join("experiments/fixtures/selfhost/checker/diagnostics/syntax_declarations.rss"),
+    );
     for retired_code in [
         "RS0004", "RS0006", "RS0009", "RS0010", "RS0011", "RS0012", "RS0014", "RS0016", "RS0017",
         "RS0018", "RS0019", "RS0020", "RS0101",
@@ -5794,7 +4659,7 @@ fn selfhost_frontend_does_not_restore_retired_language_contracts() {
         );
     }
 
-    let scanner = read(&root.join("selfhost/scan.rss"));
+    let scanner = read(&root.join("experiments/fixtures/selfhost/scan.rss"));
     for retired_mapping in [
         "word == \"features\"",
         "word == \"profile\"",

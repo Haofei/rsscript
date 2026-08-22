@@ -844,7 +844,9 @@ fn selfhost_ast_type_rules_accept_deque_queue_kernel() {
 
 #[test]
 fn selfhost_checker_accepts_diagnostic_ast_module() {
-    let source = include_str!("../../../../selfhost/semantics/diagnostics.rss");
+    let source = include_str!(
+        "../../../../experiments/fixtures/selfhost/semantics/diagnostics.rss"
+    );
     let actual = diagnostic_records_for_code(
         run_cached_checker_records(source).expect("rss checker should emit records"),
         "RS0208",

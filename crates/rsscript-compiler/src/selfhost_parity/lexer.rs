@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::diagnostic::{SELFHOST_CHECKER_TARGET_CODES, code};
+use crate::diagnostic::SELFHOST_CHECKER_TARGET_CODES;
 use crate::interface_metadata::{
     collect_interface_metadata, format_selfhost_interface_metadata_rss,
 };
@@ -13,7 +13,6 @@ use crate::lexer::{TokenKind, lex};
 use crate::vm_adapter::reg_vm_compile_sources;
 use crate::syntax::ast::{Expr, Item, Stmt};
 use crate::syntax::parse_source_raw;
-use crate::compatibility::review_package_dir;
 use crate::{RegVmExecutable, Severity, analyze_source};
 
 /// One token in the canonical dump. `len` is a Unicode-scalar span length,
@@ -32,7 +31,7 @@ fn workspace_root() -> PathBuf {
 }
 
 fn selfhost_dir() -> PathBuf {
-    workspace_root().join("selfhost")
+    workspace_root().join("experiments/fixtures/selfhost")
 }
 
 fn env_tier_u8(var: &str, default: u8, allowed: &[u8]) -> u8 {
@@ -273,7 +272,15 @@ fn compile_selfhost_tool(tool: &str, label: &str) -> Result<RegVmExecutable, Str
 fn bootstrap_runtime_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
-        .join("selfhost/runtime")
+        .join("experiments/fixtures/selfhost/runtime")
+}
+
+fn selfhost_unique_temp_dir(prefix: &str) -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()))
 }
 
 fn compile_bootstrap_c(c_file: &Path, binary: &Path) -> std::process::Output {

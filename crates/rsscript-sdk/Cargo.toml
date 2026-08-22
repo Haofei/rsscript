@@ -32,32 +32,17 @@ native-jit = [
     "execution",
     "rsscript-vm/native-jit",
 ]
-# Explicit verifier-only experiment. It does not enable a v2 VM execution
-# path or make `rsscript.bytecode.v2` part of the SDK's reviewed contract.
-bytecode-v2-prototype = ["execution", "rsscript-bytecode/v2-prototype"]
-
-[lints.rust]
-# The removed root compatibility façade remains source-archived until its
-# migration corpus moves into the dedicated conformance workspace. It is not a
-# Cargo feature and therefore cannot be enabled by SDK consumers.
-unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("compatibility"))'] }
-
 [dependencies]
 rsscript-abi-model = { path = "../rsscript-abi-model", optional = true }
 rsscript-artifact = { path = "../rsscript-artifact", optional = true }
-rsscript-artifact-store = { path = "../rsscript-artifact-store", optional = true }
 rsscript_compiler = { package = "rsscript-compiler", path = "../rsscript-compiler", default-features = false, features = ["language-service"] }
 rsscript-operation = { path = "../rsscript-operation" }
 rsscript-bytecode = { path = "../rsscript-bytecode", optional = true }
-rsscript-codegen-vm = { path = "../rsscript-codegen-vm", optional = true }
 rsscript-interface-catalog = { path = "../rsscript-interface-catalog", optional = true }
-rsscript-lowering = { path = "../rsscript-lowering", optional = true }
-rsscript-mir = { path = "../rsscript-mir", optional = true }
 rsscript-provider-api = { path = "../rsscript-provider-api", optional = true }
 rsscript-semantics = { path = "../rsscript-semantics" }
 rsscript-vm = { path = "../rsscript-vm", optional = true, default-features = false }
 rsscript-project = { path = "../rsscript-project", optional = true }
-rsscript-review = { path = "../rsscript-review", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
@@ -102,4 +87,9 @@ path = "tests/public_api_architecture.rs"
 [[test]]
 name = "native_jit_smoke"
 path = "tests/native_jit_smoke.rs"
+required-features = ["native-jit"]
+
+[[test]]
+name = "native_jit_differential"
+path = "tests/native_jit_differential.rs"
 required-features = ["native-jit"]

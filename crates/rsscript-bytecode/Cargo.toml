@@ -5,11 +5,6 @@ edition = "2024"
 description = "Versioned, verified bytecode artifact envelope for RSScript"
 license = "MIT OR Apache-2.0"
 
-[features]
-# Numeric v2 is a verifier prototype, not a deployed Artifact or VM contract.
-# Keep it explicit until a complete emitter/decoder/VM cutover is accepted.
-v2-prototype = []
-
 [dependencies]
 rsscript-abi-model = { path = "../rsscript-abi-model" }
 rsscript-operation = { path = "../rsscript-operation" }

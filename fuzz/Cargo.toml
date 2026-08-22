@@ -12,9 +12,8 @@
 #
 # These targets are the coverage-guided deployment of the in-process generative
 # fuzzers in `crates/rsscript-compiler/tests/hostile.rs` and the seed-decoded backend
-# differential (`backends_agree_on_seed_decoded_programs`): proptest supplies a
-# few random inputs there; libFuzzer drives the same never-panic / stability
-# contracts with coverage feedback and a persistent corpus.
+# libFuzzer drives the parser, Artifact, Provider, report, and runner boundaries
+# with coverage feedback and persistent corpora.
 
 [package]
 name = "rsscript-fuzz"
@@ -39,18 +38,13 @@ path = "../crates/rsscript-bytecode"
 
 [dependencies.rsscript-sdk]
 path = "../crates/rsscript-sdk"
+features = ["execution"]
 
 [dependencies.rsscript-runner-protocol]
 path = "../crates/rsscript-runner-protocol"
 
-[dependencies.rss-testgen]
-path = "../experiments/rss-testgen"
-
 [features]
-# Enable the native Cranelift tier in the generative differential. This pulls the
-# native backend, force-deopt backend, forced-safepoint backends, and OSR backend
-# into `rss-testgen::backends::all_inprocess_backends`.
-native-jit = ["rsscript-sdk/native-jit", "rss-testgen/native-jit"]
+native-jit = ["rsscript-sdk/native-jit"]
 
 # Prevent this from interfering with `cargo test` over the parent tree.
 [[bin]]
@@ -67,51 +61,11 @@ test = false
 doc = false
 bench = false
 
-# Coverage-guided generative differential: a seed -> well-typed program (via
-# rss-testgen) -> every in-process backend must agree. This is the deep target
-# (vs the raw-bytes parse_check), pointing libFuzzer at the *structured*
-# generator so it explores the language by program shape, not byte soup.
-[[bin]]
-name = "differential"
-path = "fuzz_targets/differential.rs"
-test = false
-doc = false
-bench = false
-
-# Coverage-guided negative generation: seed -> program -> inject one defect ->
-# the checker must reject it with the expected diagnostic and produce no Rust.
-[[bin]]
-name = "fail_closed"
-path = "fuzz_targets/fail_closed.rs"
-test = false
-doc = false
-bench = false
-
-# Coverage-guided proof of Invariant 1 (no panic / native crash): seed ->
-# well-typed program -> eval on the reg-VM under finite VmLimits must only ever
-# return Ok or EvalError, never panic. Any panic/abort is recorded as a crash.
-[[bin]]
-name = "no_panic"
-path = "fuzz_targets/no_panic.rs"
-test = false
-doc = false
-bench = false
-
 # Raw hostile Artifact bytes must be rejected cleanly by both the decoder and
 # the independent verifier. Accepted Artifacts must round-trip canonically.
 [[bin]]
 name = "bytecode_artifact"
 path = "fuzz_targets/bytecode_artifact.rs"
-test = false
-doc = false
-bench = false
-
-# Typed v2 executable payloads have an independent bounded decoder. This target
-# keeps the numeric opcode schema and canonical-CBOR decoder hardened before a
-# v2 Artifact writer is enabled.
-[[bin]]
-name = "bytecode_v2"
-path = "fuzz_targets/bytecode_v2.rs"
 test = false
 doc = false
 bench = false

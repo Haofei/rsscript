@@ -14,10 +14,12 @@ use rss_process_guard::{
     spawn_guarded_child_strict_with_cgroup, verify_strict_child_context_with,
 };
 use rsscript_runner_protocol::{
-    MAX_RESPONSE_BYTES, RunnerLimitsV1, RunnerProfileV1, RunnerRequestV1, RunnerResponseV1,
-    RunnerTerminationV1, read_request, read_response, validate_response_profile, write_request,
-    write_response,
+    ExecutionOutcomeV2, ExecutionReportV2, MAX_RESPONSE_BYTES, RunnerLimitsV1, RunnerProfileV1,
+    RunnerRequestV1, RunnerResponseV1, RunnerTerminationV1, VersionedExecutionReport, read_request,
+    read_response, validate_response_profile, write_request, write_response,
 };
+#[cfg(feature = "native-jit")]
+use rsscript_sdk::runtime::NativeJitOptions;
 use rsscript_sdk::{
     artifact::{
         ARTIFACT_BUNDLE_MAGIC, AdmissionError, ArtifactAdmission, ArtifactAdmissionPolicy,
@@ -108,7 +110,9 @@ pub(crate) fn run_trusted_in_process(
         .trace(TracePolicy::MetadataOnly);
     #[cfg(feature = "native-jit")]
     let request = if native {
-        request.native_jit_for_trusted_host()
+        request
+            .limits(RunLimits::unbounded_for_trusted_host())
+            .native_jit(NativeJitOptions::default())
     } else {
         request
     };
@@ -118,10 +122,10 @@ pub(crate) fn run_trusted_in_process(
         request
     };
     let report = linked.execute(request);
-    finish_report(
-        serde_json::to_value(report).expect("execution report serializes"),
-        json,
-    )
+    let report = serde_json::to_value(report)
+        .and_then(serde_json::from_value::<ExecutionReportV2>)
+        .expect("execution report matches the runner's typed v2 contract");
+    finish_report(report, json)
 }
 
 fn build_bundle(path: &str) -> Result<ArtifactBundle, String> {
@@ -551,7 +555,7 @@ fn execute_request(request: RunnerRequestV1, bundle: Vec<u8>) -> RunnerResponseV
             .limits(runner_limits(&request.limits))
             .trace(trace),
     );
-    match serde_json::to_value(report) {
+    match serde_json::to_value(report).and_then(serde_json::from_value::<ExecutionReportV2>) {
         Ok(report) => RunnerResponseV1::report(profile, report),
         Err(error) => RunnerResponseV1::rejected(
             profile,
@@ -639,7 +643,9 @@ fn profiled_registry(profile: RunnerProfileV1) -> Result<ProviderRegistry, Strin
 
 fn finish_response(response: RunnerResponseV1, json: bool) -> ExitCode {
     match response.report {
-        Some(report) if response.runner_termination == RunnerTerminationV1::Completed => {
+        Some(VersionedExecutionReport::V2(report))
+            if response.runner_termination == RunnerTerminationV1::Completed =>
+        {
             finish_report(report, json)
         }
         _ => {
@@ -653,24 +659,22 @@ fn finish_response(response: RunnerResponseV1, json: bool) -> ExitCode {
     }
 }
 
-fn finish_report(report: serde_json::Value, json: bool) -> ExitCode {
+fn finish_report(report: ExecutionReportV2, json: bool) -> ExitCode {
     if json {
         println!(
             "{}",
             serde_json::to_string_pretty(&report).expect("execution report serializes")
         );
     } else {
-        print!("{}", report["stdout"].as_str().unwrap_or_default());
-        eprint!("{}", report["stderr"].as_str().unwrap_or_default());
-        if let Some(value) = report["outcome"]["display_value"].as_str() {
-            println!("{value}");
-        }
-        if let Some(message) = report["outcome"]["failure"]["message"].as_str() {
-            eprintln!("{message}");
+        print!("{}", report.stdout);
+        eprint!("{}", report.stderr);
+        match &report.outcome {
+            ExecutionOutcomeV2::Completed { display_value, .. } => println!("{display_value}"),
+            ExecutionOutcomeV2::Failed { message, .. } => eprintln!("{message}"),
         }
     }
-    if report["schema"] == "rsscript.execution_report.v2"
-        && report["outcome"]["kind"] == "completed"
+    if report.schema == "rsscript.execution_report.v2"
+        && matches!(report.outcome, ExecutionOutcomeV2::Completed { .. })
     {
         ExitCode::SUCCESS
     } else {
@@ -995,11 +999,12 @@ fn main() -> Unit {
         );
         assert_eq!(accepted.runner_termination, RunnerTerminationV1::Completed);
         let report = accepted.report.expect("completed runner report");
-        assert_eq!(report["schema"], "rsscript.execution_report.v2");
-        assert_eq!(report["outcome"]["kind"], "completed");
-        assert_eq!(
-            report["provider_call_traces"].as_array().map(Vec::len),
-            Some(1)
-        );
+        let VersionedExecutionReport::V2(report) = report;
+        assert_eq!(report.schema, "rsscript.execution_report.v2");
+        assert!(matches!(
+            report.outcome,
+            ExecutionOutcomeV2::Completed { .. }
+        ));
+        assert_eq!(report.provider_call_traces.len(), 1);
     }
 }

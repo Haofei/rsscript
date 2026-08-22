@@ -4,9 +4,7 @@ members = [
     "aot-backend",
     "aot-model",
     "aot-runtime",
-    "native-abi",
     "reir",
-    "rss-testgen",
     "rsscript-review-reir",
     "vm-jit",
 ]

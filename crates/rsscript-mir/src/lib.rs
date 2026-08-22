@@ -2144,6 +2144,10 @@ fn transfer_move_state(
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the MIR verifier keeps each independent identity/state table explicit at this trust boundary"
+)]
 fn verify_instruction(
     function: &MirFunction,
     instruction: &MirInstruction,

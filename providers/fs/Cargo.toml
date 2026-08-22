@@ -8,6 +8,9 @@ license = "MIT OR Apache-2.0"
 rsscript-abi-model = { path = "../../crates/rsscript-abi-model" }
 rsscript-provider-api = { path = "../../crates/rsscript-provider-api" }
 
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", features = ["fs"] }
+
 [build-dependencies]
 rsscript-provider-bindgen = { path = "../../crates/rsscript-provider-bindgen" }
 rsscript-semantics = { path = "../../crates/rsscript-semantics" }

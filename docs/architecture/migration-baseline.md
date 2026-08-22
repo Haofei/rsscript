@@ -1,4 +1,8 @@
-# Architecture migration baseline
+# Architecture migration baseline (archived)
+
+> Historical record: the migration described here is closed. Permanent
+> dependency and phase invariants live in `ARCHITECTURE.md`, ADRs, Cargo
+> metadata checks, and compatibility corpora. Do not add new work items here.
 
 This document freezes the behavior and dependency baseline used while RSScript
 moves semantic ownership, executable IR, bytecode code generation, and VM
@@ -77,67 +81,12 @@ baselines during internal refactoring.
 | Package capture and persistence | `rsscript-compiler` plus workspace loader | Move OS/persistence concerns out of compiler core |
 | AOT/JIT/native/REIR/selfhost | Experimental/Integration/Research tiers | Frozen except correctness and differential value |
 
-## Review convergence TODO
+## Historical review convergence checklist
 
-This is the single execution checklist for the architecture review. A checked
-item must be backed by code and a mechanical guard; moving a file, adding a
-crate, or documenting an intended boundary is not completion by itself.
-Unchecked items remain open even when preparatory work exists. The order below
-is the required dependency order unless a correctness or security fix must land
-first.
-
-Parent items are architecture milestones. Their indented child items are the
-planning units: each should fit in one focused change set with targeted tests.
-A parent may be checked only after every child is checked and its stated
-mechanical acceptance condition holds.
-
-The checklist is also machine-readable through the repository tool:
-
-```text
-cargo run -p rsscript-xtask -- migration-status --open
-cargo run -p rsscript-xtask -- migration-status --require S02 --require G07
-cargo run -p rsscript-xtask -- migration-next
-cargo run -p rsscript-xtask -- migration-audit
-cargo run -p rsscript-xtask -- migration-verify ITEM
-```
-
-The first form produces the remaining work in document order (or use `--json`
-for automation). The second form is a fail-closed gate for a named completed
-item; it exits nonzero if an item is missing or remains open. This makes each
-focused migration change set able to add an explicit, reproducible completion
-check without inventing a second TODO source.
-
-`migration-next` is a deliberately small execution frontier, declared in
-[`migration-work-queue.json`](migration-work-queue.json). It never owns
-completion state: it validates every queue entry against this checklist, reports
-only entries whose declared prerequisites are checked, and prints the focused
-verification commands for each ready slice. This keeps the full checklist as
-the single source of truth while making the next independently mergeable work
-visible without manually re-sorting every open parent milestone.
-
-`migration-audit` cross-checks the full checklist with that curated frontier.
-It reports open leaf items that have not yet been given a bounded work packet,
-and open parent milestones whose declared children are all checked. The latter
-is deliberately a review prompt—not automatic completion—because a parent may
-also require an independent mechanical acceptance condition. Use `--json` for
-automation that prepares the next work packet without creating a second TODO
-source.
-
-`migration-work ITEM` derives a reviewable work packet from that same queue:
-its prerequisite state, expected path scope, mechanical acceptance facts, and
-focused verification commands. It is intentionally read-only; the packet does
-not create a second TODO list or mark an item complete. Use `--json` when an
-automation agent needs the same bounded work contract. Every queued slice must
-declare non-empty scope and acceptance facts, which prevents a broad parent
-milestone from being treated as an unbounded implementation request.
-
-`migration-verify ITEM` runs the curated Cargo acceptance commands for one
-ready frontier item. It rejects blocked, unknown, and completed items, and it
-cannot change checklist state; a task is still checked only after its stated
-mechanical acceptance condition has been met. Add `--dry-run` to inspect the
-exact commands without executing them. The queue permits only `cargo test` and
-`cargo run` commands, so its declarative metadata cannot turn this helper into
-an arbitrary shell executor.
+This was the execution checklist for the now-closed architecture migration. It
+is retained only as historical evidence; it is not an active TODO or roadmap.
+Permanent constraints were transferred to architecture tests, ADRs, schema
+fixtures, and the current status/roadmap documents.
 
 ### 0. Freeze and migration guardrails
 
@@ -159,9 +108,9 @@ an arbitrary shell executor.
   owns JIT, AOT, native ABI, REIR, and test generation; root Cargo metadata
   excludes them, and CI invokes their maintenance gate explicitly. Self-host and
   native package source are now physically owned by
-  `experiments/fixtures/`; root-level paths are compatibility symlinks only and
-  an architecture test rejects copied Core assets or a fixture bridge becoming a
-  workspace member.
+  `experiments/fixtures/`; the retired root-level compatibility aliases are
+  deleted, and an architecture test rejects their return or a fixture bridge
+  becoming a workspace member.
   Self-host parity is now additionally feature-gated and only enabled by its
   dedicated workflow; it no longer participates in default Core test builds.
   The generated-program differential has also moved from the SDK test target to

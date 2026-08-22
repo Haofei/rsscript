@@ -47,7 +47,7 @@ cargo test -p rsscript-compiler --no-run            # compile rsscript tests onl
 cargo test --manifest-path experiments/Cargo.toml -p rss-testgen --features native-jit --no-run
 cargo clippy --all-targets                 # lints
 cargo fmt --all                            # format
-cargo run -p rsscript-cli --bin rss --features host-tools -- <args> # drive the rss CLI
+cargo run -p rsscript-cli --bin rss --features execution -- <args> # drive the verified VM CLI
 ```
 
 ## Test feedback budgets

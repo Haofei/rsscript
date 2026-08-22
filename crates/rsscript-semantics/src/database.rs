@@ -1756,11 +1756,11 @@ impl CompilationSession {
 
     fn invalidate_semantic_document_cache_for_source(&mut self, file_id: FileId) {
         let retains_source = |key: &SemanticDocumentCacheKey| {
-            !(key.role == SessionFileRole::Source && key.file_id == file_id)
-                && !key
+            !(key.role == SessionFileRole::Source && key.file_id == file_id
+                || key
                     .visible_sources
                     .iter()
-                    .any(|(dependency_id, _)| *dependency_id == file_id)
+                    .any(|(dependency_id, _)| *dependency_id == file_id))
         };
         self.semantic_document_analysis_cache
             .retain(|key, _| retains_source(key));
@@ -1770,18 +1770,18 @@ impl CompilationSession {
 
     fn invalidate_semantic_document_cache_for_interface(&mut self, file_id: FileId) {
         self.semantic_document_analysis_cache.retain(|key, _| {
-            !(key.role == SessionFileRole::Interface && key.file_id == file_id)
-                && !key
+            !(key.role == SessionFileRole::Interface && key.file_id == file_id
+                || key
                     .visible_interfaces
                     .iter()
-                    .any(|(dependency_id, _)| *dependency_id == file_id)
+                    .any(|(dependency_id, _)| *dependency_id == file_id))
         });
         self.semantic_document_diagnostic_cache.retain(|key, _| {
-            !(key.role == SessionFileRole::Interface && key.file_id == file_id)
-                && !key
+            !(key.role == SessionFileRole::Interface && key.file_id == file_id
+                || key
                     .visible_interfaces
                     .iter()
-                    .any(|(dependency_id, _)| *dependency_id == file_id)
+                    .any(|(dependency_id, _)| *dependency_id == file_id))
         });
     }
 
@@ -1804,9 +1804,8 @@ impl CompilationSession {
             .semantic_analysis_input(&input, operation)?
             .diagnostics()
             .iter()
-            .cloned()
-            .into_iter()
             .filter(|diagnostic| diagnostic.span.file == input.path.as_ref())
+            .cloned()
             .collect::<Vec<_>>()
             .into();
         operation.check()?;

@@ -12,22 +12,23 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
+use rsscript_sdk::{compile::Severity, language::format_source, compile::Compiler};
 
 fuzz_target!(|data: &[u8]| {
     let Ok(source) = std::str::from_utf8(data) else {
         return;
     };
 
-    let diagnostics = rsscript_sdk::analyze_source("fuzz.rss", source);
+    let diagnostics = Compiler.check("fuzz.rss", source);
     let has_errors = diagnostics
         .iter()
-        .any(|diagnostic| diagnostic.severity == rsscript_sdk::Severity::Error);
+        .any(|diagnostic| diagnostic.severity == Severity::Error);
     if has_errors {
         return;
     }
 
-    let once = rsscript_sdk::format_source("fuzz.rss", source);
-    let twice = rsscript_sdk::format_source("fuzz.rss", &once);
+    let once = format_source("fuzz.rss", source);
+    let twice = format_source("fuzz.rss", &once);
     assert_eq!(
         once, twice,
         "format_source is not idempotent\n--- once ---\n{once}\n--- twice ---\n{twice}"

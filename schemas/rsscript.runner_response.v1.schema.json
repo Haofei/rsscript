@@ -23,7 +23,35 @@
     "runner_termination": {
       "enum": ["completed", "isolation_rejected", "verification_rejected", "link_rejected", "protocol_rejected", "host_failure"]
     },
-    "report": { "type": ["object", "null"] },
+    "report": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["version", "report"],
+          "properties": {
+            "version": { "const": "v2" },
+            "report": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["schema", "artifact_digest", "outcome", "usage", "telemetry", "stdout", "stderr", "provider_call_traces", "diagnostics"],
+              "properties": {
+                "schema": { "const": "rsscript.execution_report.v2" },
+                "artifact_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+                "outcome": { "type": "object" },
+                "usage": { "type": "object" },
+                "telemetry": { "type": "object" },
+                "stdout": { "type": "string" },
+                "stderr": { "type": "string" },
+                "provider_call_traces": { "type": "array" },
+                "diagnostics": { "type": "array" }
+              }
+            }
+          }
+        }
+      ]
+    },
     "error": { "type": ["string", "null"] }
   },
   "allOf": [

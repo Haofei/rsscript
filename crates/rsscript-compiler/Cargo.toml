@@ -12,8 +12,6 @@ doctest = false
 
 [dependencies]
 rsscript-abi-model = { path = "../rsscript-abi-model" }
-rsscript-artifact = { path = "../rsscript-artifact", optional = true }
-rsscript-artifact-store = { path = "../rsscript-artifact-store", optional = true }
 rsscript-bytecode = { path = "../rsscript-bytecode", optional = true }
 rsscript-codegen-vm = { path = "../rsscript-codegen-vm", optional = true }
 rsscript-diagnostics = { path = "../rsscript-diagnostics" }
@@ -21,11 +19,6 @@ rsscript-interface-catalog = { path = "../rsscript-interface-catalog" }
 rsscript-lowering = { path = "../rsscript-lowering", default-features = false, optional = true }
 rsscript-mir = { path = "../rsscript-mir", optional = true }
 rsscript-operation = { path = "../rsscript-operation" }
-rsscript-package-model = { path = "../rsscript-package-model", optional = true }
-rsscript-package-review = { path = "../rsscript-package-review", optional = true }
-rsscript-project = { path = "../rsscript-project", optional = true }
-rsscript-review-core = { path = "../rsscript-review-core", optional = true }
-rsscript-review-source = { path = "../rsscript-review-source", optional = true }
 rsscript-semantics = { path = "../rsscript-semantics" }
 rsscript-syntax = { path = "../rsscript-syntax" }
 rsscript-text = { path = "../rsscript-text" }
@@ -34,13 +27,6 @@ rsscript-vm = { path = "../rsscript-vm", default-features = false, optional = tr
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = { version = "0.10", optional = true }
-toml = { version = "0.8", optional = true }
-fs2 = { version = "0.4", optional = true }
-rustix = { version = "1.1", features = ["fs"], optional = true }
-libc = { version = "0.2", optional = true }
-hex = { version = "0.4", optional = true }
-uuid = { version = "1", features = ["v4"], optional = true }
-tempfile = { version = "3", optional = true }
 
 [features]
 # Frontend-only by default so `rss check`, formatting, and language tooling do
@@ -55,31 +41,10 @@ lowering = [
 # is the normal compiler-to-artifact path; execution remains an SDK/runtime
 # concern.
 bytecode = ["lowering", "dep:rsscript-bytecode", "dep:rsscript-codegen-vm"]
-# Package capture, review, native metadata, and persistence remain a
-# compatibility/project concern. Keep them out of the normal in-memory
-# lowering closure.
-package = [
-    "bytecode",
-    "dep:rsscript-artifact",
-    "dep:rsscript-artifact-store",
-    "dep:fs2",
-    "dep:hex",
-    "dep:libc",
-    "dep:rustix",
-    "dep:rsscript-project",
-    "dep:rsscript-package-model",
-    "dep:rsscript-package-review",
-    "dep:rsscript-review-core",
-    "dep:rsscript-review-source",
-    "dep:sha2",
-    "dep:tempfile",
-    "dep:toml",
-    "dep:uuid",
-]
 language-service = []
 # The RSS-written frontend is a research parity harness.  Keep it out of Core
 # test builds; the dedicated self-host workflow opts in explicitly.
-selfhost-parity = ["package", "dep:rsscript-vm"]
+selfhost-parity = ["bytecode", "dep:rsscript-vm"]
 # Native (Cranelift) baseline JIT for the integer/control core. Off by default so
 # normal builds/tests don't pull in the codegen dependency; enable for the Rust
 # differential/benchmark harnesses and force-JIT CI.

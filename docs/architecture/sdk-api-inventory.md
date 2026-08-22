@@ -22,9 +22,6 @@ of the reviewed in-memory `compile::Compiler` contract.
 `ProjectCompiler::capture_frontend_from` is the preferred explicit-base path
 for a normal source/interface workspace: it returns a loader-owned logical
 snapshot plus the immutable `FrontendInputSnapshot` accepted by `Compiler`.
-Legacy package review/native authorization remains on the separate package
-snapshot path during migration.
-
 - Compilation and diagnostics: `Compiler`, `CompileError`, immutable
   `FrontendInputSnapshot`, snapshot-based check/build entry points, checked
   source, and language-service query types. The frontend language module also
@@ -48,7 +45,8 @@ snapshot path during migration.
   integrity; a host must then explicitly admit the verified Artifact before
   Provider linking. `TrustedInputAdmission` is an intentionally named shortcut
   for a host-controlled input channel, while runners and provenance-aware
-  hosts implement their own admission policy.
+  hosts use `OriginVerifiedAdmission` and `ArtifactOriginVerifier` (or their
+  own admission policy) to bind detached origin evidence.
 - Provider lifecycle: `ProviderRegistry`, provider descriptors, structured
   signatures, their constructor support types (`DataEffect`,
   `ParameterSignature`, `ProviderErrorMapping`, `ResourceCleanupContract`, and
@@ -67,19 +65,22 @@ snapshot path during migration.
   The reviewed VM and façade use only `WireValue`; historical dynamic Provider
   adapters, where still needed by external migration tooling, live outside the
   VM execution closure.
-- Runtime lifecycle: `Runtime`, `LinkedArtifact`, `ExecutionRequest`, bounded
-  `RunLimits`, `ExecutionReport`, `ExecutionOutcome`, termination reason,
+- Runtime lifecycle: `Runtime`, `LinkedArtifact`, `ExecutionProfileV1`,
+  `ExecutionRequest`, bounded `RunLimits`, `ExecutionReport`,
+  `ExecutionOutcome`, termination reason,
   usage, and diagnostics. The reviewed Rust report exposes exactly one terminal
   outcome: a completed textual result or a structured failure. Provider and
   return values cross this boundary only as canonical `WireValue` data.
 - Shared operation control: cancellation tokens, monotonic deadlines, and
   operation contexts.
 
-## Historical compatibility APIs
+## Optional native tier
 
-Native JIT entry points and `NativeStats` are retired from the SDK and VM Cargo
-closures. AOT, REIR, review/risk, opcode, register, and compiler-internal APIs
-are not part of this inventory.
+The trusted in-process native tier is an explicit SDK feature. Hosts select it
+through typed `NativeJitOptions`; selecting it never changes execution limits.
+The report exposes only stable engine telemetry, not `NativeStats`, opcodes,
+registers, OSR plans, or backend implementation state. AOT, REIR, review/risk,
+and compiler-internal APIs remain outside this inventory.
 
 ## Compatibility check
 

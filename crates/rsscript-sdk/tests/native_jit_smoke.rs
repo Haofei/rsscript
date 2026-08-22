@@ -2,7 +2,7 @@ use rsscript_sdk::{
     artifact::ArtifactVerifier,
     compile::Compiler,
     provider_api::ProviderRegistry,
-    runtime::{ExecutionRequest, Runtime},
+    runtime::{ExecutionRequest, NativeJitOptions, RunLimits, Runtime},
 };
 use std::time::Instant;
 
@@ -37,11 +37,19 @@ fn phase_typed_sdk_can_select_trusted_native_execution() {
         .expect("artifact should link");
 
     let reference = linked.execute(ExecutionRequest::default());
-    let native = linked.execute(ExecutionRequest::default().native_jit_for_trusted_host());
+    let native = linked.execute(
+        ExecutionRequest::default()
+            .limits(RunLimits::unbounded_for_trusted_host())
+            .native_jit(NativeJitOptions::default()),
+    );
 
     assert_eq!(native.outcome(), reference.outcome());
     assert_eq!(native.stdout, reference.stdout);
     assert_eq!(native.stderr, reference.stderr);
+    assert!(matches!(
+        native.telemetry.engine,
+        rsscript_sdk::report::ExecutionEngineTelemetry::Native { .. }
+    ));
 }
 
 #[test]
@@ -76,7 +84,11 @@ fn native_hot_loop_release_gate_beats_the_interpreter() {
         interpreter.push(started.elapsed());
 
         let started = Instant::now();
-        let report = linked.execute(ExecutionRequest::default().native_jit_for_trusted_host());
+        let report = linked.execute(
+            ExecutionRequest::default()
+                .limits(RunLimits::unbounded_for_trusted_host())
+                .native_jit(NativeJitOptions::default()),
+        );
         assert!(matches!(
             report.outcome(),
             rsscript_sdk::ExecutionOutcome::Completed { .. }

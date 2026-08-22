@@ -2,102 +2,6 @@
 
 // Public exports are deliberately explicit so adding a compiler, bytecode, or
 // VM symbol cannot silently expand the embedding contract.
-#[cfg(feature = "compatibility")]
-pub use rsscript_compiler::syntax;
-#[cfg(not(feature = "compatibility"))]
-#[allow(unused_imports)]
-use rsscript_compiler::*;
-#[cfg(feature = "compatibility")]
-pub use rsscript_compiler::{
-    AnalysisResult, CommitBehavior, Completion, CompletionKind, ContinuationOptions, Continuations,
-    Definition, Diagnostic, DiagnosticExplanation, Effect, ExpectedType, Fix, FixEdit,
-    FrontendCompletion, FrontendInputSnapshot, FrontendStopReason, GenerateContext, LiteralClass,
-    PrefixStatus, Reference, RssDocumentSymbol, SemanticDatabase, Severity, SourceFileSnapshot,
-    SourceSnapshot, Span, SymbolCompleteness, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
-    TextRange, TypeRef, VSCODE_GRAMMAR_PATH, ValidatedProgram, analyze_source_with_interfaces,
-    analyze_source_with_interfaces_result, analyze_source_with_interfaces_result_with_operation,
-    analyze_source_with_interfaces_without_core, analyze_source_without_core,
-    analyze_sources_with_interfaces, analyze_sources_with_interfaces_result,
-    analyze_sources_with_interfaces_result_with_operation,
-    analyze_sources_with_interfaces_without_core,
-    analyze_sources_with_interfaces_without_core_result, analyze_syntax_source, core_interfaces,
-    core_package_index_json, document_symbols, explain_diagnostic_code,
-    format_diagnostic_explanation, format_diagnostics_human, format_diagnostics_json,
-    format_diagnostics_json_with_source, format_program, format_source, lint_source, prefix_status,
-    standard_package_interfaces, symbol_index, valid_continuations, validate_source,
-    validate_source_with_operation, validate_sources_with_interfaces,
-    validate_sources_with_interfaces_with_operation, validate_sources_with_interfaces_without_core,
-    vscode_tmlanguage_json,
-};
-
-#[cfg(feature = "compatibility")]
-pub use rsscript_artifact_store::{ArtifactStore, write_package_artifact_atomic};
-#[cfg(feature = "execution")]
-#[cfg(not(feature = "compatibility"))]
-#[allow(unused_imports)]
-use rsscript_bytecode::*;
-#[cfg(feature = "compatibility")]
-pub use rsscript_bytecode::{
-    BYTECODE_CONTAINER_FORMAT_VERSION, BYTECODE_ISA_VERSION, BYTECODE_MAGIC, BYTECODE_SCHEMA,
-    BytecodeArtifact, BytecodeCompatibility, BytecodeError, BytecodeErrorCode, BytecodeHeader,
-    BytecodeLimits, BytecodeVerifier, LANGUAGE_SEMANTICS_VERSION, SUPPORTED_LANGUAGE_SEMANTICS,
-    VerificationContext, VerifiedBytecode, decode_executable_payload, encode_executable_payload,
-};
-#[cfg(feature = "compatibility")]
-pub use rsscript_compiler::compatibility::{
-    CompiledIr, ExecutablePackageSnapshot, PackageAnalysis, PackageAnalysisAwaitSite,
-    PackageAnalysisExport, PackageAnalysisExternalImport, PackageAnalysisFile,
-    PackageAnalysisProducer, PackageAnalysisSummary, PackageCheck, PackageCheckLock,
-    PackageDependencyKind, PackageDiff, PackageGraphCheck, PackageIdentity, PackageInterfaceChange,
-    PackageInterfaceChangeKind, PackageLock, PackageLockDiff, PackageLockFieldChange,
-    PackageLockMetadata, PackageLockPackage, PackageLockPackageChange, PackageLoweringInput,
-    PackageManifestChange, PackageMetadataMismatch, PackageMetadataReport,
-    PackageNativeRustAuthorDeclaration, PackageNativeRustCheck, PackageNativeRustReview,
-    PackageNativeRustSemanticReview, PackageNativeRustSourceScan, PackageReview,
-    PackageReviewExport, PackageReviewFile, PackageReviewFileKind, PackageReviewMetadata,
-    PackageReviewSummary, PackageRisk, PackageSourceFile, PackageTree, PackageTreeNode,
-    PackageTreeSummary, PreparedPackage, ReviewFix, ReviewMap, ReviewMapCategorySummary,
-    ReviewMapClassification, ReviewMapFile, ReviewMapFileRisk, ReviewMapRegion, ReviewMapSummary,
-    ReviewRisk, WorkspaceSnapshot, analyze_package_dir, check_package_dir,
-    compile_frontend_input_to_ir, compile_ir_to_bytecode, compile_source_to_ir,
-    compile_validated_to_bytecode, compile_validated_to_ir, diff_package_dirs, diff_package_locks,
-    format_review_human, format_review_json, format_review_map_human, format_review_map_json,
-    load_workspace_snapshot, load_workspace_snapshot_with_operation, lock_package_dir,
-    package_lowering_input, package_sources, package_sources_with_dependency_interfaces,
-    package_tree, prepare_executable_package, prepare_package_for_execution, review_map_sources,
-    review_package_dir, review_sources,
-};
-#[cfg(feature = "execution")]
-#[cfg(not(feature = "compatibility"))]
-#[allow(unused_imports)]
-use rsscript_compiler::*;
-#[cfg(feature = "compatibility")]
-pub use rsscript_review::{
-    format_package_check_human, format_package_check_json, format_package_diff_human,
-    format_package_diff_json, format_package_lock_diff_human, format_package_lock_diff_json,
-    format_package_lock_json, format_package_lock_toml, format_package_metadata_human,
-    format_package_metadata_json, format_package_review_human, format_package_review_json,
-    format_package_review_markdown, format_package_tree_human, format_package_tree_json,
-};
-#[cfg(feature = "execution")]
-#[cfg(not(feature = "compatibility"))]
-#[allow(unused_imports)]
-use rsscript_vm::*;
-#[cfg(feature = "compatibility")]
-pub use rsscript_vm::{
-    AsyncInterpreterFn, AsyncProviderCallContext, BlockingBehavior, CancellationBehavior,
-    CoverageBucket, EvalError, EvalExecutionReport, EvalOutput, ExecutionFailureKind,
-    ExecutionUsage, ExternalFunction, ExternalFunctionRegistry, ExternalImport, ExternalSymbol,
-    FunctionSignature, HostCallContext, NativeInterpreterFn, NativeValue, ProviderCallContext,
-    ProviderCallMode, ProviderCallTrace, ProviderCallable, ProviderDescriptor, ProviderError,
-    ProviderErrorCode, ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor,
-    ProviderFuture, ProviderInvocationContract, ProviderLoadError, ProviderResource,
-    ProviderResourceRegistry, ProviderResourceTable, ProviderTraceSink, RegVmExecutable,
-    ResolvedProviderFunction, ResourceCleanupContract, ResourceHandle, SignatureHash, VmLimits,
-};
-#[cfg(feature = "compatibility")]
-#[allow(dead_code)]
-mod vm_adapter;
 #[cfg(feature = "execution")]
 pub use rsscript_artifact::{
     ARTIFACT_BUNDLE_MAGIC, ARTIFACT_BUNDLE_SCHEMA, AnalysisEnvelopeV1, AnalysisSchemaV1,
@@ -108,7 +12,15 @@ pub use rsscript_artifact::{
     ResourceTransferFactV1, SEMANTIC_DIFF_SCHEMA, SOURCE_ANALYSIS_SCHEMA, SemanticDiffV1,
     SourceAnalysisV1, TaskGroupFactV1,
 };
+#[cfg(feature = "execution")]
+#[allow(unused_imports)]
+use rsscript_bytecode::*;
+#[allow(unused_imports)]
+use rsscript_compiler::*;
 use rsscript_semantics::CompilationSession;
+#[cfg(feature = "execution")]
+#[allow(unused_imports)]
+use rsscript_vm::*;
 #[cfg(feature = "execution")]
 use sha2::{Digest, Sha256};
 #[cfg(feature = "execution")]
@@ -120,18 +32,6 @@ use std::fmt;
 use std::path::Path;
 #[cfg(feature = "execution")]
 use std::time::{Duration, Instant};
-#[cfg(feature = "compatibility")]
-pub use vm_adapter::{
-    reg_vm_compile_mir, reg_vm_compile_package, reg_vm_compile_package_input,
-    reg_vm_compile_source, reg_vm_compile_validated, reg_vm_eval_package_main_with_args,
-    reg_vm_eval_package_main_with_args_and_external_bindings,
-    reg_vm_eval_package_main_with_args_and_external_bindings_and_limits,
-    reg_vm_eval_package_main_with_args_and_external_bindings_streaming_stdout,
-    reg_vm_eval_source_main, reg_vm_eval_source_main_jit, reg_vm_eval_source_main_with_args,
-    reg_vm_eval_source_main_with_args_and_external_bindings,
-    reg_vm_eval_source_main_with_args_and_external_bindings_and_limits,
-    reg_vm_eval_source_main_with_args_streaming_stdout, reg_vm_eval_source_main_with_limits,
-};
 /// Frontend-only editor API consumed by `rsscript-language-service`.
 /// Runtime and Provider types are deliberately excluded.
 pub mod language {
@@ -258,76 +158,6 @@ pub mod project {
         }
     }
 
-    /// Legacy package-analysis and native-compatibility operations.
-    ///
-    /// This module deliberately remains opt-in because its snapshot contains
-    /// package review and native authorization state. New callers must use
-    /// [`ProjectCompiler::capture_frontend_from`] followed by
-    /// [`ProjectCompiler::build_captured`], which keeps the compiler on its
-    /// immutable in-memory input boundary.
-    #[cfg(feature = "compatibility")]
-    pub mod legacy {
-        use super::*;
-
-        pub use rsscript_compiler::compatibility::WorkspaceSnapshot;
-
-        pub struct PackageCompatibility;
-
-        impl PackageCompatibility {
-            /// Capture all package and dependency inputs exactly once.
-            pub fn snapshot(path: &Path) -> Result<WorkspaceSnapshot, CompileError> {
-                load_workspace_snapshot(path).map_err(|message| CompileError::Package {
-                    code: CompileErrorCode::PackageSnapshot,
-                    message,
-                })
-            }
-
-            /// Capture a package while honoring a caller operation boundary.
-            pub fn snapshot_with_operation(
-                path: &Path,
-                operation: &OperationContext,
-            ) -> Result<WorkspaceSnapshot, CompileError> {
-                operation.check().map_err(CompileError::from)?;
-                load_workspace_snapshot_with_operation(path, operation).map_err(|message| {
-                    match operation.check() {
-                        Ok(()) => CompileError::Package {
-                            code: CompileErrorCode::PackageSnapshot,
-                            message,
-                        },
-                        Err(abort) => CompileError::from(abort),
-                    }
-                })
-            }
-
-            /// Build compatibility package evidence from one immutable legacy
-            /// snapshot. This path is not part of the reviewed project API.
-            pub fn build(snapshot: &WorkspaceSnapshot) -> Result<BuiltArtifact, CompileError> {
-                let mut analysis = snapshot.analysis().clone();
-                if analysis.summary.errors != 0 {
-                    return Err(CompileError::Diagnostics(analysis.diagnostics.clone()));
-                }
-                let frontend = snapshot.lowering_input().frontend_input();
-                let compiled =
-                    compile_frontend_input_to_ir(&frontend).map_err(CompileError::Diagnostics)?;
-                let artifact = compile_ir_to_bytecode(&compiled, snapshot.digest())
-                    .map_err(bytecode_compile_error)?;
-                analysis.module_digest = Some(artifact.header.executable_hash.clone());
-                let analysis = AnalysisEnvelopeV1::package(analysis).map_err(CompileError::from)?;
-                BuiltArtifact::from_bytecode(artifact, analysis)
-            }
-
-            pub fn build_with_operation(
-                snapshot: &WorkspaceSnapshot,
-                operation: &OperationContext,
-            ) -> Result<BuiltArtifact, CompileError> {
-                operation.check().map_err(CompileError::from)?;
-                let package = Self::build(snapshot)?;
-                operation.check().map_err(CompileError::from)?;
-                Ok(package)
-            }
-        }
-    }
-
     fn map_project_load_error(error: ProjectLoadError) -> CompileError {
         let code = match error.code() {
             ProjectLoadErrorCode::Cancelled => CompileErrorCode::Cancelled,
@@ -359,9 +189,10 @@ pub mod artifact {
     pub use super::{
         ARTIFACT_BUNDLE_MAGIC, ARTIFACT_BUNDLE_SCHEMA, AdmissionError, AdmittedArtifact,
         AnalysisEnvelopeV1, AnalysisSchemaV1, ArtifactAdmission, ArtifactAdmissionPolicy,
-        ArtifactBundle, ArtifactBundleError, ArtifactVerifier, BuildProvenanceV1, BuiltArtifact,
-        InterfaceRequirementV1, PACKAGE_ANALYSIS_SCHEMA, PackageAnalysisV1, SOURCE_ANALYSIS_SCHEMA,
-        SourceAnalysisV1, TrustedInputAdmission, VerifiedArtifact, VerifyError,
+        ArtifactBundle, ArtifactBundleError, ArtifactOriginVerifier, ArtifactVerifier,
+        BuildProvenanceV1, BuiltArtifact, InterfaceRequirementV1, OriginVerifiedAdmission,
+        PACKAGE_ANALYSIS_SCHEMA, PackageAnalysisV1, SOURCE_ANALYSIS_SCHEMA, SourceAnalysisV1,
+        TrustedInputAdmission, VerifiedArtifact, VerifyError,
     };
     pub use rsscript_bytecode::{
         BYTECODE_CONTAINER_FORMAT_VERSION, BYTECODE_ISA_VERSION, BYTECODE_MAGIC, BYTECODE_SCHEMA,
@@ -390,7 +221,12 @@ pub mod provider_api {
 #[cfg(feature = "execution")]
 /// Reviewed linking and bounded execution entry points.
 pub mod runtime {
-    pub use super::{ExecutionRequest, LinkError, LinkedArtifact, RunLimits, Runtime, TracePolicy};
+    pub use super::{
+        AuditPolicy, ExecutionProfileV1, ExecutionRequest, LinkError, LinkedArtifact,
+        NondeterminismPolicy, RunLimits, Runtime, TracePolicy,
+    };
+    #[cfg(feature = "native-jit")]
+    pub use rsscript_vm::NativeJitOptions;
 }
 
 #[cfg(feature = "execution")]
@@ -400,6 +236,7 @@ pub mod report {
         EXECUTION_REPORT_SCHEMA, ExecutionOutcome, ExecutionReport, ExecutionTelemetry,
         ProviderFunctionTelemetry, RuntimeError, TerminationReason,
     };
+    pub use rsscript_vm::ExecutionEngineTelemetry;
 }
 
 #[cfg(feature = "execution")]
@@ -410,17 +247,9 @@ pub mod analysis {
         ResourceTransferFactV1, SEMANTIC_DIFF_SCHEMA, SemanticDiffV1, TaskGroupFactV1,
     };
 }
-#[cfg(not(feature = "compatibility"))]
 #[allow(unused_imports)]
 use rsscript_operation::*;
-#[cfg(feature = "compatibility")]
-pub use rsscript_operation::{
-    CancellationToken, MonotonicDeadline, OperationAbort, OperationContext, OperationId,
-};
 #[cfg(feature = "execution")]
-#[cfg(feature = "compatibility")]
-pub use rsscript_provider_api as provider;
-#[cfg(all(feature = "execution", not(feature = "compatibility")))]
 use rsscript_provider_api as provider;
 
 #[derive(Default)]
@@ -614,38 +443,6 @@ fn session_for_snapshot(snapshot: &FrontendInputSnapshot) -> CompilationSession 
     session
 }
 
-/// Analyze one ordinary in-memory source through the session-owned standard
-/// prelude query. Empty logical paths deliberately retain the private legacy
-/// fixture route because they cannot be represented by the session store.
-#[cfg(feature = "compatibility")]
-fn analyze_standard_source_with_session(
-    file: &str,
-    source: &str,
-    operation: Option<&OperationContext>,
-) -> AnalysisResult {
-    if file.is_empty() {
-        return legacy_frontend_fixtures::analyze_standard_source(file, source, operation);
-    }
-    let mut session = CompilationSession::with_standard_packages();
-    session
-        .set_file(file, source)
-        .expect("non-empty single-source compatibility input must be session-valid");
-    match operation {
-        Some(operation) => match session.workspace_analysis_with_operation(operation) {
-            Ok(analysis) => (*analysis).clone(),
-            // The legacy compatibility signature returns an `AnalysisResult`,
-            // while the session API correctly exposes cancellation as a
-            // `Result`. Preserve the legacy representation only for the abort
-            // result in the named compatibility adapter; ordinary work always
-            // uses the session cache/query path.
-            Err(_) => {
-                legacy_frontend_fixtures::analyze_standard_source(file, source, Some(operation))
-            }
-        },
-        None => (*session.workspace_analysis()).clone(),
-    }
-}
-
 /// Historical frontend inputs which cannot be represented by the immutable
 /// session source store without changing their asserted diagnostic behavior.
 ///
@@ -733,49 +530,6 @@ mod legacy_frontend_fixtures {
             None => Ok(analyze_sources_with_interfaces(&sources, &interfaces)),
         }
     }
-
-    #[cfg(feature = "compatibility")]
-    pub(super) fn analyze_standard_source(
-        file: &str,
-        source: &str,
-        operation: Option<&OperationContext>,
-    ) -> AnalysisResult {
-        match operation {
-            Some(operation) => {
-                rsscript_compiler::analyze_source_result_with_operation(file, source, operation)
-            }
-            None => rsscript_compiler::analyze_source_result(file, source),
-        }
-    }
-}
-
-/// Compatibility analysis entry point backed by the session query for normal
-/// inputs. Prefer [`Compiler`] or a captured snapshot for new embedding code.
-#[cfg(feature = "compatibility")]
-pub fn analyze_source(file: &str, source: &str) -> Vec<Diagnostic> {
-    analyze_standard_source_with_session(file, source, None).into_diagnostics()
-}
-
-/// Session-backed compatibility result for one standard-prelude source.
-#[cfg(feature = "compatibility")]
-pub fn analyze_source_result(file: &str, source: &str) -> AnalysisResult {
-    analyze_standard_source_with_session(file, source, None)
-}
-
-/// Operation-aware session-backed compatibility result for one source.
-#[cfg(feature = "compatibility")]
-pub fn analyze_source_result_with_operation(
-    file: &str,
-    source: &str,
-    operation: &OperationContext,
-) -> AnalysisResult {
-    analyze_standard_source_with_session(file, source, Some(operation))
-}
-
-/// Historical alias for [`analyze_source`].
-#[cfg(feature = "compatibility")]
-pub fn analyze_source_with_core(file: &str, source: &str) -> Vec<Diagnostic> {
-    analyze_source(file, source)
 }
 
 #[cfg(feature = "execution")]
@@ -827,15 +581,6 @@ impl BuiltArtifact {
     /// envelope instead of treating analysis as arbitrary JSON.
     pub fn analysis_envelope(&self) -> &AnalysisEnvelopeV1 {
         self.bundle.analysis_envelope()
-    }
-
-    /// Historical raw JSON projection for compatibility consumers. New embeds
-    /// should use [`Self::analysis_envelope`], [`Self::source_analysis`], or
-    /// [`Self::package_analysis`].
-    #[cfg(feature = "compatibility")]
-    #[doc(hidden)]
-    pub fn analysis(&self) -> &serde_json::Value {
-        self.analysis_envelope().payload()
     }
 
     /// Typed source evidence for direct source/interface builds. Package
@@ -1179,6 +924,52 @@ impl ArtifactAdmissionPolicy for TrustedInputAdmission {
     }
 }
 
+/// Host plug-in for detached signatures, transparency logs, or enterprise
+/// provenance attestations. The verifier receives only integrity-verified
+/// bundle identity and provenance; it cannot change language validity or
+/// Provider authority.
+#[cfg(feature = "execution")]
+pub trait ArtifactOriginVerifier {
+    fn verify_origin(
+        &self,
+        bundle_digest: &str,
+        provenance: &BuildProvenanceV1,
+    ) -> Result<String, String>;
+}
+
+/// Admission policy backed by an explicit origin verifier. The returned
+/// evidence digest is recorded in the admitted phase object.
+#[cfg(feature = "execution")]
+pub struct OriginVerifiedAdmission<V> {
+    policy_id: String,
+    verifier: V,
+}
+
+#[cfg(feature = "execution")]
+impl<V> OriginVerifiedAdmission<V> {
+    pub fn new(policy_id: impl Into<String>, verifier: V) -> Result<Self, AdmissionError> {
+        let policy_id = policy_id.into();
+        if policy_id.trim().is_empty() {
+            return Err(AdmissionError::InvalidPolicyId);
+        }
+        Ok(Self {
+            policy_id,
+            verifier,
+        })
+    }
+}
+
+#[cfg(feature = "execution")]
+impl<V: ArtifactOriginVerifier> ArtifactAdmissionPolicy for OriginVerifiedAdmission<V> {
+    fn admit(&self, artifact: &VerifiedArtifact) -> Result<ArtifactAdmission, AdmissionError> {
+        let evidence = self
+            .verifier
+            .verify_origin(artifact.bundle().digest(), artifact.bundle().provenance())
+            .map_err(AdmissionError::rejected)?;
+        ArtifactAdmission::new(&self.policy_id, Some(evidence))
+    }
+}
+
 /// Host-side failure while admitting a structurally verified Artifact.
 #[cfg(feature = "execution")]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1423,6 +1214,29 @@ impl Runtime {
         Ok(LinkedArtifact {
             artifact,
             bindings: self.providers.inner.bindings().collect(),
+            policy: LinkedExecutionPolicy::RequestControlled,
+        })
+    }
+
+    /// Link under one host-owned deployment profile. The profile is not part
+    /// of source or Artifact data and therefore cannot widen its own Provider,
+    /// admission, budget, isolation, or audit authority.
+    pub fn link_with_profile<'artifact>(
+        &self,
+        artifact: &'artifact AdmittedArtifact,
+        profile: ExecutionProfileV1,
+    ) -> Result<LinkedArtifact<'artifact>, LinkError> {
+        profile.validate_artifact(artifact)?;
+        for import in artifact.external_imports() {
+            self.providers
+                .inner
+                .resolve(import)
+                .map_err(LinkError::Provider)?;
+        }
+        Ok(LinkedArtifact {
+            artifact,
+            bindings: self.providers.inner.bindings().collect(),
+            policy: LinkedExecutionPolicy::Profile(Box::new(profile)),
         })
     }
 }
@@ -1431,6 +1245,13 @@ impl Runtime {
 pub struct LinkedArtifact<'artifact> {
     artifact: &'artifact AdmittedArtifact,
     bindings: Vec<(String, ExternalFunction)>,
+    policy: LinkedExecutionPolicy,
+}
+
+#[cfg(feature = "execution")]
+enum LinkedExecutionPolicy {
+    RequestControlled,
+    Profile(Box<ExecutionProfileV1>),
 }
 
 #[cfg(feature = "execution")]
@@ -1443,15 +1264,21 @@ impl LinkedArtifact<'_> {
     /// for cancellation, budget exhaustion, and Provider failures.
     pub fn execute(&self, request: ExecutionRequest) -> ExecutionReport {
         let started = Instant::now();
+        let mut request = request;
+        if let LinkedExecutionPolicy::Profile(profile) = &self.policy {
+            request.limits = profile.run_limits.clone();
+            request.trace_policy = profile.audit_policy.trace_policy();
+        }
         let limits: VmLimits = request.limits.into();
         #[cfg(feature = "native-jit")]
-        let execution = if request.native_jit {
+        let execution = if let Some(options) = request.native_jit {
             self.artifact
                 .artifact
                 .executable
-                .execute_main_with_args_and_external_bindings_native_and_limits(
+                .execute_main_with_args_and_external_bindings_native_options_and_limits(
                     request.args,
                     self.bindings.iter().cloned(),
+                    options,
                     limits.clone(),
                 )
         } else {
@@ -1507,6 +1334,7 @@ impl LinkedArtifact<'_> {
             termination_reason,
             limits.cancel.as_ref(),
             &output.provider_call_traces,
+            output.engine,
         );
         ExecutionReport {
             schema: EXECUTION_REPORT_SCHEMA,
@@ -1544,13 +1372,146 @@ pub enum TracePolicy {
 }
 
 #[cfg(feature = "execution")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NondeterminismPolicy {
+    #[default]
+    Deny,
+    ExplicitProvidersOnly,
+}
+
+#[cfg(feature = "execution")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AuditPolicy {
+    #[default]
+    MetadataOnly,
+    None,
+    RedactedDebug,
+}
+
+#[cfg(feature = "execution")]
+impl AuditPolicy {
+    const fn trace_policy(self) -> TracePolicy {
+        match self {
+            Self::None => TracePolicy::None,
+            Self::MetadataOnly => TracePolicy::MetadataOnly,
+            Self::RedactedDebug => TracePolicy::RedactedDebug,
+        }
+    }
+}
+
+/// Versioned host deployment contract enforced at link and run time.
+#[cfg(feature = "execution")]
+#[derive(Debug, Clone)]
+pub struct ExecutionProfileV1 {
+    profile_id: String,
+    provider_interfaces: BTreeMap<String, (String, u32)>,
+    run_limits: RunLimits,
+    admission_policy_id: String,
+    isolation_profile_id: String,
+    nondeterminism_policy: NondeterminismPolicy,
+    audit_policy: AuditPolicy,
+}
+
+#[cfg(feature = "execution")]
+impl ExecutionProfileV1 {
+    pub fn new(
+        profile_id: impl Into<String>,
+        run_limits: RunLimits,
+        admission_policy_id: impl Into<String>,
+        isolation_profile_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            profile_id: profile_id.into(),
+            provider_interfaces: BTreeMap::new(),
+            run_limits,
+            admission_policy_id: admission_policy_id.into(),
+            isolation_profile_id: isolation_profile_id.into(),
+            nondeterminism_policy: NondeterminismPolicy::Deny,
+            audit_policy: AuditPolicy::MetadataOnly,
+        }
+    }
+
+    pub fn allow_provider_interface(
+        mut self,
+        symbol: impl Into<String>,
+        signature_hash: impl Into<String>,
+        abi_version: u32,
+    ) -> Self {
+        self.provider_interfaces
+            .insert(symbol.into(), (signature_hash.into(), abi_version));
+        self
+    }
+
+    pub fn nondeterminism(mut self, policy: NondeterminismPolicy) -> Self {
+        self.nondeterminism_policy = policy;
+        self
+    }
+
+    pub fn audit(mut self, policy: AuditPolicy) -> Self {
+        self.audit_policy = policy;
+        self
+    }
+
+    pub fn profile_id(&self) -> &str {
+        &self.profile_id
+    }
+
+    pub fn isolation_profile_id(&self) -> &str {
+        &self.isolation_profile_id
+    }
+
+    pub const fn nondeterminism_policy(&self) -> NondeterminismPolicy {
+        self.nondeterminism_policy
+    }
+
+    pub const fn audit_policy(&self) -> AuditPolicy {
+        self.audit_policy
+    }
+
+    fn validate_artifact(&self, artifact: &AdmittedArtifact) -> Result<(), LinkError> {
+        if self.profile_id.trim().is_empty() || self.isolation_profile_id.trim().is_empty() {
+            return Err(LinkError::Profile(
+                "execution profile IDs must be non-empty".to_string(),
+            ));
+        }
+        if artifact.admission().policy_id() != self.admission_policy_id {
+            return Err(LinkError::Profile(format!(
+                "artifact admission `{}` does not match profile requirement `{}`",
+                artifact.admission().policy_id(),
+                self.admission_policy_id
+            )));
+        }
+        for import in artifact.external_imports() {
+            let Some((signature_hash, abi_version)) =
+                self.provider_interfaces.get(import.symbol.as_str())
+            else {
+                return Err(LinkError::Profile(format!(
+                    "Provider import `{}` is not allowed by execution profile `{}`",
+                    import.symbol.as_str(),
+                    self.profile_id
+                )));
+            };
+            if signature_hash != import.signature_hash.as_str()
+                || *abi_version != import.abi_version
+            {
+                return Err(LinkError::Profile(format!(
+                    "Provider import `{}` does not match the execution profile contract",
+                    import.symbol.as_str()
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "execution")]
 #[derive(Debug, Clone)]
 pub struct ExecutionRequest {
     args: Vec<String>,
     limits: RunLimits,
     trace_policy: TracePolicy,
     #[cfg(feature = "native-jit")]
-    native_jit: bool,
+    native_jit: Option<NativeJitOptions>,
 }
 
 #[cfg(feature = "execution")]
@@ -1561,7 +1522,7 @@ impl ExecutionRequest {
             limits: RunLimits::bounded(),
             trace_policy: TracePolicy::None,
             #[cfg(feature = "native-jit")]
-            native_jit: false,
+            native_jit: None,
         }
     }
 
@@ -1575,17 +1536,14 @@ impl ExecutionRequest {
         self
     }
 
-    /// Select adaptive Cranelift execution for a trusted in-process host.
-    ///
-    /// Native whole-function execution cannot yet preserve every deterministic
-    /// VM budget. This opt-in therefore also selects the existing explicit
-    /// trusted-host limit profile. Isolated or untrusted execution must keep the
-    /// bounded interpreter request until native source-cost accounting is
-    /// complete. Unsupported and unprofitable regions still fall back safely.
+    /// Select adaptive Cranelift execution using an explicit host-owned policy.
+    /// This does not alter the requested limits. Armed limits remain
+    /// authoritative and may keep unsupported native regions on the reference
+    /// interpreter. A host that deliberately wants unrestricted execution must
+    /// separately select [`RunLimits::unbounded_for_trusted_host`].
     #[cfg(feature = "native-jit")]
-    pub fn native_jit_for_trusted_host(mut self) -> Self {
-        self.native_jit = true;
-        self.limits = RunLimits::unbounded_for_trusted_host();
+    pub fn native_jit(mut self, options: NativeJitOptions) -> Self {
+        self.native_jit = Some(options);
         self
     }
 }
@@ -1613,6 +1571,7 @@ pub struct ExecutionTelemetry {
     pub execution_duration_ns: u64,
     pub cancellation_latency_ns: Option<u64>,
     pub provider_functions: Vec<ProviderFunctionTelemetry>,
+    pub engine: ExecutionEngineTelemetry,
 }
 
 #[cfg(feature = "execution")]
@@ -1622,6 +1581,7 @@ impl ExecutionTelemetry {
         termination_reason: TerminationReason,
         cancellation: Option<&CancellationToken>,
         traces: &[provider::ProviderCallTrace],
+        engine: ExecutionEngineTelemetry,
     ) -> Self {
         let mut summaries = BTreeMap::<(String, String, String), ProviderFunctionTelemetry>::new();
         for trace in traces {
@@ -1656,6 +1616,7 @@ impl ExecutionTelemetry {
             execution_duration_ns: duration_ns(elapsed),
             cancellation_latency_ns,
             provider_functions: summaries.into_values().collect(),
+            engine,
         }
     }
 }
@@ -1807,6 +1768,7 @@ impl ExecutionReport {
                 termination_reason,
                 cancellation,
                 &[],
+                ExecutionEngineTelemetry::Interpreter,
             ),
             stdout: String::new(),
             stderr: String::new(),
@@ -1995,6 +1957,7 @@ impl Error for VerifyError {}
 #[derive(Debug)]
 pub enum LinkError {
     Provider(ProviderLoadError),
+    Profile(String),
 }
 
 #[cfg(feature = "execution")]
@@ -2002,6 +1965,7 @@ impl fmt::Display for LinkError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Provider(error) => write!(formatter, "provider link failed: {error}"),
+            Self::Profile(error) => write!(formatter, "execution profile rejected link: {error}"),
         }
     }
 }
@@ -2168,6 +2132,20 @@ mod tests {
         }
     }
 
+    struct TestOriginVerifier;
+
+    impl ArtifactOriginVerifier for TestOriginVerifier {
+        fn verify_origin(
+            &self,
+            bundle_digest: &str,
+            provenance: &BuildProvenanceV1,
+        ) -> Result<String, String> {
+            assert!(bundle_digest.starts_with("sha256:"));
+            assert!(!provenance.compiler_version.is_empty());
+            Ok("sha256:test-origin-evidence".to_string())
+        }
+    }
+
     #[test]
     fn verification_and_host_admission_are_distinct_phases() {
         let built = Compiler
@@ -2197,6 +2175,62 @@ mod tests {
             .expect("link admitted artifact")
             .execute(ExecutionRequest::default());
         assert_eq!(report.termination_reason(), TerminationReason::Completed);
+    }
+
+    #[test]
+    fn origin_verification_records_evidence_in_the_admitted_phase() {
+        let built = Compiler
+            .compile("origin.rss", "fn main() -> Unit { return Unit }")
+            .expect("compile");
+        let verified = ArtifactVerifier.verify(built).expect("verify");
+        let policy = OriginVerifiedAdmission::new("detached-signature.v1", TestOriginVerifier)
+            .expect("valid policy ID");
+        let admitted = verified.admit(&policy).expect("origin accepted");
+        assert_eq!(admitted.admission().policy_id(), "detached-signature.v1");
+        assert_eq!(
+            admitted.admission().evidence_digest(),
+            Some("sha256:test-origin-evidence")
+        );
+    }
+
+    #[test]
+    fn execution_profile_enforces_admission_and_owns_runtime_limits() {
+        let built = Compiler
+            .compile(
+                "profile.rss",
+                "fn main() -> Unit { while true { } return Unit }",
+            )
+            .expect("compile");
+        let admitted = admitted(built);
+        let runtime = Runtime::new(ProviderRegistry::default());
+
+        let wrong_admission = ExecutionProfileV1::new(
+            "production.v1",
+            RunLimits::bounded(),
+            "detached-signature.v1",
+            "isolated-local.v1",
+        );
+        assert!(matches!(
+            runtime.link_with_profile(&admitted, wrong_admission),
+            Err(LinkError::Profile(_))
+        ));
+
+        let profile = ExecutionProfileV1::new(
+            "production.v1",
+            RunLimits::bounded().with_step_budget(32),
+            "trusted_input.v1",
+            "isolated-local.v1",
+        );
+        let linked = runtime
+            .link_with_profile(&admitted, profile)
+            .expect("matching profile links");
+        let report = linked
+            .execute(ExecutionRequest::default().limits(RunLimits::unbounded_for_trusted_host()));
+        assert_eq!(
+            report.termination_reason(),
+            TerminationReason::StepBudgetExceeded,
+            "profile limits must override a caller request that tries to widen them"
+        );
     }
 
     #[test]
@@ -2335,68 +2369,6 @@ mod tests {
         );
         assert_eq!(report.termination_reason(), TerminationReason::ScriptError);
         assert!(matches!(report.outcome(), ExecutionOutcome::Failed(_)));
-    }
-
-    #[cfg(all(feature = "project", feature = "compatibility"))]
-    #[test]
-    fn package_build_uses_one_immutable_snapshot_and_binds_its_digest() {
-        let directory = tempfile::tempdir().expect("workspace");
-        std::fs::create_dir(directory.path().join("src")).expect("source directory");
-        std::fs::write(
-            directory.path().join("rsspkg.toml"),
-            "[package]\nname = \"snapshot-test\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[sources]\npaths = [\"src\"]\n",
-        )
-        .expect("manifest");
-        let source_path = directory.path().join("src/main.rss");
-        std::fs::write(&source_path, "fn main() -> Int { return 1 }").expect("source");
-
-        let cancellation = CancellationToken::new();
-        cancellation.cancel();
-        let cancelled = OperationContext {
-            cancellation: Some(cancellation),
-            ..OperationContext::default()
-        };
-        let error = project::legacy::PackageCompatibility::snapshot_with_operation(
-            directory.path(),
-            &cancelled,
-        )
-        .expect_err("cancelled snapshot");
-        assert_eq!(error.code(), CompileErrorCode::Cancelled);
-        let snapshot =
-            project::legacy::PackageCompatibility::snapshot(directory.path()).expect("snapshot");
-        std::fs::write(&source_path, "fn main() -> Int { return 2 }").expect("mutate checkout");
-
-        let first = project::legacy::PackageCompatibility::build(&snapshot).expect("first build");
-        let second = project::legacy::PackageCompatibility::build(&snapshot).expect("repeat build");
-        assert_eq!(first.artifact_bytes(), second.artifact_bytes());
-        assert_eq!(first.snapshot_digest(), snapshot.digest());
-        let analysis = first
-            .package_analysis()
-            .expect("package build carries typed package analysis");
-        assert_eq!(analysis.snapshot_digest, snapshot.digest());
-        assert_eq!(
-            analysis.module_digest.as_deref(),
-            Some(first.module_digest())
-        );
-        let artifact = rsscript_bytecode::BytecodeArtifact::from_bytes(first.artifact_bytes())
-            .expect("artifact envelope");
-        assert_eq!(
-            artifact.header.snapshot_digest.as_deref(),
-            Some(snapshot.digest())
-        );
-        assert_eq!(analysis.language_version, artifact.header.language_version);
-        assert_eq!(analysis.producer.version, artifact.header.compiler_version);
-        assert_eq!(
-            analysis.interface_catalog_digest,
-            artifact.header.interface_catalog_digest
-        );
-        let first = admitted(first);
-        let runtime = Runtime::default();
-        let output = runtime
-            .link(&first)
-            .expect("link captured source")
-            .execute(ExecutionRequest::default());
-        assert_eq!(output.value(), Some("1"));
     }
 
     #[cfg(feature = "project")]

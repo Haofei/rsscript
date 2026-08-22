@@ -17,108 +17,6 @@ pub use rsscript_abi_model::{
 pub use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationId};
 use serde::{Deserialize, Serialize};
 
-/// Legacy dynamic runtime value exchanged with register-VM and native ABI
-/// compatibility adapters. New Provider implementations use [`WireValue`].
-///
-/// This model is deliberately absent from the default Provider API so an
-/// ordinary Provider cannot accidentally make free-form type names, JSON, or
-/// native IDs part of its contract.
-#[cfg(feature = "compatibility")]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum NativeValue {
-    Unit,
-    Int(i64),
-    Float(f64),
-    Bool(bool),
-    String(String),
-    Char(char),
-    Bytes(Vec<u8>),
-    List(Vec<NativeValue>),
-    Map(Vec<(NativeValue, NativeValue)>),
-    Json(serde_json::Value),
-    Struct {
-        name: String,
-        fields: BTreeMap<String, NativeValue>,
-    },
-    Variant {
-        name: String,
-        fields: BTreeMap<String, NativeValue>,
-    },
-    Native {
-        type_name: String,
-        id: i64,
-    },
-}
-
-#[cfg(feature = "compatibility")]
-impl NativeValue {
-    /// Return a deterministic estimate of the logical payload bytes crossing a
-    /// Provider boundary. This intentionally excludes allocator capacity and
-    /// transport framing, which vary by Provider implementation.
-    pub fn estimated_payload_bytes(&self) -> usize {
-        let mut total = 0usize;
-        let mut values = vec![self];
-        while let Some(value) = values.pop() {
-            match value {
-                Self::Unit => {}
-                Self::Int(_) | Self::Float(_) => total = total.saturating_add(8),
-                Self::Bool(_) => total = total.saturating_add(1),
-                Self::Char(value) => total = total.saturating_add(value.len_utf8()),
-                Self::String(value) => total = total.saturating_add(value.len()),
-                Self::Bytes(value) => total = total.saturating_add(value.len()),
-                Self::List(items) => values.extend(items),
-                Self::Map(entries) => {
-                    for (key, value) in entries {
-                        values.push(key);
-                        values.push(value);
-                    }
-                }
-                Self::Json(value) => total = total.saturating_add(json_payload_bytes(value)),
-                Self::Struct { name, fields } | Self::Variant { name, fields } => {
-                    total = total.saturating_add(name.len());
-                    for (name, value) in fields {
-                        total = total.saturating_add(name.len());
-                        values.push(value);
-                    }
-                }
-                Self::Native { type_name, .. } => {
-                    total = total.saturating_add(type_name.len()).saturating_add(8);
-                }
-            }
-        }
-        total
-    }
-}
-
-#[cfg(feature = "compatibility")]
-fn json_payload_bytes(root: &serde_json::Value) -> usize {
-    let mut total = 0usize;
-    let mut values = vec![root];
-    while let Some(value) = values.pop() {
-        match value {
-            serde_json::Value::Null => {}
-            serde_json::Value::Bool(_) => total = total.saturating_add(1),
-            serde_json::Value::Number(_) => total = total.saturating_add(8),
-            serde_json::Value::String(value) => total = total.saturating_add(value.len()),
-            serde_json::Value::Array(items) => values.extend(items),
-            serde_json::Value::Object(fields) => {
-                for (name, value) in fields {
-                    total = total.saturating_add(name.len());
-                    values.push(value);
-                }
-            }
-        }
-    }
-    total
-}
-
-#[cfg(feature = "compatibility")]
-pub fn estimated_payload_bytes(values: &[NativeValue]) -> usize {
-    values.iter().fold(0usize, |total, value| {
-        total.saturating_add(value.estimated_payload_bytes())
-    })
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderErrorCode {
@@ -660,15 +558,10 @@ impl AsyncProviderCallContext {
     }
 }
 
-#[cfg(feature = "compatibility")]
-pub type NativeHostFn = fn(Vec<NativeValue>) -> Result<NativeValue, ProviderError>;
-
-/// Canonical Provider wire callable for new Provider implementations.
+/// Canonical Provider wire callable.
 ///
-/// This is deliberately separate from [`NativeInterpreterFn`]: the latter is
-/// the compatibility adapter used by the existing register VM. New generated
-/// Provider adapters can accept structural [`WireValue`]s without reintroducing
-/// names, JSON, or native IDs into their public call contract.
+/// Generated Provider adapters accept structural [`WireValue`]s without
+/// introducing free-form type names, JSON, or native IDs into their contract.
 pub type WireHostFn = fn(Vec<WireValue>) -> Result<WireValue, ProviderError>;
 
 type ContextualWireProviderFn = dyn for<'a> Fn(&mut ProviderCallContext<'a>, Vec<WireValue>) -> Result<WireValue, ProviderError>
@@ -1071,74 +964,7 @@ pub fn replayable_async_wire_callable(
     })
 }
 
-/// Cloneable provider callable used by the runtime registry.
-#[cfg(feature = "compatibility")]
-type ContextualProviderFn = dyn for<'a> Fn(&mut ProviderCallContext<'a>, Vec<NativeValue>) -> Result<NativeValue, ProviderError>
-    + Send
-    + Sync;
-
-#[cfg(feature = "compatibility")]
-#[derive(Clone)]
-pub struct NativeInterpreterFn {
-    inner: Arc<ContextualProviderFn>,
-}
-
-#[cfg(feature = "compatibility")]
-impl NativeInterpreterFn {
-    pub fn from_fn(function: NativeHostFn) -> Self {
-        Self::new(function)
-    }
-
-    pub fn new(
-        function: impl Fn(Vec<NativeValue>) -> Result<NativeValue, ProviderError>
-        + Send
-        + Sync
-        + 'static,
-    ) -> Self {
-        Self::new_contextual(move |_, args| function(args))
-    }
-
-    pub fn new_contextual(
-        function: impl for<'a> Fn(
-            &mut ProviderCallContext<'a>,
-            Vec<NativeValue>,
-        ) -> Result<NativeValue, ProviderError>
-        + Send
-        + Sync
-        + 'static,
-    ) -> Self {
-        Self {
-            inner: Arc::new(function),
-        }
-    }
-
-    /// Invoke through an explicit runtime-owned context. Callers cannot bypass
-    /// cancellation, deadline, authority, tracing, or resource registration by
-    /// using a context-free convenience path.
-    pub fn call_with_context(
-        &self,
-        context: &mut ProviderCallContext<'_>,
-        args: Vec<NativeValue>,
-    ) -> Result<NativeValue, ProviderError> {
-        context.check_cancelled()?;
-        (self.inner)(context, args)
-    }
-}
-
-#[cfg(feature = "compatibility")]
-impl From<NativeHostFn> for NativeInterpreterFn {
-    fn from(function: NativeHostFn) -> Self {
-        Self::from_fn(function)
-    }
-}
-
-#[cfg(feature = "compatibility")]
-pub type ProviderFuture =
-    Pin<Box<dyn Future<Output = Result<NativeValue, ProviderError>> + Send + 'static>>;
-
-/// Canonical asynchronous Provider wire callable result. It is separate from
-/// [`ProviderFuture`] so new asynchronous Providers do not need to publish the
-/// legacy dynamic value model merely to suspend.
+/// Canonical asynchronous Provider wire callable result.
 pub type WireProviderFuture =
     Pin<Box<dyn Future<Output = Result<WireValue, ProviderError>> + Send + 'static>>;
 
@@ -1146,37 +972,6 @@ pub type WireProviderFuture =
 /// write-back structurally separate from an ordinary async wire result.
 pub type WireMutationProviderFuture =
     Pin<Box<dyn Future<Output = Result<WireMutationResult, ProviderError>> + Send + 'static>>;
-
-#[cfg(feature = "compatibility")]
-type AsyncContextualProviderFn =
-    dyn Fn(AsyncProviderCallContext, Vec<NativeValue>) -> ProviderFuture + Send + Sync;
-
-#[cfg(feature = "compatibility")]
-#[derive(Clone)]
-pub struct AsyncInterpreterFn {
-    inner: Arc<AsyncContextualProviderFn>,
-}
-
-#[cfg(feature = "compatibility")]
-impl AsyncInterpreterFn {
-    pub fn new<F, Fut>(function: F) -> Self
-    where
-        F: Fn(AsyncProviderCallContext, Vec<NativeValue>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<NativeValue, ProviderError>> + Send + 'static,
-    {
-        Self {
-            inner: Arc::new(move |context, args| Box::pin(function(context, args))),
-        }
-    }
-
-    pub fn call(
-        &self,
-        context: AsyncProviderCallContext,
-        args: Vec<NativeValue>,
-    ) -> ProviderFuture {
-        (self.inner)(context, args)
-    }
-}
 
 type AsyncContextualWireProviderFn =
     dyn Fn(AsyncProviderCallContext, Vec<WireValue>) -> WireProviderFuture + Send + Sync;
@@ -1239,15 +1034,11 @@ impl AsyncWireMutationInterpreterFn {
 
 #[derive(Clone)]
 pub enum ProviderCallable {
-    #[cfg(feature = "compatibility")]
-    Sync(NativeInterpreterFn),
     /// Canonical typed wire callable for descriptor-linked synchronous calls.
     WireSync(WireInterpreterFn),
     /// Canonical typed wire callable for synchronous signatures with `mut`
     /// parameters. Its result carries explicit write-back values.
     WireSyncMut(WireMutationInterpreterFn),
-    #[cfg(feature = "compatibility")]
-    Async(AsyncInterpreterFn),
     /// Canonical typed wire callable for descriptor-linked asynchronous calls.
     WireAsync(AsyncWireInterpreterFn),
     /// Canonical typed wire callable for asynchronous signatures with `mut`
@@ -1258,29 +1049,11 @@ pub enum ProviderCallable {
 impl ProviderCallable {
     pub const fn call_mode(&self) -> ProviderCallMode {
         match self {
-            #[cfg(feature = "compatibility")]
-            Self::Sync(_) => ProviderCallMode::Sync,
             Self::WireSync(_) => ProviderCallMode::Sync,
             Self::WireSyncMut(_) => ProviderCallMode::Sync,
-            #[cfg(feature = "compatibility")]
-            Self::Async(_) => ProviderCallMode::Async,
             Self::WireAsync(_) => ProviderCallMode::Async,
             Self::WireAsyncMut(_) => ProviderCallMode::Async,
         }
-    }
-}
-
-#[cfg(feature = "compatibility")]
-impl From<NativeInterpreterFn> for ProviderCallable {
-    fn from(value: NativeInterpreterFn) -> Self {
-        Self::Sync(value)
-    }
-}
-
-#[cfg(feature = "compatibility")]
-impl From<AsyncInterpreterFn> for ProviderCallable {
-    fn from(value: AsyncInterpreterFn) -> Self {
-        Self::Async(value)
     }
 }
 
@@ -1640,20 +1413,6 @@ impl Error for ProviderLoadError {}
 mod tests {
     use super::*;
 
-    #[cfg(feature = "compatibility")]
-    #[test]
-    fn payload_estimate_is_structural_and_deterministic() {
-        let value = NativeValue::Struct {
-            name: "Reply".into(),
-            fields: BTreeMap::from([
-                ("body".into(), NativeValue::Bytes(vec![1, 2, 3, 4])),
-                ("ok".into(), NativeValue::Bool(true)),
-            ]),
-        };
-        assert_eq!(value.estimated_payload_bytes(), 5 + 4 + 4 + 2 + 1);
-        assert_eq!(estimated_payload_bytes(&[value.clone(), value]), 32);
-    }
-
     #[test]
     fn provider_error_details_use_the_canonical_wire_value_model() {
         let error = ProviderError::from_io(
@@ -1834,28 +1593,6 @@ mod tests {
             ResourceCleanupContract::None
         );
         assert_eq!(resolved.callable, 7);
-    }
-
-    #[cfg(feature = "compatibility")]
-    #[test]
-    fn contextual_callable_observes_cancellation_before_provider_code() {
-        let called = Arc::new(AtomicBool::new(false));
-        let called_by_provider = Arc::clone(&called);
-        let cancelled = CancellationToken::new();
-        cancelled.cancel();
-        let callable = NativeInterpreterFn::new_contextual(move |_, _| {
-            called_by_provider.store(true, Ordering::Relaxed);
-            Ok(NativeValue::Unit)
-        });
-        let mut context = ProviderCallContext {
-            cancellation: Some(&cancelled),
-            ..ProviderCallContext::default()
-        };
-        let error = callable
-            .call_with_context(&mut context, vec![])
-            .expect_err("cancelled call must not enter Provider code");
-        assert_eq!(error.code, ProviderErrorCode::Cancelled);
-        assert!(!called.load(Ordering::Relaxed));
     }
 
     #[test]

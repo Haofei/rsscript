@@ -63,7 +63,6 @@ exclude = [
     "experiments/rsscript-review-reir",
     "experiments/vm-jit",
     "experiments/fixtures/native-abi-fixture/native/rust",
-    "packages/native-abi-fixture/native/rust",
 ]
 
 # The root workspace owns only Core, applications, the runner, and supported
@@ -98,6 +97,25 @@ default-members = [
     "crates/lsp",
     "crates/process-guard",
 ]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.96.1"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
 
 # Release tuning for the `rss` tool / VM. Thin LTO + a single codegen unit let the
 # optimizer inline across the interpreter's hot dispatch/value helpers, which are

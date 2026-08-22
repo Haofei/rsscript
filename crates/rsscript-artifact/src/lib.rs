@@ -277,7 +277,7 @@ pub enum AnalysisEnvelopeV1 {
     Package {
         /// The accepted v1 wire payload.
         payload: Value,
-        package: PackageAnalysisV1,
+        package: Box<PackageAnalysisV1>,
     },
 }
 
@@ -311,7 +311,10 @@ impl AnalysisEnvelopeV1 {
         }
         let payload = serde_json::to_value(&package)
             .map_err(|error| ArtifactBundleError::Analysis(error.to_string()))?;
-        Ok(Self::Package { payload, package })
+        Ok(Self::Package {
+            payload,
+            package: Box::new(package),
+        })
     }
 
     /// Decode analysis evidence read from a persisted Bundle or produced by a

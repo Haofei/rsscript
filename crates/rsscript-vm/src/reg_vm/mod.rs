@@ -103,7 +103,11 @@ mod tier;
 mod value_access;
 mod value_convert;
 mod value_ops;
-use execution_plan::*;
+#[cfg(feature = "native-jit")]
+pub use execution_plan::NativeJitOptions;
+use execution_plan::{ExecutionPlan, StdoutMode, TierPlan};
+#[cfg(feature = "native-jit")]
+use execution_plan::{NativeAdmissionPolicy, NativeExecutionPlan};
 pub(crate) use model::*;
 #[cfg(feature = "native-jit")]
 use native::*;
@@ -1305,20 +1309,25 @@ impl RegVmExecutable {
         external_bindings: impl IntoIterator<Item = (impl Into<String>, ExternalFunction)>,
         limits: VmLimits,
     ) -> Result<EvalExecutionReport, EvalError> {
-        let tier_up_threshold = std::env::var("RSS_JIT_TIER_THRESHOLD")
-            .ok()
-            .and_then(|value| value.parse::<u32>().ok())
-            .unwrap_or(0);
-        let native = NativeExecutionPlan::from_environment(
-            tier_up_threshold,
-            false,
-            std::env::var_os("RSS_JIT_STATS").is_some(),
-            true,
-            true,
-            false,
-            None,
-            false,
-        );
+        self.execute_main_with_args_and_external_bindings_native_options_and_limits(
+            args,
+            external_bindings,
+            NativeJitOptions::default(),
+            limits,
+        )
+    }
+
+    /// Native execution with a deterministic host-owned policy. This is the
+    /// production embedding entry point; it never reads process environment.
+    #[cfg(feature = "native-jit")]
+    pub fn execute_main_with_args_and_external_bindings_native_options_and_limits(
+        &self,
+        args: impl IntoIterator<Item = impl Into<String>>,
+        external_bindings: impl IntoIterator<Item = (impl Into<String>, ExternalFunction)>,
+        options: NativeJitOptions,
+        limits: VmLimits,
+    ) -> Result<EvalExecutionReport, EvalError> {
+        let native = NativeExecutionPlan::from_options(options);
         let plan = ExecutionPlan::native(limits, native);
         self.execute_main_with_args_and_external_bindings_plan(args, external_bindings, plan)
     }
@@ -1350,6 +1359,23 @@ impl RegVmExecutable {
                 eprintln!("{}", native.stats.summary());
             }
         }
+        #[cfg(feature = "native-jit")]
+        let engine =
+            vm.native
+                .as_ref()
+                .map_or(crate::ExecutionEngineTelemetry::Interpreter, |native| {
+                    crate::ExecutionEngineTelemetry::Native {
+                        considered: native.stats.considered,
+                        compiled: native.stats.compiled,
+                        native_calls: native.stats.native_calls,
+                        native_bails: native.stats.native_bails,
+                        osr_entries: native.stats.osr_entries,
+                        compile_nanos: native.stats.compile_nanos,
+                        run_nanos: native.stats.run_nanos,
+                    }
+                });
+        #[cfg(not(feature = "native-jit"))]
+        let engine = crate::ExecutionEngineTelemetry::Interpreter;
         let cleanup = vm.cleanup_provider_resources();
         let result = match (execution, cleanup) {
             (Err(error), _) | (Ok(_), Err(error)) => Err(error),
@@ -1371,6 +1397,7 @@ impl RegVmExecutable {
                     stdout,
                     stderr,
                     provider_call_traces,
+                    engine: engine.clone(),
                     failure: None,
                 })
             }
@@ -1382,6 +1409,7 @@ impl RegVmExecutable {
                 stdout,
                 stderr,
                 provider_call_traces,
+                engine,
                 failure: Some(error),
             }),
         }

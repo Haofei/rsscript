@@ -5,6 +5,7 @@ use rsscript_provider_api::{
 };
 use std::collections::BTreeMap;
 use std::io::Read;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -13,14 +14,89 @@ include!(concat!(env!("OUT_DIR"), "/provider_contract.rs"));
 
 const MAX_CAPTURE_BYTES: usize = 16 * 1024 * 1024;
 
-pub fn functions() -> BTreeMap<ExternalSymbol, ProviderFunction<WireInterpreterFn>> {
+/// One command explicitly admitted by the embedding host.
+#[derive(Clone, Debug)]
+pub struct ConfiguredCommand {
+    executable: PathBuf,
+    fixed_args: Vec<String>,
+    cwd: Option<PathBuf>,
+    environment: BTreeMap<String, String>,
+    max_script_args: usize,
+}
+
+impl ConfiguredCommand {
+    pub fn new(executable: impl Into<PathBuf>) -> Self {
+        Self {
+            executable: executable.into(),
+            fixed_args: Vec::new(),
+            cwd: None,
+            environment: BTreeMap::new(),
+            max_script_args: 32,
+        }
+    }
+
+    pub fn fixed_args(mut self, args: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.fixed_args = args.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn cwd(mut self, cwd: impl Into<PathBuf>) -> Self {
+        self.cwd = Some(cwd.into());
+        self
+    }
+
+    pub fn environment(
+        mut self,
+        values: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    ) -> Self {
+        self.environment = values
+            .into_iter()
+            .map(|(name, value)| (name.into(), value.into()))
+            .collect();
+        self
+    }
+
+    pub fn max_script_args(mut self, max: usize) -> Self {
+        self.max_script_args = max;
+        self
+    }
+}
+
+/// Process capability that maps script-visible command IDs to fixed host
+/// executable configurations. Scripts can never supply an executable path,
+/// ambient environment, or ambient working directory.
+#[derive(Clone, Debug, Default)]
+pub struct ConfiguredProcessProvider {
+    commands: BTreeMap<String, ConfiguredCommand>,
+}
+
+impl ConfiguredProcessProvider {
+    pub fn new(commands: impl IntoIterator<Item = (impl Into<String>, ConfiguredCommand)>) -> Self {
+        Self {
+            commands: commands
+                .into_iter()
+                .map(|(id, command)| (id.into(), command))
+                .collect(),
+        }
+    }
+
+    pub fn functions(&self) -> BTreeMap<ExternalSymbol, ProviderFunction<WireInterpreterFn>> {
+        functions_from_commands(self.commands.clone())
+    }
+}
+
+fn functions_from_commands(
+    commands: BTreeMap<String, ConfiguredCommand>,
+) -> BTreeMap<ExternalSymbol, ProviderFunction<WireInterpreterFn>> {
     let contract = descriptor();
     let function = contract.functions.into_iter().next().unwrap();
     let types = WireCallTypeTable::for_signature(&function.signature)
         .and_then(|types| types.with_record_layouts(contract.record_layouts))
         .expect("generated process descriptor has a valid wire layout");
     let output_type = types
-        .type_id(&rsscript_abi_model::WireType::from("host.process.ProcessOutput"))
+        .type_id(&rsscript_abi_model::WireType::from(
+            "host.process.ProcessOutput",
+        ))
         .expect("process output record is present in the generated wire layout");
     let string_type = types
         .type_id(&rsscript_abi_model::WireType::String)
@@ -30,8 +106,15 @@ pub fn functions() -> BTreeMap<ExternalSymbol, ProviderFunction<WireInterpreterF
         ProviderFunction {
             signature: function.signature,
             callable: WireInterpreterFn::new_contextual(move |context, values| {
-                let [WireValue::String { value: program }, WireValue::List { element_type, values: args }] = values.as_slice() else {
-                    return Err(ProviderError::invalid_argument("program must be String"));
+                let [
+                    WireValue::String { value: command_id },
+                    WireValue::List {
+                        element_type,
+                        values: args,
+                    },
+                ] = values.as_slice()
+                else {
+                    return Err(ProviderError::invalid_argument("command ID must be String"));
                 };
                 if *element_type != string_type {
                     return Err(ProviderError::invalid_argument("args must be List<String>"));
@@ -45,11 +128,29 @@ pub fn functions() -> BTreeMap<ExternalSymbol, ProviderFunction<WireInterpreterF
                         )),
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let mut command = Command::new(program);
+                let configured = commands.get(command_id).ok_or_else(|| {
+                    ProviderError::new(
+                        rsscript_provider_api::ProviderErrorCode::PermissionDenied,
+                        format!("process command ID `{command_id}` is not configured"),
+                    )
+                })?;
+                if args.len() > configured.max_script_args {
+                    return Err(ProviderError::invalid_argument(format!(
+                        "process command accepts at most {} script arguments",
+                        configured.max_script_args
+                    )));
+                }
+                let mut command = Command::new(&configured.executable);
                 command
+                    .env_clear()
+                    .envs(&configured.environment)
+                    .args(&configured.fixed_args)
                     .args(args)
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped());
+                if let Some(cwd) = &configured.cwd {
+                    command.current_dir(cwd);
+                }
                 let mut child = rss_process_guard::spawn_guarded_child(
                     &mut command,
                     rss_process_guard::ProcessLimits::generated_program(),
@@ -183,7 +284,7 @@ mod tests {
     fn conforms_to_provider_contract() {
         let report = rsscript_provider_conformance::assert_wire_provider_conforms(
             descriptor(),
-            functions(),
+            ConfiguredProcessProvider::default().functions(),
         );
         assert_eq!(report.provider_id, "rsscript.process");
     }
@@ -205,9 +306,21 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn test_provider(command_id: &str) -> ConfiguredProcessProvider {
+        ConfiguredProcessProvider::new([(
+            command_id,
+            ConfiguredCommand::new("/bin/sh").max_script_args(2),
+        )])
+    }
+
+    #[cfg(unix)]
     #[test]
     fn cancellation_terminates_and_reaps_the_process_tree() {
-        let function = functions().into_values().next().unwrap();
+        let function = test_provider("sleep")
+            .functions()
+            .into_values()
+            .next()
+            .unwrap();
         let cancellation = rsscript_provider_api::CancellationToken::new();
         let trigger = cancellation.clone();
         let canceller = std::thread::spawn(move || {
@@ -225,7 +338,9 @@ mod tests {
             .call_with_context(
                 &mut context,
                 vec![
-                    WireValue::String { value: "sh".into() },
+                    WireValue::String {
+                        value: "sleep".into(),
+                    },
                     string_list(["-c", "sleep 10"]),
                 ],
             )
@@ -241,7 +356,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn combined_process_output_obeys_runtime_budget() {
-        let function = functions().into_values().next().unwrap();
+        let function = test_provider("print")
+            .functions()
+            .into_values()
+            .next()
+            .unwrap();
         let mut context = rsscript_provider_api::ProviderCallContext {
             remaining_byte_budget: Some(32),
             remaining_output_budget: Some(64),
@@ -253,7 +372,9 @@ mod tests {
             .call_with_context(
                 &mut context,
                 vec![
-                    WireValue::String { value: "sh".into() },
+                    WireValue::String {
+                        value: "print".into(),
+                    },
                     string_list(["-c", "printf '%0200d' 0"]),
                 ],
             )

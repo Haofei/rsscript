@@ -30,20 +30,15 @@ jobs:
         run: |
           docker compose run --rm dev cargo test --locked -p rsscript-vm --features native-jit --lib
           docker compose run --rm dev cargo test --locked -p rsscript-sdk --features native-jit --test native_jit_smoke
+          docker compose run --rm dev cargo test --locked -p rsscript-sdk --features native-jit --test native_jit_differential
           docker compose run --rm dev cargo test --locked --manifest-path experiments/Cargo.toml -p vm-jit
           docker compose run --rm dev cargo test --locked --release -p rsscript-sdk --features native-jit --test native_jit_smoke native_hot_loop_release_gate_beats_the_interpreter -- --nocapture
 
-      - name: Miri pure-core smoke
-        run: docker compose run --rm dev bash -lc 'rustup toolchain install nightly-2026-07-20 --component miri,rust-src && cargo +nightly-2026-07-20 miri test --manifest-path experiments/Cargo.toml -p rss-testgen --lib'
-
-      - name: No-panic fuzz smoke
-        run: docker compose run --rm dev bash -lc 'rustup toolchain install nightly-2026-07-20 && (command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --version 0.13.2 --locked) && cd fuzz && cargo +nightly-2026-07-20 fuzz run no_panic -- -runs=20000 -max_total_time=60'
+      - name: Parser/checker no-panic fuzz smoke
+        run: docker compose run --rm dev bash -lc 'rustup toolchain install nightly-2026-07-20 && (command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --version 0.13.2 --locked) && cd fuzz && cargo +nightly-2026-07-20 fuzz run parse_check -- -runs=20000 -max_total_time=60'
 
       - name: Artifact and report boundary fuzz smoke
         run: |
           docker compose run --rm dev bash -lc 'rustup toolchain install nightly-2026-07-20 && (command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --version 0.13.2 --locked) && cd fuzz && cargo +nightly-2026-07-20 fuzz run bytecode_artifact -- -runs=10000 -max_total_time=30'
           docker compose run --rm dev bash -lc 'cd fuzz && cargo +nightly-2026-07-20 fuzz run binding_descriptor -- -runs=10000 -max_total_time=30'
           docker compose run --rm dev bash -lc 'cd fuzz && cargo +nightly-2026-07-20 fuzz run execution_report -- -runs=10000 -max_total_time=30'
-
-      - name: Native JIT differential fuzz smoke
-        run: docker compose run --rm dev bash -lc 'rustup toolchain install nightly-2026-07-20 && (command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --version 0.13.2 --locked) && cd fuzz && cargo +nightly-2026-07-20 fuzz run differential --features native-jit -- -runs=5000 -max_total_time=60'

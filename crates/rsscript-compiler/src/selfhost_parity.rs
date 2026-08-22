@@ -8,6 +8,5 @@
 include!("selfhost_parity/lexer.rs");
 include!("selfhost_parity/parser.rs");
 include!("selfhost_parity/checker.rs");
-include!("selfhost_parity/package_contract.rs");
 include!("selfhost_parity/ast_oracle.rs");
 include!("selfhost_parity/ast_parity.rs");

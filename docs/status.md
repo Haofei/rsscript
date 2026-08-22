@@ -9,8 +9,8 @@ The platform-neutral language cut is active:
 - default core interfaces contain no host service modules;
 - external package functions lower through `CallExternal` and are resolved by an
   execution-time registry;
-- provider runtime values and callables are owned by the safe provider API; the
-  native ABI adapts that model instead of defining it;
+- provider runtime values and callables use the single structural `WireValue`
+  contract; the retired dynamic native ABI is outside active workspaces;
 - execution/deployment policy types and legacy API facade are removed;
 - neutral package analysis uses `rsscript.package_analysis.v1`; optional review
   output uses the distinct `rsscript.package_review.v1` schema; workspace
@@ -22,8 +22,8 @@ capture, persistence, review presentation, and Rust AOT live outside its normal
 closure. The reference VM is physically owned by `rsscript-vm`, consumes only
 verified `rsscript.bytecode.v1`, and has no Cargo dependency on compiler,
 syntax, semantics, MIR, or lowering crates. Validated HIR lowers through the
-owned, typed `rsscript-mir` CFG and `rsscript-codegen-vm`; `vm_adapter` is the
-SDK's optional composition point for source-to-VM convenience APIs. Stable
+owned, typed `rsscript-mir` CFG and `rsscript-codegen-vm`; the compiler owns the
+single bytecode-emission path. Stable
 embedders use the reviewed `rsscript-sdk` façade instead of implementation
 modules; the compiler does not depend back on that façade.
 Native plugin loading and guarded child-process execution have been removed
@@ -60,8 +60,7 @@ parameter effects, package-wide semantic type facts, Typed HIR, call binding, an
 HIR construction are now owned by `rsscript-semantics`. The platform-neutral core
 and standard-package interface sources are owned by the data-only
 `rsscript-interface-catalog`. Canonical SDK modules expose the reviewed API;
-compatibility exports remain explicitly feature-gated during their removal
-window. `rsscript-mir` owns the
+the inactive compatibility façade has been deleted. `rsscript-mir` owns the
 provider-neutral, lifetime-independent typed CFG; `rsscript-codegen-vm` lowers
 verified MIR to bytecode, while experimental backends consume stable Core
 contracts from outside the Core dependency graph. Runtime-core

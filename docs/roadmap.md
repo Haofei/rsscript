@@ -34,14 +34,14 @@ historical evidence, not as the active roadmap. The active work is to make the
 existing Core path smaller, explicit, and usable without exposing migration
 adapters.
 
-1. Retire compatibility-only SDK and Provider paths behind an announced,
-   tested removal plan. New embedding and Provider examples must use canonical
-   `WireValue` APIs only.
+1. Keep the retired SDK and Provider compatibility paths deleted. New
+   embedding and Provider examples use canonical `WireValue` APIs only.
 2. Keep experiments one-way consumers of Core contracts. AOT, JIT, REIR, and
    self-hosting must not become default SDK, VM, CLI, or release dependencies.
-3. Make one bytecode contract executable at a time. `rsscript.bytecode.v2` is a
-   verifier-only prototype until an ADR-defined VM cutover; v1 remains the sole
-   deployed execution schema.
+3. Keep `rsscript.bytecode.v1` as the sole executable contract. Any replacement
+   begins with a new cutover ADR and must arrive with emitter, bounded verifier,
+   decoder, VM execution, compatibility fixtures, and an explicit v1 lifetime;
+   Core carries no dormant verifier-only second format.
 4. Keep host deployment choices outside language validity and Artifact identity.
    The runner's host-selected profile performs admission, Provider installation,
    limits, and isolation; its non-secret identity is recorded in the response.

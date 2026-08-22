@@ -26,11 +26,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::AotLoweringInput;
 use crate::diagnostic::Diagnostic;
 use crate::interfaces::{default_interfaces, standard_package_interfaces};
 use crate::syntax::ast::Program;
 use crate::syntax::parse_source;
-use crate::AotLoweringInput;
 use rsscript_aot_model::coverage_bucket;
 use rsscript_semantics::{CompilationSession, ValidatedProgram};
 

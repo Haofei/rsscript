@@ -256,23 +256,138 @@ pub enum RunnerTerminationV1 {
     HostFailure,
 }
 
+/// Typed execution-report contract carried by the runner protocol. Detailed
+/// wire values, diagnostics, and trace records retain their independently
+/// versioned JSON shapes, while the report state machine and resource usage are
+/// validated here instead of accepting an arbitrary JSON document.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "version", content = "report", rename_all = "snake_case")]
+pub enum VersionedExecutionReport {
+    V2(ExecutionReportV2),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionReportV2 {
+    pub schema: String,
+    pub artifact_digest: String,
+    pub outcome: ExecutionOutcomeV2,
+    pub usage: ExecutionUsageV2,
+    pub telemetry: ExecutionTelemetryV2,
+    pub stdout: String,
+    pub stderr: String,
+    pub provider_call_traces: Vec<serde_json::Value>,
+    pub diagnostics: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ExecutionOutcomeV2 {
+    Completed {
+        wire_value: Option<serde_json::Value>,
+        display_value: String,
+    },
+    Failed {
+        reason: ExecutionTerminationReasonV2,
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionTerminationReasonV2 {
+    ScriptError,
+    Cancelled,
+    DeadlineExceeded,
+    StepBudgetExceeded,
+    AllocationBudgetExceeded,
+    LiveMemoryLimitExceeded,
+    OutputLimitExceeded,
+    ProviderError,
+    ProviderBudgetExceeded,
+    IntrinsicBudgetExceeded,
+    ResourceLimitExceeded,
+    VerificationFailure,
+    InternalError,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionUsageV2 {
+    pub steps_consumed: u64,
+    pub allocation_bytes_consumed: usize,
+    pub live_memory_bytes_at_return: usize,
+    pub peak_live_memory_bytes: usize,
+    pub output_bytes: usize,
+    pub intrinsic_calls: u64,
+    pub provider_calls: u64,
+    pub resources_created: u64,
+    pub resources_cleaned: u64,
+    pub resource_cleanup_failures: u64,
+    pub resources_peak_live: usize,
+    pub resources_live_at_return: usize,
+    pub tasks_created: u64,
+    pub tasks_completed: u64,
+    pub tasks_cancelled: u64,
+    pub tasks_peak_live: usize,
+    pub tasks_live_at_return: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionTelemetryV2 {
+    pub execution_duration_ns: u64,
+    pub cancellation_latency_ns: Option<u64>,
+    pub provider_functions: Vec<ProviderFunctionTelemetryV2>,
+    pub engine: ExecutionEngineTelemetryV2,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderFunctionTelemetryV2 {
+    pub provider_id: String,
+    pub provider_version: String,
+    pub symbol: String,
+    pub calls: u64,
+    pub failures: u64,
+    pub request_bytes: usize,
+    pub response_bytes: usize,
+    pub total_duration_ns: u64,
+    pub max_duration_ns: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ExecutionEngineTelemetryV2 {
+    Interpreter,
+    Native {
+        considered: u64,
+        compiled: u64,
+        native_calls: u64,
+        native_bails: u64,
+        osr_entries: u64,
+        compile_nanos: u128,
+        run_nanos: u128,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunnerResponseV1 {
     pub schema: String,
     pub profile: RunnerProfileIdentityV1,
     pub runner_termination: RunnerTerminationV1,
-    pub report: Option<serde_json::Value>,
+    pub report: Option<VersionedExecutionReport>,
     pub error: Option<String>,
 }
 
 impl RunnerResponseV1 {
-    pub fn report(profile: RunnerProfileV1, report: serde_json::Value) -> Self {
+    pub fn report(profile: RunnerProfileV1, report: ExecutionReportV2) -> Self {
         Self {
             schema: RUNNER_RESPONSE_SCHEMA.to_string(),
             profile: profile.identity(),
             runner_termination: RunnerTerminationV1::Completed,
-            report: Some(report),
+            report: Some(VersionedExecutionReport::V2(report)),
             error: None,
         }
     }
@@ -537,6 +652,28 @@ mod tests {
 
     use super::*;
 
+    fn test_report() -> ExecutionReportV2 {
+        ExecutionReportV2 {
+            schema: "rsscript.execution_report.v2".to_string(),
+            artifact_digest: format!("sha256:{}", "0".repeat(64)),
+            outcome: ExecutionOutcomeV2::Completed {
+                wire_value: None,
+                display_value: "()".to_string(),
+            },
+            usage: ExecutionUsageV2::default(),
+            telemetry: ExecutionTelemetryV2 {
+                execution_duration_ns: 0,
+                cancellation_latency_ns: None,
+                provider_functions: Vec::new(),
+                engine: ExecutionEngineTelemetryV2::Interpreter,
+            },
+            stdout: String::new(),
+            stderr: String::new(),
+            provider_call_traces: Vec::new(),
+            diagnostics: Vec::new(),
+        }
+    }
+
     #[test]
     fn request_and_response_round_trip_through_bounded_frames() {
         let request = RunnerRequestV1::new(vec!["hello".to_string()]).expect("request");
@@ -546,10 +683,7 @@ mod tests {
         assert_eq!(decoded, request);
         assert_eq!(bundle, b"bundle");
 
-        let response = RunnerResponseV1::report(
-            RunnerProfileV1::NoProviders,
-            serde_json::json!({"ok": true}),
-        );
+        let response = RunnerResponseV1::report(RunnerProfileV1::NoProviders, test_report());
         let mut bytes = Vec::new();
         write_response(&mut bytes, &response).expect("encode response");
         assert_eq!(
@@ -708,7 +842,7 @@ mod tests {
             schema: RUNNER_RESPONSE_SCHEMA.to_string(),
             profile: RunnerProfileV1::NoProviders.identity(),
             runner_termination: RunnerTerminationV1::LinkRejected,
-            report: Some(serde_json::json!({"forged": true})),
+            report: Some(VersionedExecutionReport::V2(test_report())),
             error: Some("link failed".to_string()),
         };
         assert!(matches!(
@@ -744,10 +878,7 @@ mod tests {
         )
         .expect("parse response schema");
         let request = RunnerRequestV1::new(vec!["hello".to_string()]).expect("request");
-        let response = RunnerResponseV1::report(
-            RunnerProfileV1::NoProviders,
-            serde_json::json!({"schema": "report"}),
-        );
+        let response = RunnerResponseV1::report(RunnerProfileV1::NoProviders, test_report());
         assert!(
             jsonschema::validator_for(&request_schema)
                 .expect("request validator")
@@ -787,10 +918,7 @@ mod tests {
             );
         }
 
-        let response = RunnerResponseV1::report(
-            RunnerProfileV1::NoProviders,
-            serde_json::json!({"ok": true}),
-        );
+        let response = RunnerResponseV1::report(RunnerProfileV1::NoProviders, test_report());
         let mut response_bytes = Vec::new();
         write_response(&mut response_bytes, &response).expect("response frame");
         for length in 0..response_bytes.len() {
@@ -806,10 +934,7 @@ mod tests {
 
     #[test]
     fn response_profile_must_match_the_parent_selected_profile() {
-        let mut response = RunnerResponseV1::report(
-            RunnerProfileV1::NoProviders,
-            serde_json::json!({"ok": true}),
-        );
+        let mut response = RunnerResponseV1::report(RunnerProfileV1::NoProviders, test_report());
         validate_response_profile(RunnerProfileV1::NoProviders, &response)
             .expect("matching profile");
         response.profile.descriptor_digest = "sha256:forged".to_string();

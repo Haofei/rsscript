@@ -1795,12 +1795,7 @@ dependencies = [
 name = "rsscript-compiler"
 version = "0.1.0"
 dependencies = [
- "fs2",
- "hex",
- "libc",
  "rsscript-abi-model",
- "rsscript-artifact",
- "rsscript-artifact-store",
  "rsscript-build-support",
  "rsscript-bytecode",
  "rsscript-codegen-vm",
@@ -1809,23 +1804,15 @@ dependencies = [
  "rsscript-lowering",
  "rsscript-mir",
  "rsscript-operation",
- "rsscript-package-model",
- "rsscript-package-review",
- "rsscript-project",
- "rsscript-review-core",
- "rsscript-review-source",
  "rsscript-semantics",
  "rsscript-syntax",
  "rsscript-text",
  "rsscript-vm",
  "rsscript-work-budget",
- "rustix",
  "serde",
  "serde_json",
  "sha2",
- "tempfile",
  "toml",
- "uuid",
 ]
 
 [[package]]
@@ -2013,6 +2000,7 @@ dependencies = [
  "rsscript-provider-bindgen",
  "rsscript-provider-conformance",
  "rsscript-semantics",
+ "rustix",
 ]
 
 [[package]]
@@ -2110,18 +2098,14 @@ dependencies = [
  "proptest",
  "rsscript-abi-model",
  "rsscript-artifact",
- "rsscript-artifact-store",
  "rsscript-build-support",
  "rsscript-bytecode",
- "rsscript-codegen-vm",
  "rsscript-compiler",
  "rsscript-interface-catalog",
- "rsscript-lowering",
  "rsscript-mir",
  "rsscript-operation",
  "rsscript-project",
  "rsscript-provider-api",
- "rsscript-review",
  "rsscript-semantics",
  "rsscript-vm",
  "serde",

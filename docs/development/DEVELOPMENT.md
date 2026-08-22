@@ -70,150 +70,63 @@ deterministic compilation and execution path correct and auditable.
 
 ## Testing Loop
 
-Use Docker Compose directly for development. The public Cargo-facing rsscript
-test target names are `static`, `runtime`, `differential`, `soak`,
-`jit_cost_model`, and `jit_env`. The last two are process-isolated because they
-set process-wide JIT configuration.
+Use the pinned toolchain and locked dependency graphs. The supported local gate
+mirrors Core CI:
 
 ```sh
-docker compose run --rm dev cargo test -p rsscript-compiler --no-run
-docker compose run --rm dev cargo test -p rsscript-compiler
-docker compose run --rm dev cargo clippy -p rsscript-sdk --tests -- -D warnings
-docker compose run --rm dev cargo test --manifest-path experiments/Cargo.toml -p vm-jit --no-run
-```
-
-If a broad target fails, run the specific failing test while editing. After the
-fix, return to the broad target instead of stacking many single-test passes.
-
-Focused integration tests should target one of the six public Cargo targets and
-filter by module path:
-
-```sh
-docker compose run --rm dev cargo test -p rsscript-sdk --test static checker_frontend::misc::pass_fixtures_have_no_diagnostics -- --exact
-docker compose run --rm dev cargo test -p rsscript-sdk --test runtime vm_eval_parity::misc::parity_arithmetic_and_control_flow -- --exact
-```
-
-Default RSScript runtime/differential tests run the broad VM/JIT matrix
-in-process and keep only small generated-Rust smoke coverage. Before a release,
-or after touching Rust lowering/runtime semantics, run the full generated-Rust
-parity matrix explicitly:
-
-```sh
-docker compose run --rm dev bash -lc 'RSSCRIPT_FULL_BACKEND_PARITY=1 cargo test -p rsscript-sdk --test runtime'
-docker compose run --rm dev bash -lc 'RSSCRIPT_FULL_BACKEND_PARITY=1 cargo test -p rsscript-sdk --test differential'
-```
-
-For a differential soak, raise the generated case counts explicitly:
-
-```sh
-docker compose run --rm dev bash -lc 'RSS_DIFF_PROPTEST_CASES=200 RSS_GENERATIVE_CASES=64 RSS_GENERATIVE_MUTATION_CASES=200 cargo test -p rsscript-sdk --test differential'
-```
-
-Before committing a semantic change, run the full local gate:
-
-```sh
-docker compose run --rm dev cargo clippy -p rsscript-sdk --tests -- -D warnings
-docker compose run --rm dev cargo test --manifest-path experiments/Cargo.toml -p vm-jit --no-run
-docker compose run --rm dev cargo test -p rsscript-compiler
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked
+cargo test --locked -p rsscript-sdk --features execution
+cargo test --locked -p rsscript-cli --features execution
+cargo run --locked -p rsscript-xtask -- validate-ci
 git diff --check
 ```
 
-For release/demo parity and timing-sensitive checks, use:
+The SDK has explicit integration-test targets because `autotests = false`.
+`validate-ci` checks workflow package, feature, and test references against
+Cargo metadata and rejects unregistered top-level SDK test files. A filtered
+test is useful only after the containing registered target has proved that the
+filter matches real coverage.
+
+Providers and the runner have focused gates:
 
 ```sh
-docker compose run --rm dev bash -lc 'RSSCRIPT_FULL_BACKEND_PARITY=1 RSS_DIFF_PROPTEST_CASES=200 RSS_GENERATIVE_CASES=64 RSS_GENERATIVE_MUTATION_CASES=200 cargo test -p rsscript-sdk --test differential'
-docker compose run --rm dev cargo test -p rsscript-sdk --test soak -- --ignored
+cargo test --locked -p rsscript-provider-api
+cargo test --locked -p rsscript-provider-conformance
+cargo test --locked -p rsscript-provider-fs
+cargo test --locked -p rsscript-provider-env
+cargo test --locked -p rsscript-provider-process
+cargo test --locked -p rsscript-provider-http
+cargo test --locked -p rsscript-runner-protocol
 ```
 
-The default development loop must stay static/runtime/differential-first. Do not
-add executable examples, checked-in self-hosted tool runs, ignored static tests,
-or any other e2e test back into the normal `cargo test -p rsscript-compiler` loop. Slow
-release-grade checks belong in the explicit soak commands above.
-
-For package-review work, use focused Rust integration targets first, then run
-the full workspace gate before committing. RSScript no longer maintains a
-second package-manager or test-runner implementation in the language itself.
-
-Release/soak tests live in a separate opt-in manifest:
+The separate experiments workspace consumes Core contracts but is not a Core
+release dependency:
 
 ```sh
-docker compose run --rm dev cargo test -p rsscript-sdk --test soak -- --ignored
+cargo clippy --locked --manifest-path experiments/Cargo.toml --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --manifest-path experiments/Cargo.toml --workspace --all-features
 ```
 
-These tests may build native demo binaries, start local mock servers, generate
-temporary Rust packages, or run timing-sensitive demo clients. They must be
-marked `#[ignore]` at the Cargo test level so `cargo test --workspace` and the
-default full manifest remain static-first.
-
-Core CI runs the locked Rust workspace gate on every pull request. It is
-intentionally static-first: it runs formatting, linting, the workspace test
-suite, and generated-package compile checks without executing every example or
-self-hosted tool as a behavior test. Supply-chain audit and Windows/macOS
-process-containment and native-authorization tests are also Core per-PR gates.
-
-The off-by-default native JIT path is Experimental. Its full suite runs when
-matching paths change, nightly, manually, and during release validation.
-Security-sensitive JIT differential and unsafe-boundary checks remain separate
-path-triggered blockers; Experimental classification does not bypass them. The binding matrix is in
-[Support And Deployment Policy](../support.md).
-
-Tagged releases use that same locked full manifest as a required
-`release-validation` job, then add the native-JIT suite, full generated-Rust
-backend parity, and the release self-host lexer/parser/checker corpus. External
-service integration and ignored soak tests that launch servers or native demos
-remain explicit dedicated-environment checks.
-
-Generated Rust package targets and temporary generated packages are disposable.
-Default local development uses a memory-backed workspace. On macOS, `rss`
-automatically creates or reuses `/Volumes/RSScriptRAMDisk` and derives
-`rsscript-generated-target` and `rsscript-temp` under that root. Set
-`RSSCRIPT_RAMDISK_GIB=N` to change the default macOS size.
-
-You can still override the memory-backed root directly:
+Native JIT is an explicit trusted-host SDK mode. It is absent from default
+closures and requires both correctness and performance evidence:
 
 ```sh
-export RSSCRIPT_RAMDISK_PATH=/Volumes/RSScriptRAMDisk
+cargo test --locked -p rsscript-sdk --features native-jit
+cargo test --locked --release -p rsscript-sdk --features native-jit --test native_jit_smoke native_hot_loop_release_gate_beats_the_interpreter -- --nocapture
 ```
 
-On Linux, `/dev/shm` is usually memory-backed:
+Fuzz targets are maintained in their own manifest:
 
 ```sh
-export RSSCRIPT_RAMDISK_PATH=/dev/shm/rsscript
+cargo check --locked --manifest-path fuzz/Cargo.toml --bins
 ```
 
-On Windows, use a pre-mounted RAM disk drive or directory from your RAM disk
-tool, then set the same variable in PowerShell:
-
-```powershell
-$env:RSSCRIPT_RAMDISK_PATH = 'R:\rsscript'
-```
-
-Windows does not provide a built-in, non-admin API for creating a true RAM disk,
-so the repository only consumes a mounted RAM disk path instead of trying to
-create one.
-
-Do not point these paths back at the SSD for normal development; if a test has
-file conflicts, give it an isolated ramdisk subdirectory or copy the ramdisk
-seed target, then clean the copy after the test.
-
-No unignored runtime/soak tests are allowed in this repository. Do not add
-default tests that execute RSScript programs through `rss run`, drive
-generated Rust/Cargo as an end-to-end compiler invocation, sweep examples as
-behavior tests, run checked-in self-hosted scripts as acceptance tests, build native demo
-binaries, or start mock servers. Fast semantic demo tests are allowed when they
-only exercise review/package/REIR functions and do not build native binaries,
-start servers, run generated packages, or depend on timing. When behavior needs
-coverage, test the parser, analyzer, lowering, package metadata, source-map,
-runtime helper, or review function directly. Any unignored test that exceeds 10
-seconds must be deleted, split, or rewritten as a smaller static/unit-level
-check. Release-grade demos may exist only as ignored Cargo tests, run explicitly
-by their owning workflow or release command.
-
-Avoid running multiple workspace Cargo commands in parallel. Cargo's build lock
-makes that slower and noisier. Independent RSScript script checks may run in
-parallel after `rss` has been built; those jobs use isolated generated packages.
-Use parallel shell reads/searches freely, but keep workspace Cargo verification
-sequential.
+Avoid concurrent workspace Cargo commands because their build lock makes the
+feedback slower. Use a focused test during diagnosis, then return to the broad
+gate. Long-running or platform-specific hardening belongs in its dedicated
+workflow, not in an invented hidden SDK target.
 
 ## Why Not Always Run One Test First?
 

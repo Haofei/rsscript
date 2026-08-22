@@ -47,18 +47,17 @@ jobs:
 
       - name: Check
         run: |
-          ! rg '^\s*(features|profile)\s*:|\beffects\s*\(|\bnative\s+(fn|module)\b|\bCapability\s*<' --glob '*.rss' --glob '*.rssi'
-          ! rg 'FileFeature|HirFeatureUseKind|EffectDecl|CapabilityRisk|CAPABILITY_CATEGORIES|DeploymentProfile|ExecutionCapability|HostCapabilities|HostAuthority|ExecutionContext|AuthorizedPath|AuthorizedEndpoint|AuthorizedExecutable' crates/rsscript
-          ! rg 'stdlib/(fs|env|http|process|os|tempdir|clock|random|log)' crates/rsscript-compiler/src/interfaces.rs
-          ! rg '#\[cfg\(any\(\)\)\]' crates --glob '*.rs'
+          if rg '^\s*(features|profile)\s*:|\beffects\s*\(|\bnative\s+(fn|module)\b|\bCapability\s*<' --glob '*.rss' --glob '*.rssi'; then exit 1; fi
+          if rg 'FileFeature|HirFeatureUseKind|EffectDecl|CapabilityRisk|CAPABILITY_CATEGORIES|DeploymentProfile|ExecutionCapability|HostCapabilities|HostAuthority|ExecutionContext|AuthorizedPath|AuthorizedEndpoint|AuthorizedExecutable' crates providers; then exit 1; fi
+          if rg 'stdlib/(fs|env|http|process|os|tempdir|clock|random|log)' crates/rsscript-compiler/src/interfaces.rs; then exit 1; fi
+          if rg '#\[cfg\(any\(\)\)\]' crates --glob '*.rs'; then exit 1; fi
+          cargo run --locked -p rsscript-xtask -- validate-ci
           cargo fmt --all -- --check
           cargo clippy --locked --all-targets -- -D warnings
           cargo clippy --locked -p rsscript-sdk --all-targets --features execution -- -D warnings
           cargo clippy --locked -p rsscript-cli --all-targets --features execution -- -D warnings
           cargo test --locked
-          # `execution` is the reviewed façade build; the migration corpus
-          # additionally enables its explicit legacy-compatibility feature.
-          cargo test --locked -p rsscript-sdk --features compatibility
+          cargo test --locked -p rsscript-sdk --features execution
           cargo test --locked -p rsscript-cli --features execution
 
   core-platform-security:
@@ -81,15 +80,12 @@ jobs:
       - name: Process containment tests
         run: cargo test --locked -p rss-process-guard
 
-      - name: Package authorization and provider boundary tests
+      - name: Provider and Artifact boundary tests
         run: |
-          cargo test --locked -p rsscript-compiler --lib package::authorization
           cargo test --locked -p rsscript-provider-api
           cargo test --locked -p rsscript-bytecode
 
-      # This checked-in digest covers both deterministic Artifact Bundle bytes
-      # and the analysis/provenance bound to the same immutable snapshot. Run
-      # it on every supported Core platform rather than treating Linux-only
-      # reproducibility as a cross-platform claim.
-      - name: Cross-platform Artifact determinism
-        run: cargo test --locked -p rsscript-sdk --test migration_baseline --features compatibility canonical_compilation_and_diagnostics_are_migration_baselines
+      # Historical readers and Provider-neutral Artifact substitution must stay
+      # valid on every supported Core platform.
+      - name: Cross-platform Artifact compatibility corpus
+        run: cargo test --locked -p rsscript-sdk --features execution --test compatibility_corpus

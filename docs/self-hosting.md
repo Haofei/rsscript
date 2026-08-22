@@ -47,14 +47,14 @@ proof:  canonical stage1 and stage2 IR/output agree
 
 | Component | Implementation | Established proof | Main gap |
 | --- | --- | --- | --- |
-| Scanner | `selfhost/scan.rss` | Shared token primitives and delimiter indexes | Not the sole frontend token source |
-| Lexer | `selfhost/lexer.rss` | Canonical full-corpus token parity | Test harness only |
-| Recognizer | `selfhost/parser.rss` | Top-level accept/reject parity | Does not own the reusable AST |
-| AST | `selfhost/syntax/*`, `selfhost/astdump.rss` | Materialized declarations and a growing body/pattern/expression subset | Legacy rendering/reparse paths remain |
-| Checker | `selfhost/check.rss` | Presence and occurrence/span parity for 84 diagnostic families | Rust remains semantic oracle; token probes remain |
-| Package contract | `selfhost/package_contract.rss` | `RS1301` coverage for major declaration families | Path-sensitive and edge cases remain |
-| Canonical IR | `selfhost/ir/canonical.rss` | Initial signatures/scalar/control/call/place slice | Ownership, generics, closures, intrinsics, package artifacts |
-| C backend | `selfhost/backend/c_emit.rss`, `selfhost/runtime/rssrt.{h,c}` | Initial scalar C ABI | Heap and full compiler IR |
+| Scanner | `experiments/fixtures/selfhost/scan.rss` | Shared token primitives and delimiter indexes | Not the sole frontend token source |
+| Lexer | `experiments/fixtures/selfhost/lexer.rss` | Canonical full-corpus token parity | Test harness only |
+| Recognizer | `experiments/fixtures/selfhost/parser.rss` | Top-level accept/reject parity | Does not own the reusable AST |
+| AST | `experiments/fixtures/selfhost/syntax/*`, `experiments/fixtures/selfhost/astdump.rss` | Materialized declarations and a growing body/pattern/expression subset | Legacy rendering/reparse paths remain |
+| Checker | `experiments/fixtures/selfhost/check.rss` | Presence and occurrence/span parity for 84 diagnostic families | Rust remains semantic oracle; token probes remain |
+| Package contract | `experiments/fixtures/selfhost/package_contract.rss` | `RS1301` coverage for major declaration families | Path-sensitive and edge cases remain |
+| Canonical IR | `experiments/fixtures/selfhost/ir/canonical.rss` | Initial signatures/scalar/control/call/place slice | Ownership, generics, closures, intrinsics, package artifacts |
+| C backend | `experiments/fixtures/selfhost/backend/c_emit.rss`, `experiments/fixtures/selfhost/runtime/rssrt.{h,c}` | Initial scalar C ABI | Heap and full compiler IR |
 | Production lowering/runtime | Rust | Current executable toolchain | Not source-independent |
 
 The Rust test harness in `crates/rsscript-compiler/src/selfhost_parity.rs` resolves these
@@ -76,7 +76,7 @@ The last audited baseline in the removed historical ledger was 2026-07-18:
 | Checker FULL | Not established |
 
 These numbers are evidence from that run, not a current CI claim. Current test
-results are authoritative when they differ. `selfhost/corpus.txt` is the
+results are authoritative when they differ. `experiments/fixtures/selfhost/corpus.txt` is the
 checked-in corpus inventory and must change with intentional corpus additions
 or removals.
 
@@ -113,11 +113,11 @@ completion proofs.
 
 | Layer | RSS tool | Oracle/comparison |
 | --- | --- | --- |
-| Lexer | `selfhost/lexer.rss` | `crate::lexer::lex`; canonical token records |
-| Parser | `selfhost/parser.rss` | `parse_source_raw`; verdict and position tier |
-| AST | `selfhost/astdump.rss` | Rust surface AST dump; byte-exact |
-| Checker | `selfhost/check.rss` | `analyze_source`; code and structured span parity |
-| Package | `selfhost/package_contract.rss` | package review; filtered `RS1301` |
+| Lexer | `experiments/fixtures/selfhost/lexer.rss` | `crate::lexer::lex`; canonical token records |
+| Parser | `experiments/fixtures/selfhost/parser.rss` | `parse_source_raw`; verdict and position tier |
+| AST | `experiments/fixtures/selfhost/astdump.rss` | Rust surface AST dump; byte-exact |
+| Checker | `experiments/fixtures/selfhost/check.rss` | `analyze_source`; code and structured span parity |
+| Package | `experiments/fixtures/selfhost/package_contract.rss` | package review; filtered `RS1301` |
 | Future lowering | RSS lowerer | canonical normalized IR |
 | Future backend | RSS C emitter | VM/AOT behavior and artifact checks |
 

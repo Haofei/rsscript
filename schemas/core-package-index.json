@@ -776,25 +776,6 @@
       },
       "dependencies": [],
       "dev_dependencies": []
-    },
-    {
-      "kind": "package",
-      "name": "rss-native-abi-fixture",
-      "version": "0.1.0",
-      "path": "packages/native-abi-fixture",
-      "interface_files": [
-        "interface/lib.rssi"
-      ],
-      "source_files": [
-        "src/main.rss"
-      ],
-      "native_rust": {
-        "crate_name": "rss_native_abi_fixture_bridge",
-        "path": "native/rust"
-      },
-      "virtual_package": null,
-      "dependencies": [],
-      "dev_dependencies": []
     }
   ]
 }

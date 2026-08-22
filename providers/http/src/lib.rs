@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
+use std::net::{IpAddr, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
 use rsscript_abi_model::ExternalSymbol;
@@ -25,15 +26,54 @@ pub struct HttpProvider {
     max_response_bytes: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HttpNetworkPolicy {
+    pub https_only: bool,
+    pub allow_private_addresses: bool,
+}
+
+impl HttpNetworkPolicy {
+    pub const fn production() -> Self {
+        Self {
+            https_only: true,
+            allow_private_addresses: false,
+        }
+    }
+
+    /// Explicit local-development policy for loopback test servers.
+    pub const fn local_development() -> Self {
+        Self {
+            https_only: false,
+            allow_private_addresses: true,
+        }
+    }
+}
+
 impl HttpProvider {
     pub fn new(
         client: reqwest::blocking::ClientBuilder,
         allowed_origins: impl IntoIterator<Item = impl AsRef<str>>,
     ) -> Result<Self, ProviderError> {
-        let allowed_origins = allowed_origins
+        Self::new_with_policy(client, allowed_origins, HttpNetworkPolicy::production())
+    }
+
+    pub fn new_with_policy(
+        mut client: reqwest::blocking::ClientBuilder,
+        allowed_origins: impl IntoIterator<Item = impl AsRef<str>>,
+        policy: HttpNetworkPolicy,
+    ) -> Result<Self, ProviderError> {
+        let parsed_origins = allowed_origins
             .into_iter()
-            .map(|origin| parse_origin(origin.as_ref()))
-            .collect::<Result<BTreeSet<_>, _>>()?;
+            .map(|origin| parse_allowed_origin(origin.as_ref(), policy))
+            .collect::<Result<Vec<_>, _>>()?;
+        for (url, addresses) in &parsed_origins {
+            let host = url.host_str().expect("validated origin has a host");
+            client = client.resolve_to_addrs(host, addresses);
+        }
+        let allowed_origins = parsed_origins
+            .into_iter()
+            .map(|(url, _)| url.origin().ascii_serialization())
+            .collect::<BTreeSet<_>>();
         let redirect_origins = allowed_origins.clone();
         let client = client
             .redirect(reqwest::redirect::Policy::custom(move |attempt| {
@@ -64,7 +104,9 @@ impl HttpProvider {
         let response_type = WireCallTypeTable::for_signature(&function.signature)
             .and_then(|types| types.with_record_layouts(contract.record_layouts))
             .expect("generated HTTP descriptor has a valid wire layout")
-            .type_id(&rsscript_abi_model::WireType::from("host.http.HttpResponse"))
+            .type_id(&rsscript_abi_model::WireType::from(
+                "host.http.HttpResponse",
+            ))
             .expect("HTTP response record is present in the generated wire layout");
         let provider = self.clone();
         BTreeMap::from([(
@@ -139,16 +181,70 @@ fn http_request_error(error: reqwest::Error, deadline_controls_timeout: bool) ->
     }
 }
 
-fn parse_origin(value: &str) -> Result<String, ProviderError> {
+fn parse_allowed_origin(
+    value: &str,
+    policy: HttpNetworkPolicy,
+) -> Result<(reqwest::Url, Vec<std::net::SocketAddr>), ProviderError> {
     let url = reqwest::Url::parse(value).map_err(|error| {
         ProviderError::invalid_argument(format!("invalid HTTP origin: {error}"))
     })?;
-    if !matches!(url.scheme(), "http" | "https") || url.host().is_none() {
+    if url.host().is_none() || (policy.https_only && url.scheme() != "https") {
+        return Err(ProviderError::invalid_argument(if policy.https_only {
+            "HTTP production policy requires an https origin with a host"
+        } else {
+            "HTTP origin must include a host"
+        }));
+    }
+    if !matches!(url.scheme(), "http" | "https") {
         return Err(ProviderError::invalid_argument(
-            "HTTP origin must use http or https and include a host",
+            "HTTP origin must use http or https",
         ));
     }
-    Ok(url.origin().ascii_serialization())
+    let host = url.host_str().expect("validated URL has a host");
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| ProviderError::invalid_argument("HTTP origin has no resolvable port"))?;
+    let addresses = (host, port)
+        .to_socket_addrs()
+        .map_err(|error| ProviderError::unavailable(format!("resolve HTTP origin: {error}")))?
+        .collect::<Vec<_>>();
+    if addresses.is_empty() {
+        return Err(ProviderError::unavailable(
+            "HTTP origin resolved to no addresses",
+        ));
+    }
+    if !policy.allow_private_addresses
+        && addresses
+            .iter()
+            .any(|address| is_private_or_special(address.ip()))
+    {
+        return Err(ProviderError::new(
+            rsscript_provider_api::ProviderErrorCode::PermissionDenied,
+            "HTTP origin resolves to a private or special-use address",
+        ));
+    }
+    Ok((url, addresses))
+}
+
+fn is_private_or_special(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => {
+            address.is_private()
+                || address.is_loopback()
+                || address.is_link_local()
+                || address.is_unspecified()
+                || address.is_multicast()
+                || address.is_broadcast()
+                || address.octets()[0] == 0
+        }
+        IpAddr::V6(address) => {
+            address.is_loopback()
+                || address.is_unspecified()
+                || address.is_multicast()
+                || (address.segments()[0] & 0xfe00) == 0xfc00
+                || (address.segments()[0] & 0xffc0) == 0xfe80
+        }
+    }
 }
 
 fn read_response_bounded(response: &mut impl Read, limit: usize) -> Result<String, ProviderError> {
@@ -176,9 +272,10 @@ mod tests {
 
     #[test]
     fn conforms_to_provider_contract_without_network_access() {
-        let provider = HttpProvider::new(
+        let provider = HttpProvider::new_with_policy(
             reqwest::blocking::Client::builder(),
-            ["https://example.com"],
+            ["http://127.0.0.1:8080"],
+            HttpNetworkPolicy::local_development(),
         )
         .unwrap();
         let report = rsscript_provider_conformance::assert_wire_provider_conforms(
@@ -190,9 +287,10 @@ mod tests {
 
     #[test]
     fn disallowed_origin_fails_before_network_access() {
-        let provider = HttpProvider::new(
+        let provider = HttpProvider::new_with_policy(
             reqwest::blocking::Client::builder(),
-            ["https://allowed.example"],
+            ["http://127.0.0.1:8080"],
+            HttpNetworkPolicy::local_development(),
         )
         .unwrap();
         let function = provider.functions().into_values().next().unwrap();
@@ -205,7 +303,7 @@ mod tests {
             .call_with_context(
                 &mut context,
                 vec![WireValue::String {
-                    value: "https://denied.example/path".into(),
+                    value: "http://127.0.0.1:8081/path".into(),
                 }],
             )
             .unwrap_err();
@@ -236,7 +334,12 @@ mod tests {
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
         });
         let origin = format!("http://{address}");
-        let provider = HttpProvider::new(reqwest::blocking::Client::builder(), [&origin]).unwrap();
+        let provider = HttpProvider::new_with_policy(
+            reqwest::blocking::Client::builder(),
+            [&origin],
+            HttpNetworkPolicy::local_development(),
+        )
+        .unwrap();
         let function = provider.functions().into_values().next().unwrap();
         let mut context = rsscript_provider_api::ProviderCallContext {
             deadline: Some(rsscript_provider_api::MonotonicDeadline::after(

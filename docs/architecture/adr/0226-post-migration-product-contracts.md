@@ -1,6 +1,6 @@
 # ADR 0226: Post-migration product contracts
 
-- Status: Accepted
+- Status: Superseded by [ADR 0227](0227-close-compatibility-and-keep-one-executable-contract.md)
 - Date: 2026-08-16
 
 ## Context

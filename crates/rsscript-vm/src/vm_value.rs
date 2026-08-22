@@ -1,11 +1,7 @@
 use std::cell::RefCell;
-#[cfg(any())]
-use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-#[cfg(any())]
-use crate::eval_types::NativeValue;
 use crate::fnv::FnvHasher;
 use crate::serde_json;
 
@@ -910,11 +906,6 @@ impl VmMapKey {
     pub(crate) fn display(&self) -> String {
         self.0.display()
     }
-
-    #[cfg(any())]
-    pub(crate) fn native_value(&self) -> Option<NativeValue> {
-        self.0.native_value()
-    }
 }
 
 /// Materialize the immutable value snapshot stored by `Map`/`Set`. RSScript's
@@ -1274,102 +1265,6 @@ impl VmValue {
         }
         rendered
     }
-
-    #[cfg(any())]
-    pub(crate) fn native_value(&self) -> Option<NativeValue> {
-        self.native_value_inner(&mut HashSet::new())
-    }
-
-    #[cfg(any())]
-    fn native_value_inner(&self, active: &mut HashSet<usize>) -> Option<NativeValue> {
-        let node = vm_value_node_id(self);
-        if let Some(node) = node
-            && !active.insert(node)
-        {
-            return None;
-        }
-        let converted = match self {
-            Self::Unit => Some(NativeValue::Unit),
-            Self::Int(value) => Some(NativeValue::Int(*value)),
-            Self::Float(value) => Some(NativeValue::Float(*value)),
-            Self::Bool(value) => Some(NativeValue::Bool(*value)),
-            Self::Char(value) => Some(NativeValue::Char(*value)),
-            Self::Bytes(value) => Some(NativeValue::Bytes(value.as_ref().clone())),
-            Self::String(value) => Some(NativeValue::String(value.to_string())),
-            Self::Json(value) => Some(NativeValue::Json(value.as_ref().clone())),
-            Self::List(values) => values
-                .borrow()
-                .iter()
-                .map(|value| value.native_value_inner(active))
-                .collect::<Option<Vec<_>>>()
-                .map(NativeValue::List),
-            // No `Deque` in the native ABI — a deque crosses the host boundary as
-            // a list (the same shape the compiled backend produces).
-            Self::Deque(values) => values
-                .borrow()
-                .iter()
-                .map(|value| value.native_value_inner(active))
-                .collect::<Option<Vec<_>>>()
-                .map(NativeValue::List),
-            Self::Map(entries) => entries
-                .borrow()
-                .iter()
-                .map(|(key, value)| Some((key.native_value()?, value.native_value_inner(active)?)))
-                .collect::<Option<Vec<_>>>()
-                .map(NativeValue::Map),
-            Self::Struct(data) => native_fields(data, active).map(|fields| NativeValue::Struct {
-                name: data.name().to_string(),
-                fields,
-            }),
-            Self::Variant(data) => native_fields(data, active).map(|fields| NativeValue::Variant {
-                name: data.name().to_string(),
-                fields,
-            }),
-            Self::Native(data) => Some(NativeValue::Native {
-                type_name: data.type_name.to_string(),
-                id: data.id,
-            }),
-            Self::Managed(value) => value.borrow().native_value_inner(active),
-            Self::OptionSomeHeap(value) => {
-                let mut fields = BTreeMap::new();
-                fields.insert("value".to_string(), value.native_value_inner(active)?);
-                Some(NativeValue::Variant {
-                    name: "Some".to_string(),
-                    fields,
-                })
-            }
-            Self::OptionSomeScalar(value) => {
-                let mut fields = BTreeMap::new();
-                fields.insert(
-                    "value".to_string(),
-                    value.to_value().native_value_inner(active)?,
-                );
-                Some(NativeValue::Variant {
-                    name: "Some".to_string(),
-                    fields,
-                })
-            }
-            Self::OptionNone => Some(NativeValue::Variant {
-                name: "None".to_string(),
-                fields: BTreeMap::new(),
-            }),
-            Self::Closure(_) => None,
-        };
-        if let Some(node) = node {
-            active.remove(&node);
-        }
-        converted
-    }
-}
-
-#[cfg(any())]
-fn native_fields(
-    data: &VmStruct,
-    active: &mut HashSet<usize>,
-) -> Option<BTreeMap<String, NativeValue>> {
-    data.iter()
-        .map(|(field, value)| Some((field.to_string(), value.native_value_inner(active)?)))
-        .collect()
 }
 
 impl PartialEq for VmValue {

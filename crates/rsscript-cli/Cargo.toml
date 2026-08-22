@@ -25,13 +25,8 @@ execution = [
     "dep:rsscript-runner-protocol",
     "dep:rsscript-provider-log",
 ]
-# Legacy package review/inspection is an explicit compatibility boundary. The
-# normal artifact build, check, and runner path uses the SDK project loader and
-# does not compile the compiler's filesystem/review closure.
-package-inspect = ["execution", "rsscript-compiler/package"]
 native-jit = ["execution", "rsscript-sdk/native-jit"]
 # Shipped host tools use the adaptive native tier with interpreter fallback.
-host-tools = ["execution", "native-jit"]
 grammar-tools = ["dep:rsscript-compiler"]
 
 [dependencies]

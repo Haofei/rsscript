@@ -152,9 +152,12 @@ running the same compiled artifact.
 
 Host authority belongs to Provider instances and profiles, not to the Core ABI.
 For example,
-`RootedFsProvider::new(root)` resolves every script path below `root` and
-rejects traversal and symlink escapes without changing the process current
-directory. This is authority narrowing, not a language permission system.
+On Unix, `RootedFsProvider::new(root)` opens a stable root directory descriptor
+and resolves every component relative to it with no-follow semantics, rejecting
+traversal, symlink escapes, and canonicalize/open races without changing the
+process current directory. Platforms without that race-resistant implementation
+fail construction closed. This is authority narrowing, not a language
+permission system.
 
 Likewise, `HttpProvider::new(client_builder, allowed_origins)` requires the host
 to name every reachable HTTP origin. It installs the allowlist on redirect hops,

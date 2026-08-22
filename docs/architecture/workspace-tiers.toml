@@ -78,8 +78,8 @@ examples = [
 ]
 
 # Non-Cargo Research/Integration inputs are physically owned by the separate
-# experiments workspace.  Root-level `selfhost` and `packages/native-abi-fixture`
-# are compatibility symlinks only; they must not become copied Core assets.
+# experiments workspace. Retired repository-root compatibility aliases must not
+# return; all Research fixture access uses these physical owners directly.
 fixture_roots = [
   "experiments/fixtures/selfhost",
   "experiments/fixtures/native-abi-fixture",

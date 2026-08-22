@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 use rsscript_provider_api::{
     BlockingBehavior, CancellationBehavior, CancellationToken, ExternalImport, ExternalSymbol,
     MonotonicDeadline, ProviderCallContext, ProviderDescriptor, ProviderError, ProviderErrorCode,
-    ProviderFunction, ProviderLoadError, ProviderRegistry, ResourceCleanupContract,
-    WireInterpreterFn, RUNTIME_ABI_VERSION,
+    ProviderFunction, ProviderLoadError, ProviderRegistry, RUNTIME_ABI_VERSION,
+    ResourceCleanupContract, WireInterpreterFn,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,43 +142,6 @@ fn check_provider_inner<T>(
     Ok(())
 }
 
-/// Legacy dynamic value conformance APIs.
-///
-/// New Providers must use [`check_wire_provider`] and
-/// [`assert_wire_provider_conforms`]. This module remains solely for the
-/// register-VM compatibility adapter while it is migrated to `WireValue`.
-pub mod compatibility {
-    use super::*;
-    use rsscript_provider_api::NativeInterpreterFn;
-
-    pub fn check_native_provider(
-        descriptor: ProviderDescriptor,
-        implementations: BTreeMap<ExternalSymbol, ProviderFunction<NativeInterpreterFn>>,
-    ) -> Result<ProviderConformanceReport, ProviderConformanceError> {
-        check_provider_inner(&descriptor, implementations, |callable, context| {
-            callable.call_with_context(context, Vec::new()).map(|_| ())
-        })?;
-        Ok(conformance_report(&descriptor))
-    }
-
-    #[track_caller]
-    pub fn assert_native_provider_conforms(
-        descriptor: ProviderDescriptor,
-        implementations: BTreeMap<ExternalSymbol, ProviderFunction<NativeInterpreterFn>>,
-    ) -> ProviderConformanceReport {
-        check_native_provider(descriptor, implementations).unwrap_or_else(|error| panic!("{error}"))
-    }
-}
-
-#[deprecated(
-    note = "legacy NativeValue conformance moved to compatibility::assert_native_provider_conforms; new Providers must use assert_wire_provider_conforms"
-)]
-pub use compatibility::assert_native_provider_conforms as assert_provider_conforms;
-#[deprecated(
-    note = "legacy NativeValue conformance moved to compatibility::check_native_provider; new Providers must use check_wire_provider"
-)]
-pub use compatibility::check_native_provider as check_provider;
-
 fn check_descriptor_shape(descriptor: &ProviderDescriptor) -> Result<(), ProviderConformanceError> {
     if descriptor.functions.is_empty() {
         return Err(ProviderConformanceError::EmptyDescriptor);
@@ -245,13 +208,13 @@ fn conformance_report(descriptor: &ProviderDescriptor) -> ProviderConformanceRep
 mod tests {
     use super::*;
     use rsscript_provider_api::{
-        DataEffect, FunctionSignature, NativeInterpreterFn, ParameterSignature, ProviderCallMode,
-        ProviderErrorMapping, ProviderFunctionDescriptor, WireInterpreterFn,
+        DataEffect, FunctionSignature, ParameterSignature, ProviderCallMode, ProviderErrorMapping,
+        ProviderFunctionDescriptor, WireInterpreterFn,
     };
 
     fn fixture() -> (
         ProviderDescriptor,
-        BTreeMap<ExternalSymbol, ProviderFunction<NativeInterpreterFn>>,
+        BTreeMap<ExternalSymbol, ProviderFunction<WireInterpreterFn>>,
     ) {
         let symbol = ExternalSymbol::new("host.test.identity").unwrap();
         let signature = FunctionSignature {
@@ -287,23 +250,6 @@ mod tests {
             symbol,
             ProviderFunction {
                 signature,
-                callable: NativeInterpreterFn::new(|mut arguments| Ok(arguments.remove(0))),
-            },
-        )]);
-        (descriptor, implementations)
-    }
-
-    fn wire_fixture() -> (
-        ProviderDescriptor,
-        BTreeMap<ExternalSymbol, ProviderFunction<WireInterpreterFn>>,
-    ) {
-        let (descriptor, _) = fixture();
-        let symbol = descriptor.functions[0].symbol.clone();
-        let signature = descriptor.functions[0].signature.clone();
-        let implementations = BTreeMap::from([(
-            symbol,
-            ProviderFunction {
-                signature,
                 callable: WireInterpreterFn::new(|mut arguments| Ok(arguments.remove(0))),
             },
         )]);
@@ -311,17 +257,8 @@ mod tests {
     }
 
     #[test]
-    fn valid_provider_passes_all_generic_checks() {
-        let (descriptor, implementations) = fixture();
-        let report = compatibility::check_native_provider(descriptor, implementations).unwrap();
-        assert_eq!(report.provider_id, "test");
-        assert_eq!(report.functions_checked, 1);
-        assert_eq!(report.cancellable_functions, 1);
-    }
-
-    #[test]
     fn canonical_wire_provider_uses_the_same_preflight_contract() {
-        let (descriptor, implementations) = wire_fixture();
+        let (descriptor, implementations) = fixture();
         let report = check_wire_provider(descriptor, implementations).unwrap();
         assert_eq!(report.provider_id, "test");
         assert_eq!(report.functions_checked, 1);
@@ -332,7 +269,7 @@ mod tests {
     fn duplicate_entries_fail_closed() {
         let (mut descriptor, implementations) = fixture();
         descriptor.functions.push(descriptor.functions[0].clone());
-        let error = compatibility::check_native_provider(descriptor, implementations).unwrap_err();
+        let error = check_wire_provider(descriptor, implementations).unwrap_err();
         assert_eq!(
             error,
             ProviderConformanceError::DuplicateEntry("identity".into())
@@ -342,7 +279,7 @@ mod tests {
     #[test]
     fn missing_implementation_is_reported_by_the_linker() {
         let (descriptor, _) = fixture();
-        let error = compatibility::check_native_provider(descriptor, BTreeMap::new()).unwrap_err();
+        let error = check_wire_provider(descriptor, BTreeMap::new()).unwrap_err();
         assert!(matches!(
             error,
             ProviderConformanceError::Load(ProviderLoadError::MissingImplementation(_))

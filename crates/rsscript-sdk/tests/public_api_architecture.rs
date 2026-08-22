@@ -193,12 +193,16 @@ fn removed_root_aliases_cannot_return() {
 #[test]
 fn public_api_inventory_covers_the_current_migration_surface() {
     let inventory = inventory();
-    for required in ["## Stable façade", "## Historical compatibility APIs"] {
+    for required in ["## Stable façade", "## Optional native tier"] {
         assert!(
             inventory.contains(required),
             "SDK API inventory must classify `{required}`"
         );
     }
+    assert!(
+        !inventory.contains("## Historical compatibility APIs"),
+        "the retired compatibility surface must not remain in the active inventory"
+    );
 
     let source = library_source();
     for module in [
@@ -229,7 +233,11 @@ fn public_api_inventory_covers_the_current_migration_surface() {
             "experimental VM detail must not enter the default SDK surface: `{forbidden}`"
         );
     }
-    assert!(source.contains("pub fn native_jit_for_trusted_host"));
+    assert!(source.contains("pub fn native_jit(mut self, options: NativeJitOptions) -> Self"));
+    assert!(
+        !source.contains("native_jit_for_trusted_host"),
+        "selecting the native engine must not silently remove execution limits"
+    );
     for forbidden in [
         "pub use rsscript_vm::NativeStats",
         "reg_vm_eval_source_main_native",

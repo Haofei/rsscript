@@ -3,7 +3,11 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::io::Read;
-use std::path::{Component, Path, PathBuf};
+#[cfg(unix)]
+use std::path::Component;
+use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::sync::Arc;
 
 use rsscript_abi_model::ExternalSymbol;
 use rsscript_provider_api::{
@@ -23,6 +27,8 @@ const MAX_READ_BYTES: usize = 16 * 1024 * 1024;
 #[derive(Debug, Clone)]
 pub struct RootedFsProvider {
     root: PathBuf,
+    #[cfg(unix)]
+    root_descriptor: Arc<std::os::fd::OwnedFd>,
 }
 
 impl RootedFsProvider {
@@ -34,7 +40,31 @@ impl RootedFsProvider {
                 "filesystem provider root must be a directory",
             ));
         }
-        Ok(Self { root })
+        #[cfg(unix)]
+        {
+            let root_descriptor = Arc::new(
+                rustix::fs::open(
+                    &root,
+                    rustix::fs::OFlags::RDONLY
+                        | rustix::fs::OFlags::DIRECTORY
+                        | rustix::fs::OFlags::CLOEXEC,
+                    rustix::fs::Mode::empty(),
+                )
+                .map_err(io::Error::from)?,
+            );
+            Ok(Self {
+                root,
+                root_descriptor,
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = root;
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "race-resistant rooted filesystem access is not implemented on this platform",
+            ))
+        }
     }
 
     pub fn root(&self) -> &Path {
@@ -59,21 +89,20 @@ impl RootedFsProvider {
                 let WireValue::String { value: path } = args.remove(0) else {
                     return Err(ProviderError::invalid_argument("path must be String"));
                 };
-                let path = read_provider
-                    .resolve_existing(&path)
-                    .map_err(|error| ProviderError::from_io("resolve read path", error))?;
+                let file = read_provider
+                    .open_for_read(&path)
+                    .map_err(|error| ProviderError::from_io("open read path", error))?;
                 let limit = context
                     .remaining_byte_budget
                     .map_or(MAX_READ_BYTES, |budget| budget.min(MAX_READ_BYTES));
-                let metadata = std::fs::metadata(&path)
+                let metadata = file
+                    .metadata()
                     .map_err(|error| ProviderError::from_io("inspect read path", error))?;
                 if metadata.len() > limit as u64 {
                     return Err(ProviderError::resource_exhausted(format!(
                         "filesystem read exceeds {limit} bytes"
                     )));
                 }
-                let file = std::fs::File::open(path)
-                    .map_err(|error| ProviderError::from_io("open read path", error))?;
                 let mut text = String::with_capacity(metadata.len() as usize);
                 file.take(limit as u64 + 1)
                     .read_to_string(&mut text)
@@ -94,16 +123,15 @@ impl RootedFsProvider {
                 let WireValue::String { value: text } = args.remove(0) else {
                     return Err(ProviderError::invalid_argument("text must be String"));
                 };
-                let path = write_provider
-                    .resolve_for_write(&path)
-                    .map_err(|error| ProviderError::from_io("resolve write path", error))?;
-                std::fs::write(path, text)
+                write_provider
+                    .write_text(&path, text.as_bytes())
                     .map_err(|error| ProviderError::from_io("write text", error))?;
                 Ok(WireValue::Unit)
             }),
         ])
     }
 
+    #[cfg(unix)]
     fn relative_path<'a>(&self, path: &'a str) -> io::Result<&'a Path> {
         let path = Path::new(path);
         if path.as_os_str().is_empty()
@@ -122,36 +150,83 @@ impl RootedFsProvider {
         Ok(path)
     }
 
-    fn resolve_existing(&self, path: &str) -> io::Result<PathBuf> {
-        let candidate = std::fs::canonicalize(self.root.join(self.relative_path(path)?))?;
-        self.ensure_below_root(candidate)
+    #[cfg(unix)]
+    fn open_for_read(&self, path: &str) -> io::Result<std::fs::File> {
+        self.open_relative(
+            self.relative_path(path)?,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
     }
 
-    fn resolve_for_write(&self, path: &str) -> io::Result<PathBuf> {
-        let relative = self.relative_path(path)?;
-        let candidate = self.root.join(relative);
-        if candidate.exists() {
-            return self.ensure_below_root(std::fs::canonicalize(candidate)?);
-        }
-        let parent = candidate.parent().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::PermissionDenied, "write path has no parent")
-        })?;
-        let canonical_parent = self.ensure_below_root(std::fs::canonicalize(parent)?)?;
-        let file_name = candidate.file_name().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "write path has no file name")
-        })?;
-        Ok(canonical_parent.join(file_name))
+    #[cfg(not(unix))]
+    fn open_for_read(&self, _path: &str) -> io::Result<std::fs::File> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "race-resistant rooted filesystem access is not implemented on this platform",
+        ))
     }
 
-    fn ensure_below_root(&self, path: PathBuf) -> io::Result<PathBuf> {
-        if path.starts_with(&self.root) {
-            Ok(path)
-        } else {
-            Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "filesystem provider path escapes its configured root",
-            ))
+    #[cfg(unix)]
+    fn write_text(&self, path: &str, bytes: &[u8]) -> io::Result<()> {
+        use std::io::Write;
+        let mut file = self.open_relative(
+            self.relative_path(path)?,
+            rustix::fs::OFlags::WRONLY
+                | rustix::fs::OFlags::CREATE
+                | rustix::fs::OFlags::TRUNC
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+        )?;
+        file.write_all(bytes)?;
+        file.sync_all()
+    }
+
+    #[cfg(not(unix))]
+    fn write_text(&self, _path: &str, _bytes: &[u8]) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "race-resistant rooted filesystem access is not implemented on this platform",
+        ))
+    }
+
+    /// Traverse every component relative to a stable directory descriptor.
+    /// `NOFOLLOW` is applied at every hop and the final open is relative to
+    /// the already-open parent, closing the canonicalize/open race.
+    #[cfg(unix)]
+    fn open_relative(
+        &self,
+        relative: &Path,
+        final_flags: rustix::fs::OFlags,
+        final_mode: rustix::fs::Mode,
+    ) -> io::Result<std::fs::File> {
+        use rustix::fs::{Mode, OFlags};
+        let components = relative
+            .components()
+            .map(|component| match component {
+                Component::Normal(component) => Ok(component),
+                _ => Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "filesystem provider path must stay below its configured root",
+                )),
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        let (name, parents) = components.split_last().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "filesystem path is empty")
+        })?;
+        let mut current = rustix::io::dup(&*self.root_descriptor).map_err(io::Error::from)?;
+        for component in parents {
+            current = rustix::fs::openat(
+                &current,
+                *component,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(io::Error::from)?;
         }
+        let file = rustix::fs::openat(&current, *name, final_flags | OFlags::NOFOLLOW, final_mode)
+            .map_err(io::Error::from)?;
+        Ok(file.into())
     }
 }
 
@@ -202,7 +277,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).unwrap();
         let provider = RootedFsProvider::new(&root).unwrap();
-        let error = provider.resolve_for_write("../outside.txt").unwrap_err();
+        let error = provider.relative_path("../outside.txt").unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -241,5 +316,23 @@ mod tests {
             rsscript_provider_api::ProviderErrorCode::ResourceExhausted
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rooted_provider_rejects_symlink_at_final_open() {
+        use std::os::unix::fs::symlink;
+
+        let base = std::env::temp_dir().join(format!(
+            "rsscript-provider-fs-symlink-{}",
+            std::process::id()
+        ));
+        let root = base.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(base.join("outside.txt"), "secret").unwrap();
+        symlink(base.join("outside.txt"), root.join("escape.txt")).unwrap();
+        let provider = RootedFsProvider::new(&root).unwrap();
+        provider.open_for_read("escape.txt").unwrap_err();
+        std::fs::remove_dir_all(base).unwrap();
     }
 }

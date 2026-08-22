@@ -43,8 +43,8 @@ mod lower_names;
 mod rust_lower;
 
 pub use rust_lower::{
-    lower_aot_input, lower_coverage_report, lower_program_to_rust,
-    lower_program_to_rust_with_map, lower_source_to_rust, lower_source_to_rust_package,
+    lower_aot_input, lower_coverage_report, lower_program_to_rust, lower_program_to_rust_with_map,
+    lower_source_to_rust, lower_source_to_rust_package,
     lower_source_to_rust_package_with_interfaces, lower_source_to_rust_with_map,
     lower_sources_to_rust_package_with_interfaces, lower_sources_to_rust_package_with_options,
     parse_runtime_diagnostics, parse_source_map_json, remap_rustc_diagnostic_json,

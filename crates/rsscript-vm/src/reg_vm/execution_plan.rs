@@ -81,8 +81,59 @@ pub(super) struct NativeAdmissionPolicy {
     pub(super) optimize_work_threshold: u64,
 }
 
+/// Host-owned configuration for the optional trusted in-process native tier.
+///
+/// Artifacts and source code cannot select or modify this policy. Defaults are
+/// deterministic and bounded; test-only stress modes remain separate entry
+/// points rather than fields in the production contract.
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeJitOptions {
+    pub tier_up_threshold: u32,
+    pub enable_osr: bool,
+    pub collect_telemetry: bool,
+    pub max_code_bytes: u64,
+    pub max_compile_millis: u64,
+    pub optimize_work_threshold: u64,
+}
+
+#[cfg(feature = "native-jit")]
+impl Default for NativeJitOptions {
+    fn default() -> Self {
+        Self {
+            tier_up_threshold: 0,
+            enable_osr: true,
+            collect_telemetry: true,
+            max_code_bytes: 16 * 1024 * 1024,
+            max_compile_millis: 2_000,
+            optimize_work_threshold: 50_000,
+        }
+    }
+}
+
 #[cfg(feature = "native-jit")]
 impl NativeExecutionPlan {
+    pub(super) fn from_options(options: NativeJitOptions) -> Self {
+        Self {
+            tier_up_threshold: options.tier_up_threshold,
+            force_bail: false,
+            collect_stats: options.collect_telemetry,
+            baseline: false,
+            precise_deopt: true,
+            osr_enabled: options.enable_osr,
+            report: false,
+            forced_safepoint: None,
+            force_all_safepoints: false,
+            admission: NativeAdmissionPolicy {
+                max_code_bytes: options.max_code_bytes,
+                max_compile_millis: options.max_compile_millis,
+                optimize_work_threshold: options
+                    .optimize_work_threshold
+                    .max(u64::from(options.tier_up_threshold) + 1),
+            },
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn from_environment(
         tier_up_threshold: u32,

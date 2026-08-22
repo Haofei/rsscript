@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,9 +10,9 @@ use std::time::Instant;
 use rsscript_provider_api::CancellationToken;
 use rsscript_provider_api::{
     BlockingBehavior, CancellationBehavior, DataEffect, ExternalSymbol, FunctionSignature,
-    NativeInterpreterFn, ParameterSignature, ProviderCallMode, ProviderDescriptor, ProviderError,
-    ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor, RUNTIME_ABI_VERSION,
-    ResourceCleanupContract,
+    ParameterSignature, ProviderCallMode, ProviderDescriptor, ProviderError, ProviderErrorMapping,
+    ProviderFunction, ProviderFunctionDescriptor, RUNTIME_ABI_VERSION, ResourceCleanupContract,
+    WireInterpreterFn,
 };
 use rsscript_sdk::{
     artifact::ArtifactVerifier,
@@ -24,8 +24,6 @@ use serde::{Deserialize, Serialize};
 
 const METRICS_SCHEMA: &str = "rsscript.core_metrics.v1";
 const SLO_SCHEMA: &str = "rsscript.core_slo.v1";
-const MIGRATION_STATUS_SCHEMA: &str = "rsscript.migration_status.v1";
-const MIGRATION_QUEUE_SCHEMA: &str = "rsscript.migration_queue.v1";
 const WORKLOAD: &str = r#"
 fn main() -> Int {
     let mut index = 0
@@ -125,957 +123,232 @@ struct Arguments {
     check: Option<PathBuf>,
 }
 
-#[derive(Debug)]
-struct MigrationStatusArguments {
-    json: bool,
-    open_only: bool,
-    required_items: Vec<String>,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct MigrationVerifyArguments {
-    item_id: String,
-    dry_run: bool,
-    staged: bool,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct MigrationWorkArguments {
-    item_id: String,
-    json: bool,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct MigrationAuditArguments {
-    json: bool,
-}
-
-#[derive(Debug, Serialize, PartialEq, Eq)]
-struct MigrationStatus {
-    schema: &'static str,
-    source: &'static str,
-    completed: usize,
-    open: usize,
-    items: Vec<MigrationStatusItem>,
-}
-
-#[derive(Debug, Serialize, PartialEq, Eq)]
-struct MigrationStatusItem {
-    id: String,
-    title: String,
-    completed: bool,
-    line: usize,
-}
-
-/// A deliberately small, curated frontier over the complete migration
-/// checklist. The Markdown checklist remains the authoritative status source;
-/// this manifest supplies only prerequisite edges and reproducible acceptance
-/// commands for the next independently mergeable slices.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct MigrationQueueManifest {
-    schema: String,
-    tasks: Vec<MigrationQueueTask>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct MigrationQueueTask {
-    id: String,
-    priority: u16,
-    depends_on: Vec<String>,
-    #[serde(default)]
-    scope: Vec<String>,
-    #[serde(default)]
-    acceptance: Vec<String>,
-    verification: Vec<String>,
-}
-
-#[derive(Debug, Serialize, PartialEq, Eq)]
-struct MigrationReadyQueue {
-    schema: &'static str,
-    source: &'static str,
-    ready: Vec<MigrationReadyItem>,
-    blocked: Vec<MigrationBlockedItem>,
-}
-
-#[derive(Debug, Serialize, PartialEq, Eq)]
-struct MigrationReadyItem {
-    id: String,
-    title: String,
-    priority: u16,
-    verification: Vec<String>,
-}
-
-#[derive(Debug, Serialize, PartialEq, Eq)]
-struct MigrationBlockedItem {
-    id: String,
-    title: String,
-    priority: u16,
-    blocked_by: Vec<String>,
-}
-
-/// A self-contained work packet for one focused migration slice. It is
-/// derived from the checklist and curated queue rather than becoming a second
-/// mutable TODO source.
-#[derive(Debug, Serialize, PartialEq, Eq)]
-struct MigrationWorkPacket {
-    schema: &'static str,
-    checklist_source: &'static str,
-    queue_source: &'static str,
-    id: String,
-    title: String,
-    checklist_line: usize,
-    priority: u16,
-    state: &'static str,
-    depends_on: Vec<String>,
-    blocked_by: Vec<String>,
-    scope: Vec<String>,
-    acceptance: Vec<String>,
-    verification: Vec<String>,
-}
-
-/// Read-only consistency report over the authoritative checklist and the
-/// deliberately smaller execution frontier. It never infers completion: a
-/// parent whose children are checked is only a candidate for a human review
-/// of its stated acceptance condition.
-#[derive(Debug, Serialize, PartialEq, Eq)]
-struct MigrationAudit {
-    schema: &'static str,
-    checklist_source: &'static str,
-    queue_source: &'static str,
-    open_leaf_items_not_queued: Vec<MigrationAuditItem>,
-    open_parents_with_completed_children: Vec<MigrationAuditItem>,
-}
-
-#[derive(Debug, Serialize, PartialEq, Eq)]
-struct MigrationAuditItem {
-    id: String,
-    title: String,
-    line: usize,
-}
-
 fn main() -> Result<(), Box<dyn Error>> {
     let mut arguments = std::env::args().skip(1);
     match arguments.next().as_deref() {
         Some("core-metrics") => run_core_metrics(parse_arguments(arguments)?),
-        Some("migration-status") => run_migration_status(parse_migration_status_arguments(arguments)?),
-        Some("migration-next") => run_migration_next(),
-        Some("migration-next-json") => run_migration_next_json(),
-        Some("migration-audit") => run_migration_audit(parse_migration_audit_arguments(arguments)?),
-        Some("migration-work") => run_migration_work(parse_migration_work_arguments(arguments)?),
-        Some("migration-verify") => run_migration_verify(parse_migration_verify_arguments(arguments)?),
+        Some("validate-ci") => validate_ci(),
         _ => Err(
-            "usage:\n  cargo run -p rsscript-xtask --release -- core-metrics [--iterations N] [--output FILE] [--check SLO]\n  cargo run -p rsscript-xtask -- migration-status [--json] [--open] [--require ITEM]\n  cargo run -p rsscript-xtask -- migration-next\n  cargo run -p rsscript-xtask -- migration-next-json\n  cargo run -p rsscript-xtask -- migration-audit [--json]\n  cargo run -p rsscript-xtask -- migration-work ITEM [--json]\n  cargo run -p rsscript-xtask -- migration-verify ITEM [--dry-run] [--staged]"
+            "usage:\n  cargo run -p rsscript-xtask --release -- core-metrics [--iterations N] [--output FILE] [--check SLO]\n  cargo run -p rsscript-xtask -- validate-ci"
                 .into(),
         ),
     }
 }
 
-fn run_migration_audit(arguments: MigrationAuditArguments) -> Result<(), Box<dyn Error>> {
-    let audit = migration_audit()?;
-    if arguments.json {
-        println!("{}", serde_json::to_string_pretty(&audit)?);
-        return Ok(());
-    }
-    println!(
-        "Migration audit: {} open leaf item(s) outside the curated queue; {} parent completion candidate(s)",
-        audit.open_leaf_items_not_queued.len(),
-        audit.open_parents_with_completed_children.len()
-    );
-    print_audit_items(
-        "Open leaf items not queued",
-        &audit.open_leaf_items_not_queued,
-    );
-    print_audit_items(
-        "Open parents whose declared children are all checked (review parent acceptance before checking)",
-        &audit.open_parents_with_completed_children,
-    );
-    Ok(())
+#[derive(Debug)]
+struct CargoPackageInventory {
+    features: BTreeSet<String>,
+    tests: BTreeSet<String>,
+    test_sources: BTreeSet<PathBuf>,
 }
 
-fn print_audit_items(label: &str, items: &[MigrationAuditItem]) {
-    if items.is_empty() {
-        println!("{label}: none");
-        return;
-    }
-    println!("{label}:");
-    for item in items {
-        println!("  - {} — {} (line {})", item.id, item.title, item.line);
-    }
-}
-
-fn run_migration_work(arguments: MigrationWorkArguments) -> Result<(), Box<dyn Error>> {
-    let packet = migration_work_packet(&arguments.item_id)?;
-    if arguments.json {
-        println!("{}", serde_json::to_string_pretty(&packet)?);
-        return Ok(());
-    }
-    println!(
-        "Migration work packet: {} — {} [priority {}, {}]",
-        packet.id, packet.title, packet.priority, packet.state
-    );
-    println!(
-        "Checklist: {}:{}",
-        packet.checklist_source, packet.checklist_line
-    );
-    print_packet_list("Prerequisites", &packet.depends_on);
-    if !packet.blocked_by.is_empty() {
-        print_packet_list("Blocked by", &packet.blocked_by);
-    }
-    print_packet_list("Expected change scope", &packet.scope);
-    print_packet_list("Mechanical acceptance", &packet.acceptance);
-    print_packet_list("Verification", &packet.verification);
-    if packet.state == "ready" {
-        println!(
-            "Handoff: cargo run -p rsscript-xtask -- migration-verify {}",
-            packet.id
-        );
-    } else {
-        println!("Handoff: complete the blocking checklist items before this slice.");
-    }
-    Ok(())
-}
-
-fn print_packet_list(label: &str, values: &[String]) {
-    if values.is_empty() {
-        println!("{label}: none");
-        return;
-    }
-    println!("{label}:");
-    for value in values {
-        println!("  - {value}");
-    }
-}
-
-/// Executes the curated acceptance commands for one ready migration slice.
-///
-/// The queue remains deliberately declarative: this command cannot mark an
-/// item complete or edit the checklist. It only removes the repeated manual
-/// work of finding the exact focused test set, and fails before running when a
-/// prerequisite is still open.
-fn run_migration_verify(arguments: MigrationVerifyArguments) -> Result<(), Box<dyn Error>> {
-    let queue = migration_ready_queue()?;
-    let item = queue
-        .ready
-        .iter()
-        .find(|item| item.id == arguments.item_id)
-        .ok_or_else(|| {
-            if let Some(blocked) = queue
-                .blocked
-                .iter()
-                .find(|item| item.id == arguments.item_id)
-            {
-                format!(
-                    "migration item `{}` is blocked by {}; run `migration-next` for the ready frontier",
-                    arguments.item_id,
-                    blocked.blocked_by.join(", ")
-                )
-            } else {
-                format!(
-                    "migration item `{}` is not a ready queued item; run `migration-next` for the ready frontier",
-                    arguments.item_id
-                )
-            }
-        })?;
-
-    if arguments.staged {
-        verify_staged_migration_change(&item.id)?;
-    }
-
-    println!(
-        "Migration verification: {} — {} ({} command{})",
-        item.id,
-        item.title,
-        item.verification.len(),
-        if item.verification.len() == 1 {
-            ""
-        } else {
-            "s"
-        }
-    );
-    for command in &item.verification {
-        let cargo_arguments = parse_verification_command(command)?;
-        if arguments.dry_run {
-            println!("[dry-run] {command}");
-            continue;
-        }
-        println!("[verify] {command}");
-        let status = Command::new("cargo")
-            .args(&cargo_arguments)
-            .current_dir(workspace_root())
-            .status()?;
-        if !status.success() {
-            return Err(format!(
-                "migration verification for `{}` failed: `{command}` exited with {status}",
-                item.id
-            )
-            .into());
-        }
-    }
-    if arguments.dry_run {
-        println!("Dry run complete; no verification commands were executed.");
-    } else {
-        println!(
-            "Migration verification passed for `{}`. Update the checklist only when the item’s mechanical acceptance condition is also satisfied.",
-            item.id
-        );
-    }
-    Ok(())
-}
-
-/// Validate the change set that is about to be committed for a work packet.
-///
-/// This is intentionally a pre-commit guard rather than a generic git
-/// wrapper. It catches the two easy-to-miss migration failures: staging a
-/// file outside the packet's declared boundary, and testing a changed Cargo
-/// manifest without staging its regenerated lockfile. It never stages or
-/// modifies files itself.
-fn verify_staged_migration_change(item_id: &str) -> Result<(), Box<dyn Error>> {
-    let packet = migration_work_packet(item_id)?;
+/// Check workflow Cargo package, feature, and integration-test references
+/// against the workspace that each command explicitly selects.
+fn validate_ci() -> Result<(), Box<dyn Error>> {
     let root = workspace_root();
-    run_git_success(&root, ["diff", "--cached", "--check"])?;
-
-    let staged = git_lines(&root, ["diff", "--cached", "--name-only"])?;
-    if staged.is_empty() {
-        return Err(format!(
-            "migration item `{item_id}` has no staged changes; stage only its declared work-packet files before using --staged"
-        )
-        .into());
-    }
-    for path in &staged {
-        if !staged_path_is_allowed(path, &packet.scope) {
-            return Err(format!(
-                "staged path `{path}` is outside migration item `{item_id}` scope; split it into its own work packet or extend the declared scope"
-            )
-            .into());
-        }
-    }
-
-    let unstaged_locks = git_lines(&root, [
-        "diff",
-        "--name-only",
-        "--",
-        "Cargo.lock",
-        "experiments/Cargo.lock",
-    ])?;
-    if !unstaged_locks.is_empty() {
-        return Err(format!(
-            "Cargo lockfile changes are not staged: {}; stage the regenerated lockfile before committing",
-            unstaged_locks.join(", ")
-        )
-        .into());
-    }
-
-    run_cargo_metadata_locked(&root, None)?;
-    run_cargo_metadata_locked(&root, Some("experiments/Cargo.toml"))?;
-    println!(
-        "Staged migration preflight passed for `{item_id}` (scope, diff, and locked metadata)."
-    );
-    Ok(())
-}
-
-fn staged_path_is_allowed(path: &str, scope: &[String]) -> bool {
-    if matches!(path, "Cargo.lock" | "experiments/Cargo.lock") {
-        return true;
-    }
-    scope.iter().any(|entry| {
-        let anchor = entry
-            .split_once('*')
-            .map_or(entry.as_str(), |(prefix, _)| prefix)
-            .trim_end_matches('/');
-        path == anchor || path.strip_prefix(anchor).is_some_and(|suffix| suffix.starts_with('/'))
-    })
-}
-
-fn git_lines<const N: usize>(root: &Path, arguments: [&str; N]) -> Result<Vec<String>, Box<dyn Error>> {
-    let output = Command::new("git").args(arguments).current_dir(root).output()?;
-    if !output.status.success() {
-        return Err(format!("git command failed with {}", output.status).into());
-    }
-    Ok(String::from_utf8(output.stdout)?
-        .lines()
-        .map(str::to_owned)
-        .collect())
-}
-
-fn run_git_success<const N: usize>(root: &Path, arguments: [&str; N]) -> Result<(), Box<dyn Error>> {
-    let status = Command::new("git").args(arguments).current_dir(root).status()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("git command failed with {status}").into())
-    }
-}
-
-fn run_cargo_metadata_locked(root: &Path, manifest_path: Option<&str>) -> Result<(), Box<dyn Error>> {
-    let mut command = Command::new("cargo");
-    command
-        .arg("metadata")
-        .arg("--locked")
-        .arg("--no-deps")
-        .arg("--format-version=1")
-        .current_dir(root);
-    if let Some(manifest_path) = manifest_path {
-        command.arg("--manifest-path").arg(manifest_path);
-    }
-    let status = command.status()?;
-    if status.success() {
-        Ok(())
-    } else {
-        let target = manifest_path.unwrap_or("Cargo.toml");
-        Err(format!("locked Cargo metadata check failed for `{target}` with {status}").into())
-    }
-}
-
-fn run_migration_next() -> Result<(), Box<dyn Error>> {
-    let queue = migration_ready_queue()?;
-    println!(
-        "Migration ready queue: {} ready, {} blocked ({})",
-        queue.ready.len(),
-        queue.blocked.len(),
-        workspace_root()
-            .join("docs/architecture/migration-work-queue.json")
-            .display()
-    );
-    for item in queue.ready {
-        println!(
-            "- {} — {} [priority {}]",
-            item.id, item.title, item.priority
-        );
-        for command in item.verification {
-            println!("  verify: {command}");
-        }
-    }
-    Ok(())
-}
-
-fn run_migration_next_json() -> Result<(), Box<dyn Error>> {
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&migration_ready_queue()?)?
-    );
-    Ok(())
-}
-
-fn migration_ready_queue() -> Result<MigrationReadyQueue, Box<dyn Error>> {
-    let root = workspace_root();
-    let status = migration_status(&fs::read_to_string(
-        root.join("docs/architecture/migration-baseline.md"),
-    )?)?;
-    let manifest: MigrationQueueManifest = serde_json::from_slice(&fs::read(
-        root.join("docs/architecture/migration-work-queue.json"),
-    )?)?;
-    if manifest.schema != MIGRATION_QUEUE_SCHEMA {
-        return Err(format!(
-            "unsupported migration work queue schema `{}`",
-            manifest.schema
-        )
-        .into());
-    }
-
-    let by_id = status
-        .items
-        .iter()
-        .map(|item| (item.id.as_str(), item))
-        .collect::<BTreeMap<_, _>>();
-    let mut queued = std::collections::BTreeSet::new();
-    let mut ready = Vec::new();
-    let mut blocked = Vec::new();
-    for task in manifest.tasks {
-        if !queued.insert(task.id.clone()) {
-            return Err(format!("duplicate migration queue task `{}`", task.id).into());
-        }
-        let item = by_id
-            .get(task.id.as_str())
-            .ok_or_else(|| format!("migration queue task `{}` is not declared", task.id))?;
-        if migration_item_has_children(&status, &item.id) {
-            return Err(format!(
-                "migration queue task `{}` is a parent milestone; queue only independently closeable leaf items",
-                task.id
-            )
-            .into());
-        }
-        if item.completed {
-            return Err(format!(
-                "migration queue task `{}` is already complete; remove it from the frontier",
-                task.id
-            )
-            .into());
-        }
-        if task.verification.is_empty() {
-            return Err(format!(
-                "migration queue task `{}` must declare at least one verification command",
-                task.id
-            )
-            .into());
-        }
-        if task.scope.is_empty() || task.acceptance.is_empty() {
-            return Err(format!(
-                "migration queue task `{}` must declare non-empty scope and mechanical acceptance",
-                task.id
-            )
-            .into());
-        }
-        for scope in &task.scope {
-            validate_migration_scope(&root, scope)?;
-        }
-        for command in &task.verification {
-            parse_verification_command(command)?;
-        }
-        let mut blocked_by = Vec::new();
-        for dependency in task.depends_on {
-            let dependency_item = by_id.get(dependency.as_str()).ok_or_else(|| {
-                format!(
-                    "migration queue task `{}` depends on undeclared item `{dependency}`",
-                    task.id
-                )
-            })?;
-            if !dependency_item.completed {
-                blocked_by.push(dependency);
-            }
-        }
-        if blocked_by.is_empty() {
-            ready.push(MigrationReadyItem {
-                id: task.id,
-                title: item.title.clone(),
-                priority: task.priority,
-                verification: task.verification,
-            });
-        } else {
-            blocked.push(MigrationBlockedItem {
-                id: task.id,
-                title: item.title.clone(),
-                priority: task.priority,
-                blocked_by,
-            });
-        }
-    }
-    ready.sort_by(|left, right| {
-        left.priority
-            .cmp(&right.priority)
-            .then(left.id.cmp(&right.id))
-    });
-    blocked.sort_by(|left, right| {
-        left.priority
-            .cmp(&right.priority)
-            .then(left.id.cmp(&right.id))
-    });
-    Ok(MigrationReadyQueue {
-        schema: MIGRATION_QUEUE_SCHEMA,
-        source: "docs/architecture/migration-work-queue.json",
-        ready,
-        blocked,
-    })
-}
-
-/// Reject stale work-packet paths before they become an implementation plan.
-///
-/// Scope remains intentionally declarative and accepts a trailing glob such as
-/// `crates/rsscript-vm/**`, but its non-glob anchor must resolve inside the
-/// repository. This catches package renames and proposed crates that were
-/// never created without turning the queue into a general glob engine.
-fn validate_migration_scope(root: &Path, scope: &str) -> Result<(), Box<dyn Error>> {
-    let anchor = scope
-        .split_once('*')
-        .map_or(scope, |(prefix, _)| prefix)
-        .trim_end_matches('/');
-    if anchor.is_empty() || Path::new(anchor).is_absolute() {
-        return Err(format!("migration scope `{scope}` must have a relative path anchor").into());
-    }
-    let path = root.join(anchor);
-    if !path.exists() {
-        return Err(format!(
-            "migration scope `{scope}` has no repository path anchor `{}`",
-            path.display()
-        )
-        .into());
-    }
-    Ok(())
-}
-
-fn migration_work_packet(item_id: &str) -> Result<MigrationWorkPacket, Box<dyn Error>> {
-    let root = workspace_root();
-    let status = migration_status(&fs::read_to_string(
-        root.join("docs/architecture/migration-baseline.md"),
-    )?)?;
-    let manifest: MigrationQueueManifest = serde_json::from_slice(&fs::read(
-        root.join("docs/architecture/migration-work-queue.json"),
-    )?)?;
-    if manifest.schema != MIGRATION_QUEUE_SCHEMA {
-        return Err(format!(
-            "unsupported migration work queue schema `{}`",
-            manifest.schema
-        )
-        .into());
-    }
-    let task = manifest
-        .tasks
-        .iter()
-        .find(|task| task.id == item_id)
-        .ok_or_else(|| format!("migration work item `{item_id}` is not in the curated queue"))?;
-    if task.scope.is_empty() || task.acceptance.is_empty() {
-        return Err(format!(
-            "migration work item `{item_id}` must declare non-empty scope and mechanical acceptance"
-        )
-        .into());
-    }
-    let checklist = status
-        .items
-        .iter()
-        .find(|item| item.id == item_id)
-        .ok_or_else(|| {
-            format!("migration work item `{item_id}` is not declared in the checklist")
-        })?;
-    if checklist.completed {
-        return Err(format!(
-            "migration work item `{item_id}` is already complete; remove it from the curated queue"
-        )
-        .into());
-    }
-
-    let ready = migration_ready_queue()?;
-    let blocked_by = ready
-        .blocked
-        .iter()
-        .find(|item| item.id == item_id)
-        .map(|item| item.blocked_by.clone())
-        .unwrap_or_default();
-    let state = if ready.ready.iter().any(|item| item.id == item_id) {
-        "ready"
-    } else if !blocked_by.is_empty() {
-        "blocked"
-    } else {
-        return Err(format!(
-            "migration work item `{item_id}` is neither ready nor blocked; validate its queue dependencies"
-        )
-        .into());
-    };
-    Ok(MigrationWorkPacket {
-        schema: "rsscript.migration_work_packet.v1",
-        checklist_source: "docs/architecture/migration-baseline.md",
-        queue_source: "docs/architecture/migration-work-queue.json",
-        id: task.id.clone(),
-        title: checklist.title.clone(),
-        checklist_line: checklist.line,
-        priority: task.priority,
-        state,
-        depends_on: task.depends_on.clone(),
-        blocked_by,
-        scope: task.scope.clone(),
-        acceptance: task.acceptance.clone(),
-        verification: task.verification.clone(),
-    })
-}
-
-/// The frontier intentionally stores only focused Cargo test/run commands.
-/// Keeping this parser narrow prevents a JSON task entry from silently
-/// becoming an arbitrary shell program and makes the reported command exactly
-/// the command that is executed by `migration-verify`.
-fn parse_verification_command(command: &str) -> Result<Vec<String>, Box<dyn Error>> {
-    let arguments = command
-        .split_whitespace()
-        .map(str::to_owned)
+    let root_inventory = cargo_inventory(&root, None)?;
+    let experiments_inventory = cargo_inventory(&root, Some("experiments/Cargo.toml"))?;
+    let workflow_dir = root.join(".github/workflows");
+    validate_sdk_test_reachability(&root, &root_inventory)?;
+    let mut workflows = fs::read_dir(&workflow_dir)?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "yml"))
         .collect::<Vec<_>>();
-    let Some((program, rest)) = arguments.split_first() else {
-        return Err("migration verification command cannot be empty".into());
-    };
-    if program != "cargo" {
-        return Err(format!(
-            "migration verification command must start with `cargo`, found `{program}`"
-        )
-        .into());
-    }
-    let Some(subcommand) = rest.first() else {
-        return Err("migration verification command must include a Cargo subcommand".into());
-    };
-    if !matches!(subcommand.as_str(), "test" | "run") {
-        return Err(format!(
-            "migration verification command must use `cargo test` or `cargo run`, found `cargo {subcommand}`"
-        )
-        .into());
-    }
-    if arguments.iter().any(|argument| {
-        argument
-            .contains(|character: char| matches!(character, ';' | '|' | '&' | '`' | '\n' | '\r'))
-    }) {
-        return Err(format!(
-            "migration verification command contains unsupported shell syntax: `{command}`"
-        )
-        .into());
-    }
-    Ok(rest.to_vec())
-}
+    workflows.sort();
 
-fn parse_migration_status_arguments(
-    mut arguments: impl Iterator<Item = String>,
-) -> Result<MigrationStatusArguments, Box<dyn Error>> {
-    let mut parsed = MigrationStatusArguments {
-        json: false,
-        open_only: false,
-        required_items: Vec::new(),
-    };
-    while let Some(argument) = arguments.next() {
-        match argument.as_str() {
-            "--json" => parsed.json = true,
-            "--open" => parsed.open_only = true,
-            "--require" => parsed.required_items.push(
-                arguments
-                    .next()
-                    .ok_or("--require requires a migration item ID")?,
-            ),
-            _ => return Err(format!("unknown migration-status argument: {argument}").into()),
-        }
-    }
-    Ok(parsed)
-}
-
-fn parse_migration_verify_arguments(
-    mut arguments: impl Iterator<Item = String>,
-) -> Result<MigrationVerifyArguments, Box<dyn Error>> {
-    let item_id = arguments
-        .next()
-        .ok_or("migration-verify requires a migration item ID")?;
-    let mut dry_run = false;
-    let mut staged = false;
-    while let Some(argument) = arguments.next() {
-        match argument.as_str() {
-            "--dry-run" => dry_run = true,
-            "--staged" => staged = true,
-            _ => return Err(format!("unknown migration-verify argument: {argument}").into()),
-        }
-    }
-    Ok(MigrationVerifyArguments {
-        item_id,
-        dry_run,
-        staged,
-    })
-}
-
-fn parse_migration_work_arguments(
-    mut arguments: impl Iterator<Item = String>,
-) -> Result<MigrationWorkArguments, Box<dyn Error>> {
-    let item_id = arguments
-        .next()
-        .ok_or("migration-work requires a migration item ID")?;
-    let mut json = false;
-    while let Some(argument) = arguments.next() {
-        match argument.as_str() {
-            "--json" => json = true,
-            _ => return Err(format!("unknown migration-work argument: {argument}").into()),
-        }
-    }
-    Ok(MigrationWorkArguments { item_id, json })
-}
-
-fn parse_migration_audit_arguments(
-    mut arguments: impl Iterator<Item = String>,
-) -> Result<MigrationAuditArguments, Box<dyn Error>> {
-    let mut parsed = MigrationAuditArguments { json: false };
-    while let Some(argument) = arguments.next() {
-        match argument.as_str() {
-            "--json" => parsed.json = true,
-            _ => return Err(format!("unknown migration-audit argument: {argument}").into()),
-        }
-    }
-    Ok(parsed)
-}
-
-fn run_migration_status(arguments: MigrationStatusArguments) -> Result<(), Box<dyn Error>> {
-    let path = workspace_root().join("docs/architecture/migration-baseline.md");
-    let status = migration_status(&fs::read_to_string(&path)?)?;
-    for required in &arguments.required_items {
-        let item = status
-            .items
-            .iter()
-            .find(|item| item.id == *required)
-            .ok_or_else(|| format!("migration item `{required}` is not declared"))?;
-        if !item.completed {
-            return Err(format!(
-                "migration item `{required}` remains open (line {}: {})",
-                item.line, item.title
-            )
-            .into());
-        }
-    }
-
-    if arguments.json {
-        let mut output = status;
-        if arguments.open_only {
-            output.items.retain(|item| !item.completed);
-        }
-        println!("{}", serde_json::to_string_pretty(&output)?);
-        return Ok(());
-    }
-
-    println!(
-        "Migration checklist: {} complete, {} open ({})",
-        status.completed,
-        status.open,
-        path.display()
-    );
-    for item in status
-        .items
-        .iter()
-        .filter(|item| {
-            arguments.required_items.is_empty()
-                || arguments
-                    .required_items
-                    .iter()
-                    .any(|required| required == &item.id)
-        })
-        .filter(|item| !arguments.open_only || !item.completed)
-    {
-        let marker = if item.completed { 'x' } else { ' ' };
-        println!(
-            "- [{marker}] {} — {} (line {})",
-            item.id, item.title, item.line
-        );
-    }
-    Ok(())
-}
-
-fn migration_status(document: &str) -> Result<MigrationStatus, Box<dyn Error>> {
-    let mut items = Vec::new();
-    let mut seen = std::collections::BTreeSet::new();
-    let lines = document.lines().collect::<Vec<_>>();
-    let mut offset = 0;
-    while offset < lines.len() {
-        let line = lines[offset];
-        let trimmed = line.trim_start();
-        let (completed, label) = match trimmed
-            .strip_prefix("- [x] **")
-            .map(|label| (true, label))
-            .or_else(|| trimmed.strip_prefix("- [ ] **").map(|label| (false, label)))
-        {
-            Some(item) => item,
-            None => {
-                offset += 1;
+    let mut checked = 0usize;
+    for path in workflows {
+        let source = fs::read_to_string(&path)?.replace("\\\n", " ");
+        for (line_index, line) in source.lines().enumerate() {
+            if !line.contains("cargo ") && !line.contains("cargo +") {
                 continue;
             }
-        };
-        let start_line = offset + 1;
-        let mut label = label.to_string();
-        while !label.contains("**") {
-            offset += 1;
-            let continuation = lines
-                .get(offset)
-                .ok_or_else(|| format!("unterminated migration item on line {start_line}"))?;
-            label.push(' ');
-            label.push_str(continuation.trim());
+            let inventory = if line.contains("--manifest-path experiments/Cargo.toml") {
+                &experiments_inventory
+            } else {
+                &root_inventory
+            };
+            validate_workflow_cargo_command(line, inventory)
+                .map_err(|error| format!("{}:{}: {error}", path.display(), line_index + 1))?;
+            checked += 1;
         }
-        let (label, _) = label
-            .split_once("**")
-            .expect("migration item loop must stop at closing bold marker");
-        let (id, title) = label
-            .split_once(" — ")
-            .ok_or_else(|| format!("migration item on line {start_line} is missing ` — `"))?;
-        if id.is_empty() || title.is_empty() {
-            return Err(format!("invalid migration item on line {start_line}").into());
-        }
-        if !seen.insert(id.to_string()) {
-            return Err(format!("duplicate migration item `{id}`").into());
-        }
-        items.push(MigrationStatusItem {
-            id: id.to_string(),
-            title: title.to_string(),
-            completed,
-            line: start_line,
-        });
-        offset += 1;
     }
-    if items.is_empty() {
-        return Err("migration checklist contains no parseable items".into());
-    }
-    let completed = items.iter().filter(|item| item.completed).count();
-    Ok(MigrationStatus {
-        schema: MIGRATION_STATUS_SCHEMA,
-        source: "docs/architecture/migration-baseline.md",
-        completed,
-        open: items.len() - completed,
-        items,
-    })
+    println!("validated {checked} workflow Cargo command line(s)");
+    Ok(())
 }
 
-fn migration_audit() -> Result<MigrationAudit, Box<dyn Error>> {
-    let root = workspace_root();
-    let status = migration_status(&fs::read_to_string(
-        root.join("docs/architecture/migration-baseline.md"),
-    )?)?;
-    // Validate the frontier before reporting against it. An audit that accepted
-    // an unknown or completed queue entry would hide exactly the drift it is
-    // intended to surface.
-    let _ready = migration_ready_queue()?;
-    let manifest: MigrationQueueManifest = serde_json::from_slice(&fs::read(
-        root.join("docs/architecture/migration-work-queue.json"),
-    )?)?;
-    let queued = manifest
-        .tasks
-        .iter()
-        .map(|task| task.id.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    Ok(audit_migration_status(&status, &queued))
-}
-
-fn audit_migration_status(
-    status: &MigrationStatus,
-    queued: &std::collections::BTreeSet<&str>,
-) -> MigrationAudit {
-    let mut open_leaf_items_not_queued = Vec::new();
-    let mut open_parents_with_completed_children = Vec::new();
-    for item in &status.items {
-        let prefix = format!("{}.", item.id);
-        let descendants = status
-            .items
+fn cargo_inventory(
+    root: &Path,
+    manifest_path: Option<&str>,
+) -> Result<BTreeMap<String, CargoPackageInventory>, Box<dyn Error>> {
+    let mut command = Command::new("cargo");
+    command
+        .args(["metadata", "--locked", "--no-deps", "--format-version=1"])
+        .current_dir(root);
+    if let Some(manifest_path) = manifest_path {
+        command.args(["--manifest-path", manifest_path]);
+    }
+    let output = command.output()?;
+    if !output.status.success() {
+        return Err(format!(
+            "cargo metadata failed for {}: {}",
+            manifest_path.unwrap_or("Cargo.toml"),
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into());
+    }
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let mut inventory = BTreeMap::new();
+    for package in metadata["packages"]
+        .as_array()
+        .ok_or("cargo metadata packages must be an array")?
+    {
+        let name = package["name"]
+            .as_str()
+            .ok_or("cargo metadata package name must be a string")?;
+        let features = package["features"]
+            .as_object()
+            .ok_or("cargo metadata package features must be an object")?
+            .keys()
+            .cloned()
+            .collect();
+        let test_targets = package["targets"]
+            .as_array()
+            .ok_or("cargo metadata package targets must be an array")?
             .iter()
-            .filter(|candidate| is_migration_descendant(&item.id, &candidate.id, &prefix))
+            .filter(|target| {
+                target["kind"]
+                    .as_array()
+                    .is_some_and(|kinds| kinds.iter().any(|kind| kind.as_str() == Some("test")))
+            })
             .collect::<Vec<_>>();
-        if descendants.is_empty() {
-            if !item.completed && !queued.contains(item.id.as_str()) {
-                open_leaf_items_not_queued.push(MigrationAuditItem {
-                    id: item.id.clone(),
-                    title: item.title.clone(),
-                    line: item.line,
-                });
-            }
-        } else if !item.completed && descendants.iter().all(|child| child.completed) {
-            open_parents_with_completed_children.push(MigrationAuditItem {
-                id: item.id.clone(),
-                title: item.title.clone(),
-                line: item.line,
-            });
+        let tests = test_targets
+            .iter()
+            .filter_map(|target| target["name"].as_str().map(str::to_owned))
+            .collect();
+        let test_sources = test_targets
+            .iter()
+            .filter_map(|target| target["src_path"].as_str().map(PathBuf::from))
+            .collect();
+        inventory.insert(
+            name.to_owned(),
+            CargoPackageInventory {
+                features,
+                tests,
+                test_sources,
+            },
+        );
+    }
+    Ok(inventory)
+}
+
+fn validate_sdk_test_reachability(
+    root: &Path,
+    inventory: &BTreeMap<String, CargoPackageInventory>,
+) -> Result<(), Box<dyn Error>> {
+    let package = inventory
+        .get("rsscript-sdk")
+        .ok_or("root workspace must contain rsscript-sdk")?;
+    let test_dir = root.join("crates/rsscript-sdk/tests");
+    let mut unreachable = Vec::new();
+    for entry in fs::read_dir(&test_dir)? {
+        let path = entry?.path();
+        if path.extension().is_some_and(|extension| extension == "rs")
+            && !package.test_sources.contains(&path)
+        {
+            unreachable.push(path);
         }
     }
-    MigrationAudit {
-        schema: "rsscript.migration_audit.v1",
-        checklist_source: "docs/architecture/migration-baseline.md",
-        queue_source: "docs/architecture/migration-work-queue.json",
-        open_leaf_items_not_queued,
-        open_parents_with_completed_children,
+    if !unreachable.is_empty() {
+        unreachable.sort();
+        let paths = unreachable
+            .iter()
+            .map(|path| {
+                path.strip_prefix(root)
+                    .unwrap_or(path)
+                    .display()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!(
+            "rsscript-sdk disables automatic tests; every top-level test source must be an explicit target: {paths}"
+        )
+        .into());
     }
+    Ok(())
 }
 
-/// The checklist predates the execution helper and uses both `M03.2.a`-style
-/// and compact `M03.2a` child IDs. Treat a dotted suffix as a descendant, or
-/// a non-empty all-letter suffix as a compact child; a numeric suffix such as
-/// `M01.10` must remain a sibling of `M01.1`, not become its child.
-fn is_migration_descendant(parent: &str, candidate: &str, dotted_prefix: &str) -> bool {
-    candidate.starts_with(dotted_prefix)
-        || candidate.strip_prefix(parent).is_some_and(|suffix| {
-            !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_alphabetic())
+fn validate_workflow_cargo_command(
+    line: &str,
+    inventory: &BTreeMap<String, CargoPackageInventory>,
+) -> Result<(), String> {
+    let tokens = line
+        .split_whitespace()
+        .map(|token| {
+            token.trim_matches(|character: char| matches!(character, '\'' | '"' | ';' | ')' | '('))
         })
-}
-
-/// A queue entry is executable only when it maps to one independently
-/// closeable checklist item. Parent milestones deliberately stay out of the
-/// frontier: their children carry the bounded implementation contracts and a
-/// parent may require an additional acceptance review after they close.
-fn migration_item_has_children(status: &MigrationStatus, id: &str) -> bool {
-    let dotted_prefix = format!("{id}.");
-    status
-        .items
-        .iter()
-        .any(|candidate| is_migration_descendant(id, &candidate.id, &dotted_prefix))
+        .collect::<Vec<_>>();
+    let mut packages = Vec::new();
+    let mut features = Vec::new();
+    let mut test_target = None;
+    let mut index = 0usize;
+    while index < tokens.len() {
+        match tokens[index] {
+            "-p" | "--package" if index + 1 < tokens.len() => {
+                packages.push(tokens[index + 1].trim_end_matches('\\'));
+                index += 2;
+                continue;
+            }
+            "--features" if index + 1 < tokens.len() => {
+                features.extend(tokens[index + 1].trim_end_matches('\\').split(','));
+                index += 2;
+                continue;
+            }
+            "--test" if index + 1 < tokens.len() => {
+                test_target = Some(tokens[index + 1].trim_end_matches('\\'));
+                index += 2;
+                continue;
+            }
+            token if token.starts_with("--features=") => {
+                features.extend(token.trim_start_matches("--features=").split(','));
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    for package in &packages {
+        if !inventory.contains_key(*package) {
+            return Err(format!("unknown Cargo package `{package}` in `{line}`"));
+        }
+    }
+    if !features.is_empty() {
+        for package in &packages {
+            let package_inventory = &inventory[*package];
+            for feature in &features {
+                if !package_inventory.features.contains(*feature) {
+                    return Err(format!(
+                        "package `{package}` has no feature `{feature}` in `{line}`"
+                    ));
+                }
+            }
+        }
+    }
+    if let Some(test_target) = test_target {
+        if packages.len() != 1 {
+            return Err(format!(
+                "workflow test target `{test_target}` must name exactly one package in `{line}`"
+            ));
+        }
+        let package = packages[0];
+        if !inventory[package].tests.contains(test_target) {
+            return Err(format!(
+                "package `{package}` has no test target `{test_target}` in `{line}`"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn workspace_root() -> PathBuf {
@@ -1313,7 +586,7 @@ fn metrics_provider_runtime() -> Result<Runtime, Box<dyn Error>> {
             symbol,
             ProviderFunction {
                 signature,
-                callable: NativeInterpreterFn::new(|mut values| {
+                callable: WireInterpreterFn::new(|mut values| {
                     values.pop().filter(|_| values.is_empty()).ok_or_else(|| {
                         ProviderError::invalid_argument("metrics echo expects one argument")
                     })
@@ -1420,258 +693,6 @@ mod tests {
         let error = parse_arguments(["--iterations".into(), "1".into()].into_iter())
             .expect_err("one iteration cannot produce a useful distribution");
         assert!(error.to_string().contains("at least 2"));
-    }
-
-    #[test]
-    fn migration_status_parses_nested_and_wrapped_checklist_items() {
-        let status = migration_status(
-            "- [x] **G01 — Completed parent.**\n  - [ ] **G01.1 — Open child\n    item.**\n",
-        )
-        .expect("well-formed checklist");
-        assert_eq!(status.completed, 1);
-        assert_eq!(status.open, 1);
-        assert_eq!(
-            status.items,
-            vec![
-                MigrationStatusItem {
-                    id: "G01".into(),
-                    title: "Completed parent.".into(),
-                    completed: true,
-                    line: 1,
-                },
-                MigrationStatusItem {
-                    id: "G01.1".into(),
-                    title: "Open child item.".into(),
-                    completed: false,
-                    line: 2,
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn migration_status_rejects_duplicate_item_ids() {
-        let error = migration_status("- [x] **G01 — First.**\n- [ ] **G01 — Second.**\n")
-            .expect_err("duplicate IDs make a checklist gate ambiguous");
-        assert!(error.to_string().contains("duplicate migration item `G01`"));
-    }
-
-    #[test]
-    fn migration_audit_distinguishes_unqueued_leaves_from_parent_candidates() {
-        let status = migration_status(
-            "- [ ] **G01 — Parent.**\n  - [x] **G01.1 — Completed child.**\n- [ ] **S05.1 — Queued leaf.**\n- [ ] **E02.2 — Unqueued leaf.**\n",
-        )
-        .expect("well-formed checklist");
-        let queued = std::collections::BTreeSet::from(["S05.1"]);
-        assert_eq!(
-            audit_migration_status(&status, &queued),
-            MigrationAudit {
-                schema: "rsscript.migration_audit.v1",
-                checklist_source: "docs/architecture/migration-baseline.md",
-                queue_source: "docs/architecture/migration-work-queue.json",
-                open_leaf_items_not_queued: vec![MigrationAuditItem {
-                    id: "E02.2".into(),
-                    title: "Unqueued leaf.".into(),
-                    line: 4,
-                }],
-                open_parents_with_completed_children: vec![MigrationAuditItem {
-                    id: "G01".into(),
-                    title: "Parent.".into(),
-                    line: 1,
-                }],
-            }
-        );
-    }
-
-    #[test]
-    fn migration_audit_recognizes_compact_lettered_children_without_merging_numeric_siblings() {
-        assert!(is_migration_descendant("M03.2", "M03.2a", "M03.2."));
-        assert!(is_migration_descendant("M03.2", "M03.2.a", "M03.2."));
-        assert!(!is_migration_descendant("M01.1", "M01.10", "M01.1."));
-    }
-
-    #[test]
-    fn migration_frontier_rejects_parent_milestones() {
-        let status = migration_status(
-            "- [ ] **S05.1 — Parent.**\n  - [x] **S05.1a — Completed child.**\n  - [ ] **S05.1b — Open child.**\n- [ ] **E02.2 — Leaf.**\n",
-        )
-        .expect("well-formed checklist");
-        assert!(migration_item_has_children(&status, "S05.1"));
-        assert!(!migration_item_has_children(&status, "S05.1a"));
-        assert!(!migration_item_has_children(&status, "E02.2"));
-    }
-
-    #[test]
-    fn published_migration_checklist_is_machine_readable() {
-        let status = migration_status(include_str!(
-            "../../../docs/architecture/migration-baseline.md"
-        ))
-        .expect("published migration checklist must remain parseable");
-        assert!(status.items.len() > 100);
-        assert!(status.items.iter().any(|item| item.id == "S02"));
-        assert!(status.items.iter().any(|item| item.id == "A09"));
-    }
-
-    #[test]
-    fn published_migration_frontier_is_fail_closed_and_prioritized() {
-        let queue = migration_ready_queue().expect("published frontier must be valid");
-        assert_eq!(queue.schema, MIGRATION_QUEUE_SCHEMA);
-        assert!(
-            queue
-                .ready
-                .windows(2)
-                .all(|items| items[0].priority <= items[1].priority)
-        );
-        assert!(queue.ready.iter().all(|item| !item.verification.is_empty()));
-        let status = migration_status(include_str!(
-            "../../../docs/architecture/migration-baseline.md"
-        ))
-        .expect("published migration checklist must remain parseable");
-        assert!(queue.ready.iter().all(|ready| {
-            status
-                .items
-                .iter()
-                .find(|item| item.id == ready.id)
-                .is_some_and(|item| !item.completed)
-        }));
-        // The queue intentionally becomes empty when the historical migration
-        // checklist closes.  Requiring a synthetic task would make the
-        // migration tooling reopen work solely to satisfy its own test.
-        if queue.ready.is_empty() {
-            let audit = migration_audit().expect("closed migration audit");
-            assert!(audit.open_leaf_items_not_queued.is_empty());
-            assert!(audit.open_parents_with_completed_children.is_empty());
-        }
-    }
-
-    #[test]
-    fn migration_verify_arguments_require_one_item_id() {
-        assert_eq!(
-            parse_migration_verify_arguments(["S05.1".into(), "--dry-run".into()].into_iter())
-                .expect("valid migration verify invocation"),
-            MigrationVerifyArguments {
-                item_id: "S05.1".into(),
-                dry_run: true,
-                staged: false,
-            }
-        );
-        assert_eq!(
-            parse_migration_verify_arguments(["S05.1".into(), "--staged".into()].into_iter())
-                .expect("valid staged migration verify invocation"),
-            MigrationVerifyArguments {
-                item_id: "S05.1".into(),
-                dry_run: false,
-                staged: true,
-            }
-        );
-        let error = parse_migration_verify_arguments(std::iter::empty())
-            .expect_err("an item ID is required");
-        assert!(error.to_string().contains("requires a migration item ID"));
-    }
-
-    #[test]
-    fn migration_work_arguments_require_one_item_id_and_support_json() {
-        assert_eq!(
-            parse_migration_work_arguments(["S05.1".into(), "--json".into()].into_iter())
-                .expect("valid migration work invocation"),
-            MigrationWorkArguments {
-                item_id: "S05.1".into(),
-                json: true,
-            }
-        );
-        let error = parse_migration_work_arguments(std::iter::empty())
-            .expect_err("a work item ID is required");
-        assert!(error.to_string().contains("requires a migration item ID"));
-    }
-
-    #[test]
-    fn migration_audit_arguments_only_accept_json() {
-        assert_eq!(
-            parse_migration_audit_arguments(["--json".into()].into_iter())
-                .expect("JSON audit invocation"),
-            MigrationAuditArguments { json: true }
-        );
-        let error = parse_migration_audit_arguments(["--unknown".into()].into_iter())
-            .expect_err("unknown audit flags must fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("unknown migration-audit argument")
-        );
-    }
-
-    #[test]
-    fn published_migration_work_packet_is_bounded_and_actionable() {
-        let Some(ready) = migration_ready_queue()
-            .expect("published frontier")
-            .ready
-            .into_iter()
-            .next()
-        else {
-            let audit = migration_audit().expect("closed migration audit");
-            assert!(audit.open_leaf_items_not_queued.is_empty());
-            return;
-        };
-        let packet = migration_work_packet(&ready.id).expect("published work packet");
-        assert_eq!(packet.schema, "rsscript.migration_work_packet.v1");
-        assert_eq!(packet.state, "ready");
-        assert!(!packet.scope.is_empty());
-        assert!(!packet.acceptance.is_empty());
-        assert!(!packet.verification.is_empty());
-
-        let queued = migration_work_packet(&ready.id).expect("published work packet");
-        assert!(matches!(queued.state, "ready" | "blocked"));
-        if queued.state == "blocked" {
-            assert!(!queued.blocked_by.is_empty());
-        } else {
-            assert!(queued.blocked_by.is_empty());
-        }
-    }
-
-    #[test]
-    fn staged_scope_check_allows_declared_paths_and_workspace_locks_only() {
-        let scope = vec![
-            "crates/rsscript-compiler/src/**".to_owned(),
-            "docs/architecture/migration-baseline.md".to_owned(),
-        ];
-        assert!(staged_path_is_allowed(
-            "crates/rsscript-compiler/src/lib.rs",
-            &scope
-        ));
-        assert!(staged_path_is_allowed(
-            "docs/architecture/migration-baseline.md",
-            &scope
-        ));
-        assert!(staged_path_is_allowed("Cargo.lock", &scope));
-        assert!(staged_path_is_allowed("experiments/Cargo.lock", &scope));
-        assert!(!staged_path_is_allowed("README.md", &scope));
-        assert!(!staged_path_is_allowed(
-            "crates/rsscript-vm/src/lib.rs",
-            &scope
-        ));
-    }
-
-    #[test]
-    fn migration_verification_commands_are_narrow_cargo_invocations() {
-        assert_eq!(
-            parse_verification_command("cargo test -p rsscript-sdk --locked")
-                .expect("Cargo test command"),
-            vec!["test", "-p", "rsscript-sdk", "--locked"]
-        );
-        for command in ["", "echo test", "cargo clean", "cargo test; rm -rf test"] {
-            assert!(parse_verification_command(command).is_err(), "{command}");
-        }
-    }
-
-    #[test]
-    fn migration_scopes_must_name_existing_relative_anchors() {
-        let root = workspace_root();
-        validate_migration_scope(&root, "crates/process-guard/**").expect("existing glob anchor");
-        validate_migration_scope(&root, "docs/threat-model.md").expect("existing file anchor");
-        let missing = validate_migration_scope(&root, "crates/not-a-real-package/**")
-            .expect_err("stale scope must fail before work begins");
-        assert!(missing.to_string().contains("no repository path anchor"));
-        assert!(validate_migration_scope(&root, "/tmp/**").is_err());
     }
 
     #[test]

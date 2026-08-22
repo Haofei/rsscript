@@ -95,7 +95,7 @@ jobs:
           TARGET: ${{ matrix.target }}
           SUFFIX: ${{ matrix.suffix }}
         run: |
-          cargo build --locked --frozen --release --target "$TARGET" --bin rss -p rsscript-cli --features host-tools
+          cargo build --locked --frozen --release --target "$TARGET" --bin rss -p rsscript-cli --features native-jit
           mkdir -p dist
           cp "target/$TARGET/release/rss$SUFFIX" "dist/rss-$TARGET$SUFFIX"
           PYTHON="$(command -v python3 || command -v python)" || {

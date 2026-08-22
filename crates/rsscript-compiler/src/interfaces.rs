@@ -20,14 +20,14 @@ pub(crate) fn interface_catalog_digest() -> String {
     format!("sha256:{:x}", digest.finalize())
 }
 
-#[cfg(feature = "package")]
+#[cfg(feature = "selfhost-parity")]
 #[allow(unused_imports)]
 pub(crate) use rsscript_interface_catalog::builtin_interfaces;
 
 #[cfg(not(test))]
 #[allow(unused_imports)]
 pub(crate) use rsscript_interface_catalog::default_interfaces;
-#[cfg(all(test, feature = "package"))]
+#[cfg(all(test, feature = "selfhost-parity"))]
 #[allow(dead_code)]
 pub(crate) fn default_interfaces() -> impl Iterator<Item = (&'static str, &'static str)> {
     rsscript_interface_catalog::CORE_INTERFACES
@@ -49,6 +49,6 @@ pub(crate) fn standard_package_interfaces() -> impl Iterator<Item = (&'static st
 // fixtures. Keep its catalog identical to the production neutral catalog so a
 // plain `cargo test` remains a valid Core gate instead of referencing a module
 // compiled only under the optional execution feature.
-#[cfg(all(test, not(feature = "package")))]
+#[cfg(all(test, not(feature = "selfhost-parity")))]
 #[allow(unused_imports)]
 pub(crate) use rsscript_interface_catalog::default_interfaces;
