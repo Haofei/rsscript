@@ -201,22 +201,7 @@ pub(super) fn osr_heap_input_regs(jit_fn: &vm_jit::JitFunction) -> Vec<usize> {
         }
     };
     for instr in &jit_fn.code {
-        match instr {
-            vm_jit::JitInstr::HostCall { args, .. }
-            | vm_jit::JitInstr::MemoizedHostCall { args, .. } => {
-                for arg in args {
-                    if let vm_jit::HostArg::Reg(reg) = arg {
-                        push_reg(*reg);
-                    }
-                }
-            }
-            vm_jit::JitInstr::MatchMapGetInt { map, .. }
-            | vm_jit::JitInstr::MatchMapGetFloat { map, .. }
-            | vm_jit::JitInstr::MatchSortedMapGetInt { map, .. }
-            | vm_jit::JitInstr::MatchSortedMapGetFloat { map, .. }
-            | vm_jit::JitInstr::GuardClosureId { base: map, .. } => push_reg(*map),
-            _ => {}
-        }
+        instr.visit_osr_heap_inputs(&mut push_reg);
     }
     regs
 }

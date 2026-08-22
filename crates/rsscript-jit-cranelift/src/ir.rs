@@ -404,6 +404,27 @@ impl JitInstr {
                 | JitInstr::ListIsEmptyDirect { .. }
         )
     }
+
+    /// Visit registers whose heap handles must be available when entering this
+    /// instruction through OSR. Keeping this classification on the instruction
+    /// model prevents VM tiering code from maintaining a second opcode list.
+    pub fn visit_osr_heap_inputs(&self, mut visit: impl FnMut(u32)) {
+        match self {
+            JitInstr::HostCall { args, .. } | JitInstr::MemoizedHostCall { args, .. } => {
+                for arg in args {
+                    if let HostArg::Reg(reg) = arg {
+                        visit(*reg);
+                    }
+                }
+            }
+            JitInstr::MatchMapGetInt { map, .. }
+            | JitInstr::MatchMapGetFloat { map, .. }
+            | JitInstr::MatchSortedMapGetInt { map, .. }
+            | JitInstr::MatchSortedMapGetFloat { map, .. }
+            | JitInstr::GuardClosureId { base: map, .. } => visit(*map),
+            _ => {}
+        }
+    }
 }
 
 /// Storage class of a register: an unboxed `i64` (integers and booleans) or an

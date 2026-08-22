@@ -722,7 +722,7 @@ impl RegVmExecutable {
     /// the differential's full coverage. Production hosts that want to defer
     /// compilation use [`NativeJitOptions::tier_up_threshold`]; the VM never
     /// reads process-global environment variables.
-    #[cfg(feature = "native-jit")]
+    #[cfg(all(feature = "native-jit", any(test, feature = "jit-diagnostics")))]
     pub fn eval_main_with_args_native(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
@@ -742,7 +742,7 @@ impl RegVmExecutable {
 
     /// Like [`Self::eval_main_with_args_native`] but also returns the native-tier
     /// [`NativeStats`] from the run (for benchmark/telemetry reporting).
-    #[cfg(feature = "native-jit")]
+    #[cfg(all(feature = "native-jit", any(test, feature = "jit-diagnostics")))]
     pub fn eval_main_with_args_native_with_stats(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
@@ -759,7 +759,7 @@ impl RegVmExecutable {
     /// environment. Keeping this explicit prevents parallel test cases from
     /// changing one another's native compilation policy.
     #[doc(hidden)]
-    #[cfg(feature = "native-jit")]
+    #[cfg(all(feature = "native-jit", any(test, feature = "jit-diagnostics")))]
     pub fn eval_main_with_args_native_at_threshold(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
@@ -780,7 +780,7 @@ impl RegVmExecutable {
 
     /// Stats variant of [`Self::eval_main_with_args_native_at_threshold`].
     #[doc(hidden)]
-    #[cfg(feature = "native-jit")]
+    #[cfg(all(feature = "native-jit", any(test, feature = "jit-diagnostics")))]
     pub fn eval_main_with_args_native_with_stats_at_threshold(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
@@ -800,7 +800,7 @@ impl RegVmExecutable {
 
     /// Like [`Self::eval_main_with_args_native_osr`] but also returns the
     /// native-tier [`NativeStats`] (notably `osr_entries`) for bench telemetry.
-    #[cfg(feature = "native-jit")]
+    #[cfg(all(feature = "native-jit", any(test, feature = "jit-diagnostics")))]
     pub fn eval_main_with_args_native_osr_with_stats(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
@@ -813,7 +813,7 @@ impl RegVmExecutable {
     /// hot loop runs that loop natively mid-function (OSR-entry at the header,
     /// OSR-exit/precise-resume at the post-loop ip). Must equal every other backend
     /// byte-for-byte. Test/validation + bench entry point.
-    #[cfg(feature = "native-jit")]
+    #[cfg(all(feature = "native-jit", any(test, feature = "jit-diagnostics")))]
     pub fn eval_main_with_args_native_osr(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
@@ -833,7 +833,7 @@ impl RegVmExecutable {
     /// running the function from the top). The observable result must equal every
     /// non-precise backend. Test/validation entry point only — lets the test set
     /// `precise_deopt` deterministically without a (racy) process env var.
-    #[cfg(feature = "native-jit")]
+    #[cfg(all(feature = "native-jit", any(test, feature = "jit-diagnostics")))]
     pub fn eval_main_with_args_native_precise(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
@@ -846,7 +846,7 @@ impl RegVmExecutable {
     /// always bails at its first guard, so every native-eligible function falls
     /// back to the interpreter. Its output must equal every other backend — this
     /// is how the deopt/fallback path is verified end-to-end.
-    #[cfg(feature = "native-jit")]
+    #[cfg(all(feature = "native-jit", any(test, feature = "jit-diagnostics")))]
     pub fn eval_main_with_args_native_force_deopt(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
@@ -859,7 +859,7 @@ impl RegVmExecutable {
     /// [`Self::eval_main_with_args_native_force_deopt`], this still enters native
     /// code and captures the safepoint's live register payload before falling back
     /// or precise-resuming, so it exercises the real deopt machinery.
-    #[cfg(feature = "native-jit")]
+    #[cfg(all(feature = "native-jit", any(test, feature = "jit-diagnostics")))]
     pub fn eval_main_with_args_native_force_safepoint(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
@@ -881,7 +881,7 @@ impl RegVmExecutable {
     /// Run `main` while forcing every generated native safepoint to deopt.
     /// This explicit switch is deterministic and safe
     /// for in-process differential tests and fuzzers.
-    #[cfg(feature = "native-jit")]
+    #[cfg(all(feature = "native-jit", any(test, feature = "jit-diagnostics")))]
     pub fn eval_main_with_args_native_force_all_safepoints(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
@@ -896,7 +896,7 @@ impl RegVmExecutable {
     /// alongside the stats. The report is observational, so the `EvalOutput` is byte-
     /// identical to [`Self::eval_main_with_args_native_osr`]; this just also hands the
     /// caller the report so a test can assert the per-region reasons.
-    #[cfg(feature = "native-jit")]
+    #[cfg(all(feature = "native-jit", any(test, feature = "jit-diagnostics")))]
     pub fn eval_main_with_args_native_osr_report(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
@@ -919,7 +919,7 @@ impl RegVmExecutable {
         )
     }
 
-    #[cfg(feature = "native-jit")]
+    #[cfg(all(feature = "native-jit", any(test, feature = "jit-diagnostics")))]
     fn eval_main_with_args_native_inner(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
@@ -952,7 +952,7 @@ impl RegVmExecutable {
     /// [`VmLimits`]. With native enabled, an armed `step_budget`/`cancel`/`allocation_budget`
     /// must prevent native dispatch (Cranelift polls/accounts none of them) — used to
     /// regression-test the recursive native fast-path limit gate.
-    #[cfg(feature = "native-jit")]
+    #[cfg(all(feature = "native-jit", any(test, feature = "jit-diagnostics")))]
     pub fn eval_main_with_args_native_with_limits(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
@@ -969,7 +969,7 @@ impl RegVmExecutable {
     /// OSR on the interpreter until transformed regions carry exact source resource
     /// costs. Tests use this entry point to verify both the result and that
     /// `osr_entries == 0` under those modes.
-    #[cfg(feature = "native-jit")]
+    #[cfg(all(feature = "native-jit", any(test, feature = "jit-diagnostics")))]
     pub fn eval_main_with_args_native_osr_with_limits(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
@@ -981,7 +981,7 @@ impl RegVmExecutable {
         .map(|(output, stats, _lines)| (output, stats))
     }
 
-    #[cfg(feature = "native-jit")]
+    #[cfg(all(feature = "native-jit", any(test, feature = "jit-diagnostics")))]
     #[allow(clippy::too_many_arguments)]
     fn eval_main_with_args_native_inner_reported(
         &self,
@@ -2158,6 +2158,7 @@ pub struct NativeStats {
 
 #[cfg(feature = "native-jit")]
 impl NativeStats {
+    #[cfg(any(test, feature = "jit-diagnostics"))]
     fn summary(&self) -> String {
         format!(
             "native-jit: considered={} translated={} compiled={} baseline_compiles={} optimized_compiles={} baseline_calls={} optimized_calls={} promotions={} ir_instrs={} code_bytes={} admission_admitted={} admission_admitted_bytes={} admission_rejected={} admission_rejected_bytes={} deopt_sites={} direct_list_bounds_check_sites={} memoized_runtime_helper_call_sites={} runtime_helper_call_sites={} fused_map_match_helper_sites={} direct_list_store_load_forwarded_moves={} native_call_edges={} native_call_depth_max={} profile_closure_guards={} profile_closure_id_reads={} profile_closure_pic_sites={} profile_closure_pic_arms={} profile_branch_sites={} profile_branch_samples={} profile_branch_taken={} profile_branch_fallthrough={} profile_branch_cold_blocks={} profile_branch_side_exits={} not_eligible={} top_decline={} \
@@ -2215,6 +2216,7 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
         )
     }
 
+    #[cfg(any(test, feature = "jit-diagnostics"))]
     fn top_native_decline_reason(&self) -> String {
         self.native_decline_reasons
             .iter()
@@ -2332,7 +2334,7 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
 /// really did not (the report-correctness tests assert this).
 ///
 /// One block per function (deduped by construction — each function is visited once).
-#[cfg(feature = "native-jit")]
+#[cfg(all(feature = "native-jit", any(test, feature = "jit-diagnostics")))]
 fn jit_missed_opt_report(
     unit: &RegUnit,
     jit_state: &JitState,
@@ -2445,7 +2447,7 @@ fn jit_missed_opt_report(
 /// (`none`) when the model is off or nothing was declined. Distinct from the native
 /// ELIGIBILITY decline summary: these regions ARE valid native code, just judged
 /// not worth it (native ≈ interpreter).
-#[cfg(feature = "native-jit")]
+#[cfg(all(feature = "native-jit", any(test, feature = "jit-diagnostics")))]
 fn jit_cost_model_decline_summary_block(stats: &NativeStats) -> String {
     let mut lines = vec!["jit-report: cost-model decline summary".to_string()];
     if stats.unprofitable_decline_reasons.is_empty() {
@@ -2487,7 +2489,7 @@ fn native_decline_reason_counts(unit: &RegUnit, jit_state: &JitState) -> BTreeMa
     counts
 }
 
-#[cfg(feature = "native-jit")]
+#[cfg(all(feature = "native-jit", any(test, feature = "jit-diagnostics")))]
 fn jit_native_decline_summary_block(counts: BTreeMap<String, u64>) -> String {
     let mut lines = vec!["jit-report: native decline summary".to_string()];
     if counts.is_empty() {
@@ -2673,7 +2675,7 @@ fn native_decline_reason(unit: &RegUnit, jit_state: &JitState, func: &RegFunctio
 /// incidental non-subset instruction (e.g. a `LoadString` constant load that the
 /// subset also rejects). Falls back to the first non-subset instruction otherwise.
 /// `None` ⇒ the whole body is in the native subset.
-#[cfg(feature = "native-jit")]
+#[cfg(all(feature = "native-jit", any(test, feature = "jit-diagnostics")))]
 fn first_non_subset_reason(body: &[RegInstr]) -> Option<String> {
     // First: a non-subset effectful intrinsic (the headline reason).
     if let Some(instr) = body.iter().find(|instr| {

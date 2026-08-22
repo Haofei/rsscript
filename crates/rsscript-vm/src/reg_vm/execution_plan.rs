@@ -167,6 +167,7 @@ impl NativeExecutionPlan {
         }
     }
 
+    #[cfg(any(test, feature = "jit-diagnostics"))]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn for_diagnostics(
         tier_up_threshold: u32,

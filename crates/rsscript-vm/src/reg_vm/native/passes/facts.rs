@@ -363,6 +363,7 @@ impl NativeRegionCfg {
         backedges
     }
 
+    #[cfg(any(test, feature = "jit-diagnostics"))]
     pub(in crate::reg_vm) fn backedges(&self) -> Vec<(usize, usize)> {
         let mut backedges = Vec::new();
         for ip in self.entry..self.exit {

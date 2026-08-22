@@ -23,6 +23,9 @@ default = []
 # reference and fallback path; enabling this feature only adds native execution
 # for eligible hot regions.
 native-jit = ["dep:vm-jit"]
+# Developer-only stress and benchmark entry points. Production hosts configure
+# the native engine exclusively through typed `NativeJitOptions`.
+jit-diagnostics = ["native-jit"]
 
 [build-dependencies]
 rsscript-build-support = { path = "../rsscript-build-support" }

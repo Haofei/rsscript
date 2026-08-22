@@ -478,6 +478,8 @@ pub(crate) struct HostHelperDescriptor {
     pub(crate) symbol: &'static str,
     pub(crate) sig: HostHelperSig,
     pub(crate) heap_effect: HostHeapEffect,
+    pub(crate) heap_reads: &'static [HostHeapAccess],
+    pub(crate) heap_writes: &'static [HostHeapAccess],
 }
 
 macro_rules! host_heap_effect {
@@ -498,6 +500,15 @@ macro_rules! host_found_out {
     };
 }
 
+macro_rules! host_heap_accesses {
+    () => {
+        &[]
+    };
+    ($accesses:expr) => {
+        $accesses
+    };
+}
+
 macro_rules! host_helpers {
     ($(
         $helper:ident => {
@@ -508,6 +519,8 @@ macro_rules! host_helpers {
             failure: $failure:expr,
             $(found_out: $found_out:expr,)?
             $(heap_effect: $heap_effect:expr,)?
+            $(reads: $reads:expr,)?
+            $(writes: $writes:expr,)?
         }
     ),+ $(,)?) => {
         /// Generic host helper a [`JitInstr::HostCall`] can invoke. Adding a helper
@@ -542,6 +555,8 @@ macro_rules! host_helpers {
                         failure: $failure,
                     },
                     heap_effect: host_heap_effect!($($heap_effect)?),
+                    heap_reads: host_heap_accesses!($($reads)?),
+                    heap_writes: host_heap_accesses!($($writes)?),
                 }),+
             ];
 
@@ -576,57 +591,17 @@ macro_rules! host_helpers {
             }
 
             pub fn heap_reads(self) -> &'static [HostHeapAccess] {
-                match self {
-                    HostHelper::ListLen
-                    | HostHelper::ListIsEmpty
-                    | HostHelper::MapLen
-                    | HostHelper::MapIsEmpty
-                    | HostHelper::SetLen
-                    | HostHelper::SetIsEmpty
-                    | HostHelper::SortedSetIsEmpty
-                    | HostHelper::SortedMapLen
-                    | HostHelper::SortedMapIsEmpty
-                    | HostHelper::DequeLen
-                    | HostHelper::DequeIsEmpty => &HOST_READ_COLLECTION_LEN,
-                    _ => &[],
-                }
+                self.descriptor().heap_reads
             }
 
             pub fn heap_writes(self) -> &'static [HostHeapAccess] {
-                match self {
-                    HostHelper::ListSetInt | HostHelper::ListSetFloat => {
-                        &HOST_WRITE_ELEMENTS
-                    }
-                    HostHelper::ListSortInt => &HOST_WRITE_ELEMENTS,
-                    HostHelper::ListPushInt
-                    | HostHelper::ListPushHandle
-                    | HostHelper::ListPushFloat
-                    | HostHelper::DequePushBackInt
-                    | HostHelper::DequePushBackHandle
-                    | HostHelper::DequePushBackFloat
-                    | HostHelper::DequePushFrontInt
-                    | HostHelper::DequePushFrontHandle
-                    | HostHelper::DequePushFrontFloat
-                    | HostHelper::DequePopFrontInt
-                    | HostHelper::DequePopBackInt
-                    | HostHelper::DequePopFrontFloat
-                    | HostHelper::DequePopBackFloat => &HOST_WRITE_COLLECTION_SHAPE,
-                    HostHelper::MapInsertInt
-                    | HostHelper::MapInsertHandleKeyInt
-                    | HostHelper::MapInsertFloat
-                    | HostHelper::SortedMapInsertInt
-                    | HostHelper::SortedMapInsertHandleKeyInt => &HOST_WRITE_MAP_SHAPE,
-                    HostHelper::SetInsertInt
-                    | HostHelper::SetInsertHandle
-                    | HostHelper::SortedSetInsertInt
-                    | HostHelper::SortedSetInsertHandle => &HOST_WRITE_SET_SHAPE,
-                    HostHelper::FieldSetInt
-                    | HostHelper::FieldSetFloat
-                    | HostHelper::FieldSetHandle => &HOST_WRITE_FIELDS,
-                    helper if helper.heap_effect().writes_existing_heap() => {
-                        &HOST_WRITE_UNKNOWN
-                    }
-                    _ => &[],
+                let descriptor = self.descriptor();
+                if descriptor.heap_writes.is_empty()
+                    && descriptor.heap_effect.writes_existing_heap()
+                {
+                    &HOST_WRITE_UNKNOWN
+                } else {
+                    descriptor.heap_writes
                 }
             }
 
@@ -652,6 +627,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Handle),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::ReplacesInput,
+        writes: &HOST_WRITE_FIELDS,
     },
     FieldSetHandle => {
         field: field_set_handle,
@@ -660,6 +636,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Handle),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::ReplacesInput,
+        writes: &HOST_WRITE_FIELDS,
     },
     FieldSetFloat => {
         field: field_set_float,
@@ -668,6 +645,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Handle),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::ReplacesInput,
+        writes: &HOST_WRITE_FIELDS,
     },
     ListLen => {
         field: list_len,
@@ -675,6 +653,7 @@ host_helpers! {
         args: [JitValueType::Handle],
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
+        reads: &HOST_READ_COLLECTION_LEN,
     },
     ListIsEmpty => {
         field: list_is_empty,
@@ -682,6 +661,7 @@ host_helpers! {
         args: [JitValueType::Handle],
         result: HostResult::Exact(JitValueType::Bool),
         failure: HostFailureMode::BailFlag,
+        reads: &HOST_READ_COLLECTION_LEN,
     },
     ListGetInt => {
         field: list_get_int,
@@ -697,6 +677,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
+        writes: &HOST_WRITE_ELEMENTS,
     },
     ListSetFloat => {
         field: list_set_float,
@@ -705,6 +686,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
+        writes: &HOST_WRITE_ELEMENTS,
     },
     ListPushInt => {
         field: list_push_int,
@@ -713,6 +695,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
+        writes: &HOST_WRITE_COLLECTION_SHAPE,
     },
     ListPushHandle => {
         field: list_push_handle,
@@ -721,6 +704,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
+        writes: &HOST_WRITE_COLLECTION_SHAPE,
     },
     ListPushFloat => {
         field: list_push_float,
@@ -729,6 +713,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
+        writes: &HOST_WRITE_COLLECTION_SHAPE,
     },
     ListSortInt => {
         field: list_sort_int,
@@ -737,6 +722,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
+        writes: &HOST_WRITE_ELEMENTS,
     },
     ListNewInt => {
         field: list_new_int,
@@ -925,6 +911,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
+        writes: &HOST_WRITE_MAP_SHAPE,
     },
     MapInsertHandleKeyInt => {
         field: map_insert_handle_key_int,
@@ -933,6 +920,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
+        writes: &HOST_WRITE_MAP_SHAPE,
     },
     MapInsertFloat => {
         field: map_insert_float,
@@ -941,6 +929,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
+        writes: &HOST_WRITE_MAP_SHAPE,
     },
     MapGetInt => {
         field: map_get_int,
@@ -978,6 +967,7 @@ host_helpers! {
         args: [JitValueType::Handle],
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
+        reads: &HOST_READ_COLLECTION_LEN,
     },
     MapIsEmpty => {
         field: map_is_empty,
@@ -985,6 +975,7 @@ host_helpers! {
         args: [JitValueType::Handle],
         result: HostResult::Exact(JitValueType::Bool),
         failure: HostFailureMode::BailFlag,
+        reads: &HOST_READ_COLLECTION_LEN,
     },
     SetInsertInt => {
         field: set_insert_int,
@@ -993,6 +984,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Bool),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
+        writes: &HOST_WRITE_SET_SHAPE,
     },
     SetInsertHandle => {
         field: set_insert_handle,
@@ -1001,6 +993,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Bool),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
+        writes: &HOST_WRITE_SET_SHAPE,
     },
     SetLen => {
         field: set_len,
@@ -1008,6 +1001,7 @@ host_helpers! {
         args: [JitValueType::Handle],
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
+        reads: &HOST_READ_COLLECTION_LEN,
     },
     SetIsEmpty => {
         field: set_is_empty,
@@ -1015,6 +1009,7 @@ host_helpers! {
         args: [JitValueType::Handle],
         result: HostResult::Exact(JitValueType::Bool),
         failure: HostFailureMode::BailFlag,
+        reads: &HOST_READ_COLLECTION_LEN,
     },
     SortedSetInsertInt => {
         field: sorted_set_insert_int,
@@ -1023,6 +1018,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Bool),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
+        writes: &HOST_WRITE_SET_SHAPE,
     },
     SortedSetInsertHandle => {
         field: sorted_set_insert_handle,
@@ -1031,6 +1027,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Bool),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
+        writes: &HOST_WRITE_SET_SHAPE,
     },
     SortedSetContainsInt => {
         field: sorted_set_contains_int,
@@ -1045,6 +1042,7 @@ host_helpers! {
         args: [JitValueType::Handle],
         result: HostResult::Exact(JitValueType::Bool),
         failure: HostFailureMode::BailFlag,
+        reads: &HOST_READ_COLLECTION_LEN,
     },
     SortedMapInsertInt => {
         field: sorted_map_insert_int,
@@ -1053,6 +1051,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
+        writes: &HOST_WRITE_MAP_SHAPE,
     },
     SortedMapInsertHandleKeyInt => {
         field: sorted_map_insert_handle_key_int,
@@ -1061,6 +1060,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
+        writes: &HOST_WRITE_MAP_SHAPE,
     },
     SortedMapGetInt => {
         field: sorted_map_get_int,
@@ -1091,6 +1091,7 @@ host_helpers! {
         args: [JitValueType::Handle],
         result: HostResult::Exact(JitValueType::Bool),
         failure: HostFailureMode::BailFlag,
+        reads: &HOST_READ_COLLECTION_LEN,
     },
     SortedMapLen => {
         field: sorted_map_len,
@@ -1098,6 +1099,7 @@ host_helpers! {
         args: [JitValueType::Handle],
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
+        reads: &HOST_READ_COLLECTION_LEN,
     },
     DequeLen => {
         field: deque_len,
@@ -1105,6 +1107,7 @@ host_helpers! {
         args: [JitValueType::Handle],
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
+        reads: &HOST_READ_COLLECTION_LEN,
     },
     DequeIsEmpty => {
         field: deque_is_empty,
@@ -1112,6 +1115,7 @@ host_helpers! {
         args: [JitValueType::Handle],
         result: HostResult::Exact(JitValueType::Bool),
         failure: HostFailureMode::BailFlag,
+        reads: &HOST_READ_COLLECTION_LEN,
     },
     DequePushBackInt => {
         field: deque_push_back_int,
@@ -1120,6 +1124,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
+        writes: &HOST_WRITE_COLLECTION_SHAPE,
     },
     DequePushBackHandle => {
         field: deque_push_back_handle,
@@ -1128,6 +1133,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
+        writes: &HOST_WRITE_COLLECTION_SHAPE,
     },
     DequePushBackFloat => {
         field: deque_push_back_float,
@@ -1136,6 +1142,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
+        writes: &HOST_WRITE_COLLECTION_SHAPE,
     },
     DequePushFrontInt => {
         field: deque_push_front_int,
@@ -1144,6 +1151,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
+        writes: &HOST_WRITE_COLLECTION_SHAPE,
     },
     DequePushFrontHandle => {
         field: deque_push_front_handle,
@@ -1152,6 +1160,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
+        writes: &HOST_WRITE_COLLECTION_SHAPE,
     },
     DequePushFrontFloat => {
         field: deque_push_front_float,
@@ -1160,6 +1169,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
+        writes: &HOST_WRITE_COLLECTION_SHAPE,
     },
     DequePopFrontInt => {
         field: deque_pop_front_int,
@@ -1168,6 +1178,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
+        writes: &HOST_WRITE_COLLECTION_SHAPE,
     },
     DequePopFrontFloat => {
         field: deque_pop_front_float,
@@ -1176,6 +1187,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Float),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
+        writes: &HOST_WRITE_COLLECTION_SHAPE,
     },
     DequePopBackFloat => {
         field: deque_pop_back_float,
@@ -1184,6 +1196,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Float),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
+        writes: &HOST_WRITE_COLLECTION_SHAPE,
     },
     DequePopBackInt => {
         field: deque_pop_back_int,
@@ -1192,6 +1205,7 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
+        writes: &HOST_WRITE_COLLECTION_SHAPE,
     },
 }
 use super::*;

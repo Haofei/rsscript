@@ -243,6 +243,7 @@ pub(in crate::reg_vm) fn detect_natural_loops(code: &[RegInstr]) -> Vec<OsrLoop>
 /// `[h, exit)` body make the region single-entry/single-exit — the only thing we can
 /// OSR soundly. Multi-header / multi-exit / non-contiguous shapes return `None`.
 #[cfg(feature = "native-jit")]
+#[cfg(any(test, feature = "jit-diagnostics"))]
 pub(in crate::reg_vm) fn detect_single_natural_loop(code: &[RegInstr]) -> Option<OsrLoop> {
     let n = code.len();
     // Collect backedges from the shared native CFG descriptor. This matters when
