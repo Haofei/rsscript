@@ -130,48 +130,50 @@ fn resolve_dependency_graph_from_manifest_graph(
     };
     let mut expanded = BTreeSet::new();
     let mut stack = Vec::new();
-    resolve_dependency_node(
-        &root_path,
-        &root_features,
-        true,
+    let mut state = DependencyResolutionState {
         scope,
-        &manifest_sources,
-        &mut graph,
-        &mut expanded,
-        &mut stack,
-    )?;
+        manifest_sources: &manifest_sources,
+        graph: &mut graph,
+        expanded: &mut expanded,
+        stack: &mut stack,
+    };
+    resolve_dependency_node(&root_path, &root_features, true, &mut state)?;
     Ok(graph)
+}
+
+struct DependencyResolutionState<'a> {
+    scope: DependencyResolutionScope,
+    manifest_sources: &'a BTreeMap<String, String>,
+    graph: &'a mut ResolvedDependencyGraph,
+    expanded: &'a mut BTreeSet<String>,
+    stack: &'a mut Vec<String>,
 }
 
 fn resolve_dependency_node(
     package_dir: &Path,
     requested_features: &[String],
     is_root: bool,
-    scope: DependencyResolutionScope,
-    manifest_sources: &BTreeMap<String, String>,
-    graph: &mut ResolvedDependencyGraph,
-    expanded: &mut BTreeSet<String>,
-    stack: &mut Vec<String>,
+    state: &mut DependencyResolutionState<'_>,
 ) -> Result<String, String> {
     let canonical = canonical_path_label(package_dir);
-    if let Some(cycle_start) = stack.iter().position(|entry| entry == &canonical) {
-        let mut cycle = stack[cycle_start..]
+    if let Some(cycle_start) = state.stack.iter().position(|entry| entry == &canonical) {
+        let mut cycle = state.stack[cycle_start..]
             .iter()
-            .map(|key| resolved_node_label(graph, key))
+            .map(|key| resolved_node_label(state.graph, key))
             .collect::<Vec<_>>();
-        cycle.push(resolved_node_label(graph, &canonical));
+        cycle.push(resolved_node_label(state.graph, &canonical));
         return Err(format!("dependency cycle detected: {}", cycle.join(" -> ")));
     }
 
-    if !graph.nodes.contains_key(&canonical) {
-        let manifest_source = manifest_sources.get(&canonical).ok_or_else(|| {
+    if !state.graph.nodes.contains_key(&canonical) {
+        let manifest_source = state.manifest_sources.get(&canonical).ok_or_else(|| {
             format!(
                 "project manifest graph omitted resolved dependency root {}",
                 package_dir.display()
             )
         })?;
         let manifest = parse_package_manifest_source(package_dir, manifest_source)?;
-        graph.nodes.insert(
+        state.graph.nodes.insert(
             canonical.clone(),
             ResolvedDependencyNode {
                 package_dir: package_dir.to_path_buf(),
@@ -183,7 +185,8 @@ fn resolve_dependency_node(
         );
     }
     {
-        let node = graph
+        let node = state
+            .graph
             .nodes
             .get_mut(&canonical)
             .expect("resolved node exists");
@@ -191,12 +194,12 @@ fn resolve_dependency_node(
         requested.extend(requested_features.iter().cloned());
         node.features = resolve_package_features(&node.manifest, &requested).selected;
     }
-    if expanded.contains(&canonical) {
+    if state.expanded.contains(&canonical) {
         return Ok(canonical);
     }
 
-    stack.push(canonical.clone());
-    let manifest = &graph.nodes[&canonical].manifest;
+    state.stack.push(canonical.clone());
+    let manifest = &state.graph.nodes[&canonical].manifest;
     let mut declared = manifest
         .dependencies
         .iter()
@@ -207,7 +210,7 @@ fn resolve_dependency_node(
             )
         })
         .collect::<Vec<_>>();
-    if is_root && scope == DependencyResolutionScope::Development {
+    if is_root && state.scope == DependencyResolutionScope::Development {
         declared.extend(manifest.dev_dependencies.iter().map(|(name, value)| {
             (
                 package_dependency_spec(name, value),
@@ -225,11 +228,7 @@ fn resolve_dependency_node(
                         &dependency_dir,
                         &spec.features,
                         false,
-                        scope,
-                        manifest_sources,
-                        graph,
-                        expanded,
-                        stack,
+                        state,
                     )?)
                 } else {
                     None
@@ -239,13 +238,14 @@ fn resolve_dependency_node(
         };
         dependencies.push(ResolvedDependencyEdge { spec, kind, target });
     }
-    stack.pop();
-    graph
+    state.stack.pop();
+    state
+        .graph
         .nodes
         .get_mut(&canonical)
         .expect("resolved node exists")
         .dependencies = dependencies;
-    expanded.insert(canonical.clone());
+    state.expanded.insert(canonical.clone());
     Ok(canonical)
 }
 

@@ -140,6 +140,7 @@ struct CargoPackageInventory {
     features: BTreeSet<String>,
     tests: BTreeSet<String>,
     test_sources: BTreeSet<PathBuf>,
+    test_functions: BTreeSet<String>,
 }
 
 /// Check workflow Cargo package, feature, and integration-test references
@@ -231,16 +232,69 @@ fn cargo_inventory(
             .iter()
             .filter_map(|target| target["src_path"].as_str().map(PathBuf::from))
             .collect();
+        let manifest_path = package["manifest_path"]
+            .as_str()
+            .ok_or("cargo metadata package manifest_path must be a string")?;
+        let package_root = Path::new(manifest_path)
+            .parent()
+            .ok_or("Cargo package manifest must have a parent directory")?;
+        let test_functions = collect_test_functions(package_root)?;
         inventory.insert(
             name.to_owned(),
             CargoPackageInventory {
                 features,
                 tests,
                 test_sources,
+                test_functions,
             },
         );
     }
     Ok(inventory)
+}
+
+fn collect_test_functions(package_root: &Path) -> Result<BTreeSet<String>, Box<dyn Error>> {
+    let mut pending = vec![package_root.to_path_buf()];
+    let mut functions = BTreeSet::new();
+    while let Some(path) = pending.pop() {
+        for entry in fs::read_dir(path)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                if !path.ends_with("target") && !path.ends_with(".git") {
+                    pending.push(path);
+                }
+                continue;
+            }
+            if path.extension().is_none_or(|extension| extension != "rs") {
+                continue;
+            }
+            let source = fs::read_to_string(path)?;
+            let mut test_attribute = false;
+            for line in source.lines() {
+                let line = line.trim();
+                if line == "#[test]" || line.ends_with("::test]") {
+                    test_attribute = true;
+                    continue;
+                }
+                if !test_attribute || line.is_empty() || line.starts_with("#[") {
+                    continue;
+                }
+                let declaration = line.strip_prefix("pub ").unwrap_or(line);
+                let declaration = declaration.strip_prefix("async ").unwrap_or(declaration);
+                if let Some(declaration) = declaration.strip_prefix("fn ")
+                    && let Some(name) = declaration
+                        .split(|character: char| {
+                            !(character.is_ascii_alphanumeric() || character == '_')
+                        })
+                        .next()
+                        .filter(|name| !name.is_empty())
+                {
+                    functions.insert(name.to_owned());
+                }
+                test_attribute = false;
+            }
+        }
+    }
+    Ok(functions)
 }
 
 fn validate_sdk_test_reachability(
@@ -348,7 +402,69 @@ fn validate_workflow_cargo_command(
             ));
         }
     }
+    if let Some(filter) = cargo_test_filter(&tokens) {
+        if packages.len() != 1 {
+            return Err(format!(
+                "workflow test filter `{filter}` must name exactly one package in `{line}`"
+            ));
+        }
+        let package = packages[0];
+        let leaf = filter.rsplit("::").next().unwrap_or(filter);
+        if !inventory[package]
+            .test_functions
+            .iter()
+            .any(|name| name.contains(leaf))
+        {
+            return Err(format!(
+                "package `{package}` has no test function matching filter `{filter}` in `{line}`"
+            ));
+        }
+    }
     Ok(())
+}
+
+fn cargo_test_filter<'a>(tokens: &'a [&'a str]) -> Option<&'a str> {
+    let cargo = tokens.iter().position(|token| *token == "cargo")?;
+    let test = tokens[cargo + 1..]
+        .iter()
+        .position(|token| *token == "test")?
+        + cargo
+        + 1;
+    let options_with_values = [
+        "-p",
+        "--package",
+        "--features",
+        "--test",
+        "--manifest-path",
+        "--target",
+        "--profile",
+        "-j",
+        "--jobs",
+        "--exclude",
+        "--bin",
+        "--example",
+        "--bench",
+        "--color",
+        "--config",
+        "--target-dir",
+    ];
+    let mut index = test + 1;
+    while index < tokens.len() {
+        let token = tokens[index].trim_end_matches('\\');
+        if token == "--" {
+            return None;
+        }
+        if options_with_values.contains(&token) {
+            index += 2;
+            continue;
+        }
+        if token.starts_with('-') || token.contains('=') {
+            index += 1;
+            continue;
+        }
+        return Some(token);
+    }
+    None
 }
 
 fn workspace_root() -> PathBuf {
@@ -681,6 +797,18 @@ fn check_slo(metrics: &CoreMetrics, path: &PathBuf) -> Result<(), Box<dyn Error>
 mod tests {
     use super::*;
 
+    fn test_inventory(functions: &[&str]) -> BTreeMap<String, CargoPackageInventory> {
+        BTreeMap::from([(
+            "example".into(),
+            CargoPackageInventory {
+                features: BTreeSet::from(["execution".into()]),
+                tests: BTreeSet::from(["integration".into()]),
+                test_sources: BTreeSet::new(),
+                test_functions: functions.iter().map(|name| (*name).to_owned()).collect(),
+            },
+        )])
+    }
+
     #[test]
     fn percentile_uses_a_conservative_nearest_rank() {
         let samples = (1..=20).map(f64::from).collect::<Vec<_>>();
@@ -693,6 +821,27 @@ mod tests {
         let error = parse_arguments(["--iterations".into(), "1".into()].into_iter())
             .expect_err("one iteration cannot produce a useful distribution");
         assert!(error.to_string().contains("at least 2"));
+    }
+
+    #[test]
+    fn workflow_validator_accepts_a_filter_that_names_a_real_test() {
+        let inventory = test_inventory(&["actual_contract_test"]);
+        validate_workflow_cargo_command(
+            "cargo test -p example --features execution --lib module::actual_contract_test -- --exact",
+            &inventory,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn workflow_validator_rejects_a_filter_that_would_run_zero_tests() {
+        let inventory = test_inventory(&["actual_contract_test"]);
+        let error = validate_workflow_cargo_command(
+            "cargo test -p example --lib retired_contract_ -- --nocapture",
+            &inventory,
+        )
+        .unwrap_err();
+        assert!(error.contains("no test function matching filter `retired_contract_`"));
     }
 
     #[test]

@@ -3,9 +3,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::net::{IpAddr, ToSocketAddrs};
+use std::sync::mpsc::{RecvTimeoutError, sync_channel};
 use std::time::{Duration, Instant};
 
-use rsscript_abi_model::ExternalSymbol;
+use rsscript_abi_model::{ExternalSymbol, WireTypeId};
 use rsscript_provider_api::{
     ProviderError, ProviderFunction, WireCallTypeTable, WireInterpreterFn, WireValue,
 };
@@ -14,6 +15,7 @@ include!(concat!(env!("OUT_DIR"), "/provider_contract.rs"));
 
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// Host-configured HTTP capability. Only origins explicitly supplied at
 /// construction can be reached. The host supplies a preconfigured client
@@ -136,13 +138,6 @@ impl HttpProvider {
                         .min(DEFAULT_REQUEST_TIMEOUT);
                     let deadline_controls_timeout = deadline_timeout
                         .is_some_and(|deadline| deadline <= DEFAULT_REQUEST_TIMEOUT);
-                    let mut response = provider
-                        .client
-                        .get(url)
-                        .timeout(timeout)
-                        .send()
-                        .map_err(|error| http_request_error(error, deadline_controls_timeout))?;
-                    let status = i64::from(response.status().as_u16());
                     let limit = context
                         .remaining_byte_budget
                         .into_iter()
@@ -150,24 +145,107 @@ impl HttpProvider {
                         .chain([provider.max_response_bytes])
                         .min()
                         .unwrap_or(provider.max_response_bytes);
-                    if response
-                        .content_length()
-                        .is_some_and(|length| length > limit as u64)
-                    {
-                        return Err(response_too_large(limit));
+                    if context.cancellation.is_some() {
+                        execute_get_cancellable(
+                            context,
+                            provider.clone(),
+                            url,
+                            timeout,
+                            deadline_controls_timeout,
+                            limit,
+                            response_type,
+                        )
+                    } else {
+                        execute_get(
+                            &provider,
+                            url,
+                            timeout,
+                            deadline_controls_timeout,
+                            limit,
+                            response_type,
+                        )
                     }
-                    let body = read_response_bounded(&mut response, limit)?;
-                    Ok(WireValue::Record {
-                        type_id: response_type,
-                        fields: vec![
-                            WireValue::Int { value: status },
-                            WireValue::String { value: body },
-                        ],
-                    })
                 }),
             },
         )])
     }
+}
+
+/// Run a blocking transport on an owned worker when a cancellation token is
+/// present. This makes cancellation observable by the VM without waiting for
+/// the transport timeout. The abandoned worker remains bounded by the request
+/// timeout and response-size limit and cannot publish a late result.
+fn execute_get_cancellable(
+    context: &rsscript_provider_api::ProviderCallContext<'_>,
+    provider: HttpProvider,
+    url: reqwest::Url,
+    timeout: Duration,
+    deadline_controls_timeout: bool,
+    limit: usize,
+    response_type: WireTypeId,
+) -> Result<WireValue, ProviderError> {
+    let (sender, receiver) = sync_channel(1);
+    std::thread::Builder::new()
+        .name("rsscript-http-provider".into())
+        .spawn(move || {
+            let result = execute_get(
+                &provider,
+                url,
+                timeout,
+                deadline_controls_timeout,
+                limit,
+                response_type,
+            );
+            let _ = sender.send(result);
+        })
+        .map_err(|error| ProviderError::internal(format!("start HTTP worker: {error}")))?;
+
+    loop {
+        context.check_cancelled()?;
+        match receiver.recv_timeout(CANCELLATION_POLL_INTERVAL) {
+            Ok(result) => {
+                context.check_cancelled()?;
+                return result;
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(ProviderError::internal(
+                    "HTTP worker exited without returning a result",
+                ));
+            }
+        }
+    }
+}
+
+fn execute_get(
+    provider: &HttpProvider,
+    url: reqwest::Url,
+    timeout: Duration,
+    deadline_controls_timeout: bool,
+    limit: usize,
+    response_type: WireTypeId,
+) -> Result<WireValue, ProviderError> {
+    let mut response = provider
+        .client
+        .get(url)
+        .timeout(timeout)
+        .send()
+        .map_err(|error| http_request_error(error, deadline_controls_timeout))?;
+    let status = i64::from(response.status().as_u16());
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit as u64)
+    {
+        return Err(response_too_large(limit));
+    }
+    let body = read_response_bounded(&mut response, limit)?;
+    Ok(WireValue::Record {
+        type_id: response_type,
+        fields: vec![
+            WireValue::Int { value: status },
+            WireValue::String { value: body },
+        ],
+    })
 }
 
 fn http_request_error(error: reqwest::Error, deadline_controls_timeout: bool) -> ProviderError {
@@ -361,6 +439,58 @@ mod tests {
             error.code,
             rsscript_provider_api::ProviderErrorCode::DeadlineExceeded
         );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn in_flight_request_observes_cancellation_promptly() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            std::thread::sleep(Duration::from_millis(500));
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+        });
+        let origin = format!("http://{address}");
+        let provider = HttpProvider::new_with_policy(
+            reqwest::blocking::Client::builder(),
+            [&origin],
+            HttpNetworkPolicy::local_development(),
+        )
+        .unwrap();
+        let function = provider.functions().into_values().next().unwrap();
+        let cancellation = rsscript_provider_api::CancellationToken::new();
+        let cancellation_request = cancellation.clone();
+        let cancel = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(40));
+            cancellation_request.cancel();
+        });
+        let mut context = rsscript_provider_api::ProviderCallContext {
+            cancellation: Some(&cancellation),
+            blocking_allowed: true,
+            ..rsscript_provider_api::ProviderCallContext::default()
+        };
+        let started = Instant::now();
+        let error = function
+            .callable
+            .call_with_context(
+                &mut context,
+                vec![WireValue::String {
+                    value: format!("{origin}/slow"),
+                }],
+            )
+            .unwrap_err();
+        let elapsed = started.elapsed();
+        assert_eq!(
+            error.code,
+            rsscript_provider_api::ProviderErrorCode::Cancelled
+        );
+        assert!(
+            elapsed < Duration::from_millis(300),
+            "cancellation took {elapsed:?}"
+        );
+        cancel.join().unwrap();
         server.join().unwrap();
     }
 }

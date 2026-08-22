@@ -20,3 +20,10 @@ implementations, REIR is an optional Integration, and self-hosting is Research.
 Untrusted, third-party, or machine-generated scripts require an independently
 isolated runner. Successful validation is not authorization to execute them in
 the embedding application's process.
+
+Official host Providers remain Experimental and fail closed where their stated
+authority boundary cannot be implemented. In particular, the rooted filesystem
+Provider currently requires the descriptor-relative, no-follow Unix
+implementation; unsupported platforms reject construction instead of falling
+back to canonicalize-then-open behavior. The reference runner also remains
+Experimental until its platform isolation matrix is complete.

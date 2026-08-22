@@ -16,7 +16,7 @@ fn main() {
     let generated = interface.render_rust(&RustProviderOptions {
         provider_id: "rsscript.http",
         blocking: GeneratedBlocking::MayBlock,
-        cancellation: GeneratedCancellation::NotApplicable,
+        cancellation: GeneratedCancellation::Cooperative,
         thread_safe: true,
         reentrant: true,
         cleanup: GeneratedCleanup::None,

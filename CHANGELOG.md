@@ -21,6 +21,8 @@ track migrations without confusing crate versions with wire versions.
 - Official Providers use canonical `WireValue` calls.
 - Environment, process, filesystem, and HTTP authorities are instance-owned
   and fail closed.
+- HTTP calls with a cancellation token now report in-flight cancellation
+  promptly while the bounded blocking transport finishes on an owned worker.
 
 ### SDK and execution report
 
@@ -30,3 +32,10 @@ track migrations without confusing crate versions with wire versions.
 ### Runner protocol
 
 - Runner response v1 carries a typed, versioned execution-report v2 envelope.
+
+### Repository governance
+
+- Workflow validation rejects Cargo test filters that match no declared test,
+  preventing stale filtered commands from succeeding with zero tests.
+- Public bug/PR templates route security reports to private disclosure and make
+  trust-boundary verification explicit.

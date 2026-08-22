@@ -295,9 +295,7 @@ fn unsupported_native_binding_signature(function: &FunctionDecl) -> Option<Strin
             return Some(format!("parameter `{}` ({reason})", param.name));
         }
     }
-    let Some(return_ty) = function.return_ty.as_ref() else {
-        return None;
-    };
+    let return_ty = function.return_ty.as_ref()?;
     if return_ty.name == "Result" {
         if return_ty.args.len() != 2
             || return_ty.args[1].name != "String"

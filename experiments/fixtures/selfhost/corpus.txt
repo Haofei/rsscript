@@ -525,3 +525,17 @@ selfhost/syntax/parser_items.rss
 selfhost/syntax/parser_stmts.rss
 selfhost/syntax/token_ranges.rss
 selfhost/types.rss
+crates/rsscript-bytecode/fixtures/v1/reference.rss
+crates/rsscript-bytecode/fixtures/v1/step-budget-exhausted.rss
+crates/rsscript-sdk/tests/corpus/compatibility/provider_replacement.rss
+crates/rsscript-sdk/tests/corpus/execution_state/loop.rss
+crates/rsscript-sdk/tests/corpus/execution_state/script_error.rss
+crates/rsscript-sdk/tests/corpus/execution_state/success.rss
+crates/rsscript-sdk/tests/corpus/semantic_mir/scalar_control_flow.rss
+crates/rsscript-sdk/tests/corpus/semantic_mir/structured_async.rss
+crates/rsscript-sdk/tests/corpus/semantic_mir/unknown_callee.rss
+examples/embedded-report-pipeline/script/isolated.rss
+examples/structured-async-pipeline/script/isolated.rss
+examples/structured-async-pipeline/script/main.rss
+experiments/rss-testgen/tests/corpus/execution_state/completed.rss
+experiments/rss-testgen/tests/corpus/execution_state/infinite_loop.rss

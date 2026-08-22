@@ -1,0 +1,45 @@
+name: Bug report
+description: Report a reproducible Core, Provider, or tooling defect
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Do not disclose vulnerabilities here. Use GitHub private vulnerability
+        reporting as described in SECURITY.md.
+  - type: dropdown
+    id: boundary
+    attributes:
+      label: Affected boundary
+      options:
+        - Compiler or language service
+        - Artifact or verifier
+        - VM or execution report
+        - Provider
+        - Isolated runner
+        - CLI or documentation
+        - Experimental backend
+    validations:
+      required: true
+  - type: input
+    id: revision
+    attributes:
+      label: RSScript revision
+      description: Commit SHA or tag used to reproduce the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include the exact command, input, and expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Actual output
+      description: Include diagnostics or a redacted Execution Report when relevant.
+    validations:
+      required: true

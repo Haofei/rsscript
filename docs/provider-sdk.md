@@ -163,4 +163,8 @@ Likewise, `HttpProvider::new(client_builder, allowed_origins)` requires the host
 to name every reachable HTTP origin. It installs the allowlist on redirect hops,
 applies the execution deadline with a 30-second hard ceiling, and bounds the
 combined response body by the remaining runtime budget and its 16 MiB provider
-ceiling.
+ceiling. When a run supplies a cancellation token, the blocking transport runs
+on an owned worker while the Provider polls the token; cancellation is reported
+promptly and a late worker result is discarded. The underlying transport remains
+bounded by its timeout and size ceiling—this is cooperative cancellation, not an
+OS/network sandbox or a guarantee that the remote peer stops work.

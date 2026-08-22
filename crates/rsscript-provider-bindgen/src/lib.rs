@@ -247,8 +247,7 @@ fn render_mock_support(output: &mut String, functions: &[InterfaceFunction]) {
 fn render_resource_wrapper(output: &mut String, resource: &InterfaceDescriptorResourceV1) {
     let type_name = resource_wrapper_name(&resource.name);
     output.push_str(&format!(
-        "/// Generated handle wrapper for the `{}` resource.\n#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]\npub struct {type_name}(pub rsscript_provider_api::ResourceHandle);\n\nimpl {type_name} {{\n    /// Legacy name used only by the `NativeValue` compatibility adapter.\n    pub const TYPE_NAME: &'static str = {:?};\n\n    /// Decode the canonical, generation-safe Provider wire representation.\n    /// `resource_type` comes from the linked interface descriptor; it is never\n    /// inferred from a legacy type-name string.\n    pub fn from_wire(\n        value: rsscript_abi_model::WireValue,\n        resource_type: rsscript_abi_model::WireResourceTypeId,\n    ) -> Result<Self, rsscript_provider_api::ProviderError> {{\n        match value {{\n            rsscript_abi_model::WireValue::Resource {{ handle }} if handle.resource_type == resource_type => Ok(Self(rsscript_provider_api::ResourceHandle::from_wire(handle))),\n            _ => Err(rsscript_provider_api::ProviderError::invalid_argument(\"resource handle type mismatch\")),\n        }}\n    }}\n\n    /// Encode the canonical, generation-safe Provider wire representation.\n    pub fn into_wire(\n        self,\n        resource_type: rsscript_abi_model::WireResourceTypeId,\n    ) -> rsscript_abi_model::WireValue {{\n        rsscript_abi_model::WireValue::Resource {{ handle: self.0.to_wire(resource_type) }}\n    }}\n\n    /// Decode the legacy dynamic adapter representation. New Provider code\n    /// should prefer `from_wire`.\n    pub fn from_native(value: rsscript_provider_api::NativeValue) -> Result<Self, rsscript_provider_api::ProviderError> {{\n        match value {{\n            rsscript_provider_api::NativeValue::Native {{ type_name, id }} if type_name == Self::TYPE_NAME => Ok(Self(rsscript_provider_api::ResourceHandle::from_native_id(id))),\n            _ => Err(rsscript_provider_api::ProviderError::invalid_argument(\"resource handle type mismatch\")),\n        }}\n    }}\n\n    /// Encode the legacy dynamic adapter representation. New Provider code\n    /// should prefer `into_wire`.\n    pub fn into_native(self) -> rsscript_provider_api::NativeValue {{\n        rsscript_provider_api::NativeValue::Native {{ type_name: Self::TYPE_NAME.into(), id: self.0.to_native_id() }}\n    }}\n}}\n\n",
-        resource.name,
+        "/// Generated handle wrapper for the `{}` resource.\n#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]\npub struct {type_name}(pub rsscript_provider_api::ResourceHandle);\n\nimpl {type_name} {{\n    /// Decode the canonical, generation-safe Provider wire representation.\n    /// `resource_type` comes from the linked interface descriptor; it is never\n    /// inferred from a string type name.\n    pub fn from_wire(\n        value: rsscript_abi_model::WireValue,\n        resource_type: rsscript_abi_model::WireResourceTypeId,\n    ) -> Result<Self, rsscript_provider_api::ProviderError> {{\n        match value {{\n            rsscript_abi_model::WireValue::Resource {{ handle }} if handle.resource_type == resource_type => Ok(Self(rsscript_provider_api::ResourceHandle::from_wire(handle))),\n            _ => Err(rsscript_provider_api::ProviderError::invalid_argument(\"resource handle type mismatch\")),\n        }}\n    }}\n\n    /// Encode the canonical, generation-safe Provider wire representation.\n    pub fn into_wire(\n        self,\n        resource_type: rsscript_abi_model::WireResourceTypeId,\n    ) -> rsscript_abi_model::WireValue {{\n        rsscript_abi_model::WireValue::Resource {{ handle: self.0.to_wire(resource_type) }}\n    }}\n}}\n\n",
         resource.name,
     ));
 }
@@ -889,14 +888,14 @@ mod tests {
         assert!(
             rust.contains("pub struct HostFsFileHandle(pub rsscript_provider_api::ResourceHandle)")
         );
-        assert!(rust.contains("ResourceHandle::from_native_id"));
         assert!(rust.contains("pub fn from_wire("));
         assert!(rust.contains("rsscript_abi_model::WireValue::Resource"));
         assert!(rust.contains("handle.resource_type == resource_type"));
         assert!(rust.contains("ResourceHandle::from_wire(handle)"));
         assert!(rust.contains("pub fn into_wire("));
         assert!(rust.contains("self.0.to_wire(resource_type)"));
-        assert!(rust.contains("pub const TYPE_NAME: &'static str = \"host.fs.File\""));
+        assert!(!rust.contains("NativeValue"));
+        assert!(!rust.contains("from_native"));
         assert!(rust.contains("fn open(&self, path: String) -> Result<HostFsFileHandle"));
         assert!(rust.contains(
             "result: rsscript_abi_model::WireType::Resource { name: \"host.fs.File\".into() }"

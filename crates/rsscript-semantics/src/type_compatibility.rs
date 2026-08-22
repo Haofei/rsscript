@@ -46,13 +46,29 @@ pub fn contains_unresolved_generic_type(type_name: &str, facts: &UnresolvedGener
 /// Whether a rendered type includes one of the supplied unresolved generic
 /// parameter names. Intended for unresolved callee signatures.
 pub fn type_contains_unresolved_generic(type_name: &str, generic_names: &[String]) -> bool {
-    contains_unresolved_generic_type(
+    contains_named_generic(
         type_name,
-        &UnresolvedGenericFacts {
-            active_generic_names: generic_names.iter().cloned().collect(),
-            ..UnresolvedGenericFacts::default()
-        },
+        &generic_names.iter().map(String::as_str).collect(),
     )
+}
+
+fn contains_named_generic(type_name: &str, generic_names: &HashSet<&str>) -> bool {
+    let root = crate::type_root_name(type_name);
+    generic_names.contains(root)
+        || type_name
+            .trim()
+            .strip_prefix("fresh ")
+            .is_some_and(|target| contains_named_generic(target.trim(), generic_names))
+        || crate::type_arg_names(type_name).is_some_and(|arguments| {
+            arguments
+                .iter()
+                .any(|argument| contains_named_generic(argument, generic_names))
+        })
+        || function_return_type(type_name)
+            .is_some_and(|return_type| contains_named_generic(return_type, generic_names))
+        || function_parameter_types(type_name)
+            .iter()
+            .any(|parameter| contains_named_generic(parameter, generic_names))
 }
 
 /// Compare two rendered, alias-expanded source types using the language's
@@ -475,5 +491,10 @@ mod tests {
             "List<U>",
             &UnresolvedGenericFacts::default()
         ));
+        assert!(type_contains_unresolved_generic(
+            "List<T>",
+            &["T".to_owned()]
+        ));
+        assert!(!type_contains_unresolved_generic("T", &[]));
     }
 }

@@ -1826,7 +1826,15 @@ fn corpus_manifest_matches_discovery() {
     let mut expected = manifest
         .lines()
         .filter(|line| !line.trim().is_empty())
-        .map(str::to_string)
+        .map(|line| {
+            if let Some(relative) = line.strip_prefix("selfhost/") {
+                format!("experiments/fixtures/selfhost/{relative}")
+            } else if let Some(relative) = line.strip_prefix("packages/native-abi-fixture/") {
+                format!("experiments/fixtures/native-abi-fixture/{relative}")
+            } else {
+                line.to_string()
+            }
+        })
         .collect::<Vec<_>>();
     expected.sort();
     let mut actual = collect_rss_files(&root)
@@ -1842,7 +1850,7 @@ fn corpus_manifest_matches_discovery() {
     actual.sort();
     assert_eq!(
         actual, expected,
-        "selfhost/corpus.txt is stale; update it when adding/removing corpus .rss files"
+        "experiments/fixtures/selfhost/corpus.txt is stale; update it when adding/removing corpus .rss files"
     );
 }
 
