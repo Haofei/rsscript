@@ -38,11 +38,12 @@ pub(super) fn finish_native_compile_failure(
     }
 }
 
-/// Admit successfully emitted ids. Baseline and optimized modules reserve fixed
-/// Cranelift arenas from one shared hard budget; codegen cannot grow beyond those
-/// mappings. Compile-time exhaustion stops subsequent attempts; it does not
-/// discard the current successfully emitted function and leave unreachable code
-/// resident.
+/// Publish successfully emitted ids. Baseline and optimized modules reserve fixed
+/// Cranelift arenas from one shared hard budget, so codegen cannot grow beyond the
+/// configured executable-memory mapping. Once Cranelift has finalized a function
+/// it is resident for the module lifetime and cannot be individually reclaimed;
+/// therefore the current function is always published. Crossing the soft code or
+/// compile-time admission budget only closes admission for subsequent attempts.
 pub(super) fn finish_native_compile(
     native: &mut NativeState,
     admission: NativeCompileAdmission,
@@ -64,39 +65,50 @@ pub(super) fn finish_native_compile(
     let code_bytes = ids.iter().fold(0u64, |total, &id| {
         total.saturating_add(module.code_size_bytes(id).unwrap_or(0))
     });
-    let admitted_bytes = native
-        .admission
-        .admitted_code_bytes
-        .checked_add(code_bytes)
-        .filter(|&total| total <= native.admission.max_code_bytes);
-    let within_time = native.admission.compile_nanos <= native.admission.max_compile_nanos;
-    if let Some(total) = admitted_bytes.filter(|_| within_time) {
-        native.admission.admitted_code_bytes = total;
-        if native.collect_stats {
-            native.stats.admission_admitted = native
-                .stats
-                .admission_admitted
-                .saturating_add(admission.regions);
-            native.stats.admission_admitted_bytes = native
-                .stats
-                .admission_admitted_bytes
-                .saturating_add(code_bytes);
-        }
-        true
-    } else {
-        if admitted_bytes.is_none() {
-            native.admission.code_exhausted = true;
-        }
-        if native.collect_stats {
-            native.stats.admission_rejected = native
-                .stats
-                .admission_rejected
-                .saturating_add(admission.regions);
-            native.stats.admission_rejected_bytes = native
-                .stats
-                .admission_rejected_bytes
-                .saturating_add(code_bytes);
-        }
-        false
+    let (total, exhausted) = admission_after_publish(
+        native.admission.admitted_code_bytes,
+        code_bytes,
+        native.admission.max_code_bytes,
+        native.admission.compile_nanos,
+        native.admission.max_compile_nanos,
+    );
+    native.admission.admitted_code_bytes = total;
+    if exhausted {
+        native.admission.code_exhausted = true;
+    }
+    if native.collect_stats {
+        native.stats.admission_admitted = native
+            .stats
+            .admission_admitted
+            .saturating_add(admission.regions);
+        native.stats.admission_admitted_bytes = native
+            .stats
+            .admission_admitted_bytes
+            .saturating_add(code_bytes);
+    }
+    true
+}
+
+fn admission_after_publish(
+    published_bytes: u64,
+    current_bytes: u64,
+    max_code_bytes: u64,
+    compile_nanos: u128,
+    max_compile_nanos: u128,
+) -> (u64, bool) {
+    let published_bytes = published_bytes.saturating_add(current_bytes);
+    let exhausted = published_bytes >= max_code_bytes || compile_nanos > max_compile_nanos;
+    (published_bytes, exhausted)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::admission_after_publish;
+
+    #[test]
+    fn finalized_code_is_published_before_future_admission_closes() {
+        assert_eq!(admission_after_publish(80, 30, 100, 5, 10), (110, true));
+        assert_eq!(admission_after_publish(10, 20, 100, 11, 10), (30, true));
+        assert_eq!(admission_after_publish(10, 20, 100, 10, 10), (30, false));
     }
 }

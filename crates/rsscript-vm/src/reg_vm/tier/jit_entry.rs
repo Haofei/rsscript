@@ -127,6 +127,9 @@ impl RegVm {
         let call_count = self.jit_state.call_count(func);
         let (id, param_tys, ret) = {
             let native = self.native.as_mut()?;
+            if !native.allow_recursive_calls {
+                return None;
+            }
             // Deopt-stress / forced-bail modes run the scalar/interpreter path so the
             // differential stress backends exercise the always-correct fallback.
             if native.force_bail || native.forced_safepoint.is_some() || native.force_all_safepoints
@@ -295,6 +298,9 @@ impl RegVm {
         // compiling any member compiles the whole group.
         let (id, param_tys, ret) = {
             let native = self.native.as_mut()?;
+            if !native.allow_recursive_calls {
+                return None;
+            }
             if native.force_bail || native.forced_safepoint.is_some() || native.force_all_safepoints
             {
                 return None;

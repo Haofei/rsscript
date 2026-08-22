@@ -70,6 +70,7 @@ pub(super) struct NativeExecutionPlan {
     pub(super) report: bool,
     pub(super) forced_safepoint: Option<u32>,
     pub(super) force_all_safepoints: bool,
+    pub(super) allow_recursive_calls: bool,
     pub(super) admission: NativeAdmissionPolicy,
 }
 
@@ -95,6 +96,12 @@ pub struct NativeJitOptions {
     pub max_code_bytes: u64,
     pub max_compile_millis: u64,
     pub optimize_work_threshold: u64,
+    /// Enables non-tail native recursion on the host C stack.
+    ///
+    /// This remains disabled by default because the current Cranelift backend
+    /// cannot prove the live host stack bound. Tail recursion continues to lower
+    /// to loops, and disabled recursive calls fall back to the interpreter.
+    pub allow_recursive_calls: bool,
 }
 
 #[cfg(feature = "native-jit")]
@@ -107,6 +114,7 @@ impl Default for NativeJitOptions {
             max_code_bytes: 16 * 1024 * 1024,
             max_compile_millis: 2_000,
             optimize_work_threshold: 50_000,
+            allow_recursive_calls: false,
         }
     }
 }
@@ -124,6 +132,7 @@ impl NativeExecutionPlan {
             report: false,
             forced_safepoint: None,
             force_all_safepoints: false,
+            allow_recursive_calls: options.allow_recursive_calls,
             admission: NativeAdmissionPolicy {
                 max_code_bytes: options.max_code_bytes,
                 max_compile_millis: options.max_compile_millis,
@@ -163,6 +172,10 @@ impl NativeExecutionPlan {
             report,
             forced_safepoint,
             force_all_safepoints,
+            // Legacy diagnostic entry points are used only by in-crate tests and
+            // developer tooling. They no longer opt production execution into
+            // host-stack recursion implicitly.
+            allow_recursive_calls: false,
             admission: NativeAdmissionPolicy::from_environment(tier_up_threshold),
         }
     }
@@ -205,6 +218,11 @@ mod tests {
         assert_eq!(
             ExecutionPlan::streaming(VmLimits::default()).stdout,
             StdoutMode::Streaming
+        );
+        #[cfg(feature = "native-jit")]
+        assert!(
+            !NativeJitOptions::default().allow_recursive_calls,
+            "host-stack recursion must require an explicit trusted-host opt-in"
         );
     }
 }

@@ -211,10 +211,71 @@ pub(super) fn osr_heap_input_regs(jit_fn: &vm_jit::JitFunction) -> Vec<usize> {
                 }
             }
             vm_jit::JitInstr::MatchMapGetInt { map, .. }
+            | vm_jit::JitInstr::MatchMapGetFloat { map, .. }
             | vm_jit::JitInstr::MatchSortedMapGetInt { map, .. }
+            | vm_jit::JitInstr::MatchSortedMapGetFloat { map, .. }
             | vm_jit::JitInstr::GuardClosureId { base: map, .. } => push_reg(*map),
             _ => {}
         }
     }
     regs
+}
+
+#[cfg(all(test, feature = "native-jit"))]
+mod tests {
+    use super::*;
+
+    fn map_match_function(instr: vm_jit::JitInstr) -> vm_jit::JitFunction {
+        vm_jit::JitFunction {
+            n_params: 2,
+            n_regs: 3,
+            reg_types: vec![
+                vm_jit::JitValueType::Handle,
+                vm_jit::JitValueType::Int,
+                vm_jit::JitValueType::Float,
+            ],
+            zero_init_regs: Vec::new(),
+            code: vec![instr],
+            memo_scopes: Vec::new(),
+            cold_blocks: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn map_match_heap_inputs_are_symmetric_across_value_types() {
+        let variants = [
+            vm_jit::JitInstr::MatchMapGetInt {
+                map: 0,
+                key: 1,
+                value_dst: 1,
+                some_ip: 0,
+                none_ip: 0,
+            },
+            vm_jit::JitInstr::MatchMapGetFloat {
+                map: 0,
+                key: 1,
+                value_dst: 2,
+                some_ip: 0,
+                none_ip: 0,
+            },
+            vm_jit::JitInstr::MatchSortedMapGetInt {
+                map: 0,
+                key: 1,
+                value_dst: 1,
+                some_ip: 0,
+                none_ip: 0,
+            },
+            vm_jit::JitInstr::MatchSortedMapGetFloat {
+                map: 0,
+                key: 1,
+                value_dst: 2,
+                some_ip: 0,
+                none_ip: 0,
+            },
+        ];
+
+        for instr in variants {
+            assert_eq!(osr_heap_input_regs(&map_match_function(instr)), vec![0]);
+        }
+    }
 }

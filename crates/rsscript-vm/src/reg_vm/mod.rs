@@ -1995,6 +1995,10 @@ struct NativeState {
     /// Env-gated deopt stress mode (`RSS_JIT_DEOPT_EVERY`): when set, every
     /// generated native safepoint bails unconditionally.
     force_all_safepoints: bool,
+    /// Explicit host opt-in for non-tail recursion in generated machine code.
+    /// Disabled by default because the backend's static frame estimate is not a
+    /// proof of the live host stack available at the call site.
+    allow_recursive_calls: bool,
     /// Telemetry: where native-tier attempts go (so the next coverage win is
     /// measurable rather than guessed).
     stats: NativeStats,
@@ -6507,6 +6511,7 @@ impl NativeState {
             plan.report,
             plan.forced_safepoint,
             plan.force_all_safepoints,
+            plan.allow_recursive_calls,
             plan.admission,
         )
     }
@@ -6556,6 +6561,7 @@ impl NativeState {
             report,
             None,
             false,
+            true,
             NativeAdmissionPolicy::from_environment(tier_up_threshold),
         )
     }
@@ -6570,6 +6576,7 @@ impl NativeState {
         report: bool,
         forced_safepoint: Option<u32>,
         force_all_safepoints: bool,
+        allow_recursive_calls: bool,
         admission_policy: NativeAdmissionPolicy,
     ) -> Result<Self, EvalError> {
         let max_code_bytes = admission_policy.max_code_bytes;
@@ -6628,6 +6635,7 @@ impl NativeState {
             force_bail,
             forced_safepoint,
             force_all_safepoints,
+            allow_recursive_calls,
             stats: NativeStats::default(),
             collect_stats,
             precise_deopt,
