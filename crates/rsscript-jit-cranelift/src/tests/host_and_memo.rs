@@ -673,7 +673,7 @@ extern "C" fn bailing_map_get_match_int(
     found: &mut i64,
 ) -> i64 {
     *found = 1;
-    signal_bail();
+    signal_bail(_ctx);
     99
 }
 

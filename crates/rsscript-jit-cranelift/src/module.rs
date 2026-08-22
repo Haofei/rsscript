@@ -18,20 +18,7 @@
 /// register's value on the bail edge only (slot `reg` receives that register's
 /// 8-byte word). Native-call bail edges also chain the callee safepoint id and
 /// payload after the caller register window.
-type CompiledAbi = unsafe extern "C" fn(
-    *const i64,
-    usize,
-    *const i64,
-    HostCtx,
-    *mut i64,
-    *const u8,
-    *mut i64,
-    *mut i64,
-    usize,
-    usize,
-    usize,
-    *const i64,
-) -> u8;
+type CompiledAbi = unsafe extern "C" fn(*mut JitCallFrame) -> JitStatus;
 
 /// Stable classification for native-tier failures. Hosts use the kind to decide
 /// whether interpreter fallback is expected or the module must be quarantined;
@@ -299,6 +286,8 @@ pub struct NativeModule {
     id: u64,
     /// Declared host-helper imports (see [`HostHelpers`]).
     imports: HostFuncs,
+    call_active: std::cell::Cell<bool>,
+    deopt_payload: std::cell::RefCell<Vec<i64>>,
     /// Keeps the shared hard-budget reservation alive for the arena's lifetime.
     _memory_reservation: ExecutableMemoryReservation,
 }
@@ -517,6 +506,8 @@ impl NativeModule {
             counter: 0,
             id: NEXT_MODULE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             imports,
+            call_active: std::cell::Cell::new(false),
+            deopt_payload: std::cell::RefCell::new(Vec::new()),
             _memory_reservation: memory_reservation,
         })
     }
@@ -1157,8 +1148,8 @@ impl NativeModule {
     /// interprets it.
     /// Flat entries are accepted only when `flat_args` contains matching live Rust
     /// borrows whose addresses and lengths equal the ABI words in `args`/`lens`.
-    /// A mutable proof may satisfy read-only aliases of the same buffer as well as
-    /// mutable entries; the single exclusive borrow remains held for the whole call.
+    /// Mutable entries require distinct mutable proofs; read-only aliases must use
+    /// immutable proofs. Ambiguous aliasing declines to the interpreter.
     pub fn call_with_host_ctx(
         &self,
         id: CompiledId,
@@ -1203,39 +1194,47 @@ impl NativeModule {
         } else {
             &func.param_types
         };
+        let mut mutable_proofs_used = vec![false; flat_args.len()];
         for (index, ty) in entry_types.iter().copied().enumerate() {
             if !is_flat_type(ty) {
                 continue;
             }
             let expected_ptr = args.get(index).copied();
             let expected_len = lens.get(index).copied();
-            let proof = flat_args.iter_mut().any(|arg| {
-                let (ptr, len, compatible) = match arg {
-                    FlatBufferArg::Int(values) => (
-                        values.as_ptr() as i64,
-                        values.len() as i64,
-                        ty == JitValueType::FlatInt,
-                    ),
-                    FlatBufferArg::IntMut(values) => (
-                        values.as_mut_ptr() as i64,
-                        values.len() as i64,
-                        matches!(ty, JitValueType::FlatInt | JitValueType::FlatIntMut),
-                    ),
-                    FlatBufferArg::Float(values) => (
-                        values.as_ptr() as i64,
-                        values.len() as i64,
-                        ty == JitValueType::FlatFloat,
-                    ),
-                    FlatBufferArg::FloatMut(values) => (
-                        values.as_mut_ptr() as i64,
-                        values.len() as i64,
-                        matches!(ty, JitValueType::FlatFloat | JitValueType::FlatFloatMut),
-                    ),
-                };
-                compatible && expected_ptr == Some(ptr) && expected_len == Some(len)
-            });
-            if !proof {
+            let proof = flat_args
+                .iter_mut()
+                .enumerate()
+                .find_map(|(proof_index, arg)| {
+                    let (ptr, len, compatible) = match arg {
+                        FlatBufferArg::Int(values) => (
+                            values.as_ptr() as i64,
+                            values.len() as i64,
+                            ty == JitValueType::FlatInt,
+                        ),
+                        FlatBufferArg::IntMut(values) => (
+                            values.as_mut_ptr() as i64,
+                            values.len() as i64,
+                            ty == JitValueType::FlatIntMut && !mutable_proofs_used[proof_index],
+                        ),
+                        FlatBufferArg::Float(values) => (
+                            values.as_ptr() as i64,
+                            values.len() as i64,
+                            ty == JitValueType::FlatFloat,
+                        ),
+                        FlatBufferArg::FloatMut(values) => (
+                            values.as_mut_ptr() as i64,
+                            values.len() as i64,
+                            ty == JitValueType::FlatFloatMut && !mutable_proofs_used[proof_index],
+                        ),
+                    };
+                    (compatible && expected_ptr == Some(ptr) && expected_len == Some(len))
+                        .then_some(proof_index)
+                });
+            let Some(proof_index) = proof else {
                 return anonymous_deopt();
+            };
+            if matches!(ty, JitValueType::FlatIntMut | JitValueType::FlatFloatMut) {
+                mutable_proofs_used[proof_index] = true;
             }
         }
         self.call_inner(id, args, lens, host_ctx, logical_depth, std::ptr::null())
@@ -1294,7 +1293,7 @@ impl NativeModule {
                 logical_depth: None,
             };
         }
-        let Some(_call_guard) = TopLevelCallGuard::enter() else {
+        let Some(_call_guard) = TopLevelCallGuard::enter(&self.call_active) else {
             return NativeOutcome::Deopt {
                 safepoint_id: SafepointId::ANONYMOUS,
                 live: Vec::new(),
@@ -1306,94 +1305,94 @@ impl NativeModule {
         let returns_handle = func.returns_handle;
         let deopt_map = &func.deopt_map;
         let mut out: i64 = 0;
-        BAIL_FLAG.with(|bail| {
-            SAFEPOINT_ID.with(|safepoint| {
-                DEOPT_PAYLOAD.with(|payload| {
-                    bail.set(0);
-                    safepoint.set(0);
-                    let bail_ptr = bail.as_ptr() as *const u8;
-                    let safepoint_ptr = safepoint.as_ptr();
-                    // Reused per-thread scratch buffer for the deopt payload: a valid
-                    // pointer for every call, but only written on a bail edge. Grow-only
-                    // (no per-call zeroing): the success hot path neither allocates nor
-                    // memsets, and a bail only ever reads slots the generated code just
-                    // wrote (the live-register set), so stale words in other slots are
-                    // never observed.
-                    let mut buf = payload.borrow_mut();
-                    if buf.len() < deopt_map.payload_words {
-                        buf.resize(deopt_map.payload_words, 0);
-                    }
-                    let payload_ptr = buf.as_mut_ptr();
-                    // SAFETY: `f` was produced by `compile` with the `CompiledAbi`
-                    // signature; it reads `args.len()` i64s from `args.as_ptr()` and
-                    // `lens.as_ptr()`, writes one i64 to `&mut out`, and only ever loads
-                    // (never stores) the `u8` at `bail_ptr` — this thread's `BAIL_FLAG`
-                    // cell, valid for the call. It only ever *stores* to the `i64` at
-                    // `safepoint_ptr` (the symmetric write-direction-opposite of
-                    // `bail_ptr`) — this thread's `SAFEPOINT_ID` cell, also valid for the
-                    // call, and only on a bail edge (the hot path never touches it).
-                    // `payload_ptr` addresses this thread's `DEOPT_PAYLOAD` buffer, sized
-                    // to `deopt_map.payload_words` above and held borrowed (so it stays
-                    // valid and immovable) for the whole call; the generated code only
-                    // ever *stores* live register words and copied child-frame payloads
-                    // into it, and only on a bail edge (the hot path never touches it).
-                    // Any flat-array data pointer in `args` is read in-bounds (against
-                    // the matching `lens` entry) per the caller's borrow-protocol
-                    // obligation documented above. The generated code never retains any
-                    // of the pointers.
-                    let completed = unsafe {
-                        f(
-                            args.as_ptr(),
-                            args.len(),
-                            lens.as_ptr(),
-                            host_ctx,
-                            &mut out as *mut i64,
-                            bail_ptr,
-                            safepoint_ptr,
-                            payload_ptr,
-                            // Host native stack depth starts at zero independently of
-                            // the language's logical call depth.
-                            0,
-                            logical_depth.current,
-                            logical_depth.limit,
-                            // J0.5 limits cell (null for unarmed variants, which ignore
-                            // it). The generated armed OSR variant reads/writes it.
-                            limits_ptr,
-                        )
-                    };
-                    if completed != 0 && bail.get() == 0 {
-                        // Success: leave the payload buffer untouched, build no Vec.
-                        // Heap-result return ABI: a Handle-returning function's
-                        // `out` is an output-table handle, signalled distinctly so the
-                        // host materializes a heap value from it. The scalar path is
-                        // byte-for-byte unchanged. §7.2: this branch runs ONLY on a
-                        // clean completion (`completed != 0 && bail.get() == 0`); any
-                        // bail takes the `else` (`Deopt`) arm, so no heap result is
-                        // ever reported on a bailed attempt.
-                        if returns_handle {
-                            NativeOutcome::CompletedHandle(out)
-                        } else {
-                            NativeOutcome::Completed(out)
-                        }
+        let mut bail = 0_u8;
+        let mut safepoint = 0_i64;
+        {
+            let payload = &self.deopt_payload;
+            {
+                // Reused per-thread scratch buffer for the deopt payload: a valid
+                // pointer for every call, but only written on a bail edge. Grow-only
+                // (no per-call zeroing): the success hot path neither allocates nor
+                // memsets, and a bail only ever reads slots the generated code just
+                // wrote (the live-register set), so stale words in other slots are
+                // never observed.
+                let mut buf = payload.borrow_mut();
+                if buf.len() < deopt_map.payload_words {
+                    buf.resize(deopt_map.payload_words, 0);
+                }
+                let payload_ptr = buf.as_mut_ptr();
+                let mut helper_context = HostCallContext {
+                    user: host_ctx,
+                    bail: &mut bail,
+                };
+                // SAFETY: `f` was produced by `compile` with the `CompiledAbi`
+                // signature; it reads `args.len()` i64s from `args.as_ptr()` and
+                // `lens.as_ptr()`, writes one i64 to `&mut out`, and only ever loads
+                // (never stores) the `u8` at `bail_ptr` — this thread's `BAIL_FLAG`
+                // cell, valid for the call. It only ever *stores* to the `i64` at
+                // `safepoint_ptr` (the symmetric write-direction-opposite of
+                // `bail_ptr`) — this thread's `SAFEPOINT_ID` cell, also valid for the
+                // call, and only on a bail edge (the hot path never touches it).
+                // `payload_ptr` addresses this thread's `DEOPT_PAYLOAD` buffer, sized
+                // to `deopt_map.payload_words` above and held borrowed (so it stays
+                // valid and immovable) for the whole call; the generated code only
+                // ever *stores* live register words and copied child-frame payloads
+                // into it, and only on a bail edge (the hot path never touches it).
+                // Any flat-array data pointer in `args` is read in-bounds (against
+                // the matching `lens` entry) per the caller's borrow-protocol
+                // obligation documented above. The generated code never retains any
+                // of the pointers.
+                let mut frame = JitCallFrame {
+                    abi_version: JIT_CALL_ABI_VERSION,
+                    flags: 0,
+                    args: args.as_ptr(),
+                    lens: lens.as_ptr(),
+                    arg_count: args.len(),
+                    host_ctx: (&mut helper_context as *mut HostCallContext) as HostCtx,
+                    limits: limits_ptr,
+                    result: &mut out,
+                    bail: &mut bail,
+                    safepoint: &mut safepoint,
+                    deopt: payload_ptr,
+                    native_depth: 0,
+                    logical_depth: logical_depth.current,
+                    logical_depth_limit: logical_depth.limit,
+                };
+                // SAFETY: `f` was finalized from the one-pointer `CompiledAbi`
+                // signature and every pointer in `frame` remains live for the call.
+                let completed = unsafe { f(&mut frame) };
+                if completed == JitStatus::Completed && bail == 0 {
+                    // Success: leave the payload buffer untouched, build no Vec.
+                    // Heap-result return ABI: a Handle-returning function's
+                    // `out` is an output-table handle, signalled distinctly so the
+                    // host materializes a heap value from it. The scalar path is
+                    // byte-for-byte unchanged. §7.2: this branch runs ONLY on a
+                    // clean completion (`completed != 0 && bail.get() == 0`); any
+                    // bail takes the `else` (`Deopt`) arm, so no heap result is
+                    // ever reported on a bailed attempt.
+                    if returns_handle {
+                        NativeOutcome::CompletedHandle(out)
                     } else {
-                        let safepoint_id = SafepointId(safepoint.get() as u32);
-                        // Decode the captured live registers via the J0.1a state-map.
-                        // A real bail site (id >= 1) names a `sites[id - 1]` entry; an
-                        // anonymous bail (id 0, e.g. fell off the end) has no site, so
-                        // `live` is empty.
-                        let frame = self.decode_deopt_frame(id, safepoint_id, 0, &buf);
-                        NativeOutcome::Deopt {
-                            safepoint_id,
-                            live: frame
-                                .as_ref()
-                                .map_or_else(Vec::new, |frame| frame.live.clone()),
-                            child: frame.and_then(|frame| frame.child),
-                            logical_depth: func.osr.then_some(out.max(0) as usize),
-                        }
+                        NativeOutcome::Completed(out)
                     }
-                })
-            })
-        })
+                } else {
+                    let safepoint_id = SafepointId(safepoint as u32);
+                    // Decode the captured live registers via the J0.1a state-map.
+                    // A real bail site (id >= 1) names a `sites[id - 1]` entry; an
+                    // anonymous bail (id 0, e.g. fell off the end) has no site, so
+                    // `live` is empty.
+                    let frame = self.decode_deopt_frame(id, safepoint_id, 0, &buf);
+                    NativeOutcome::Deopt {
+                        safepoint_id,
+                        live: frame
+                            .as_ref()
+                            .map_or_else(Vec::new, |frame| frame.live.clone()),
+                        child: frame.and_then(|frame| frame.child),
+                        logical_depth: func.osr.then_some(out.max(0) as usize),
+                    }
+                }
+            }
+        }
     }
 
     /// The per-function [`DeoptMap`] computed at compile time, or `None` if `id`
@@ -1418,51 +1417,24 @@ impl NativeModule {
     }
 }
 
-struct TopLevelCallGuard;
+struct TopLevelCallGuard<'a>(&'a std::cell::Cell<bool>);
 
-impl TopLevelCallGuard {
-    fn enter() -> Option<Self> {
-        TOP_LEVEL_CALL_ACTIVE.with(|active| {
-            if active.replace(true) {
-                None
-            } else {
-                Some(Self)
-            }
-        })
+impl<'a> TopLevelCallGuard<'a> {
+    fn enter(active: &'a std::cell::Cell<bool>) -> Option<Self> {
+        (!active.replace(true)).then_some(Self(active))
     }
 }
 
-impl Drop for TopLevelCallGuard {
+impl Drop for TopLevelCallGuard<'_> {
     fn drop(&mut self) {
-        TOP_LEVEL_CALL_ACTIVE.with(|active| active.set(false));
+        self.0.set(false);
     }
 }
 
-std::thread_local! {
-    /// A top-level call owns the TLS bail/safepoint/payload cells until machine code
-    /// returns. Generated native-to-native calls do not enter through this guard.
-    static TOP_LEVEL_CALL_ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-
-    /// Per-thread bail flag shared between the in-flight compiled call (which loads
-    /// it) and the host helpers (which set it via [`signal_bail`]). `call` resets it
-    /// before each invocation, so it is only meaningful during a call.
-    static BAIL_FLAG: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
-
-    /// Per-thread safepoint-id cell the in-flight compiled call *stores* into on a
-    /// bail edge (mirrors [`BAIL_FLAG`], opposite write direction). `call` resets it
-    /// to `0` before each invocation, so it is only meaningful during a call: `0`
-    /// means no bail site fired; a non-zero value is the [`SafepointId`] of the site
-    /// that bailed.
-    static SAFEPOINT_ID: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
-
-    /// Per-thread reused scratch buffer for the deopt payload. `call` resizes it to
-    /// the function's `deopt_map.payload_words` and passes its pointer into the
-    /// compiled function, which *stores* each live register's value into its slot on
-    /// a bail edge only; native-call bail edges also copy chained child payloads.
-    /// Reused across calls so the success hot path performs no steady-state
-    /// allocation.
-    static DEOPT_PAYLOAD: std::cell::RefCell<Vec<i64>> =
-        const { std::cell::RefCell::new(Vec::new()) };
+#[repr(C)]
+struct HostCallContext {
+    user: HostCtx,
+    bail: *mut u8,
 }
 
 /// Signal from a [`HostHelpers`] callback that the in-flight native call cannot be
@@ -1471,7 +1443,24 @@ std::thread_local! {
 /// each helper call and branches to fallback when it is set; [`NativeModule::call`]
 /// also reports it. Safe to call any time — it is a no-op outside a `call`, since
 /// `call` resets the flag at the start of every invocation.
-pub fn signal_bail() {
-    BAIL_FLAG.with(|flag| flag.set(1));
+pub fn signal_bail(context: HostCtx) {
+    if context == 0 {
+        return;
+    }
+    // SAFETY: generated code receives only the address of the live
+    // `HostCallContext` created by `call_inner`, and helpers cannot retain it.
+    let context = unsafe { &mut *(context as *mut HostCallContext) };
+    // SAFETY: the bail cell belongs to the same live call frame.
+    unsafe { *context.bail = 1 };
+}
+
+/// Recover the embedding VM's opaque context from the call-scoped helper context.
+pub fn user_host_ctx(context: HostCtx) -> HostCtx {
+    if context == 0 {
+        return 0;
+    }
+    // SAFETY: see `signal_bail`; this function is called only by registered host
+    // helpers while the generated invocation is active.
+    unsafe { (*(context as *const HostCallContext)).user }
 }
 use super::*;

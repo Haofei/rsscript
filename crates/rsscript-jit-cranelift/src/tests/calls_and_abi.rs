@@ -969,6 +969,28 @@ fn native_call_can_pass_flat_int_arg_to_mutating_callee() {
 }
 
 #[test]
+fn one_mutable_flat_proof_cannot_authorize_two_abi_entries() {
+    use JitValueType::{FlatIntMut, Int};
+    let mut module = module();
+    let function = module
+        .compile(&ft(
+            3,
+            vec![FlatIntMut, FlatIntMut, Int],
+            vec![JitInstr::Return { src: 2 }],
+        ))
+        .unwrap();
+    let mut data = [1_i64, 2];
+    let pointer = data.as_mut_ptr() as i64;
+    let args = [pointer, pointer, 7];
+    let lens = [2, 2, 0];
+    let mut proof = [FlatBufferArg::IntMut(&mut data)];
+    assert!(matches!(
+        module.call_with_host_ctx(function, &args, &lens, 0, &mut proof),
+        NativeOutcome::Deopt { .. }
+    ));
+}
+
+#[test]
 fn native_call_can_pass_flat_float_arg_to_readonly_callee() {
     use JitValueType::{FlatFloat, Float, Int};
     let mut m = module();
@@ -1027,7 +1049,7 @@ fn float_read_helpers_compile_and_bail() {
         if slot == 0 {
             2.5
         } else {
-            signal_bail();
+            signal_bail(_ctx);
             0.0
         }
     }
@@ -1035,7 +1057,7 @@ fn float_read_helpers_compile_and_bail() {
         if index >= 0 {
             index as f64 + 0.5
         } else {
-            signal_bail();
+            signal_bail(_ctx);
             0.0
         }
     }

@@ -906,7 +906,7 @@ fn deep_acyclic_native_call_chain_deopts_at_cap() {
 fn call_native_helper_bail_chains_child() {
     use JitValueType::{Handle, Int};
     extern "C" fn bailing_field(_ctx: HostCtx, _handle: i64, _slot: i64) -> i64 {
-        signal_bail();
+        signal_bail(_ctx);
         0
     }
     let mut m = NativeModule::new(HostHelpers {

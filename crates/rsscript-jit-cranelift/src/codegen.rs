@@ -1,6 +1,5 @@
-/// Push the `CompiledAbi` parameter/return signature onto `func` (args ptr, n_args,
-/// lens ptr, host ctx, out ptr, bail ptr, safepoint ptr, deopt payload ptr, native
-/// call depth, limits ptr → i8 completed). Shared by `compile_inner` and
+/// Push the versioned single-frame parameter/return signature onto `func`.
+/// Shared by `compile_inner` and
 /// `compile_recursive_group` so the ABI is defined in exactly one place.
 ///
 /// `limits ptr` (J0.5) points at a host-owned 3-word `[i64; 3]` cell
@@ -11,19 +10,55 @@ pub(crate) fn push_compiled_abi_signature(
     func: &mut cranelift_codegen::ir::Function,
     ptr_ty: cranelift_codegen::ir::Type,
 ) {
-    func.signature.params.push(AbiParam::new(ptr_ty)); // args ptr
-    func.signature.params.push(AbiParam::new(ptr_ty)); // n_args
-    func.signature.params.push(AbiParam::new(ptr_ty)); // lens ptr (TV2)
-    func.signature.params.push(AbiParam::new(types::I64)); // host helper context
-    func.signature.params.push(AbiParam::new(ptr_ty)); // out ptr
-    func.signature.params.push(AbiParam::new(ptr_ty)); // bail flag ptr
-    func.signature.params.push(AbiParam::new(ptr_ty)); // safepoint id out ptr
-    func.signature.params.push(AbiParam::new(ptr_ty)); // deopt payload out ptr
-    func.signature.params.push(AbiParam::new(ptr_ty)); // native call depth (slice 1)
-    func.signature.params.push(AbiParam::new(ptr_ty)); // logical VM call depth
-    func.signature.params.push(AbiParam::new(ptr_ty)); // logical VM depth limit
-    func.signature.params.push(AbiParam::new(ptr_ty)); // limits ptr (J0.5)
+    func.signature.params.push(AbiParam::new(ptr_ty)); // JitCallFrame ptr
     func.signature.returns.push(AbiParam::new(types::I8));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_child_call_frame(
+    bcx: &mut FunctionBuilder<'_>,
+    ptr_ty: cranelift_codegen::ir::Type,
+    args: Value,
+    lens: Value,
+    arg_count: Value,
+    host_ctx: Value,
+    limits: Value,
+    result: Value,
+    bail: Value,
+    safepoint: Value,
+    deopt: Value,
+    native_depth: Value,
+    logical_depth: Value,
+    logical_depth_limit: Value,
+) -> Value {
+    let slot = bcx.create_sized_stack_slot(StackSlotData::new(
+        StackSlotKind::ExplicitSlot,
+        CALL_FRAME_SIZE,
+        3,
+    ));
+    let abi = bcx
+        .ins()
+        .iconst(types::I32, i64::from(JIT_CALL_ABI_VERSION));
+    let flags = bcx.ins().iconst(types::I32, 0);
+    bcx.ins().stack_store(abi, slot, FRAME_ABI_VERSION);
+    bcx.ins().stack_store(flags, slot, FRAME_FLAGS);
+    for (value, offset) in [
+        (args, FRAME_ARGS),
+        (lens, FRAME_LENS),
+        (arg_count, FRAME_ARG_COUNT),
+        (host_ctx, FRAME_HOST_CTX),
+        (limits, FRAME_LIMITS),
+        (result, FRAME_RESULT),
+        (bail, FRAME_BAIL),
+        (safepoint, FRAME_SAFEPOINT),
+        (deopt, FRAME_DEOPT),
+        (native_depth, FRAME_NATIVE_DEPTH),
+        (logical_depth, FRAME_LOGICAL_DEPTH),
+        (logical_depth_limit, FRAME_LOGICAL_DEPTH_LIMIT),
+    ] {
+        bcx.ins().stack_store(value, slot, offset);
+    }
+    bcx.ins().stack_addr(ptr_ty, slot, 0)
 }
 
 /// Conservative host stack budget a native recursive call-chain may consume before
@@ -220,23 +255,49 @@ pub(crate) fn build_function(
     bcx.append_block_params_for_function_params(entry);
     bcx.switch_to_block(entry);
     let params = bcx.block_params(entry).to_vec();
-    let args_ptr = params[0];
-    let lens_ptr = params[2];
-    let host_ctx = params[3];
-    let out_ptr = params[4];
-    let bail_ptr = params[5];
-    let safepoint_ptr = params[6];
-    let payload_ptr = params[7];
+    let frame_ptr = params[0];
+    let args_ptr = bcx
+        .ins()
+        .load(ptr_ty, MemFlags::trusted(), frame_ptr, FRAME_ARGS);
+    let lens_ptr = bcx
+        .ins()
+        .load(ptr_ty, MemFlags::trusted(), frame_ptr, FRAME_LENS);
+    let host_ctx = bcx
+        .ins()
+        .load(types::I64, MemFlags::trusted(), frame_ptr, FRAME_HOST_CTX);
+    let out_ptr = bcx
+        .ins()
+        .load(ptr_ty, MemFlags::trusted(), frame_ptr, FRAME_RESULT);
+    let bail_ptr = bcx
+        .ins()
+        .load(ptr_ty, MemFlags::trusted(), frame_ptr, FRAME_BAIL);
+    let safepoint_ptr = bcx
+        .ins()
+        .load(ptr_ty, MemFlags::trusted(), frame_ptr, FRAME_SAFEPOINT);
+    let payload_ptr = bcx
+        .ins()
+        .load(ptr_ty, MemFlags::trusted(), frame_ptr, FRAME_DEOPT);
     // Native call depth (native-call-ABI slice 1): the chain depth passed by the
     // caller. Forwarded as `depth + 1` to native callees so a future entry guard can
     // bail before host-stack overflow; not yet checked.
-    let native_call_depth = params[8];
-    let logical_call_depth = params[9];
-    let logical_depth_limit = params[10];
+    let native_call_depth =
+        bcx.ins()
+            .load(ptr_ty, MemFlags::trusted(), frame_ptr, FRAME_NATIVE_DEPTH);
+    let logical_call_depth =
+        bcx.ins()
+            .load(ptr_ty, MemFlags::trusted(), frame_ptr, FRAME_LOGICAL_DEPTH);
+    let logical_depth_limit = bcx.ins().load(
+        ptr_ty,
+        MemFlags::trusted(),
+        frame_ptr,
+        FRAME_LOGICAL_DEPTH_LIMIT,
+    );
     // Limits cell pointer (J0.5): `[steps, step_budget, cancel_addr]`. Read only by an
     // armed OSR variant; forwarded verbatim to native callees so the whole native
     // chain shares one accounting/cancel cell.
-    let limits_ptr = params[11];
+    let limits_ptr = bcx
+        .ins()
+        .load(ptr_ty, MemFlags::trusted(), frame_ptr, FRAME_LIMITS);
     // J0.5 limit-tracking variables, materialized only for an armed compile so an
     // unarmed function emits byte-identical code. `steps_var` accumulates the
     // interpreter-equivalent instruction count (one tick per instruction); `limit_var`
@@ -975,23 +1036,23 @@ pub(crate) fn build_function(
                     .map(|tail_depth_var| bcx.use_var(tail_depth_var))
                     .unwrap_or(logical_call_depth);
                 let child_logical_depth = bcx.ins().iadd(caller_logical_depth, one_depth);
-                let call = bcx.ins().call(
-                    native_ref(*callee),
-                    &[
-                        args_ptr_v,
-                        nargs_v,
-                        lens_ptr_v,
-                        host_ctx,
-                        out_ptr_v,
-                        bail_ptr,
-                        safepoint_ptr_v,
-                        payload_ptr_v,
-                        child_depth,
-                        child_logical_depth,
-                        logical_depth_limit,
-                        limits_ptr,
-                    ],
+                let child_frame = build_child_call_frame(
+                    &mut bcx,
+                    ptr_ty,
+                    args_ptr_v,
+                    lens_ptr_v,
+                    nargs_v,
+                    host_ctx,
+                    limits_ptr,
+                    out_ptr_v,
+                    bail_ptr,
+                    safepoint_ptr_v,
+                    payload_ptr_v,
+                    child_depth,
+                    child_logical_depth,
+                    logical_depth_limit,
                 );
+                let call = bcx.ins().call(native_ref(*callee), &[child_frame]);
                 let completed = bcx.inst_results(call)[0];
                 let child_bail = bcx.ins().load(types::I8, MemFlags::trusted(), bail_ptr, 0);
                 let one_i8 = bcx.ins().iconst(types::I8, 1);
@@ -1064,23 +1125,23 @@ pub(crate) fn build_function(
                     .map(|tail_depth_var| bcx.use_var(tail_depth_var))
                     .unwrap_or(logical_call_depth);
                 let child_logical_depth = bcx.ins().iadd(caller_logical_depth, one_depth);
-                let call = bcx.ins().call(
-                    self_ref,
-                    &[
-                        args_ptr_v,
-                        nargs_v,
-                        lens_ptr_v,
-                        host_ctx,
-                        out_ptr_v,
-                        bail_ptr,
-                        safepoint_ptr,
-                        payload_ptr,
-                        child_depth,
-                        child_logical_depth,
-                        logical_depth_limit,
-                        limits_ptr,
-                    ],
+                let child_frame = build_child_call_frame(
+                    &mut bcx,
+                    ptr_ty,
+                    args_ptr_v,
+                    lens_ptr_v,
+                    nargs_v,
+                    host_ctx,
+                    limits_ptr,
+                    out_ptr_v,
+                    bail_ptr,
+                    safepoint_ptr,
+                    payload_ptr,
+                    child_depth,
+                    child_logical_depth,
+                    logical_depth_limit,
                 );
+                let call = bcx.ins().call(self_ref, &[child_frame]);
                 // A child guard-bail returns completed=0 WITHOUT setting the shared
                 // bail flag, so detect failure via the return value (covers guard and
                 // helper bails alike). On failure, propagate (re-run-from-top).
@@ -1181,23 +1242,23 @@ pub(crate) fn build_function(
                     .map(|tail_depth_var| bcx.use_var(tail_depth_var))
                     .unwrap_or(logical_call_depth);
                 let child_logical_depth = bcx.ins().iadd(caller_logical_depth, one_depth);
-                let call = bcx.ins().call(
-                    member_ref,
-                    &[
-                        args_ptr_v,
-                        nargs_v,
-                        lens_ptr_v,
-                        host_ctx,
-                        out_ptr_v,
-                        bail_ptr,
-                        safepoint_ptr_v,
-                        payload_ptr_v,
-                        child_depth,
-                        child_logical_depth,
-                        logical_depth_limit,
-                        limits_ptr,
-                    ],
+                let child_frame = build_child_call_frame(
+                    &mut bcx,
+                    ptr_ty,
+                    args_ptr_v,
+                    lens_ptr_v,
+                    nargs_v,
+                    host_ctx,
+                    limits_ptr,
+                    out_ptr_v,
+                    bail_ptr,
+                    safepoint_ptr_v,
+                    payload_ptr_v,
+                    child_depth,
+                    child_logical_depth,
+                    logical_depth_limit,
                 );
+                let call = bcx.ins().call(member_ref, &[child_frame]);
                 // Non-chaining: a child bail uses its own safepoint/payload but the
                 // shared helper-bail channel. Propagate at this site (re-run-from-top).
                 let completed = bcx.inst_results(call)[0];

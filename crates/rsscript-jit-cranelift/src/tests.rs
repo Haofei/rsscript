@@ -17,6 +17,29 @@ fn execution_spec_tracks_the_public_ir_version() {
 }
 
 #[test]
+fn call_frame_layout_is_versioned_and_stable() {
+    assert_eq!(JIT_CALL_ABI_VERSION, 1);
+    assert_eq!(
+        CALL_FRAME_SIZE as usize,
+        std::mem::size_of::<JitCallFrame>()
+    );
+    assert_eq!(
+        FRAME_ARGS as usize,
+        std::mem::offset_of!(JitCallFrame, args)
+    );
+    assert_eq!(
+        FRAME_DEOPT as usize,
+        std::mem::offset_of!(JitCallFrame, deopt)
+    );
+    assert_eq!(
+        FRAME_LOGICAL_DEPTH_LIMIT as usize,
+        std::mem::offset_of!(JitCallFrame, logical_depth_limit)
+    );
+    #[cfg(target_pointer_width = "64")]
+    assert_eq!(CALL_FRAME_SIZE, 104);
+}
+
+#[test]
 fn host_helper_descriptor_table_is_complete_and_unique() {
     let helpers = HostHelper::all();
     assert_eq!(helpers.len(), HostHelper::DESCRIPTORS.len());

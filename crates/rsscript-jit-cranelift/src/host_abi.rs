@@ -2,12 +2,61 @@
 /// just forwards it from [`NativeModule::call`] to every imported host helper.
 pub type HostCtx = i64;
 
+pub const JIT_CALL_ABI_VERSION: u32 = 1;
+
+/// Single versioned argument passed to generated functions. Keeping the machine
+/// ABI to one pointer prevents caller/codegen parameter-order drift as execution
+/// controls evolve.
+#[repr(C)]
+pub struct JitCallFrame {
+    pub abi_version: u32,
+    pub flags: u32,
+    pub args: *const i64,
+    pub lens: *const i64,
+    pub arg_count: usize,
+    pub host_ctx: HostCtx,
+    pub limits: *const i64,
+    pub result: *mut i64,
+    pub bail: *mut u8,
+    pub safepoint: *mut i64,
+    pub deopt: *mut i64,
+    pub native_depth: usize,
+    pub logical_depth: usize,
+    pub logical_depth_limit: usize,
+}
+
+pub(crate) const CALL_FRAME_SIZE: u32 = std::mem::size_of::<JitCallFrame>() as u32;
+pub(crate) const FRAME_ABI_VERSION: i32 = std::mem::offset_of!(JitCallFrame, abi_version) as i32;
+pub(crate) const FRAME_FLAGS: i32 = std::mem::offset_of!(JitCallFrame, flags) as i32;
+pub(crate) const FRAME_ARGS: i32 = std::mem::offset_of!(JitCallFrame, args) as i32;
+pub(crate) const FRAME_LENS: i32 = std::mem::offset_of!(JitCallFrame, lens) as i32;
+pub(crate) const FRAME_ARG_COUNT: i32 = std::mem::offset_of!(JitCallFrame, arg_count) as i32;
+pub(crate) const FRAME_HOST_CTX: i32 = std::mem::offset_of!(JitCallFrame, host_ctx) as i32;
+pub(crate) const FRAME_LIMITS: i32 = std::mem::offset_of!(JitCallFrame, limits) as i32;
+pub(crate) const FRAME_RESULT: i32 = std::mem::offset_of!(JitCallFrame, result) as i32;
+pub(crate) const FRAME_BAIL: i32 = std::mem::offset_of!(JitCallFrame, bail) as i32;
+pub(crate) const FRAME_SAFEPOINT: i32 = std::mem::offset_of!(JitCallFrame, safepoint) as i32;
+pub(crate) const FRAME_DEOPT: i32 = std::mem::offset_of!(JitCallFrame, deopt) as i32;
+pub(crate) const FRAME_NATIVE_DEPTH: i32 = std::mem::offset_of!(JitCallFrame, native_depth) as i32;
+pub(crate) const FRAME_LOGICAL_DEPTH: i32 =
+    std::mem::offset_of!(JitCallFrame, logical_depth) as i32;
+pub(crate) const FRAME_LOGICAL_DEPTH_LIMIT: i32 =
+    std::mem::offset_of!(JitCallFrame, logical_depth_limit) as i32;
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JitStatus {
+    Deopt = 0,
+    Completed = 1,
+}
+
 pub(crate) const DEFAULT_STANDALONE_JIT_ARENA_BYTES: u64 = 64 * 1024 * 1024;
 
-/// Borrow proof for one unique flat buffer passed to generated code. One proof may
-/// validate multiple ABI entries that intentionally alias the same buffer. Safe
-/// callers cannot construct an arbitrary address: `NativeModule` validates every
-/// raw pointer and length against these live slices immediately before the call.
+/// Borrow proof for one flat buffer passed to generated code. Immutable proofs may
+/// be reused; a mutable proof validates exactly one mutable ABI entry and cannot
+/// also satisfy a read-only entry. Safe callers cannot construct an arbitrary
+/// address: `NativeModule` validates every pointer and length immediately before
+/// the call.
 pub enum FlatBufferArg<'a> {
     Int(&'a [i64]),
     IntMut(&'a mut [i64]),

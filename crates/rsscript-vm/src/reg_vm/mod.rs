@@ -3105,16 +3105,25 @@ impl JitCallCtx {
 
 #[cfg(feature = "native-jit")]
 #[derive(Clone, Copy)]
-struct JitHostCallCtx;
+struct JitHostCallCtx {
+    call_context: vm_jit::HostCtx,
+}
 
 #[cfg(feature = "native-jit")]
 impl JitHostCallCtx {
     fn active() -> Option<Self> {
-        JitCallCtx::is_active().then_some(Self)
+        JitCallCtx::is_active().then_some(Self { call_context: 0 })
     }
 
     fn from_token(token: vm_jit::HostCtx) -> Option<Self> {
-        JitCallCtx::token_is_active(token).then_some(Self)
+        let user = vm_jit::user_host_ctx(token);
+        JitCallCtx::token_is_active(user).then_some(Self {
+            call_context: token,
+        })
+    }
+
+    fn signal_bail(self) {
+        vm_jit::signal_bail(self.call_context);
     }
 
     fn push_heap_arg(self, value: VmValue) -> usize {
@@ -3141,7 +3150,7 @@ impl JitHostCallCtx {
         match value {
             Some(value) => self.push_heap_arg(value) as i64,
             None => {
-                vm_jit::signal_bail();
+                self.signal_bail();
                 0
             }
         }
@@ -4207,17 +4216,17 @@ fn jit_struct_field_float(value: &VmValue, slot: usize) -> Option<f64> {
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_field_int(_ctx: vm_jit::HostCtx, handle: i64, slot: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
     match usize::try_from(slot)
         .ok()
-        .and_then(|slot| _ctx.heap_read_handle(handle, |value| jit_struct_field_int(value, slot)))
+        .and_then(|slot| ctx.heap_read_handle(handle, |value| jit_struct_field_int(value, slot)))
     {
         Some(value) => value,
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -4230,17 +4239,17 @@ extern "C" fn rss_jit_field_set_int(
     slot: i64,
     value: i64,
 ) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    rss_jit_field_set_int_with_ctx(_ctx, handle, slot, value)
+    rss_jit_field_set_int_with_ctx(ctx, handle, slot, value)
 }
 
 #[cfg(feature = "native-jit")]
 fn rss_jit_field_set_int_with_ctx(ctx: JitHostCallCtx, handle: i64, slot: i64, value: i64) -> i64 {
     let Some(slot) = usize::try_from(slot).ok() else {
-        vm_jit::signal_bail();
+        ctx.signal_bail();
         return 0;
     };
     let root = jit_heap_result_root_with_ctx(ctx, handle);
@@ -4280,7 +4289,7 @@ fn rss_jit_field_set_int_with_ctx(ctx: JitHostCallCtx, handle: i64, slot: i64, v
             handle
         }
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -4297,11 +4306,11 @@ extern "C" fn rss_jit_field_set_handle(
     slot: i64,
     value_handle: i64,
 ) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    rss_jit_field_set_handle_with_ctx(_ctx, handle, slot, value_handle)
+    rss_jit_field_set_handle_with_ctx(ctx, handle, slot, value_handle)
 }
 
 #[cfg(feature = "native-jit")]
@@ -4312,12 +4321,12 @@ fn rss_jit_field_set_handle_with_ctx(
     value_handle: i64,
 ) -> i64 {
     let Some(slot) = usize::try_from(slot).ok() else {
-        vm_jit::signal_bail();
+        ctx.signal_bail();
         return 0;
     };
     // Resolve the new heap field value before the COW write.
     let Some(new_value) = ctx.heap_read_handle(value_handle, |value| Some(value.clone())) else {
-        vm_jit::signal_bail();
+        ctx.signal_bail();
         return 0;
     };
     let root = jit_heap_result_root_with_ctx(ctx, handle);
@@ -4352,7 +4361,7 @@ fn rss_jit_field_set_handle_with_ctx(
             handle
         }
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -4365,11 +4374,11 @@ extern "C" fn rss_jit_field_set_float(
     slot: i64,
     value: f64,
 ) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    rss_jit_field_set_float_with_ctx(_ctx, handle, slot, value)
+    rss_jit_field_set_float_with_ctx(ctx, handle, slot, value)
 }
 
 /// Copy-on-write set of a `Float` struct/variant field — the write-side mirror of
@@ -4384,7 +4393,7 @@ fn rss_jit_field_set_float_with_ctx(
     value: f64,
 ) -> i64 {
     let Some(slot) = usize::try_from(slot).ok() else {
-        vm_jit::signal_bail();
+        ctx.signal_bail();
         return 0;
     };
     let root = jit_heap_result_root_with_ctx(ctx, handle);
@@ -4424,7 +4433,7 @@ fn rss_jit_field_set_float_with_ctx(
             handle
         }
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -4461,18 +4470,18 @@ fn jit_collection_metadata_helper_calls() -> usize {
 extern "C" fn rss_jit_list_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
     #[cfg(test)]
     record_jit_collection_metadata_helper_call();
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let Some(list) = _ctx.heap_list_handle(handle) else {
-        vm_jit::signal_bail();
+    let Some(list) = ctx.heap_list_handle(handle) else {
+        ctx.signal_bail();
         return 0;
     };
     match i64::try_from(list.borrow().len()) {
         Ok(value) => value,
         Err(_) => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -4482,12 +4491,12 @@ extern "C" fn rss_jit_list_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
 extern "C" fn rss_jit_list_is_empty(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
     #[cfg(test)]
     record_jit_collection_metadata_helper_call();
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let Some(list) = _ctx.heap_list_handle(handle) else {
-        vm_jit::signal_bail();
+    let Some(list) = ctx.heap_list_handle(handle) else {
+        ctx.signal_bail();
         return 0;
     };
     i64::from(list.borrow().is_empty())
@@ -4495,16 +4504,16 @@ extern "C" fn rss_jit_list_is_empty(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_list_get_int(_ctx: vm_jit::HostCtx, handle: i64, index: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
     let Some(index) = usize::try_from(index).ok() else {
-        vm_jit::signal_bail();
+        ctx.signal_bail();
         return 0;
     };
-    let Some(list) = _ctx.heap_list_handle(handle) else {
-        vm_jit::signal_bail();
+    let Some(list) = ctx.heap_list_handle(handle) else {
+        ctx.signal_bail();
         return 0;
     };
     let borrowed = list.borrow();
@@ -4512,19 +4521,19 @@ extern "C" fn rss_jit_list_get_int(_ctx: vm_jit::HostCtx, handle: i64, index: i6
         TypedVec::Ints(values) => match values.get(index) {
             Some(value) => *value,
             None => {
-                vm_jit::signal_bail();
+                ctx.signal_bail();
                 0
             }
         },
         TypedVec::Boxed(values) => match values.get(index) {
             Some(VmValue::Int(value)) => *value,
             Some(_) | None => {
-                vm_jit::signal_bail();
+                ctx.signal_bail();
                 0
             }
         },
         TypedVec::Floats(_) => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -4537,17 +4546,17 @@ extern "C" fn rss_jit_list_set_int(
     index: i64,
     value: i64,
 ) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    rss_jit_list_set_int_with_ctx(_ctx, handle, index, value)
+    rss_jit_list_set_int_with_ctx(ctx, handle, index, value)
 }
 
 #[cfg(feature = "native-jit")]
 fn rss_jit_list_set_int_with_ctx(ctx: JitHostCallCtx, handle: i64, index: i64, value: i64) -> i64 {
     let Some(index) = usize::try_from(index).ok() else {
-        vm_jit::signal_bail();
+        ctx.signal_bail();
         return 0;
     };
     match ctx.with_journaled_list_write(handle, |list| {
@@ -4559,7 +4568,7 @@ fn rss_jit_list_set_int_with_ctx(ctx: JitHostCallCtx, handle: i64, index: i64, v
     }) {
         Some(value) => value,
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -4572,11 +4581,11 @@ extern "C" fn rss_jit_list_set_float(
     index: i64,
     value: f64,
 ) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    rss_jit_list_set_float_with_ctx(_ctx, handle, index, value)
+    rss_jit_list_set_float_with_ctx(ctx, handle, index, value)
 }
 
 /// Set a `Float` list element — the write-side mirror of `rss_jit_list_get_float`.
@@ -4589,7 +4598,7 @@ fn rss_jit_list_set_float_with_ctx(
     value: f64,
 ) -> i64 {
     let Some(index) = usize::try_from(index).ok() else {
-        vm_jit::signal_bail();
+        ctx.signal_bail();
         return 0;
     };
     match ctx.with_journaled_list_write(handle, |list| {
@@ -4601,7 +4610,7 @@ fn rss_jit_list_set_float_with_ctx(
     }) {
         Some(value) => value,
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -4609,11 +4618,11 @@ fn rss_jit_list_set_float_with_ctx(
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_list_push_int(_ctx: vm_jit::HostCtx, handle: i64, value: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    rss_jit_list_push_int_with_ctx(_ctx, handle, value)
+    rss_jit_list_push_int_with_ctx(ctx, handle, value)
 }
 
 #[cfg(feature = "native-jit")]
@@ -4629,12 +4638,12 @@ fn rss_jit_list_push_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value: i64) 
             } else {
                 // Over budget: bail. The OSR rolls back this loop's list writes and
                 // reruns on the interpreter, which recharges and errors at the exact push.
-                vm_jit::signal_bail();
+                ctx.signal_bail();
                 0
             }
         }
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -4651,18 +4660,18 @@ extern "C" fn rss_jit_list_push_handle(
     handle: i64,
     value_handle: i64,
 ) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    rss_jit_list_push_handle_with_ctx(_ctx, handle, value_handle)
+    rss_jit_list_push_handle_with_ctx(ctx, handle, value_handle)
 }
 
 #[cfg(feature = "native-jit")]
 fn rss_jit_list_push_handle_with_ctx(ctx: JitHostCallCtx, handle: i64, value_handle: i64) -> i64 {
     // Resolve the heap value (clone it out of its table) before the journaled write.
     let Some(value) = ctx.heap_read_handle(value_handle, |value| Some(value.clone())) else {
-        vm_jit::signal_bail();
+        ctx.signal_bail();
         return 0;
     };
     match ctx.with_journaled_list_write(handle, move |list| list.checked_push_accounted(value).ok())
@@ -4671,12 +4680,12 @@ fn rss_jit_list_push_handle_with_ctx(ctx: JitHostCallCtx, handle: i64, value_han
             if jit_mem_charge(grew as i64) {
                 0
             } else {
-                vm_jit::signal_bail();
+                ctx.signal_bail();
                 0
             }
         }
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -4684,11 +4693,11 @@ fn rss_jit_list_push_handle_with_ctx(ctx: JitHostCallCtx, handle: i64, value_han
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_list_push_float(_ctx: vm_jit::HostCtx, handle: i64, value: f64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    rss_jit_list_push_float_with_ctx(_ctx, handle, value)
+    rss_jit_list_push_float_with_ctx(ctx, handle, value)
 }
 
 /// Push a `Float` onto a flat `List<Float>` — the write-side mirror of
@@ -4703,12 +4712,12 @@ fn rss_jit_list_push_float_with_ctx(ctx: JitHostCallCtx, handle: i64, value: f64
             if jit_mem_charge(grew as i64) {
                 0
             } else {
-                vm_jit::signal_bail();
+                ctx.signal_bail();
                 0
             }
         }
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -4716,11 +4725,11 @@ fn rss_jit_list_push_float_with_ctx(ctx: JitHostCallCtx, handle: i64, value: f64
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_list_sort_int(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    rss_jit_list_sort_int_with_ctx(_ctx, handle)
+    rss_jit_list_sort_int_with_ctx(ctx, handle)
 }
 
 #[cfg(feature = "native-jit")]
@@ -4734,7 +4743,7 @@ fn rss_jit_list_sort_int_with_ctx(ctx: JitHostCallCtx, handle: i64) -> i64 {
     }) {
         Some(value) => value,
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -4742,11 +4751,11 @@ fn rss_jit_list_sort_int_with_ctx(ctx: JitHostCallCtx, handle: i64) -> i64 {
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_list_new_int(_ctx: vm_jit::HostCtx) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    _ctx.publish_heap_result(VmValue::List(Rc::new(RefCell::new(TypedVec::Ints(
+    ctx.publish_heap_result(VmValue::List(Rc::new(RefCell::new(TypedVec::Ints(
         Vec::new(),
     )))))
 }
@@ -4763,11 +4772,11 @@ extern "C" fn rss_jit_map_insert_int(
     key: i64,
     value: i64,
 ) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    rss_jit_map_insert_int_with_ctx(_ctx, handle, key, value)
+    rss_jit_map_insert_int_with_ctx(ctx, handle, key, value)
 }
 
 #[cfg(feature = "native-jit")]
@@ -4778,7 +4787,7 @@ fn rss_jit_map_insert_int_with_ctx(ctx: JitHostCallCtx, handle: i64, key: i64, v
     }) {
         Some(value) => value,
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -4797,11 +4806,11 @@ extern "C" fn rss_jit_map_insert_handle_key_int(
     key_handle: i64,
     value: i64,
 ) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    rss_jit_map_insert_handle_key_int_with_ctx(_ctx, handle, key_handle, value)
+    rss_jit_map_insert_handle_key_int_with_ctx(ctx, handle, key_handle, value)
 }
 
 #[cfg(feature = "native-jit")]
@@ -4814,7 +4823,7 @@ fn rss_jit_map_insert_handle_key_int_with_ctx(
     // Resolve the heap key to the host's canonical map key BEFORE the journaled write.
     let Some(key) = ctx.heap_read_handle(key_handle, |value| Some(VmMapKey::new(value.clone())))
     else {
-        vm_jit::signal_bail();
+        ctx.signal_bail();
         return 0;
     };
     match ctx.with_journaled_map_write(handle, |map| {
@@ -4823,7 +4832,7 @@ fn rss_jit_map_insert_handle_key_int_with_ctx(
     }) {
         Some(value) => value,
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -4836,11 +4845,11 @@ extern "C" fn rss_jit_map_insert_float(
     key: i64,
     value: f64,
 ) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    rss_jit_map_insert_float_with_ctx(_ctx, handle, key, value)
+    rss_jit_map_insert_float_with_ctx(ctx, handle, key, value)
 }
 
 /// Insert a `Float` value into an Int-keyed map — the value-side mirror of
@@ -4858,7 +4867,7 @@ fn rss_jit_map_insert_float_with_ctx(
     }) {
         Some(value) => value,
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -4866,18 +4875,18 @@ fn rss_jit_map_insert_float_with_ctx(
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_map_get_int(_ctx: vm_jit::HostCtx, handle: i64, key: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let Some(map) = _ctx.heap_map_handle(handle) else {
-        vm_jit::signal_bail();
+    let Some(map) = ctx.heap_map_handle(handle) else {
+        ctx.signal_bail();
         return 0;
     };
     match map.borrow().get(&jit_int_key(key)) {
         Some(VmValue::Int(value)) => *value,
         _ => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -4891,12 +4900,12 @@ extern "C" fn rss_jit_map_get_match_int(
     found: &mut i64,
 ) -> i64 {
     *found = 0;
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let Some(map) = _ctx.heap_map_handle(handle) else {
-        vm_jit::signal_bail();
+    let Some(map) = ctx.heap_map_handle(handle) else {
+        ctx.signal_bail();
         return 0;
     };
     match map.borrow().get(&jit_int_key(key)) {
@@ -4906,7 +4915,7 @@ extern "C" fn rss_jit_map_get_match_int(
         }
         None => 0,
         _ => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -4924,12 +4933,12 @@ extern "C" fn rss_jit_map_get_match_float(
     found: &mut i64,
 ) -> f64 {
     *found = 0;
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0.0;
     };
-    let Some(map) = _ctx.heap_map_handle(handle) else {
-        vm_jit::signal_bail();
+    let Some(map) = ctx.heap_map_handle(handle) else {
+        ctx.signal_bail();
         return 0.0;
     };
     match map.borrow().get(&jit_int_key(key)) {
@@ -4939,7 +4948,7 @@ extern "C" fn rss_jit_map_get_match_float(
         }
         None => 0.0,
         _ => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0.0
         }
     }
@@ -4947,12 +4956,12 @@ extern "C" fn rss_jit_map_get_match_float(
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_map_contains_int(_ctx: vm_jit::HostCtx, handle: i64, key: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let Some(map) = _ctx.heap_map_handle(handle) else {
-        vm_jit::signal_bail();
+    let Some(map) = ctx.heap_map_handle(handle) else {
+        ctx.signal_bail();
         return 0;
     };
     i64::from(map.borrow().contains_key(&jit_int_key(key)))
@@ -4962,18 +4971,18 @@ extern "C" fn rss_jit_map_contains_int(_ctx: vm_jit::HostCtx, handle: i64, key: 
 extern "C" fn rss_jit_map_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
     #[cfg(test)]
     record_jit_collection_metadata_helper_call();
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let Some(map) = _ctx.heap_map_handle(handle) else {
-        vm_jit::signal_bail();
+    let Some(map) = ctx.heap_map_handle(handle) else {
+        ctx.signal_bail();
         return 0;
     };
     match i64::try_from(map.borrow().len()) {
         Ok(len) => len,
         Err(_) => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -4983,12 +4992,12 @@ extern "C" fn rss_jit_map_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
 extern "C" fn rss_jit_map_is_empty(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
     #[cfg(test)]
     record_jit_collection_metadata_helper_call();
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let Some(map) = _ctx.heap_map_handle(handle) else {
-        vm_jit::signal_bail();
+    let Some(map) = ctx.heap_map_handle(handle) else {
+        ctx.signal_bail();
         return 0;
     };
     i64::from(map.borrow().is_empty())
@@ -4996,11 +5005,11 @@ extern "C" fn rss_jit_map_is_empty(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_set_insert_int(_ctx: vm_jit::HostCtx, handle: i64, value: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    rss_jit_set_insert_int_with_ctx(_ctx, handle, value)
+    rss_jit_set_insert_int_with_ctx(ctx, handle, value)
 }
 
 #[cfg(feature = "native-jit")]
@@ -5012,7 +5021,7 @@ fn rss_jit_set_insert_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value: i64)
     }) {
         Some(value) => value,
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -5029,18 +5038,18 @@ extern "C" fn rss_jit_set_insert_handle(
     handle: i64,
     value_handle: i64,
 ) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    rss_jit_set_insert_handle_with_ctx(_ctx, handle, value_handle)
+    rss_jit_set_insert_handle_with_ctx(ctx, handle, value_handle)
 }
 
 #[cfg(feature = "native-jit")]
 fn rss_jit_set_insert_handle_with_ctx(ctx: JitHostCallCtx, handle: i64, value_handle: i64) -> i64 {
     let Some(key) = ctx.heap_read_handle(value_handle, |value| Some(VmMapKey::new(value.clone())))
     else {
-        vm_jit::signal_bail();
+        ctx.signal_bail();
         return 0;
     };
     match ctx.with_journaled_map_write(handle, move |map| {
@@ -5048,7 +5057,7 @@ fn rss_jit_set_insert_handle_with_ctx(ctx: JitHostCallCtx, handle: i64, value_ha
     }) {
         Some(value) => value,
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -5058,18 +5067,18 @@ fn rss_jit_set_insert_handle_with_ctx(ctx: JitHostCallCtx, handle: i64, value_ha
 extern "C" fn rss_jit_set_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
     #[cfg(test)]
     record_jit_collection_metadata_helper_call();
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let Some(map) = _ctx.heap_map_handle(handle) else {
-        vm_jit::signal_bail();
+    let Some(map) = ctx.heap_map_handle(handle) else {
+        ctx.signal_bail();
         return 0;
     };
     match i64::try_from(map.borrow().len()) {
         Ok(len) => len,
         Err(_) => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -5079,12 +5088,12 @@ extern "C" fn rss_jit_set_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
 extern "C" fn rss_jit_set_is_empty(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
     #[cfg(test)]
     record_jit_collection_metadata_helper_call();
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let Some(map) = _ctx.heap_map_handle(handle) else {
-        vm_jit::signal_bail();
+    let Some(map) = ctx.heap_map_handle(handle) else {
+        ctx.signal_bail();
         return 0;
     };
     i64::from(map.borrow().is_empty())
@@ -5092,11 +5101,11 @@ extern "C" fn rss_jit_set_is_empty(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_sorted_set_insert_int(_ctx: vm_jit::HostCtx, handle: i64, value: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    rss_jit_sorted_set_insert_int_with_ctx(_ctx, handle, value)
+    rss_jit_sorted_set_insert_int_with_ctx(ctx, handle, value)
 }
 
 #[cfg(feature = "native-jit")]
@@ -5108,7 +5117,7 @@ fn rss_jit_sorted_set_insert_int_with_ctx(ctx: JitHostCallCtx, handle: i64, valu
     }) {
         Some(value) => value,
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -5124,22 +5133,22 @@ extern "C" fn rss_jit_sorted_set_insert_handle(
     handle: i64,
     value_handle: i64,
 ) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let Some(value) = _ctx.heap_read_handle(value_handle, |value| Some(value.clone())) else {
-        vm_jit::signal_bail();
+    let Some(value) = ctx.heap_read_handle(value_handle, |value| Some(value.clone())) else {
+        ctx.signal_bail();
         return 0;
     };
-    match _ctx.with_journaled_list_write(handle, move |list| {
+    match ctx.with_journaled_list_write(handle, move |list| {
         sorted_insert_vm(list.as_boxed_mut(), value)
             .ok()
             .map(i64::from)
     }) {
         Some(value) => value,
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -5151,11 +5160,11 @@ extern "C" fn rss_jit_sorted_set_contains_int(
     handle: i64,
     value: i64,
 ) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    match _ctx.heap_read_handle(handle, |heap| match heap {
+    match ctx.heap_read_handle(handle, |heap| match heap {
         VmValue::List(list) => Some(Rc::clone(list)),
         VmValue::Managed(inner) => match &*inner.borrow() {
             VmValue::List(list) => Some(Rc::clone(list)),
@@ -5166,12 +5175,12 @@ extern "C" fn rss_jit_sorted_set_contains_int(
         Some(list) => match sorted_contains_vm(&list.borrow(), &VmValue::Int(value)) {
             Ok(found) => i64::from(found),
             Err(_) => {
-                vm_jit::signal_bail();
+                ctx.signal_bail();
                 0
             }
         },
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -5181,12 +5190,12 @@ extern "C" fn rss_jit_sorted_set_contains_int(
 extern "C" fn rss_jit_sorted_set_is_empty(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
     #[cfg(test)]
     record_jit_collection_metadata_helper_call();
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let Some(list) = _ctx.heap_list_handle(handle) else {
-        vm_jit::signal_bail();
+    let Some(list) = ctx.heap_list_handle(handle) else {
+        ctx.signal_bail();
         return 0;
     };
     i64::from(list.borrow().is_empty())
@@ -5299,11 +5308,11 @@ extern "C" fn rss_jit_sorted_map_insert_int(
     key: i64,
     value: i64,
 ) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    rss_jit_sorted_map_insert_int_with_ctx(_ctx, handle, key, value)
+    rss_jit_sorted_map_insert_int_with_ctx(ctx, handle, key, value)
 }
 
 #[cfg(feature = "native-jit")]
@@ -5320,7 +5329,7 @@ fn rss_jit_sorted_map_insert_int_with_ctx(
     }) {
         Some(value) => value,
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -5337,21 +5346,21 @@ extern "C" fn rss_jit_sorted_map_insert_handle_key_int(
     key_handle: i64,
     value: i64,
 ) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let Some(key) = _ctx.heap_read_handle(key_handle, |key| Some(key.clone())) else {
-        vm_jit::signal_bail();
+    let Some(key) = ctx.heap_read_handle(key_handle, |key| Some(key.clone())) else {
+        ctx.signal_bail();
         return 0;
     };
-    match _ctx.with_journaled_list_write(handle, move |list| {
+    match ctx.with_journaled_list_write(handle, move |list| {
         sorted_map_insert_in_place(list.as_boxed_mut(), key, VmValue::Int(value)).ok()?;
         Some(0)
     }) {
         Some(value) => value,
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -5365,12 +5374,12 @@ extern "C" fn rss_jit_sorted_map_get_int(
     found: &mut i64,
 ) -> i64 {
     *found = 0;
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let Some(list) = _ctx.heap_list_handle(handle) else {
-        vm_jit::signal_bail();
+    let Some(list) = ctx.heap_list_handle(handle) else {
+        ctx.signal_bail();
         return 0;
     };
     let backing = list.borrow();
@@ -5398,7 +5407,7 @@ extern "C" fn rss_jit_sorted_map_get_int(
                 JIT_SORTED_MAP_SCAN_CACHE.with(|cache| {
                     cache.borrow_mut().take();
                 });
-                vm_jit::signal_bail();
+                ctx.signal_bail();
                 0
             }
         };
@@ -5424,7 +5433,7 @@ extern "C" fn rss_jit_sorted_map_get_int(
             JIT_SORTED_MAP_SCAN_CACHE.with(|cache| {
                 cache.borrow_mut().take();
             });
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -5442,12 +5451,12 @@ extern "C" fn rss_jit_sorted_map_get_float(
     found: &mut i64,
 ) -> f64 {
     *found = 0;
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0.0;
     };
-    let Some(list) = _ctx.heap_list_handle(handle) else {
-        vm_jit::signal_bail();
+    let Some(list) = ctx.heap_list_handle(handle) else {
+        ctx.signal_bail();
         return 0.0;
     };
     match jit_sorted_map_find_int_key_float(&list.borrow(), key) {
@@ -5457,7 +5466,7 @@ extern "C" fn rss_jit_sorted_map_get_float(
         }
         Ok(None) => 0.0,
         Err(_) => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0.0
         }
     }
@@ -5469,18 +5478,18 @@ extern "C" fn rss_jit_sorted_map_contains_key_int(
     handle: i64,
     key: i64,
 ) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let Some(list) = _ctx.heap_list_handle(handle) else {
-        vm_jit::signal_bail();
+    let Some(list) = ctx.heap_list_handle(handle) else {
+        ctx.signal_bail();
         return 0;
     };
     match jit_sorted_map_find_int(&list.borrow(), key) {
         Ok(found) => i64::from(found.is_some()),
         Err(_) => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -5490,12 +5499,12 @@ extern "C" fn rss_jit_sorted_map_contains_key_int(
 extern "C" fn rss_jit_sorted_map_is_empty(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
     #[cfg(test)]
     record_jit_collection_metadata_helper_call();
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let Some(list) = _ctx.heap_list_handle(handle) else {
-        vm_jit::signal_bail();
+    let Some(list) = ctx.heap_list_handle(handle) else {
+        ctx.signal_bail();
         return 0;
     };
     i64::from(list.borrow().is_empty())
@@ -5505,18 +5514,18 @@ extern "C" fn rss_jit_sorted_map_is_empty(_ctx: vm_jit::HostCtx, handle: i64) ->
 extern "C" fn rss_jit_sorted_map_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
     #[cfg(test)]
     record_jit_collection_metadata_helper_call();
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let Some(list) = _ctx.heap_list_handle(handle) else {
-        vm_jit::signal_bail();
+    let Some(list) = ctx.heap_list_handle(handle) else {
+        ctx.signal_bail();
         return 0;
     };
     match i64::try_from(list.borrow().len()) {
         Ok(len) => len,
         Err(_) => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -5526,18 +5535,18 @@ extern "C" fn rss_jit_sorted_map_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 
 extern "C" fn rss_jit_deque_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
     #[cfg(test)]
     record_jit_collection_metadata_helper_call();
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let Some(deque) = _ctx.heap_deque_handle(handle) else {
-        vm_jit::signal_bail();
+    let Some(deque) = ctx.heap_deque_handle(handle) else {
+        ctx.signal_bail();
         return 0;
     };
     match i64::try_from(deque.borrow().len()) {
         Ok(len) => len,
         Err(_) => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -5547,12 +5556,12 @@ extern "C" fn rss_jit_deque_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
 extern "C" fn rss_jit_deque_is_empty(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
     #[cfg(test)]
     record_jit_collection_metadata_helper_call();
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let Some(deque) = _ctx.heap_deque_handle(handle) else {
-        vm_jit::signal_bail();
+    let Some(deque) = ctx.heap_deque_handle(handle) else {
+        ctx.signal_bail();
         return 0;
     };
     i64::from(deque.borrow().is_empty())
@@ -5560,11 +5569,11 @@ extern "C" fn rss_jit_deque_is_empty(_ctx: vm_jit::HostCtx, handle: i64) -> i64 
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_deque_push_back_int(_ctx: vm_jit::HostCtx, handle: i64, value: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    rss_jit_deque_push_back_int_with_ctx(_ctx, handle, value)
+    rss_jit_deque_push_back_int_with_ctx(ctx, handle, value)
 }
 
 #[cfg(feature = "native-jit")]
@@ -5575,7 +5584,7 @@ fn rss_jit_deque_push_back_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value:
     }) {
         Some(value) => value,
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -5590,21 +5599,21 @@ extern "C" fn rss_jit_deque_push_back_handle(
     handle: i64,
     value_handle: i64,
 ) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let Some(value) = _ctx.heap_read_handle(value_handle, |value| Some(value.clone())) else {
-        vm_jit::signal_bail();
+    let Some(value) = ctx.heap_read_handle(value_handle, |value| Some(value.clone())) else {
+        ctx.signal_bail();
         return 0;
     };
-    match _ctx.with_journaled_deque_write(handle, move |deque| {
+    match ctx.with_journaled_deque_write(handle, move |deque| {
         deque.push_back(value);
         Some(0)
     }) {
         Some(value) => value,
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -5612,11 +5621,11 @@ extern "C" fn rss_jit_deque_push_back_handle(
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_deque_push_back_float(_ctx: vm_jit::HostCtx, handle: i64, value: f64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    rss_jit_deque_push_back_float_with_ctx(_ctx, handle, value)
+    rss_jit_deque_push_back_float_with_ctx(ctx, handle, value)
 }
 
 #[cfg(feature = "native-jit")]
@@ -5627,7 +5636,7 @@ fn rss_jit_deque_push_back_float_with_ctx(ctx: JitHostCallCtx, handle: i64, valu
     }) {
         Some(value) => value,
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -5635,11 +5644,11 @@ fn rss_jit_deque_push_back_float_with_ctx(ctx: JitHostCallCtx, handle: i64, valu
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_deque_push_front_int(_ctx: vm_jit::HostCtx, handle: i64, value: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    rss_jit_deque_push_front_int_with_ctx(_ctx, handle, value)
+    rss_jit_deque_push_front_int_with_ctx(ctx, handle, value)
 }
 
 #[cfg(feature = "native-jit")]
@@ -5650,7 +5659,7 @@ fn rss_jit_deque_push_front_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value
     }) {
         Some(value) => value,
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -5665,21 +5674,21 @@ extern "C" fn rss_jit_deque_push_front_handle(
     handle: i64,
     value_handle: i64,
 ) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let Some(value) = _ctx.heap_read_handle(value_handle, |value| Some(value.clone())) else {
-        vm_jit::signal_bail();
+    let Some(value) = ctx.heap_read_handle(value_handle, |value| Some(value.clone())) else {
+        ctx.signal_bail();
         return 0;
     };
-    match _ctx.with_journaled_deque_write(handle, move |deque| {
+    match ctx.with_journaled_deque_write(handle, move |deque| {
         deque.push_front(value);
         Some(0)
     }) {
         Some(value) => value,
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -5691,11 +5700,11 @@ extern "C" fn rss_jit_deque_push_front_float(
     handle: i64,
     value: f64,
 ) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    rss_jit_deque_push_front_float_with_ctx(_ctx, handle, value)
+    rss_jit_deque_push_front_float_with_ctx(ctx, handle, value)
 }
 
 #[cfg(feature = "native-jit")]
@@ -5706,7 +5715,7 @@ fn rss_jit_deque_push_front_float_with_ctx(ctx: JitHostCallCtx, handle: i64, val
     }) {
         Some(value) => value,
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -5721,7 +5730,7 @@ fn jit_deque_pop_int(
     match ctx.with_journaled_deque_write(handle, pop) {
         Some(VmValue::Int(value)) => value,
         _ => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -5729,20 +5738,20 @@ fn jit_deque_pop_int(
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_deque_pop_front_int(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    jit_deque_pop_int(_ctx, handle, VecDeque::pop_front)
+    jit_deque_pop_int(ctx, handle, VecDeque::pop_front)
 }
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_deque_pop_back_int(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    jit_deque_pop_int(_ctx, handle, VecDeque::pop_back)
+    jit_deque_pop_int(ctx, handle, VecDeque::pop_back)
 }
 
 /// Float value-side mirror of `jit_deque_pop_int`: pop a `Float`; an empty deque or
@@ -5756,7 +5765,7 @@ fn jit_deque_pop_float(
     match ctx.with_journaled_deque_write(handle, pop) {
         Some(VmValue::Float(value)) => value,
         _ => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0.0
         }
     }
@@ -5764,35 +5773,35 @@ fn jit_deque_pop_float(
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_deque_pop_front_float(_ctx: vm_jit::HostCtx, handle: i64) -> f64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0.0;
     };
-    jit_deque_pop_float(_ctx, handle, VecDeque::pop_front)
+    jit_deque_pop_float(ctx, handle, VecDeque::pop_front)
 }
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_deque_pop_back_float(_ctx: vm_jit::HostCtx, handle: i64) -> f64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0.0;
     };
-    jit_deque_pop_float(_ctx, handle, VecDeque::pop_back)
+    jit_deque_pop_float(ctx, handle, VecDeque::pop_back)
 }
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_field_float(_ctx: vm_jit::HostCtx, handle: i64, slot: i64) -> f64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0.0;
     };
     match usize::try_from(slot)
         .ok()
-        .and_then(|slot| _ctx.heap_read_handle(handle, |value| jit_struct_field_float(value, slot)))
+        .and_then(|slot| ctx.heap_read_handle(handle, |value| jit_struct_field_float(value, slot)))
     {
         Some(value) => value,
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0.0
         }
     }
@@ -5800,16 +5809,16 @@ extern "C" fn rss_jit_field_float(_ctx: vm_jit::HostCtx, handle: i64, slot: i64)
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_list_get_float(_ctx: vm_jit::HostCtx, handle: i64, index: i64) -> f64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0.0;
     };
     let Some(index) = usize::try_from(index).ok() else {
-        vm_jit::signal_bail();
+        ctx.signal_bail();
         return 0.0;
     };
-    let Some(list) = _ctx.heap_list_handle(handle) else {
-        vm_jit::signal_bail();
+    let Some(list) = ctx.heap_list_handle(handle) else {
+        ctx.signal_bail();
         return 0.0;
     };
     let borrowed = list.borrow();
@@ -5817,19 +5826,19 @@ extern "C" fn rss_jit_list_get_float(_ctx: vm_jit::HostCtx, handle: i64, index: 
         TypedVec::Floats(values) => match values.get(index) {
             Some(value) => *value,
             None => {
-                vm_jit::signal_bail();
+                ctx.signal_bail();
                 0.0
             }
         },
         TypedVec::Boxed(values) => match values.get(index) {
             Some(VmValue::Float(value)) => *value,
             Some(_) | None => {
-                vm_jit::signal_bail();
+                ctx.signal_bail();
                 0.0
             }
         },
         TypedVec::Ints(_) => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0.0
         }
     }
@@ -5851,11 +5860,10 @@ fn jit_closure_function_id(value: &VmValue) -> Option<i64> {
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_closure_id(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
         return -1;
     };
-    _ctx.heap_read(handle, jit_closure_function_id)
-        .unwrap_or(-1)
+    ctx.heap_read(handle, jit_closure_function_id).unwrap_or(-1)
 }
 
 /// The scalar bits of capture `index` of the closure behind `handle`, as `i64` (an
@@ -5881,17 +5889,17 @@ fn jit_closure_capture_scalar(value: &VmValue, index: usize) -> Option<i64> {
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_closure_capture(_ctx: vm_jit::HostCtx, handle: i64, index: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
     match usize::try_from(index)
         .ok()
-        .and_then(|index| _ctx.heap_read(handle, |value| jit_closure_capture_scalar(value, index)))
+        .and_then(|index| ctx.heap_read(handle, |value| jit_closure_capture_scalar(value, index)))
     {
         Some(value) => value,
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -5910,13 +5918,13 @@ fn jit_struct_field_closure_function_id(value: &VmValue, slot: usize) -> Option<
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_field_closure_id(_ctx: vm_jit::HostCtx, handle: i64, slot: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
         return -1;
     };
     usize::try_from(slot)
         .ok()
         .and_then(|slot| {
-            _ctx.heap_read(handle, |value| {
+            ctx.heap_read(handle, |value| {
                 jit_struct_field_closure_function_id(value, slot)
             })
         })
@@ -5947,20 +5955,20 @@ extern "C" fn rss_jit_field_closure_capture(
     slot: i64,
     index: i64,
 ) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
     match usize::try_from(slot).ok().and_then(|slot| {
         usize::try_from(index).ok().and_then(|index| {
-            _ctx.heap_read(handle, |value| {
+            ctx.heap_read(handle, |value| {
                 jit_struct_field_closure_capture_scalar(value, slot, index)
             })
         })
     }) {
         Some(value) => value,
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -6024,7 +6032,7 @@ fn jit_push_heap_result_with_root_with_ctx(
     match ctx.push_heap_result(value, root) {
         Some(handle) => handle,
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -6032,11 +6040,11 @@ fn jit_push_heap_result_with_root_with_ctx(
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_string_from_int(_ctx: vm_jit::HostCtx, value: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    _ctx.publish_heap_result(VmValue::String(Rc::new(value.to_string())))
+    ctx.publish_heap_result(VmValue::String(Rc::new(value.to_string())))
 }
 
 #[cfg(feature = "native-jit")]
@@ -6059,14 +6067,14 @@ fn jit_string_clone(value: &VmValue) -> Option<Rc<String>> {
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_string_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    match _ctx.heap_read_handle(handle, jit_string_len) {
+    match ctx.heap_read_handle(handle, jit_string_len) {
         Some(value) => value,
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -6074,21 +6082,21 @@ extern "C" fn rss_jit_string_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_string_concat(_ctx: vm_jit::HostCtx, left: i64, right: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let left = _ctx.heap_read_handle(left, jit_string_clone);
-    let right = _ctx.heap_read_handle(right, jit_string_clone);
+    let left = ctx.heap_read_handle(left, jit_string_clone);
+    let right = ctx.heap_read_handle(right, jit_string_clone);
     match (left, right) {
         (Some(left), Some(right)) => {
             let mut value = String::with_capacity(left.len() + right.len());
             value.push_str(&left);
             value.push_str(&right);
-            _ctx.publish_heap_result(VmValue::string(value))
+            ctx.publish_heap_result(VmValue::string(value))
         }
         _ => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -6096,16 +6104,16 @@ extern "C" fn rss_jit_string_concat(_ctx: vm_jit::HostCtx, left: i64, right: i64
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_string_slice(_ctx: vm_jit::HostCtx, value: i64, start: i64, len: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    match _ctx.heap_read_handle(value, jit_string_clone) {
+    match ctx.heap_read_handle(value, jit_string_clone) {
         Some(value) => {
-            _ctx.publish_heap_result(VmValue::string(string_slice_range(&value, start, len)))
+            ctx.publish_heap_result(VmValue::string(string_slice_range(&value, start, len)))
         }
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -6118,18 +6126,18 @@ extern "C" fn rss_jit_string_pad_left(
     width: i64,
     fill: i64,
 ) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let value = _ctx.heap_read_handle(value, jit_string_clone);
-    let fill = _ctx.heap_read_handle(fill, jit_string_clone);
+    let value = ctx.heap_read_handle(value, jit_string_clone);
+    let fill = ctx.heap_read_handle(fill, jit_string_clone);
     match (value, fill) {
         (Some(value), Some(fill)) => {
-            _ctx.publish_heap_result(VmValue::string(string_pad(&value, width, &fill, true)))
+            ctx.publish_heap_result(VmValue::string(string_pad(&value, width, &fill, true)))
         }
         _ => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -6142,22 +6150,22 @@ extern "C" fn rss_jit_string_pad_left_len(
     width: i64,
     fill: i64,
 ) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let value = _ctx.heap_read_handle(value, jit_string_clone);
-    let fill = _ctx.heap_read_handle(fill, jit_string_clone);
+    let value = ctx.heap_read_handle(value, jit_string_clone);
+    let fill = ctx.heap_read_handle(fill, jit_string_clone);
     match (value, fill) {
         (Some(value), Some(fill)) => match string_pad_len(&value, width, &fill) {
             Some(len) => len,
             None => {
-                vm_jit::signal_bail();
+                ctx.signal_bail();
                 0
             }
         },
         _ => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -6165,24 +6173,24 @@ extern "C" fn rss_jit_string_pad_left_len(
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_string_split(_ctx: vm_jit::HostCtx, value: i64, delimiter: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let value = _ctx.heap_read_handle(value, jit_string_clone);
-    let delimiter = _ctx.heap_read_handle(delimiter, jit_string_clone);
+    let value = ctx.heap_read_handle(value, jit_string_clone);
+    let delimiter = ctx.heap_read_handle(delimiter, jit_string_clone);
     match (value, delimiter) {
         (Some(value), Some(delimiter)) => {
             let parts = value
                 .split(delimiter.as_str())
                 .map(VmValue::string)
                 .collect::<Vec<_>>();
-            _ctx.publish_heap_result(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+            ctx.publish_heap_result(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
                 parts,
             )))))
         }
         _ => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -6190,16 +6198,16 @@ extern "C" fn rss_jit_string_split(_ctx: vm_jit::HostCtx, value: i64, delimiter:
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_string_starts_with(_ctx: vm_jit::HostCtx, value: i64, prefix: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let value = _ctx.heap_read_handle(value, jit_string_clone);
-    let prefix = _ctx.heap_read_handle(prefix, jit_string_clone);
+    let value = ctx.heap_read_handle(value, jit_string_clone);
+    let prefix = ctx.heap_read_handle(prefix, jit_string_clone);
     match (value, prefix) {
         (Some(value), Some(prefix)) => i64::from(value.starts_with(prefix.as_str())),
         _ => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -6207,24 +6215,24 @@ extern "C" fn rss_jit_string_starts_with(_ctx: vm_jit::HostCtx, value: i64, pref
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_string_split_count(_ctx: vm_jit::HostCtx, value: i64, delimiter: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let value = _ctx.heap_read_handle(value, jit_string_clone);
-    let delimiter = _ctx.heap_read_handle(delimiter, jit_string_clone);
+    let value = ctx.heap_read_handle(value, jit_string_clone);
+    let delimiter = ctx.heap_read_handle(delimiter, jit_string_clone);
     match (value, delimiter) {
         (Some(value), Some(delimiter)) => {
             match i64::try_from(value.split(delimiter.as_str()).count()) {
                 Ok(count) => count,
                 Err(_) => {
-                    vm_jit::signal_bail();
+                    ctx.signal_bail();
                     0
                 }
             }
         }
         _ => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -6232,17 +6240,17 @@ extern "C" fn rss_jit_string_split_count(_ctx: vm_jit::HostCtx, value: i64, deli
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_string_literal(_ctx: vm_jit::HostCtx, literal_id: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
     let value = usize::try_from(literal_id)
         .ok()
         .and_then(|index| JIT_STRING_LITERALS.with(|table| table.borrow().get(index).cloned()));
     match value {
-        Some(value) => _ctx.publish_heap_result(VmValue::String(value)),
+        Some(value) => ctx.publish_heap_result(VmValue::String(value)),
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -6268,14 +6276,14 @@ fn jit_bytes_clone(value: &VmValue) -> Option<Rc<Vec<u8>>> {
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_bytes_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    match _ctx.heap_read_handle(handle, jit_bytes_len) {
+    match ctx.heap_read_handle(handle, jit_bytes_len) {
         Some(value) => value,
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -6283,16 +6291,16 @@ extern "C" fn rss_jit_bytes_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_bytes_slice(_ctx: vm_jit::HostCtx, handle: i64, start: i64, len: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    match _ctx.heap_read_handle(handle, jit_bytes_clone) {
+    match ctx.heap_read_handle(handle, jit_bytes_clone) {
         Some(value) => {
-            _ctx.publish_heap_result(VmValue::Bytes(Rc::new(bytes_slice(&value, start, len))))
+            ctx.publish_heap_result(VmValue::Bytes(Rc::new(bytes_slice(&value, start, len))))
         }
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -6309,17 +6317,17 @@ fn jit_json_clone(value: &VmValue) -> Option<Rc<crate::serde_json::Value>> {
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_json_parse(_ctx: vm_jit::HostCtx, text: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    match _ctx
+    match ctx
         .heap_read_handle(text, jit_string_clone)
         .and_then(|text| crate::serde_json::from_str::<crate::serde_json::Value>(&text).ok())
     {
-        Some(value) => _ctx.publish_heap_result(VmValue::Json(Rc::new(value))),
+        Some(value) => ctx.publish_heap_result(VmValue::Json(Rc::new(value))),
         None => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -6327,23 +6335,23 @@ extern "C" fn rss_jit_json_parse(_ctx: vm_jit::HostCtx, text: i64) -> i64 {
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_json_field(_ctx: vm_jit::HostCtx, value: i64, name: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let value = _ctx.heap_read_handle(value, jit_json_clone);
-    let name = _ctx.heap_read_handle(name, jit_string_clone);
+    let value = ctx.heap_read_handle(value, jit_json_clone);
+    let name = ctx.heap_read_handle(name, jit_string_clone);
     match (value, name) {
         (Some(value), Some(name)) => match value.as_object().and_then(|obj| obj.get(name.as_str()))
         {
-            Some(field) => _ctx.publish_heap_result(VmValue::Json(Rc::new(field.clone()))),
+            Some(field) => ctx.publish_heap_result(VmValue::Json(Rc::new(field.clone()))),
             None => {
-                vm_jit::signal_bail();
+                ctx.signal_bail();
                 0
             }
         },
         _ => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -6351,12 +6359,12 @@ extern "C" fn rss_jit_json_field(_ctx: vm_jit::HostCtx, value: i64, name: i64) -
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_json_field_int(_ctx: vm_jit::HostCtx, value: i64, name: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let value = _ctx.heap_read_handle(value, jit_json_clone);
-    let name = _ctx.heap_read_handle(name, jit_string_clone);
+    let value = ctx.heap_read_handle(value, jit_json_clone);
+    let name = ctx.heap_read_handle(name, jit_string_clone);
     match (value, name) {
         (Some(value), Some(name)) => match value
             .as_object()
@@ -6365,12 +6373,12 @@ extern "C" fn rss_jit_json_field_int(_ctx: vm_jit::HostCtx, value: i64, name: i6
         {
             Some(value) => value,
             None => {
-                vm_jit::signal_bail();
+                ctx.signal_bail();
                 0
             }
         },
         _ => {
-            vm_jit::signal_bail();
+            ctx.signal_bail();
             0
         }
     }
@@ -6378,24 +6386,24 @@ extern "C" fn rss_jit_json_field_int(_ctx: vm_jit::HostCtx, value: i64, name: i6
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_field_handle(_ctx: vm_jit::HostCtx, handle: i64, slot: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
     let value = usize::try_from(slot).ok().and_then(|slot| {
-        _ctx.heap_read_handle(handle, |value| jit_struct_field_heap_value(value, slot))
+        ctx.heap_read_handle(handle, |value| jit_struct_field_heap_value(value, slot))
     });
-    _ctx.publish_heap_handle(value)
+    ctx.publish_heap_handle(value)
 }
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_list_get_handle(_ctx: vm_jit::HostCtx, handle: i64, index: i64) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
+    let Some(ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail(_ctx);
         return 0;
     };
-    let value = _ctx.heap_read_handle(handle, |value| jit_list_get_heap_value(value, index));
-    _ctx.publish_heap_handle(value)
+    let value = ctx.heap_read_handle(handle, |value| jit_list_get_heap_value(value, index));
+    ctx.publish_heap_handle(value)
 }
 
 #[cfg(feature = "native-jit")]
