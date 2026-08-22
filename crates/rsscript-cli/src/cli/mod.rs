@@ -173,7 +173,7 @@ const USAGE: &str = r#"usage:
   rss inspect <analysis|resources|async|call-graph> [--json] <package-directory>
   rss profile [--json] [profile-name]  # inspect host-selected runner presets
   rss run [--json] [--profile <profile-name>] <file-package-or-bundle> [-- <args>...]  # isolated runner + verified VM
-  rss run --trusted-in-process [--json] <file-package-or-bundle> [-- <args>...]"#;
+  rss run --trusted-in-process [--native] [--json] <file-package-or-bundle> [-- <args>...]"#;
 
 fn usage() -> String {
     USAGE.to_owned()

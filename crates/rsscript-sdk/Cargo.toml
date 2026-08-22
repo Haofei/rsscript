@@ -25,6 +25,13 @@ project = [
     "execution",
     "dep:rsscript-project",
 ]
+# Adaptive native execution remains opt-in for embedders. It does not restore
+# the retired compatibility façade: the same phase-typed Artifact and report
+# contracts are used by both interpreter and native execution.
+native-jit = [
+    "execution",
+    "rsscript-vm/native-jit",
+]
 # Explicit verifier-only experiment. It does not enable a v2 VM execution
 # path or make `rsscript.bytecode.v2` part of the SDK's reviewed contract.
 bytecode-v2-prototype = ["execution", "rsscript-bytecode/v2-prototype"]
@@ -91,3 +98,8 @@ required-features = ["execution"]
 [[test]]
 name = "public_api_architecture"
 path = "tests/public_api_architecture.rs"
+
+[[test]]
+name = "native_jit_smoke"
+path = "tests/native_jit_smoke.rs"
+required-features = ["native-jit"]

@@ -9,6 +9,7 @@ on:
       - "benchmarks/vm-jit/**"
       - "crates/rsscript-vm/src/reg_vm/**"
       - "crates/rsscript-sdk/tests/jit_acceptance.rs"
+      - "crates/rsscript-sdk/tests/native_jit_smoke.rs"
       - "experiments/vm-jit/**"
   push:
     branches: [main]
@@ -17,6 +18,7 @@ on:
       - "benchmarks/vm-jit/**"
       - "crates/rsscript-vm/src/reg_vm/**"
       - "crates/rsscript-sdk/tests/jit_acceptance.rs"
+      - "crates/rsscript-sdk/tests/native_jit_smoke.rs"
       - "experiments/vm-jit/**"
 
 permissions:
@@ -38,4 +40,4 @@ jobs:
         run: docker compose build dev
 
       - name: JIT perf gate
-        run: docker compose run --rm dev cargo test --release -p rsscript-sdk --test runtime jit_perf_gate_against_baseline --features native-jit -- --test-threads=1 --nocapture
+        run: docker compose run --rm dev cargo test --locked --release -p rsscript-sdk --features native-jit --test native_jit_smoke native_hot_loop_release_gate_beats_the_interpreter -- --nocapture

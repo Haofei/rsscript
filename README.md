@@ -77,13 +77,14 @@ rss verify <artifact.rssbundle>
 rss diff [--json|--markdown] <old-input> <new-input>
 rss profile [--json] [profile-name]
 rss run [--json] [--profile <profile-name>] <file-package-or-bundle> [-- <args>...]  # isolated process
-rss run --trusted-in-process [--json] <file-package-or-bundle> [-- <args>...]
+rss run --trusted-in-process [--native] [--json] <file-package-or-bundle> [-- <args>...]
 rss inspect <imports|bytecode|analysis|resources|async|call-graph> <input>
 ```
 
-The product CLI execution build contains only the verified VM and isolated
-runner path. Rust AOT is an experiments-workspace backend and is not selectable
-through `rss run`.
+The product CLI execution build contains the verified VM and isolated runner.
+Its optional native-JIT build enables `--native` only together with
+`--trusted-in-process`; Rust AOT remains an experiments-workspace backend and is
+not selectable through `rss run`.
 
 Building a package captures one immutable workspace snapshot. Every build emits
 a versioned Artifact Bundle containing verified bytecode, neutral analysis,
@@ -106,6 +107,13 @@ boundary is defense in depth, not a claim that the VM itself is a security
 sandbox. Trusted hosts can opt into same-process execution explicitly with
 `--trusted-in-process`.
 
+CPU-bound trusted workloads can additionally select adaptive Cranelift
+execution with `--trusted-in-process --native`. This path uses the same verified
+Artifact, Provider linker, and Execution Report as the interpreter, and falls
+back for unsupported regions. It is intentionally unavailable to the isolated
+runner: exact step, allocation, cancellation, and deadline accounting remains
+the bounded interpreter's contract. An Artifact cannot request native execution.
+
 Frontend tooling uses `rsscript-compiler` with its default features; that
 closure contains no runtime or provider. Rust hosts depend on `rsscript-sdk`
 and enable its `execution` feature to use the stable embedding surface: `Compiler`,
@@ -125,9 +133,10 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-These are the Core workspace checks. AOT, native JIT, REIR, and self-hosting
-are isolated experiments with their own manifests and must not be enabled by a
-normal Core verification command.
+These are the Core workspace checks. AOT, REIR, and self-hosting are isolated
+experiments. Native JIT is an explicit trusted-host performance feature and is
+absent from the normal Core verification closure; its correctness and release
+performance gates run separately.
 
 The normative language description is in
 [`docs/spec/RSScript_v0.7_Spec.md`](docs/spec/RSScript_v0.7_Spec.md), and the layer

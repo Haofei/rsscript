@@ -1289,6 +1289,46 @@ impl RegVmExecutable {
         limits: VmLimits,
     ) -> Result<EvalExecutionReport, EvalError> {
         let plan = ExecutionPlan::interpreter(limits);
+        self.execute_main_with_args_and_external_bindings_plan(args, external_bindings, plan)
+    }
+
+    /// Execute through the adaptive native tier while preserving the same
+    /// verified bytecode, Provider linking, limits, cleanup, and report path as
+    /// the reference interpreter. Unsupported or unprofitable regions fall back
+    /// to the interpreter. Armed limits remain authoritative: whole-function
+    /// native dispatch is refused where exact accounting is unavailable, while
+    /// verified OSR regions use the native limits cells.
+    #[cfg(feature = "native-jit")]
+    pub fn execute_main_with_args_and_external_bindings_native_and_limits(
+        &self,
+        args: impl IntoIterator<Item = impl Into<String>>,
+        external_bindings: impl IntoIterator<Item = (impl Into<String>, ExternalFunction)>,
+        limits: VmLimits,
+    ) -> Result<EvalExecutionReport, EvalError> {
+        let tier_up_threshold = std::env::var("RSS_JIT_TIER_THRESHOLD")
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(0);
+        let native = NativeExecutionPlan::from_environment(
+            tier_up_threshold,
+            false,
+            std::env::var_os("RSS_JIT_STATS").is_some(),
+            true,
+            true,
+            false,
+            None,
+            false,
+        );
+        let plan = ExecutionPlan::native(limits, native);
+        self.execute_main_with_args_and_external_bindings_plan(args, external_bindings, plan)
+    }
+
+    fn execute_main_with_args_and_external_bindings_plan(
+        &self,
+        args: impl IntoIterator<Item = impl Into<String>>,
+        external_bindings: impl IntoIterator<Item = (impl Into<String>, ExternalFunction)>,
+        plan: ExecutionPlan,
+    ) -> Result<EvalExecutionReport, EvalError> {
         let mut vm = self.prepare_vm(
             args.into_iter().map(Into::into).collect(),
             external_bindings
@@ -1298,6 +1338,18 @@ impl RegVmExecutable {
             &plan,
         )?;
         let execution = vm.run_program("main");
+        #[cfg(feature = "native-jit")]
+        if let Some(native) = &mut vm.native
+            && native.collect_stats
+        {
+            native.stats.add_profile_feedback(&self.unit, &vm.jit_state);
+            native
+                .stats
+                .add_native_decline_reasons(&self.unit, &vm.jit_state);
+            if std::env::var_os("RSS_JIT_STATS").is_some() {
+                eprintln!("{}", native.stats.summary());
+            }
+        }
         let cleanup = vm.cleanup_provider_resources();
         let result = match (execution, cleanup) {
             (Err(error), _) | (Ok(_), Err(error)) => Err(error),

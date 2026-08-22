@@ -132,7 +132,6 @@ pub use vm_adapter::{
     reg_vm_eval_source_main_with_args_and_external_bindings_and_limits,
     reg_vm_eval_source_main_with_args_streaming_stdout, reg_vm_eval_source_main_with_limits,
 };
-
 /// Frontend-only editor API consumed by `rsscript-language-service`.
 /// Runtime and Provider types are deliberately excluded.
 pub mod language {
@@ -662,9 +661,9 @@ mod legacy_frontend_fixtures {
     /// duplicate a source/interface path to assert an old diagnostic.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(super) enum SnapshotReason {
-        EmptyLogicalPath,
-        DuplicateSourcePath,
-        DuplicateInterfacePath,
+        Empty,
+        DuplicateSource,
+        DuplicateInterface,
     }
 
     pub(super) fn snapshot_reason(snapshot: &FrontendInputSnapshot) -> Option<SnapshotReason> {
@@ -683,11 +682,11 @@ mod legacy_frontend_fixtures {
         if source_paths.iter().any(|path| path.is_empty())
             || interface_paths.iter().any(|path| path.is_empty())
         {
-            Some(SnapshotReason::EmptyLogicalPath)
+            Some(SnapshotReason::Empty)
         } else if source_paths.len() != snapshot.sources().files().len() {
-            Some(SnapshotReason::DuplicateSourcePath)
+            Some(SnapshotReason::DuplicateSource)
         } else if interface_paths.len() != snapshot.interfaces().files().len() {
-            Some(SnapshotReason::DuplicateInterfacePath)
+            Some(SnapshotReason::DuplicateInterface)
         } else {
             None
         }
@@ -1445,7 +1444,28 @@ impl LinkedArtifact<'_> {
     pub fn execute(&self, request: ExecutionRequest) -> ExecutionReport {
         let started = Instant::now();
         let limits: VmLimits = request.limits.into();
-        let output = match self
+        #[cfg(feature = "native-jit")]
+        let execution = if request.native_jit {
+            self.artifact
+                .artifact
+                .executable
+                .execute_main_with_args_and_external_bindings_native_and_limits(
+                    request.args,
+                    self.bindings.iter().cloned(),
+                    limits.clone(),
+                )
+        } else {
+            self.artifact
+                .artifact
+                .executable
+                .execute_main_with_args_and_external_bindings_and_limits(
+                    request.args,
+                    self.bindings.iter().cloned(),
+                    limits.clone(),
+                )
+        };
+        #[cfg(not(feature = "native-jit"))]
+        let execution = self
             .artifact
             .artifact
             .executable
@@ -1453,7 +1473,8 @@ impl LinkedArtifact<'_> {
                 request.args,
                 self.bindings.iter().cloned(),
                 limits.clone(),
-            ) {
+            );
+        let output = match execution {
             Ok(output) => output,
             Err(error) => {
                 let diagnostics = match &error {
@@ -1528,6 +1549,8 @@ pub struct ExecutionRequest {
     args: Vec<String>,
     limits: RunLimits,
     trace_policy: TracePolicy,
+    #[cfg(feature = "native-jit")]
+    native_jit: bool,
 }
 
 #[cfg(feature = "execution")]
@@ -1537,6 +1560,8 @@ impl ExecutionRequest {
             args: args.into_iter().map(Into::into).collect(),
             limits: RunLimits::bounded(),
             trace_policy: TracePolicy::None,
+            #[cfg(feature = "native-jit")]
+            native_jit: false,
         }
     }
 
@@ -1547,6 +1572,20 @@ impl ExecutionRequest {
 
     pub fn trace(mut self, policy: TracePolicy) -> Self {
         self.trace_policy = policy;
+        self
+    }
+
+    /// Select adaptive Cranelift execution for a trusted in-process host.
+    ///
+    /// Native whole-function execution cannot yet preserve every deterministic
+    /// VM budget. This opt-in therefore also selects the existing explicit
+    /// trusted-host limit profile. Isolated or untrusted execution must keep the
+    /// bounded interpreter request until native source-cost accounting is
+    /// complete. Unsupported and unprofitable regions still fall back safely.
+    #[cfg(feature = "native-jit")]
+    pub fn native_jit_for_trusted_host(mut self) -> Self {
+        self.native_jit = true;
+        self.limits = RunLimits::unbounded_for_trusted_host();
         self
     }
 }
@@ -2900,7 +2939,7 @@ fn main() -> Result<Int, String> {
             FrontendInputSnapshot::single("", "fn main() -> Int { return Missing.value }\n");
         assert_eq!(
             legacy_frontend_fixtures::snapshot_reason(&empty_path),
-            Some(legacy_frontend_fixtures::SnapshotReason::EmptyLogicalPath)
+            Some(legacy_frontend_fixtures::SnapshotReason::Empty)
         );
         assert_eq!(
             diagnostic_fingerprint(compiler.check_snapshot(&empty_path)),
@@ -2923,7 +2962,7 @@ fn main() -> Result<Int, String> {
         );
         assert_eq!(
             legacy_frontend_fixtures::snapshot_reason(&duplicate_interface),
-            Some(legacy_frontend_fixtures::SnapshotReason::DuplicateInterfacePath)
+            Some(legacy_frontend_fixtures::SnapshotReason::DuplicateInterface)
         );
         assert_eq!(
             diagnostic_fingerprint(compiler.check_snapshot(&duplicate_interface)),

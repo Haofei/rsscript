@@ -75,7 +75,12 @@ pub(crate) fn run_isolated(
     finish_response(response, json)
 }
 
-pub(crate) fn run_trusted_in_process(path: &str, program_args: &[&str], json: bool) -> ExitCode {
+pub(crate) fn run_trusted_in_process(
+    path: &str,
+    program_args: &[&str],
+    json: bool,
+    native: bool,
+) -> ExitCode {
     let bundle = match build_bundle(path) {
         Ok(bundle) => bundle,
         Err(error) => {
@@ -98,11 +103,21 @@ pub(crate) fn run_trusted_in_process(path: &str, program_args: &[&str], json: bo
             return ExitCode::from(1);
         }
     };
-    let report = linked.execute(
-        ExecutionRequest::new(program_args.iter().copied())
-            .limits(runner_limits(&RunnerLimitsV1::default()))
-            .trace(TracePolicy::MetadataOnly),
-    );
+    let request = ExecutionRequest::new(program_args.iter().copied())
+        .limits(runner_limits(&RunnerLimitsV1::default()))
+        .trace(TracePolicy::MetadataOnly);
+    #[cfg(feature = "native-jit")]
+    let request = if native {
+        request.native_jit_for_trusted_host()
+    } else {
+        request
+    };
+    #[cfg(not(feature = "native-jit"))]
+    let request = {
+        debug_assert!(!native);
+        request
+    };
+    let report = linked.execute(request);
     finish_report(
         serde_json::to_value(report).expect("execution report serializes"),
         json,

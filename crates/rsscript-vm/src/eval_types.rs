@@ -1485,10 +1485,7 @@ impl ExternalFunction {
         context.symbol = contract.descriptor.symbol.as_str().to_string();
         let callable = match &self.callable {
             ProviderCallable::WireAsync(callable) => callable.clone(),
-            ProviderCallable::WireSync(_)
-            | ProviderCallable::WireSyncMut(_)
-            | ProviderCallable::WireAsyncMut(_)
-            | _ => {
+            _ => {
                 return Box::pin(async {
                     Err(ProviderError::unavailable(
                         "non-wire async Provider cannot enter the wire async dispatcher",
@@ -1614,10 +1611,7 @@ impl ExternalFunction {
         context.symbol = contract.descriptor.symbol.as_str().to_string();
         let callable = match &self.callable {
             ProviderCallable::WireAsyncMut(callable) => callable.clone(),
-            ProviderCallable::WireSync(_)
-            | ProviderCallable::WireSyncMut(_)
-            | ProviderCallable::WireAsync(_)
-            | _ => {
+            _ => {
                 return Box::pin(async {
                     Err(ProviderError::unavailable(
                         "non-wire-mutation async Provider cannot enter the wire mutation dispatcher",

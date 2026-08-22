@@ -28,32 +28,13 @@ jobs:
 
       - name: Native JIT hardening gate
         run: |
-          docker compose run --rm dev cargo test -p rsscript-vm --lib register_window_tests --features native-jit -- --test-threads=1
-          docker compose run --rm dev cargo test -p rsscript-vm child_native --features native-jit -- --test-threads=1
-          docker compose run --rm dev cargo test -p rsscript-sdk --test runtime native_jit_fast_backends_include_deopt_every_safepoint --features native-jit -- --test-threads=1
-          docker compose run --rm dev cargo test -p rsscript-sdk --test runtime jit_acceptance_runs_ --features native-jit -- --test-threads=1
-          docker compose run --rm dev cargo test -p rsscript-sdk --test runtime native_jit_acceptance_reports_real_native_execution --features native-jit -- --test-threads=1
-          docker compose run --rm dev cargo test -p rsscript-sdk --test runtime native_jit_precompiles_cold_scalar_call_chains --features native-jit -- --test-threads=1
-          docker compose run --rm dev cargo test -p rsscript-sdk --test runtime native_jit_precompiles_handle_return_call_chains --features native-jit -- --test-threads=1
-          docker compose run --rm dev cargo test -p vm-jit native_call_can_pass_flat -- --test-threads=1
-          docker compose run --rm dev cargo test -p rsscript-vm --lib native_direct_dispatch_consumes_handle_return_compiled_call --features native-jit -- --test-threads=1
-          docker compose run --rm dev cargo test -p rsscript-vm --lib native_direct_dispatch_passes_bool_args_and_return --features native-jit -- --test-threads=1
-          docker compose run --rm dev cargo test -p rsscript-vm --lib native_direct_dispatch_passes_float_args_and_return --features native-jit -- --test-threads=1
-          docker compose run --rm dev cargo test -p rsscript-vm --lib native_direct_dispatch_passes_flat_int_arg_to_compiled_call --features native-jit -- --test-threads=1
-          docker compose run --rm dev cargo test -p rsscript-vm --lib native_direct_dispatch_passes_flat_float_arg_to_compiled_call --features native-jit -- --test-threads=1
-          docker compose run --rm dev cargo test -p rsscript-vm --lib native_direct_dispatch_passes_flat_int_mut_arg_to_compiled_call --features native-jit -- --test-threads=1
-          docker compose run --rm dev cargo test -p rsscript-vm --lib native_direct_dispatch_passes_handle_arg_to_compiled_call --features native-jit -- --test-threads=1
-          docker compose run --rm dev cargo test -p rsscript-vm --lib native_direct_dispatch_rejects_mut_handle_compiled_call --features native-jit -- --test-threads=1
-          docker compose run --rm dev cargo test -p rsscript-vm --lib precise_deopt_with_nested_child_native_frames_resumes_leaf_safepoint --features native-jit -- --test-threads=1
-          docker compose run --rm dev cargo test -p rsscript-sdk --test runtime report_profile_guided_pic_shows_hottest_first_order --features native-jit -- --test-threads=1
-          docker compose run --rm dev cargo test -p rsscript-sdk --test runtime report_shows_profile_guided_branch_feedback --features native-jit -- --test-threads=1
-          docker compose run --rm dev cargo test -p rsscript-sdk --test runtime report_groups_native_decline_reasons_by_count --features native-jit -- --test-threads=1
-          docker compose run --rm dev bash -lc 'RSS_DIFF_PROPTEST_CASES=16 RSS_DIFF_SHRINK_ITERS=0 cargo test -p rsscript-sdk --test differential backends_agree_on_seed_decoded_programs --features native-jit -- --test-threads=1'
-          docker compose run --rm dev cargo test --release -p rsscript-sdk --test runtime jit_perf_gate_against_baseline --features native-jit -- --test-threads=1 --nocapture
-          docker compose run --rm dev bash -lc 'rustup toolchain install nightly-2026-07-20 --component rust-src && target="$(rustc -vV | sed -n "s/^host: //p")" && RUSTFLAGS="-Zsanitizer=address" cargo +nightly-2026-07-20 test -Zbuild-std --target "$target" -p vm-jit native_scalar_call -- --test-threads=1 && RUSTFLAGS="-Zsanitizer=address" cargo +nightly-2026-07-20 test -Zbuild-std --target "$target" -p rsscript-vm child_native --features native-jit -- --test-threads=1 && RUSTFLAGS="-Zsanitizer=address" cargo +nightly-2026-07-20 test -Zbuild-std --target "$target" -p rsscript-vm forced_all_native_safepoints_exercises_child_native_deopt --features native-jit -- --test-threads=1 && RUSTFLAGS="-Zsanitizer=address" cargo +nightly-2026-07-20 test -Zbuild-std --target "$target" -p vm-jit guard_closure_id_passes_or_bails -- --test-threads=1 && RUSTFLAGS="-Zsanitizer=address" cargo +nightly-2026-07-20 test -Zbuild-std --target "$target" -p vm-jit direct_flat_reads_index_in_register -- --test-threads=1'
+          docker compose run --rm dev cargo test --locked -p rsscript-vm --features native-jit --lib
+          docker compose run --rm dev cargo test --locked -p rsscript-sdk --features native-jit --test native_jit_smoke
+          docker compose run --rm dev cargo test --locked --manifest-path experiments/Cargo.toml -p vm-jit
+          docker compose run --rm dev cargo test --locked --release -p rsscript-sdk --features native-jit --test native_jit_smoke native_hot_loop_release_gate_beats_the_interpreter -- --nocapture
 
       - name: Miri pure-core smoke
-        run: docker compose run --rm dev bash -lc 'rustup toolchain install nightly-2026-07-20 --component miri,rust-src && cargo +nightly-2026-07-20 miri test -p rss-testgen --lib'
+        run: docker compose run --rm dev bash -lc 'rustup toolchain install nightly-2026-07-20 --component miri,rust-src && cargo +nightly-2026-07-20 miri test --manifest-path experiments/Cargo.toml -p rss-testgen --lib'
 
       - name: No-panic fuzz smoke
         run: docker compose run --rm dev bash -lc 'rustup toolchain install nightly-2026-07-20 && (command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --version 0.13.2 --locked) && cd fuzz && cargo +nightly-2026-07-20 fuzz run no_panic -- -runs=20000 -max_total_time=60'

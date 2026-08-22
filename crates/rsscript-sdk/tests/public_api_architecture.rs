@@ -229,10 +229,16 @@ fn public_api_inventory_covers_the_current_migration_surface() {
             "experimental VM detail must not enter the default SDK surface: `{forbidden}`"
         );
     }
-    assert!(
-        !source.contains("native-jit"),
-        "the reviewed SDK must not expose the retired native JIT experiment"
-    );
+    assert!(source.contains("pub fn native_jit_for_trusted_host"));
+    for forbidden in [
+        "pub use rsscript_vm::NativeStats",
+        "reg_vm_eval_source_main_native",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "native execution must stay behind the phase-typed request API: `{forbidden}`"
+        );
+    }
     let manifest =
         std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
             .expect("SDK manifest should be readable");

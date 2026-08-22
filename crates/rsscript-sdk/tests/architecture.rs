@@ -905,22 +905,33 @@ fn jit_planning_state_is_kept_out_of_verified_program_objects() {
 }
 
 #[test]
-fn default_vm_layout_excludes_native_jit_feedback_and_dependencies() {
+fn default_vm_layout_excludes_native_jit_while_opt_in_closure_is_explicit() {
     let root = workspace_root();
-    let manifest = read(&root.join("crates/rsscript-vm/Cargo.toml"));
-    assert!(
-        !manifest.contains("vm-jit ="),
-        "the Core VM must not retain an optional Cargo edge to the JIT lab"
+    let manifest: toml::Value = toml::from_str(&read(&root.join("crates/rsscript-vm/Cargo.toml")))
+        .expect("VM manifest should parse");
+    assert_eq!(
+        manifest["dependencies"]["vm-jit"]["optional"].as_bool(),
+        Some(true),
+        "the native backend must remain an optional dependency"
     );
+    let native_feature = manifest["features"]["native-jit"]
+        .as_array()
+        .expect("native-jit feature should be explicit");
     assert!(
-        !manifest.contains("native-jit ="),
-        "the Core VM must not expose a native-JIT feature"
+        native_feature
+            .iter()
+            .any(|entry| entry.as_str() == Some("dep:vm-jit"))
     );
 
     let closure = cargo_tree(&root, "rsscript-vm");
     assert!(
         !closure.contains("vm-jit "),
         "default VM dependency closure must not include the native JIT lab:\n{closure}"
+    );
+    let native_closure = cargo_tree_with_features(&root, "rsscript-vm", "native-jit");
+    assert!(
+        native_closure.contains("vm-jit "),
+        "the explicit native-jit feature must resolve the reviewed backend:\n{native_closure}"
     );
 }
 
@@ -1112,6 +1123,7 @@ fn vm_runtime_dependency_inventory_prevents_library_implementation_regressions()
         "rsscript-provider-api".to_owned(),
         "rsscript-text".to_owned(),
         "serde".to_owned(),
+        "vm-jit".to_owned(),
     ]);
     assert_eq!(
         declared, expected,
@@ -2264,19 +2276,9 @@ fn rust_aot_lowering_is_explicitly_feature_gated() {
             .is_none(),
         "the experimental AOT backend must not retain source-shaped executable-IR lowering"
     );
-    let sdk_compatibility = sdk["features"]["compatibility"]
-        .as_array()
-        .expect("SDK compatibility feature should be declared")
-        .iter()
-        .filter_map(toml::Value::as_str)
-        .collect::<BTreeSet<_>>();
     assert!(
-        !sdk_compatibility.contains("aot-rust"),
-        "compatibility must not implicitly select the experimental Rust AOT backend"
-    );
-    assert!(
-        !sdk_compatibility.contains("legacy-exec-ir"),
-        "compatibility must not restore a deleted executable IR path"
+        sdk["features"].get("compatibility").is_none(),
+        "the retired SDK compatibility feature must remain absent"
     );
 
     let testgen: toml::Value =
@@ -2334,10 +2336,17 @@ fn rust_aot_lowering_is_explicitly_feature_gated() {
         cli["features"].get("aot-rust").is_none(),
         "the product CLI must not expose an experimental AOT feature"
     );
+    let cli_native = cli["features"]["native-jit"]
+        .as_array()
+        .expect("the product CLI must expose an explicit native-JIT feature");
     assert!(
-        cli["features"].get("native-jit").is_none(),
-        "the product CLI must not expose an experimental native-JIT feature"
+        cli_native
+            .iter()
+            .any(|entry| entry.as_str() == Some("rsscript-sdk/native-jit")),
+        "the CLI native feature must compose through the phase-typed SDK"
     );
+    let run_command = read(&root.join("crates/rsscript-cli/src/cli/run_cmd.rs"));
+    assert!(run_command.contains("`--native` requires explicit `--trusted-in-process`"));
     assert!(
         cli["dependencies"].get("rsscript-aot-backend").is_none(),
         "the product CLI must not depend on the experimental AOT backend"
@@ -4203,13 +4212,12 @@ fn lsp_dependency_closure_selects_frontend_only() {
             .is_none(),
         "the frontend compiler must not declare the provider runtime API"
     );
-    for dependency in ["rsscript-lowering"] {
-        assert_eq!(
-            compiler_manifest["dependencies"][dependency]["optional"].as_bool(),
-            Some(true),
-            "LSP-excluded dependency `{dependency}` must remain optional"
-        );
-    }
+    let dependency = "rsscript-lowering";
+    assert_eq!(
+        compiler_manifest["dependencies"][dependency]["optional"].as_bool(),
+        Some(true),
+        "LSP-excluded dependency `{dependency}` must remain optional"
+    );
     assert_eq!(
         compiler_manifest["dependencies"]["rsscript-bytecode"]["optional"].as_bool(),
         Some(true),

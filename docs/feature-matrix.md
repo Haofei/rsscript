@@ -17,7 +17,7 @@ regression value and does not drive the release roadmap.
 | Reference isolated runner | Experimental | On in CLI | Runner protocol v1 and process limits |
 | Host providers | Experimental | Explicit | Provider ABI and runner configuration |
 | Rust AOT backend | Experimental | Off | Differential parity with reference VM |
-| Cranelift JIT, OSR, deopt | Experimental | Off | Differential parity and hard limits |
+| Cranelift JIT, OSR, deopt | Experimental | Explicit trusted host | Differential parity, safe fallback, and release performance gate |
 | Native plugins | Experimental | Off | Trusted provider boundary only |
 | REIR review | Integration | Off | Consumes neutral analysis and metadata |
 | Self-host frontend and C backend | Research | Off | Corpus and parity regression harness |
