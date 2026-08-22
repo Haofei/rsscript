@@ -2,7 +2,7 @@
 /// just forwards it from [`NativeModule::call`] to every imported host helper.
 pub type HostCtx = i64;
 
-const DEFAULT_STANDALONE_JIT_ARENA_BYTES: u64 = 64 * 1024 * 1024;
+pub(crate) const DEFAULT_STANDALONE_JIT_ARENA_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Borrow proof for one unique flat buffer passed to generated code. One proof may
 /// validate multiple ABI entries that intentionally alias the same buffer. Safe
@@ -416,25 +416,25 @@ impl HostHeapEffect {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct HostHelperSig {
-    args: &'static [JitValueType],
-    found_out: bool,
-    result: HostResult,
-    failure: HostFailureMode,
+pub(crate) struct HostHelperSig {
+    pub(crate) args: &'static [JitValueType],
+    pub(crate) found_out: bool,
+    pub(crate) result: HostResult,
+    pub(crate) failure: HostFailureMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HostResult {
+pub(crate) enum HostResult {
     Exact(JitValueType),
     IntOrFloatBits,
 }
 
 #[derive(Debug, Clone, Copy)]
-struct HostHelperDescriptor {
-    helper: HostHelper,
-    symbol: &'static str,
-    sig: HostHelperSig,
-    heap_effect: HostHeapEffect,
+pub(crate) struct HostHelperDescriptor {
+    pub(crate) helper: HostHelper,
+    pub(crate) symbol: &'static str,
+    pub(crate) sig: HostHelperSig,
+    pub(crate) heap_effect: HostHeapEffect,
 }
 
 macro_rules! host_heap_effect {
@@ -476,7 +476,7 @@ macro_rules! host_helpers {
         }
 
         impl HostHelpers {
-            fn addr(self, helper: HostHelper) -> *const u8 {
+            pub(crate) fn addr(self, helper: HostHelper) -> *const u8 {
                 match helper {
                     $(HostHelper::$helper => self.$field as *const u8),+
                 }
@@ -488,7 +488,7 @@ macro_rules! host_helpers {
                 $(HostHelper::$helper),+
             ];
 
-            const DESCRIPTORS: &'static [HostHelperDescriptor] = &[
+            pub(crate) const DESCRIPTORS: &'static [HostHelperDescriptor] = &[
             $(HostHelperDescriptor {
                     helper: HostHelper::$helper,
                     symbol: $symbol,
@@ -502,7 +502,7 @@ macro_rules! host_helpers {
                 }),+
             ];
 
-            fn all() -> &'static [HostHelper] {
+            pub(crate) fn all() -> &'static [HostHelper] {
                 Self::ALL
             }
 
@@ -513,7 +513,7 @@ macro_rules! host_helpers {
                     .expect("host helper descriptor missing")
             }
 
-            fn symbol(self) -> &'static str {
+            pub(crate) fn symbol(self) -> &'static str {
                 self.descriptor().symbol
             }
 
@@ -587,7 +587,7 @@ macro_rules! host_helpers {
                 }
             }
 
-            fn signature(self) -> HostHelperSig {
+            pub(crate) fn signature(self) -> HostHelperSig {
                 self.descriptor().sig
             }
         }
@@ -1151,3 +1151,4 @@ host_helpers! {
         heap_effect: HostHeapEffect::MutatesInput,
     },
 }
+use super::*;

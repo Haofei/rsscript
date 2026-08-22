@@ -1204,6 +1204,17 @@ name = "rsscript-interface-catalog"
 version = "0.1.0"
 
 [[package]]
+name = "rsscript-jit-cranelift"
+version = "0.1.0"
+dependencies = [
+ "cranelift-codegen",
+ "cranelift-frontend",
+ "cranelift-jit",
+ "cranelift-module",
+ "cranelift-native",
+]
+
+[[package]]
 name = "rsscript-lowering"
 version = "0.1.0"
 dependencies = [
@@ -1311,6 +1322,7 @@ dependencies = [
  "rsscript-bytecode",
  "rsscript-corelib",
  "rsscript-diagnostics",
+ "rsscript-jit-cranelift",
  "rsscript-operation",
  "rsscript-provider-api",
  "rsscript-text",
@@ -1318,7 +1330,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "toml",
- "vm-jit",
 ]
 
 [[package]]
@@ -1642,17 +1653,6 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
-
-[[package]]
-name = "vm-jit"
-version = "0.1.0"
-dependencies = [
- "cranelift-codegen",
- "cranelift-frontend",
- "cranelift-jit",
- "cranelift-module",
- "cranelift-native",
-]
 
 [[package]]
 name = "vsimd"

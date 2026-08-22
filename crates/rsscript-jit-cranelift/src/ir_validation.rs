@@ -140,7 +140,7 @@ fn validate_memo_scopes(
 /// operand class (and forbids `Handle`), the int-only ops (`Mod`, bit/shift) require
 /// `Int`, comparisons yield a logical `Bool`, and `Handle` registers are only valid
 /// as the `base` of a heap read.
-fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
+pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
     const MAX_JIT_REGS: usize = 65_536;
     const MAX_JIT_PARAMS: usize = 16_384;
     const MAX_JIT_INSTRUCTIONS: usize = 1_000_000;
@@ -878,7 +878,7 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
 
 /// Return the ABI result type after [`validate`] has established that every
 /// return agrees and that OSR entries contain no `Return` instruction.
-fn validated_return_type(program: &JitFunction, osr: bool) -> Option<JitValueType> {
+pub(crate) fn validated_return_type(program: &JitFunction, osr: bool) -> Option<JitValueType> {
     if osr {
         return None;
     }
@@ -894,7 +894,7 @@ fn validated_return_type(program: &JitFunction, osr: bool) -> Option<JitValueTyp
     })
 }
 
-fn reachable_jit_instrs(program: &JitFunction) -> Vec<bool> {
+pub(crate) fn reachable_jit_instrs(program: &JitFunction) -> Vec<bool> {
     let mut reachable = vec![false; program.code.len()];
     if program.code.is_empty() {
         return reachable;
@@ -912,7 +912,7 @@ fn reachable_jit_instrs(program: &JitFunction) -> Vec<bool> {
 
 /// The register an instruction definitely writes (its `dst`), if any. Control
 /// instructions (`Return`/`Jump`/`JumpIf*`/`Bail`) and `Nop` write nothing.
-fn instr_def(instr: &JitInstr) -> Option<u32> {
+pub(crate) fn instr_def(instr: &JitInstr) -> Option<u32> {
     match instr {
         JitInstr::LoadInt { dst, .. }
         | JitInstr::LoadFloat { dst, .. }
@@ -1029,7 +1029,7 @@ fn instr_uses(instr: &JitInstr) -> Vec<u32> {
 /// branches add their target; `Jump` goes only to its target; `Return`/`Bail` (and
 /// running off the end) go nowhere. Out-of-range targets are dropped — `validate`
 /// rejects those before codegen, and the analysis stays total regardless.
-fn successors(program: &JitFunction, i: usize) -> Vec<usize> {
+pub(crate) fn successors(program: &JitFunction, i: usize) -> Vec<usize> {
     let n = program.code.len();
     let in_range = |t: u32| (t as usize) < n;
     let next = i + 1;
@@ -1085,3 +1085,4 @@ fn successors(program: &JitFunction, i: usize) -> Vec<usize> {
         }
     }
 }
+use super::*;

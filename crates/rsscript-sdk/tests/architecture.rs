@@ -24,9 +24,9 @@ const UNSAFE_BOUNDARY_CRATES: &[BoundaryCrate] = &[
         directory: "process-guard",
     },
     BoundaryCrate {
-        package: "vm-jit",
+        package: "rsscript-jit-cranelift",
         rust_name: "vm_jit",
-        directory: "vm-jit",
+        directory: "rsscript-jit-cranelift",
     },
 ];
 
@@ -199,7 +199,7 @@ fn cargo_metadata_enforces_composition_dependency_direction() {
         "reir",
         "rss-native-abi",
         "rss-process-guard",
-        "vm-jit",
+        "rsscript-jit-cranelift",
         "rsscript-provider-fs",
         "rsscript-provider-env",
         "rsscript-provider-process",
@@ -242,7 +242,7 @@ fn cargo_metadata_enforces_composition_dependency_direction() {
         "rsscript-workspace-loader",
         "rss-native-abi",
         "rss-process-guard",
-        "vm-jit",
+        "rsscript-jit-cranelift",
         "fs2",
         "rustix",
         "tempfile",
@@ -281,7 +281,7 @@ fn reviewed_compiler_closure_excludes_host_and_persistence_adapters() {
         "rsscript-workspace-loader",
         "rss-native-abi",
         "rss-process-guard",
-        "vm-jit",
+        "rsscript-jit-cranelift",
         "fs2",
         "rustix",
         "tempfile",
@@ -308,6 +308,7 @@ fn workspace_tiers_are_exhaustive_and_define_default_members() {
         "providers",
         "integrations",
         "experimental",
+        "optional_engines",
         "research",
         "tooling",
         "examples",
@@ -405,7 +406,6 @@ fn root_workspace_excludes_experimental_packages() {
         "reir",
         "rss-testgen",
         "rsscript-review-reir",
-        "vm-jit",
     ] {
         assert!(
             !root_members.iter().any(|member| {
@@ -418,6 +418,52 @@ fn root_workspace_excludes_experimental_packages() {
             "Core workspace must not own experimental package `{experimental}`"
         );
     }
+}
+
+#[test]
+fn root_workspace_packages_never_path_depend_on_experiments() {
+    let root = workspace_root();
+    let metadata = cargo_metadata(&root);
+    let packages = metadata["packages"].as_array().expect("metadata packages");
+    let workspace_members = metadata["workspace_members"]
+        .as_array()
+        .expect("workspace members")
+        .iter()
+        .filter_map(|member| member.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut violations = Vec::new();
+
+    for package in packages {
+        let Some(id) = package["id"].as_str() else {
+            continue;
+        };
+        if !workspace_members.contains(id) {
+            continue;
+        }
+        let package_name = package["name"].as_str().expect("package name");
+        for dependency in package["dependencies"]
+            .as_array()
+            .expect("package dependencies")
+        {
+            let Some(path) = dependency["path"].as_str() else {
+                continue;
+            };
+            let path = Path::new(path);
+            if path.starts_with(root.join("experiments")) {
+                violations.push(format!(
+                    "{package_name} path-depends on experiments package {} at {}",
+                    dependency["name"].as_str().unwrap_or("<unknown>"),
+                    path.display()
+                ));
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "root workspace packages must consume only supported root contracts:\n{}",
+        violations.join("\n")
+    );
 }
 
 #[test]
@@ -464,7 +510,7 @@ fn reviewed_execution_closures_do_not_resolve_experimental_backends() {
             "rsscript-aot-backend ",
             "rsscript-aot-model ",
             "rsscript-aot-runtime ",
-            "vm-jit ",
+            "rsscript-jit-cranelift ",
             "rss-native-abi ",
             "experiments/",
         ] {
@@ -601,7 +647,7 @@ fn rss_check_default_cargo_closure_is_frontend_only() {
         "rsscript-bytecode ",
         "rsscript-provider-api ",
         "rss-process-guard ",
-        "vm-jit ",
+        "rsscript-jit-cranelift ",
         "reqwest ",
         "tokio ",
         "tungstenite ",
@@ -895,12 +941,12 @@ fn default_vm_layout_excludes_native_jit_while_opt_in_closure_is_explicit() {
 
     let closure = cargo_tree(&root, "rsscript-vm");
     assert!(
-        !closure.contains("vm-jit "),
-        "default VM dependency closure must not include the native JIT lab:\n{closure}"
+        !closure.contains("rsscript-jit-cranelift "),
+        "default VM dependency closure must not include the optional native engine:\n{closure}"
     );
     let native_closure = cargo_tree_with_features(&root, "rsscript-vm", "native-jit");
     assert!(
-        native_closure.contains("vm-jit "),
+        native_closure.contains("rsscript-jit-cranelift "),
         "the explicit native-jit feature must resolve the reviewed backend:\n{native_closure}"
     );
 }
@@ -1093,7 +1139,7 @@ fn vm_runtime_dependency_inventory_prevents_library_implementation_regressions()
         "rsscript-provider-api".to_owned(),
         "rsscript-text".to_owned(),
         "serde".to_owned(),
-        "vm-jit".to_owned(),
+        "rsscript-jit-cranelift".to_owned(),
     ]);
     assert_eq!(
         declared, expected,
@@ -1338,7 +1384,7 @@ fn syntax_model_is_owned_by_the_boundary_crate() {
         "rsscript-aot-runtime",
         "rsscript-provider-api",
         "reir",
-        "vm-jit",
+        "rsscript-jit-cranelift",
     ] {
         assert!(
             !dependencies.contains(forbidden),
@@ -3091,7 +3137,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "rss-native-abi",
         "rss-process-guard",
         "reir",
-        "vm-jit",
+        "rsscript-jit-cranelift",
     ] {
         assert!(
             !dependencies.contains(forbidden),
@@ -3165,7 +3211,7 @@ fn complete_frontend_checker_is_owned_by_semantics() {
         "rss-native-abi",
         "rss-process-guard",
         "reir",
-        "vm-jit",
+        "rsscript-jit-cranelift",
     ] {
         assert!(
             !dependencies.contains(forbidden),
@@ -3654,7 +3700,11 @@ fn compiler_default_dependency_closure_is_host_neutral() {
         manifest["dependencies"].get("rss-process-guard").is_none(),
         "compiler must not own child-process execution"
     );
-    assert!(manifest["dependencies"].get("vm-jit").is_none());
+    assert!(
+        manifest["dependencies"]
+            .get("rsscript-jit-cranelift")
+            .is_none()
+    );
     let selfhost_vm = manifest["dependencies"]["rsscript-vm"]
         .as_table()
         .expect("self-host parity VM dependency must be declared explicitly");
@@ -3808,7 +3858,7 @@ fn concrete_host_providers_are_leaf_composition_packages() {
             "rsscript-aot-runtime",
             "rsscript-semantics",
             "reir",
-            "vm-jit",
+            "rsscript-jit-cranelift",
         ] {
             assert!(
                 !dependencies.contains(forbidden),
@@ -3838,7 +3888,7 @@ fn provider_contracts_can_be_generated_without_the_engine_or_runtime() {
         "rsscript-runtime",
         "rsscript-aot-runtime",
         "rsscript-provider-api",
-        "vm-jit",
+        "rsscript-jit-cranelift",
     ] {
         assert!(
             !dependencies.contains(forbidden),
@@ -4033,7 +4083,7 @@ fn abi_and_provider_crates_keep_one_way_dependencies() {
         "rss-native-abi",
         "rss-process-guard",
         "reir",
-        "vm-jit",
+        "rsscript-jit-cranelift",
     ] {
         assert!(
             !abi_dependencies.contains(forbidden),
@@ -4110,7 +4160,7 @@ fn artifact_verifier_owns_instruction_validation() {
         "rsscript-semantics",
         "rsscript-runtime",
         "rsscript-aot-runtime",
-        "vm-jit",
+        "rsscript-jit-cranelift",
     ] {
         assert!(
             !dependencies.contains(forbidden),
@@ -4229,7 +4279,10 @@ fn bytecode_backends_cannot_reintroduce_frontend_dependencies() {
     let backends = [
         ("VM", root.join("crates/rsscript-vm/src/reg_vm")),
         ("MIR codegen", root.join("crates/rsscript-codegen-vm/src")),
-        ("JIT lab", root.join("experiments/vm-jit/src")),
+        (
+            "optional JIT engine",
+            root.join("crates/rsscript-jit-cranelift/src"),
+        ),
     ];
     let forbidden_source = [
         "rsscript_compiler",
@@ -4271,9 +4324,10 @@ fn bytecode_backends_cannot_reintroduce_frontend_dependencies() {
             );
         }
     }
-    let jit_manifest: toml::Value =
-        toml::from_str(&read(&root.join("experiments/vm-jit/Cargo.toml")))
-            .expect("JIT lab manifest should parse");
+    let jit_manifest: toml::Value = toml::from_str(&read(
+        &root.join("crates/rsscript-jit-cranelift/Cargo.toml"),
+    ))
+    .expect("JIT lab manifest should parse");
     let jit_dependencies = dependency_packages(&jit_manifest);
     for forbidden in [
         "rsscript-compiler",
@@ -4283,7 +4337,7 @@ fn bytecode_backends_cannot_reintroduce_frontend_dependencies() {
     ] {
         assert!(
             !jit_dependencies.contains(forbidden),
-            "vm-jit must not depend on frontend package `{forbidden}`"
+            "rsscript-jit-cranelift must not depend on frontend package `{forbidden}`"
         );
     }
 }
@@ -4305,7 +4359,7 @@ fn typed_mir_has_a_frontend_free_dependency_boundary() {
         "rsscript-provider-api",
         "rsscript-runtime",
         "reir",
-        "vm-jit",
+        "rsscript-jit-cranelift",
     ] {
         assert!(
             !dependencies.contains(forbidden),
@@ -4625,8 +4679,8 @@ fn high_risk_state_machines_keep_dedicated_module_owners() {
         "experiments/aot-backend/src/rust_lower/helpers/executable_declarations.rs",
         "experiments/aot-backend/src/rust_lower/helpers/semantic_projection.rs",
         "experiments/aot-runtime/src/json.rs",
-        "experiments/vm-jit/src/analysis.rs",
-        "experiments/vm-jit/src/executable_memory.rs",
+        "crates/rsscript-jit-cranelift/src/analysis.rs",
+        "crates/rsscript-jit-cranelift/src/executable_memory.rs",
         "experiments/reir/src/reconciliation/engine.rs",
         "experiments/reir/src/cli/safe_io.rs",
     ];

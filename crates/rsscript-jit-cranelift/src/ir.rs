@@ -18,7 +18,7 @@ pub enum JitCompare {
 }
 
 impl JitCompare {
-    fn cc(self) -> IntCC {
+    pub(crate) fn cc(self) -> IntCC {
         match self {
             JitCompare::Lt => IntCC::SignedLessThan,
             JitCompare::Le => IntCC::SignedLessThanOrEqual,
@@ -29,7 +29,7 @@ impl JitCompare {
 
     /// Ordered float comparison (NaN → false), matching Rust's `<`/`<=`/`>`/`>=`
     /// on `f64` (the interpreter's float comparison).
-    fn fcc(self) -> FloatCC {
+    pub(crate) fn fcc(self) -> FloatCC {
         match self {
             JitCompare::Lt => FloatCC::LessThan,
             JitCompare::Le => FloatCC::LessThanOrEqual,
@@ -473,7 +473,8 @@ pub struct JitFunction {
 }
 
 impl JitFunction {
-    fn is_float(&self, reg: u32) -> bool {
+    pub(crate) fn is_float(&self, reg: u32) -> bool {
         self.reg_types[reg as usize] == JitValueType::Float
     }
 }
+use super::*;

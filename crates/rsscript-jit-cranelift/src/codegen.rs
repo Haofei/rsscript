@@ -7,7 +7,7 @@
 /// `[steps, step_budget, cancel_addr]` used only by an armed OSR variant to enforce
 /// `step_budget`/`cancel` in generated code; unarmed compiles ignore it, and callers
 /// of unarmed functions may pass a null pointer.
-fn push_compiled_abi_signature(
+pub(crate) fn push_compiled_abi_signature(
     func: &mut cranelift_codegen::ir::Function,
     ptr_ty: cranelift_codegen::ir::Type,
 ) {
@@ -35,7 +35,7 @@ fn push_compiled_abi_signature(
 /// above the native chain. (A fully general guard would compare the live stack
 /// pointer against a captured limit; this static budget achieves the same safety
 /// property — never overflow before bailing — without per-call SP plumbing.)
-const NATIVE_RECURSION_STACK_BUDGET_BYTES: i64 = 1 << 20; // 1 MiB
+pub(crate) const NATIVE_RECURSION_STACK_BUDGET_BYTES: i64 = 1 << 20; // 1 MiB
 
 /// Ceiling on the derived cap. Small scalar recursive frames (a few hundred bytes)
 /// derive a cap far above any reasonable host-stack-safe depth, so we clamp to this
@@ -43,7 +43,7 @@ const NATIVE_RECURSION_STACK_BUDGET_BYTES: i64 = 1 << 20; // 1 MiB
 /// to the previous fixed cap. Recursion deeper than the derived cap bails to the
 /// interpreter (which enforces its own `max_depth`), so deep recursion is always
 /// correct and crash-free, just not native past the cap.
-const NATIVE_RECURSION_DEPTH_CAP_MAX: i64 = 250;
+pub(crate) const NATIVE_RECURSION_DEPTH_CAP_MAX: i64 = 250;
 
 /// Over-estimate the per-call native frame size in bytes. Conservative on purpose:
 /// every virtual register may spill to an 8-byte stack slot, the deopt payload
@@ -51,7 +51,7 @@ const NATIVE_RECURSION_DEPTH_CAP_MAX: i64 = 250;
 /// callee-saved registers, alignment padding, and call scratch. Over-estimating the
 /// frame yields a *smaller* (safer) cap, which is the correct direction for a guard
 /// whose whole job is to bail before the stack overflows.
-fn native_recursion_frame_bytes_estimate(program: &JitFunction) -> i64 {
+pub(crate) fn native_recursion_frame_bytes_estimate(program: &JitFunction) -> i64 {
     const SLOT_BYTES: i64 = 8;
     const FIXED_OVERHEAD_BYTES: i64 = 4096;
     let regs = program.n_regs as i64;
@@ -77,7 +77,7 @@ fn native_recursion_frame_bytes_estimate(program: &JitFunction) -> i64 {
 /// fixed stack budget, clamped to `[0, MAX]`. Frame-size-aware so a wide-frame
 /// recursive function bails sooner than a scalar one instead of sharing one
 /// frame-blind constant.
-fn native_recursion_depth_cap(program: &JitFunction) -> i64 {
+pub(crate) fn native_recursion_depth_cap(program: &JitFunction) -> i64 {
     let frame = native_recursion_frame_bytes_estimate(program).max(1);
     (NATIVE_RECURSION_STACK_BUDGET_BYTES / frame).min(NATIVE_RECURSION_DEPTH_CAP_MAX)
 }
@@ -87,24 +87,24 @@ fn native_recursion_depth_cap(program: &JitFunction) -> i64 {
 /// the slice can enforce it; an all-`false` value reproduces the byte-identical
 /// pre-J0.5 codegen. Only the OSR loop tier sets either flag today.
 #[derive(Clone, Copy, Default)]
-struct LimitChecks {
+pub(crate) struct LimitChecks {
     /// Emit a per-instruction step accumulator, a `steps > step_budget` test on every
     /// loop backedge, and a steps write-back on every native exit (clean + deopt), so
     /// a native loop trips `step_budget` exactly like the interpreter would.
-    step: bool,
+    pub(crate) step: bool,
     /// Emit a `cancel` poll (load the host `AtomicBool`) on every loop backedge and
     /// bail to the interpreter when set — the interpreter then re-polls and errors.
-    cancel: bool,
+    pub(crate) cancel: bool,
 }
 
 impl LimitChecks {
-    fn any(self) -> bool {
+    pub(crate) fn any(self) -> bool {
         self.step || self.cancel
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_function(
+pub(crate) fn build_function(
     func: &mut cranelift_codegen::ir::Function,
     fbctx: &mut FunctionBuilderContext,
     module: &mut JITModule,
@@ -2240,3 +2240,4 @@ fn emit_checked_shift(
         bcx.ins().ishl(a, amt)
     }
 }
+use super::*;

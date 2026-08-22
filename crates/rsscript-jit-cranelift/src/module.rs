@@ -212,13 +212,13 @@ struct CompiledFunc {
 }
 
 #[derive(Clone)]
-struct NativeCallee {
-    handle: CompiledId,
-    func_id: FuncId,
-    n_params: usize,
-    param_types: Vec<JitValueType>,
-    deopt_payload_words: usize,
-    return_type: JitValueType,
+pub(crate) struct NativeCallee {
+    pub(crate) handle: CompiledId,
+    pub(crate) func_id: FuncId,
+    pub(crate) n_params: usize,
+    pub(crate) param_types: Vec<JitValueType>,
+    pub(crate) deopt_payload_words: usize,
+    pub(crate) return_type: JitValueType,
 }
 
 /// Metadata for one member of a co-compiled mutually-recursive group
@@ -227,12 +227,12 @@ struct NativeCallee {
 /// (re-run-from-top deopt), so only the callee's shape is needed to marshal the
 /// call and size a (discarded-on-bail) payload slot.
 #[derive(Clone)]
-struct NativeGroupMember {
-    func_id: FuncId,
-    n_params: usize,
-    param_types: Vec<JitValueType>,
-    deopt_payload_words: usize,
-    return_type: JitValueType,
+pub(crate) struct NativeGroupMember {
+    pub(crate) func_id: FuncId,
+    pub(crate) n_params: usize,
+    pub(crate) param_types: Vec<JitValueType>,
+    pub(crate) deopt_payload_words: usize,
+    pub(crate) return_type: JitValueType,
 }
 
 /// Process-wide source of per-module identities, so a [`CompiledId`] minted by one
@@ -260,12 +260,12 @@ pub struct NativeModule {
 /// `FuncId`s of the declared host helpers, resolved into per-function `FuncRef`s
 /// at codegen time.
 #[derive(Clone)]
-struct HostFuncs {
+pub(crate) struct HostFuncs {
     funcs: Vec<(HostHelper, FuncId)>,
 }
 
 impl HostFuncs {
-    fn get(&self, helper: HostHelper) -> FuncId {
+    pub(crate) fn get(&self, helper: HostHelper) -> FuncId {
         self.funcs
             .iter()
             .find_map(|(candidate, id)| (*candidate == helper).then_some(*id))
@@ -278,18 +278,17 @@ impl HostFuncs {
 /// index the wrong function table).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompiledId {
-    module_id: u64,
-    index: usize,
+    pub(crate) module_id: u64,
+    pub(crate) index: usize,
 }
 
-mod deopt;
-pub use deopt::{
+use crate::deopt::anonymous_deopt;
+pub use crate::deopt::{
     DeoptChildSite, DeoptFrame, DeoptMap, DeoptReg, DeoptSite, DeoptValue, NativeOutcome,
     SafepointId,
 };
-use deopt::anonymous_deopt;
 
-fn is_flat_type(ty: JitValueType) -> bool {
+pub(crate) fn is_flat_type(ty: JitValueType) -> bool {
     matches!(
         ty,
         JitValueType::FlatInt
@@ -346,13 +345,13 @@ impl NativeOutcome {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ForcedDeopt {
+pub(crate) enum ForcedDeopt {
     Site(u32),
     All,
 }
 
 impl ForcedDeopt {
-    fn forces(self, site_id: i64) -> bool {
+    pub(crate) fn forces(self, site_id: i64) -> bool {
         match self {
             ForcedDeopt::Site(site) => i64::from(site) == site_id,
             ForcedDeopt::All => true,
@@ -361,6 +360,11 @@ impl ForcedDeopt {
 }
 
 impl NativeModule {
+    #[cfg(test)]
+    pub(crate) fn compiled_function_count(&self) -> usize {
+        self.funcs.len()
+    }
+
     /// Optimizing native tier (back-compat default): `opt_level="speed"`.
     pub fn new(helpers: HostHelpers) -> Result<Self, JitError> {
         Self::new_with_opt(helpers, false)
@@ -1416,3 +1420,4 @@ std::thread_local! {
 pub fn signal_bail() {
     BAIL_FLAG.with(|flag| flag.set(1));
 }
+use super::*;

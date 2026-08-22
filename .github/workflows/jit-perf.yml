@@ -9,7 +9,7 @@ on:
       - "benchmarks/vm-jit/**"
       - "crates/rsscript-vm/src/reg_vm/**"
       - "crates/rsscript-sdk/tests/native_jit_smoke.rs"
-      - "experiments/vm-jit/**"
+      - "crates/rsscript-jit-cranelift/**"
   push:
     branches: [main]
     paths:
@@ -17,7 +17,7 @@ on:
       - "benchmarks/vm-jit/**"
       - "crates/rsscript-vm/src/reg_vm/**"
       - "crates/rsscript-sdk/tests/native_jit_smoke.rs"
-      - "experiments/vm-jit/**"
+      - "crates/rsscript-jit-cranelift/**"
 
 permissions:
   contents: read

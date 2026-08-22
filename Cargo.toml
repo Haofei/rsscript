@@ -10,6 +10,7 @@ members = [
     "crates/rsscript-diagnostics",
     "crates/rsscript-sdk",
     "crates/rsscript-interface-catalog",
+    "crates/rsscript-jit-cranelift",
     "crates/rsscript-mir",
     "crates/rsscript-provider-api",
     "crates/rsscript-provider-bindgen",
@@ -49,8 +50,9 @@ members = [
     "crates/process-guard",
 ]
 
-# Integration, experimental, and research packages are physically maintained
-# below `experiments/` and deliberately excluded from the Core workspace.
+# Integration and research packages are physically maintained below
+# `experiments/` and deliberately excluded from the supported root workspace.
+# The trusted opt-in Cranelift engine is a root member, but not a default member.
 # Native package source remains a test fixture, but its Rust bridge is no
 # longer a workspace member.
 exclude = [
@@ -61,7 +63,6 @@ exclude = [
     "experiments/reir",
     "experiments/rss-testgen",
     "experiments/rsscript-review-reir",
-    "experiments/vm-jit",
     "experiments/fixtures/native-abi-fixture/native/rust",
 ]
 

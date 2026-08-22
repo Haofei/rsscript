@@ -61,6 +61,13 @@ integrations = [
 experimental = [
 ]
 
+# Supported, explicit opt-in execution engines. These are root workspace
+# members so Core never depends on an `experiments/` path, but they are not
+# default members and cannot be selected by an Artifact.
+optional_engines = [
+  "rsscript-jit-cranelift",
+]
+
 research = [
 ]
 

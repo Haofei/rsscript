@@ -15,7 +15,7 @@ rsscript-operation = { path = "../rsscript-operation" }
 rsscript-provider-api = { path = "../rsscript-provider-api" }
 rsscript-text = { path = "../rsscript-text" }
 serde = { version = "1", features = ["derive", "rc"] }
-vm-jit = { path = "../../experiments/vm-jit", optional = true }
+vm-jit = { package = "rsscript-jit-cranelift", path = "../rsscript-jit-cranelift", optional = true }
 
 [features]
 default = []

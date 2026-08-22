@@ -6,7 +6,6 @@ members = [
     "aot-runtime",
     "reir",
     "rsscript-review-reir",
-    "vm-jit",
 ]
 
 default-members = []

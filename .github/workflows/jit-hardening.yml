@@ -31,7 +31,7 @@ jobs:
           docker compose run --rm dev cargo test --locked -p rsscript-vm --features native-jit --lib
           docker compose run --rm dev cargo test --locked -p rsscript-sdk --features native-jit --test native_jit_smoke
           docker compose run --rm dev cargo test --locked -p rsscript-sdk --features native-jit --test native_jit_differential
-          docker compose run --rm dev cargo test --locked --manifest-path experiments/Cargo.toml -p vm-jit
+          docker compose run --rm dev cargo test --locked -p rsscript-jit-cranelift
           docker compose run --rm dev cargo test --locked --release -p rsscript-sdk --features native-jit --test native_jit_smoke native_hot_loop_release_gate_beats_the_interpreter -- --nocapture
 
       - name: Parser/checker no-panic fuzz smoke

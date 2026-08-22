@@ -37,7 +37,13 @@
 //! the safepoint. The interpreter remains the semantic source of truth.
 
 mod analysis;
+mod codegen;
+mod deopt;
 mod executable_memory;
+mod host_abi;
+mod ir;
+mod ir_validation;
+mod module;
 mod validated;
 
 #[cfg(test)]
@@ -54,11 +60,20 @@ use cranelift_jit::{ArenaMemoryProvider, JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module, default_libcall_names};
 pub use executable_memory::ExecutableMemoryBudget;
 use executable_memory::{ExecutableMemoryReservation, arena_allocation_charge};
+pub use host_abi::*;
+pub use ir::*;
+pub use module::*;
 pub use validated::{ValidatedJitFunction, validate_function};
 
-include!("host_abi.rs");
-include!("ir.rs");
-include!("module.rs");
-include!("ir_validation.rs");
-include!("codegen.rs");
-include!("tests.rs");
+pub(crate) use codegen::{
+    LimitChecks, NATIVE_RECURSION_STACK_BUDGET_BYTES, build_function, native_recursion_depth_cap,
+    native_recursion_frame_bytes_estimate, push_compiled_abi_signature,
+};
+pub(crate) use host_abi::{DEFAULT_STANDALONE_JIT_ARENA_BYTES, HostHelperSig, HostResult};
+pub(crate) use ir_validation::{
+    instr_def, reachable_jit_instrs, successors, validate, validated_return_type,
+};
+pub(crate) use module::{ForcedDeopt, HostFuncs, NativeCallee, NativeGroupMember, is_flat_type};
+
+#[cfg(test)]
+mod tests;
