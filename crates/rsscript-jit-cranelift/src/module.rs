@@ -292,6 +292,80 @@ pub struct NativeModule {
     _memory_reservation: ExecutableMemoryReservation,
 }
 
+/// Borrow-checked arguments for one native call.
+///
+/// The builder owns the ABI word/length arrays while retaining Rust borrows for
+/// every flat buffer. Consequently a caller cannot attach the same mutable slice
+/// twice, or overlap a mutable and immutable proof, without crossing an unsafe
+/// Rust boundary. Final pointer/type validation still happens immediately before
+/// dispatch so a mismatched compiled signature declines to the interpreter.
+pub struct PreparedCall<'module, 'buffers> {
+    module: &'module NativeModule,
+    function: CompiledId,
+    args: Vec<i64>,
+    lens: Vec<i64>,
+    host_ctx: HostCtx,
+    logical_depth: LogicalCallDepth,
+    flat_args: Vec<FlatBufferArg<'buffers>>,
+}
+
+impl<'module, 'buffers> PreparedCall<'module, 'buffers> {
+    pub fn scalar(mut self, value: i64) -> Self {
+        self.args.push(value);
+        self.lens.push(0);
+        self
+    }
+
+    pub fn readonly_int(mut self, values: &'buffers [i64]) -> Self {
+        self.args.push(values.as_ptr() as i64);
+        self.lens.push(values.len() as i64);
+        self.flat_args.push(FlatBufferArg::Int(values));
+        self
+    }
+
+    pub fn unique_int_mut(mut self, values: &'buffers mut [i64]) -> Self {
+        self.args.push(values.as_mut_ptr() as i64);
+        self.lens.push(values.len() as i64);
+        self.flat_args.push(FlatBufferArg::IntMut(values));
+        self
+    }
+
+    pub fn readonly_float(mut self, values: &'buffers [f64]) -> Self {
+        self.args.push(values.as_ptr() as i64);
+        self.lens.push(values.len() as i64);
+        self.flat_args.push(FlatBufferArg::Float(values));
+        self
+    }
+
+    pub fn unique_float_mut(mut self, values: &'buffers mut [f64]) -> Self {
+        self.args.push(values.as_mut_ptr() as i64);
+        self.lens.push(values.len() as i64);
+        self.flat_args.push(FlatBufferArg::FloatMut(values));
+        self
+    }
+
+    pub fn host_context(mut self, host_ctx: HostCtx) -> Self {
+        self.host_ctx = host_ctx;
+        self
+    }
+
+    pub fn logical_depth(mut self, current: usize, limit: usize) -> Self {
+        self.logical_depth = LogicalCallDepth { current, limit };
+        self
+    }
+
+    pub fn execute(mut self) -> NativeOutcome {
+        self.module.call_with_host_ctx_at_depth(
+            self.function,
+            &self.args,
+            &self.lens,
+            self.host_ctx,
+            &mut self.flat_args,
+            self.logical_depth,
+        )
+    }
+}
+
 /// `FuncId`s of the declared host helpers, resolved into per-function `FuncRef`s
 /// at codegen time.
 #[derive(Clone)]
@@ -403,6 +477,23 @@ impl NativeModule {
     /// Optimizing native tier (back-compat default): `opt_level="speed"`.
     pub fn new(helpers: HostHelpers) -> Result<Self, JitError> {
         Self::new_with_opt(helpers, false)
+    }
+
+    /// Start a safe, phase-typed native call. Prefer this API when constructing
+    /// ABI arguments outside the VM's internal reusable marshalling path.
+    pub fn prepare_call(&self, function: CompiledId) -> PreparedCall<'_, '_> {
+        PreparedCall {
+            module: self,
+            function,
+            args: Vec::new(),
+            lens: Vec::new(),
+            host_ctx: 0,
+            logical_depth: LogicalCallDepth {
+                current: 0,
+                limit: usize::MAX,
+            },
+            flat_args: Vec::new(),
+        }
     }
 
     /// Build a native module at a selectable optimization level.
@@ -1047,7 +1138,8 @@ impl NativeModule {
     /// buffer of the logical type and length in `lens`. Mutable flat entries must
     /// be exclusively borrowed. `limits_ptr` must be null or point to a live limits
     /// cell required by this compiled OSR entry.
-    pub unsafe fn call_with_limits(
+    #[cfg(test)]
+    pub(crate) unsafe fn call_with_limits(
         &self,
         id: CompiledId,
         args: &[i64],

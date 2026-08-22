@@ -991,6 +991,36 @@ fn one_mutable_flat_proof_cannot_authorize_two_abi_entries() {
 }
 
 #[test]
+fn prepared_call_owns_abi_words_and_flat_borrow_proofs() {
+    use JitValueType::{FlatIntMut, Int};
+    let mut module = module();
+    let function = module
+        .compile(&ft(
+            3,
+            vec![FlatIntMut, Int, Int, Int],
+            vec![
+                JitInstr::ListSetIntDirect {
+                    dst: 3,
+                    base: 0,
+                    index: 1,
+                    value: 2,
+                },
+                JitInstr::Return { src: 3 },
+            ],
+        ))
+        .unwrap();
+    let mut data = [3_i64, 4];
+    let outcome = module
+        .prepare_call(function)
+        .unique_int_mut(&mut data)
+        .scalar(1)
+        .scalar(42)
+        .execute();
+    assert_eq!(outcome.completed(), Some(0));
+    assert_eq!(data, [3, 42]);
+}
+
+#[test]
 fn native_call_can_pass_flat_float_arg_to_readonly_callee() {
     use JitValueType::{FlatFloat, Float, Int};
     let mut m = module();
