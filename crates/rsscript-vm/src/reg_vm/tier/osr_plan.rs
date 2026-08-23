@@ -10,6 +10,23 @@ pub(super) fn osr_committed_tail_calls(final_logical_depth: usize, physical_dept
     final_logical_depth.saturating_sub(physical_depth)
 }
 
+/// Whether an OSR region may execute without bypassing a host execution control.
+///
+/// Keep this separate from whole-function native admission: OSR has its own entry
+/// path and therefore must fail closed for every limit it cannot yet poll or
+/// account for. In particular, a deadline-only request must not enter a native
+/// loop that has no generated deadline poll.
+#[cfg(feature = "native-jit")]
+pub(super) fn osr_execution_controls_unarmed(limits: &VmLimits) -> bool {
+    limits.step_budget.is_none()
+        && limits.cancel.is_none()
+        && limits.deadline.is_none()
+        && limits.allocation_budget.is_none()
+        && limits.live_memory_limit.is_none()
+        && limits.intrinsic_call_budget.is_none()
+        && limits.provider_call_budget.is_none()
+}
+
 #[cfg(feature = "native-jit")]
 pub(super) fn osr_materialize_recipe_is_supported(
     value: &OsrMaterializeValue,
@@ -211,6 +228,7 @@ pub(super) fn osr_heap_input_regs(jit_fn: &vm_jit::JitFunction) -> Vec<usize> {
 #[cfg(all(test, feature = "native-jit"))]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn map_match_function(instr: vm_jit::JitInstr) -> vm_jit::JitFunction {
         vm_jit::JitFunction {
@@ -264,5 +282,16 @@ mod tests {
         for instr in variants {
             assert_eq!(osr_heap_input_regs(&map_match_function(instr)), vec![0]);
         }
+    }
+
+    #[test]
+    fn deadline_only_execution_cannot_enter_osr() {
+        let mut limits = VmLimits::unbounded_for_trusted_host();
+        assert!(osr_execution_controls_unarmed(&limits));
+
+        limits.deadline = Some(rsscript_operation::MonotonicDeadline::after(
+            Duration::from_secs(1),
+        ));
+        assert!(!osr_execution_controls_unarmed(&limits));
     }
 }

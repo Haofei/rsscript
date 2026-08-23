@@ -1432,13 +1432,7 @@ impl RegVm {
         // allocation costs, no armed resource mode is allowed through OSR. The
         // interpreter remains the semantic authority. Cancellation also stays on
         // that path even though vm-jit's raw cancel load is now atomic.
-        if self.limits.step_budget.is_some()
-            || self.limits.cancel.is_some()
-            || self.limits.allocation_budget.is_some()
-            || self.limits.live_memory_limit.is_some()
-            || self.limits.intrinsic_call_budget.is_some()
-            || self.limits.provider_call_budget.is_some()
-        {
+        if !osr_execution_controls_unarmed(&self.limits) {
             return false;
         }
         // These values remain false after the gate above. Keeping the compile-time
