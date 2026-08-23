@@ -52,6 +52,11 @@ currently keep every continuation in the interpreter.
   coexist in the VM frame: continuation marshalling validates only the exact
   register footprint of the selected scalar region, so scalar work after an
   interpreter-materialized aggregate can re-enter native code safely.
+- Provider calls and `await` are exercised as normal mixed-mode boundaries by
+  interpreter/native differential tests. The VM executes each boundary exactly
+  once, preserves Provider traces and scheduler semantics, then probes the next
+  scalar continuation. Generated code never re-enters the interpreter or spans a
+  suspension.
 - Structural compilation work is bounded by `JitLimits` before Cranelift code
   generation. Instruction, register, CFG-edge, operand, analysis-word, deopt,
   memo-scope, callee, and recursive-group counts have deterministic limits.
