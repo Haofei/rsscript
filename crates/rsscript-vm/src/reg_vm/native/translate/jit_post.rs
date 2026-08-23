@@ -6,14 +6,117 @@
 use super::*;
 
 #[cfg(feature = "native-jit")]
-pub(super) fn native_compose_ip_maps(
-    previous_to_original: &[usize],
-    next_to_previous: &[usize],
-) -> Option<Vec<usize>> {
-    next_to_previous
-        .iter()
-        .map(|&previous| previous_to_original.get(previous).copied())
-        .collect()
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct NativeInstructionOrigin {
+    /// Instruction in the original register bytecode that produced this item.
+    pub(super) bytecode_ip: usize,
+    /// Interpreter instruction to resume when a guard before this item deopts.
+    pub(super) resume_ip: usize,
+}
+
+/// Owned state threaded through native rewrites.
+///
+/// Passes still return a local `new -> previous` index map while they migrate to
+/// the block IR, but composition happens exactly once here. Keeping source and
+/// resume identity together prevents another parallel-vector protocol from
+/// silently drifting when a pass expands one bytecode instruction into several
+/// native operations.
+#[cfg(feature = "native-jit")]
+pub(super) struct NativePipelineState {
+    pub(super) code: Vec<RegInstr>,
+    pub(super) n_regs: usize,
+    origins: Vec<NativeInstructionOrigin>,
+}
+
+#[cfg(feature = "native-jit")]
+impl NativePipelineState {
+    pub(super) fn new(
+        code: Vec<RegInstr>,
+        n_regs: usize,
+        transformed_to_bytecode: Vec<usize>,
+    ) -> Option<Self> {
+        if code.len() != transformed_to_bytecode.len() {
+            return None;
+        }
+        let origins = transformed_to_bytecode
+            .into_iter()
+            .map(|ip| NativeInstructionOrigin {
+                bytecode_ip: ip,
+                resume_ip: ip,
+            })
+            .collect();
+        Some(Self {
+            code,
+            n_regs,
+            origins,
+        })
+    }
+
+    pub(super) fn apply_rewrite(
+        &mut self,
+        code: Vec<RegInstr>,
+        n_regs: usize,
+        next_to_previous: Vec<usize>,
+    ) -> Option<()> {
+        if code.len() != next_to_previous.len() {
+            return None;
+        }
+        let origins = next_to_previous
+            .into_iter()
+            .map(|previous| self.origins.get(previous).copied())
+            .collect::<Option<Vec<_>>>()?;
+        self.code = code;
+        self.n_regs = n_regs;
+        self.origins = origins;
+        Some(())
+    }
+
+    pub(super) fn into_parts(self) -> (Vec<RegInstr>, usize, Vec<NativeInstructionOrigin>) {
+        debug_assert_eq!(self.code.len(), self.origins.len());
+        (self.code, self.n_regs, self.origins)
+    }
+}
+
+#[cfg(all(test, feature = "native-jit"))]
+mod pipeline_state_tests {
+    use super::*;
+
+    #[test]
+    fn pipeline_state_composes_source_and_resume_origins_atomically() {
+        let initial = vec![
+            RegInstr::LoadUnit { dst: 0 },
+            RegInstr::LoadUnit { dst: 1 },
+            RegInstr::LoadUnit { dst: 2 },
+        ];
+        let mut state = NativePipelineState::new(initial, 3, vec![10, 20, 30]).unwrap();
+
+        state
+            .apply_rewrite(
+                vec![RegInstr::LoadUnit { dst: 2 }, RegInstr::LoadUnit { dst: 0 }],
+                3,
+                vec![2, 0],
+            )
+            .unwrap();
+
+        let (code, n_regs, origins) = state.into_parts();
+        assert_eq!(code.len(), origins.len());
+        assert_eq!(n_regs, 3);
+        assert_eq!(origins[0].bytecode_ip, 30);
+        assert_eq!(origins[0].resume_ip, 30);
+        assert_eq!(origins[1].bytecode_ip, 10);
+        assert_eq!(origins[1].resume_ip, 10);
+    }
+
+    #[test]
+    fn pipeline_state_rejects_a_drifting_rewrite_map() {
+        let mut state =
+            NativePipelineState::new(vec![RegInstr::LoadUnit { dst: 0 }], 1, vec![0]).unwrap();
+        assert!(
+            state
+                .apply_rewrite(vec![RegInstr::LoadUnit { dst: 0 }], 1, Vec::new(),)
+                .is_none()
+        );
+    }
 }
 
 #[cfg(feature = "native-jit")]

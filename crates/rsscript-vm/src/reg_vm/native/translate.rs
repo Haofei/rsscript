@@ -244,7 +244,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
         .chain(self_call_sites.iter().copied())
         .chain(group_call_sites.keys().copied())
         .collect();
-    let (code, n_regs, mut ip_map) = native_inline_leaf_calls_preserving_known_calls(
+    let (code, n_regs, ip_map) = native_inline_leaf_calls_preserving_known_calls(
         unit,
         func,
         profile,
@@ -253,43 +253,59 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
         None,
         &preserve_call_known,
     )?;
-    let region_exit = native_whole_function_region_exit(&code);
-    let (code, n_regs, next_ip_map) =
-        native_elide_readonly_full_list_slices_in_region(&code, n_regs, 0, region_exit)?;
-    ip_map = native_compose_ip_maps(&ip_map, &next_ip_map)?;
-    let region_exit = native_whole_function_region_exit(&code);
-    let (code, n_regs, next_ip_map) =
-        native_lower_checked_payload_intrinsics_in_region(&code, n_regs, 0, region_exit)?;
-    ip_map = native_compose_ip_maps(&ip_map, &next_ip_map)?;
+    let mut pipeline = NativePipelineState::new(code, n_regs, ip_map)?;
+    let region_exit = native_whole_function_region_exit(&pipeline.code);
+    let (code, n_regs, next_ip_map) = native_elide_readonly_full_list_slices_in_region(
+        &pipeline.code,
+        pipeline.n_regs,
+        0,
+        region_exit,
+    )?;
+    pipeline.apply_rewrite(code, n_regs, next_ip_map)?;
+    let region_exit = native_whole_function_region_exit(&pipeline.code);
+    let (code, n_regs, next_ip_map) = native_lower_checked_payload_intrinsics_in_region(
+        &pipeline.code,
+        pipeline.n_regs,
+        0,
+        region_exit,
+    )?;
+    pipeline.apply_rewrite(code, n_regs, next_ip_map)?;
     // Scalar replacement and range optimization run on the fully inlined body,
     // using the same transform order as OSR. Result runs before Option because it
     // tolerates Option ops while dissolving always-Ok Results; Option is stricter and
     // expects only native-subset instructions plus Option ops. Variant and struct SR
     // then remove user aggregate constructors/accessors exposed by inlining.
-    let region_exit = native_whole_function_region_exit(&code);
+    let region_exit = native_whole_function_region_exit(&pipeline.code);
     let (code, n_regs, next_ip_map, _recipes) =
-        native_scalar_replace_results_in_region(&code, n_regs, 0, region_exit)?;
-    ip_map = native_compose_ip_maps(&ip_map, &next_ip_map)?;
+        native_scalar_replace_results_in_region(&pipeline.code, pipeline.n_regs, 0, region_exit)?;
+    pipeline.apply_rewrite(code, n_regs, next_ip_map)?;
     let (code, n_regs, scalar_payload_regs, next_ip_map) =
-        native_scalar_replace_options(&code, n_regs)?;
-    ip_map = native_compose_ip_maps(&ip_map, &next_ip_map)?;
-    let region_exit = native_whole_function_region_exit(&code);
+        native_scalar_replace_options(&pipeline.code, pipeline.n_regs)?;
+    pipeline.apply_rewrite(code, n_regs, next_ip_map)?;
+    let region_exit = native_whole_function_region_exit(&pipeline.code);
     let (code, n_regs, next_ip_map, _recipes) =
-        native_scalar_replace_variants_in_region(&code, n_regs, 0, region_exit)?;
-    ip_map = native_compose_ip_maps(&ip_map, &next_ip_map)?;
-    let region_exit = native_whole_function_region_exit(&code);
+        native_scalar_replace_variants_in_region(&pipeline.code, pipeline.n_regs, 0, region_exit)?;
+    pipeline.apply_rewrite(code, n_regs, next_ip_map)?;
+    let region_exit = native_whole_function_region_exit(&pipeline.code);
     let (code, n_regs, next_ip_map, _recipes) =
-        native_scalar_replace_structs_in_region(&code, n_regs, 0, region_exit)?;
-    ip_map = native_compose_ip_maps(&ip_map, &next_ip_map)?;
+        native_scalar_replace_structs_in_region(&pipeline.code, pipeline.n_regs, 0, region_exit)?;
+    pipeline.apply_rewrite(code, n_regs, next_ip_map)?;
     // Dissolve non-escaping `Bytes.slice(...); Bytes.len(...)` values before native
     // type inference. Dynamic Bytes inputs retain a validating `Bytes.len` helper at
     // the slice site, while the allocation and output handle disappear. The regular
     // loop memoizer below can then cache that scalar helper when its operands are
     // invariant.
-    let region_exit = native_whole_function_region_exit(&code);
+    let region_exit = native_whole_function_region_exit(&pipeline.code);
     let (code, n_regs, next_ip_map) =
-        native_bytes_length_fold_in_region(&code, n_regs, 0, region_exit)?;
-    ip_map = native_compose_ip_maps(&ip_map, &next_ip_map)?;
+        native_bytes_length_fold_in_region(&pipeline.code, pipeline.n_regs, 0, region_exit)?;
+    pipeline.apply_rewrite(code, n_regs, next_ip_map)?;
+    let (code, n_regs, origins) = pipeline.into_parts();
+    let ip_map: Vec<usize> = origins.iter().map(|origin| origin.bytecode_ip).collect();
+    debug_assert!(
+        origins
+            .iter()
+            .all(|origin| origin.resume_ip <= func.code.len())
+    );
     if func.params > n_regs {
         return None;
     }
