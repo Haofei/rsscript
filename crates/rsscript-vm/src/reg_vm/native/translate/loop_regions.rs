@@ -353,11 +353,8 @@ pub(in crate::reg_vm) fn detect_single_natural_loop(code: &[RegInstr]) -> Option
             // `MatchOption` (untransformed-code path): both arms must stay in-region.
             RegInstr::MatchOption {
                 some_ip, none_ip, ..
-            } => {
-                if !in_region(*some_ip) || !in_region(*none_ip) {
-                    return None;
-                }
-            }
+            } if !in_region(*some_ip) || !in_region(*none_ip) => return None,
+            RegInstr::MatchOption { .. } => {}
             // Any non-straight-line call inside the body is rejected by the subset
             // check in `translate_osr_loop`; control-flow-wise it falls through,
             // which stays in-region.

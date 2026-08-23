@@ -2941,6 +2941,7 @@ impl RegVm {
 /// is the single eligibility gate, so the group admits any cycle the general native
 /// path can compile (Int/Bool/Float bodies, members that also call inlinable leaves).
 #[cfg(feature = "native-jit")]
+#[cfg(feature = "jit-recursion-experimental")]
 fn native_recursive_group(unit: &RegUnit, function_id: usize) -> Option<Vec<usize>> {
     use std::collections::HashSet;
     let callees = |fid: usize| -> Vec<usize> {

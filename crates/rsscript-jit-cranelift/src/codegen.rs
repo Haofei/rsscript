@@ -91,10 +91,12 @@ pub(crate) fn native_recursion_frame_bytes_estimate(program: &JitFunction) -> i6
     const FIXED_OVERHEAD_BYTES: i64 = 4096;
     let regs = program.n_regs as i64;
     let explicit_slots = program.code.iter().fold(0_i64, |total, instr| {
-        let words = match instr {
+        let words: i64 = match instr {
+            #[cfg(feature = "recursion")]
             JitInstr::CallSelf { args, .. } => {
                 (args.len() as i64).saturating_mul(2).saturating_add(1)
             }
+            #[cfg(feature = "recursion")]
             JitInstr::CallGroup { args, .. } => (args.len() as i64)
                 .saturating_mul(2)
                 .saturating_add(regs)
@@ -153,6 +155,8 @@ pub(crate) fn build_function(
     native_static_call_depth: u32,
     assigned_in: &[Vec<bool>],
 ) -> Result<DeoptMap, JitError> {
+    #[cfg(not(feature = "recursion"))]
+    let _ = (self_func_id, group, native_static_call_depth);
     // Definite-assignment facts were computed by validation and are reused here;
     // codegen never repeats the most expensive structural dataflow pass.
     // Forward integer-interval analysis (interval range analysis): per-instruction sound ranges for
@@ -193,17 +197,21 @@ pub(crate) fn build_function(
     // Self-recursive native calls (native-call-ABI slice 2): a `CallSelf` invokes
     // THIS function via its own (declared-before-defined) `FuncId`. Only declared when
     // a self-call is present, so non-recursive functions get no extra func ref.
+    #[cfg(feature = "recursion")]
     let has_call_self = program
         .code
         .iter()
         .any(|instr| matches!(instr, JitInstr::CallSelf { .. }));
+    #[cfg(feature = "recursion")]
     let self_ref = has_call_self.then(|| module.declare_func_in_func(self_func_id, bcx.func));
     // Mutual-recursion group calls (native-call-ABI slice 4): a func ref per group
     // member, resolving `CallGroup { group_index }` to the member's declared FuncId.
+    #[cfg(feature = "recursion")]
     let has_call_group = program
         .code
         .iter()
         .any(|instr| matches!(instr, JitInstr::CallGroup { .. }));
+    #[cfg(feature = "recursion")]
     let group_refs: Vec<_> = group
         .iter()
         .map(|member| module.declare_func_in_func(member.func_id, bcx.func))
@@ -222,12 +230,17 @@ pub(crate) fn build_function(
         }
     };
     let vars: Vec<Variable> = (0..n_regs).map(|i| bcx.declare_var(var_ty(i))).collect();
+    #[cfg(feature = "memoization")]
     let memo_count = program
         .code
         .iter()
         .filter(|instr| matches!(instr, JitInstr::MemoizedHostCall { .. }))
         .count();
+    #[cfg(not(feature = "memoization"))]
+    let memo_count = 0;
+    #[allow(unused_mut)]
     let mut memo_value_tys = vec![types::I64; memo_count];
+    #[cfg(feature = "memoization")]
     for instr in &program.code {
         if let JitInstr::MemoizedHostCall { dst, memo_slot, .. } = instr {
             memo_value_tys[*memo_slot as usize] = var_ty(*dst as usize);
@@ -446,9 +459,14 @@ pub(crate) fn build_function(
                     is_leader[i + 1] = true;
                 }
             }
-            JitInstr::JumpIfBool { target, .. }
-            | JitInstr::JumpIfIntCompare { target, .. }
-            | JitInstr::ProfiledJumpIfBool { target, .. }
+            JitInstr::JumpIfBool { target, .. } | JitInstr::JumpIfIntCompare { target, .. } => {
+                is_leader[*target as usize] = true;
+                if i + 1 < n {
+                    is_leader[i + 1] = true;
+                }
+            }
+            #[cfg(feature = "speculation")]
+            JitInstr::ProfiledJumpIfBool { target, .. }
             | JitInstr::ProfiledJumpIfIntCompare { target, .. } => {
                 is_leader[*target as usize] = true;
                 if i + 1 < n {
@@ -555,6 +573,7 @@ pub(crate) fn build_function(
     // edges are statically resolved, so their maximum depth is checked once by the
     // top-level wrapper. Reserve that known descendant depth when recursion and an
     // ordinary native edge coexist.
+    #[cfg(feature = "recursion")]
     if has_call_self || has_call_group {
         let cap = bcx
             .ins()
@@ -936,6 +955,7 @@ pub(crate) fn build_function(
                 };
                 bcx.def_var(reg(*dst), stored);
             }
+            #[cfg(feature = "memoization")]
             JitInstr::MemoizedHostCall {
                 helper,
                 dst,
@@ -1106,6 +1126,7 @@ pub(crate) fn build_function(
                 };
                 bcx.def_var(reg(*dst), result);
             }
+            #[cfg(feature = "recursion")]
             JitInstr::CallSelf { dst, args } => {
                 // Self-recursive native call (native-call-ABI slice 2): invoke THIS
                 // function via its own func ref, sharing the caller's bail/safepoint/
@@ -1191,6 +1212,7 @@ pub(crate) fn build_function(
                 };
                 bcx.def_var(reg(*dst), result);
             }
+            #[cfg(feature = "recursion")]
             JitInstr::CallGroup {
                 group_index,
                 dst,
@@ -1584,6 +1606,7 @@ pub(crate) fn build_function(
                 }
                 terminated = true;
             }
+            #[cfg(feature = "speculation")]
             JitInstr::ProfiledJumpIfBool {
                 cond,
                 expected,
@@ -1643,6 +1666,7 @@ pub(crate) fn build_function(
                 }
                 terminated = true;
             }
+            #[cfg(feature = "speculation")]
             JitInstr::ProfiledJumpIfIntCompare {
                 lhs,
                 rhs,
@@ -1849,6 +1873,7 @@ pub(crate) fn build_function(
                 let empty64 = bcx.ins().uextend(types::I64, empty);
                 bcx.def_var(reg(*dst), empty64);
             }
+            #[cfg(feature = "speculation")]
             JitInstr::GuardClosureId { base, expected } => {
                 // Read the closure handle's underlying function id and bail to the
                 // interpreter if it isn't the speculated callee `expected`. The

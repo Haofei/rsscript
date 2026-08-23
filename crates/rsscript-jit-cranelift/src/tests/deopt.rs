@@ -103,6 +103,7 @@ fn deopt_map_straightline_single_guard() {
     );
 }
 
+#[cfg(feature = "speculation")]
 #[test]
 fn profiled_branch_deopts_on_cold_edge() {
     let mut m = module();

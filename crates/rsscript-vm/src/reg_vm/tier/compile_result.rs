@@ -47,6 +47,7 @@ impl NativeCompileTelemetry {
                 | vm_jit::JitInstr::ListSetFloatDirect { .. } => {
                     telemetry.direct_list_bounds_check_sites += 1;
                 }
+                #[cfg(feature = "jit-memoization-experimental")]
                 vm_jit::JitInstr::MemoizedHostCall { .. } => {
                     telemetry.memoized_runtime_helper_call_sites += 1;
                 }
@@ -66,12 +67,16 @@ impl NativeCompileTelemetry {
                     telemetry.runtime_helper_call_sites += 1;
                     telemetry.fused_map_match_helper_sites += 1;
                 }
-                vm_jit::JitInstr::CallNative { .. }
-                | vm_jit::JitInstr::CallSelf { .. }
-                | vm_jit::JitInstr::CallGroup { .. } => telemetry.native_call_edges += 1,
+                vm_jit::JitInstr::CallNative { .. } => telemetry.native_call_edges += 1,
+                #[cfg(feature = "jit-recursion-experimental")]
+                vm_jit::JitInstr::CallSelf { .. } | vm_jit::JitInstr::CallGroup { .. } => {
+                    telemetry.native_call_edges += 1
+                }
+                #[cfg(feature = "jit-speculation")]
                 vm_jit::JitInstr::GuardClosureId { .. } => {
                     telemetry.profile_closure_guard_sites += 1;
                 }
+                #[cfg(feature = "jit-speculation")]
                 vm_jit::JitInstr::ProfiledJumpIfBool { .. }
                 | vm_jit::JitInstr::ProfiledJumpIfIntCompare { .. } => {
                     telemetry.profile_branch_side_exits += 1;
@@ -103,12 +108,19 @@ impl NativeCompileTelemetry {
 #[cfg(feature = "native-jit")]
 pub(super) fn native_region_is_promotion_eligible(jit_fn: &vm_jit::JitFunction) -> bool {
     !jit_fn.code.iter().any(|instr| {
-        matches!(
-            instr,
-            vm_jit::JitInstr::CallNative { .. }
-                | vm_jit::JitInstr::CallSelf { .. }
-                | vm_jit::JitInstr::CallGroup { .. }
-        )
+        matches!(instr, vm_jit::JitInstr::CallNative { .. }) || {
+            #[cfg(feature = "jit-recursion-experimental")]
+            {
+                matches!(
+                    instr,
+                    vm_jit::JitInstr::CallSelf { .. } | vm_jit::JitInstr::CallGroup { .. }
+                )
+            }
+            #[cfg(not(feature = "jit-recursion-experimental"))]
+            {
+                false
+            }
+        }
     })
 }
 

@@ -474,6 +474,7 @@ fn native_scalar_call_deopts_at_caller_when_callee_deopts() {
     ));
 }
 
+#[cfg(feature = "recursion")]
 #[test]
 fn native_self_recursion_computes_and_caps_depth() {
     // sum(n) = if n <= 0 { 0 } else { n + sum(n - 1) }, compiled with CallSelf.
@@ -550,6 +551,7 @@ fn native_self_recursion_computes_and_caps_depth() {
     }
 }
 
+#[cfg(feature = "recursion")]
 #[test]
 fn native_mutual_recursion_group_computes_and_caps_depth() {
     // is_even(n) = if n<1 {1} else is_odd(n-1); is_odd(n) = if n<1 {0} else is_even(n-1).
@@ -1356,6 +1358,7 @@ fn float_read_helpers_compile_and_bail() {
     let _ = Int;
 }
 
+#[cfg(feature = "speculation")]
 #[test]
 fn guard_closure_id_passes_or_bails() {
     use JitValueType::{Handle, Int};

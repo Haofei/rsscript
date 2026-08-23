@@ -27,6 +27,7 @@ fn check_zero_init_reg(program: &JitFunction, reg: u32) -> Result<(), JitError> 
     Ok(())
 }
 
+#[cfg(feature = "memoization")]
 fn validate_memo_scopes(
     program: &JitFunction,
     memo_slot_owners: &[Option<usize>],
@@ -407,18 +408,23 @@ pub(crate) fn validate_with_limits(
     };
 
     let mut returns = Vec::new();
+    #[cfg(feature = "memoization")]
     let memo_count = program
         .code
         .iter()
         .filter(|instr| matches!(instr, JitInstr::MemoizedHostCall { .. }))
         .count();
+    #[cfg(not(feature = "memoization"))]
+    let memo_count = 0;
     if memo_count > limits.max_memo_slots {
         return Err(JitError::invalid_ir(format!(
             "JIT IR has {memo_count} memo slots, exceeding the limit {}",
             limits.max_memo_slots
         )));
     }
-    let mut memo_slot_owners = vec![None; memo_count];
+    #[cfg(feature = "memoization")]
+    let mut memo_slot_owners: Vec<Option<usize>> = vec![None; memo_count];
+    #[cfg(feature = "memoization")]
     for (ip, instr) in program.code.iter().enumerate() {
         let JitInstr::MemoizedHostCall { memo_slot, .. } = instr else {
             continue;
@@ -538,6 +544,7 @@ pub(crate) fn validate_with_limits(
                     }
                 }
             }
+            #[cfg(feature = "memoization")]
             JitInstr::MemoizedHostCall {
                 helper, dst, args, ..
             } => {
@@ -613,6 +620,7 @@ pub(crate) fn validate_with_limits(
                     check_reg(*arg)?;
                 }
             }
+            #[cfg(feature = "recursion")]
             JitInstr::CallSelf { dst, args } => {
                 check_reg(*dst)?;
                 if is_flat_type(class(*dst)) {
@@ -640,6 +648,7 @@ pub(crate) fn validate_with_limits(
                     }
                 }
             }
+            #[cfg(feature = "recursion")]
             JitInstr::CallGroup { dst, args, .. } => {
                 // Group index, arity, and arg/result classes are checked against the
                 // co-compiled group in `compile_recursive_group`/`build_function`,
@@ -731,6 +740,7 @@ pub(crate) fn validate_with_limits(
                 check_target(*target)?;
                 check_fallthrough()?;
             }
+            #[cfg(feature = "speculation")]
             JitInstr::ProfiledJumpIfBool { cond, target, .. } => {
                 require_class(*cond, JitValueType::Bool, "ProfiledJumpIfBool")?;
                 check_target(*target)?;
@@ -743,6 +753,7 @@ pub(crate) fn validate_with_limits(
                 check_target(*target)?;
                 check_fallthrough()?;
             }
+            #[cfg(feature = "speculation")]
             JitInstr::ProfiledJumpIfIntCompare {
                 lhs, rhs, target, ..
             } => {
@@ -854,6 +865,7 @@ pub(crate) fn validate_with_limits(
                 }
                 require_class(*dst, JitValueType::Bool, "ListIsEmptyDirect result")?;
             }
+            #[cfg(feature = "speculation")]
             JitInstr::GuardClosureId { base, expected } => {
                 require_class(*base, JitValueType::Handle, "GuardClosureId base")?;
                 if *expected < 0 {
@@ -874,7 +886,15 @@ pub(crate) fn validate_with_limits(
             }
         }
     }
+    #[cfg(feature = "memoization")]
     validate_memo_scopes(program, &memo_slot_owners)?;
+    #[cfg(not(feature = "memoization"))]
+    if !program.memo_scopes.is_empty() {
+        return Err(JitError::new(
+            JitErrorKind::UnsupportedInstruction,
+            "memo scopes require the research-only memoization feature",
+        ));
+    }
     let reachable = reachable_jit_instrs(program);
     let mut reachable_return_type = None;
     for (ip, ty) in returns {
@@ -906,11 +926,13 @@ pub(crate) fn validate_with_limits(
         }
     }
 
+    #[cfg(feature = "recursion")]
     let has_call_self = program
         .code
         .iter()
         .enumerate()
         .any(|(ip, instr)| reachable[ip] && matches!(instr, JitInstr::CallSelf { .. }));
+    #[cfg(feature = "recursion")]
     if has_call_self {
         let Some(return_type) = reachable_return_type else {
             return Err(JitError::invalid_ir(
@@ -938,6 +960,7 @@ pub(crate) fn validate_with_limits(
         }
     }
 
+    #[cfg(feature = "recursion")]
     if (has_call_self
         || program
             .code

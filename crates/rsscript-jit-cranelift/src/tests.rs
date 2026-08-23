@@ -54,6 +54,7 @@ fn map_match_effect_metadata_covers_int_and_float_symmetrically() {
         assert_eq!(heap_inputs, [1]);
     }
 }
+#[cfg(feature = "recursion")]
 use crate::codegen::NATIVE_RECURSION_DEPTH_CAP_MAX;
 
 /// Test shim: validate as a non-OSR program (the common case for these IR

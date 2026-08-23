@@ -110,7 +110,7 @@ impl RegVm {
     /// Returns the wrapped result on a clean completion, or `None` to fall back
     /// (compile failure, non-scalar param/return, deopt incl. the entry depth-cap
     /// bail that keeps deep recursion off the host stack). Compiled once and cached.
-    #[cfg(feature = "native-jit")]
+    #[cfg(feature = "jit-recursion-experimental")]
     fn try_native_self_recursive(
         &mut self,
         unit: &RegUnit,
@@ -269,6 +269,18 @@ impl RegVm {
         }
     }
 
+    #[cfg(all(feature = "native-jit", not(feature = "jit-recursion-experimental")))]
+    fn try_native_self_recursive(
+        &mut self,
+        _unit: &RegUnit,
+        _function_id: usize,
+        _func: &RegFunction,
+        _caller_base: usize,
+        _args: &[usize],
+    ) -> Option<VmValue> {
+        None
+    }
+
     /// Native mutual recursion (native-call-ABI slice 4; generalized to scalar Float):
     /// if `function_id` is part of a mutually-recursive cycle of scalar functions,
     /// compile the whole group together (declare the cycle, then define each) and
@@ -278,7 +290,7 @@ impl RegVm {
     /// the result on a clean completion, or `None` to fall back to the interpreter
     /// (not eligible, non-scalar param/return, or a deopt incl. the depth-cap bail).
     /// The group is compiled once and every member cached.
-    #[cfg(feature = "native-jit")]
+    #[cfg(feature = "jit-recursion-experimental")]
     pub(in crate::reg_vm) fn try_native_mutual_recursive_int(
         &mut self,
         unit: &RegUnit,
@@ -459,6 +471,17 @@ impl RegVm {
                 None
             }
         }
+    }
+
+    #[cfg(all(feature = "native-jit", not(feature = "jit-recursion-experimental")))]
+    pub(in crate::reg_vm) fn try_native_mutual_recursive_int(
+        &mut self,
+        _unit: &RegUnit,
+        _function_id: usize,
+        _caller_base: usize,
+        _args: &[usize],
+    ) -> Option<VmValue> {
+        None
     }
 
     pub(in crate::reg_vm) fn run_jit_self_recursive_int(

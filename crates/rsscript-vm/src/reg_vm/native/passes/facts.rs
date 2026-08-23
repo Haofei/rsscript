@@ -26,7 +26,7 @@ impl<T: Copy + Eq> NativeFact<T> {
     }
 }
 
-#[cfg(feature = "native-jit")]
+#[cfg(feature = "jit-memoization-experimental")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::reg_vm) enum NativeHeapProvenance {
     External,
@@ -34,13 +34,13 @@ pub(in crate::reg_vm) enum NativeHeapProvenance {
     Unknown,
 }
 
-#[cfg(feature = "native-jit")]
+#[cfg(feature = "jit-memoization-experimental")]
 pub(in crate::reg_vm) struct NativeHeapProvenanceFacts {
     cfg: NativeRegionCfg,
     before: Vec<Vec<NativeFact<NativeHeapProvenance>>>,
 }
 
-#[cfg(feature = "native-jit")]
+#[cfg(feature = "jit-memoization-experimental")]
 impl NativeHeapProvenanceFacts {
     pub(in crate::reg_vm) fn compute(
         code: &[RegInstr],
@@ -113,7 +113,7 @@ impl NativeHeapProvenanceFacts {
     }
 }
 
-#[cfg(feature = "native-jit")]
+#[cfg(feature = "jit-memoization-experimental")]
 fn native_ty_is_heap_receiver(ty: NativeTy) -> bool {
     matches!(
         ty,
@@ -125,7 +125,7 @@ fn native_ty_is_heap_receiver(ty: NativeTy) -> bool {
     )
 }
 
-#[cfg(feature = "native-jit")]
+#[cfg(feature = "jit-memoization-experimental")]
 fn native_heap_provenance_transfer(
     ip: usize,
     instr: &vm_jit::JitInstr,
@@ -155,8 +155,26 @@ fn native_heap_provenance_transfer(
         }
         vm_jit::JitInstr::HostCall {
             helper, dst, args, ..
+        } => {
+            let value = if helper.heap_effect().produces_heap_result() {
+                if matches!(helper.heap_effect(), vm_jit::HostHeapEffect::ReplacesInput) {
+                    match args.first() {
+                        Some(vm_jit::HostArg::Reg(reg)) => facts
+                            .get(*reg as usize)
+                            .copied()
+                            .unwrap_or(NativeFact::Unknown),
+                        _ => NativeFact::Unknown,
+                    }
+                } else {
+                    NativeFact::Known(NativeHeapProvenance::Fresh(ip))
+                }
+            } else {
+                NativeFact::Unknown
+            };
+            set(facts, *dst, value);
         }
-        | vm_jit::JitInstr::MemoizedHostCall {
+        #[cfg(feature = "jit-memoization-experimental")]
+        vm_jit::JitInstr::MemoizedHostCall {
             helper, dst, args, ..
         } => {
             let value = if helper.heap_effect().produces_heap_result() {
@@ -176,9 +194,11 @@ fn native_heap_provenance_transfer(
             };
             set(facts, *dst, value);
         }
-        vm_jit::JitInstr::CallNative { dst, .. }
-        | vm_jit::JitInstr::CallSelf { dst, .. }
-        | vm_jit::JitInstr::CallGroup { dst, .. } => {
+        vm_jit::JitInstr::CallNative { dst, .. } => {
+            set(facts, *dst, NativeFact::Unknown);
+        }
+        #[cfg(feature = "jit-recursion-experimental")]
+        vm_jit::JitInstr::CallSelf { dst, .. } | vm_jit::JitInstr::CallGroup { dst, .. } => {
             set(facts, *dst, NativeFact::Unknown);
         }
         _ => {
@@ -189,7 +209,7 @@ fn native_heap_provenance_transfer(
     }
 }
 
-#[cfg(feature = "native-jit")]
+#[cfg(feature = "jit-memoization-experimental")]
 fn native_jit_heap_fact_dst(instr: &vm_jit::JitInstr) -> Option<u32> {
     match instr {
         vm_jit::JitInstr::LoadInt { dst, .. }

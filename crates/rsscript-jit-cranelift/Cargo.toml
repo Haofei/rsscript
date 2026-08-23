@@ -4,6 +4,18 @@ version = "0.1.0"
 edition = "2024"
 description = "Optional bounded Cranelift execution engine for trusted in-process RSScript hosts"
 license = "MIT OR Apache-2.0"
+publish = false
+
+[features]
+default = []
+# Research-only profile-guided branch and closure guards. The supported
+# baseline engine does not compile these IR variants or their code generation.
+speculation = []
+# Research-only non-tail recursion on the host C stack. Tail recursion remains
+# a loop in the supported baseline engine.
+recursion = []
+# Research-only loop-invariant host-helper memoization.
+memoization = []
 
 [dependencies]
 cranelift-codegen = "0.132.1"

@@ -24,9 +24,11 @@ use vm_jit::{HostHelper, JitFunction, JitInstr};
 const W_SCALAR_ALU: i64 = 2; // Add/Sub/Mul/.../Compare/Equal: native arithmetic vs VM dispatch
 const W_LOAD_MOVE: i64 = 1; // LoadInt/Move/conversions: cheap but still beats a dispatch
 const W_BRANCH: i64 = 1; // Jump/JumpIf*: native control flow
+#[cfg(feature = "jit-speculation")]
 const W_PROFILED_BRANCH: i64 = 2; // profile-guided branch: a genuine native win
 const W_DIRECT_LIST: i64 = 3; // List*Direct: replaced a per-element host call — big win
 const W_MATCH_MAP_GET: i64 = 2; // fused Map.get+match: partly native
+#[cfg(feature = "jit-memoization-experimental")]
 const W_MEMOIZED_HOSTCALL: i64 = 1; // hoisted loop-invariant helper: amortised
 
 // --- Debit weights (per-iteration boundary cost native cannot amortise) -----
@@ -180,6 +182,7 @@ pub(in crate::reg_vm) fn native_region_profitability(
             | JitInstr::JumpIfIntCompare { .. } => {
                 score += W_BRANCH;
             }
+            #[cfg(feature = "jit-speculation")]
             JitInstr::ProfiledJumpIfBool { .. } | JitInstr::ProfiledJumpIfIntCompare { .. } => {
                 score += W_PROFILED_BRANCH;
             }
@@ -202,6 +205,7 @@ pub(in crate::reg_vm) fn native_region_profitability(
             | JitInstr::MatchSortedMapGetFloat { .. } => {
                 score += W_MATCH_MAP_GET;
             }
+            #[cfg(feature = "jit-memoization-experimental")]
             JitInstr::MemoizedHostCall { .. } => {
                 score += W_MEMOIZED_HOSTCALL;
             }
@@ -219,18 +223,22 @@ pub(in crate::reg_vm) fn native_region_profitability(
                 p.runtime_helper_calls += 1;
                 score -= W_HOST_CALL;
             }
+            #[cfg(feature = "jit-speculation")]
             JitInstr::GuardClosureId { .. } => {
                 p.closure_guards += 1;
                 score -= W_CLOSURE_GUARD;
             }
-            JitInstr::CallNative { .. }
-            | JitInstr::CallSelf { .. }
-            | JitInstr::CallGroup { .. } => {
+            JitInstr::CallNative { .. } => {
                 // A call avoids interpreter re-entry but still constructs a child
                 // call frame and deopt chain. The scorecard showed a loop-free
                 // 80-call wrapper regressing by orders of magnitude, so charge the
                 // measured fixed edge cost. Loop bodies with substantial scalar
                 // work still amortize it and remain eligible.
+                p.native_calls += 1;
+                score -= W_NATIVE_CALL;
+            }
+            #[cfg(feature = "jit-recursion-experimental")]
+            JitInstr::CallSelf { .. } | JitInstr::CallGroup { .. } => {
                 p.native_calls += 1;
                 score -= W_NATIVE_CALL;
             }

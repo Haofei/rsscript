@@ -29,11 +29,14 @@ jit-diagnostics = ["native-jit"]
 # Non-default research transforms whose current canonical workload evidence does
 # not meet the production retention threshold (profile-guided closure PIC and
 # branch side exits). This is deliberately not re-exported by the stable SDK.
-jit-speculation = ["native-jit"]
+jit-speculation = ["native-jit", "vm-jit/speculation"]
 # Non-tail machine-code recursion still relies on a conservative host-stack
 # estimate. Keep it unavailable to the stable SDK until an explicit-stack or
 # measured-stack implementation provides a real boundary.
-jit-recursion-experimental = ["native-jit"]
+jit-recursion-experimental = ["native-jit", "vm-jit/recursion"]
+# Research-only loop-invariant helper memoization. Disabled in the supported
+# baseline until canonical workload evidence meets the retention threshold.
+jit-memoization-experimental = ["native-jit", "vm-jit/memoization"]
 
 [build-dependencies]
 rsscript-build-support = { path = "../rsscript-build-support" }

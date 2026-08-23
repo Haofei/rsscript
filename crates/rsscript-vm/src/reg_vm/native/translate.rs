@@ -20,7 +20,7 @@ mod loop_regions;
 use jit_post::*;
 pub(in crate::reg_vm) use loop_regions::*;
 
-#[cfg(all(test, feature = "native-jit"))]
+#[cfg(all(test, feature = "jit-memoization-experimental"))]
 pub(crate) use jit_post::{
     native_field_load_slot_not_stored_in_loop, native_loop_preserves_field_slot_for_receiver,
     native_loop_preserves_heap_projection,
@@ -302,6 +302,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     let reachable = analysis.reachable_mask();
     let profile_guidance =
         native_profile_guidance_with_analysis(profile, &code, &ip_map, &analysis);
+    #[cfg(feature = "jit-speculation")]
     let profile_hot_branch_edges = &profile_guidance.hot_branch_edges;
 
     // Every *reachable* instruction must be in the native subset.
@@ -1106,6 +1107,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                     }
                 }
             }
+            #[cfg(feature = "jit-recursion-experimental")]
             RegInstr::CallKnown {
                 dst,
                 args,
@@ -1126,6 +1128,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                     args: args.iter().map(|arg| r(*arg)).collect(),
                 }
             }
+            #[cfg(feature = "jit-recursion-experimental")]
             RegInstr::CallKnown {
                 dst,
                 args,
@@ -1304,6 +1307,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 target,
             } => {
                 require(bool_ty(*cond))?;
+                #[cfg(feature = "jit-speculation")]
                 if let Some(&hot_target) = profile_hot_branch_edges.get(&i) {
                     JitInstr::ProfiledJumpIfBool {
                         cond: r(*cond),
@@ -1318,6 +1322,12 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                         target: r(*target),
                     }
                 }
+                #[cfg(not(feature = "jit-speculation"))]
+                JitInstr::JumpIfBool {
+                    cond: r(*cond),
+                    expected: *expected,
+                    target: r(*target),
+                }
             }
             RegInstr::JumpIfIntCompare {
                 lhs,
@@ -1327,6 +1337,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 target,
             } => {
                 require(int_pair_or_same_numeric(*lhs, *rhs))?;
+                #[cfg(feature = "jit-speculation")]
                 if let Some(&hot_target) = profile_hot_branch_edges.get(&i) {
                     JitInstr::ProfiledJumpIfIntCompare {
                         lhs: r(*lhs),
@@ -1344,6 +1355,14 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                         expected: *expected,
                         target: r(*target),
                     }
+                }
+                #[cfg(not(feature = "jit-speculation"))]
+                JitInstr::JumpIfIntCompare {
+                    lhs: r(*lhs),
+                    rhs: r(*rhs),
+                    op: cmp(op),
+                    expected: *expected,
+                    target: r(*target),
                 }
             }
             RegInstr::Return { src } => {
@@ -1817,6 +1836,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                     }
                 }
             }
+            #[cfg(feature = "jit-speculation")]
             RegInstr::NativeGuardClosureId { closure, expected } => {
                 // The closure handle is a native-readable handle (a param, or a
                 // stored closure fetched via `FieldHandle`/`ListGetHandle`); the
@@ -2086,6 +2106,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     let native_reg_types: Vec<NativeTy> = (0..n_regs)
         .map(|reg| ty[reg].unwrap_or(NativeTy::Int))
         .collect();
+    #[cfg(feature = "jit-memoization-experimental")]
     let memo_scopes = native_memoize_loop_invariant_runtime_helper_calls(
         &code,
         &reachable,
@@ -2093,6 +2114,8 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
         &native_reg_types,
         func.params,
     );
+    #[cfg(not(feature = "jit-memoization-experimental"))]
+    let memo_scopes = Vec::new();
     native_forward_direct_list_store_loads(&mut jit_code);
 
     let reg_types = native_reg_types
@@ -2241,6 +2264,7 @@ fn translate_osr_loop_inner(
     captures: usize,
     lp: OsrLoop,
     cold_blocks: Vec<u32>,
+    #[cfg_attr(not(feature = "jit-speculation"), allow(unused_variables))]
     profile_hot_branch_edges: HashMap<usize, bool>,
     param_native_types: &[Option<NativeTy>],
     immutable_leaf_params: &[bool],
@@ -3231,6 +3255,7 @@ fn translate_osr_loop_inner(
                 target,
             } => {
                 require(bool_ty(*cond))?;
+                #[cfg(feature = "jit-speculation")]
                 if let Some(&hot_target) = profile_hot_branch_edges.get(&i) {
                     JitInstr::ProfiledJumpIfBool {
                         cond: r(*cond),
@@ -3245,6 +3270,12 @@ fn translate_osr_loop_inner(
                         target: r(*target),
                     }
                 }
+                #[cfg(not(feature = "jit-speculation"))]
+                JitInstr::JumpIfBool {
+                    cond: r(*cond),
+                    expected: *expected,
+                    target: r(*target),
+                }
             }
             RegInstr::JumpIfIntCompare {
                 lhs,
@@ -3254,6 +3285,7 @@ fn translate_osr_loop_inner(
                 target,
             } => {
                 require(numeric_pair_or_int_free(*lhs, *rhs))?;
+                #[cfg(feature = "jit-speculation")]
                 if let Some(&hot_target) = profile_hot_branch_edges.get(&i) {
                     JitInstr::ProfiledJumpIfIntCompare {
                         lhs: r(*lhs),
@@ -3271,6 +3303,14 @@ fn translate_osr_loop_inner(
                         expected: *expected,
                         target: r(*target),
                     }
+                }
+                #[cfg(not(feature = "jit-speculation"))]
+                JitInstr::JumpIfIntCompare {
+                    lhs: r(*lhs),
+                    rhs: r(*rhs),
+                    op: cmp(op),
+                    expected: *expected,
+                    target: r(*target),
                 }
             }
             // A `Return` inside the loop was rejected by `detect_single_natural_loop`
@@ -3726,6 +3766,7 @@ fn translate_osr_loop_inner(
                     }
                 }
             }
+            #[cfg(feature = "jit-speculation")]
             RegInstr::NativeGuardClosureId { closure, expected } => {
                 require(handle_reg(*closure))?;
                 let expected = i64::try_from(*expected).ok()?;
@@ -3934,7 +3975,9 @@ fn translate_osr_loop_inner(
     for _ in &scalar_fields {
         native_reg_types.push(NativeTy::Int);
     }
+    #[cfg(feature = "jit-memoization-experimental")]
     let reachable = native_reachable_instructions(code);
+    #[cfg(feature = "jit-memoization-experimental")]
     let memo_scopes = native_memoize_loop_invariant_runtime_helper_calls(
         code,
         &reachable,
@@ -3942,6 +3985,8 @@ fn translate_osr_loop_inner(
         &native_reg_types,
         n_params,
     );
+    #[cfg(not(feature = "jit-memoization-experimental"))]
+    let memo_scopes = Vec::new();
     native_forward_direct_list_store_loads(&mut jit_code);
     let mut written_regs = vec![false; native_reg_types.len()];
     for (ip, instr) in jit_code.iter().enumerate() {

@@ -93,7 +93,7 @@ fn native_scalar_leaf_callable(function: &JitFunction, osr: bool, _returns_handl
                 | JitValueType::FlatFloatMut
         )
     }) && function.code.iter().all(|instr| {
-        (matches!(
+        let baseline = matches!(
             instr,
             JitInstr::Nop
                 | JitInstr::TailCallGuard { .. }
@@ -119,22 +119,41 @@ fn native_scalar_leaf_callable(function: &JitFunction, osr: bool, _returns_handl
                 | JitInstr::Jump { .. }
                 | JitInstr::JumpIfBool { .. }
                 | JitInstr::JumpIfIntCompare { .. }
-                | JitInstr::ProfiledJumpIfBool { .. }
-                | JitInstr::ProfiledJumpIfIntCompare { .. }
                 | JitInstr::CallNative { .. }
-                | JitInstr::CallSelf { .. }
-                | JitInstr::CallGroup { .. }
                 | JitInstr::HostCall { .. }
-                | JitInstr::MemoizedHostCall { .. }
                 | JitInstr::Return { .. }
                 | JitInstr::Bail // Flat-list direct ops via the canonical `is_flat_list_direct` set (single
                                  // source of truth shared with the rsscript leaf/cost-model sites).
-        ) || instr.is_flat_list_direct())
-            && !matches!(
+        ) || instr.is_flat_list_direct();
+        #[cfg(feature = "speculation")]
+        let baseline = baseline
+            || matches!(
                 instr,
-                JitInstr::HostCall { helper, .. } | JitInstr::MemoizedHostCall { helper, .. }
+                JitInstr::ProfiledJumpIfBool { .. }
+                    | JitInstr::ProfiledJumpIfIntCompare { .. }
+                    | JitInstr::GuardClosureId { .. }
+            );
+        #[cfg(feature = "recursion")]
+        let baseline = baseline
+            || matches!(
+                instr,
+                JitInstr::CallSelf { .. } | JitInstr::CallGroup { .. }
+            );
+        #[cfg(feature = "memoization")]
+        let baseline = baseline || matches!(instr, JitInstr::MemoizedHostCall { .. });
+
+        let extends_handles = matches!(
+            instr,
+            JitInstr::HostCall { helper, .. } if helper.heap_effect().extends_input_handles()
+        );
+        #[cfg(feature = "memoization")]
+        let extends_handles = extends_handles
+            || matches!(
+                instr,
+                JitInstr::MemoizedHostCall { helper, .. }
                     if helper.heap_effect().extends_input_handles()
-            )
+            );
+        baseline && !extends_handles
     })
 }
 
@@ -251,6 +270,7 @@ pub(crate) struct NativeCallee {
 /// (re-run-from-top deopt), so only the callee's shape is needed to marshal the
 /// call and size a (discarded-on-bail) payload slot.
 #[derive(Clone)]
+#[cfg_attr(not(feature = "recursion"), allow(dead_code))]
 pub(crate) struct NativeGroupMember {
     pub(crate) func_id: FuncId,
     pub(crate) n_params: usize,
@@ -870,6 +890,7 @@ impl NativeModule {
     /// then finalize once. Returns one [`CompiledId`] per member (same order as
     /// `funcs`). Members are scalar, non-OSR, re-run-from-top on deopt, and each
     /// carries the entry depth guard so the cycle cannot overflow the host C stack.
+    #[cfg(feature = "recursion")]
     pub fn compile_recursive_group(
         &mut self,
         funcs: &[JitFunction],
@@ -1625,4 +1646,5 @@ pub fn user_host_ctx(context: HostCtx) -> HostCtx {
     unsafe { (*(context as *const HostCallContext)).user }
 }
 use super::*;
+#[cfg(feature = "recursion")]
 use crate::validated::ValidationFacts;

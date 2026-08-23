@@ -72,8 +72,11 @@ pub use module::*;
 pub use validated::{ValidatedJitFunction, validate_function};
 
 pub(crate) use codegen::{
-    LimitChecks, NATIVE_RECURSION_STACK_BUDGET_BYTES, build_function, native_recursion_depth_cap,
-    native_recursion_frame_bytes_estimate, push_compiled_abi_signature,
+    LimitChecks, build_function, native_recursion_depth_cap, push_compiled_abi_signature,
+};
+#[cfg(feature = "recursion")]
+pub(crate) use codegen::{
+    NATIVE_RECURSION_STACK_BUDGET_BYTES, native_recursion_frame_bytes_estimate,
 };
 pub(crate) use host_abi::{DEFAULT_STANDALONE_JIT_ARENA_BYTES, HostHelperSig, HostResult};
 #[cfg(test)]

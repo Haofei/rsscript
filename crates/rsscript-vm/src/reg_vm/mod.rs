@@ -889,6 +889,7 @@ impl RegVmExecutable {
     }
 
     #[cfg(all(feature = "native-jit", any(test, feature = "jit-diagnostics")))]
+    #[allow(clippy::too_many_arguments)] // Diagnostic-only compatibility helper.
     fn eval_main_with_args_native_inner(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
@@ -996,8 +997,7 @@ impl RegVmExecutable {
         let report_lines = if let Some(native) = &vm.native
             && native.report
         {
-            let lines = jit_missed_opt_report(&self.unit, &vm.jit_state, native);
-            lines
+            jit_missed_opt_report(&self.unit, &vm.jit_state, native)
         } else {
             Vec::new()
         };
@@ -1959,6 +1959,7 @@ struct NativeState {
     /// Explicit host opt-in for non-tail recursion in generated machine code.
     /// Disabled by default because the backend's static frame estimate is not a
     /// proof of the live host stack available at the call site.
+    #[cfg(feature = "jit-recursion-experimental")]
     allow_recursive_calls: bool,
     /// Host-selected profitability behavior; never inferred from process state.
     cost_model: NativeCostModel,
@@ -2008,6 +2009,7 @@ struct NativeState {
     /// marshals scalar args (Int/Bool/Float) and wraps the result. `None` = known
     /// not natively self-recursion-compilable (fall back to the tier-0 i64 executor
     /// for i64-only bodies, or the full interpreter for non-i64 bodies).
+    #[cfg(feature = "jit-recursion-experimental")]
     self_recursive_native: HashMap<usize, Option<(vm_jit::CompiledId, Vec<NativeTy>, NativeTy)>>,
     /// Native mutual-recursion cache (native-call-ABI slice 4; generalized to scalar
     /// Float in the Phase 2 follow-up): per-function stable ordinal key
@@ -2016,6 +2018,7 @@ struct NativeState {
     /// like the self-recursion cache. Compiling any member of a recursive cycle
     /// compiles+caches the whole group. `None` = known not a natively-compilable
     /// mutual-recursion member (interpreter).
+    #[cfg(feature = "jit-recursion-experimental")]
     mutual_recursive_native: HashMap<usize, Option<(vm_jit::CompiledId, Vec<NativeTy>, NativeTy)>>,
     /// Reusable per-call marshalling scratch buffers (TV2 arg/len words and the
     /// flat-list `Rc` keep-alive set). Held here and `mem::take`n into the call
@@ -6546,6 +6549,8 @@ impl NativeState {
         osr_work_threshold: u32,
         admission_policy: NativeAdmissionPolicy,
     ) -> Result<Self, EvalError> {
+        #[cfg(not(feature = "jit-recursion-experimental"))]
+        let _ = allow_recursive_calls;
         let max_code_bytes = admission_policy.max_code_bytes;
         let max_compile_millis = admission_policy.max_compile_millis;
         let optimize_work_threshold = admission_policy.optimize_work_threshold;
@@ -6599,6 +6604,7 @@ impl NativeState {
             force_bail,
             forced_safepoint,
             force_all_safepoints,
+            #[cfg(feature = "jit-recursion-experimental")]
             allow_recursive_calls,
             cost_model,
             osr_work_threshold,
@@ -6613,7 +6619,9 @@ impl NativeState {
             osr_optimization_sources: HashMap::new(),
             osr_promotion_work: HashMap::new(),
             osr_bail_counts: HashMap::new(),
+            #[cfg(feature = "jit-recursion-experimental")]
             self_recursive_native: HashMap::new(),
+            #[cfg(feature = "jit-recursion-experimental")]
             mutual_recursive_native: HashMap::new(),
             scratch_args: Vec::new(),
             scratch_lens: Vec::new(),

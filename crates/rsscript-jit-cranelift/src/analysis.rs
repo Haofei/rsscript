@@ -360,8 +360,9 @@ pub(super) fn interval_analysis(program: &JitFunction) -> Vec<Vec<Interval>> {
                 op,
                 expected,
                 target,
-            }
-            | JitInstr::ProfiledJumpIfIntCompare {
+            } => (*lhs, *rhs, *op, *expected, *target),
+            #[cfg(feature = "speculation")]
+            JitInstr::ProfiledJumpIfIntCompare {
                 lhs,
                 rhs,
                 op,

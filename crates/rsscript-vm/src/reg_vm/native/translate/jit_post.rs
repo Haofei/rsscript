@@ -40,8 +40,9 @@ pub(super) fn native_forward_direct_list_store_loads(jit_code: &mut [vm_jit::Jit
         let targets: &[u32] = match instr {
             vm_jit::JitInstr::Jump { target }
             | vm_jit::JitInstr::JumpIfBool { target, .. }
-            | vm_jit::JitInstr::ProfiledJumpIfBool { target, .. }
-            | vm_jit::JitInstr::JumpIfIntCompare { target, .. }
+            | vm_jit::JitInstr::JumpIfIntCompare { target, .. } => std::slice::from_ref(target),
+            #[cfg(feature = "jit-speculation")]
+            vm_jit::JitInstr::ProfiledJumpIfBool { target, .. }
             | vm_jit::JitInstr::ProfiledJumpIfIntCompare { target, .. } => {
                 std::slice::from_ref(target)
             }
@@ -347,6 +348,7 @@ where
 }
 
 #[cfg(feature = "native-jit")]
+#[cfg(feature = "jit-memoization-experimental")]
 pub(super) fn native_memoize_loop_invariant_runtime_helper_calls(
     code: &[RegInstr],
     reachable: &[bool],
@@ -453,6 +455,7 @@ pub(super) fn native_memoize_loop_invariant_runtime_helper_calls(
 }
 
 #[cfg(feature = "native-jit")]
+#[cfg(feature = "jit-memoization-experimental")]
 fn native_memoizable_runtime_helper_call(
     instr: &vm_jit::JitInstr,
 ) -> Option<(vm_jit::HostHelper, &u32, &Vec<vm_jit::HostArg>)> {
@@ -463,6 +466,7 @@ fn native_memoizable_runtime_helper_call(
 }
 
 #[cfg(feature = "native-jit")]
+#[cfg(feature = "jit-memoization-experimental")]
 fn native_memoizable_helper(helper: vm_jit::HostHelper) -> bool {
     if helper.heap_effect().writes_existing_heap() {
         return false;
@@ -471,11 +475,13 @@ fn native_memoizable_helper(helper: vm_jit::HostHelper) -> bool {
 }
 
 #[cfg(feature = "native-jit")]
+#[cfg(feature = "jit-memoization-experimental")]
 fn native_memoizable_result_type(_helper: vm_jit::HostHelper, result_ty: NativeTy) -> bool {
     matches!(result_ty, NativeTy::Int | NativeTy::Bool | NativeTy::Float)
 }
 
 #[cfg(feature = "native-jit")]
+#[cfg(feature = "jit-memoization-experimental")]
 fn native_memoizable_scalar_result_helper(helper: vm_jit::HostHelper) -> bool {
     matches!(
         helper,
@@ -489,6 +495,7 @@ fn native_memoizable_scalar_result_helper(helper: vm_jit::HostHelper) -> bool {
 }
 
 #[cfg(feature = "native-jit")]
+#[cfg(feature = "jit-memoization-experimental")]
 fn native_memoizable_field_load_helper(helper: vm_jit::HostHelper) -> bool {
     matches!(
         helper,
@@ -497,6 +504,7 @@ fn native_memoizable_field_load_helper(helper: vm_jit::HostHelper) -> bool {
 }
 
 #[cfg(feature = "native-jit")]
+#[cfg(feature = "jit-memoization-experimental")]
 fn native_collection_metadata_helper(helper: vm_jit::HostHelper) -> bool {
     helper.heap_reads().iter().any(|access| {
         access.arg == 0 && access.projection == vm_jit::HostHeapProjection::CollectionLen
@@ -505,12 +513,14 @@ fn native_collection_metadata_helper(helper: vm_jit::HostHelper) -> bool {
 
 #[cfg(feature = "native-jit")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(feature = "jit-memoization-experimental")]
 enum NativeHeapDomain {
     Projection(vm_jit::HostHeapProjection),
     FieldSlot(i64),
 }
 
 #[cfg(feature = "native-jit")]
+#[cfg(feature = "jit-memoization-experimental")]
 fn native_heap_domains_may_overlap(lhs: NativeHeapDomain, rhs: NativeHeapDomain) -> bool {
     use vm_jit::HostHeapProjection;
 
@@ -532,6 +542,7 @@ fn native_heap_domains_may_overlap(lhs: NativeHeapDomain, rhs: NativeHeapDomain)
 }
 
 #[cfg(feature = "native-jit")]
+#[cfg(feature = "jit-memoization-experimental")]
 fn native_heap_roots_may_alias(lhs: NativeHeapProvenance, rhs: NativeHeapProvenance) -> bool {
     match (lhs, rhs) {
         (NativeHeapProvenance::Fresh(lhs), NativeHeapProvenance::Fresh(rhs)) => lhs == rhs,
@@ -542,6 +553,7 @@ fn native_heap_roots_may_alias(lhs: NativeHeapProvenance, rhs: NativeHeapProvena
 }
 
 #[cfg(feature = "native-jit")]
+#[cfg(feature = "jit-memoization-experimental")]
 fn native_heap_receiver_arg(args: &[vm_jit::HostArg], index: usize) -> Option<u32> {
     match args.get(index) {
         Some(vm_jit::HostArg::Reg(reg)) => Some(*reg),
@@ -550,6 +562,7 @@ fn native_heap_receiver_arg(args: &[vm_jit::HostArg], index: usize) -> Option<u3
 }
 
 #[cfg(feature = "native-jit")]
+#[cfg(feature = "jit-memoization-experimental")]
 fn native_host_write_domain(
     helper: vm_jit::HostHelper,
     args: &[vm_jit::HostArg],
@@ -566,6 +579,7 @@ fn native_host_write_domain(
 }
 
 #[cfg(feature = "native-jit")]
+#[cfg(feature = "jit-memoization-experimental")]
 fn native_loop_preserves_heap_query(
     query_args: &[vm_jit::HostArg],
     query_domain: NativeHeapDomain,
@@ -585,8 +599,7 @@ fn native_loop_preserves_heap_query(
     for (ip, instr) in jit_code[header..exit].iter().enumerate() {
         let ip = header + ip;
         match instr {
-            vm_jit::JitInstr::HostCall { helper, args, .. }
-            | vm_jit::JitInstr::MemoizedHostCall { helper, args, .. } => {
+            vm_jit::JitInstr::HostCall { helper, args, .. } => {
                 for access in helper.heap_writes() {
                     let write_domain = native_host_write_domain(*helper, args, access.projection);
                     if !native_heap_domains_may_overlap(query_domain, write_domain) {
@@ -604,9 +617,28 @@ fn native_loop_preserves_heap_query(
                     }
                 }
             }
-            vm_jit::JitInstr::CallNative { .. }
-            | vm_jit::JitInstr::CallSelf { .. }
-            | vm_jit::JitInstr::CallGroup { .. } => return false,
+            #[cfg(feature = "jit-memoization-experimental")]
+            vm_jit::JitInstr::MemoizedHostCall { helper, args, .. } => {
+                for access in helper.heap_writes() {
+                    let write_domain = native_host_write_domain(*helper, args, access.projection);
+                    if !native_heap_domains_may_overlap(query_domain, write_domain) {
+                        continue;
+                    }
+                    let Some(write_reg) = native_heap_receiver_arg(args, access.arg as usize)
+                    else {
+                        return false;
+                    };
+                    let write_root = provenance
+                        .map(|facts| facts.before(write_reg, ip))
+                        .unwrap_or(NativeHeapProvenance::Unknown);
+                    if native_heap_roots_may_alias(query_root, write_root) {
+                        return false;
+                    }
+                }
+            }
+            vm_jit::JitInstr::CallNative { .. } => return false,
+            #[cfg(feature = "jit-recursion-experimental")]
+            vm_jit::JitInstr::CallSelf { .. } | vm_jit::JitInstr::CallGroup { .. } => return false,
             vm_jit::JitInstr::ListSetIntDirect { base, .. }
             | vm_jit::JitInstr::ListSetFloatDirect { base, .. } => {
                 let write_domain =
@@ -626,7 +658,7 @@ fn native_loop_preserves_heap_query(
     true
 }
 
-#[cfg(all(feature = "native-jit", test))]
+#[cfg(all(feature = "jit-memoization-experimental", test))]
 #[allow(dead_code)]
 pub(crate) fn native_loop_preserves_heap_projection(
     jit_code: &[vm_jit::JitInstr],
@@ -636,8 +668,7 @@ pub(crate) fn native_loop_preserves_heap_projection(
 ) -> bool {
     for instr in &jit_code[header..exit] {
         match instr {
-            vm_jit::JitInstr::HostCall { helper, .. }
-            | vm_jit::JitInstr::MemoizedHostCall { helper, .. } => {
+            vm_jit::JitInstr::HostCall { helper, .. } => {
                 if helper.heap_writes().iter().any(|access| {
                     access.projection == projection
                         || access.projection == vm_jit::HostHeapProjection::Unknown
@@ -645,15 +676,24 @@ pub(crate) fn native_loop_preserves_heap_projection(
                     return false;
                 }
             }
-            vm_jit::JitInstr::CallNative { .. }
-            | vm_jit::JitInstr::CallSelf { .. }
-            | vm_jit::JitInstr::CallGroup { .. } => return false,
-            // Direct flat-list stores preserve the view's length.
-            vm_jit::JitInstr::ListSetIntDirect { .. }
-            | vm_jit::JitInstr::ListSetFloatDirect { .. } => {
-                if projection == vm_jit::HostHeapProjection::Elements {
+            #[cfg(feature = "jit-memoization-experimental")]
+            vm_jit::JitInstr::MemoizedHostCall { helper, .. } => {
+                if helper.heap_writes().iter().any(|access| {
+                    access.projection == projection
+                        || access.projection == vm_jit::HostHeapProjection::Unknown
+                }) {
                     return false;
                 }
+            }
+            vm_jit::JitInstr::CallNative { .. } => return false,
+            #[cfg(feature = "jit-recursion-experimental")]
+            vm_jit::JitInstr::CallSelf { .. } | vm_jit::JitInstr::CallGroup { .. } => return false,
+            // Direct flat-list stores preserve the view's length.
+            vm_jit::JitInstr::ListSetIntDirect { .. }
+            | vm_jit::JitInstr::ListSetFloatDirect { .. }
+                if projection == vm_jit::HostHeapProjection::Elements =>
+            {
+                return false;
             }
             _ => {}
         }
@@ -661,7 +701,7 @@ pub(crate) fn native_loop_preserves_heap_projection(
     true
 }
 
-#[cfg(all(feature = "native-jit", test))]
+#[cfg(all(feature = "jit-memoization-experimental", test))]
 #[allow(dead_code)]
 pub(crate) fn native_field_load_slot_not_stored_in_loop(
     args: &[vm_jit::HostArg],
@@ -698,7 +738,7 @@ pub(crate) fn native_field_load_slot_not_stored_in_loop(
     true
 }
 
-#[cfg(all(feature = "native-jit", test))]
+#[cfg(all(feature = "jit-memoization-experimental", test))]
 #[allow(dead_code)]
 pub(crate) fn native_loop_preserves_field_slot_for_receiver(
     code: &[RegInstr],
@@ -726,6 +766,7 @@ pub(crate) fn native_loop_preserves_field_slot_for_receiver(
 }
 
 #[cfg(feature = "native-jit")]
+#[cfg(feature = "jit-memoization-experimental")]
 fn native_field_load_args_loop_stable(
     args: &[vm_jit::HostArg],
     invariants: &NativeLoopInvariants,
@@ -760,6 +801,7 @@ fn native_field_load_args_loop_stable(
 /// (`FieldSetInt` and its Float/Handle counterparts). Field-read stability must
 /// treat all three as stores or a differently typed write could leave a stale memo.
 #[cfg(feature = "native-jit")]
+#[cfg(feature = "jit-memoization-experimental")]
 fn is_native_field_set_helper(helper: vm_jit::HostHelper) -> bool {
     matches!(
         helper,
@@ -792,7 +834,6 @@ pub(super) fn native_jit_written_reg(instr: &vm_jit::JitInstr) -> Option<u32> {
         | vm_jit::JitInstr::IntToFloat { dst, .. }
         | vm_jit::JitInstr::FloatToInt { dst, .. }
         | vm_jit::JitInstr::HostCall { dst, .. }
-        | vm_jit::JitInstr::MemoizedHostCall { dst, .. }
         | vm_jit::JitInstr::ListGetIntDirect { dst, .. }
         | vm_jit::JitInstr::ListSetIntDirect { dst, .. }
         | vm_jit::JitInstr::ListGetFloatDirect { dst, .. }
@@ -803,14 +844,20 @@ pub(super) fn native_jit_written_reg(instr: &vm_jit::JitInstr) -> Option<u32> {
         | vm_jit::JitInstr::MatchMapGetFloat { value_dst: dst, .. }
         | vm_jit::JitInstr::MatchSortedMapGetInt { value_dst: dst, .. }
         | vm_jit::JitInstr::MatchSortedMapGetFloat { value_dst: dst, .. }
-        | vm_jit::JitInstr::CallNative { dst, .. }
-        | vm_jit::JitInstr::CallSelf { dst, .. } => Some(*dst),
+        | vm_jit::JitInstr::CallNative { dst, .. } => Some(*dst),
+        #[cfg(feature = "jit-memoization-experimental")]
+        vm_jit::JitInstr::MemoizedHostCall { dst, .. } => Some(*dst),
+        #[cfg(feature = "jit-recursion-experimental")]
+        vm_jit::JitInstr::CallSelf { dst, .. } | vm_jit::JitInstr::CallGroup { dst, .. } => {
+            Some(*dst)
+        }
         _ => None,
     }
 }
 
 #[cfg(feature = "native-jit")]
 #[derive(Clone)]
+#[cfg(feature = "jit-memoization-experimental")]
 struct NativeLoopInvariants {
     written: Vec<bool>,
     constant_int: Vec<Option<i64>>,
@@ -821,6 +868,7 @@ struct NativeLoopInvariants {
 }
 
 #[cfg(feature = "native-jit")]
+#[cfg(feature = "jit-memoization-experimental")]
 fn native_loop_invariant_regs(
     code: &[RegInstr],
     reachable: &[bool],
@@ -893,6 +941,7 @@ fn native_loop_invariant_regs(
 }
 
 #[cfg(feature = "native-jit")]
+#[cfg(feature = "jit-memoization-experimental")]
 fn native_runtime_helper_args_loop_invariant(
     args: &[vm_jit::HostArg],
     invariants: &NativeLoopInvariants,
@@ -907,6 +956,7 @@ fn native_runtime_helper_args_loop_invariant(
 }
 
 #[cfg(feature = "native-jit")]
+#[cfg(feature = "jit-memoization-experimental")]
 fn native_propagate_derived_loop_invariant(
     instr: &RegInstr,
     invariants: &mut NativeLoopInvariants,
@@ -930,6 +980,7 @@ fn native_propagate_derived_loop_invariant(
 }
 
 #[cfg(feature = "native-jit")]
+#[cfg(feature = "jit-memoization-experimental")]
 fn native_reg_loop_invariant_at(
     reg: usize,
     invariants: &NativeLoopInvariants,
@@ -960,6 +1011,7 @@ fn native_reg_loop_invariant_at(
 }
 
 #[cfg(feature = "native-jit")]
+#[cfg(feature = "jit-memoization-experimental")]
 fn native_memo_scope_representable(code: &[RegInstr], header: usize, exit: usize) -> bool {
     (header..exit).any(|ip| {
         matches!(
@@ -1075,21 +1127,22 @@ mod direct_store_forwarding_tests {
 
     #[test]
     fn calls_and_unknown_heap_effects_kill_available_store() {
-        let barriers = [
-            vm_jit::JitInstr::HostCall {
-                helper: vm_jit::HostHelper::StringLen,
-                dst: 19,
-                args: vec![vm_jit::HostArg::Reg(18)],
-            },
-            vm_jit::JitInstr::CallSelf {
-                dst: 20,
-                args: vec![],
-            },
-            vm_jit::JitInstr::GuardClosureId {
-                base: 21,
-                expected: 1,
-            },
-        ];
+        #[allow(unused_mut)]
+        let mut barriers = vec![vm_jit::JitInstr::HostCall {
+            helper: vm_jit::HostHelper::StringLen,
+            dst: 19,
+            args: vec![vm_jit::HostArg::Reg(18)],
+        }];
+        #[cfg(feature = "jit-recursion-experimental")]
+        barriers.push(vm_jit::JitInstr::CallSelf {
+            dst: 20,
+            args: vec![],
+        });
+        #[cfg(feature = "jit-speculation")]
+        barriers.push(vm_jit::JitInstr::GuardClosureId {
+            base: 21,
+            expected: 1,
+        });
         for barrier in barriers {
             let mut code = vec![int_store(0, 1, 2), barrier, int_load(3, 0, 1)];
 

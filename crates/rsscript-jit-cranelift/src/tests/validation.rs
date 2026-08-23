@@ -34,6 +34,7 @@ fn rejects_out_of_range_cold_block_hint() {
     );
 }
 
+#[cfg(feature = "speculation")]
 #[test]
 fn compiles_valid_cold_block_hint() {
     let mut m = module();
@@ -147,6 +148,7 @@ fn rejects_inconsistent_return_types() {
     );
 }
 
+#[cfg(feature = "recursion")]
 #[test]
 fn rejects_callself_result_type_mismatch() {
     use JitValueType::{Float, Int};
@@ -166,6 +168,7 @@ fn rejects_callself_result_type_mismatch() {
     assert!(err.message.contains("CallSelf result"), "{}", err.message);
 }
 
+#[cfg(feature = "recursion")]
 #[test]
 fn rejects_callself_flat_parameters_until_lengths_are_supported() {
     use JitValueType::{FlatInt, Int};
@@ -303,6 +306,7 @@ fn rejects_zero_initialized_handle_scratch() {
     assert!(err.message.contains("scalar type"), "{}", err.message);
 }
 
+#[cfg(feature = "memoization")]
 #[test]
 fn rejects_duplicate_or_out_of_range_memo_slots() {
     use JitValueType::{Handle, Int};
@@ -349,6 +353,7 @@ fn rejects_duplicate_or_out_of_range_memo_slots() {
     );
 }
 
+#[cfg(feature = "memoization")]
 #[test]
 fn rejects_handle_returning_memoized_helper() {
     use JitValueType::{Handle, Int};
@@ -407,6 +412,7 @@ fn rejects_bool_arithmetic_and_accepts_float_compare_branches() {
     ))
     .expect("comparison branches accept same-class Float operands");
 
+    #[cfg(feature = "speculation")]
     validate(&ft(
         2,
         vec![Float, Float],
@@ -442,6 +448,7 @@ fn rejects_bool_arithmetic_and_accepts_float_compare_branches() {
     assert!(err.message.contains("classes differ"), "{}", err.message);
 }
 
+#[cfg(feature = "recursion")]
 #[test]
 fn canonical_leaf_classifier_covers_recursive_and_float_conversion_ops() {
     use JitValueType::{Float, Int};
@@ -485,6 +492,7 @@ fn canonical_leaf_classifier_covers_recursive_and_float_conversion_ops() {
     assert!(is_native_callable_leaf(&grouped));
 }
 
+#[cfg(feature = "recursion")]
 #[test]
 fn recursive_stack_cap_never_exceeds_estimated_budget() {
     let args = (0..4096).collect::<Vec<_>>();
@@ -856,6 +864,7 @@ fn precise_deopt_preserves_bool_logical_type() {
     );
 }
 
+#[cfg(feature = "recursion")]
 #[test]
 fn recursive_group_rejects_external_native_call_before_declaration() {
     use JitValueType::Int;
