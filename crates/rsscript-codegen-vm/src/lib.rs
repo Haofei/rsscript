@@ -2257,6 +2257,66 @@ mod tests {
     }
 
     #[test]
+    fn qualified_scalar_signature_survives_codegen_and_independent_verification() {
+        let qualified_int = WireType::Qualified {
+            qualifier: rsscript_abi_model::WireQualifier::Owned,
+            value: Box::new(WireType::Int {
+                bits: 64,
+                signed: true,
+            }),
+        };
+        let module = MirModule::new(
+            vec![qualified_int.clone()],
+            vec![MirFunction::new(
+                FunctionId::new(0),
+                MirFunctionSignature::with_modes(
+                    vec![TypeId::new(0)],
+                    vec![MirParameterMode::Read],
+                    TypeId::new(0),
+                    false,
+                ),
+                1,
+                1,
+                vec![BasicBlock::new(
+                    BlockId::new(0),
+                    vec![MirInstruction::ReadPlace {
+                        destination: ValueId::new(0),
+                        place: PlaceId::new(0),
+                    }],
+                    MirTerminator::Return(Some(ValueId::new(0))),
+                )],
+            )],
+            vec![MirFunctionDebug::new("identity", vec!["value".to_owned()])],
+            vec![],
+        )
+        .expect("qualified scalar MIR verifies")
+        .into_verified()
+        .expect("qualified scalar MIR admission");
+        let artifact = emit_artifact(
+            &module,
+            &format!("sha256:{}", "a".repeat(64)),
+            &format!("sha256:{}", "b".repeat(64)),
+            "0.1.0",
+        )
+        .expect("emit qualified scalar bytecode");
+        let verified = BytecodeVerifier::default()
+            .verify(&artifact.to_bytes().expect("artifact bytes"))
+            .expect("qualified scalar facts verify independently");
+        let facts = verified
+            .typed_executable_facts()
+            .expect("qualified typed facts")
+            .facts();
+        assert_eq!(
+            facts.functions[0].registers[0].ty,
+            fact_type(Some(&qualified_int))
+        );
+        assert_eq!(
+            facts.functions[0].registers[1].ty,
+            fact_type(Some(&qualified_int))
+        );
+    }
+
+    #[test]
     fn aggregate_field_read_emits_verifiable_get_field_bytecode() {
         let module = MirModule::new(
             vec![WireType::Int {
@@ -2315,10 +2375,21 @@ mod tests {
     #[test]
     fn owned_list_construction_emits_a_verifiable_make_list_instruction() {
         let module = MirModule::new(
-            vec![WireType::Unit],
+            vec![
+                WireType::Int {
+                    bits: 64,
+                    signed: true,
+                },
+                WireType::List {
+                    element: Box::new(WireType::Int {
+                        bits: 64,
+                        signed: true,
+                    }),
+                },
+            ],
             vec![MirFunction::new(
                 FunctionId::new(0),
-                MirFunctionSignature::new(vec![], TypeId::new(0), false),
+                MirFunctionSignature::new(vec![], TypeId::new(1), false),
                 0,
                 3,
                 vec![BasicBlock::new(

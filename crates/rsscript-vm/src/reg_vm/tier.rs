@@ -1733,73 +1733,111 @@ impl RegVm {
                     &region,
                     &param_native_types,
                 )
-                .and_then(|(jit_fn, slots, n_live_in, exits)| {
-                    let admission = begin_native_compile(native, 1, NativeCodeTier::Baseline)?;
-                    match native.baseline_module.compile_osr(
-                        &jit_fn,
-                        u32::try_from(region.entry).ok()?,
-                        true,
-                        cancel_armed,
-                    ) {
-                        Ok(id) => {
-                            if !finish_native_compile(
-                                native,
-                                admission,
-                                &[id],
-                                NativeCodeTier::Baseline,
-                            ) {
-                                return None;
-                            }
-                            record_native_compile_stats(
-                                native,
-                                id,
-                                &jit_fn,
-                                NativeCodeTier::Baseline,
-                            );
-                            if native.collect_stats {
-                                native.stats.shape_versions += 1;
-                                if version_key.instance.type_arguments.is_known()
-                                    && !native.has_continuation_instance(
-                                        &version_key.instance,
-                                        version_key.entry,
-                                    )
-                                {
-                                    native.stats.static_type_instances += 1;
+                .and_then(
+                    |(jit_fn, slots, n_live_in, exits, typed_summary, virtual_summary)| {
+                        let admission = begin_native_compile(native, 1, NativeCodeTier::Baseline)?;
+                        match native.baseline_module.compile_osr(
+                            &jit_fn,
+                            u32::try_from(region.entry).ok()?,
+                            true,
+                            cancel_armed,
+                        ) {
+                            Ok(id) => {
+                                if !finish_native_compile(
+                                    native,
+                                    admission,
+                                    &[id],
+                                    NativeCodeTier::Baseline,
+                                ) {
+                                    return None;
                                 }
-                                native.stats.continuation_compiled_source_instructions = native
-                                    .stats
-                                    .continuation_compiled_source_instructions
-                                    .saturating_add(region.source_instructions as u64);
+                                record_native_compile_stats(
+                                    native,
+                                    id,
+                                    &jit_fn,
+                                    NativeCodeTier::Baseline,
+                                );
+                                if native.collect_stats {
+                                    native.stats.shape_versions += 1;
+                                    if version_key.instance.type_arguments.is_known()
+                                        && !native.has_continuation_instance(
+                                            &version_key.instance,
+                                            version_key.entry,
+                                        )
+                                    {
+                                        native.stats.static_type_instances += 1;
+                                    }
+                                    native.stats.continuation_compiled_source_instructions = native
+                                        .stats
+                                        .continuation_compiled_source_instructions
+                                        .saturating_add(region.source_instructions as u64);
+                                    native.stats.typed_region_compiles =
+                                        native.stats.typed_region_compiles.saturating_add(1);
+                                    native.stats.typed_region_blocks = native
+                                        .stats
+                                        .typed_region_blocks
+                                        .saturating_add(typed_summary.blocks as u64);
+                                    native.stats.typed_region_values = native
+                                        .stats
+                                        .typed_region_values
+                                        .saturating_add(typed_summary.values as u64);
+                                    native.stats.typed_region_work_units = native
+                                        .stats
+                                        .typed_region_work_units
+                                        .saturating_add(typed_summary.work_units as u64);
+                                    native.stats.virtual_objects_observed =
+                                        native.stats.virtual_objects_observed.saturating_add(
+                                            virtual_summary
+                                                .options
+                                                .saturating_add(virtual_summary.results)
+                                                .saturating_add(virtual_summary.variants)
+                                                .saturating_add(virtual_summary.structs)
+                                                .saturating_add(virtual_summary.closures)
+                                                as u64,
+                                        );
+                                    native.stats.virtual_objects_no_escape = native
+                                        .stats
+                                        .virtual_objects_no_escape
+                                        .saturating_add(virtual_summary.no_escape as u64);
+                                    native.stats.virtual_objects_exit_only = native
+                                        .stats
+                                        .virtual_objects_exit_only
+                                        .saturating_add(virtual_summary.exit_only as u64);
+                                    native.stats.virtual_objects_declined = native
+                                        .stats
+                                        .virtual_objects_declined
+                                        .saturating_add(virtual_summary.declined as u64);
+                                }
+                                native
+                                    .continuation_controllers
+                                    .entry(version_key.clone())
+                                    .or_default()
+                                    .compiled(false);
+                                // No controlled canonical baseline currently
+                                // clears the optimized-continuation retention
+                                // gate. Keep the common controller state at
+                                // baseline instead of inventing an unmeasured
+                                // promotion path.
+                                debug_assert_eq!(
+                                    continuation_tier_decision(None),
+                                    ContinuationTierDecision::BaselineOnly
+                                );
+                                Some(Rc::new(ContinuationEntry {
+                                    id,
+                                    entry: region.entry,
+                                    exits,
+                                    n_jit_regs: jit_fn.n_regs as usize,
+                                    n_live_in,
+                                    slots,
+                                }))
                             }
-                            native
-                                .continuation_controllers
-                                .entry(version_key.clone())
-                                .or_default()
-                                .compiled(false);
-                            // No controlled canonical baseline currently
-                            // clears the optimized-continuation retention
-                            // gate. Keep the common controller state at
-                            // baseline instead of inventing an unmeasured
-                            // promotion path.
-                            debug_assert_eq!(
-                                continuation_tier_decision(None),
-                                ContinuationTierDecision::BaselineOnly
-                            );
-                            Some(Rc::new(ContinuationEntry {
-                                id,
-                                entry: region.entry,
-                                exits,
-                                n_jit_regs: jit_fn.n_regs as usize,
-                                n_live_in,
-                                slots,
-                            }))
+                            Err(_) => {
+                                finish_native_compile_failure(native, admission);
+                                None
+                            }
                         }
-                        Err(_) => {
-                            finish_native_compile_failure(native, admission);
-                            None
-                        }
-                    }
-                });
+                    },
+                );
                 native
                     .continuation_cache
                     .insert(version_key.clone(), compiled);

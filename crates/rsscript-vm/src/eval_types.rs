@@ -917,6 +917,17 @@ pub enum ExecutionEngineTelemetry {
         interpreted_native_work: u64,
         /// Dynamic normal-boundary observations grouped by stable reason.
         native_barrier_counts: std::collections::BTreeMap<String, u64>,
+        /// Direct flat-list access sites emitted by compiled regions before
+        /// backend range proofs are applied.
+        direct_list_bounds_check_sites: u64,
+        /// Direct flat-list checks removed by sound modulo or canonical
+        /// induction-variable proofs.
+        direct_list_bounds_checks_elided: u64,
+        /// Read-only loop-invariant runtime calls represented by one lazy LICM
+        /// memo slot per loop activation (research feature only).
+        readonly_licm_sites: u64,
+        /// Runtime helper call sites remaining after native optimization.
+        runtime_helper_call_sites: u64,
         /// Machine code currently resident in the JIT modules. The current
         /// compile-once-publish policy makes this equal to published code.
         resident_code_bytes: u64,

@@ -70,6 +70,7 @@ jobs:
       - name: Native JIT hardening gate
         run: |
           docker compose run --rm dev cargo test --locked -p rsscript-vm --features native-jit --lib
+          docker compose run --rm dev cargo test --locked -p rsscript-vm --all-features --lib
           docker compose run --rm dev cargo test --locked -p rsscript-sdk --features native-jit --test native_jit_smoke
           docker compose run --rm dev cargo test --locked -p rsscript-sdk --features native-jit --test native_jit_differential
           docker compose run --rm dev cargo test --locked -p rsscript-jit-cranelift

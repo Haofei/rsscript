@@ -22,6 +22,7 @@ rsscript-text = { path = "../../crates/rsscript-text" }
 serde_json = { version = "1", features = ["preserve_order"] }
 
 [dev-dependencies]
+rsscript-sdk = { path = "../../crates/rsscript-sdk", features = ["execution", "native-jit"] }
 tempfile = "3"
 
 [build-dependencies]

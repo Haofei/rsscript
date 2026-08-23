@@ -68,6 +68,13 @@ pub(in crate::reg_vm) struct VirtualObjectAnalysis {
 }
 
 impl VirtualObjectAnalysis {
+    pub(in crate::reg_vm) fn derive_ir(
+        function: &RegFunction,
+        typed: &TypedRegionIr,
+    ) -> Option<Self> {
+        Self::derive(function, typed.typed())
+    }
+
     /// Analyze virtual aggregate candidates in one typed region.
     ///
     /// This is intentionally conservative and register based. Conflicting
@@ -248,6 +255,47 @@ impl VirtualObjectAnalysis {
                 }
         })
     }
+
+    pub(in crate::reg_vm) fn summary(&self) -> VirtualObjectSummary {
+        let mut summary = VirtualObjectSummary::default();
+        for object in &self.objects {
+            match &object.kind {
+                VirtualObjectKind::Option => summary.options = summary.options.saturating_add(1),
+                VirtualObjectKind::Result => summary.results = summary.results.saturating_add(1),
+                VirtualObjectKind::Variant(_) => {
+                    summary.variants = summary.variants.saturating_add(1)
+                }
+                VirtualObjectKind::Struct(_) => summary.structs = summary.structs.saturating_add(1),
+                VirtualObjectKind::Closure { .. } => {
+                    summary.closures = summary.closures.saturating_add(1)
+                }
+            }
+            match object.escape {
+                VirtualEscapeClass::NoEscape => {
+                    summary.no_escape = summary.no_escape.saturating_add(1)
+                }
+                VirtualEscapeClass::ExitOnly => {
+                    summary.exit_only = summary.exit_only.saturating_add(1)
+                }
+                VirtualEscapeClass::Escapes | VirtualEscapeClass::Unknown => {
+                    summary.declined = summary.declined.saturating_add(1)
+                }
+            }
+        }
+        summary
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::reg_vm) struct VirtualObjectSummary {
+    pub(in crate::reg_vm) options: usize,
+    pub(in crate::reg_vm) results: usize,
+    pub(in crate::reg_vm) variants: usize,
+    pub(in crate::reg_vm) structs: usize,
+    pub(in crate::reg_vm) closures: usize,
+    pub(in crate::reg_vm) no_escape: usize,
+    pub(in crate::reg_vm) exit_only: usize,
+    pub(in crate::reg_vm) declined: usize,
 }
 
 /// Propagate the included move graph in bounded `O(registers + moves)` work.
@@ -524,6 +572,141 @@ pub(in crate::reg_vm) const MAX_OSR_MATERIALIZE_NODES: usize = 64;
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) type ResultRecipe = (usize, usize, usize, Option<usize>);
 
+/// Aggregate-independent accounting for the shared virtual-object rewrite
+/// pipeline.  The counters describe actual constructor removal rather than
+/// merely reporting that a legacy specialized pass was invoked.
+#[cfg(feature = "native-jit")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::reg_vm) struct VirtualEliminationSummary {
+    pub(in crate::reg_vm) option_candidates: usize,
+    pub(in crate::reg_vm) result_candidates: usize,
+    pub(in crate::reg_vm) variant_candidates: usize,
+    pub(in crate::reg_vm) struct_candidates: usize,
+    pub(in crate::reg_vm) constructors_eliminated: usize,
+    pub(in crate::reg_vm) materialization_recipes: usize,
+    pub(in crate::reg_vm) work_units: usize,
+}
+
+/// One unified whole-function virtual-object rewrite result.
+///
+/// The mature aggregate-specific rewrites remain the proven mechanics for now,
+/// but orchestration, origin composition, work accounting and telemetry are
+/// owned here. This is the cutover point for replacing those mechanics one kind
+/// at a time without maintaining four independent backend pipelines.
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) struct VirtualEliminationResult {
+    pub(in crate::reg_vm) code: Vec<RegInstr>,
+    pub(in crate::reg_vm) n_regs: usize,
+    /// Final instruction index to the input stream passed to the pipeline.
+    pub(in crate::reg_vm) ip_map: Vec<usize>,
+    pub(in crate::reg_vm) zero_init_regs: Vec<usize>,
+    pub(in crate::reg_vm) summary: VirtualEliminationSummary,
+}
+
+#[cfg(feature = "native-jit")]
+const MAX_VIRTUAL_REWRITE_WORK_UNITS: usize = 262_144;
+
+/// Eliminate non-escaping Option/Result/Variant/Struct allocations through one
+/// bounded, fail-closed pipeline.
+///
+/// Each underlying rewrite already owns differential-tested exit/deopt
+/// materialization. Whole-function compilation does not need those recipes at a
+/// normal return, but retaining their count here makes accidental loss visible
+/// and lets the same result vocabulary be reused by the OSR cutover.
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn native_eliminate_virtual_objects_whole(
+    code: &[RegInstr],
+    n_regs: usize,
+) -> Option<VirtualEliminationResult> {
+    let mut summary = virtual_constructor_summary(code);
+    let input_candidates = virtual_candidate_total(summary)?;
+    let mut work_units = code.len();
+    if work_units > MAX_VIRTUAL_REWRITE_WORK_UNITS {
+        return None;
+    }
+
+    let exit = native_whole_function_region_exit(code);
+    let (code_r, regs_r, map_r, result_recipes) =
+        native_scalar_replace_results_in_region(code, n_regs, 0, exit)?;
+    charge_virtual_rewrite_work(&mut work_units, code_r.len())?;
+
+    let (code_o, regs_o, zero_init_regs, map_o) = native_scalar_replace_options(&code_r, regs_r)?;
+    charge_virtual_rewrite_work(&mut work_units, code_o.len())?;
+
+    let exit = native_whole_function_region_exit(&code_o);
+    let (code_v, regs_v, map_v, variant_recipes) =
+        native_scalar_replace_variants_in_region(&code_o, regs_o, 0, exit)?;
+    charge_virtual_rewrite_work(&mut work_units, code_v.len())?;
+
+    let exit = native_whole_function_region_exit(&code_v);
+    let (code_s, regs_s, map_s, struct_recipes) =
+        native_scalar_replace_structs_in_region(&code_v, regs_v, 0, exit)?;
+    charge_virtual_rewrite_work(&mut work_units, code_s.len())?;
+
+    let ip_map = map_s
+        .iter()
+        .map(|&s| {
+            let v = *map_v.get(s)?;
+            let o = *map_o.get(v)?;
+            map_r.get(o).copied()
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let remaining = virtual_candidate_total(virtual_constructor_summary(&code_s))?;
+    summary.constructors_eliminated = input_candidates.saturating_sub(remaining);
+    summary.materialization_recipes = result_recipes
+        .len()
+        .checked_add(variant_recipes.len())?
+        .checked_add(struct_recipes.len())?;
+    summary.work_units = work_units;
+    Some(VirtualEliminationResult {
+        code: code_s,
+        n_regs: regs_s,
+        ip_map,
+        zero_init_regs,
+        summary,
+    })
+}
+
+#[cfg(feature = "native-jit")]
+fn virtual_constructor_summary(code: &[RegInstr]) -> VirtualEliminationSummary {
+    let mut summary = VirtualEliminationSummary::default();
+    for instruction in code {
+        match instruction {
+            RegInstr::LoadNone { .. } | RegInstr::MakeSome { .. } => {
+                summary.option_candidates = summary.option_candidates.saturating_add(1);
+            }
+            RegInstr::MakeVariant { layout, .. }
+                if matches!(layout.name.as_ref(), "Ok" | "Err") =>
+            {
+                summary.result_candidates = summary.result_candidates.saturating_add(1);
+            }
+            RegInstr::MakeVariant { .. } => {
+                summary.variant_candidates = summary.variant_candidates.saturating_add(1);
+            }
+            RegInstr::MakeStruct { .. } => {
+                summary.struct_candidates = summary.struct_candidates.saturating_add(1);
+            }
+            _ => {}
+        }
+    }
+    summary
+}
+
+#[cfg(feature = "native-jit")]
+fn virtual_candidate_total(summary: VirtualEliminationSummary) -> Option<usize> {
+    summary
+        .option_candidates
+        .checked_add(summary.result_candidates)?
+        .checked_add(summary.variant_candidates)?
+        .checked_add(summary.struct_candidates)
+}
+
+#[cfg(feature = "native-jit")]
+fn charge_virtual_rewrite_work(work: &mut usize, units: usize) -> Option<()> {
+    *work = work.checked_add(units)?;
+    (*work <= MAX_VIRTUAL_REWRITE_WORK_UNITS).then_some(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -687,5 +870,61 @@ mod tests {
         );
         assert_eq!(object_by_reg, original);
         assert_eq!(builders[0].aliases, vec![1]);
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn unified_pipeline_eliminates_non_escaping_option_allocation() {
+        let code = vec![
+            RegInstr::LoadInt { dst: 0, value: 7 },
+            RegInstr::MakeSome { dst: 1, value: 0 },
+            RegInstr::UnwrapSome { dst: 2, src: 1 },
+            RegInstr::Return { src: 2 },
+        ];
+        let result = native_eliminate_virtual_objects_whole(&code, 3).expect("rewrite");
+        assert_eq!(result.summary.option_candidates, 1);
+        assert!(result.summary.constructors_eliminated >= 1);
+        assert!(result.summary.work_units <= MAX_VIRTUAL_REWRITE_WORK_UNITS);
+        assert!(!result.code.iter().any(|instruction| matches!(
+            instruction,
+            RegInstr::MakeSome { .. } | RegInstr::LoadNone { .. }
+        )));
+        assert_eq!(result.ip_map.len(), result.code.len());
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn unified_summary_covers_result_variant_and_struct_kinds() {
+        let ok = result_ok_layout();
+        let user_variant = Rc::new(crate::vm_value::TypeLayout::new(
+            Rc::from("Present"),
+            vec![Rc::from("value")],
+        ));
+        let structure = Rc::new(crate::vm_value::TypeLayout::new(
+            Rc::from("Point"),
+            vec![Rc::from("x")],
+        ));
+        let code = vec![
+            RegInstr::LoadInt { dst: 0, value: 1 },
+            RegInstr::MakeVariant {
+                dst: 1,
+                layout: ok,
+                fields: vec![("value".into(), 0)],
+            },
+            RegInstr::MakeVariant {
+                dst: 2,
+                layout: user_variant,
+                fields: vec![("value".into(), 0)],
+            },
+            RegInstr::MakeStruct {
+                dst: 3,
+                layout: structure,
+                fields: vec![("x".into(), 0)],
+            },
+        ];
+        let summary = virtual_constructor_summary(&code);
+        assert_eq!(summary.result_candidates, 1);
+        assert_eq!(summary.variant_candidates, 1);
+        assert_eq!(summary.struct_candidates, 1);
     }
 }

@@ -1047,6 +1047,8 @@ fn jit_static_facts_and_missed_optimization_telemetry_stay_structured() {
         "shape_versions",
         "native_call_edges",
         "direct_list_bounds_checks_elided",
+        "memoized_runtime_helper_call_sites",
+        "runtime_helper_call_sites",
         "canonical_loops",
         "canonical_induction_variables",
         "scalar_unroll_research_candidates",
@@ -1126,10 +1128,17 @@ fn loop_optimizations_share_canonical_facts_and_keep_unrolling_research_only() {
     }
     assert!(jit_post.contains("detect_canonical_loops(code)"));
     assert!(jit_post.contains("facts: &CanonicalLoopFacts"));
+    assert!(jit_post.contains("fn native_readonly_licm_eligible("));
+    assert!(jit_post.contains("helper.heap_reads()"));
     assert!(loops.contains("fn scalar_x2_unroll_research_decision("));
     assert!(!loops.contains("fn native_unroll_scalar_loop_x2("));
     assert!(contract.contains("Scalar x2 unrolling is not enabled"));
     assert!(contract.contains("SIMD remains out of scope"));
+
+    let backend_analysis = read(&root.join("crates/rsscript-jit-cranelift/src/analysis.rs"));
+    assert!(backend_analysis.contains("fn add_canonical_induction_bounds("));
+    assert!(backend_analysis.contains("WORK_PER_INSTRUCTION"));
+    assert!(backend_analysis.contains("MAX_WORK"));
 }
 
 #[test]

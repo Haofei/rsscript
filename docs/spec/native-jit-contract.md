@@ -117,12 +117,35 @@ a conservative affine induction variable. The existing backend range proof may
 remove an individual flat-list bounds check, and reports the exact eliminated-site
 count separately from checks retained.
 
+The backend also recognizes one deliberately narrow bounds-check-elimination
+shape: a non-negative induction variable, an invariant direct-list length bound,
+a strict `<` guard, a single `+1` update, and a single-entry/single-exit CFG. It
+rejects mutable step/bound/base registers, non-unit steps, non-strict guards, and
+analysis that exceeds a checked linear work allowance. This is a proof for an
+individual direct flat-list access, not a general range-analysis claim. Backend
+tests assert emitted and eliminated-site counts separately, while the controlled
+scorecard exposes both counters for workloads that reach the flat-buffer ABI.
+
+Research LICM is descriptor-driven rather than a helper-name allowlist. A helper
+must be read-only, every operand must be loop invariant, and every declared heap
+projection must remain unmodified for the loop activation. Missing or multi-root
+projection metadata fails closed. Field-slot reads additionally retain their exact
+slot proof. This remains behind `jit-memoization-experimental`: correctness tests
+make it runnable, while controlled scorecard evidence is still required before it
+can enter the stable native path.
+
 Scalar x2 unrolling is not enabled. The VM reports only research candidates that
 have one latch and exit, a unit constant induction step, at most twelve direct
 scalar instructions, and no internal control-flow or effectful helper. Even those
 candidates remain unchanged until exact source-step charging, overflow/deopt
 resume identity, remainder semantics, differential coverage, and a controlled
 end-to-end benchmark all pass. SIMD remains out of scope.
+
+Closure speculation remains a runnable research implementation behind
+`jit-speculation`, with all-feature differential tests and dedicated scorecard
+cases. It is not compiled into the ordinary SDK `native-jit` feature. Promotion
+requires controlled-hardware end-to-end evidence in addition to differential
+correctness; a microbenchmark-only improvement is insufficient.
 
 Nested and loop-carried struct scalar replacement is retained for research behind
 the VM-only `jit-struct-sr-experimental` feature. The ordinary SDK `native-jit`
@@ -154,6 +177,8 @@ Static frame estimates are admission heuristics, not a hard safety proof.
 
 Native reports distinguish resident, published, rejected-resident, and reserved
 arena bytes. Under compile-once-publish, rejected-resident bytes must remain zero.
+They also expose direct-list check sites/elisions and read-only LICM/helper sites,
+so a scorecard can distinguish actual optimization from mere compilation.
 
 ## Hardening gate
 

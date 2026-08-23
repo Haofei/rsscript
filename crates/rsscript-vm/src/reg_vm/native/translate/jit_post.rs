@@ -489,46 +489,22 @@ pub(super) fn native_memoize_loop_invariant_runtime_helper_calls(
             };
             let dst = *dst;
             let args = args.clone();
-            let field_load_eligible = native_memoizable_field_load_helper(helper)
-                && native_field_load_args_loop_stable(
-                    &args,
-                    &invariants,
-                    jit_code,
-                    heap_provenance.as_ref(),
-                    lp.header,
-                    lp.exit,
-                    ip,
-                    original_n_regs,
-                );
-            let collection_metadata_eligible = native_collection_metadata_helper(helper)
-                && native_loop_preserves_heap_query(
-                    &args,
-                    NativeHeapDomain::Projection(vm_jit::HostHeapProjection::CollectionLen),
-                    jit_code,
-                    heap_provenance.as_ref(),
-                    lp.header,
-                    lp.exit,
-                    ip,
-                );
-            let args_loop_stable = if field_load_eligible {
-                true
-            } else {
-                native_runtime_helper_args_loop_invariant(&args, &invariants, ip)
-            };
-            if !(native_memoizable_helper(helper)
-                || field_load_eligible
-                || collection_metadata_eligible)
-                || !args_loop_stable
-            {
+            if !native_readonly_licm_eligible(
+                helper,
+                &args,
+                &invariants,
+                jit_code,
+                heap_provenance.as_ref(),
+                lp.header,
+                lp.exit,
+                ip,
+            ) {
                 continue;
             }
             let Some(&result_ty) = native_reg_types.get(dst as usize) else {
                 continue;
             };
-            if !(native_memoizable_result_type(helper, result_ty)
-                || field_load_eligible
-                    && matches!(result_ty, NativeTy::Int | NativeTy::Bool | NativeTy::Float))
-            {
+            if !native_memoizable_result_type(helper, result_ty) {
                 continue;
             }
             jit_code[ip] = vm_jit::JitInstr::MemoizedHostCall {
@@ -569,13 +545,65 @@ fn native_memoizable_runtime_helper_call(
     }
 }
 
+/// Descriptor-driven read-only LICM eligibility. The generated code implements
+/// the hoist lazily with one memo slot per loop activation; this is equivalent to
+/// preheader motion while preserving bail/deopt ordering. Every register operand
+/// must be loop-invariant, every observed heap projection must remain unchanged,
+/// and helpers with incomplete heap-read metadata fail closed unless their input
+/// value is an immutable RSScript scalar/leaf object covered by the established
+/// compatibility whitelist.
 #[cfg(feature = "native-jit")]
 #[cfg(feature = "jit-memoization-experimental")]
-fn native_memoizable_helper(helper: vm_jit::HostHelper) -> bool {
-    if helper.heap_effect().writes_existing_heap() {
+#[allow(clippy::too_many_arguments)]
+fn native_readonly_licm_eligible(
+    helper: vm_jit::HostHelper,
+    args: &[vm_jit::HostArg],
+    invariants: &NativeLoopInvariants,
+    jit_code: &[vm_jit::JitInstr],
+    provenance: Option<&NativeHeapProvenanceFacts>,
+    header: usize,
+    exit: usize,
+    helper_ip: usize,
+) -> bool {
+    if helper.heap_effect() != vm_jit::HostHeapEffect::ReadOnly
+        || !native_runtime_helper_args_loop_invariant(args, invariants, helper_ip)
+    {
         return false;
     }
-    native_memoizable_scalar_result_helper(helper)
+
+    if native_memoizable_field_load_helper(helper) {
+        return native_field_load_args_loop_stable(
+            args,
+            invariants,
+            jit_code,
+            provenance,
+            header,
+            exit,
+            helper_ip,
+            invariants.written.len(),
+        );
+    }
+
+    let reads = helper.heap_reads();
+    if reads.is_empty() {
+        let has_handle_argument = helper.arg_types().contains(&vm_jit::JitValueType::Handle);
+        return !has_handle_argument || native_memoizable_scalar_result_helper(helper);
+    }
+    reads.iter().all(|access| {
+        // Current heap-provenance facts model the canonical receiver in argument
+        // zero. A future multi-receiver helper must extend that fact table rather
+        // than silently reusing the wrong root.
+        access.arg == 0
+            && native_loop_preserves_heap_query(
+                args,
+                NativeHeapDomain::Projection(access.projection),
+                jit_code,
+                provenance,
+                header,
+                exit,
+                helper_ip,
+            )
+    })
 }
 
 #[cfg(feature = "native-jit")]
@@ -605,14 +633,6 @@ fn native_memoizable_field_load_helper(helper: vm_jit::HostHelper) -> bool {
         helper,
         vm_jit::HostHelper::FieldInt | vm_jit::HostHelper::FieldFloat
     )
-}
-
-#[cfg(feature = "native-jit")]
-#[cfg(feature = "jit-memoization-experimental")]
-fn native_collection_metadata_helper(helper: vm_jit::HostHelper) -> bool {
-    helper.heap_reads().iter().any(|access| {
-        access.arg == 0 && access.projection == vm_jit::HostHeapProjection::CollectionLen
-    })
 }
 
 #[cfg(feature = "native-jit")]
@@ -1124,6 +1144,78 @@ fn native_memo_scope_representable(code: &[RegInstr], facts: &CanonicalLoopFacts
                 Some(RegInstr::Jump { target }) if *target == facts.region.header
             )
         })
+}
+
+#[cfg(all(test, feature = "jit-memoization-experimental"))]
+mod readonly_licm_tests {
+    use super::*;
+
+    fn invariants(n_regs: usize) -> NativeLoopInvariants {
+        NativeLoopInvariants {
+            written: vec![false; n_regs],
+            constant_int: vec![None; n_regs],
+            constant_string: vec![None; n_regs],
+            first_write_ip: vec![None; n_regs],
+            write_count: vec![0; n_regs],
+            derived_invariant: vec![false; n_regs],
+        }
+    }
+
+    #[test]
+    fn descriptor_driven_list_read_is_licm_eligible_without_element_writes() {
+        let args = vec![vm_jit::HostArg::Reg(0), vm_jit::HostArg::Reg(1)];
+        let code = vec![
+            vm_jit::JitInstr::Nop,
+            vm_jit::JitInstr::HostCall {
+                helper: vm_jit::HostHelper::ListGetInt,
+                dst: 2,
+                args: args.clone(),
+            },
+            vm_jit::JitInstr::Jump { target: 0 },
+        ];
+        assert!(native_readonly_licm_eligible(
+            vm_jit::HostHelper::ListGetInt,
+            &args,
+            &invariants(3),
+            &code,
+            None,
+            0,
+            code.len(),
+            1,
+        ));
+    }
+
+    #[test]
+    fn descriptor_driven_list_read_is_not_hoisted_across_element_write() {
+        let args = vec![vm_jit::HostArg::Reg(0), vm_jit::HostArg::Reg(1)];
+        let code = vec![
+            vm_jit::JitInstr::HostCall {
+                helper: vm_jit::HostHelper::ListGetInt,
+                dst: 2,
+                args: args.clone(),
+            },
+            vm_jit::JitInstr::HostCall {
+                helper: vm_jit::HostHelper::ListSetInt,
+                dst: 3,
+                args: vec![
+                    vm_jit::HostArg::Reg(0),
+                    vm_jit::HostArg::Reg(1),
+                    vm_jit::HostArg::Reg(2),
+                ],
+            },
+            vm_jit::JitInstr::Jump { target: 0 },
+        ];
+        assert!(!native_readonly_licm_eligible(
+            vm_jit::HostHelper::ListGetInt,
+            &args,
+            &invariants(4),
+            &code,
+            None,
+            0,
+            code.len(),
+            0,
+        ));
+    }
 }
 
 #[cfg(all(test, feature = "native-jit"))]

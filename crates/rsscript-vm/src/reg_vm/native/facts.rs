@@ -1326,7 +1326,7 @@ mod tests {
     }
 
     #[test]
-    fn persisted_type_claim_cannot_override_executable_storage_proof() {
+    fn persisted_type_claim_conflict_is_rejected_before_vm_projection() {
         let payload = rsscript_bytecode::encode_executable_payload(&serde_json::json!({
             "functions": [{
                 "name": "main", "params": 0, "captures": 0, "regs": 1,
@@ -1377,25 +1377,15 @@ mod tests {
         artifact
             .attach_typed_executable_facts(&facts)
             .expect("attach facts");
-        let verified = rsscript_bytecode::BytecodeVerifier::default()
+        let error = rsscript_bytecode::BytecodeVerifier::default()
             .verify(&artifact.to_bytes().expect("artifact bytes"))
-            .expect("structurally verified facts");
-        let unit = unit(vec![function(
-            "main",
-            0,
-            1,
-            vec![
-                RegInstr::LoadInt { dst: 0, value: 7 },
-                RegInstr::Return { src: 0 },
-            ],
-        )]);
-        assert_eq!(
-            VerifiedExecutableFacts::derive_with_typed(
-                &unit,
-                verified.typed_executable_facts().expect("typed facts"),
-            )
-            .expect_err("conflicting storage claim must fail"),
-            VerifiedFactsError::TypedFactsMismatch
+            .expect_err("conflicting storage claim must fail before VM projection");
+        assert!(
+            matches!(
+                error,
+                rsscript_bytecode::BytecodeError::InvalidTypedExecutableFacts(_)
+            ),
+            "unexpected verifier error: {error:?}"
         );
     }
 }

@@ -436,6 +436,82 @@ fn main() -> Int {
     }
 
     #[test]
+    fn runtime_string_arguments_follow_borrowed_str_abi() {
+        let source = r#"
+fn main(args: read List<String>) -> Int {
+    let raw = Arguments.get_or_default(
+        args: read args,
+        index: 0,
+        default: String.from_int(value: 7),
+    )
+    let parsed = String.parse_int(value: raw)
+    Output.write(message: String.from_int(value: 9))
+    match parsed {
+        Some(value) => { return value }
+        None => { return 0 }
+    }
+}
+"#;
+        let rust = super::lower_source_to_rust("runtime-string-abi.rss", source)
+            .expect("runtime String arguments should lower");
+
+        assert!(
+            rust.contains(
+                "arguments_get_or_default(args, 0i64, (rsscript_runtime::string_from_int(7i64)).as_str())"
+            ),
+            "{rust}"
+        );
+        assert!(
+            rust.contains("rsscript_runtime::string_parse_int(raw.as_str())"),
+            "{rust}"
+        );
+        assert!(
+            rust.contains(
+                "rsscript_runtime::log_write((rsscript_runtime::string_from_int(9i64)).as_str())"
+            ),
+            "{rust}"
+        );
+    }
+
+    #[test]
+    fn native_scalar_loop_package_uses_runtime_string_borrow_adaptation() {
+        let source = include_str!("../../../../benchmarks/vm-jit/kernels/native_scalar_loop.rss");
+        let runtime_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../aot-runtime")
+            .to_string_lossy()
+            .into_owned();
+        let package = super::lower_source_to_rust_package(
+            "native_scalar_loop.rss",
+            source,
+            "rsscript-aot-string-borrow-smoke",
+            &runtime_path,
+        )
+        .expect("native scalar loop package should lower");
+
+        assert!(
+            package
+                .lib_rs
+                .contains("arguments_get_or_default(args, 0i64, (rsscript_runtime::string_from_int(default)).as_str())"),
+            "{}",
+            package.lib_rs
+        );
+        assert!(
+            package
+                .lib_rs
+                .contains("rsscript_runtime::string_parse_int(raw.as_str())"),
+            "{}",
+            package.lib_rs
+        );
+        assert!(
+            package.lib_rs.contains(
+                "rsscript_runtime::log_write((rsscript_runtime::string_from_int(result)).as_str())"
+            ),
+            "{}",
+            package.lib_rs
+        );
+    }
+
+    #[test]
     fn generated_package_write_skips_unchanged_files() {
         let out_dir = unique_temp_dir("rsscript-write-generated");
         let package = GeneratedRustPackage {

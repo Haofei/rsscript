@@ -2454,7 +2454,9 @@ impl Error for BytecodeError {}
 mod tests {
     use super::*;
     use proptest::prelude::*;
-    use rsscript_abi_model::{DataEffect, ExternalSymbol, FunctionSignature, ParameterSignature};
+    use rsscript_abi_model::{
+        DataEffect, ExternalSymbol, FunctionSignature, ParameterSignature, WireType,
+    };
 
     const TEST_CATALOG_DIGEST: &str =
         "sha256:0000000000000000000000000000000000000000000000000000000000000000";
@@ -2744,6 +2746,191 @@ mod tests {
             BytecodeVerifier::default().verify(&artifact.to_bytes().expect("artifact bytes")),
             Err(BytecodeError::InvalidTypedExecutableFacts(message))
                 if message.contains("does not prove function generic substitutions")
+        ));
+    }
+
+    #[test]
+    fn typed_facts_must_cover_every_executable_call() {
+        let mut artifact = BytecodeArtifact::new(
+            "0.1.0",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
+            RUNTIME_ABI_VERSION,
+            TEST_SOURCE_DIGEST,
+            vec![],
+            known_call_payload(),
+        )
+        .expect("artifact");
+        let facts = two_function_facts(&artifact);
+        artifact
+            .attach_typed_executable_facts(&facts)
+            .expect("attach omitted call facts");
+        assert!(matches!(
+            BytecodeVerifier::default().verify(&artifact.to_bytes().expect("artifact bytes")),
+            Err(BytecodeError::InvalidTypedExecutableFacts(message))
+                if message.contains("completely cover")
+        ));
+    }
+
+    #[test]
+    fn known_call_signature_is_rederived() {
+        let mut artifact = BytecodeArtifact::new(
+            "0.1.0",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
+            RUNTIME_ABI_VERSION,
+            TEST_SOURCE_DIGEST,
+            vec![],
+            known_call_payload(),
+        )
+        .expect("artifact");
+        let mut facts = two_function_facts(&artifact);
+        facts.functions[0].call_sites.push(TypedCallSiteV1 {
+            instruction: 0,
+            target: TypedCallTargetV1::KnownFunction(1),
+            parameters: vec![TypedFactTypeV1::Known(WireType::Bool)],
+            result: TypedFactTypeV1::Known(WireType::Bool),
+            parameter_effects: vec![TypedDataEffectV1::Read],
+            type_arguments: vec![],
+        });
+        artifact
+            .attach_typed_executable_facts(&facts)
+            .expect("attach forged call facts");
+        let error = BytecodeVerifier::default()
+            .verify(&artifact.to_bytes().expect("artifact bytes"))
+            .expect_err("forged static signature must fail");
+        assert!(
+            matches!(
+                error,
+                BytecodeError::InvalidTypedExecutableFacts(ref message)
+                    if message.contains("parameter or result")
+            ),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn known_call_mutation_effect_is_rederived_from_mut_args() {
+        let mut artifact = BytecodeArtifact::new(
+            "0.1.0",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
+            RUNTIME_ABI_VERSION,
+            TEST_SOURCE_DIGEST,
+            vec![],
+            known_call_payload(),
+        )
+        .expect("artifact");
+        let mut facts = two_function_facts(&artifact);
+        let scalar = facts.functions[1].registers[0].ty.clone();
+        facts.functions[0].call_sites.push(TypedCallSiteV1 {
+            instruction: 0,
+            target: TypedCallTargetV1::KnownFunction(1),
+            parameters: vec![scalar.clone()],
+            result: scalar,
+            parameter_effects: vec![TypedDataEffectV1::Mutate],
+            type_arguments: vec![],
+        });
+        artifact
+            .attach_typed_executable_facts(&facts)
+            .expect("attach forged effect facts");
+        assert!(matches!(
+            BytecodeVerifier::default().verify(&artifact.to_bytes().expect("artifact bytes")),
+            Err(BytecodeError::InvalidTypedExecutableFacts(message))
+                if message.contains("mutation effects")
+        ));
+    }
+
+    #[test]
+    fn register_claims_are_intersected_with_literal_and_return_types() {
+        let mut artifact = BytecodeArtifact::new(
+            "0.1.0",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
+            RUNTIME_ABI_VERSION,
+            TEST_SOURCE_DIGEST,
+            vec![],
+            scalar_return_payload(),
+        )
+        .expect("artifact");
+        let mut facts = empty_function_facts(&artifact, 1);
+        facts.functions[0].registers[0].ty = TypedFactTypeV1::Known(WireType::Float { bits: 64 });
+        artifact
+            .attach_typed_executable_facts(&facts)
+            .expect("attach forged register facts");
+        assert!(matches!(
+            BytecodeVerifier::default().verify(&artifact.to_bytes().expect("artifact bytes")),
+            Err(BytecodeError::InvalidTypedExecutableFacts(message))
+                if message.contains("independently derived")
+        ));
+    }
+
+    #[test]
+    fn typed_layouts_are_exact_references_to_executable_layouts() {
+        let payload = encode_executable_payload(&serde_json::json!({
+            "functions": [],
+            "function_ids": {},
+            "resource_drop_functions": {},
+            "types": {
+                "Point": {"name": "Point", "fields": [
+                    {"name": "x", "type_name": "owned Int"}
+                ]}
+            },
+            "variant_layouts": {
+                "Choice": {"name": "Choice", "variants": [
+                    {"name": "Some", "fields": [
+                        {"name": "value", "type_name": "String"}
+                    ]}
+                ]}
+            },
+            "native_signatures": {},
+            "closure_identity_observable": false
+        }))
+        .expect("payload");
+        let mut artifact = BytecodeArtifact::new(
+            "0.1.0",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
+            RUNTIME_ABI_VERSION,
+            TEST_SOURCE_DIGEST,
+            vec![],
+            payload,
+        )
+        .expect("artifact");
+        let mut facts = empty_function_facts(&artifact, 0);
+        facts.functions.clear();
+        facts.layouts = vec![
+            TypedLayoutV1 {
+                layout_id: 0,
+                name: "Choice".to_owned(),
+                kind: TypedLayoutKindV1::Variant,
+                fields: vec![TypedLayoutFieldV1 {
+                    case: Some("Some".to_owned()),
+                    name: "value".to_owned(),
+                    ty: TypedFactTypeV1::Known(WireType::String),
+                }],
+            },
+            TypedLayoutV1 {
+                layout_id: 1,
+                name: "Point".to_owned(),
+                kind: TypedLayoutKindV1::Record,
+                fields: vec![TypedLayoutFieldV1 {
+                    case: None,
+                    name: "x".to_owned(),
+                    ty: TypedFactTypeV1::Known(WireType::Qualified {
+                        qualifier: rsscript_abi_model::WireQualifier::Owned,
+                        value: Box::new(WireType::Bool),
+                    }),
+                }],
+            },
+        ];
+        artifact
+            .attach_typed_executable_facts(&facts)
+            .expect("attach forged layout facts");
+        assert!(matches!(
+            BytecodeVerifier::default().verify(&artifact.to_bytes().expect("artifact bytes")),
+            Err(BytecodeError::InvalidTypedExecutableFacts(message))
+                if message.contains("case, field name, or type")
         ));
     }
 
@@ -3606,6 +3793,90 @@ mod tests {
             "closure_identity_observable": false
         }))
         .expect("external call payload")
+    }
+
+    fn scalar_return_payload() -> Vec<u8> {
+        encode_executable_payload(&serde_json::json!({
+            "functions": [{
+                "name": "main", "params": 0, "captures": 0, "regs": 1,
+                "local_regs": {},
+                "code": [
+                    {"LoadInt": {"dst": 0, "value": 7}},
+                    {"Return": {"src": 0}}
+                ]
+            }],
+            "function_ids": {"main": 0},
+            "resource_drop_functions": {},
+            "types": {},
+            "native_signatures": {"main": {"params": [], "return_type": "Int"}},
+            "closure_identity_observable": false
+        }))
+        .expect("scalar return payload")
+    }
+
+    fn known_call_payload() -> Vec<u8> {
+        encode_executable_payload(&serde_json::json!({
+            "functions": [
+                {
+                    "name": "main", "params": 1, "captures": 0, "regs": 2,
+                    "local_regs": {},
+                    "code": [
+                        {"CallKnown": {"dst": 1, "function": 1, "args": [0], "mut_args": []}},
+                        {"Return": {"src": 1}}
+                    ]
+                },
+                {
+                    "name": "identity", "params": 1, "captures": 0, "regs": 1,
+                    "local_regs": {},
+                    "code": [{"Return": {"src": 0}}]
+                }
+            ],
+            "function_ids": {"identity": 1, "main": 0},
+            "resource_drop_functions": {},
+            "types": {},
+            "native_signatures": {
+                "main": {"params": ["owned Int"], "return_type": "owned Int"},
+                "identity": {"params": ["owned Int"], "return_type": "owned Int"}
+            },
+            "closure_identity_observable": false
+        }))
+        .expect("known call payload")
+    }
+
+    fn two_function_facts(artifact: &BytecodeArtifact) -> TypedExecutableFactsV1 {
+        let scalar = TypedRegisterFactV1 {
+            ty: TypedFactTypeV1::Known(WireType::Qualified {
+                qualifier: rsscript_abi_model::WireQualifier::Owned,
+                value: Box::new(WireType::Int {
+                    bits: 64,
+                    signed: true,
+                }),
+            }),
+            ownership: TypedValueOwnershipV1::Owned,
+        };
+        TypedExecutableFactsV1 {
+            schema: TYPED_EXECUTABLE_FACTS_SCHEMA_V1.to_owned(),
+            executable_hash: artifact.header.executable_hash.clone(),
+            bytecode_isa_version: artifact.header.bytecode_isa_version,
+            runtime_abi_version: artifact.header.runtime_abi_version,
+            interface_catalog_digest: artifact.header.interface_catalog_digest.clone(),
+            imports_hash: typed_facts_imports_hash(artifact).expect("imports hash"),
+            functions: vec![
+                TypedFunctionFactsV1 {
+                    function_ordinal: 0,
+                    registers: vec![scalar.clone(), scalar.clone()],
+                    call_sites: vec![],
+                    generic_substitutions: vec![],
+                },
+                TypedFunctionFactsV1 {
+                    function_ordinal: 1,
+                    registers: vec![scalar],
+                    call_sites: vec![],
+                    generic_substitutions: vec![],
+                },
+            ],
+            layouts: vec![],
+        }
     }
 
     fn empty_function_facts(

@@ -425,6 +425,9 @@ impl HostHeapAccess {
 
 const HOST_READ_COLLECTION_LEN: [HostHeapAccess; 1] =
     [HostHeapAccess::new(0, HostHeapProjection::CollectionLen)];
+const HOST_READ_ELEMENTS: [HostHeapAccess; 1] =
+    [HostHeapAccess::new(0, HostHeapProjection::Elements)];
+const HOST_READ_FIELDS: [HostHeapAccess; 1] = [HostHeapAccess::new(0, HostHeapProjection::Fields)];
 const HOST_WRITE_ELEMENTS: [HostHeapAccess; 1] =
     [HostHeapAccess::new(0, HostHeapProjection::Elements)];
 const HOST_WRITE_COLLECTION_SHAPE: [HostHeapAccess; 2] = [
@@ -629,6 +632,7 @@ host_helpers! {
         args: [JitValueType::Handle, JitValueType::Int],
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
+        reads: &HOST_READ_FIELDS,
     },
     FieldSetInt => {
         field: field_set_int,
@@ -679,6 +683,7 @@ host_helpers! {
         args: [JitValueType::Handle, JitValueType::Int],
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
+        reads: &HOST_READ_ELEMENTS,
     },
     ListSetInt => {
         field: list_set_int,
@@ -748,6 +753,7 @@ host_helpers! {
         args: [JitValueType::Handle, JitValueType::Int],
         result: HostResult::Exact(JitValueType::Float),
         failure: HostFailureMode::BailFlag,
+        reads: &HOST_READ_FIELDS,
     },
     ListGetFloat => {
         field: list_get_float,
@@ -755,6 +761,7 @@ host_helpers! {
         args: [JitValueType::Handle, JitValueType::Int],
         result: HostResult::Exact(JitValueType::Float),
         failure: HostFailureMode::BailFlag,
+        reads: &HOST_READ_ELEMENTS,
     },
     ClosureId => {
         field: closure_id,

@@ -35,6 +35,22 @@ the Rust/AOT backend lives in the experiments workspace and must contribute a
 measurement from its own controlled runner before any AOT/JIT performance
 comparison is claimed. `not_measured` is evidence of a missing measurement,
 not a zero-cost or unsupported engine.
+
+The experiments workspace owns the slow, ignored cross-engine harness that
+turns the AOT cell into a real measurement without creating a Core-to-AOT
+dependency:
+
+```bash
+cargo test --locked --release --manifest-path experiments/Cargo.toml \
+  -p rsscript-aot-backend --test aot_jit_matrix -- --ignored --nocapture
+```
+
+It builds the generated Rust package in an isolated target directory and
+alternates interpreter, JIT, and AOT samples. AOT execution includes process
+startup and records that measurement mode in its reason field. Scheduled CI
+publishes this evidence; promotion decisions still require a pinned,
+controlled-hardware run rather than GitHub-hosted timing alone.
+
 `mixed-mode-continuation` is the canonical barrier workload: it repeatedly
 executes scalar regions around an interpreter-owned aggregate boundary and guards
 against admitting region transitions that do not beat the interpreter end to end.

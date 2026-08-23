@@ -423,11 +423,21 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
     Box<[ContinuationSlot]>,
     usize,
     BTreeMap<usize, ContinuationExit>,
+    TypedRegionSummary,
+    VirtualObjectSummary,
 )> {
     if region.entry >= func.code.len() || region.included.len() != func.code.len() {
         return None;
     }
-    let typed_region = TypedRegion::derive(func, facts, &region.included)?;
+    let typed_ir = TypedRegionIr::derive(func, facts, &region.included)?;
+    let typed_summary = typed_ir.summary();
+    if typed_ir.blocks().len() != typed_summary.blocks
+        || typed_summary.instructions
+            != region.included.iter().filter(|included| **included).count()
+    {
+        return None;
+    }
+    let typed_region = typed_ir.typed();
     let expected_field_accesses = func
         .code
         .iter()
@@ -443,18 +453,24 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
     if typed_region.field_accesses().len() != expected_field_accesses {
         return None;
     }
-    let virtual_objects = VirtualObjectAnalysis::derive(func, &typed_region)?;
-    if !virtual_objects.is_well_formed(func, &typed_region) {
+    let virtual_objects = VirtualObjectAnalysis::derive_ir(func, &typed_ir)?;
+    if !virtual_objects.is_well_formed(func, typed_region) {
         return None;
     }
-    let mut synthetic = func.code.clone();
-    for (ip, instr) in synthetic.iter_mut().enumerate() {
-        if !region.included[ip] {
-            *instr = RegInstr::RuntimeError {
-                message: "native continuation boundary".to_string(),
-            };
-        }
-    }
+    let virtual_summary = virtual_objects.summary();
+    debug_assert!(
+        virtual_summary
+            .no_escape
+            .saturating_add(virtual_summary.exit_only)
+            .saturating_add(virtual_summary.declined)
+            <= virtual_summary
+                .options
+                .saturating_add(virtual_summary.results)
+                .saturating_add(virtual_summary.variants)
+                .saturating_add(virtual_summary.structs)
+                .saturating_add(virtual_summary.closures)
+    );
+    let synthetic = typed_ir.lower_to_reg_code(func)?;
     let mut active_regs = region.active_regs.clone();
     active_regs.resize(func.regs, false);
     let immutable_leaf_params = vec![false; func.params];
@@ -587,6 +603,8 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
         compact_slots.into_boxed_slice(),
         region.live_in_regs.len(),
         exits,
+        typed_summary,
+        virtual_summary,
     ))
 }
 

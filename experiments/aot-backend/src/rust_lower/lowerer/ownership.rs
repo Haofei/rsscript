@@ -405,6 +405,22 @@ impl<'a> RustLowerer<'a> {
         {
             return self.lower_managed_handle_effect_arg(*effect, value);
         }
+        // RSS `String` values are owned at the language boundary, while the
+        // generated-Rust runtime deliberately accepts immutable string inputs
+        // as `&str`. Adapt that ABI from the callee's semantic signature instead
+        // of special-casing individual helpers such as `String.parse_int` or
+        // `Output.write`. This also keeps temporaries alive for the duration of
+        // the call without cloning them.
+        //
+        // Consuming runtime inputs remain type-safe: the only current consuming
+        // string-like runtime value is `StringBuilder.finish`, whose semantic
+        // type is `StringBuilder`, not `String`.
+        if runtime_intrinsic_target(callee).is_some()
+            && let Some(expected) = self.expected_call_arg_type(callee, arg, index)
+            && self.canonical_type_ref(&expected).name == "String"
+        {
+            return self.lower_runtime_str_arg(&arg.value);
+        }
         if runtime_intrinsic_borrows_arg(callee, arg.name.as_deref(), index) {
             let value = match &arg.value {
                 Expr::Effect { value, .. } => value.as_ref(),
@@ -469,6 +485,22 @@ impl<'a> RustLowerer<'a> {
             return self.lower_call_arg_for_expected_type(&arg.value, &expected);
         }
         self.lower_expr(&arg.value)
+    }
+
+    /// Lower an owned RSS `String` expression for a runtime `&str` parameter.
+    ///
+    /// Identifiers deserve a direct path: a `read String` parameter is already
+    /// represented as `&String`, and method autoderef gives us `&str` without
+    /// the clone performed by the ordinary value-expression lowering path.
+    fn lower_runtime_str_arg(&mut self, value: &Expr) -> String {
+        let value = match value {
+            Expr::Effect { value, .. } => value.as_ref(),
+            value => value,
+        };
+        match value {
+            Expr::Ident(name, _) => format!("{}.as_str()", rust_value_ident(name)),
+            _ => format!("({}).as_str()", self.lower_expr(value)),
+        }
     }
 
     pub(in crate::rust_lower) fn lower_call_arg_for_expected_type(

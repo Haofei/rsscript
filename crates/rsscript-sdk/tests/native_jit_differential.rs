@@ -100,7 +100,7 @@ fn native_engine_matches_the_verified_interpreter_corpus() {
             .expect("corpus source compiles");
         let admitted = ArtifactVerifier
             .verify(built)
-            .expect("corpus artifact verifies")
+            .unwrap_or_else(|error| panic!("corpus artifact verifies for {file}: {error:?}"))
             .admit_trusted_input();
         let linked = Runtime::new(ProviderRegistry::default())
             .link(&admitted)

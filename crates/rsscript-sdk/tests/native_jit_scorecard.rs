@@ -115,6 +115,7 @@ fn validate_and_print_engine_matrix(record: serde_json::Value) {
 #[test]
 #[ignore = "full native-JIT performance scorecard"]
 fn native_jit_pass_scorecard() {
+    let case_filter = std::env::var("RSS_JIT_CASE").ok();
     let samples = std::env::var("RSS_JIT_SAMPLES")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
@@ -135,7 +136,15 @@ fn native_jit_pass_scorecard() {
             "order": "alternating",
         })
     );
+    let mut cases_run = 0usize;
     for case in CASES {
+        if case_filter
+            .as_deref()
+            .is_some_and(|filter| filter != case.name)
+        {
+            continue;
+        }
+        cases_run += 1;
         let built = match Compiler.compile(case.name, case.source) {
             Ok(built) => built,
             Err(error) => {
@@ -207,8 +216,12 @@ fn native_jit_pass_scorecard() {
             compile_nanos,
             resident_code_bytes,
             reserved_arena_bytes,
+            runtime_helper_call_sites,
+            readonly_licm_sites,
+            bounds_check_sites,
+            bounds_checks_elided,
         ) = match latest_native.telemetry.engine {
-            ExecutionEngineTelemetry::Interpreter => (0, 0, 0, 0, 0, 0, 0, 0),
+            ExecutionEngineTelemetry::Interpreter => (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
             ExecutionEngineTelemetry::Native {
                 native_calls,
                 native_bails,
@@ -218,6 +231,10 @@ fn native_jit_pass_scorecard() {
                 compile_nanos,
                 resident_code_bytes,
                 reserved_arena_bytes,
+                runtime_helper_call_sites,
+                readonly_licm_sites,
+                direct_list_bounds_check_sites,
+                direct_list_bounds_checks_elided,
                 ..
             } => (
                 native_calls,
@@ -228,6 +245,10 @@ fn native_jit_pass_scorecard() {
                 compile_nanos,
                 resident_code_bytes,
                 reserved_arena_bytes,
+                runtime_helper_call_sites,
+                readonly_licm_sites,
+                direct_list_bounds_check_sites,
+                direct_list_bounds_checks_elided,
             ),
         };
         println!(
@@ -248,6 +269,10 @@ fn native_jit_pass_scorecard() {
                 "osr_entries": osr_entries,
                 "continuation_entries": continuation_entries,
                 "continuation_compiled_source_instructions": continuation_compiled_source_instructions,
+                "runtime_helper_call_sites": runtime_helper_call_sites,
+                "readonly_licm_sites": readonly_licm_sites,
+                "bounds_check_sites": bounds_check_sites,
+                "bounds_checks_elided": bounds_checks_elided,
             })
         );
         let entered = native_calls > 0 || osr_entries > 0 || continuation_entries > 0;
@@ -273,8 +298,8 @@ fn native_jit_pass_scorecard() {
                     "transitions": native_calls
                         .saturating_add(osr_entries)
                         .saturating_add(continuation_entries),
-                    "host_helper_calls": null,
-                    "bounds_checks": null,
+                    "host_helper_calls": runtime_helper_call_sites,
+                    "bounds_checks": bounds_check_sites.saturating_sub(bounds_checks_elided),
                     "allocations_eliminated": null,
                     "reason": if entered { None } else { Some("native tier declined this workload") }
                 },
@@ -291,4 +316,8 @@ fn native_jit_pass_scorecard() {
             }
         }));
     }
+    assert!(
+        cases_run > 0,
+        "RSS_JIT_CASE did not match a canonical scorecard case"
+    );
 }

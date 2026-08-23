@@ -1330,6 +1330,12 @@ impl RegVmExecutable {
                             .continuation_compiled_source_instructions,
                         interpreted_native_work: native.stats.interpreted_native_work,
                         native_barrier_counts: native.stats.native_barrier_counts.clone(),
+                        direct_list_bounds_check_sites: native.stats.direct_list_bounds_check_sites,
+                        direct_list_bounds_checks_elided: native
+                            .stats
+                            .direct_list_bounds_checks_elided,
+                        readonly_licm_sites: native.stats.memoized_runtime_helper_call_sites,
+                        runtime_helper_call_sites: native.stats.runtime_helper_call_sites,
                         resident_code_bytes: native.stats.compiled_code_bytes,
                         published_code_bytes: native.admission.admitted_code_bytes,
                         rejected_resident_bytes: 0,
@@ -2269,6 +2275,22 @@ pub struct NativeStats {
     pub verified_known_call_sites: u64,
     /// Instruction effect records derived under the facts work budget.
     pub verified_instruction_effects: u64,
+    /// Continuation regions admitted through the bounded typed block IR.
+    pub typed_region_compiles: u64,
+    /// Typed basic blocks compiled across continuation regions.
+    pub typed_region_blocks: u64,
+    /// Dense typed values represented across continuation regions.
+    pub typed_region_values: u64,
+    /// Bounded construction work consumed by typed region IRs.
+    pub typed_region_work_units: u64,
+    /// Aggregate candidates observed by the shared virtual-object analysis.
+    pub virtual_objects_observed: u64,
+    /// Virtual objects proven not to escape their native region.
+    pub virtual_objects_no_escape: u64,
+    /// Virtual objects requiring normal-exit materialization.
+    pub virtual_objects_exit_only: u64,
+    /// Virtual objects conservatively declined due to escape/unknown state.
+    pub virtual_objects_declined: u64,
     /// Hot functions that reached the native tier (passed tiering, not force-bail).
     pub considered: u64,
     /// Calls deferred below the tier-up threshold (still on the interpreter).
@@ -2437,7 +2459,7 @@ impl NativeStats {
         format!(
             "native-jit: verified_known_reg_types={} verified_unknown_reg_types={} verified_known_call_sites={} verified_instruction_effects={} considered={} translated={} compiled={} baseline_compiles={} optimized_compiles={} baseline_calls={} optimized_calls={} promotions={} ir_instrs={} code_bytes={} admission_admitted={} admission_admitted_bytes={} admission_rejected={} admission_rejected_bytes={} deopt_sites={} direct_list_bounds_check_sites={} memoized_runtime_helper_call_sites={} runtime_helper_call_sites={} fused_map_match_helper_sites={} direct_list_store_load_forwarded_moves={} native_call_edges={} native_call_depth_max={} profile_closure_guards={} profile_closure_id_reads={} profile_closure_pic_sites={} profile_closure_pic_arms={} profile_branch_sites={} profile_branch_samples={} profile_branch_taken={} profile_branch_fallthrough={} profile_branch_cold_blocks={} profile_branch_side_exits={} not_eligible={} top_decline={} \
 compile_failed={} calls={} bails={} child_bails={} child_resumes={} arg_mismatch={} shape_versions={} static_type_instances={} static_instance_limit_fallbacks={} shape_cache_hits={} shape_limit_fallbacks={} shape_bails={} tier_deferred={} \
-compile_ms={:.3} run_ms={:.3} osr_entries={} continuation_entries={} continuation_yields={} unprofitable_declines={}",
+compile_ms={:.3} run_ms={:.3} osr_entries={} continuation_entries={} continuation_yields={} unprofitable_declines={} typed_region_compiles={} typed_region_blocks={} typed_region_values={} typed_region_work_units={} virtual_objects_observed={} virtual_objects_no_escape={} virtual_objects_exit_only={} virtual_objects_declined={}",
             self.verified_known_reg_types,
             self.verified_unknown_reg_types,
             self.verified_known_call_sites,
@@ -2495,6 +2517,14 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} continuation_entries={} continuatio
             self.continuation_entries,
             self.continuation_yields,
             self.unprofitable_declines,
+            self.typed_region_compiles,
+            self.typed_region_blocks,
+            self.typed_region_values,
+            self.typed_region_work_units,
+            self.virtual_objects_observed,
+            self.virtual_objects_no_escape,
+            self.virtual_objects_exit_only,
+            self.virtual_objects_declined,
         )
     }
 
@@ -2642,6 +2672,38 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} continuation_entries={} continuatio
         object.insert(
             "verified_instruction_effects".into(),
             self.verified_instruction_effects.into(),
+        );
+        object.insert(
+            "typed_region_compiles".into(),
+            self.typed_region_compiles.into(),
+        );
+        object.insert(
+            "typed_region_blocks".into(),
+            self.typed_region_blocks.into(),
+        );
+        object.insert(
+            "typed_region_values".into(),
+            self.typed_region_values.into(),
+        );
+        object.insert(
+            "typed_region_work_units".into(),
+            self.typed_region_work_units.into(),
+        );
+        object.insert(
+            "virtual_objects_observed".into(),
+            self.virtual_objects_observed.into(),
+        );
+        object.insert(
+            "virtual_objects_no_escape".into(),
+            self.virtual_objects_no_escape.into(),
+        );
+        object.insert(
+            "virtual_objects_exit_only".into(),
+            self.virtual_objects_exit_only.into(),
+        );
+        object.insert(
+            "virtual_objects_declined".into(),
+            self.virtual_objects_declined.into(),
         );
         object.insert(
             "interpreted_native_work".into(),

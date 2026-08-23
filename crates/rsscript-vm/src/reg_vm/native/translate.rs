@@ -288,26 +288,22 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
         region_exit,
     )?;
     pipeline.apply_rewrite(code, n_regs, next_ip_map)?;
-    // Scalar replacement and range optimization run on the fully inlined body,
-    // using the same transform order as OSR. Result runs before Option because it
-    // tolerates Option ops while dissolving always-Ok Results; Option is stricter and
-    // expects only native-subset instructions plus Option ops. Variant and struct SR
-    // then remove user aggregate constructors/accessors exposed by inlining.
-    let region_exit = native_whole_function_region_exit(&pipeline.code);
-    let (code, n_regs, next_ip_map, _recipes) =
-        native_scalar_replace_results_in_region(&pipeline.code, pipeline.n_regs, 0, region_exit)?;
-    pipeline.apply_rewrite(code, n_regs, next_ip_map)?;
-    let (code, n_regs, scalar_payload_regs, next_ip_map) =
-        native_scalar_replace_options(&pipeline.code, pipeline.n_regs)?;
-    pipeline.apply_rewrite(code, n_regs, next_ip_map)?;
-    let region_exit = native_whole_function_region_exit(&pipeline.code);
-    let (code, n_regs, next_ip_map, _recipes) =
-        native_scalar_replace_variants_in_region(&pipeline.code, pipeline.n_regs, 0, region_exit)?;
-    pipeline.apply_rewrite(code, n_regs, next_ip_map)?;
-    let region_exit = native_whole_function_region_exit(&pipeline.code);
-    let (code, n_regs, next_ip_map, _recipes) =
-        native_scalar_replace_structs_in_region(&pipeline.code, pipeline.n_regs, 0, region_exit)?;
-    pipeline.apply_rewrite(code, n_regs, next_ip_map)?;
+    // Option/Result/Variant/Struct now share one bounded virtual-object
+    // orchestration boundary. The proven specialized rewrites remain the
+    // mechanics, while work accounting, origin composition and elimination
+    // telemetry are centralized so they can be retired independently.
+    let virtualized = native_eliminate_virtual_objects_whole(&pipeline.code, pipeline.n_regs)?;
+    let scalar_payload_regs = virtualized.zero_init_regs;
+    debug_assert!(
+        virtualized.summary.constructors_eliminated
+            <= virtualized
+                .summary
+                .option_candidates
+                .saturating_add(virtualized.summary.result_candidates)
+                .saturating_add(virtualized.summary.variant_candidates)
+                .saturating_add(virtualized.summary.struct_candidates)
+    );
+    pipeline.apply_rewrite(virtualized.code, virtualized.n_regs, virtualized.ip_map)?;
     // Dissolve non-escaping `Bytes.slice(...); Bytes.len(...)` values before native
     // type inference. Dynamic Bytes inputs retain a validating `Bytes.len` helper at
     // the slice site, while the allocation and output handle disappear. The regular
@@ -2244,7 +2240,7 @@ pub(in crate::reg_vm) fn translate_osr_loop(
 
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn translate_osr_loop_profiled(
-    _func: &RegFunction,
+    func: &RegFunction,
     facts: &VerifiedFunctionFacts,
     profile: Option<&FunctionProfile>,
     code: &[RegInstr],
@@ -2264,6 +2260,20 @@ pub(in crate::reg_vm) fn translate_osr_loop_profiled(
     Vec<bool>,
     Vec<Rc<String>>,
 )> {
+    // The direct verified-bytecode OSR path consumes the same bounded typed
+    // block IR as continuations. Transformed/inlined streams retain their
+    // existing proven facts until their origin map can project typed values
+    // without guessing.
+    let typed_code;
+    let code = if std::ptr::eq(code, func.code.as_slice()) {
+        let mut included = vec![false; code.len()];
+        included.get_mut(lp.header..lp.exit)?.fill(true);
+        let typed_ir = TypedRegionIr::derive(func, facts, &included)?;
+        typed_code = typed_ir.lower_to_reg_code(func)?;
+        typed_code.as_slice()
+    } else {
+        code
+    };
     let profile_guidance = native_osr_profile_guidance(profile, code, n_regs, lp, ip_map);
     translate_osr_loop_inner(
         code,

@@ -797,6 +797,104 @@ fn list_bounds_plan_accepts_only_unique_sound_provenance() {
     );
 }
 
+fn canonical_flat_scan(initial: i64, step: i64, compare: JitCompare) -> JitFunction {
+    use JitValueType::{FlatInt, Int};
+    ft(
+        1,
+        vec![FlatInt, Int, Int, Int, Int],
+        vec![
+            JitInstr::LoadInt {
+                dst: 1,
+                value: initial,
+            },
+            JitInstr::LoadInt {
+                dst: 2,
+                value: step,
+            },
+            JitInstr::ListLenDirect { dst: 3, base: 0 },
+            JitInstr::JumpIfIntCompare {
+                lhs: 1,
+                rhs: 3,
+                op: compare,
+                expected: false,
+                target: 7,
+            },
+            JitInstr::ListGetIntDirect {
+                dst: 4,
+                base: 0,
+                index: 1,
+            },
+            JitInstr::Add {
+                dst: 1,
+                lhs: 1,
+                rhs: 2,
+            },
+            JitInstr::Jump { target: 3 },
+            JitInstr::Return { src: 1 },
+        ],
+    )
+}
+
+#[test]
+fn canonical_induction_elides_flat_scan_bounds_check() {
+    let program = canonical_flat_scan(0, 1, JitCompare::Lt);
+    let plan = list_bounds_plan(&program, &interval_analysis(&program), false);
+    assert_eq!(plan.unchecked_ips, [4].into_iter().collect());
+
+    let mut module = module();
+    let id = module
+        .compile(&program)
+        .expect("canonical flat scan compiles");
+    assert_eq!(module.direct_list_bounds_checks_elided(id), Some(1));
+
+    for values in [Vec::new(), vec![10, 20, 30, 40, 50]] {
+        assert_eq!(
+            module
+                .call_with_host_ctx(
+                    id,
+                    &[values.as_ptr() as i64],
+                    &[values.len() as i64],
+                    0,
+                    &mut [FlatBufferArg::Int(&values)],
+                )
+                .completed(),
+            Some(values.len() as i64)
+        );
+    }
+}
+
+#[test]
+fn canonical_induction_bounds_proof_declines_unsafe_shapes() {
+    for program in [
+        canonical_flat_scan(-1, 1, JitCompare::Lt),
+        canonical_flat_scan(0, 2, JitCompare::Lt),
+        canonical_flat_scan(0, 1, JitCompare::Le),
+    ] {
+        assert!(
+            list_bounds_plan(&program, &interval_analysis(&program), false)
+                .unchecked_ips
+                .is_empty()
+        );
+    }
+
+    let mut mutable_step = canonical_flat_scan(0, 1, JitCompare::Lt);
+    mutable_step
+        .code
+        .insert(5, JitInstr::LoadInt { dst: 2, value: 2 });
+    if let JitInstr::Jump { target } = &mut mutable_step.code[7] {
+        *target = 3;
+    }
+    if let JitInstr::JumpIfIntCompare { target, .. } = &mut mutable_step.code[3] {
+        *target = 8;
+    }
+    assert!(
+        list_bounds_plan(&mutable_step, &interval_analysis(&mutable_step), false)
+            .unchecked_ips
+            .is_empty(),
+        "a loop-local step redefinition must retain bounds checks"
+    );
+}
+
 #[test]
 fn constant_modulo_elides_all_direct_get_and_set_checks() {
     use JitValueType::{FlatFloat, FlatFloatMut, FlatInt, FlatIntMut, Float, Int};

@@ -714,6 +714,262 @@ pub(super) struct ListBoundsPlan {
     pub(super) entry_min_len: std::collections::BTreeMap<u32, i64>,
 }
 
+/// Add bounds proofs for the canonical counted-loop shape emitted by the VM:
+///
+/// ```text
+/// i = non_negative_constant
+/// bound = len(flat_list)
+/// header: if !(i < bound) -> exit
+///         flat_list[i]
+///         i = i + 1
+///         jump header
+/// ```
+///
+/// This is deliberately narrower than a general relational range analysis. The
+/// CFG is indexed once, candidate-specific scans share a linear work budget, and
+/// every unproved detail retains the ordinary checked access. Checked integer
+/// addition protects the induction update: overflow deopts before a subsequent
+/// access can observe a wrapped index.
+fn add_canonical_induction_bounds(
+    program: &JitFunction,
+    reachable: &[bool],
+    plan: &mut ListBoundsPlan,
+) {
+    const WORK_PER_INSTRUCTION: usize = 24;
+    const MAX_WORK: usize = 2_000_000;
+
+    let n = program.code.len();
+    if n == 0 {
+        return;
+    }
+    let mut successors_by_ip = Vec::with_capacity(n);
+    let mut predecessors = vec![Vec::new(); n];
+    let mut backedges = vec![Vec::new(); n];
+    for ip in 0..n {
+        let successors = successors(program, ip);
+        for &target in &successors {
+            predecessors[target].push(ip);
+            if target <= ip {
+                backedges[target].push(ip);
+            }
+        }
+        successors_by_ip.push(successors);
+    }
+    let mut remaining = n
+        .checked_mul(WORK_PER_INSTRUCTION)
+        .unwrap_or(MAX_WORK)
+        .min(MAX_WORK);
+    let mut charge = |amount: usize| -> bool {
+        let Some(next) = remaining.checked_sub(amount) else {
+            remaining = 0;
+            return false;
+        };
+        remaining = next;
+        true
+    };
+
+    for (header, header_backedges) in backedges.iter().enumerate() {
+        let Some(body_end) = header_backedges.iter().copied().max() else {
+            continue;
+        };
+        if !charge(1) {
+            break;
+        }
+        let mut condition = header;
+        while condition <= body_end
+            && !matches!(
+                program.code[condition],
+                JitInstr::Jump { .. }
+                    | JitInstr::JumpIfBool { .. }
+                    | JitInstr::JumpIfIntCompare { .. }
+                    | JitInstr::Return { .. }
+                    | JitInstr::Bail
+            )
+        {
+            if !charge(1) {
+                return;
+            }
+            condition += 1;
+        }
+        let (induction, bound, exit) = match program.code.get(condition) {
+            Some(JitInstr::JumpIfIntCompare {
+                lhs,
+                rhs,
+                op: JitCompare::Lt,
+                expected: false,
+                target,
+            }) => (*lhs, *rhs, *target as usize),
+            Some(JitInstr::JumpIfIntCompare {
+                lhs,
+                rhs,
+                op: JitCompare::Gt,
+                expected: false,
+                target,
+            }) => (*rhs, *lhs, *target as usize),
+            _ => continue,
+        };
+        if exit <= body_end || exit >= n {
+            continue;
+        }
+        let in_loop = |ip: usize| (header..exit).contains(&ip);
+
+        // Prove single entry and single normal exit from the shared CFG index.
+        let mut canonical = true;
+        for incoming in predecessors
+            .iter()
+            .take(exit)
+            .skip(header.saturating_add(1))
+        {
+            if !charge(incoming.len().max(1)) {
+                return;
+            }
+            if incoming.iter().any(|source| !in_loop(*source)) {
+                canonical = false;
+                break;
+            }
+        }
+        if !canonical {
+            continue;
+        }
+        for outgoing in successors_by_ip.iter().take(exit).skip(header) {
+            if !charge(outgoing.len().max(1)) {
+                return;
+            }
+            if outgoing
+                .iter()
+                .any(|target| !in_loop(*target) && *target != exit)
+            {
+                canonical = false;
+                break;
+            }
+        }
+        if !canonical {
+            continue;
+        }
+
+        // Keep the dominating-value proof intentionally strict: a straight-line
+        // prefix and exactly one pre-loop definition avoid relying on textual
+        // order across branches.
+        if program.code[..header].iter().any(|instr| {
+            !matches!(
+                instr.effects().control_flow,
+                super::JitControlFlow::Fallthrough
+            )
+        }) {
+            continue;
+        }
+        let mut induction_init = None;
+        let mut bound_base = None;
+        for instr in &program.code[..=condition] {
+            if !charge(1) {
+                return;
+            }
+            if instr_def(instr) == Some(induction) {
+                induction_init = match instr {
+                    JitInstr::LoadInt { value, .. } => Some(*value),
+                    _ => None,
+                };
+            }
+            if instr_def(instr) == Some(bound) {
+                bound_base = match instr {
+                    JitInstr::ListLenDirect { base, .. } => Some(*base),
+                    _ => None,
+                };
+            }
+        }
+        let (Some(initial), Some(base)) = (induction_init, bound_base) else {
+            continue;
+        };
+        if initial < 0 {
+            continue;
+        }
+
+        let mut update = None;
+        let mut induction_writes = 0usize;
+        let mut base_or_bound_redefined = false;
+        for (ip, instr) in program.code.iter().enumerate().take(exit).skip(header) {
+            if !charge(1) {
+                return;
+            }
+            if instr_def(instr) == Some(induction) {
+                induction_writes += 1;
+                if let JitInstr::Add { dst, lhs, rhs } = instr
+                    && *dst == induction
+                    && (*lhs == induction || *rhs == induction)
+                {
+                    let step = if *lhs == induction { *rhs } else { *lhs };
+                    let step_is_one = program.code[..header]
+                        .iter()
+                        .rfind(|candidate| instr_def(candidate) == Some(step))
+                        .is_some_and(|candidate| {
+                            matches!(candidate, JitInstr::LoadInt { value: 1, .. })
+                        });
+                    if step_is_one {
+                        update = Some((ip, step));
+                    }
+                }
+            }
+            if instr_def(instr).is_some_and(|dst| dst == base || dst == bound) {
+                base_or_bound_redefined = true;
+            }
+        }
+        let Some((update_ip, step)) = update else {
+            continue;
+        };
+        if induction_writes != 1 || base_or_bound_redefined {
+            continue;
+        }
+        // The prefix constant is only a stable +1 induction step when the loop
+        // cannot redefine its register before the latch update.
+        if program.code[header..exit]
+            .iter()
+            .any(|instr| instr_def(instr) == Some(step))
+        {
+            continue;
+        }
+
+        for (ip, instr) in program
+            .code
+            .iter()
+            .enumerate()
+            .take(update_ip)
+            .skip(condition + 1)
+        {
+            if !reachable.get(ip).copied().unwrap_or(false) {
+                continue;
+            }
+            if !charge(1) {
+                return;
+            }
+            match instr {
+                JitInstr::ListGetIntDirect {
+                    base: access_base,
+                    index,
+                    ..
+                }
+                | JitInstr::ListSetIntDirect {
+                    base: access_base,
+                    index,
+                    ..
+                }
+                | JitInstr::ListGetFloatDirect {
+                    base: access_base,
+                    index,
+                    ..
+                }
+                | JitInstr::ListSetFloatDirect {
+                    base: access_base,
+                    index,
+                    ..
+                } if *access_base == base && *index == induction => {
+                    plan.unchecked_ips.insert(ip);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 /// Resolve a register through its sole reachable definition. This is deliberately
 /// stricter than reaching-definition analysis: any reachable second definition,
 /// even on a disjoint branch, makes the value ambiguous and keeps accesses checked.
@@ -842,5 +1098,6 @@ pub(super) fn list_bounds_plan(
             _ => {}
         }
     }
+    add_canonical_induction_bounds(program, &reachable, &mut plan);
     plan
 }
