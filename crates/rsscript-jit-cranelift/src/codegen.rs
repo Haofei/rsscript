@@ -135,13 +135,6 @@ pub(crate) struct LimitChecks {
     pub(crate) cancel: bool,
 }
 
-fn counts_as_source_step(instr: &JitInstr) -> bool {
-    !matches!(
-        instr,
-        JitInstr::RegionExit { .. } | JitInstr::OsrExit | JitInstr::Bail
-    )
-}
-
 /// Instructions which cannot deopt, call a helper, or otherwise leave the current
 /// native activation. Consecutive members inside one CFG basic block may share one
 /// source-step reservation. The list is intentionally conservative: omitting an
@@ -191,12 +184,10 @@ fn step_segment_costs(program: &JitFunction, is_leader: &[bool]) -> Vec<u32> {
         while end < n && !starts[end] {
             end += 1;
         }
-        let source_steps = program.code[start..end]
-            .iter()
-            .filter(|instr| counts_as_source_step(instr))
-            .count();
-        costs[start] = u32::try_from(source_steps)
-            .expect("validated JIT instruction limit fits source cost in u32");
+        costs[start] = (start..end)
+            .map(|ip| program.instruction_origin(ip).source_cost)
+            .try_fold(0_u32, u32::checked_add)
+            .expect("validated source-step cost fits u32");
         start = end;
     }
     costs
@@ -276,7 +267,10 @@ pub(crate) fn build_function(
         .map(|callee| {
             (
                 callee.handle,
-                module.declare_func_in_func(callee.func_id, bcx.func),
+                module.declare_func_in_func(
+                    callee.direct_scalar_func_id.unwrap_or(callee.func_id),
+                    bcx.func,
+                ),
             )
         })
         .collect();
@@ -316,17 +310,17 @@ pub(crate) fn build_function(
         }
     };
     let vars: Vec<Variable> = (0..n_regs).map(|i| bcx.declare_var(var_ty(i))).collect();
-    #[cfg(feature = "memoization")]
+    #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
     let memo_count = program
         .code
         .iter()
         .filter(|instr| matches!(instr, JitInstr::MemoizedHostCall { .. }))
         .count();
-    #[cfg(not(feature = "memoization"))]
+    #[cfg(not(any(feature = "memoization", feature = "readonly-licm")))]
     let memo_count = 0;
     #[allow(unused_mut)]
     let mut memo_value_tys = vec![types::I64; memo_count];
-    #[cfg(feature = "memoization")]
+    #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
     for instr in &program.code {
         if let JitInstr::MemoizedHostCall { dst, memo_slot, .. } = instr {
             memo_value_tys[*memo_slot as usize] = var_ty(*dst as usize);
@@ -626,7 +620,8 @@ pub(crate) fn build_function(
     macro_rules! deopt {
         ($ip:expr) => {
             &mut DeoptCtx {
-                ip: $ip as u32,
+                jit_ip: $ip as u32,
+                origin: program.instruction_origin($ip),
                 deopt_in,
                 reg_types: &program.reg_types,
                 sites: &mut sites,
@@ -638,7 +633,8 @@ pub(crate) fn build_function(
         };
         ($ip:expr, unconditional) => {
             &mut DeoptCtx {
-                ip: $ip as u32,
+                jit_ip: $ip as u32,
+                origin: program.instruction_origin($ip),
                 deopt_in: &deopt_in,
                 reg_types: &program.reg_types,
                 sites: &mut sites,
@@ -650,7 +646,8 @@ pub(crate) fn build_function(
         };
         ($ip:expr, live = $live:expr) => {
             &mut DeoptCtx {
-                ip: $ip as u32,
+                jit_ip: $ip as u32,
+                origin: program.instruction_origin($ip),
                 deopt_in: &deopt_in,
                 reg_types: &program.reg_types,
                 sites: &mut sites,
@@ -1080,7 +1077,7 @@ pub(crate) fn build_function(
                 };
                 bcx.def_var(reg(*dst), stored);
             }
-            #[cfg(feature = "memoization")]
+            #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
             JitInstr::MemoizedHostCall {
                 helper,
                 dst,
@@ -1146,128 +1143,145 @@ pub(crate) fn build_function(
             }
             JitInstr::CallNative { callee, dst, args } => {
                 let meta = native_callee(*callee);
-                let slot_bytes = |words: usize| (words.max(1) * 8) as u32;
-                let args_slot = bcx.create_sized_stack_slot(StackSlotData::new(
-                    StackSlotKind::ExplicitSlot,
-                    slot_bytes(meta.n_params),
-                    3,
-                ));
-                // Scalar helper-free leaves cannot observe a flat-buffer length.
-                // Keep the versioned frame (and child deopt payload) for precise
-                // checked-arithmetic deopt, but do not allocate or populate an
-                // otherwise dead parallel lens window.
-                let lens_slot = (!meta.compact_scalar_frame).then(|| {
-                    bcx.create_sized_stack_slot(StackSlotData::new(
+                if meta.direct_scalar_func_id.is_some() {
+                    // Proven-infallible scalar leaves use their private direct
+                    // signature. No child frame, args/lens windows, safepoint or
+                    // deopt payload is needed on this edge.
+                    let direct_args: Vec<_> =
+                        args.iter().map(|arg| bcx.use_var(reg(*arg))).collect();
+                    let call = bcx.ins().call(native_ref(*callee), &direct_args);
+                    let result = bcx.inst_results(call)[0];
+                    bcx.def_var(reg(*dst), result);
+                } else {
+                    let slot_bytes = |words: usize| (words.max(1) * 8) as u32;
+                    let args_slot = bcx.create_sized_stack_slot(StackSlotData::new(
                         StackSlotKind::ExplicitSlot,
                         slot_bytes(meta.n_params),
                         3,
-                    ))
-                });
-                let out_slot = bcx.create_sized_stack_slot(StackSlotData::new(
-                    StackSlotKind::ExplicitSlot,
-                    8,
-                    3,
-                ));
-                let safepoint_slot = bcx.create_sized_stack_slot(StackSlotData::new(
-                    StackSlotKind::ExplicitSlot,
-                    8,
-                    3,
-                ));
-                let payload_slot = bcx.create_sized_stack_slot(StackSlotData::new(
-                    StackSlotKind::ExplicitSlot,
-                    slot_bytes(meta.deopt_payload_words),
-                    3,
-                ));
+                    ));
+                    // Scalar helper-free leaves cannot observe a flat-buffer length.
+                    // Keep the versioned frame (and child deopt payload) for precise
+                    // checked-arithmetic deopt, but do not allocate or populate an
+                    // otherwise dead parallel lens window.
+                    let lens_slot = (!meta.compact_scalar_frame).then(|| {
+                        bcx.create_sized_stack_slot(StackSlotData::new(
+                            StackSlotKind::ExplicitSlot,
+                            slot_bytes(meta.n_params),
+                            3,
+                        ))
+                    });
+                    let out_slot = bcx.create_sized_stack_slot(StackSlotData::new(
+                        StackSlotKind::ExplicitSlot,
+                        8,
+                        3,
+                    ));
+                    let safepoint_slot = bcx.create_sized_stack_slot(StackSlotData::new(
+                        StackSlotKind::ExplicitSlot,
+                        8,
+                        3,
+                    ));
+                    let payload_slot = bcx.create_sized_stack_slot(StackSlotData::new(
+                        StackSlotKind::ExplicitSlot,
+                        slot_bytes(meta.deopt_payload_words),
+                        3,
+                    ));
 
-                let zero_i64 = bcx.ins().iconst(types::I64, 0);
-                bcx.ins().stack_store(zero_i64, safepoint_slot, 0);
-                for (i_arg, &arg) in args.iter().enumerate() {
-                    let value = bcx.use_var(reg(arg));
-                    bcx.ins().stack_store(value, args_slot, (i_arg as i32) * 8);
-                    let len = if matches!(
-                        meta.param_types[i_arg],
-                        JitValueType::FlatInt
-                            | JitValueType::FlatIntMut
-                            | JitValueType::FlatFloat
-                            | JitValueType::FlatFloatMut
-                    ) {
-                        bcx.ins()
-                            .load(types::I64, MemFlags::trusted(), lens_ptr, (arg as i32) * 8)
-                    } else {
-                        zero_i64
-                    };
-                    if let Some(lens_slot) = lens_slot {
-                        bcx.ins().stack_store(len, lens_slot, (i_arg as i32) * 8);
+                    let zero_i64 = bcx.ins().iconst(types::I64, 0);
+                    bcx.ins().stack_store(zero_i64, safepoint_slot, 0);
+                    for (i_arg, &arg) in args.iter().enumerate() {
+                        let value = bcx.use_var(reg(arg));
+                        bcx.ins().stack_store(value, args_slot, (i_arg as i32) * 8);
+                        let len = if matches!(
+                            meta.param_types[i_arg],
+                            JitValueType::FlatInt
+                                | JitValueType::FlatIntMut
+                                | JitValueType::FlatFloat
+                                | JitValueType::FlatFloatMut
+                        ) {
+                            bcx.ins().load(
+                                types::I64,
+                                MemFlags::trusted(),
+                                lens_ptr,
+                                (arg as i32) * 8,
+                            )
+                        } else {
+                            zero_i64
+                        };
+                        if let Some(lens_slot) = lens_slot {
+                            bcx.ins().stack_store(len, lens_slot, (i_arg as i32) * 8);
+                        }
                     }
+                    let args_ptr_v = bcx.ins().stack_addr(ptr_ty, args_slot, 0);
+                    let lens_ptr_v = match lens_slot {
+                        Some(slot) => bcx.ins().stack_addr(ptr_ty, slot, 0),
+                        None => bcx.ins().iconst(ptr_ty, 0),
+                    };
+                    let out_ptr_v = bcx.ins().stack_addr(ptr_ty, out_slot, 0);
+                    let safepoint_ptr_v = bcx.ins().stack_addr(ptr_ty, safepoint_slot, 0);
+                    let payload_ptr_v = bcx.ins().stack_addr(ptr_ty, payload_slot, 0);
+                    let nargs_v = bcx.ins().iconst(ptr_ty, meta.n_params as i64);
+                    // Forward the chain depth as `caller_depth + 1` (native-call-ABI
+                    // slice 1): a native callee's depth is one deeper than its caller's.
+                    let one_depth = bcx.ins().iconst(ptr_ty, 1);
+                    let child_depth = bcx.ins().iadd(native_call_depth, one_depth);
+                    let caller_logical_depth = tail_depth_var
+                        .map(|tail_depth_var| bcx.use_var(tail_depth_var))
+                        .unwrap_or(logical_call_depth);
+                    let child_logical_depth = bcx.ins().iadd(caller_logical_depth, one_depth);
+                    let child_frame = build_child_call_frame(
+                        &mut bcx,
+                        ptr_ty,
+                        args_ptr_v,
+                        lens_ptr_v,
+                        nargs_v,
+                        host_ctx,
+                        limits_ptr,
+                        out_ptr_v,
+                        bail_ptr,
+                        safepoint_ptr_v,
+                        payload_ptr_v,
+                        child_depth,
+                        child_logical_depth,
+                        logical_depth_limit,
+                    );
+                    let call = bcx.ins().call(native_ref(*callee), &[child_frame]);
+                    let completed = bcx.inst_results(call)[0];
+                    let one_i8 = bcx.ins().iconst(types::I8, 1);
+                    let not_completed = bcx.ins().icmp(IntCC::NotEqual, completed, one_i8);
+                    let failed = if meta.compact_scalar_frame {
+                        // This callee contains neither HostCall nor a nested native
+                        // call, so it cannot set the shared helper-bail byte. Its typed
+                        // status is the complete failure signal.
+                        not_completed
+                    } else {
+                        let child_bail =
+                            bcx.ins().load(types::I8, MemFlags::trusted(), bail_ptr, 0);
+                        let zero_i8_again = bcx.ins().iconst(types::I8, 0);
+                        let child_bailed =
+                            bcx.ins().icmp(IntCC::NotEqual, child_bail, zero_i8_again);
+                        bcx.ins().bor(not_completed, child_bailed)
+                    };
+                    let cont = bail_if_child_native_failed(
+                        &mut bcx,
+                        failed,
+                        fallback,
+                        safepoint_ptr,
+                        payload_ptr,
+                        safepoint_ptr_v,
+                        payload_ptr_v,
+                        meta,
+                        &vars,
+                        &mut next_id,
+                        deopt!(i),
+                    );
+                    bcx.switch_to_block(cont);
+                    let result = if meta.return_type == JitValueType::Float {
+                        bcx.ins().stack_load(types::F64, out_slot, 0)
+                    } else {
+                        bcx.ins().stack_load(types::I64, out_slot, 0)
+                    };
+                    bcx.def_var(reg(*dst), result);
                 }
-                let args_ptr_v = bcx.ins().stack_addr(ptr_ty, args_slot, 0);
-                let lens_ptr_v = match lens_slot {
-                    Some(slot) => bcx.ins().stack_addr(ptr_ty, slot, 0),
-                    None => bcx.ins().iconst(ptr_ty, 0),
-                };
-                let out_ptr_v = bcx.ins().stack_addr(ptr_ty, out_slot, 0);
-                let safepoint_ptr_v = bcx.ins().stack_addr(ptr_ty, safepoint_slot, 0);
-                let payload_ptr_v = bcx.ins().stack_addr(ptr_ty, payload_slot, 0);
-                let nargs_v = bcx.ins().iconst(ptr_ty, meta.n_params as i64);
-                // Forward the chain depth as `caller_depth + 1` (native-call-ABI
-                // slice 1): a native callee's depth is one deeper than its caller's.
-                let one_depth = bcx.ins().iconst(ptr_ty, 1);
-                let child_depth = bcx.ins().iadd(native_call_depth, one_depth);
-                let caller_logical_depth = tail_depth_var
-                    .map(|tail_depth_var| bcx.use_var(tail_depth_var))
-                    .unwrap_or(logical_call_depth);
-                let child_logical_depth = bcx.ins().iadd(caller_logical_depth, one_depth);
-                let child_frame = build_child_call_frame(
-                    &mut bcx,
-                    ptr_ty,
-                    args_ptr_v,
-                    lens_ptr_v,
-                    nargs_v,
-                    host_ctx,
-                    limits_ptr,
-                    out_ptr_v,
-                    bail_ptr,
-                    safepoint_ptr_v,
-                    payload_ptr_v,
-                    child_depth,
-                    child_logical_depth,
-                    logical_depth_limit,
-                );
-                let call = bcx.ins().call(native_ref(*callee), &[child_frame]);
-                let completed = bcx.inst_results(call)[0];
-                let one_i8 = bcx.ins().iconst(types::I8, 1);
-                let not_completed = bcx.ins().icmp(IntCC::NotEqual, completed, one_i8);
-                let failed = if meta.compact_scalar_frame {
-                    // This callee contains neither HostCall nor a nested native
-                    // call, so it cannot set the shared helper-bail byte. Its typed
-                    // status is the complete failure signal.
-                    not_completed
-                } else {
-                    let child_bail = bcx.ins().load(types::I8, MemFlags::trusted(), bail_ptr, 0);
-                    let zero_i8_again = bcx.ins().iconst(types::I8, 0);
-                    let child_bailed = bcx.ins().icmp(IntCC::NotEqual, child_bail, zero_i8_again);
-                    bcx.ins().bor(not_completed, child_bailed)
-                };
-                let cont = bail_if_child_native_failed(
-                    &mut bcx,
-                    failed,
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
-                    safepoint_ptr_v,
-                    payload_ptr_v,
-                    meta,
-                    &vars,
-                    &mut next_id,
-                    deopt!(i),
-                );
-                bcx.switch_to_block(cont);
-                let result = if meta.return_type == JitValueType::Float {
-                    bcx.ins().stack_load(types::F64, out_slot, 0)
-                } else {
-                    bcx.ins().stack_load(types::I64, out_slot, 0)
-                };
-                bcx.def_var(reg(*dst), result);
             }
             #[cfg(feature = "recursion")]
             JitInstr::CallSelf { dst, args } => {
@@ -1878,7 +1892,8 @@ pub(crate) fn build_function(
                 // this ip, capturing the live-out window so the host resumes the
                 // interpreter here (precise-deopt). Reuse `bail_if` in its
                 // unconditional mode: it mints a stable safepoint id, records the
-                // `DeoptSite` (resume_ip = this ip, live = entry-assigned regs), and
+                // `DeoptSite` (resume_ip from explicit origin metadata, live =
+                // entry-assigned regs), and
                 // emits the id-store + live-capture on the (unconditionally taken)
                 // bail edge — the exact same machinery a guard bail uses.
                 let final_logical_depth = tail_depth_var
@@ -2210,9 +2225,11 @@ fn emit_direct_set_int(
 /// currently being emitted (`ip`), keeping `sites` aligned 1:1 with the minted
 /// safepoint ids. Carries no Cranelift state — it shapes no machine code.
 struct DeoptCtx<'a> {
-    /// Index of the instruction currently being lowered (the resume_ip for any
-    /// guard it emits).
-    ip: u32,
+    /// CFG index of the JIT instruction currently being lowered. This indexes JIT
+    /// liveness only and is deliberately not an interpreter resume identity.
+    jit_ip: u32,
+    /// Explicit source/resume/accounting identity carried through native rewrites.
+    origin: JitInstructionOrigin,
     /// Validated source-resume state sets per instruction. Detached clients use
     /// conservative definite assignment; verified-bytecode translation can add
     /// precise source liveness without dropping local JIT uses.
@@ -2253,7 +2270,7 @@ impl DeoptCtx<'_> {
                         .map(|ty| (reg, ty))
                 })
                 .collect(),
-            None => match self.deopt_in.get(self.ip as usize) {
+            None => match self.deopt_in.get(self.jit_ip as usize) {
                 Some(set) => set
                     .iter()
                     .enumerate()
@@ -2264,7 +2281,8 @@ impl DeoptCtx<'_> {
             },
         };
         self.sites.push(DeoptSite {
-            resume_ip: self.ip,
+            source_ip: self.origin.source_ip,
+            resume_ip: self.origin.resume_ip,
             live: live.clone(),
             child,
         });

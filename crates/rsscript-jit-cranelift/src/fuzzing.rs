@@ -41,6 +41,8 @@ mod tests {
                 },
                 JitInstr::Return { src: 0 },
             ],
+            instruction_origins: Vec::new(),
+            source_instruction_count: 0,
             memo_scopes: Vec::new(),
             cold_blocks: Vec::new(),
             resume_live_regs: Vec::new(),

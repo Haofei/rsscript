@@ -52,8 +52,8 @@ pub enum FloatRounding {
 }
 
 /// One instruction of the JIT IR. Registers are `u32` indices; jump `target`s are
-/// indices into the function's instruction vector (matching the VM's bytecode, so
-/// translation is 1:1 and target indices need no remapping).
+/// indices into this function's instruction vector. Source and interpreter-resume
+/// positions are carried independently by [`JitFunction::instruction_origins`].
 #[derive(Debug, Clone)]
 pub enum JitInstr {
     /// Placeholder that preserves 1:1 index alignment with the source bytecode
@@ -139,7 +139,7 @@ pub enum JitInstr {
     /// Memo slots are a dense, function-local namespace, separate from public VM
     /// registers. This keeps the IR source-index aligned without changing register
     /// windows, definite assignment, or deopt payloads.
-    #[cfg(feature = "memoization")]
+    #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
     MemoizedHostCall {
         helper: HostHelper,
         dst: u32,
@@ -441,7 +441,7 @@ impl JitInstr {
     pub(crate) fn required_host_helper(&self) -> Option<HostHelper> {
         match self {
             Self::HostCall { helper, .. } => Some(*helper),
-            #[cfg(feature = "memoization")]
+            #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
             Self::MemoizedHostCall { helper, .. } => Some(*helper),
             Self::MatchMapGetInt { .. } => Some(HostHelper::MapGetMatchInt),
             Self::MatchMapGetFloat { .. } => Some(HostHelper::MapGetMatchFloat),
@@ -487,7 +487,7 @@ impl JitInstr {
             | Self::ListSetFloatDirect { dst, .. }
             | Self::ListLenDirect { dst, .. }
             | Self::ListIsEmptyDirect { dst, .. } => Some(*dst),
-            #[cfg(feature = "memoization")]
+            #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
             Self::MemoizedHostCall { dst, .. } => Some(*dst),
             #[cfg(feature = "recursion")]
             Self::CallSelf { dst, .. } | Self::CallGroup { dst, .. } => Some(*dst),
@@ -552,7 +552,7 @@ impl JitInstr {
                     }
                 }
             }
-            #[cfg(feature = "memoization")]
+            #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
             Self::MemoizedHostCall { args, .. } => {
                 for arg in args {
                     if let HostArg::Reg(reg) = arg {
@@ -635,7 +635,7 @@ impl JitInstr {
                 HostHeapEffect::AllocatesResult => Write,
                 HostHeapEffect::MutatesInput | HostHeapEffect::ReplacesInput => ReadWrite,
             },
-            #[cfg(feature = "memoization")]
+            #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
             Self::MemoizedHostCall { helper, .. } => match helper.heap_effect() {
                 HostHeapEffect::ReadOnly | HostHeapEffect::ExtendsInputHandles => Read,
                 HostHeapEffect::AllocatesResult => Write,
@@ -680,7 +680,7 @@ impl JitInstr {
                 | Self::Bail
                 | Self::OsrExit
         );
-        #[cfg(feature = "memoization")]
+        #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
         let may_deopt = may_deopt || matches!(self, Self::MemoizedHostCall { .. });
         #[cfg(feature = "recursion")]
         let may_deopt = may_deopt || matches!(self, Self::CallSelf { .. } | Self::CallGroup { .. });
@@ -741,7 +741,7 @@ impl JitInstr {
                     }
                 }
             }
-            #[cfg(feature = "memoization")]
+            #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
             JitInstr::MemoizedHostCall { args, .. } => {
                 for arg in args {
                     if let HostArg::Reg(reg) = arg {
@@ -803,6 +803,30 @@ pub struct MemoScope {
     pub memo_slots: Vec<u32>,
 }
 
+/// Stable source identity and accounting carried by one in-process JIT IR item.
+///
+/// JIT instruction indices are CFG identities only.  They must not be interpreted
+/// as bytecode positions: rewrites may expand, fuse, or reorder native operations.
+/// `source_cost` is the number of interpreter source steps owned by this item;
+/// across a rewrite the total cost must be preserved and an expanded source
+/// instruction assigns its cost to exactly one generated item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JitInstructionOrigin {
+    pub source_ip: u32,
+    pub resume_ip: u32,
+    pub source_cost: u32,
+}
+
+impl JitInstructionOrigin {
+    pub const fn identity(ip: u32) -> Self {
+        Self {
+            source_ip: ip,
+            resume_ip: ip,
+            source_cost: 1,
+        }
+    }
+}
+
 /// A compilable function: register count, per-register storage class, and the
 /// instruction stream. Callers unbox each argument to `i64` bits (an `f64`'s bit
 /// pattern for float registers) and read the result back the same way.
@@ -817,6 +841,14 @@ pub struct JitFunction {
     /// typed placeholder on a path where the logical value is absent.
     pub zero_init_regs: Vec<u32>,
     pub code: Vec<JitInstr>,
+    /// Per-instruction source/deopt/accounting identity. Production VM producers
+    /// always populate this table. An empty table is retained only for detached
+    /// lockstep clients and is interpreted as identity metadata.
+    pub instruction_origins: Vec<JitInstructionOrigin>,
+    /// Number of instructions in the source bytecode function. This bounds both
+    /// source and interpreter-resume positions independently from `code.len()`.
+    /// Zero is the detached-client compatibility value and means `code.len()`.
+    pub source_instruction_count: u32,
     /// Validated loop activation boundaries for every [`JitInstr::MemoizedHostCall`].
     /// Each memo slot must belong to exactly one scope.
     pub memo_scopes: Vec<MemoScope>,
@@ -835,6 +867,30 @@ pub struct JitFunction {
 impl JitFunction {
     pub(crate) fn is_float(&self, reg: u32) -> bool {
         self.reg_types[reg as usize] == JitValueType::Float
+    }
+
+    pub(crate) fn instruction_origin(&self, ip: usize) -> JitInstructionOrigin {
+        self.instruction_origins
+            .get(ip)
+            .copied()
+            .unwrap_or_else(|| {
+                let mut origin = JitInstructionOrigin::identity(ip as u32);
+                if matches!(
+                    self.code.get(ip),
+                    Some(JitInstr::RegionExit { .. } | JitInstr::OsrExit | JitInstr::Bail)
+                ) {
+                    origin.source_cost = 0;
+                }
+                origin
+            })
+    }
+
+    pub fn source_instruction_count(&self) -> usize {
+        if self.source_instruction_count == 0 {
+            self.code.len()
+        } else {
+            self.source_instruction_count as usize
+        }
     }
 
     /// Compact the register namespace according to `ordered_old_regs`.
@@ -942,7 +998,7 @@ impl JitInstr {
                 map(dst, old_to_new)?;
                 map_args(args, old_to_new)?;
             }
-            #[cfg(feature = "memoization")]
+            #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
             Self::MemoizedHostCall { dst, args, .. } => {
                 map(dst, old_to_new)?;
                 map_args(args, old_to_new)?;

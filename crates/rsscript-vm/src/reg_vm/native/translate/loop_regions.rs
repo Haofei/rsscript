@@ -559,6 +559,9 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
         param_native_types,
         &immutable_leaf_params,
         Some(facts),
+        Some(&typed_ir),
+        None,
+        func.code.len(),
         false,
     )?;
     if !derived_liveins.is_empty()
@@ -605,6 +608,12 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
             exit_id: u32::try_from(exit).ok()?,
             live,
         };
+        let origin = jit_fn.instruction_origins.get_mut(exit)?;
+        origin.source_ip = u32::try_from(exit).ok()?;
+        origin.resume_ip = u32::try_from(exit).ok()?;
+        // The boundary instruction itself executes in the interpreter after the
+        // planned yield, so native code must not pre-charge its source step.
+        origin.source_cost = 0;
     }
     let mut ordered_vm_regs = region.live_in_regs.clone();
     ordered_vm_regs.extend(

@@ -51,6 +51,14 @@ const CASES: &[(&str, &str)] = &[
         "fn square(value: Int) -> Int { return value * value } fn main() -> Int { let mut i = 0; let mut total = 0; while i < 2000 { total = total + square(value: i % 97); i = i + 1 }; return total }",
     ),
     (
+        "direct-scalar-call.rss",
+        "fn wide(value: Int) -> Int { let a01 = value ^ 1; let a02 = a01 ^ 2; let a03 = a02 ^ 3; let a04 = a03 ^ 4; let a05 = a04 ^ 5; let a06 = a05 ^ 6; let a07 = a06 ^ 7; let a08 = a07 ^ 8; let a09 = a08 ^ 9; let a10 = a09 ^ 10; let a11 = a10 ^ 11; let a12 = a11 ^ 12; let a13 = a12 ^ 13; let a14 = a13 ^ 14; let a15 = a14 ^ 15; let a16 = a15 ^ 16; let a17 = a16 ^ 17; let a18 = a17 ^ 18; let a19 = a18 ^ 19; let a20 = a19 ^ 20; let a21 = a20 ^ 21; let a22 = a21 ^ 22; let a23 = a22 ^ 23; let a24 = a23 ^ 24; let a25 = a24 ^ 25; return a25 } fn main() -> Int { let mut i = 0; let mut total = 0; while i < 2000 { total = wide(value: total); i = i + 1 }; return total }",
+    ),
+    (
+        "static-inline-call.rss",
+        "fn small(value: Int) -> Int { return value * value } fn worker(value: Int) -> Int { let a = small(value: value % 97); let b = a + 1; let c = b + 2; let d = c + 3; let e = d + 4; let f = e + 5; return f } fn main() -> Int { let mut i = 0; let mut total = 0; while i < 2000 { total = total + worker(value: i); i = i + 1 }; return total }",
+    ),
+    (
         "generic-static-instances.rss",
         "fn identity<T>(value: read T) -> T { return value } fn main() -> Int { let ignored = identity<Float>(value: read 1.5); let mut i = 0; while i < 2000 { i = identity<Int>(value: read i + 1) }; return i }",
     ),
@@ -135,6 +143,9 @@ fn native_engine_matches_the_verified_interpreter_corpus() {
         let interpreter = linked.execute(request());
         let native = linked.execute(request().native_jit(NativeJitOptions {
             cost_model: NativeCostModel::Report,
+            // Exercise whole-function call lowering for the two ABI/inlining
+            // canaries; the rest of the corpus keeps production OSR enabled.
+            enable_osr: !matches!(*file, "direct-scalar-call.rss" | "static-inline-call.rss"),
             ..NativeJitOptions::default()
         }));
 

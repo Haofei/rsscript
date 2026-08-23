@@ -22,7 +22,7 @@ default = []
 # Optional adaptive Cranelift tier. The interpreter remains the verifier-backed
 # reference and fallback path; enabling this feature only adds native execution
 # for eligible hot regions.
-native-jit = ["dep:vm-jit"]
+native-jit = ["dep:vm-jit", "vm-jit/readonly-licm"]
 # Developer-only stress and benchmark entry points. Production hosts configure
 # the native engine exclusively through typed `NativeJitOptions`.
 jit-diagnostics = ["native-jit"]
@@ -34,8 +34,8 @@ jit-speculation = ["native-jit", "vm-jit/speculation"]
 # estimate. Keep it unavailable to the stable SDK until an explicit-stack or
 # measured-stack implementation provides a real boundary.
 jit-recursion-experimental = ["native-jit", "vm-jit/recursion"]
-# Research-only loop-invariant helper memoization. Disabled in the supported
-# baseline until canonical workload evidence meets the retention threshold.
+# Compatibility alias retained for research invocations. The supported native
+# path independently enables only the verifier/alias-gated read-only LICM subset.
 jit-memoization-experimental = ["native-jit", "vm-jit/memoization"]
 # Nested and loop-carried struct scalar replacement has not met the canonical
 # workload retention threshold. Keep the implementation available to VM

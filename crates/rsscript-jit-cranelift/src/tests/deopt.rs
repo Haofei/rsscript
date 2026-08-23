@@ -103,6 +103,40 @@ fn deopt_map_straightline_single_guard() {
     );
 }
 
+#[test]
+fn deopt_map_uses_explicit_source_and_resume_identity() {
+    let mut m = module();
+    let mut program = f(
+        2,
+        3,
+        vec![
+            JitInstr::Add {
+                dst: 2,
+                lhs: 0,
+                rhs: 1,
+            },
+            JitInstr::Return { src: 2 },
+        ],
+    );
+    program.source_instruction_count = 8;
+    program.instruction_origins = vec![
+        JitInstructionOrigin {
+            source_ip: 6,
+            resume_ip: 4,
+            source_cost: 1,
+        },
+        JitInstructionOrigin {
+            source_ip: 7,
+            resume_ip: 7,
+            source_cost: 1,
+        },
+    ];
+    let id = m.compile(&program).unwrap();
+    let site = &m.deopt_map(id).unwrap().sites[0];
+    assert_eq!(site.source_ip, 6);
+    assert_eq!(site.resume_ip, 4);
+}
+
 #[cfg(feature = "speculation")]
 #[test]
 fn profiled_branch_deopts_on_cold_edge() {

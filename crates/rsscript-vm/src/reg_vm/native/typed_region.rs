@@ -8,7 +8,7 @@
 //! storage/effect facts instead of reconstructing them independently.
 
 use super::*;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 
 const MAX_TYPED_REGION_INSTRUCTIONS: usize = 4_096;
 const MAX_TYPED_REGION_BLOCKS: usize = 2_048;
@@ -32,6 +32,8 @@ impl TypedValueId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::reg_vm) enum TypedValueOwnership {
     Copy,
+    ReadBorrow,
+    UniqueBorrow,
     Owned,
     Shared,
     Unknown,
@@ -43,6 +45,9 @@ pub(in crate::reg_vm) enum TypedAliasClass {
     Unique(TypedValueId),
     /// Function input slot; captures precede ordinary parameters in bytecode v1.
     Param(u32),
+    /// A verifier-bound `mut` input. Consumers must still prove that no other
+    /// operation in their region can create or observe an alias.
+    UniqueParam(u32),
     Immutable,
     Shared,
     Unknown,
@@ -55,6 +60,55 @@ pub(in crate::reg_vm) struct TypedRegionValue {
     pub(in crate::reg_vm) storage: VerifiedStorageType,
     pub(in crate::reg_vm) ownership: TypedValueOwnership,
     pub(in crate::reg_vm) alias: TypedAliasClass,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::reg_vm) struct TypedProgramPointValue {
+    pub(in crate::reg_vm) ownership: TypedValueOwnership,
+    pub(in crate::reg_vm) alias: TypedAliasClass,
+}
+
+impl TypedProgramPointValue {
+    const UNKNOWN: Self = Self {
+        ownership: TypedValueOwnership::Unknown,
+        alias: TypedAliasClass::Unknown,
+    };
+
+    pub(in crate::reg_vm) fn permits_readonly_hoist(self) -> bool {
+        matches!(
+            (self.ownership, self.alias),
+            (_, TypedAliasClass::Immutable)
+                | (TypedValueOwnership::ReadBorrow, TypedAliasClass::Param(_))
+                | (TypedValueOwnership::Owned, TypedAliasClass::Unique(_))
+                | (
+                    TypedValueOwnership::UniqueBorrow,
+                    TypedAliasClass::UniqueParam(_)
+                )
+        )
+    }
+
+    pub(in crate::reg_vm) fn permits_bounds_elision(self, mutable: bool) -> bool {
+        if mutable {
+            matches!(
+                (self.ownership, self.alias),
+                (TypedValueOwnership::Owned, TypedAliasClass::Unique(_))
+                    | (
+                        TypedValueOwnership::UniqueBorrow,
+                        TypedAliasClass::UniqueParam(_)
+                    )
+            )
+        } else {
+            self.permits_readonly_hoist()
+                || matches!(self.ownership, TypedValueOwnership::ReadBorrow)
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TypedProgramPointFact {
+    source_ip: usize,
+    value: TypedValueId,
+    state: TypedProgramPointValue,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -159,6 +213,7 @@ pub(in crate::reg_vm) struct TypedRegionSummary {
 pub(in crate::reg_vm) struct TypedRegionIr {
     typed: TypedRegion,
     blocks: Box<[TypedRegionBlock]>,
+    program_point_facts: Box<[TypedProgramPointFact]>,
     summary: TypedRegionSummary,
 }
 
@@ -282,10 +337,34 @@ impl TypedRegion {
                 VerifiedStorageType::Handle => {
                     let root = find(&mut parent, reg);
                     if reg < function.captures.saturating_add(function.params) {
-                        (
-                            TypedValueOwnership::Shared,
-                            TypedAliasClass::Param(reg.try_into().ok()?),
-                        )
+                        let parameter = reg.try_into().ok()?;
+                        match facts
+                            .reg_ownership
+                            .get(reg)
+                            .copied()
+                            .unwrap_or(VerifiedValueOwnership::Unknown)
+                        {
+                            VerifiedValueOwnership::ReadBorrow => (
+                                TypedValueOwnership::ReadBorrow,
+                                TypedAliasClass::Param(parameter),
+                            ),
+                            VerifiedValueOwnership::UniqueBorrow => (
+                                TypedValueOwnership::UniqueBorrow,
+                                TypedAliasClass::UniqueParam(parameter),
+                            ),
+                            VerifiedValueOwnership::Owned => (
+                                TypedValueOwnership::Owned,
+                                // v1 does not prove that a taken caller value has
+                                // no other runtime handle; keep the parameter root.
+                                TypedAliasClass::Param(parameter),
+                            ),
+                            VerifiedValueOwnership::Copy
+                            | VerifiedValueOwnership::Shared
+                            | VerifiedValueOwnership::Unknown => (
+                                TypedValueOwnership::Shared,
+                                TypedAliasClass::Param(parameter),
+                            ),
+                        }
                     } else if immutable_root[root] && !heap_mutated[root] {
                         (TypedValueOwnership::Shared, TypedAliasClass::Immutable)
                     } else if constructor[reg]
@@ -510,9 +589,18 @@ impl TypedRegionIr {
         }
         summary.blocks = blocks.len();
         summary.work_units = work.consumed;
+        let program_point_facts = derive_program_point_facts(
+            function,
+            facts,
+            &typed,
+            &blocks,
+            MAX_TYPED_REGION_WORK_UNITS,
+        )
+        .unwrap_or_default();
         let ir = Self {
             typed,
             blocks: blocks.into_boxed_slice(),
+            program_point_facts: program_point_facts.into_boxed_slice(),
             summary,
         };
         ir.validate()?;
@@ -529,6 +617,34 @@ impl TypedRegionIr {
 
     pub(in crate::reg_vm) fn summary(&self) -> TypedRegionSummary {
         self.summary
+    }
+
+    /// Flow-sensitive ownership/alias evidence immediately before `source_ip`.
+    /// Missing, conflicting or over-budget evidence is indistinguishable from
+    /// `Unknown`, so consumers can only lose an optimization.
+    pub(in crate::reg_vm) fn program_point_value(
+        &self,
+        source_ip: usize,
+        reg: Reg,
+    ) -> TypedProgramPointValue {
+        let Some(value) = self.typed.value(reg).map(|value| value.id) else {
+            return TypedProgramPointValue::UNKNOWN;
+        };
+        self.program_point_facts
+            .binary_search_by_key(&(source_ip, value), |fact| (fact.source_ip, fact.value))
+            .ok()
+            .and_then(|index| self.program_point_facts.get(index))
+            .map_or(TypedProgramPointValue::UNKNOWN, |fact| fact.state)
+    }
+
+    pub(in crate::reg_vm) fn permits_bounds_elision(
+        &self,
+        source_ip: usize,
+        reg: Reg,
+        mutable: bool,
+    ) -> bool {
+        self.program_point_value(source_ip, reg)
+            .permits_bounds_elision(mutable)
     }
 
     /// Project typed blocks into the existing register stream consumed by the
@@ -721,6 +837,233 @@ impl TypedRegionIr {
         }
         Some(())
     }
+}
+
+pub(in crate::reg_vm) fn verified_alias_allows_bounds_elision(
+    typed: Option<&TypedRegionIr>,
+    source_ip: usize,
+    reg: Reg,
+    mutable: bool,
+) -> bool {
+    typed.is_none_or(|typed| typed.permits_bounds_elision(source_ip, reg, mutable))
+}
+
+fn derive_program_point_facts(
+    function: &RegFunction,
+    _facts: &VerifiedFunctionFacts,
+    typed: &TypedRegion,
+    blocks: &[TypedRegionBlock],
+    work_limit: usize,
+) -> Option<Vec<TypedProgramPointFact>> {
+    let first = blocks.first()?;
+    let mut remaining = work_limit;
+    let mut charge = |units: usize| {
+        remaining = remaining.checked_sub(units)?;
+        Some(())
+    };
+    let unknown = vec![TypedProgramPointValue::UNKNOWN; typed.values.len()];
+    let mut entry_states = vec![None::<Vec<TypedProgramPointValue>>; blocks.len()];
+    let mut entry = unknown.clone();
+    for value in typed
+        .values
+        .iter()
+        .filter(|value| value.vm_reg < function.captures.saturating_add(function.params))
+    {
+        entry[value.id.index_for_runtime()] = TypedProgramPointValue {
+            ownership: value.ownership,
+            alias: value.alias,
+        };
+    }
+    entry_states[first.id as usize] = Some(entry);
+    let mut pending = VecDeque::from([first.id as usize]);
+    let mut queued = vec![false; blocks.len()];
+    queued[first.id as usize] = true;
+
+    while let Some(block_index) = pending.pop_front() {
+        queued[block_index] = false;
+        let block = blocks.get(block_index)?;
+        let mut state = entry_states.get(block_index)?.clone()?;
+        for instruction in &block.instructions {
+            charge(
+                instruction
+                    .reads
+                    .len()
+                    .saturating_add(instruction.writes.len())
+                    .saturating_add(1),
+            )?;
+            transfer_program_point(instruction, typed, &mut state)?;
+        }
+        for successor in &block.successors {
+            let successor = blocks
+                .binary_search_by_key(successor, |block| block.entry_ip)
+                .ok()?;
+            charge(state.len().max(1))?;
+            let changed = match &mut entry_states[successor] {
+                None => {
+                    entry_states[successor] = Some(state.clone());
+                    true
+                }
+                Some(existing) => merge_program_point_state(existing, &state),
+            };
+            if changed && !queued[successor] {
+                pending.push_back(successor);
+                queued[successor] = true;
+            }
+        }
+    }
+
+    let mut result = Vec::new();
+    for (block_index, block) in blocks.iter().enumerate() {
+        let Some(mut state) = entry_states[block_index].clone() else {
+            continue;
+        };
+        for instruction in &block.instructions {
+            for value in &instruction.reads {
+                result.push(TypedProgramPointFact {
+                    source_ip: instruction.source_ip,
+                    value: *value,
+                    state: state
+                        .get(value.index_for_runtime())
+                        .copied()
+                        .unwrap_or(TypedProgramPointValue::UNKNOWN),
+                });
+            }
+            transfer_program_point(instruction, typed, &mut state)?;
+        }
+    }
+    result.sort_unstable_by_key(|fact| (fact.source_ip, fact.value));
+    result.dedup_by_key(|fact| (fact.source_ip, fact.value));
+    Some(result)
+}
+
+fn merge_program_point_state(
+    existing: &mut [TypedProgramPointValue],
+    incoming: &[TypedProgramPointValue],
+) -> bool {
+    if existing.len() != incoming.len() {
+        return false;
+    }
+    let mut changed = false;
+    for (existing, incoming) in existing.iter_mut().zip(incoming) {
+        let merged = if *existing == *incoming {
+            *existing
+        } else {
+            TypedProgramPointValue::UNKNOWN
+        };
+        changed |= merged != *existing;
+        *existing = merged;
+    }
+    changed
+}
+
+fn transfer_program_point(
+    instruction: &TypedRegionInstruction,
+    typed: &TypedRegion,
+    state: &mut [TypedProgramPointValue],
+) -> Option<()> {
+    let set = |state: &mut [TypedProgramPointValue], value: TypedValueId, next| {
+        *state.get_mut(value.index_for_runtime())? = next;
+        Some(())
+    };
+    let scalar = |value: TypedValueId| {
+        let storage = typed.values.get(value.index_for_runtime())?.storage;
+        matches!(
+            storage,
+            VerifiedStorageType::Unit
+                | VerifiedStorageType::Int
+                | VerifiedStorageType::Bool
+                | VerifiedStorageType::Float
+                | VerifiedStorageType::Char
+        )
+        .then_some(TypedProgramPointValue {
+            ownership: TypedValueOwnership::Copy,
+            alias: TypedAliasClass::NoAlias,
+        })
+    };
+    let fresh = |value: TypedValueId| TypedProgramPointValue {
+        ownership: TypedValueOwnership::Owned,
+        alias: TypedAliasClass::Unique(value),
+    };
+
+    match &instruction.op {
+        TypedRegionOp::Constant { result, storage } => {
+            let next = if *storage == VerifiedStorageType::Handle
+                && matches!(instruction.source, RegInstr::LoadString { .. })
+            {
+                TypedProgramPointValue {
+                    ownership: TypedValueOwnership::Owned,
+                    alias: TypedAliasClass::Immutable,
+                }
+            } else {
+                scalar(*result).unwrap_or(TypedProgramPointValue::UNKNOWN)
+            };
+            set(state, *result, next)?;
+        }
+        TypedRegionOp::Move { result, source, .. } => {
+            if let Some(copy) = scalar(*source) {
+                set(state, *result, copy)?;
+            } else {
+                let source_index = source.index_for_runtime();
+                let source_state = state
+                    .get(source_index)
+                    .copied()
+                    .unwrap_or(TypedProgramPointValue::UNKNOWN);
+                if source_state.alias == TypedAliasClass::Immutable {
+                    set(state, *result, source_state)?;
+                } else {
+                    let shared = TypedProgramPointValue {
+                        ownership: TypedValueOwnership::Shared,
+                        alias: TypedAliasClass::Shared,
+                    };
+                    set(state, *source, shared)?;
+                    set(state, *result, shared)?;
+                }
+            }
+        }
+        TypedRegionOp::Aggregate { result, .. } => set(state, *result, fresh(*result))?,
+        TypedRegionOp::Field(access) => match access.kind {
+            TypedFieldAccessKind::Read { result } => {
+                let next = scalar(result).unwrap_or(TypedProgramPointValue {
+                    ownership: TypedValueOwnership::Shared,
+                    alias: TypedAliasClass::Unknown,
+                });
+                set(state, result, next)?;
+            }
+            TypedFieldAccessKind::Write { result, .. } => {
+                let next = scalar(result).unwrap_or_else(|| fresh(result));
+                set(state, result, next)?;
+            }
+        },
+        TypedRegionOp::Call {
+            result,
+            arguments,
+            parameter_effects,
+            ..
+        } => {
+            for (argument, effect) in arguments.iter().zip(parameter_effects) {
+                if *effect == VerifiedParamEffect::Mut {
+                    // A mutable call may publish aliases or replace the value.
+                    set(state, *argument, TypedProgramPointValue::UNKNOWN)?;
+                }
+            }
+            let next = scalar(*result).unwrap_or(TypedProgramPointValue::UNKNOWN);
+            set(state, *result, next)?;
+        }
+        TypedRegionOp::Control => {}
+        TypedRegionOp::Other => {
+            if let RegInstr::DeepCopy { reg } = instruction.source
+                && let Some(value) = typed.value(reg)
+            {
+                set(state, value.id, fresh(value.id))?;
+                return Some(());
+            }
+            for value in &instruction.writes {
+                let next = scalar(*value).unwrap_or(TypedProgramPointValue::UNKNOWN);
+                set(state, *value, next)?;
+            }
+        }
+    }
+    Some(())
 }
 
 #[derive(Debug)]
@@ -1172,6 +1515,59 @@ mod tests {
             TypedRegionIr::derive(&function, &facts, &[true; 2]).is_none(),
             "typed IR must never promote or carry an active Unknown"
         );
+    }
+
+    #[test]
+    fn program_point_alias_flow_preserves_unique_mut_input_until_aliasing_move() {
+        let mut function = function(
+            3,
+            vec![
+                RegInstr::ListLen { dst: 2, list: 0 },
+                RegInstr::Move { dst: 1, src: 0 },
+                RegInstr::ListLen { dst: 2, list: 0 },
+                RegInstr::Return { src: 2 },
+            ],
+        );
+        function.params = 1;
+        let mut facts = facts(&function);
+        facts.reg_types[0] = VerifiedStorageType::Handle;
+        facts.reg_ownership[0] = VerifiedValueOwnership::UniqueBorrow;
+        let ir = TypedRegionIr::derive(&function, &facts, &[true; 4]).expect("typed flow");
+
+        assert_eq!(
+            ir.program_point_value(0, 0),
+            TypedProgramPointValue {
+                ownership: TypedValueOwnership::UniqueBorrow,
+                alias: TypedAliasClass::UniqueParam(0),
+            }
+        );
+        assert!(ir.program_point_value(0, 0).permits_bounds_elision(true));
+        assert_eq!(
+            ir.program_point_value(2, 0).alias,
+            TypedAliasClass::Shared,
+            "a Handle move must revoke the unique alias proof"
+        );
+        assert!(!ir.program_point_value(2, 0).permits_bounds_elision(true));
+    }
+
+    #[test]
+    fn alias_permissions_fail_closed_and_distinguish_read_from_mutation() {
+        let readonly = TypedProgramPointValue {
+            ownership: TypedValueOwnership::ReadBorrow,
+            alias: TypedAliasClass::Param(0),
+        };
+        let unique = TypedProgramPointValue {
+            ownership: TypedValueOwnership::UniqueBorrow,
+            alias: TypedAliasClass::UniqueParam(0),
+        };
+
+        assert!(readonly.permits_readonly_hoist());
+        assert!(readonly.permits_bounds_elision(false));
+        assert!(!readonly.permits_bounds_elision(true));
+        assert!(unique.permits_readonly_hoist());
+        assert!(unique.permits_bounds_elision(true));
+        assert!(!TypedProgramPointValue::UNKNOWN.permits_readonly_hoist());
+        assert!(!TypedProgramPointValue::UNKNOWN.permits_bounds_elision(false));
     }
 
     #[test]

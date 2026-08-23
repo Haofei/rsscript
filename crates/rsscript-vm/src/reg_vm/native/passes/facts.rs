@@ -26,7 +26,6 @@ impl<T: Copy + Eq> NativeFact<T> {
     }
 }
 
-#[cfg(feature = "jit-memoization-experimental")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::reg_vm) enum NativeHeapProvenance {
     External,
@@ -34,13 +33,11 @@ pub(in crate::reg_vm) enum NativeHeapProvenance {
     Unknown,
 }
 
-#[cfg(feature = "jit-memoization-experimental")]
 pub(in crate::reg_vm) struct NativeHeapProvenanceFacts {
     cfg: NativeRegionCfg,
     before: Vec<Vec<NativeFact<NativeHeapProvenance>>>,
 }
 
-#[cfg(feature = "jit-memoization-experimental")]
 impl NativeHeapProvenanceFacts {
     pub(in crate::reg_vm) fn compute(
         code: &[RegInstr],
@@ -113,7 +110,6 @@ impl NativeHeapProvenanceFacts {
     }
 }
 
-#[cfg(feature = "jit-memoization-experimental")]
 fn native_ty_is_heap_receiver(ty: NativeTy) -> bool {
     matches!(
         ty,
@@ -125,7 +121,6 @@ fn native_ty_is_heap_receiver(ty: NativeTy) -> bool {
     )
 }
 
-#[cfg(feature = "jit-memoization-experimental")]
 fn native_heap_provenance_transfer(
     ip: usize,
     instr: &vm_jit::JitInstr,
@@ -173,7 +168,6 @@ fn native_heap_provenance_transfer(
             };
             set(facts, *dst, value);
         }
-        #[cfg(feature = "jit-memoization-experimental")]
         vm_jit::JitInstr::MemoizedHostCall {
             helper, dst, args, ..
         } => {
@@ -209,7 +203,6 @@ fn native_heap_provenance_transfer(
     }
 }
 
-#[cfg(feature = "jit-memoization-experimental")]
 fn native_jit_heap_fact_dst(instr: &vm_jit::JitInstr) -> Option<u32> {
     match instr {
         vm_jit::JitInstr::LoadInt { dst, .. }

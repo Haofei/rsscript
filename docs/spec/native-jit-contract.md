@@ -29,8 +29,16 @@ then returns to a VM-owned barrier which performs the next monotonic clock poll.
   proof cannot authorize a read-only or second mutable entry.
 - Process environment variables do not configure library behavior. Hosts pass
   typed `NativeJitOptions`; diagnostic front ends may translate their own flags.
-- Every call crosses the versioned `JitCallFrame` ABI. The frame owns bail,
-  safepoint, deoptimization, depth, limit, and host-context state for that call.
+- Every VM-to-native entry crosses the versioned `JitCallFrame` ABI. The frame
+  owns bail, safepoint, deoptimization, depth, limit, and host-context state.
+- A native-to-native edge may use the private frame-free scalar ABI only when the
+  callee is a bounded, non-recursive leaf over `Int`/`Bool`/`Float` and every
+  reachable instruction is proven unable to deopt, allocate, call a helper,
+  suspend, touch a resource, or invoke another function. Checked integer
+  arithmetic and shifts therefore retain the full child-frame path. Direct
+  entries are emitted lazily only for compiled callees; ordinary top-level VM
+  entries do not duplicate machine code. This internal ABI is process-local and
+  carries no independent compatibility promise.
 - Reentrant native entry is unsupported and returns the typed
   `NativeDeclineReason::ReentrantCall`; it is never presented as a resumable
   generated-code safepoint.
@@ -118,10 +126,13 @@ Profile-guided closure PIC and branch-side-exit speculation are excluded from th
 stable SDK path. They remain behind the VM-only `jit-speculation` research feature
 until a canonical compiler workload demonstrates a repeatable end-to-end benefit.
 
-Loop-invariant host-helper memoization is likewise excluded from the stable SDK
-path and compiled only by `jit-memoization-experimental`. Its CFG scope proof and
-runtime memo state must earn retention through the same canonical scorecard.
-OSR selection and that experimental helper-hoist consume one canonical loop-fact
+The stable native path contains a deliberately narrow read-only LICM subset. Its
+lazy loop-activation memoization is emitted only when verifier-bound typed facts
+produce flow-sensitive ownership/alias evidence, every operand is invariant, and
+the existing heap-provenance scan proves that no overlapping write occurs. The
+legacy `jit-memoization-experimental` feature remains a compatibility alias; it
+does not widen this production proof. OSR selection and helper-hoisting consume
+one canonical loop-fact
 projection: unique preheader (when present), header condition, latches, exits, and
 a conservative affine induction variable. The existing backend range proof may
 remove an individual flat-list bounds check, and reports the exact eliminated-site
@@ -136,13 +147,14 @@ individual direct flat-list access, not a general range-analysis claim. Backend
 tests assert emitted and eliminated-site counts separately, while the controlled
 scorecard exposes both counters for workloads that reach the flat-buffer ABI.
 
-Research LICM is descriptor-driven rather than a helper-name allowlist. A helper
+Read-only LICM is descriptor-driven rather than a helper-name allowlist. A helper
 must be read-only, every operand must be loop invariant, and every declared heap
 projection must remain unmodified for the loop activation. Missing or multi-root
 projection metadata fails closed. Field-slot reads additionally retain their exact
-slot proof. This remains behind `jit-memoization-experimental`: correctness tests
-make it runnable, while controlled scorecard evidence is still required before it
-can enter the stable native path.
+slot proof. Handle receivers additionally require a program-point alias class of
+immutable, uniquely owned, unique-borrowed, or read-borrowed. Unknown, shared, an
+over-budget ownership analysis, or a typed-facts disagreement retains the ordinary
+helper call.
 
 Scalar x2 unrolling is not enabled. The VM reports only research candidates that
 have one latch and exit, a unit constant induction step, at most twelve direct
@@ -179,10 +191,15 @@ contract, and prepared-call boundary. Raw call-frame layout, ABI offsets, helper
 function aliases, codegen internals, and module implementation types remain
 crate-private.
 
-Native rewrites carry `NativeInstructionOrigin { bytecode_ip, resume_ip }` in one
-owned pipeline state. A pass may temporarily return a local new-to-previous map,
-but only the pipeline state composes it; source and deopt-resume identity may not
-travel in unrelated parallel vectors.
+Native rewrites carry
+`NativeInstructionOrigin { source_ip, resume_ip, source_cost }` in one owned
+pipeline state. JIT instruction indices are CFG identities only. A pass may
+temporarily return a local new-to-previous map, but only the pipeline state
+composes it; source identity, interpreter resume, and accounting ownership may not
+travel in unrelated parallel vectors. Expansion assigns one source cost to exactly
+one generated item, fusion preserves the summed cost, and a rewrite that loses
+cost is rejected before codegen. Codegen reserves explicit source cost by segment;
+deopt maps expose the explicit source/resume positions to the VM.
 
 ## Native recursion
 
@@ -210,7 +227,8 @@ code; guard pages and canary/boundary fixtures cover direct native memory access
 
 The stable retention set is baseline scalar/flat-data execution, native leaf-call
 chains, transactional helpers, precise deopt, and the Option/Result/Variant scalar
-replacement paths that enter on the canonical scorecard. Speculation, non-tail
-native recursion, and helper memoization are research features. A local scorecard
+replacement paths that enter on the canonical scorecard. Speculation and non-tail
+native recursion remain research features; only the alias-gated read-only LICM
+subset is retained in production. A local scorecard
 run is diagnostic only; timings become a compatibility or release signal only
 after a controlled-hardware baseline is checked in with machine/toolchain metadata.

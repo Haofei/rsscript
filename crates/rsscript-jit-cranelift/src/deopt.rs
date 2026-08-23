@@ -17,8 +17,9 @@ impl SafepointId {
 /// The deopt state for one safepoint: where the interpreter must resume and which
 /// registers carry live state into that resume point.
 ///
-/// `resume_ip` is the [`JitInstr`] index the interpreter re-executes when this
-/// guard fires. It is the very instruction whose guard bailed: native code bails
+/// `source_ip` and `resume_ip` come from the instruction's explicit origin table,
+/// not its JIT CFG index. `resume_ip` is the bytecode instruction the interpreter
+/// re-executes when this guard fires. It is the source instruction whose guard bailed: native code bails
 /// *before* completing that instruction (e.g. before storing an `Add`'s checked
 /// result), so the interpreter must run it again. Its inputs and any values used by
 /// the remaining continuation must therefore be reconstructed.
@@ -33,7 +34,9 @@ impl SafepointId {
 /// resume window after transactional rollback.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeoptSite {
-    /// The `JitInstr` index to resume interpretation at (the bailing instruction).
+    /// Original bytecode position represented by the native operation.
+    pub source_ip: u32,
+    /// Bytecode position to resume interpretation at (the bailing instruction).
     pub resume_ip: u32,
     /// Registers definitely assigned and live on entry to `resume_ip`.
     pub live: Vec<(u32, JitValueType)>,

@@ -80,6 +80,8 @@ fn rejects_reg_types_length_mismatch() {
         reg_types: vec![JitValueType::Int; 2],
         zero_init_regs: Vec::new(),
         code: vec![],
+        instruction_origins: Vec::new(),
+        source_instruction_count: 0,
         memo_scopes: Vec::new(),
         cold_blocks: Vec::new(),
         resume_live_regs: Vec::new(),
@@ -108,6 +110,46 @@ fn rejects_params_exceeding_regs() {
 }
 
 #[test]
+fn rejects_drifting_or_double_charged_instruction_origins() {
+    let mut wrong_len = f(0, 1, vec![JitInstr::LoadInt { dst: 0, value: 1 }]);
+    wrong_len.source_instruction_count = 1;
+    wrong_len.instruction_origins = vec![];
+    // Empty remains the detached-client identity contract; a non-empty mismatch
+    // must fail closed.
+    wrong_len.instruction_origins = vec![JitInstructionOrigin::identity(0); 2];
+    assert!(
+        validate(&wrong_len)
+            .unwrap_err()
+            .message
+            .contains("origin table")
+    );
+
+    let mut duplicate = f(
+        0,
+        1,
+        vec![
+            JitInstr::LoadInt { dst: 0, value: 1 },
+            JitInstr::Return { src: 0 },
+        ],
+    );
+    duplicate.source_instruction_count = 2;
+    duplicate.instruction_origins = vec![
+        JitInstructionOrigin::identity(0),
+        JitInstructionOrigin {
+            source_ip: 0,
+            resume_ip: 0,
+            source_cost: 1,
+        },
+    ];
+    assert!(
+        validate(&duplicate)
+            .unwrap_err()
+            .message
+            .contains("owns source cost more than once")
+    );
+}
+
+#[test]
 fn rejects_excessive_combined_analysis_dimensions() {
     let program = JitFunction {
         n_params: 0,
@@ -115,6 +157,8 @@ fn rejects_excessive_combined_analysis_dimensions() {
         reg_types: vec![JitValueType::Int; 1_001],
         zero_init_regs: Vec::new(),
         code: vec![JitInstr::Jump { target: 0 }; 1_000],
+        instruction_origins: Vec::new(),
+        source_instruction_count: 0,
         memo_scopes: Vec::new(),
         cold_blocks: Vec::new(),
         resume_live_regs: Vec::new(),
@@ -321,7 +365,7 @@ fn rejects_zero_initialized_handle_scratch() {
     assert!(err.message.contains("scalar type"), "{}", err.message);
 }
 
-#[cfg(feature = "memoization")]
+#[cfg(any(feature = "memoization", feature = "readonly-licm"))]
 #[test]
 fn rejects_duplicate_or_out_of_range_memo_slots() {
     use JitValueType::{Handle, Int};
@@ -368,7 +412,7 @@ fn rejects_duplicate_or_out_of_range_memo_slots() {
     );
 }
 
-#[cfg(feature = "memoization")]
+#[cfg(any(feature = "memoization", feature = "readonly-licm"))]
 #[test]
 fn rejects_handle_returning_memoized_helper() {
     use JitValueType::{Handle, Int};
@@ -665,6 +709,8 @@ fn continuation_register_compaction_uses_dense_live_windows() {
                 live: vec![7],
             },
         ],
+        instruction_origins: Vec::new(),
+        source_instruction_count: 0,
         memo_scopes: Vec::new(),
         cold_blocks: Vec::new(),
         resume_live_regs: Vec::new(),
@@ -924,6 +970,60 @@ fn armed_osr_reserves_block_cost_and_falls_back_at_first_unpaid_step() {
         NativeOutcome::Deopt { safepoint_id, .. }
             if safepoint_id != SafepointId::ANONYMOUS
     ));
+}
+
+#[test]
+fn armed_osr_charges_explicit_source_cost_instead_of_jit_instruction_count() {
+    let mut m = module();
+    let code = vec![
+        JitInstr::LoadInt { dst: 1, value: 1 },
+        JitInstr::JumpIfIntCompare {
+            lhs: 0,
+            rhs: 1,
+            op: JitCompare::Gt,
+            expected: false,
+            target: 4,
+        },
+        JitInstr::Sub {
+            dst: 0,
+            lhs: 0,
+            rhs: 1,
+        },
+        JitInstr::Jump { target: 1 },
+        JitInstr::OsrExit,
+    ];
+    let mut program = f(1, 2, code);
+    program.source_instruction_count = 5;
+    program.instruction_origins = vec![
+        JitInstructionOrigin {
+            source_ip: 0,
+            resume_ip: 0,
+            source_cost: 0,
+        },
+        JitInstructionOrigin::identity(1),
+        JitInstructionOrigin {
+            source_ip: 2,
+            resume_ip: 2,
+            source_cost: 3,
+        },
+        JitInstructionOrigin::identity(3),
+        JitInstructionOrigin {
+            source_ip: 4,
+            resume_ip: 4,
+            source_cost: 0,
+        },
+    ];
+    let id = m.compile_osr(&program, 1, true, false).unwrap();
+    let window = [3, 1];
+    let lens = [0; 2];
+    let (outcome, steps) = m.call_with_step_cancel(id, &window, &lens, 0, Some(4), None);
+    assert_eq!(steps, 4, "the first segment owns 1 + 3 source steps");
+    let NativeOutcome::Deopt { safepoint_id, .. } = outcome else {
+        panic!("the next one-step segment must be rejected");
+    };
+    let site = &m.deopt_map(id).unwrap().sites[safepoint_id.0 as usize - 1];
+    assert_eq!(site.source_ip, 3);
+    assert_eq!(site.resume_ip, 3);
 }
 
 #[test]

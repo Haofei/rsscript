@@ -57,7 +57,28 @@ pub(in crate::reg_vm) enum VerifiedCallTarget {
 pub(in crate::reg_vm) enum VerifiedParamEffect {
     #[default]
     Unknown,
+    /// A verified typed-facts contract says the argument is non-mutating at the
+    /// caller boundary. Bytecode v1 cannot distinguish `read` from `take`, so
+    /// both deliberately collapse to this conservative class.
+    ReadOrTake,
     Mut,
+}
+
+/// Ownership evidence admitted with the verified executable.
+///
+/// This is intentionally a small lattice rather than a second ownership
+/// checker. Scalar `Copy` is independently reconstructable from v1. Borrow and
+/// owned classes are consumed only together with opcode/effect/alias proofs;
+/// by themselves they never authorize an unchecked memory operation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::reg_vm) enum VerifiedValueOwnership {
+    #[default]
+    Unknown,
+    Copy,
+    ReadBorrow,
+    UniqueBorrow,
+    Owned,
+    Shared,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -93,6 +114,7 @@ pub(in crate::reg_vm) struct VerifiedInstrEffects {
 #[derive(Clone, Debug)]
 pub(in crate::reg_vm) struct VerifiedFunctionFacts {
     pub(in crate::reg_vm) reg_types: Box<[VerifiedStorageType]>,
+    pub(in crate::reg_vm) reg_ownership: Box<[VerifiedValueOwnership]>,
     pub(in crate::reg_vm) call_sites: Box<[Option<VerifiedCallSite>]>,
     pub(in crate::reg_vm) effects: Box<[VerifiedInstrEffects]>,
     /// Concrete substitutions for this emitted function instance, when the
@@ -205,6 +227,14 @@ impl VerifiedExecutableFacts {
                     }
                 }
             }
+            for ((ownership, storage), typed_register) in function
+                .reg_ownership
+                .iter_mut()
+                .zip(&function.reg_types)
+                .zip(&typed_function.registers)
+            {
+                *ownership = verified_typed_ownership(*storage, typed_register.ownership);
+            }
             for typed_call in &typed_function.call_sites {
                 let Some(Some(call)) = function.call_sites.get_mut(typed_call.instruction as usize)
                 else {
@@ -246,8 +276,10 @@ impl VerifiedExecutableFacts {
                     *effect = match typed_effect {
                         rsscript_bytecode::TypedDataEffectV1::Mutate => VerifiedParamEffect::Mut,
                         rsscript_bytecode::TypedDataEffectV1::Read
-                        | rsscript_bytecode::TypedDataEffectV1::Take
-                        | rsscript_bytecode::TypedDataEffectV1::Unknown => {
+                        | rsscript_bytecode::TypedDataEffectV1::Take => {
+                            VerifiedParamEffect::ReadOrTake
+                        }
+                        rsscript_bytecode::TypedDataEffectV1::Unknown => {
                             VerifiedParamEffect::Unknown
                         }
                     };
@@ -394,6 +426,35 @@ fn typed_storage_type(ty: &rsscript_bytecode::TypedFactTypeV1) -> Option<Verifie
     Some(wire_storage_type(ty))
 }
 
+fn verified_typed_ownership(
+    storage: VerifiedStorageType,
+    ownership: rsscript_bytecode::TypedValueOwnershipV1,
+) -> VerifiedValueOwnership {
+    use rsscript_bytecode::TypedValueOwnershipV1 as Typed;
+    if matches!(
+        storage,
+        VerifiedStorageType::Unit
+            | VerifiedStorageType::Int
+            | VerifiedStorageType::Bool
+            | VerifiedStorageType::Float
+            | VerifiedStorageType::Char
+    ) {
+        return VerifiedValueOwnership::Copy;
+    }
+    if storage != VerifiedStorageType::Handle {
+        return VerifiedValueOwnership::Unknown;
+    }
+    match ownership {
+        Typed::ReadBorrow => VerifiedValueOwnership::ReadBorrow,
+        Typed::UniqueBorrow => VerifiedValueOwnership::UniqueBorrow,
+        Typed::Owned => VerifiedValueOwnership::Owned,
+        Typed::Shared => VerifiedValueOwnership::Shared,
+        // A heap handle is never promoted to Copy merely because an optional
+        // section says so. v1 cannot independently establish that contract.
+        Typed::Copy | Typed::Unknown => VerifiedValueOwnership::Unknown,
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 enum TypeFact {
     Unset,
@@ -524,8 +585,28 @@ fn derive_function_facts(
         });
     }
 
+    let reg_types = constraints.finish();
+    let reg_ownership = reg_types
+        .iter()
+        .map(|storage| {
+            if matches!(
+                storage,
+                VerifiedStorageType::Unit
+                    | VerifiedStorageType::Int
+                    | VerifiedStorageType::Bool
+                    | VerifiedStorageType::Float
+                    | VerifiedStorageType::Char
+            ) {
+                VerifiedValueOwnership::Copy
+            } else {
+                VerifiedValueOwnership::Unknown
+            }
+        })
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
     Ok(VerifiedFunctionFacts {
-        reg_types: constraints.finish(),
+        reg_types,
+        reg_ownership,
         call_sites: call_sites.into_boxed_slice(),
         effects: effects.into_boxed_slice(),
         generic_substitutions: Box::new([]),
@@ -1054,6 +1135,19 @@ fn instruction_footprints(instruction: &RegInstr) -> (RegFootprint, RegFootprint
         RegInstr::GetField { dst, base, .. } | RegInstr::GetFieldSlot { dst, base, .. } => {
             (Registers(vec![*base]), Registers(vec![*dst]))
         }
+        RegInstr::ListLen { dst, list } => (Registers(vec![*list]), Registers(vec![*dst])),
+        RegInstr::ListGet { dst, list, index } => {
+            (Registers(vec![*list, *index]), Registers(vec![*dst]))
+        }
+        RegInstr::ListSet {
+            dst,
+            list,
+            index,
+            value,
+        } => (
+            Registers(vec![*list, *index, *value]),
+            Registers(vec![*dst]),
+        ),
         RegInstr::SetField {
             dst, base, value, ..
         }
@@ -1319,10 +1413,36 @@ mod tests {
     }
 
     #[test]
+    fn typed_ownership_never_promotes_a_heap_handle_to_copy() {
+        assert_eq!(
+            verified_typed_ownership(
+                VerifiedStorageType::Handle,
+                rsscript_bytecode::TypedValueOwnershipV1::Copy,
+            ),
+            VerifiedValueOwnership::Unknown
+        );
+        assert_eq!(
+            verified_typed_ownership(
+                VerifiedStorageType::Handle,
+                rsscript_bytecode::TypedValueOwnershipV1::UniqueBorrow,
+            ),
+            VerifiedValueOwnership::UniqueBorrow
+        );
+        assert_eq!(
+            verified_typed_ownership(
+                VerifiedStorageType::Int,
+                rsscript_bytecode::TypedValueOwnershipV1::Owned,
+            ),
+            VerifiedValueOwnership::Copy
+        );
+    }
+
+    #[test]
     fn verified_generic_call_instantiates_scalar_parameter_storage() {
         let base = VerifiedFunctionFacts {
             reg_types: vec![VerifiedStorageType::Handle, VerifiedStorageType::Unknown]
                 .into_boxed_slice(),
+            reg_ownership: vec![VerifiedValueOwnership::Unknown; 2].into_boxed_slice(),
             call_sites: Vec::new().into_boxed_slice(),
             effects: Vec::new().into_boxed_slice(),
             generic_substitutions: Vec::new().into_boxed_slice(),

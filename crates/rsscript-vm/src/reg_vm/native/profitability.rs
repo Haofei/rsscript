@@ -28,7 +28,6 @@ const W_BRANCH: i64 = 1; // Jump/JumpIf*: native control flow
 const W_PROFILED_BRANCH: i64 = 2; // profile-guided branch: a genuine native win
 const W_DIRECT_LIST: i64 = 3; // List*Direct: replaced a per-element host call — big win
 const W_MATCH_MAP_GET: i64 = 2; // fused Map.get+match: partly native
-#[cfg(feature = "jit-memoization-experimental")]
 const W_MEMOIZED_HOSTCALL: i64 = 1; // hoisted loop-invariant helper: amortised
 
 // --- Debit weights (per-iteration boundary cost native cannot amortise) -----
@@ -205,7 +204,6 @@ pub(in crate::reg_vm) fn native_region_profitability(
             | JitInstr::MatchSortedMapGetFloat { .. } => {
                 score += W_MATCH_MAP_GET;
             }
-            #[cfg(feature = "jit-memoization-experimental")]
             JitInstr::MemoizedHostCall { .. } => {
                 score += W_MEMOIZED_HOSTCALL;
             }
@@ -358,6 +356,8 @@ mod tests {
                 JitInstr::LoadInt { dst: 0, value: 0 },
                 JitInstr::Return { src: 0 },
             ],
+            instruction_origins: Vec::new(),
+            source_instruction_count: 0,
             memo_scopes: Vec::new(),
             cold_blocks: Vec::new(),
             resume_live_regs: Vec::new(),

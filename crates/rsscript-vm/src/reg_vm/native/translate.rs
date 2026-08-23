@@ -20,7 +20,7 @@ mod loop_regions;
 use jit_post::*;
 pub(in crate::reg_vm) use loop_regions::*;
 
-#[cfg(all(test, feature = "jit-memoization-experimental"))]
+#[cfg(test)]
 pub(crate) use jit_post::{
     native_field_load_slot_not_stored_in_loop, native_loop_preserves_field_slot_for_receiver,
     native_loop_preserves_heap_projection,
@@ -314,7 +314,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
         native_bytes_length_fold_in_region(&pipeline.code, pipeline.n_regs, 0, region_exit)?;
     pipeline.apply_rewrite(code, n_regs, next_ip_map)?;
     let (code, n_regs, origins) = pipeline.into_parts();
-    let ip_map: Vec<usize> = origins.iter().map(|origin| origin.bytecode_ip).collect();
+    let ip_map: Vec<usize> = origins.iter().map(|origin| origin.source_ip).collect();
     debug_assert!(
         origins
             .iter()
@@ -2134,16 +2134,14 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     let native_reg_types: Vec<NativeTy> = (0..n_regs)
         .map(|reg| ty[reg].unwrap_or(NativeTy::Int))
         .collect();
-    #[cfg(feature = "jit-memoization-experimental")]
     let memo_scopes = native_memoize_loop_invariant_runtime_helper_calls(
         &code,
         &reachable,
         &mut jit_code,
         &native_reg_types,
         func.params,
+        None,
     );
-    #[cfg(not(feature = "jit-memoization-experimental"))]
-    let memo_scopes = Vec::new();
     native_forward_direct_list_store_loads(&mut jit_code);
 
     let reg_types = native_reg_types
@@ -2155,12 +2153,20 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     // parameter defaults to `Int` (and a mismatching argument then just falls back).
     let param_types: Vec<NativeTy> = native_reg_types[..func.params].to_vec();
 
+    let instruction_origins = origins
+        .iter()
+        .copied()
+        .map(NativeInstructionOrigin::to_jit)
+        .collect::<Option<Vec<_>>>()?;
+
     let jit_fn = vm_jit::JitFunction {
         n_params: func.params as u32,
         n_regs: native_reg_types.len() as u32,
         reg_types,
         zero_init_regs: scalar_payload_regs.iter().map(|&reg| reg as u32).collect(),
         code: jit_code,
+        instruction_origins,
+        source_instruction_count: u32::try_from(func.code.len()).ok()?,
         memo_scopes,
         cold_blocks: profile_guidance.cold_blocks,
         resume_live_regs: Vec::new(),
@@ -2171,7 +2177,9 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     let precise_resume_safe = self_call_sites.is_empty()
         && group_call_sites.is_empty()
         && n_regs == func.regs
-        && ip_map.iter().enumerate().all(|(ip, &orig)| ip == orig);
+        && origins
+            .iter()
+            .all(|origin| origin.source_ip < func.code.len() && origin.resume_ip < func.code.len());
     Some((
         jit_fn,
         ret_type,
@@ -2181,29 +2189,17 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     ))
 }
 
-/// `Some(())` if the condition holds, else `None` — lets the translator use `?`
-/// to bail out of a non-eligible function.
+/// Convert a failed eligibility predicate into the translator's `None` decline.
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn require(condition: bool) -> Option<()> {
     condition.then_some(())
 }
 
-/// Build an OSR [`vm_jit::JitFunction`] for the loop `lp` in `code`. `code` is the
-/// (possibly scalar replacement-scalar-replaced) instruction stream; `lp.header`/`lp.exit` index
-/// into it. The JIT is index-aligned with `code` so a native OSR-exit's
-/// `resume_ip` is the `code` instruction index — which the caller maps back to the
-/// ORIGINAL `func.code` post-loop ip via the scalar replacement ip-map (identity when no Option was
-/// replaced, so the keystone holds: indices into `code` track the interpreter's
-/// resume position through the ip-map).
-///
-/// Every instruction in the loop body region must be in the native subset. The
-/// exit instruction becomes [`vm_jit::JitInstr::OsrExit`] (deopt back to the
-/// interpreter with the live-out window). All instructions outside the loop region
-/// (the pre-loop, the post-loop) become [`vm_jit::JitInstr::Bail`]/`Nop`: they are
-/// never reached natively (entry is the header, the only exit is `OsrExit`), but
-/// they keep the index alignment. Returns the function plus the per-register types
-/// so the caller can marshal the live-in window. `None` if the loop body leaves
-/// the subset or types don't unify.
+/// Build an OSR function for a native-subset loop. CFG indices stay local to the
+/// possibly transformed stream; the origin map independently retains source and
+/// resume identity. Non-loop instructions preserve alignment but cannot execute,
+/// and the loop exits through `OsrExit` with its live-out window. Returns `None`
+/// when the loop or its types cannot be represented safely.
 #[cfg(feature = "native-jit")]
 #[allow(dead_code)]
 pub(in crate::reg_vm) fn translate_osr_loop(
@@ -2230,10 +2226,12 @@ pub(in crate::reg_vm) fn translate_osr_loop(
         Vec::new(),
         HashMap::new(),
         &[],
-        // No signature available on the bare entry (unit tests): treat every param
-        // conservatively (none proven an immutable leaf) so the guard never under-declines.
+        // Bare test entry has no immutable-leaf proof.
         &[],
         None,
+        None,
+        None,
+        code.len(),
         true,
     )
 }
@@ -2264,14 +2262,16 @@ pub(in crate::reg_vm) fn translate_osr_loop_profiled(
     // block IR as continuations. Transformed/inlined streams retain their
     // existing proven facts until their origin map can project typed values
     // without guessing.
+    let typed_ir;
     let typed_code;
     let code = if std::ptr::eq(code, func.code.as_slice()) {
         let mut included = vec![false; code.len()];
         included.get_mut(lp.header..lp.exit)?.fill(true);
-        let typed_ir = TypedRegionIr::derive(func, facts, &included)?;
-        typed_code = typed_ir.lower_to_reg_code(func)?;
+        typed_ir = Some(TypedRegionIr::derive(func, facts, &included)?);
+        typed_code = typed_ir.as_ref()?.lower_to_reg_code(func)?;
         typed_code.as_slice()
     } else {
+        typed_ir = None;
         code
     };
     let profile_guidance = native_osr_profile_guidance(profile, code, n_regs, lp, ip_map);
@@ -2286,6 +2286,9 @@ pub(in crate::reg_vm) fn translate_osr_loop_profiled(
         param_native_types,
         immutable_leaf_params,
         Some(facts),
+        typed_ir.as_ref(),
+        Some(ip_map),
+        func.code.len(),
         true,
     )
 }
@@ -2317,6 +2320,9 @@ fn translate_osr_loop_inner(
     param_native_types: &[Option<NativeTy>],
     immutable_leaf_params: &[bool],
     verified_facts: Option<&VerifiedFunctionFacts>,
+    typed_ir: Option<&TypedRegionIr>,
+    source_ip_map: Option<&[usize]>,
+    source_instruction_count: usize,
     enable_flat_buffers: bool,
 ) -> Option<(
     vm_jit::JitFunction,
@@ -2828,7 +2834,9 @@ fn translate_osr_loop_inner(
                     RegInstr::ListGet { dst, list, .. } if is_handle_reg(*list) => {
                         // A heap-valued element (e.g. a stored closure/struct) means the
                         // list is NOT a flat scalar buffer ⇒ disqualify.
-                        if is_handle_reg(*dst) {
+                        if is_handle_reg(*dst)
+                            || !verified_alias_allows_bounds_elision(typed_ir, i, *list, false)
+                        {
                             st[*list] = S::Disq;
                         } else {
                             let kind = if ty[*dst] == Some(NativeTy::Float) {
@@ -2850,7 +2858,9 @@ fn translate_osr_loop_inner(
                         }
                     }
                     RegInstr::ListSet { list, value, .. } if is_handle_reg(*list) => {
-                        if ty[*value] == Some(NativeTy::Int) {
+                        if !verified_alias_allows_bounds_elision(typed_ir, i, *list, true) {
+                            st[*list] = S::Disq;
+                        } else if ty[*value] == Some(NativeTy::Int) {
                             st[*list] = match st[*list] {
                                 S::Unseen
                                 | S::Flat(NativeTy::FlatInt)
@@ -4026,31 +4036,26 @@ fn translate_osr_loop_inner(
                         .collect(),
                 }
             }
-            // Any other (non-subset) instruction in-region was already rejected.
             _ => return None,
         };
         jit_code.push(jit);
     }
 
-    // Native type per register, then the JIT-class projection for codegen.
     let mut native_reg_types: Vec<NativeTy> = (0..n_regs)
         .map(|reg| ty[reg].unwrap_or(NativeTy::Int))
         .collect();
     for _ in &scalar_fields {
         native_reg_types.push(NativeTy::Int);
     }
-    #[cfg(feature = "jit-memoization-experimental")]
     let reachable = native_reachable_instructions(code);
-    #[cfg(feature = "jit-memoization-experimental")]
     let memo_scopes = native_memoize_loop_invariant_runtime_helper_calls(
         code,
         &reachable,
         &mut jit_code,
         &native_reg_types,
         n_params,
+        typed_ir,
     );
-    #[cfg(not(feature = "jit-memoization-experimental"))]
-    let memo_scopes = Vec::new();
     native_forward_direct_list_store_loads(&mut jit_code);
     let mut written_regs = vec![false; native_reg_types.len()];
     for (ip, instr) in jit_code.iter().enumerate() {
@@ -4065,9 +4070,11 @@ fn translate_osr_loop_inner(
         .iter()
         .map(|t| t.jit_value_type())
         .collect();
-    // Param types so the caller can marshal handle params (List/struct) in the
-    // window; scalar live-in regs marshal directly by `reg_types`.
+    // Handle parameters marshal through the window; scalars use `reg_types`.
     let param_types: Vec<NativeTy> = native_reg_types[..n_params].to_vec();
+
+    let instruction_origins =
+        native_jit_origins(&jit_code, source_ip_map, source_instruction_count)?;
 
     let jit_fn = vm_jit::JitFunction {
         n_params: n_params as u32,
@@ -4075,6 +4082,8 @@ fn translate_osr_loop_inner(
         reg_types,
         zero_init_regs: Vec::new(),
         code: jit_code,
+        instruction_origins,
+        source_instruction_count: u32::try_from(source_instruction_count).ok()?,
         memo_scopes,
         cold_blocks,
         resume_live_regs: Vec::new(),

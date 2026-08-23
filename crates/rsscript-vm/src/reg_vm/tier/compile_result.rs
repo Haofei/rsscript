@@ -47,7 +47,6 @@ impl NativeCompileTelemetry {
                 | vm_jit::JitInstr::ListSetFloatDirect { .. } => {
                     telemetry.direct_list_bounds_check_sites += 1;
                 }
-                #[cfg(feature = "jit-memoization-experimental")]
                 vm_jit::JitInstr::MemoizedHostCall { .. } => {
                     telemetry.memoized_runtime_helper_call_sites += 1;
                 }
@@ -160,6 +159,8 @@ pub(super) fn record_native_compile_stats(
     native.stats.profile_branch_cold_blocks += jit_fn.cold_blocks.len() as u64;
     native.stats.profile_branch_side_exits += telemetry.profile_branch_side_exits;
     native.stats.native_call_edges += telemetry.native_call_edges;
+    native.stats.direct_scalar_call_edges +=
+        u64::from(module.direct_scalar_call_edges(id).unwrap_or(0));
     native.stats.native_call_depth_max = native
         .stats
         .native_call_depth_max

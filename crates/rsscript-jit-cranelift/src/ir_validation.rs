@@ -28,7 +28,7 @@ fn check_zero_init_reg(program: &JitFunction, reg: u32) -> Result<(), JitError> 
     Ok(())
 }
 
-#[cfg(feature = "memoization")]
+#[cfg(any(feature = "memoization", feature = "readonly-licm"))]
 fn validate_memo_scopes(
     program: &JitFunction,
     memo_slot_owners: &[Option<usize>],
@@ -169,6 +169,60 @@ pub(crate) fn validate_with_limits(
 ) -> Result<ValidationFacts, JitError> {
     let n_regs = program.n_regs as usize;
     let n = program.code.len();
+    let source_len = program.source_instruction_count();
+
+    if !program.instruction_origins.is_empty() {
+        if program.instruction_origins.len() != n {
+            return Err(JitError::invalid_ir(format!(
+                "instruction origin table has {} entries for {n} JIT instructions",
+                program.instruction_origins.len()
+            )));
+        }
+        if source_len == 0 && n != 0 {
+            return Err(JitError::invalid_ir(
+                "non-empty JIT IR requires a non-empty source instruction space",
+            ));
+        }
+        let mut charged_sources = std::collections::HashSet::new();
+        let mut total_source_cost = 0_u64;
+        for (jit_ip, origin) in program.instruction_origins.iter().enumerate() {
+            if origin.source_ip as usize >= source_len {
+                return Err(JitError::invalid_ir(format!(
+                    "instruction origin {jit_ip} has source_ip {} outside source length {source_len}",
+                    origin.source_ip
+                )));
+            }
+            if origin.resume_ip as usize >= source_len {
+                return Err(JitError::invalid_ir(format!(
+                    "instruction origin {jit_ip} has resume_ip {} outside source length {source_len}",
+                    origin.resume_ip
+                )));
+            }
+            if origin.source_cost != 0 && !charged_sources.insert(origin.source_ip) {
+                return Err(JitError::invalid_ir(format!(
+                    "source instruction {} owns source cost more than once",
+                    origin.source_ip
+                )));
+            }
+            total_source_cost = total_source_cost
+                .checked_add(u64::from(origin.source_cost))
+                .ok_or_else(|| JitError::invalid_ir("source-step cost overflow"))?;
+            if matches!(
+                program.code[jit_ip],
+                JitInstr::RegionExit { .. } | JitInstr::OsrExit | JitInstr::Bail
+            ) && origin.source_cost != 0
+            {
+                return Err(JitError::invalid_ir(format!(
+                    "non-executing boundary instruction {jit_ip} must have zero source cost"
+                )));
+            }
+        }
+        if total_source_cost > source_len as u64 {
+            return Err(JitError::invalid_ir(format!(
+                "source-step cost {total_source_cost} exceeds source instruction count {source_len}"
+            )));
+        }
+    }
 
     if program.reg_types.len() != n_regs {
         return Err(JitError::invalid_ir(format!(
@@ -409,13 +463,13 @@ pub(crate) fn validate_with_limits(
     };
 
     let mut returns = Vec::new();
-    #[cfg(feature = "memoization")]
+    #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
     let memo_count = program
         .code
         .iter()
         .filter(|instr| matches!(instr, JitInstr::MemoizedHostCall { .. }))
         .count();
-    #[cfg(not(feature = "memoization"))]
+    #[cfg(not(any(feature = "memoization", feature = "readonly-licm")))]
     let memo_count = 0;
     if memo_count > limits.max_memo_slots {
         return Err(JitError::invalid_ir(format!(
@@ -423,9 +477,9 @@ pub(crate) fn validate_with_limits(
             limits.max_memo_slots
         )));
     }
-    #[cfg(feature = "memoization")]
+    #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
     let mut memo_slot_owners: Vec<Option<usize>> = vec![None; memo_count];
-    #[cfg(feature = "memoization")]
+    #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
     for (ip, instr) in program.code.iter().enumerate() {
         let JitInstr::MemoizedHostCall { memo_slot, .. } = instr else {
             continue;
@@ -545,7 +599,7 @@ pub(crate) fn validate_with_limits(
                     }
                 }
             }
-            #[cfg(feature = "memoization")]
+            #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
             JitInstr::MemoizedHostCall {
                 helper, dst, args, ..
             } => {
@@ -894,13 +948,13 @@ pub(crate) fn validate_with_limits(
             }
         }
     }
-    #[cfg(feature = "memoization")]
+    #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
     validate_memo_scopes(program, &memo_slot_owners)?;
-    #[cfg(not(feature = "memoization"))]
+    #[cfg(not(any(feature = "memoization", feature = "readonly-licm")))]
     if !program.memo_scopes.is_empty() {
         return Err(JitError::new(
             JitErrorKind::UnsupportedInstruction,
-            "memo scopes require the research-only memoization feature",
+            "memo scopes require the internal memoization capability",
         ));
     }
     let reachable = reachable_jit_instrs(program);

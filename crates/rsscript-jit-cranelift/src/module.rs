@@ -139,14 +139,14 @@ fn native_scalar_leaf_callable(function: &JitFunction, osr: bool, _returns_handl
                 instr,
                 JitInstr::CallSelf { .. } | JitInstr::CallGroup { .. }
             );
-        #[cfg(feature = "memoization")]
+        #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
         let baseline = baseline || matches!(instr, JitInstr::MemoizedHostCall { .. });
 
         let extends_handles = matches!(
             instr,
             JitInstr::HostCall { helper, .. } if helper.heap_effect().extends_input_handles()
         );
-        #[cfg(feature = "memoization")]
+        #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
         let extends_handles = extends_handles
             || matches!(
                 instr,
@@ -183,7 +183,7 @@ fn native_compact_scalar_frame_callable(
                 JitInstr::HostCall { .. } | JitInstr::CallNative { .. }
             ) && !instr.is_flat_list_direct()
         });
-    #[cfg(feature = "memoization")]
+    #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
     let compact = compact
         && function
             .code
@@ -257,6 +257,9 @@ fn declare_import_for(
 struct CompiledFunc {
     f: CompiledAbi,
     id: FuncId,
+    /// Optional frame-free entry used only by infallible scalar native callers.
+    /// The public/top-level entry always remains `f`/`JitCallFrame`.
+    direct_scalar_id: Option<FuncId>,
     /// Machine-code bytes emitted by Cranelift for this function, including any
     /// constant data reported by `CompiledCode::code_info`.
     code_size_bytes: u64,
@@ -302,6 +305,7 @@ struct CompiledFunc {
     /// read in its parent call site. It still uses a versioned `JitCallFrame` and
     /// child deopt payload because checked scalar operations may deopt precisely.
     compact_scalar_frame_callable: bool,
+    direct_scalar_call_edges: u32,
 }
 
 #[derive(Clone)]
@@ -313,6 +317,7 @@ pub(crate) struct NativeCallee {
     pub(crate) deopt_payload_words: usize,
     pub(crate) return_type: JitValueType,
     pub(crate) compact_scalar_frame: bool,
+    pub(crate) direct_scalar_func_id: Option<FuncId>,
 }
 
 /// Metadata for one member of a co-compiled mutually-recursive group
@@ -749,7 +754,18 @@ impl NativeModule {
                 "OSR-validated IR cannot use the normal compile entry",
             ));
         }
-        self.compile_inner(function, None, None, LimitChecks::default())
+        self.compile_inner(function, None, None, LimitChecks::default(), false)
+    }
+
+    /// Compile a function that may become the target of a native-to-native call.
+    /// Eligible infallible scalar leaves receive a second frame-free entry; normal
+    /// top-level compilation never pays that code-size cost.
+    pub fn compile_native_callee(
+        &mut self,
+        function: &JitFunction,
+    ) -> Result<CompiledId, JitError> {
+        let validated = ValidatedJitFunction::with_limits(function, &self.limits)?;
+        self.compile_inner(&validated, None, None, LimitChecks::default(), true)
     }
 
     /// Compile `function` while forcing the safepoint with id `force_site` (sites are
@@ -773,6 +789,7 @@ impl NativeModule {
             Some(ForcedDeopt::Site(force_site)),
             None,
             LimitChecks::default(),
+            false,
         )
     }
 
@@ -791,6 +808,7 @@ impl NativeModule {
             Some(ForcedDeopt::All),
             None,
             LimitChecks::default(),
+            false,
         )
     }
 
@@ -835,6 +853,7 @@ impl NativeModule {
                 step: step_limit,
                 cancel: cancel_armed,
             },
+            false,
         )
     }
 
@@ -844,6 +863,7 @@ impl NativeModule {
         forced: Option<ForcedDeopt>,
         osr_header: Option<u32>,
         limit_checks: LimitChecks,
+        emit_direct_scalar_entry: bool,
     ) -> Result<CompiledId, JitError> {
         let function = validated.function();
         debug_assert_eq!(
@@ -860,6 +880,8 @@ impl NativeModule {
             native_scalar_leaf_callable(function, osr_header.is_some(), returns_handle);
         let compact_scalar_frame_callable =
             native_compact_scalar_frame_callable(function, osr_header.is_some(), returns_handle);
+        let direct_scalar_callable = emit_direct_scalar_entry
+            && direct_scalar_callable(function, osr_header.is_some(), return_type);
         let native_callees = self.resolve_native_callees(function)?;
         if native_callees.len() > self.limits.max_native_callees {
             return Err(JitError::new(
@@ -878,8 +900,13 @@ impl NativeModule {
                     .iter()
                     .find(|candidate| candidate.handle == *callee)
                     .expect("resolved native callee covers every validated CallNative");
+                let child_words = if child.direct_scalar_func_id.is_some() {
+                    0
+                } else {
+                    1 + child.deopt_payload_words
+                };
                 projected_payload_words = projected_payload_words
-                    .checked_add(1 + child.deopt_payload_words)
+                    .checked_add(child_words)
                     .ok_or_else(|| {
                         JitError::new(
                             JitErrorKind::AdmissionRejected,
@@ -939,12 +966,36 @@ impl NativeModule {
         self.module
             .define_function(id, &mut self.ctx)
             .map_err(|e| err("define", e))?;
-        let code_size_bytes = self
+        let mut code_size_bytes = self
             .ctx
             .compiled_code()
             .map(|code| u64::from(code.code_info().total_size))
             .unwrap_or(0);
         self.module.clear_context(&mut self.ctx);
+        let direct_scalar_id = if direct_scalar_callable {
+            let return_type = return_type.expect("direct scalar eligibility requires a return");
+            push_direct_scalar_signature(&mut self.ctx.func, function, return_type);
+            let direct_name = format!("rss_jit_direct_{}", self.counter);
+            self.counter += 1;
+            let direct_id = self
+                .module
+                .declare_function(&direct_name, Linkage::Local, &self.ctx.func.signature)
+                .map_err(|e| err("declare direct scalar entry", e))?;
+            build_direct_scalar_function(&mut self.ctx.func, &mut self.fbctx, function)?;
+            self.module
+                .define_function(direct_id, &mut self.ctx)
+                .map_err(|e| err("define direct scalar entry", e))?;
+            code_size_bytes = code_size_bytes.saturating_add(
+                self.ctx
+                    .compiled_code()
+                    .map(|code| u64::from(code.code_info().total_size))
+                    .unwrap_or(0),
+            );
+            self.module.clear_context(&mut self.ctx);
+            Some(direct_id)
+        } else {
+            None
+        };
         self.module
             .finalize_definitions()
             .map_err(|e| err("finalize", e))?;
@@ -959,6 +1010,7 @@ impl NativeModule {
         self.funcs.push(CompiledFunc {
             f,
             id,
+            direct_scalar_id,
             code_size_bytes,
             native_call_depth,
             native_depth_cap: native_recursion_depth_cap(function) as u32,
@@ -974,6 +1026,10 @@ impl NativeModule {
             return_type,
             scalar_leaf_callable,
             compact_scalar_frame_callable,
+            direct_scalar_call_edges: native_callees
+                .iter()
+                .filter(|callee| callee.direct_scalar_func_id.is_some())
+                .count() as u32,
         });
         Ok(handle)
     }
@@ -1165,6 +1221,7 @@ impl NativeModule {
             self.funcs.push(CompiledFunc {
                 f,
                 id: func_ids[i],
+                direct_scalar_id: None,
                 code_size_bytes: code_sizes[i],
                 direct_list_bounds_checks_elided: bounds_checks_elided[i],
                 native_call_depth: 0,
@@ -1183,6 +1240,7 @@ impl NativeModule {
                 // full child-frame path; their stack/deopt contract is different
                 // from the bounded acyclic scalar-leaf optimization.
                 compact_scalar_frame_callable: false,
+                direct_scalar_call_edges: 0,
             });
             handles.push(handle);
         }
@@ -1217,6 +1275,25 @@ impl NativeModule {
             return None;
         }
         self.funcs.get(id.index).map(|func| func.native_call_depth)
+    }
+
+    /// Native call sites emitted through the private frame-free scalar ABI.
+    pub fn direct_scalar_call_edges(&self, id: CompiledId) -> Option<u32> {
+        if id.module_id != self.id {
+            return None;
+        }
+        self.funcs
+            .get(id.index)
+            .map(|func| func.direct_scalar_call_edges)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_direct_scalar_entry(&self, id: CompiledId) -> bool {
+        id.module_id == self.id
+            && self
+                .funcs
+                .get(id.index)
+                .is_some_and(|func| func.direct_scalar_id.is_some())
     }
 
     #[cfg(test)]
@@ -1300,6 +1377,7 @@ impl NativeModule {
                 deopt_payload_words: compiled.deopt_map.payload_words,
                 return_type,
                 compact_scalar_frame: compiled.compact_scalar_frame_callable,
+                direct_scalar_func_id: compiled.direct_scalar_id,
             });
         }
         Ok(callees)

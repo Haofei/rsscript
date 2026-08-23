@@ -241,6 +241,8 @@ mod tests {
             ],
             zero_init_regs: Vec::new(),
             code: vec![instr],
+            instruction_origins: Vec::new(),
+            source_instruction_count: 0,
             memo_scopes: Vec::new(),
             cold_blocks: Vec::new(),
             resume_live_regs: Vec::new(),

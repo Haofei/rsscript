@@ -2415,6 +2415,11 @@ pub struct NativeStats {
     pub direct_list_store_load_forwarded_moves: u64,
     /// Native-to-native call sites emitted across compiled regions.
     pub native_call_edges: u64,
+    /// Native call sites using the frame-free, infallible scalar internal ABI.
+    pub direct_scalar_call_edges: u64,
+    /// Small acyclic pure-scalar known calls routed through the existing static
+    /// leaf inliner instead of compiling a separate callee entry.
+    pub static_inline_candidates: u64,
     /// Deepest native-to-native call chain emitted across compiled regions.
     pub native_call_depth_max: u64,
     /// Profile-guided monomorphic closure guards emitted across compiled regions.
@@ -2501,7 +2506,7 @@ impl NativeStats {
     #[cfg(any(test, feature = "jit-diagnostics"))]
     fn summary(&self) -> String {
         format!(
-            "native-jit: verified_known_reg_types={} verified_unknown_reg_types={} verified_known_call_sites={} verified_instruction_effects={} considered={} translated={} compiled={} baseline_compiles={} optimized_compiles={} baseline_calls={} optimized_calls={} promotions={} ir_instrs={} code_bytes={} admission_admitted={} admission_admitted_bytes={} admission_rejected={} admission_rejected_bytes={} deopt_sites={} direct_list_bounds_check_sites={} memoized_runtime_helper_call_sites={} runtime_helper_call_sites={} fused_map_match_helper_sites={} direct_list_store_load_forwarded_moves={} native_call_edges={} native_call_depth_max={} profile_closure_guards={} profile_closure_id_reads={} profile_closure_pic_sites={} profile_closure_pic_arms={} profile_branch_sites={} profile_branch_samples={} profile_branch_taken={} profile_branch_fallthrough={} profile_branch_cold_blocks={} profile_branch_side_exits={} not_eligible={} top_decline={} \
+            "native-jit: verified_known_reg_types={} verified_unknown_reg_types={} verified_known_call_sites={} verified_instruction_effects={} considered={} translated={} compiled={} baseline_compiles={} optimized_compiles={} baseline_calls={} optimized_calls={} promotions={} ir_instrs={} code_bytes={} admission_admitted={} admission_admitted_bytes={} admission_rejected={} admission_rejected_bytes={} deopt_sites={} direct_list_bounds_check_sites={} memoized_runtime_helper_call_sites={} runtime_helper_call_sites={} fused_map_match_helper_sites={} direct_list_store_load_forwarded_moves={} native_call_edges={} direct_scalar_call_edges={} static_inline_candidates={} native_call_depth_max={} profile_closure_guards={} profile_closure_id_reads={} profile_closure_pic_sites={} profile_closure_pic_arms={} profile_branch_sites={} profile_branch_samples={} profile_branch_taken={} profile_branch_fallthrough={} profile_branch_cold_blocks={} profile_branch_side_exits={} not_eligible={} top_decline={} \
 compile_failed={} calls={} bails={} child_bails={} child_resumes={} arg_mismatch={} shape_versions={} static_type_instances={} static_instance_limit_fallbacks={} shape_cache_hits={} shape_limit_fallbacks={} shape_bails={} tier_deferred={} \
 compile_ms={:.3} run_ms={:.3} osr_entries={} continuation_entries={} continuation_yields={} unprofitable_declines={} typed_region_compiles={} typed_region_blocks={} typed_region_values={} typed_region_work_units={} virtual_objects_observed={} virtual_objects_no_escape={} virtual_objects_exit_only={} virtual_objects_declined={}",
             self.verified_known_reg_types,
@@ -2529,6 +2534,8 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} continuation_entries={} continuatio
             self.fused_map_match_helper_sites,
             self.direct_list_store_load_forwarded_moves,
             self.native_call_edges,
+            self.direct_scalar_call_edges,
+            self.static_inline_candidates,
             self.native_call_depth_max,
             self.profile_closure_guard_sites,
             self.profile_closure_id_reads,
@@ -2673,6 +2680,14 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} continuation_entries={} continuatio
             "unprofitable_declined_fns": &self.unprofitable_declined_fns,
         });
         let object = value.as_object_mut().expect("stats JSON is an object");
+        object.insert(
+            "direct_scalar_call_edges".into(),
+            self.direct_scalar_call_edges.into(),
+        );
+        object.insert(
+            "static_inline_candidates".into(),
+            self.static_inline_candidates.into(),
+        );
         object.insert(
             "direct_list_bounds_checks_elided".into(),
             self.direct_list_bounds_checks_elided.into(),
@@ -4128,7 +4143,7 @@ fn jit_verify_deopt_map(
     if let Some(site) = forced_safepoint
         && site > 0
         && (site as usize) <= map.sites.len()
-        && map.sites[(site - 1) as usize].resume_ip as usize >= jit_fn.code.len()
+        && map.sites[(site - 1) as usize].resume_ip as usize >= jit_fn.source_instruction_count()
     {
         return Err(format!(
             "forced safepoint {site} resumes outside translated code"
@@ -4137,13 +4152,22 @@ fn jit_verify_deopt_map(
 
     let mut saw_required_resume = required_resume_ip.is_none();
     for (site_index, site) in map.sites.iter().enumerate() {
+        let source_ip = site.source_ip as usize;
         let resume_ip = site.resume_ip as usize;
-        if resume_ip >= jit_fn.code.len() {
+        if source_ip >= jit_fn.source_instruction_count() {
             return Err(format!(
-                "deopt site {} resumes at {}, outside translated code len {}",
+                "deopt site {} has source ip {}, outside source code len {}",
+                site_index + 1,
+                source_ip,
+                jit_fn.source_instruction_count()
+            ));
+        }
+        if resume_ip >= jit_fn.source_instruction_count() {
+            return Err(format!(
+                "deopt site {} resumes at {}, outside source code len {}",
                 site_index + 1,
                 resume_ip,
-                jit_fn.code.len()
+                jit_fn.source_instruction_count()
             ));
         }
         if required_resume_ip == Some(resume_ip) {
@@ -4193,9 +4217,9 @@ fn jit_verify_compiled_osr(
     module: &vm_jit::NativeModule,
     id: vm_jit::CompiledId,
     jit_fn: &vm_jit::JitFunction,
-    trans_exit: usize,
+    source_exit: usize,
 ) -> Result<(), String> {
-    jit_verify_deopt_map(module, id, jit_fn, None, Some(trans_exit))
+    jit_verify_deopt_map(module, id, jit_fn, None, Some(source_exit))
 }
 
 #[cfg(feature = "native-jit")]

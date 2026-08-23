@@ -14,7 +14,11 @@ speculation = []
 # Research-only non-tail recursion on the host C stack. Tail recursion remains
 # a loop in the supported baseline engine.
 recursion = []
-# Research-only loop-invariant host-helper memoization.
+# Internal mechanism for the VM's verifier/alias-gated read-only LICM subset.
+# This is intentionally distinct from the research compatibility feature below:
+# the engine never decides eligibility from either feature alone.
+readonly-licm = []
+# Research compatibility switch for the historical memoization experiments.
 memoization = []
 # Coverage-guided harness support. This is not part of the VM or SDK feature
 # surface and only exposes a scalar validation-to-codegen probe to `fuzz/`.

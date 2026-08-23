@@ -78,6 +78,8 @@ fn build_function(data: &[u8]) -> JitFunction {
         reg_types: vec![JitValueType::Int; n_regs as usize],
         zero_init_regs: Vec::new(),
         code,
+        instruction_origins: Vec::new(),
+        source_instruction_count: 0,
         memo_scopes: Vec::new(),
         cold_blocks: Vec::new(),
         resume_live_regs: Vec::new(),

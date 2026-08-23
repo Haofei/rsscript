@@ -9,9 +9,56 @@ use super::*;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct NativeInstructionOrigin {
     /// Instruction in the original register bytecode that produced this item.
-    pub(super) bytecode_ip: usize,
+    pub(super) source_ip: usize,
     /// Interpreter instruction to resume when a guard before this item deopts.
     pub(super) resume_ip: usize,
+    /// Interpreter source-step cost owned by this native item. Expansion assigns
+    /// the cost to exactly one result; fusion must preserve the summed cost.
+    pub(super) source_cost: u32,
+}
+
+#[cfg(feature = "native-jit")]
+impl NativeInstructionOrigin {
+    pub(super) fn to_jit(self) -> Option<vm_jit::JitInstructionOrigin> {
+        Some(vm_jit::JitInstructionOrigin {
+            source_ip: u32::try_from(self.source_ip).ok()?,
+            resume_ip: u32::try_from(self.resume_ip).ok()?,
+            source_cost: self.source_cost,
+        })
+    }
+}
+
+#[cfg(feature = "native-jit")]
+pub(super) fn native_jit_origins(
+    instructions: &[vm_jit::JitInstr],
+    source_ip_map: Option<&[usize]>,
+    source_instruction_count: usize,
+) -> Option<Vec<vm_jit::JitInstructionOrigin>> {
+    let mut charged_sources = std::collections::HashSet::new();
+    instructions
+        .iter()
+        .enumerate()
+        .map(|(ip, instruction)| {
+            let mapped = source_ip_map
+                .and_then(|map| map.get(ip).copied())
+                .unwrap_or(ip);
+            let valid_source = (mapped < source_instruction_count).then_some(mapped);
+            let source_ip = valid_source.unwrap_or(0);
+            let executes_source = !matches!(
+                instruction,
+                vm_jit::JitInstr::Bail
+                    | vm_jit::JitInstr::OsrExit
+                    | vm_jit::JitInstr::RegionExit { .. }
+            );
+            Some(vm_jit::JitInstructionOrigin {
+                source_ip: u32::try_from(source_ip).ok()?,
+                resume_ip: u32::try_from(source_ip).ok()?,
+                source_cost: u32::from(
+                    executes_source && valid_source.is_some() && charged_sources.insert(source_ip),
+                ),
+            })
+        })
+        .collect()
 }
 
 /// Owned state threaded through native rewrites.
@@ -38,11 +85,13 @@ impl NativePipelineState {
         if code.len() != transformed_to_bytecode.len() {
             return None;
         }
+        let mut charged = std::collections::HashSet::new();
         let origins = transformed_to_bytecode
             .into_iter()
             .map(|ip| NativeInstructionOrigin {
-                bytecode_ip: ip,
+                source_ip: ip,
                 resume_ip: ip,
+                source_cost: u32::from(charged.insert(ip)),
             })
             .collect();
         Some(Self {
@@ -61,10 +110,28 @@ impl NativePipelineState {
         if code.len() != next_to_previous.len() {
             return None;
         }
+        let previous_cost = self.origins.iter().try_fold(0_u64, |sum, origin| {
+            sum.checked_add(u64::from(origin.source_cost))
+        })?;
+        let mut charged_previous = std::collections::HashSet::new();
         let origins = next_to_previous
             .into_iter()
-            .map(|previous| self.origins.get(previous).copied())
+            .map(|previous| {
+                let mut origin = self.origins.get(previous).copied()?;
+                if !charged_previous.insert(previous) {
+                    origin.source_cost = 0;
+                }
+                Some(origin)
+            })
             .collect::<Option<Vec<_>>>()?;
+        let next_cost = origins.iter().try_fold(0_u64, |sum, origin| {
+            sum.checked_add(u64::from(origin.source_cost))
+        })?;
+        if next_cost != previous_cost {
+            // A rewrite may expand one source item, but silently dropping source
+            // accounting would make bounded native execution disagree with the VM.
+            return None;
+        }
         self.code = code;
         self.n_regs = n_regs;
         self.origins = origins;
@@ -92,19 +159,27 @@ mod pipeline_state_tests {
 
         state
             .apply_rewrite(
-                vec![RegInstr::LoadUnit { dst: 2 }, RegInstr::LoadUnit { dst: 0 }],
+                vec![
+                    RegInstr::LoadUnit { dst: 2 },
+                    RegInstr::LoadUnit { dst: 0 },
+                    RegInstr::LoadUnit { dst: 1 },
+                ],
                 3,
-                vec![2, 0],
+                vec![2, 0, 1],
             )
             .unwrap();
 
         let (code, n_regs, origins) = state.into_parts();
         assert_eq!(code.len(), origins.len());
         assert_eq!(n_regs, 3);
-        assert_eq!(origins[0].bytecode_ip, 30);
+        assert_eq!(origins[0].source_ip, 30);
         assert_eq!(origins[0].resume_ip, 30);
-        assert_eq!(origins[1].bytecode_ip, 10);
+        assert_eq!(origins[1].source_ip, 10);
         assert_eq!(origins[1].resume_ip, 10);
+        assert_eq!(
+            origins.iter().map(|origin| origin.source_cost).sum::<u32>(),
+            3
+        );
     }
 
     #[test]
@@ -115,6 +190,26 @@ mod pipeline_state_tests {
             state
                 .apply_rewrite(vec![RegInstr::LoadUnit { dst: 0 }], 1, Vec::new(),)
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn pipeline_state_charges_an_expanded_source_exactly_once() {
+        let initial = vec![RegInstr::LoadUnit { dst: 0 }];
+        let mut state = NativePipelineState::new(initial, 1, vec![7]).unwrap();
+        state
+            .apply_rewrite(
+                vec![RegInstr::LoadUnit { dst: 0 }, RegInstr::LoadUnit { dst: 0 }],
+                1,
+                vec![0, 0],
+            )
+            .unwrap();
+        let (_, _, origins) = state.into_parts();
+        assert_eq!(origins[0].source_cost, 1);
+        assert_eq!(origins[1].source_cost, 0);
+        assert_eq!(
+            origins.iter().map(|origin| origin.source_cost).sum::<u32>(),
+            1
         );
     }
 }
@@ -451,13 +546,13 @@ where
 }
 
 #[cfg(feature = "native-jit")]
-#[cfg(feature = "jit-memoization-experimental")]
 pub(super) fn native_memoize_loop_invariant_runtime_helper_calls(
     code: &[RegInstr],
     reachable: &[bool],
     jit_code: &mut [vm_jit::JitInstr],
     native_reg_types: &[NativeTy],
     n_params: usize,
+    typed_ir: Option<&TypedRegionIr>,
 ) -> Vec<vm_jit::MemoScope> {
     let original_n_regs = native_reg_types.len();
     let mut next_memo_slot = 0_u32;
@@ -498,6 +593,7 @@ pub(super) fn native_memoize_loop_invariant_runtime_helper_calls(
                 lp.header,
                 lp.exit,
                 ip,
+                typed_ir,
             ) {
                 continue;
             }
@@ -535,7 +631,6 @@ pub(super) fn native_memoize_loop_invariant_runtime_helper_calls(
 }
 
 #[cfg(feature = "native-jit")]
-#[cfg(feature = "jit-memoization-experimental")]
 fn native_memoizable_runtime_helper_call(
     instr: &vm_jit::JitInstr,
 ) -> Option<(vm_jit::HostHelper, &u32, &Vec<vm_jit::HostArg>)> {
@@ -553,7 +648,6 @@ fn native_memoizable_runtime_helper_call(
 /// value is an immutable RSScript scalar/leaf object covered by the established
 /// compatibility whitelist.
 #[cfg(feature = "native-jit")]
-#[cfg(feature = "jit-memoization-experimental")]
 #[allow(clippy::too_many_arguments)]
 fn native_readonly_licm_eligible(
     helper: vm_jit::HostHelper,
@@ -564,11 +658,32 @@ fn native_readonly_licm_eligible(
     header: usize,
     exit: usize,
     helper_ip: usize,
+    typed_ir: Option<&TypedRegionIr>,
 ) -> bool {
     if helper.heap_effect() != vm_jit::HostHeapEffect::ReadOnly
         || !native_runtime_helper_args_loop_invariant(args, invariants, helper_ip)
     {
         return false;
+    }
+
+    // Handle-based hoists require flow-sensitive ownership/alias evidence from
+    // the verifier-backed typed region. The existing heap-provenance scan still
+    // proves that no overlapping write occurs; this additional gate prevents an
+    // optional v1 ownership annotation from authorizing the transform alone.
+    for (argument, ty) in args.iter().zip(helper.arg_types()) {
+        if *ty != vm_jit::JitValueType::Handle {
+            continue;
+        }
+        let vm_jit::HostArg::Reg(reg) = argument else {
+            return false;
+        };
+        if !typed_ir.is_some_and(|typed| {
+            typed
+                .program_point_value(helper_ip, *reg as usize)
+                .permits_readonly_hoist()
+        }) {
+            return false;
+        }
     }
 
     if native_memoizable_field_load_helper(helper) {
@@ -607,13 +722,11 @@ fn native_readonly_licm_eligible(
 }
 
 #[cfg(feature = "native-jit")]
-#[cfg(feature = "jit-memoization-experimental")]
 fn native_memoizable_result_type(_helper: vm_jit::HostHelper, result_ty: NativeTy) -> bool {
     matches!(result_ty, NativeTy::Int | NativeTy::Bool | NativeTy::Float)
 }
 
 #[cfg(feature = "native-jit")]
-#[cfg(feature = "jit-memoization-experimental")]
 fn native_memoizable_scalar_result_helper(helper: vm_jit::HostHelper) -> bool {
     matches!(
         helper,
@@ -627,7 +740,6 @@ fn native_memoizable_scalar_result_helper(helper: vm_jit::HostHelper) -> bool {
 }
 
 #[cfg(feature = "native-jit")]
-#[cfg(feature = "jit-memoization-experimental")]
 fn native_memoizable_field_load_helper(helper: vm_jit::HostHelper) -> bool {
     matches!(
         helper,
@@ -637,14 +749,12 @@ fn native_memoizable_field_load_helper(helper: vm_jit::HostHelper) -> bool {
 
 #[cfg(feature = "native-jit")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg(feature = "jit-memoization-experimental")]
 enum NativeHeapDomain {
     Projection(vm_jit::HostHeapProjection),
     FieldSlot(i64),
 }
 
 #[cfg(feature = "native-jit")]
-#[cfg(feature = "jit-memoization-experimental")]
 fn native_heap_domains_may_overlap(lhs: NativeHeapDomain, rhs: NativeHeapDomain) -> bool {
     use vm_jit::HostHeapProjection;
 
@@ -666,7 +776,6 @@ fn native_heap_domains_may_overlap(lhs: NativeHeapDomain, rhs: NativeHeapDomain)
 }
 
 #[cfg(feature = "native-jit")]
-#[cfg(feature = "jit-memoization-experimental")]
 fn native_heap_roots_may_alias(lhs: NativeHeapProvenance, rhs: NativeHeapProvenance) -> bool {
     match (lhs, rhs) {
         (NativeHeapProvenance::Fresh(lhs), NativeHeapProvenance::Fresh(rhs)) => lhs == rhs,
@@ -677,7 +786,6 @@ fn native_heap_roots_may_alias(lhs: NativeHeapProvenance, rhs: NativeHeapProvena
 }
 
 #[cfg(feature = "native-jit")]
-#[cfg(feature = "jit-memoization-experimental")]
 fn native_heap_receiver_arg(args: &[vm_jit::HostArg], index: usize) -> Option<u32> {
     match args.get(index) {
         Some(vm_jit::HostArg::Reg(reg)) => Some(*reg),
@@ -686,7 +794,6 @@ fn native_heap_receiver_arg(args: &[vm_jit::HostArg], index: usize) -> Option<u3
 }
 
 #[cfg(feature = "native-jit")]
-#[cfg(feature = "jit-memoization-experimental")]
 fn native_host_write_domain(
     helper: vm_jit::HostHelper,
     args: &[vm_jit::HostArg],
@@ -703,7 +810,6 @@ fn native_host_write_domain(
 }
 
 #[cfg(feature = "native-jit")]
-#[cfg(feature = "jit-memoization-experimental")]
 fn native_loop_preserves_heap_query(
     query_args: &[vm_jit::HostArg],
     query_domain: NativeHeapDomain,
@@ -741,7 +847,6 @@ fn native_loop_preserves_heap_query(
                     }
                 }
             }
-            #[cfg(feature = "jit-memoization-experimental")]
             vm_jit::JitInstr::MemoizedHostCall { helper, args, .. } => {
                 for access in helper.heap_writes() {
                     let write_domain = native_host_write_domain(*helper, args, access.projection);
@@ -782,7 +887,7 @@ fn native_loop_preserves_heap_query(
     true
 }
 
-#[cfg(all(feature = "jit-memoization-experimental", test))]
+#[cfg(test)]
 #[allow(dead_code)]
 pub(crate) fn native_loop_preserves_heap_projection(
     jit_code: &[vm_jit::JitInstr],
@@ -800,7 +905,6 @@ pub(crate) fn native_loop_preserves_heap_projection(
                     return false;
                 }
             }
-            #[cfg(feature = "jit-memoization-experimental")]
             vm_jit::JitInstr::MemoizedHostCall { helper, .. } => {
                 if helper.heap_writes().iter().any(|access| {
                     access.projection == projection
@@ -825,7 +929,7 @@ pub(crate) fn native_loop_preserves_heap_projection(
     true
 }
 
-#[cfg(all(feature = "jit-memoization-experimental", test))]
+#[cfg(test)]
 #[allow(dead_code)]
 pub(crate) fn native_field_load_slot_not_stored_in_loop(
     args: &[vm_jit::HostArg],
@@ -862,7 +966,7 @@ pub(crate) fn native_field_load_slot_not_stored_in_loop(
     true
 }
 
-#[cfg(all(feature = "jit-memoization-experimental", test))]
+#[cfg(test)]
 #[allow(dead_code)]
 pub(crate) fn native_loop_preserves_field_slot_for_receiver(
     code: &[RegInstr],
@@ -890,7 +994,6 @@ pub(crate) fn native_loop_preserves_field_slot_for_receiver(
 }
 
 #[cfg(feature = "native-jit")]
-#[cfg(feature = "jit-memoization-experimental")]
 fn native_field_load_args_loop_stable(
     args: &[vm_jit::HostArg],
     invariants: &NativeLoopInvariants,
@@ -925,7 +1028,6 @@ fn native_field_load_args_loop_stable(
 /// (`FieldSetInt` and its Float/Handle counterparts). Field-read stability must
 /// treat all three as stores or a differently typed write could leave a stale memo.
 #[cfg(feature = "native-jit")]
-#[cfg(feature = "jit-memoization-experimental")]
 fn is_native_field_set_helper(helper: vm_jit::HostHelper) -> bool {
     matches!(
         helper,
@@ -969,7 +1071,6 @@ pub(super) fn native_jit_written_reg(instr: &vm_jit::JitInstr) -> Option<u32> {
         | vm_jit::JitInstr::MatchSortedMapGetInt { value_dst: dst, .. }
         | vm_jit::JitInstr::MatchSortedMapGetFloat { value_dst: dst, .. }
         | vm_jit::JitInstr::CallNative { dst, .. } => Some(*dst),
-        #[cfg(feature = "jit-memoization-experimental")]
         vm_jit::JitInstr::MemoizedHostCall { dst, .. } => Some(*dst),
         #[cfg(feature = "jit-recursion-experimental")]
         vm_jit::JitInstr::CallSelf { dst, .. } | vm_jit::JitInstr::CallGroup { dst, .. } => {
@@ -981,7 +1082,6 @@ pub(super) fn native_jit_written_reg(instr: &vm_jit::JitInstr) -> Option<u32> {
 
 #[cfg(feature = "native-jit")]
 #[derive(Clone)]
-#[cfg(feature = "jit-memoization-experimental")]
 struct NativeLoopInvariants {
     written: Vec<bool>,
     constant_int: Vec<Option<i64>>,
@@ -992,7 +1092,6 @@ struct NativeLoopInvariants {
 }
 
 #[cfg(feature = "native-jit")]
-#[cfg(feature = "jit-memoization-experimental")]
 fn native_loop_invariant_regs(
     code: &[RegInstr],
     reachable: &[bool],
@@ -1065,7 +1164,6 @@ fn native_loop_invariant_regs(
 }
 
 #[cfg(feature = "native-jit")]
-#[cfg(feature = "jit-memoization-experimental")]
 fn native_runtime_helper_args_loop_invariant(
     args: &[vm_jit::HostArg],
     invariants: &NativeLoopInvariants,
@@ -1080,7 +1178,6 @@ fn native_runtime_helper_args_loop_invariant(
 }
 
 #[cfg(feature = "native-jit")]
-#[cfg(feature = "jit-memoization-experimental")]
 fn native_propagate_derived_loop_invariant(
     instr: &RegInstr,
     invariants: &mut NativeLoopInvariants,
@@ -1104,7 +1201,6 @@ fn native_propagate_derived_loop_invariant(
 }
 
 #[cfg(feature = "native-jit")]
-#[cfg(feature = "jit-memoization-experimental")]
 fn native_reg_loop_invariant_at(
     reg: usize,
     invariants: &NativeLoopInvariants,
@@ -1135,7 +1231,6 @@ fn native_reg_loop_invariant_at(
 }
 
 #[cfg(feature = "native-jit")]
-#[cfg(feature = "jit-memoization-experimental")]
 fn native_memo_scope_representable(code: &[RegInstr], facts: &CanonicalLoopFacts) -> bool {
     !facts.latches.is_empty()
         && facts.latches.iter().all(|latch| {
@@ -1146,7 +1241,7 @@ fn native_memo_scope_representable(code: &[RegInstr], facts: &CanonicalLoopFacts
         })
 }
 
-#[cfg(all(test, feature = "jit-memoization-experimental"))]
+#[cfg(test)]
 mod readonly_licm_tests {
     use super::*;
 
@@ -1162,7 +1257,7 @@ mod readonly_licm_tests {
     }
 
     #[test]
-    fn descriptor_driven_list_read_is_licm_eligible_without_element_writes() {
+    fn descriptor_driven_list_read_requires_typed_alias_evidence() {
         let args = vec![vm_jit::HostArg::Reg(0), vm_jit::HostArg::Reg(1)];
         let code = vec![
             vm_jit::JitInstr::Nop,
@@ -1173,7 +1268,7 @@ mod readonly_licm_tests {
             },
             vm_jit::JitInstr::Jump { target: 0 },
         ];
-        assert!(native_readonly_licm_eligible(
+        assert!(!native_readonly_licm_eligible(
             vm_jit::HostHelper::ListGetInt,
             &args,
             &invariants(3),
@@ -1182,6 +1277,7 @@ mod readonly_licm_tests {
             0,
             code.len(),
             1,
+            None,
         ));
     }
 
@@ -1214,6 +1310,7 @@ mod readonly_licm_tests {
             0,
             code.len(),
             0,
+            None,
         ));
     }
 }

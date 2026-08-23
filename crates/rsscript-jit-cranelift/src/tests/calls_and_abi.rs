@@ -22,6 +22,10 @@ fn compiles_and_runs_float_arith() {
             ],
         ))
         .unwrap();
+    assert!(
+        !m.has_direct_scalar_entry(id),
+        "ordinary VM entries must not duplicate code for an unused direct ABI"
+    );
     let call = |a: f64, b: f64| {
         f64::from_bits(
             m.callt(id, &[a.to_bits() as i64, b.to_bits() as i64])
@@ -55,6 +59,10 @@ fn native_scalar_call_invokes_compiled_int_leaf() {
         m.compact_scalar_frame_callable(callee),
         "helper-free scalar leaves should omit the child lens window"
     );
+    assert!(
+        !m.has_direct_scalar_entry(callee),
+        "checked integer addition must retain the precise-deopt child ABI"
+    );
     // caller(x) = add2(x, 7) * 2
     let caller = m
         .compile(&f(
@@ -80,6 +88,7 @@ fn native_scalar_call_invokes_compiled_int_leaf() {
 
     assert_eq!(m.callt(caller, &[5]), Some(24));
     assert_eq!(m.callt(caller, &[-10]), Some(-6));
+    assert_eq!(m.direct_scalar_call_edges(caller), Some(0));
 }
 
 #[test]
@@ -99,6 +108,7 @@ fn compact_scalar_child_frame_preserves_precise_nested_deopt() {
             ],
         ))
         .unwrap();
+    assert!(!m.has_direct_scalar_entry(callee));
     assert!(m.compact_scalar_frame_callable(callee));
     let caller = m
         .compile(&f(
@@ -114,6 +124,7 @@ fn compact_scalar_child_frame_preserves_precise_nested_deopt() {
             ],
         ))
         .unwrap();
+    assert_eq!(m.direct_scalar_call_edges(caller), Some(0));
 
     assert_eq!(m.callt(caller, &[12, 3]), Some(4));
     let outcome = m.call(caller, &[12, 0], &[0, 0]);
@@ -335,7 +346,7 @@ fn native_scalar_call_invokes_compiled_float_leaf() {
     let mut m = module();
     // callee(a: Float, b: Float) = a * b
     let callee = m
-        .compile(&ft(
+        .compile_native_callee(&ft(
             2,
             vec![Float, Float, Float],
             vec![
@@ -348,6 +359,7 @@ fn native_scalar_call_invokes_compiled_float_leaf() {
             ],
         ))
         .unwrap();
+    assert!(m.has_direct_scalar_entry(callee));
     // caller(x: Float) = callee(x, 4.0) - x
     let caller = m
         .compile(&ft(
@@ -369,6 +381,7 @@ fn native_scalar_call_invokes_compiled_float_leaf() {
             ],
         ))
         .unwrap();
+    assert_eq!(m.direct_scalar_call_edges(caller), Some(1));
     let got = m
         .callt(caller, &[2.5f64.to_bits() as i64])
         .map(|bits| f64::from_bits(bits as u64));

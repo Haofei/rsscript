@@ -43,6 +43,7 @@
 mod analysis;
 mod codegen;
 mod deopt;
+mod direct_codegen;
 mod executable_memory;
 #[cfg(feature = "fuzzing")]
 pub mod fuzzing;
@@ -82,8 +83,8 @@ pub use host_abi::{
     FlatBufferArg, HostCtx, HostHeapEffect, HostHeapProjection, HostHelper, HostHelpers,
 };
 pub use ir::{
-    FloatRounding, HostArg, JitCompare, JitControlFlow, JitFunction, JitInstr, JitValueType,
-    MemoScope,
+    FloatRounding, HostArg, JitCompare, JitControlFlow, JitFunction, JitInstr,
+    JitInstructionOrigin, JitValueType, MemoScope,
 };
 pub use limits::JitLimits;
 pub use module::{
@@ -106,6 +107,9 @@ pub(crate) use codegen::{
 #[cfg(feature = "recursion")]
 pub(crate) use codegen::{
     NATIVE_RECURSION_STACK_BUDGET_BYTES, native_recursion_frame_bytes_estimate,
+};
+pub(crate) use direct_codegen::{
+    build_direct_scalar_function, direct_scalar_callable, push_direct_scalar_signature,
 };
 pub(crate) use host_abi::{DEFAULT_STANDALONE_JIT_ARENA_BYTES, HostHelperSig, HostResult};
 #[cfg(test)]

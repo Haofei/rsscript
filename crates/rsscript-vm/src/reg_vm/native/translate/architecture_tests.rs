@@ -19,3 +19,16 @@ fn native_translation_is_partitioned_by_invariant() {
         "translate.rs should remain an orchestration and lowering boundary"
     );
 }
+
+#[test]
+fn alias_sensitive_loop_optimizations_consume_program_point_evidence() {
+    let translator = include_str!("../translate.rs");
+    let jit_post = include_str!("jit_post.rs");
+    let typed_region = include_str!("../typed_region.rs");
+
+    assert!(translator.contains("verified_alias_allows_bounds_elision("));
+    assert!(jit_post.contains("program_point_value(helper_ip"));
+    assert!(jit_post.contains("permits_readonly_hoist()"));
+    assert!(typed_region.contains("Missing, conflicting or over-budget evidence"));
+    assert!(typed_region.contains("typed.permits_bounds_elision(source_ip, reg, mutable)"));
+}

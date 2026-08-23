@@ -143,6 +143,44 @@ fn native_compiled_entry_call_descriptor(
 }
 
 #[cfg(feature = "native-jit")]
+fn controlled_static_inline_candidate(
+    callee: &RegFunction,
+    facts: &VerifiedFunctionFacts,
+    n_args: usize,
+    mut_args: &[usize],
+) -> bool {
+    const MAX_STATIC_INLINE_INSTRUCTIONS: usize = 24;
+    mut_args.is_empty()
+        && !callee.code.is_empty()
+        && callee.code.len() <= MAX_STATIC_INLINE_INSTRUCTIONS
+        && !jit_function_has_loop(&callee.code)
+        && native_callee_inlinable(callee, n_args)
+        && facts
+            .reg_types
+            .iter()
+            .take(callee.params)
+            .all(|ty| {
+                matches!(
+                    ty,
+                    VerifiedStorageType::Int
+                        | VerifiedStorageType::Bool
+                        | VerifiedStorageType::Float
+                )
+            })
+        && callee.code.iter().all(|instr| {
+            !matches!(instr, RegInstr::Return { src } if !matches!(facts.reg_types.get(*src), Some(VerifiedStorageType::Int | VerifiedStorageType::Bool | VerifiedStorageType::Float)))
+        })
+        && facts.effects.iter().all(|effect| {
+            !effect.writes_heap
+                && !effect.may_allocate
+                && !effect.may_call_provider
+                && !effect.may_suspend
+                && !effect.may_spawn
+                && !effect.touches_resource
+        })
+}
+
+#[cfg(feature = "native-jit")]
 fn native_compile_direct_scalar_callee(
     jit_state: &JitState,
     native: &mut NativeState,
@@ -230,7 +268,7 @@ fn native_compile_direct_scalar_callee(
     } else {
         match native.forced_safepoint {
             Some(site) => native.baseline_module.compile_forcing_bail(&jit_fn, site),
-            None => native.baseline_module.compile(&jit_fn),
+            None => native.baseline_module.compile_native_callee(&jit_fn),
         }
     };
     let id = match compiled {
@@ -343,6 +381,22 @@ fn native_compiled_call_sites_inner(
             .and_then(|facts| facts.function(self_key))
             .and_then(|facts| facts.call_site(ip))
             .cloned();
+        let Some(callee_facts) = native
+            .verified_facts
+            .as_ref()
+            .and_then(|facts| facts.function(callee_key))
+        else {
+            continue;
+        };
+        if controlled_static_inline_candidate(callee, callee_facts, args.len(), mut_args) {
+            if native.collect_stats {
+                native.stats.static_inline_candidates += 1;
+            }
+            // Omitting this site from the preserve map routes it through the
+            // existing origin-aware leaf inliner. No second callee compile or
+            // child ABI edge is emitted for the small, pure scalar body.
+            continue;
+        }
         let Some(descriptor) = native_compile_direct_scalar_callee(
             jit_state,
             native,
@@ -2235,7 +2289,7 @@ impl RegVm {
         // the cache entry for the non-OSR `try_native` path.
         let (
             id,
-            trans_exit,
+            _trans_exit,
             orig_exit,
             n_jit_regs,
             _param_types,
@@ -2400,7 +2454,12 @@ impl RegVm {
                                                 &native.baseline_module,
                                                 id,
                                                 &jit_fn,
-                                                lp.exit,
+                                                jit_fn
+                                                    .instruction_origins
+                                                    .get(lp.exit)
+                                                    .map_or(lp.exit, |origin| {
+                                                        origin.resume_ip as usize
+                                                    }),
                                             )
                                         {
                                             debug_assert!(
@@ -2813,7 +2872,7 @@ impl RegVm {
                                                     &native.baseline_module,
                                                     id,
                                                     &jit_fn,
-                                                    lp.exit,
+                                                    orig_exit,
                                                 ) {
                                                     debug_assert!(false, "native OSR verifier failed: {err}");
                                                     if jit_native_verify_is_strict() {
@@ -3022,7 +3081,13 @@ impl RegVm {
                                         native.optimized_module.as_ref().expect("optimized module"),
                                         optimized_id,
                                         &source.jit_fn,
-                                        source.exit,
+                                        source
+                                            .jit_fn
+                                            .instruction_origins
+                                            .get(source.exit)
+                                            .map_or(source.exit, |origin| {
+                                                origin.resume_ip as usize
+                                            }),
                                     )
                                     .is_ok();
                                 if verified || !jit_native_verify_is_strict() {
@@ -3491,10 +3556,10 @@ impl RegVm {
                     scratch.restore(self.native.as_mut());
                     return false;
                 };
-                // The OSR-exit's resume_ip (a TRANSFORMED-code ip) MUST be the loop's
-                // post-loop exit ip; anything else is an OSR construction bug. Fall
+                // The OSR-exit's explicit resume_ip MUST be the original bytecode
+                // post-loop exit; anything else is an OSR construction bug. Fall
                 // back rather than misresume.
-                if resume_ip as usize != trans_exit {
+                if resume_ip as usize != orig_exit {
                     heap_tx.abort();
                     scratch.restore(self.native.as_mut());
                     return false;
