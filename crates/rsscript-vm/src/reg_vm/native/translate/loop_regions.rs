@@ -353,6 +353,7 @@ pub(in crate::reg_vm) fn detect_scalar_continuation_region(
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn translate_scalar_continuation_region(
     func: &RegFunction,
+    facts: &VerifiedFunctionFacts,
     region: &ContinuationRegion,
     param_native_types: &[Option<NativeTy>],
 ) -> Option<(
@@ -396,6 +397,7 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
         HashMap::new(),
         param_native_types,
         &immutable_leaf_params,
+        Some(facts),
         false,
     )?;
     if !derived_liveins.is_empty()

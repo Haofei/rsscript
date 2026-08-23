@@ -486,6 +486,10 @@ enum PureStep {
 pub struct RegVmExecutable {
     unit: Rc<RegUnit>,
     artifact: rsscript_bytecode::BytecodeArtifact,
+    /// Lazily derived once per verified executable. Interpreter-only execution
+    /// pays no facts cost even in a binary that was built with native JIT.
+    #[cfg(feature = "native-jit")]
+    verified_facts: std::cell::OnceCell<Result<Rc<VerifiedExecutableFacts>, VerifiedFactsError>>,
 }
 
 impl RegVmExecutable {
@@ -503,6 +507,8 @@ impl RegVmExecutable {
         Ok(Self {
             unit: Rc::new(unit),
             artifact,
+            #[cfg(feature = "native-jit")]
+            verified_facts: std::cell::OnceCell::new(),
         })
     }
 
@@ -610,7 +616,25 @@ impl RegVmExecutable {
             }
             #[cfg(feature = "native-jit")]
             TierPlan::Native(native) => {
-                vm.native = Some(NativeState::new_with_plan(native)?);
+                let verified_facts = match self
+                    .verified_facts
+                    .get_or_init(|| VerifiedExecutableFacts::derive(&self.unit).map(Rc::new))
+                {
+                    Ok(facts) => Rc::clone(facts),
+                    Err(error) => {
+                        return Err(EvalError::Runtime(format!(
+                            "cannot derive bounded verified executable facts: {error:?}"
+                        )));
+                    }
+                };
+                let mut native_state = NativeState::new_with_plan(native)?;
+                let facts_summary = verified_facts.summary();
+                native_state.stats.verified_known_reg_types = facts_summary.known_reg_types;
+                native_state.stats.verified_unknown_reg_types = facts_summary.unknown_reg_types;
+                native_state.stats.verified_known_call_sites = facts_summary.known_call_sites;
+                native_state.stats.verified_instruction_effects = facts_summary.instruction_effects;
+                native_state.verified_facts = Some(verified_facts);
+                vm.native = Some(native_state);
                 vm.jit_enabled = true;
                 vm.jit_force_all = true;
             }
@@ -988,9 +1012,13 @@ impl RegVmExecutable {
             && native.collect_stats
         {
             native.stats.add_profile_feedback(&self.unit, jit_state);
+            let facts = native
+                .verified_facts
+                .as_deref()
+                .expect("native execution installs verified facts");
             native
                 .stats
-                .add_native_decline_reasons(&self.unit, jit_state);
+                .add_native_decline_reasons(&self.unit, jit_state, facts);
         }
         // Diagnostics are returned as structured values. Process-global logging
         // belongs to the CLI/composition root, not the embeddable VM.
@@ -1233,9 +1261,13 @@ impl RegVmExecutable {
             && native.collect_stats
         {
             native.stats.add_profile_feedback(&self.unit, &vm.jit_state);
+            let facts = native
+                .verified_facts
+                .as_deref()
+                .expect("native execution installs verified facts");
             native
                 .stats
-                .add_native_decline_reasons(&self.unit, &vm.jit_state);
+                .add_native_decline_reasons(&self.unit, &vm.jit_state, facts);
         }
         #[cfg(feature = "native-jit")]
         let engine =
@@ -1716,6 +1748,10 @@ const MAX_NATIVE_SHAPE_VERSIONS: usize = 2;
 #[cfg(feature = "native-jit")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum NativeParamShape {
+    /// The verified executable already proves the exact scalar storage class.
+    /// The function/region key identifies that static fact, so the runtime value
+    /// must not create a second specialization dimension.
+    StaticScalar,
     Int,
     Bool,
     Float,
@@ -1753,10 +1789,6 @@ impl Default for ShapeKey {
 
 #[cfg(feature = "native-jit")]
 impl ShapeKey {
-    fn from_values<'a>(values: impl IntoIterator<Item = &'a VmValue>) -> Self {
-        Self::from_shapes(values.into_iter().map(native_param_shape))
-    }
-
     fn from_shapes(values: impl IntoIterator<Item = NativeParamShape>) -> Self {
         let mut inline = [NativeParamShape::Unsupported; INLINE_SHAPE_PARAMS];
         let mut len = 0usize;
@@ -1812,6 +1844,20 @@ fn native_param_shape(value: &VmValue) -> NativeParamShape {
         VmValue::Unit | VmValue::Char(_) | VmValue::OptionNone | VmValue::OptionSomeScalar(_) => {
             NativeParamShape::Unsupported
         }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+fn native_param_shape_with_fact(value: &VmValue, fact: VerifiedStorageType) -> NativeParamShape {
+    match fact {
+        VerifiedStorageType::Int | VerifiedStorageType::Bool | VerifiedStorageType::Float => {
+            NativeParamShape::StaticScalar
+        }
+        // Handles still need representation/layout specialization: a verified
+        // v1 handle does not distinguish boxed, flat-list, closure, or nominal
+        // aggregate representations.
+        VerifiedStorageType::Handle | VerifiedStorageType::Unknown => native_param_shape(value),
+        VerifiedStorageType::Unit | VerifiedStorageType::Char => NativeParamShape::Unsupported,
     }
 }
 
@@ -1919,6 +1965,10 @@ impl std::ops::DerefMut for LazyNativeModule {
 
 #[cfg(feature = "native-jit")]
 struct NativeState {
+    /// Bounded, evaluation-local storage/call/effect facts derived from the
+    /// already verified v1 executable. Test-only constructors may leave this
+    /// empty; production native execution installs it before dispatch.
+    verified_facts: Option<Rc<VerifiedExecutableFacts>>,
     baseline_module: LazyNativeModule,
     /// The speed-optimized tier. `None` is the explicit
     /// baseline-only diagnostic mode.
@@ -2108,6 +2158,14 @@ struct NativeAdmissionBudget {
 #[cfg(feature = "native-jit")]
 #[derive(Debug, Default, Clone)]
 pub struct NativeStats {
+    /// Register storage classes proved once from the verified executable.
+    pub verified_known_reg_types: u64,
+    /// Registers whose nominal/storage type was erased by v1 and remains unknown.
+    pub verified_unknown_reg_types: u64,
+    /// Call sites whose target/signature projection remains present in v1.
+    pub verified_known_call_sites: u64,
+    /// Instruction effect records derived under the facts work budget.
+    pub verified_instruction_effects: u64,
     /// Hot functions that reached the native tier (passed tiering, not force-bail).
     pub considered: u64,
     /// Calls deferred below the tier-up threshold (still on the interpreter).
@@ -2246,9 +2304,13 @@ impl NativeStats {
     #[cfg(any(test, feature = "jit-diagnostics"))]
     fn summary(&self) -> String {
         format!(
-            "native-jit: considered={} translated={} compiled={} baseline_compiles={} optimized_compiles={} baseline_calls={} optimized_calls={} promotions={} ir_instrs={} code_bytes={} admission_admitted={} admission_admitted_bytes={} admission_rejected={} admission_rejected_bytes={} deopt_sites={} direct_list_bounds_check_sites={} memoized_runtime_helper_call_sites={} runtime_helper_call_sites={} fused_map_match_helper_sites={} direct_list_store_load_forwarded_moves={} native_call_edges={} native_call_depth_max={} profile_closure_guards={} profile_closure_id_reads={} profile_closure_pic_sites={} profile_closure_pic_arms={} profile_branch_sites={} profile_branch_samples={} profile_branch_taken={} profile_branch_fallthrough={} profile_branch_cold_blocks={} profile_branch_side_exits={} not_eligible={} top_decline={} \
+            "native-jit: verified_known_reg_types={} verified_unknown_reg_types={} verified_known_call_sites={} verified_instruction_effects={} considered={} translated={} compiled={} baseline_compiles={} optimized_compiles={} baseline_calls={} optimized_calls={} promotions={} ir_instrs={} code_bytes={} admission_admitted={} admission_admitted_bytes={} admission_rejected={} admission_rejected_bytes={} deopt_sites={} direct_list_bounds_check_sites={} memoized_runtime_helper_call_sites={} runtime_helper_call_sites={} fused_map_match_helper_sites={} direct_list_store_load_forwarded_moves={} native_call_edges={} native_call_depth_max={} profile_closure_guards={} profile_closure_id_reads={} profile_closure_pic_sites={} profile_closure_pic_arms={} profile_branch_sites={} profile_branch_samples={} profile_branch_taken={} profile_branch_fallthrough={} profile_branch_cold_blocks={} profile_branch_side_exits={} not_eligible={} top_decline={} \
 compile_failed={} calls={} bails={} child_bails={} child_resumes={} arg_mismatch={} shape_versions={} shape_cache_hits={} shape_limit_fallbacks={} shape_bails={} tier_deferred={} \
 compile_ms={:.3} run_ms={:.3} osr_entries={} continuation_entries={} continuation_yields={} unprofitable_declines={}",
+            self.verified_known_reg_types,
+            self.verified_unknown_reg_types,
+            self.verified_known_call_sites,
+            self.verified_instruction_effects,
             self.considered,
             self.translated,
             self.compiled,
@@ -2316,8 +2378,13 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} continuation_entries={} continuatio
             .unwrap_or_else(|| "none".to_string())
     }
 
-    fn add_native_decline_reasons(&mut self, unit: &RegUnit, jit_state: &JitState) {
-        self.native_decline_reasons = native_decline_reason_counts(unit, jit_state);
+    fn add_native_decline_reasons(
+        &mut self,
+        unit: &RegUnit,
+        jit_state: &JitState,
+        facts: &VerifiedExecutableFacts,
+    ) {
+        self.native_decline_reasons = native_decline_reason_counts(unit, jit_state, facts);
     }
 
     fn add_profile_feedback(&mut self, unit: &RegUnit, jit_state: &JitState) {
@@ -2387,6 +2454,22 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} continuation_entries={} continuatio
         });
         let object = value.as_object_mut().expect("stats JSON is an object");
         object.insert(
+            "verified_known_reg_types".into(),
+            self.verified_known_reg_types.into(),
+        );
+        object.insert(
+            "verified_unknown_reg_types".into(),
+            self.verified_unknown_reg_types.into(),
+        );
+        object.insert(
+            "verified_known_call_sites".into(),
+            self.verified_known_call_sites.into(),
+        );
+        object.insert(
+            "verified_instruction_effects".into(),
+            self.verified_instruction_effects.into(),
+        );
+        object.insert(
             "interpreted_native_work".into(),
             self.interpreted_native_work.into(),
         );
@@ -2449,8 +2532,15 @@ fn jit_missed_opt_report(
     native: &NativeState,
 ) -> Vec<String> {
     let mut out = vec![format!("jit-report: summary\n  {}", native.stats.summary())];
-    let native_decline_counts = native_decline_reason_counts(unit, jit_state);
-    for func in &unit.functions {
+    let native_decline_counts = native_decline_reason_counts(
+        unit,
+        jit_state,
+        native
+            .verified_facts
+            .as_deref()
+            .expect("native execution installs verified facts"),
+    );
+    for (function, func) in unit.functions.iter().enumerate() {
         let profile_lines = jit_profile_report_lines(unit, jit_state, func);
         // Skip the synthetic/placeholder/trivial bodies: a body that is only the
         // lowerer's defensive `LoadUnit; Return` (≤ 2 instructions, no real work) is
@@ -2467,6 +2557,11 @@ fn jit_missed_opt_report(
         match translate_to_native_jit(
             unit,
             func,
+            native
+                .verified_facts
+                .as_ref()
+                .and_then(|facts| facts.function(function))
+                .expect("native execution installs facts for every verified function"),
             jit_state.profile(func),
             jit_state.call_count(func),
         ) {
@@ -2575,9 +2670,13 @@ fn jit_cost_model_decline_summary_block(stats: &NativeStats) -> String {
 }
 
 #[cfg(feature = "native-jit")]
-fn native_decline_reason_counts(unit: &RegUnit, jit_state: &JitState) -> BTreeMap<String, u64> {
+fn native_decline_reason_counts(
+    unit: &RegUnit,
+    jit_state: &JitState,
+    verified_facts: &VerifiedExecutableFacts,
+) -> BTreeMap<String, u64> {
     let mut counts = BTreeMap::<String, u64>::new();
-    for func in &unit.functions {
+    for (function, func) in unit.functions.iter().enumerate() {
         let profile_lines = jit_profile_report_lines(unit, jit_state, func);
         if func.code.len() <= 2 && profile_lines.is_empty() {
             continue;
@@ -2585,6 +2684,9 @@ fn native_decline_reason_counts(unit: &RegUnit, jit_state: &JitState) -> BTreeMa
         if translate_to_native_jit(
             unit,
             func,
+            verified_facts
+                .function(function)
+                .expect("facts cover every verified function"),
             jit_state.profile(func),
             jit_state.call_count(func),
         )
@@ -6627,6 +6729,7 @@ impl NativeState {
         };
         let optimized_arena_bytes = max_code_bytes.saturating_sub(baseline_arena_bytes);
         Ok(Self {
+            verified_facts: None,
             baseline_module: LazyNativeModule::new(
                 jit_host_helpers(),
                 !eager_optimized,

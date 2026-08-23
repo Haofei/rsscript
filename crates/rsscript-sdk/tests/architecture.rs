@@ -921,6 +921,157 @@ fn jit_planning_state_is_kept_out_of_verified_program_objects() {
 }
 
 #[test]
+fn verified_jit_facts_are_native_only_evaluation_local_state() {
+    let root = workspace_root();
+    let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));
+    let native = read(&root.join("crates/rsscript-vm/src/reg_vm/native/mod.rs"));
+    let facts_path = root.join("crates/rsscript-vm/src/reg_vm/native/facts.rs");
+    let facts = read(&facts_path);
+    let model = read(&root.join("crates/rsscript-vm/src/reg_vm/model.rs"));
+    let bytecode = read(&root.join("crates/rsscript-vm/src/reg_vm/bytecode.rs"));
+
+    assert!(vm.contains("#[cfg(feature = \"native-jit\")]\nmod native;"));
+    assert!(
+        vm.contains("verified_facts: std::cell::OnceCell"),
+        "verified facts must be derived lazily once per verified executable"
+    );
+    assert!(vm.contains("native_param_shape_with_fact"));
+    assert!(vm.contains("NativeParamShape::StaticScalar"));
+    assert!(native.contains("mod facts;"));
+    for required in [
+        "struct VerifiedExecutableFacts",
+        "struct VerifiedFunctionFacts",
+        "struct VerifiedFactsLimits",
+        "enum VerifiedStorageType",
+        "BytecodeLimits::default()",
+        "fn derive(",
+    ] {
+        assert!(
+            facts.contains(required),
+            "the bounded native facts projection must expose `{required}`"
+        );
+    }
+    assert!(
+        facts.contains("RegUnit"),
+        "native facts must be derived from the decoded, verified executable"
+    );
+    for serialized_model in [
+        ("verified VM model", model),
+        ("v1 bytecode model", bytecode),
+    ] {
+        assert!(
+            !serialized_model.1.contains("VerifiedExecutableFacts")
+                && !serialized_model.1.contains("VerifiedFunctionFacts")
+                && !serialized_model.1.contains("VerifiedStorageType"),
+            "{} must not persist evaluation-local native facts",
+            serialized_model.0
+        );
+    }
+    for serialization_marker in [
+        "#[derive(Serialize",
+        "#[derive(Deserialize",
+        "serde::Serialize",
+        "serde::Deserialize",
+        "#[serde(",
+    ] {
+        assert!(
+            !facts.contains(serialization_marker),
+            "evaluation-local native facts must not acquire serialized contract marker `{serialization_marker}`"
+        );
+    }
+}
+
+#[test]
+fn native_facts_do_not_pull_frontend_layers_into_the_jit() {
+    let root = workspace_root();
+    let native_closure = cargo_tree_with_features(&root, "rsscript-vm", "native-jit");
+    for forbidden in [
+        "rsscript-syntax ",
+        "rsscript-semantics ",
+        "rsscript-compiler ",
+        "rsscript-sdk ",
+    ] {
+        assert!(
+            !native_closure.contains(forbidden),
+            "verified executable facts must not make the VM/JIT depend on frontend layer `{forbidden}`:\n{native_closure}"
+        );
+    }
+}
+
+#[test]
+fn jit_translation_consumes_verified_facts_without_multiplying_inference_engines() {
+    let root = workspace_root();
+    let translate = read(&root.join("crates/rsscript-vm/src/reg_vm/native/translate.rs"));
+    let native_sources = rust_files_below(&root.join("crates/rsscript-vm/src/reg_vm/native"));
+    let all_native = native_sources
+        .iter()
+        .map(|path| read(path))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        translate.contains("VerifiedFunctionFacts")
+            || translate.contains("VerifiedExecutableFacts"),
+        "whole-function, OSR, and continuation translation must consume the shared verified facts projection"
+    );
+    for inference_definition in ["fn native_set_ty(", "fn native_unify("] {
+        assert!(
+            all_native.matches(inference_definition).count() <= 1,
+            "native translation must not grow another ad-hoc inference engine `{inference_definition}`"
+        );
+    }
+}
+
+#[test]
+fn continuation_register_windows_remain_compact_and_liveness_driven() {
+    let root = workspace_root();
+    let regions =
+        read(&root.join("crates/rsscript-vm/src/reg_vm/native/translate/loop_regions.rs"));
+    let jit_ir = read(&root.join("crates/rsscript-jit-cranelift/src/ir.rs"));
+
+    for required in [
+        "struct ContinuationSlot",
+        "live_in_regs",
+        "live_slots",
+        "ordered_vm_regs",
+        "compact_registers(",
+    ] {
+        assert!(
+            regions.contains(required) || jit_ir.contains(required),
+            "continuation compact-window invariant is missing `{required}`"
+        );
+    }
+    assert!(regions.contains("region.live_in_regs.len()"));
+    assert!(jit_ir.contains("n_live_in"));
+}
+
+#[test]
+fn typed_facts_migration_preserves_the_v1_reader_contract() {
+    let root = workspace_root();
+    let manifest: toml::Value = toml::from_str(&read(&root.join("crates/rsscript-sdk/Cargo.toml")))
+        .expect("SDK manifest should parse");
+    let compatibility = read(&root.join("crates/rsscript-sdk/tests/compatibility_corpus.rs"));
+    let bytecode = read(&root.join("crates/rsscript-bytecode/src/lib.rs"));
+    let fixture = root.join("crates/rsscript-bytecode/fixtures/v1/reference.rssbundle.base64");
+    let tests = manifest["test"]
+        .as_array()
+        .expect("SDK must declare explicit test targets");
+    let target = tests
+        .iter()
+        .find(|test| test["name"].as_str() == Some("compatibility_corpus"))
+        .expect("v1 reader compatibility corpus must remain an explicit SDK target");
+
+    assert_eq!(target["required-features"][0].as_str(), Some("execution"));
+    assert!(
+        fixture.is_file(),
+        "the deployed v1 reader fixture must remain checked in"
+    );
+    assert!(compatibility.contains("deployed v1 bundle remains readable"));
+    assert!(compatibility.contains("ArtifactVerifier"));
+    assert!(bytecode.contains("pub const BYTECODE_SCHEMA: &str = \"rsscript.bytecode.v1\";"));
+}
+
+#[test]
 fn default_vm_layout_excludes_native_jit_while_opt_in_closure_is_explicit() {
     let root = workspace_root();
     let manifest: toml::Value = toml::from_str(&read(&root.join("crates/rsscript-vm/Cargo.toml")))

@@ -175,6 +175,7 @@ fn native_set_list_read_base_ty(
 pub(in crate::reg_vm) fn translate_to_native_jit(
     unit: &RegUnit,
     func: &RegFunction,
+    facts: &VerifiedFunctionFacts,
     profile: Option<&FunctionProfile>,
     call_count: u32,
 ) -> Option<(
@@ -184,13 +185,21 @@ pub(in crate::reg_vm) fn translate_to_native_jit(
     Vec<Rc<String>>,
     bool,
 )> {
-    translate_to_native_jit_with_compiled_callees(unit, func, profile, call_count, &HashMap::new())
+    translate_to_native_jit_with_compiled_callees(
+        unit,
+        func,
+        facts,
+        profile,
+        call_count,
+        &HashMap::new(),
+    )
 }
 
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn translate_to_native_jit_with_compiled_callees(
     unit: &RegUnit,
     func: &RegFunction,
+    facts: &VerifiedFunctionFacts,
     profile: Option<&FunctionProfile>,
     call_count: u32,
     compiled_callees: &HashMap<usize, NativeCompiledCallee>,
@@ -204,6 +213,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_compiled_callees(
     translate_to_native_jit_with_calls(
         unit,
         func,
+        facts,
         profile,
         call_count,
         compiled_callees,
@@ -224,6 +234,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_compiled_callees(
 pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     unit: &RegUnit,
     func: &RegFunction,
+    facts: &VerifiedFunctionFacts,
     profile: Option<&FunctionProfile>,
     call_count: u32,
     compiled_callees: &HashMap<usize, NativeCompiledCallee>,
@@ -343,7 +354,11 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     // Parameters start untyped and acquire their type from the operands they are
     // combined with — so a float-parameter function is inferred correctly rather
     // than forced to `Int`.
-    let mut ty: Vec<Option<NativeTy>> = vec![None; n_regs];
+    // Seed the storage lattice once from the bounded facts derived from the
+    // verified executable. The local fixpoint remains only as a v1 compatibility
+    // completion path for facts that are legitimately `Unknown` after type
+    // erasure; it is no longer the source of ordinary scalar/call ABI facts.
+    let mut ty = facts.native_type_seed(n_regs, false)?;
     let declared_signature = unit.native_signatures.get(&func.name);
     if let Some(signature) = declared_signature {
         for (reg, declared) in signature.params.iter().take(func.params).enumerate() {
@@ -412,53 +427,47 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                     ..
                 } if self_call_sites.contains(&ip_map[i]) => {
                     // Self-recursive call (native-call-ABI slice 3): the callee *is*
-                    // this function, so its args and result take this function's own
-                    // declared parameter/return types — the same signature-driven
-                    // typing the group-call arm uses for mutual recursion. A
+                    // this function, so its args and result use the same verified
+                    // call-site signature consumed by the group-call arm. A
                     // Bool/Float-typed self-recursive function thus types its self-call
-                    // correctly instead of being forced to `Int`. Params/return left
-                    // undeclared flow from their other uses via unification.
+                    // correctly instead of being forced to `Int`. Types erased by
+                    // v1 still flow from their other uses via unification.
+                    let call = facts.call_site(ip_map[i]);
                     let mut ok = mut_args.is_empty() && args.len() == func.params;
                     for (pi, arg) in args.iter().enumerate() {
-                        if let Some(pty) = declared_signature
-                            .and_then(|s| s.params.get(pi))
-                            .and_then(|d| native_declared_type_name_to_ty(d))
+                        if let Some(pty) = call
+                            .and_then(|call| call.params.get(pi))
+                            .and_then(|ty| ty.native_ty())
                         {
                             ok = ok && native_set_ty(ty, *arg, pty, c);
                         }
                     }
-                    if let Some(ret) = declared_return_ty {
+                    if let Some(ret) = call.and_then(|call| call.result.native_ty()) {
                         ok = ok && native_set_ty(ty, *dst, ret, c);
                     }
                     ok
                 }
                 RegInstr::CallKnown {
                     dst,
-                    function,
+                    function: _,
                     args,
                     mut_args,
                 } if group_call_sites.contains_key(&ip_map[i]) => {
                     // Mutually-recursive group call (native-call-ABI slice 4): args and
-                    // result take the *callee* member's declared parameter/return types,
+                    // result take the *callee* member's verified call-site types,
                     // so a Bool-returning member (e.g. `is_even`/`is_odd`) types its
                     // result `Bool` rather than being forced to `Int`.
-                    let callee_sig = unit
-                        .functions
-                        .get(*function)
-                        .and_then(|cf| unit.native_signatures.get(&cf.name));
+                    let call = facts.call_site(ip_map[i]);
                     let mut ok = mut_args.is_empty();
                     for (pi, arg) in args.iter().enumerate() {
-                        if let Some(pty) = callee_sig
-                            .and_then(|s| s.params.get(pi))
-                            .and_then(|d| native_declared_type_name_to_ty(d))
+                        if let Some(pty) = call
+                            .and_then(|call| call.params.get(pi))
+                            .and_then(|ty| ty.native_ty())
                         {
                             ok = ok && native_set_ty(ty, *arg, pty, c);
                         }
                     }
-                    if let Some(ret) = callee_sig
-                        .and_then(|s| s.return_type.as_deref())
-                        .and_then(native_declared_type_name_to_ty)
-                    {
+                    if let Some(ret) = call.and_then(|call| call.result.native_ty()) {
                         ok = ok && native_set_ty(ty, *dst, ret, c);
                     }
                     ok
@@ -2228,6 +2237,7 @@ pub(in crate::reg_vm) fn translate_osr_loop(
         // No signature available on the bare entry (unit tests): treat every param
         // conservatively (none proven an immutable leaf) so the guard never under-declines.
         &[],
+        None,
         true,
     )
 }
@@ -2235,6 +2245,7 @@ pub(in crate::reg_vm) fn translate_osr_loop(
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn translate_osr_loop_profiled(
     _func: &RegFunction,
+    facts: &VerifiedFunctionFacts,
     profile: Option<&FunctionProfile>,
     code: &[RegInstr],
     n_regs: usize,
@@ -2264,6 +2275,7 @@ pub(in crate::reg_vm) fn translate_osr_loop_profiled(
         profile_guidance.hot_branch_edges,
         param_native_types,
         immutable_leaf_params,
+        Some(facts),
         true,
     )
 }
@@ -2294,6 +2306,7 @@ fn translate_osr_loop_inner(
     profile_hot_branch_edges: HashMap<usize, bool>,
     param_native_types: &[Option<NativeTy>],
     immutable_leaf_params: &[bool],
+    verified_facts: Option<&VerifiedFunctionFacts>,
     enable_flat_buffers: bool,
 ) -> Option<(
     vm_jit::JitFunction,
@@ -2329,7 +2342,10 @@ fn translate_osr_loop_inner(
     // Type inference by unification over the loop region only (a fixpoint to handle
     // the backedge). Same rules as `translate_to_native_jit`; registers live-in to
     // the header acquire their type from the operands they combine with.
-    let mut ty: Vec<Option<NativeTy>> = vec![None; n_regs];
+    let mut ty = match verified_facts {
+        Some(facts) => facts.native_type_seed(n_regs, true)?,
+        None => vec![None; n_regs],
+    };
     // Seed live-in scalar types from simple preheader definitions. This is deliberately
     // conservative: constants and moves are type-stable and dominate the OSR entry
     // in normal lowered `while` code, while opaque heap/call/list writes are still

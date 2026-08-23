@@ -80,6 +80,7 @@ fn build_function(data: &[u8]) -> JitFunction {
         code,
         memo_scopes: Vec::new(),
         cold_blocks: Vec::new(),
+        resume_live_regs: Vec::new(),
     }
 }
 

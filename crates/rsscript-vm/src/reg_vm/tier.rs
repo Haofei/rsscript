@@ -174,17 +174,20 @@ fn native_compile_direct_scalar_callee(
         native_compiled_call_sites_inner(jit_state, native, unit, callee, callee_key, stack);
     let profile = jit_state.profile(callee);
     let call_count = jit_state.call_count(callee);
+    let facts = Rc::clone(native.verified_facts.as_ref()?);
+    let callee_facts = facts.function(callee_key)?;
     let translated = if nested_call_sites.is_empty() {
-        translate_to_native_jit(unit, callee, profile, call_count)
+        translate_to_native_jit(unit, callee, callee_facts, profile, call_count)
     } else {
         translate_to_native_jit_with_compiled_callees(
             unit,
             callee,
+            callee_facts,
             profile,
             call_count,
             &nested_call_sites,
         )
-        .or_else(|| translate_to_native_jit(unit, callee, profile, call_count))
+        .or_else(|| translate_to_native_jit(unit, callee, callee_facts, profile, call_count))
     };
     let Some((jit_fn, ret, params, string_literals, precise_resume_safe)) = translated else {
         stack.remove(&callee_key);
@@ -557,7 +560,27 @@ impl RegVm {
         let native_key = self.jit_state.function_ordinal(func);
         let profile = self.jit_state.profile(func);
         let call_count = self.jit_state.call_count(func);
-        let shape = ShapeKey::from_values((0..func.params).map(|index| self.reg(base + index)));
+        let Some(verified_facts) = self
+            .native
+            .as_ref()
+            .and_then(|native| native.verified_facts.as_ref())
+            .cloned()
+        else {
+            return NativeAttempt::Fallback;
+        };
+        let Some(function_facts) = verified_facts.function(native_key) else {
+            return NativeAttempt::Fallback;
+        };
+        let shape = ShapeKey::from_shapes((0..func.params).map(|index| {
+            native_param_shape_with_fact(
+                self.reg(base + index),
+                function_facts
+                    .reg_types
+                    .get(index)
+                    .copied()
+                    .unwrap_or_default(),
+            )
+        }));
         let version_key = NativeVersionKey {
             function: native_key,
             shape,
@@ -608,16 +631,25 @@ impl RegVm {
                         native_key,
                     );
                     let translated = if compiled_call_sites.is_empty() {
-                        translate_to_native_jit(&unit, func, profile, call_count)
+                        translate_to_native_jit(&unit, func, function_facts, profile, call_count)
                     } else {
                         translate_to_native_jit_with_compiled_callees(
                             &unit,
                             func,
+                            function_facts,
                             profile,
                             call_count,
                             &compiled_call_sites,
                         )
-                        .or_else(|| translate_to_native_jit(&unit, func, profile, call_count))
+                        .or_else(|| {
+                            translate_to_native_jit(
+                                &unit,
+                                func,
+                                function_facts,
+                                profile,
+                                call_count,
+                            )
+                        })
                     };
                     let entry = match translated {
                         Some((jit_fn, ret, params, string_literals, precise_resume_safe)) => {
@@ -1474,6 +1506,17 @@ impl RegVm {
         // regions below; the next VM-owned barrier polls the clock.
         let cancel_armed = self.limits.cancel.is_some();
         let function = self.jit_state.function_ordinal(func);
+        let Some(verified_facts) = self
+            .native
+            .as_ref()
+            .and_then(|native| native.verified_facts.as_ref())
+            .cloned()
+        else {
+            return false;
+        };
+        let Some(function_facts) = verified_facts.function(function) else {
+            return false;
+        };
         let is_candidate = {
             let Some(native) = self.native.as_mut() else {
                 return false;
@@ -1547,7 +1590,14 @@ impl RegVm {
             if !self.written.get(slot).copied().unwrap_or(false) {
                 NativeParamShape::Unsupported
             } else {
-                native_param_shape(&self.stack[slot])
+                native_param_shape_with_fact(
+                    &self.stack[slot],
+                    function_facts
+                        .reg_types
+                        .get(reg)
+                        .copied()
+                        .unwrap_or_default(),
+                )
             }
         }));
         let supported_frame = region.live_in_regs.iter().all(|reg| {
@@ -1555,7 +1605,14 @@ impl RegVm {
             let slot = base + reg;
             !self.written.get(slot).copied().unwrap_or(false)
                 || !matches!(
-                    native_param_shape(&self.stack[slot]),
+                    native_param_shape_with_fact(
+                        &self.stack[slot],
+                        function_facts
+                            .reg_types
+                            .get(reg)
+                            .copied()
+                            .unwrap_or_default(),
+                    ),
                     NativeParamShape::Unsupported
                 )
         });
@@ -1626,69 +1683,71 @@ impl RegVm {
                     }
                     return false;
                 }
-                let compiled =
-                    translate_scalar_continuation_region(func, &region, &param_native_types)
-                        .and_then(|(jit_fn, slots, n_live_in, exits)| {
-                            let admission =
-                                begin_native_compile(native, 1, NativeCodeTier::Baseline)?;
-                            match native.baseline_module.compile_osr(
-                                &jit_fn,
-                                u32::try_from(region.entry).ok()?,
-                                true,
-                                cancel_armed,
+                let compiled = translate_scalar_continuation_region(
+                    func,
+                    function_facts,
+                    &region,
+                    &param_native_types,
+                )
+                .and_then(|(jit_fn, slots, n_live_in, exits)| {
+                    let admission = begin_native_compile(native, 1, NativeCodeTier::Baseline)?;
+                    match native.baseline_module.compile_osr(
+                        &jit_fn,
+                        u32::try_from(region.entry).ok()?,
+                        true,
+                        cancel_armed,
+                    ) {
+                        Ok(id) => {
+                            if !finish_native_compile(
+                                native,
+                                admission,
+                                &[id],
+                                NativeCodeTier::Baseline,
                             ) {
-                                Ok(id) => {
-                                    if !finish_native_compile(
-                                        native,
-                                        admission,
-                                        &[id],
-                                        NativeCodeTier::Baseline,
-                                    ) {
-                                        return None;
-                                    }
-                                    record_native_compile_stats(
-                                        native,
-                                        id,
-                                        &jit_fn,
-                                        NativeCodeTier::Baseline,
-                                    );
-                                    if native.collect_stats {
-                                        native.stats.shape_versions += 1;
-                                        native.stats.continuation_compiled_source_instructions =
-                                            native
-                                                .stats
-                                                .continuation_compiled_source_instructions
-                                                .saturating_add(region.source_instructions as u64);
-                                    }
-                                    native
-                                        .continuation_controllers
-                                        .entry(version_key.clone())
-                                        .or_default()
-                                        .compiled(false);
-                                    // No controlled canonical baseline currently
-                                    // clears the optimized-continuation retention
-                                    // gate. Keep the common controller state at
-                                    // baseline instead of inventing an unmeasured
-                                    // promotion path.
-                                    debug_assert_eq!(
-                                        continuation_tier_decision(None),
-                                        ContinuationTierDecision::BaselineOnly
-                                    );
-                                    Some(Rc::new(ContinuationEntry {
-                                        id,
-                                        entry: region.entry,
-                                        exits,
-                                        n_jit_regs: jit_fn.n_regs as usize,
-                                        n_live_in,
-                                        slots,
-                                    }))
-                                }
-                                Err(_) => {
-                                    finish_native_compile_failure(native, admission);
-                                    None
-                                }
+                                return None;
                             }
-                        });
+                            record_native_compile_stats(
+                                native,
+                                id,
+                                &jit_fn,
+                                NativeCodeTier::Baseline,
+                            );
+                            if native.collect_stats {
+                                native.stats.shape_versions += 1;
+                                native.stats.continuation_compiled_source_instructions = native
+                                    .stats
+                                    .continuation_compiled_source_instructions
+                                    .saturating_add(region.source_instructions as u64);
+                            }
+                            native
+                                .continuation_controllers
+                                .entry(version_key.clone())
+                                .or_default()
+                                .compiled(false);
+                            // No controlled canonical baseline currently
+                            // clears the optimized-continuation retention
+                            // gate. Keep the common controller state at
+                            // baseline instead of inventing an unmeasured
+                            // promotion path.
+                            debug_assert_eq!(
+                                continuation_tier_decision(None),
+                                ContinuationTierDecision::BaselineOnly
+                            );
+                            Some(Rc::new(ContinuationEntry {
+                                id,
+                                entry: region.entry,
+                                exits,
+                                n_jit_regs: jit_fn.n_regs as usize,
+                                n_live_in,
+                                slots,
+                            }))
+                        }
+                        Err(_) => {
+                            finish_native_compile_failure(native, admission);
+                            None
+                        }
+                    }
+                });
                 native
                     .continuation_cache
                     .insert(version_key.clone(), compiled);
@@ -1964,6 +2023,17 @@ impl RegVm {
             native.osr_dynamic_bail = false;
         }
         let native_key = self.jit_state.function_ordinal(func);
+        let Some(verified_facts) = self
+            .native
+            .as_ref()
+            .and_then(|native| native.verified_facts.as_ref())
+            .cloned()
+        else {
+            return false;
+        };
+        let Some(function_facts) = verified_facts.function(native_key) else {
+            return false;
+        };
         let profile = self.jit_state.profile(func);
         let call_count = self.jit_state.call_count(func);
         let region_key = RegionKey {
@@ -1975,7 +2045,14 @@ impl RegVm {
             if !self.written.get(slot).copied().unwrap_or(false) {
                 return NativeParamShape::Unsupported;
             }
-            let shape = native_param_shape(&self.stack[slot]);
+            let shape = native_param_shape_with_fact(
+                &self.stack[slot],
+                function_facts
+                    .reg_types
+                    .get(index)
+                    .copied()
+                    .unwrap_or_default(),
+            );
             if index < func.params
                 || matches!(
                     shape,
@@ -2128,6 +2205,7 @@ impl RegVm {
                         let identity_ip_map: Vec<usize> = (0..func.code.len()).collect();
                         translate_osr_loop_profiled(
                             func,
+                            function_facts,
                             profile,
                             &func.code,
                             func.regs,
@@ -2552,6 +2630,7 @@ impl RegVm {
                             }
                             translate_osr_loop_profiled(
                                 func,
+                                function_facts,
                                 profile,
                                 &code,
                                 n_regs,
@@ -3530,11 +3609,34 @@ fn native_recursive_group(unit: &RegUnit, function_id: usize) -> Option<Vec<usiz
 #[cfg(all(test, feature = "native-jit"))]
 mod tests {
     use super::{osr_committed_tail_calls, osr_initial_logical_depth};
+    use crate::reg_vm::{
+        NativeParamShape, VerifiedStorageType, VmValue, native_param_shape_with_fact,
+    };
 
     #[test]
     fn osr_logical_depth_round_trips_accumulated_tail_calls() {
         let initial = osr_initial_logical_depth(3, 500);
         assert_eq!(initial, 503);
         assert_eq!(osr_committed_tail_calls(initial + 17, 3), 517);
+    }
+
+    #[test]
+    fn verified_scalars_do_not_create_runtime_shape_versions() {
+        assert_eq!(
+            native_param_shape_with_fact(&VmValue::Int(1), VerifiedStorageType::Int),
+            NativeParamShape::StaticScalar
+        );
+        assert_eq!(
+            native_param_shape_with_fact(&VmValue::Bool(true), VerifiedStorageType::Bool),
+            NativeParamShape::StaticScalar
+        );
+        assert_eq!(
+            native_param_shape_with_fact(&VmValue::Float(1.0), VerifiedStorageType::Float),
+            NativeParamShape::StaticScalar
+        );
+        assert_eq!(
+            native_param_shape_with_fact(&VmValue::Int(1), VerifiedStorageType::Unknown),
+            NativeParamShape::Int
+        );
     }
 }
