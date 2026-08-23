@@ -30,6 +30,10 @@ Optimization passes may not change observable outcomes, output, Provider calls,
 heap-visible mutations, cleanup, budget accounting, or deoptimization resume
 state. Differential tests against the interpreter enforce these invariants.
 
+Profile-guided closure PIC and branch-side-exit speculation are excluded from the
+stable SDK path. They remain behind the VM-only `jit-speculation` research feature
+until a canonical compiler workload demonstrates a repeatable end-to-end benefit.
+
 ## Native recursion
 
 Tail recursion may be lowered to a loop. Non-tail self or group recursion uses the

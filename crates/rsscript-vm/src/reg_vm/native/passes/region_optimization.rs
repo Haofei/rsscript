@@ -114,6 +114,9 @@ pub(in crate::reg_vm) fn monomorphic_closure_inline_target(
     call_count: u32,
     i: usize,
 ) -> Option<usize> {
+    if !cfg!(any(test, feature = "jit-speculation")) {
+        return None;
+    }
     let (closure, args, mut_args) = match func.code.get(i)? {
         RegInstr::CallClosure {
             closure,
@@ -193,6 +196,9 @@ pub(in crate::reg_vm) fn polymorphic_closure_inline_targets(
     call_count: u32,
     i: usize,
 ) -> Option<Vec<usize>> {
+    if !cfg!(any(test, feature = "jit-speculation")) {
+        return None;
+    }
     let (closure, args, mut_args) = match func.code.get(i)? {
         RegInstr::CallClosure {
             closure,
@@ -265,6 +271,9 @@ pub(in crate::reg_vm) fn native_translation_pending_on_profile(
     profile: Option<&FunctionProfile>,
     call_count: u32,
 ) -> bool {
+    if !cfg!(any(test, feature = "jit-speculation")) {
+        return false;
+    }
     // Frozen profile ⇒ no further state change ⇒ never pending.
     if call_count >= PROFILE_RECORD_LIMIT {
         return false;

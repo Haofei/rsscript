@@ -34,6 +34,9 @@ jobs:
           docker compose run --rm dev cargo test --locked -p rsscript-jit-cranelift
           docker compose run --rm dev cargo test --locked --release -p rsscript-sdk --features native-jit --test native_jit_smoke native_hot_loop_release_gate_beats_the_interpreter -- --nocapture
 
+      - name: Native JIT pass scorecard
+        run: docker compose run --rm dev cargo test --locked --release -p rsscript-sdk --features native-jit --test native_jit_scorecard -- --ignored --nocapture
+
       - name: Parser/checker no-panic fuzz smoke
         run: docker compose run --rm dev bash -lc 'rustup toolchain install nightly-2026-07-20 && (command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --version 0.13.2 --locked) && cd fuzz && cargo +nightly-2026-07-20 fuzz run parse_check -- -runs=20000 -max_total_time=60'
 

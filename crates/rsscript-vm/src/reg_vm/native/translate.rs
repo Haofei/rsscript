@@ -58,6 +58,9 @@ fn native_profile_guidance_with_analysis(
     ip_map: &[usize],
     analysis: &NativeRegionAnalysis,
 ) -> NativeProfileGuidance {
+    if !cfg!(any(test, feature = "jit-speculation")) {
+        return NativeProfileGuidance::default();
+    }
     let Some(profile) = profile else {
         return NativeProfileGuidance::default();
     };

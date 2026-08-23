@@ -26,6 +26,10 @@ native-jit = ["dep:vm-jit"]
 # Developer-only stress and benchmark entry points. Production hosts configure
 # the native engine exclusively through typed `NativeJitOptions`.
 jit-diagnostics = ["native-jit"]
+# Non-default research transforms whose current canonical workload evidence does
+# not meet the production retention threshold (profile-guided closure PIC and
+# branch side exits). This is deliberately not re-exported by the stable SDK.
+jit-speculation = ["native-jit"]
 
 [build-dependencies]
 rsscript-build-support = { path = "../rsscript-build-support" }

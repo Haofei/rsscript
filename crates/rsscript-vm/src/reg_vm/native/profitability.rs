@@ -32,6 +32,7 @@ const W_MEMOIZED_HOSTCALL: i64 = 1; // hoisted loop-invariant helper: amortised
 // --- Debit weights (per-iteration boundary cost native cannot amortise) -----
 const W_HOST_CALL: i64 = 3; // every HostCall re-crosses the FFI boundary the VM also pays
 const W_CLOSURE_GUARD: i64 = 4; // GuardClosureId: monomorphic closure dispatch guard
+const W_NATIVE_CALL: i64 = 4; // machine-code call/frame overhead per dynamic edge
 // A polymorphic closure inline-cache dispatch (`HostCall{helper:ClosureId}` + its
 // LoadInt/Equal/JumpIfBool arm ladder). The ladder otherwise scores as cheap scalar
 // CREDITS, but it is really per-iteration dispatch overhead — the canonical
@@ -94,6 +95,9 @@ pub(in crate::reg_vm) fn interpreted_region_work(code: &[RegInstr]) -> u32 {
 /// saves the interpreter's per-iteration dispatch) is KEPT — declining it would be
 /// an over-decline. Conservative on purpose now that the model is on by default.
 const DECLINE_AT: i64 = -1;
+/// Loop-free calls pay a native ABI transition on every invocation. Tiny scalar
+/// bodies cannot amortize it, even when they are technically native-eligible.
+const LOOP_FREE_MIN_SCORE: i64 = 24;
 
 /// Explainable profitability verdict for one native region.
 #[derive(Clone, Debug, Default)]
@@ -222,11 +226,13 @@ pub(in crate::reg_vm) fn native_region_profitability(
             JitInstr::CallNative { .. }
             | JitInstr::CallSelf { .. }
             | JitInstr::CallGroup { .. } => {
-                // Native->native call edges are neutral in v1: they avoid an
-                // interpreter re-entry (favourable) but a tiny callee is a debit.
-                // Without callee-size context here we leave them at 0 and revisit
-                // after report-mode data.
+                // A call avoids interpreter re-entry but still constructs a child
+                // call frame and deopt chain. The scorecard showed a loop-free
+                // 80-call wrapper regressing by orders of magnitude, so charge the
+                // measured fixed edge cost. Loop bodies with substantial scalar
+                // work still amortize it and remain eligible.
                 p.native_calls += 1;
+                score -= W_NATIVE_CALL;
             }
             JitInstr::Nop
             | JitInstr::TailCallGuard { .. }
@@ -242,7 +248,11 @@ pub(in crate::reg_vm) fn native_region_profitability(
     //    fixed entry cost, so a non-positive score genuinely means "native ≈ VM for
     //    this loop".
     //
-    // 2. A LOOP-FREE region that contains a polymorphic closure inline-cache
+    // 2. A LOOP-FREE region below the measured ABI-amortization floor, including
+    //    tiny profiled branches. Native callees compiled as part of a profitable
+    //    parent are handled separately by the native-call planner.
+    //
+    // 3. A LOOP-FREE region that contains a polymorphic closure inline-cache
     //    (`pic_sites > 0`): such a body is, by construction, a per-iteration
     //    dispatch helper (you do not place a polymorphic closure call in a one-shot
     //    function and compile it hot), and the PIC dispatch is per-call overhead
@@ -250,9 +260,9 @@ pub(in crate::reg_vm) fn native_region_profitability(
     //    distinct from a clean native-call leaf (`pic_sites == 0`), which is left to
     //    the adaptive `NATIVE_NOAMORTIZE_GIVEUP` demotion and never declined here.
     //
-    // A loop-free region WITHOUT a PIC is never statically declined (it may be a
-    // beneficial native-call leaf); the adaptive give-up path handles it.
-    p.decline = (has_backedge && score <= DECLINE_AT) || (!has_backedge && p.pic_sites > 0);
+    p.decline = (has_backedge && score <= DECLINE_AT)
+        || (!has_backedge && score < LOOP_FREE_MIN_SCORE)
+        || (!has_backedge && p.pic_sites > 0);
     p
 }
 
@@ -299,5 +309,49 @@ mod tests {
         assert_eq!(tiny_work, interpreted_region_work(&tiny));
         assert_eq!(heavy_work, interpreted_region_work(&heavy));
         assert!(heavy_work > tiny_work);
+    }
+
+    #[test]
+    fn tiny_loop_free_branch_is_declined_before_abi_overhead_dominates() {
+        let function = JitFunction {
+            n_params: 1,
+            n_regs: 3,
+            reg_types: vec![
+                vm_jit::JitValueType::Int,
+                vm_jit::JitValueType::Int,
+                vm_jit::JitValueType::Bool,
+            ],
+            zero_init_regs: Vec::new(),
+            code: vec![
+                JitInstr::LoadInt {
+                    dst: 1,
+                    value: 1_000_000_000,
+                },
+                JitInstr::Compare {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                    op: vm_jit::JitCompare::Lt,
+                },
+                JitInstr::JumpIfBool {
+                    cond: 2,
+                    expected: true,
+                    target: 5,
+                },
+                JitInstr::Add {
+                    dst: 0,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                JitInstr::Return { src: 0 },
+                JitInstr::LoadInt { dst: 0, value: 0 },
+                JitInstr::Return { src: 0 },
+            ],
+            memo_scopes: Vec::new(),
+            cold_blocks: Vec::new(),
+        };
+        let profitability = native_region_profitability(&function, false);
+        assert!(profitability.decline);
+        assert!(profitability.score < LOOP_FREE_MIN_SCORE);
     }
 }
