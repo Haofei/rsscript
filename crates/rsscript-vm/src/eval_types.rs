@@ -909,6 +909,10 @@ pub enum ExecutionEngineTelemetry {
         native_calls: u64,
         native_bails: u64,
         osr_entries: u64,
+        /// Weighted native-lowerable work that remained interpreted.
+        interpreted_native_work: u64,
+        /// Dynamic normal-boundary observations grouped by stable reason.
+        native_barrier_counts: std::collections::BTreeMap<String, u64>,
         /// Machine code currently resident in the JIT modules. The current
         /// compile-once-publish policy makes this equal to published code.
         resident_code_bytes: u64,

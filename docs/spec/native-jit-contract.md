@@ -33,6 +33,11 @@ explicit trusted/unbounded execution mode until accounting parity is implemented
   deoptimization, and OSR eligibility are classified by the exhaustive
   `JitInstr::effects` API. Validators and tiering must consume those facts rather
   than maintain independent opcode lists.
+- VM bytecode eligibility is expressed as `Direct`, bounded synchronous `Helper`,
+  normal `Yield` barrier, or `Reject`, rather than as an unstructured boolean.
+  Native telemetry reports dynamically interpreted native-capable work and stable
+  barrier-reason counts. These observations decide which continuation regions are
+  worth implementing; they do not change execution semantics.
 - Structural compilation work is bounded by `JitLimits` before Cranelift code
   generation. Instruction, register, CFG-edge, operand, analysis-word, deopt,
   memo-scope, callee, and recursive-group counts have deterministic limits.

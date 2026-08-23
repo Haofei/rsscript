@@ -1248,6 +1248,8 @@ impl RegVmExecutable {
                         native_calls: native.stats.native_calls,
                         native_bails: native.stats.native_bails,
                         osr_entries: native.stats.osr_entries,
+                        interpreted_native_work: native.stats.interpreted_native_work,
+                        native_barrier_counts: native.stats.native_barrier_counts.clone(),
                         resident_code_bytes: native.stats.compiled_code_bytes,
                         published_code_bytes: native.admission.admitted_code_bytes,
                         rejected_resident_bytes: 0,
@@ -2094,6 +2096,13 @@ pub struct NativeStats {
     pub translated: u64,
     /// Functions rejected by translation (outside the native subset).
     pub not_eligible: u64,
+    /// Weighted instructions that were native-lowerable but still ran through the
+    /// interpreter. This is the primary "missed hot work" signal for deciding
+    /// whether continuation regions would remove meaningful interpreter work.
+    pub interpreted_native_work: u64,
+    /// Dynamic normal-boundary counts grouped by stable barrier reason. These are
+    /// observations only; they do not change eligibility or execution behavior.
+    pub native_barrier_counts: BTreeMap<String, u64>,
     /// Stable native translation decline reasons, grouped by the same explanation
     /// used by the structured missed-optimization report.
     pub native_decline_reasons: BTreeMap<String, u64>,
@@ -2348,6 +2357,15 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
             "unprofitable_declined_fns": &self.unprofitable_declined_fns,
         });
         let object = value.as_object_mut().expect("stats JSON is an object");
+        object.insert(
+            "interpreted_native_work".into(),
+            self.interpreted_native_work.into(),
+        );
+        object.insert(
+            "native_barrier_counts".into(),
+            crate::serde_json::to_value(&self.native_barrier_counts)
+                .expect("barrier counts serialize"),
+        );
         object.insert("baseline_compiles".into(), self.baseline_compiles.into());
         object.insert("optimized_compiles".into(), self.optimized_compiles.into());
         object.insert("baseline_calls".into(), self.baseline_calls.into());

@@ -101,6 +101,8 @@ fn native_engine_matches_the_verified_interpreter_corpus() {
         let ExecutionEngineTelemetry::Native {
             native_calls,
             osr_entries,
+            interpreted_native_work,
+            native_barrier_counts,
             rejected_resident_bytes,
             ..
         } = native.telemetry.engine
@@ -113,6 +115,16 @@ fn native_engine_matches_the_verified_interpreter_corpus() {
                 (native_calls, osr_entries),
                 (0, 0),
                 "struct scalar replacement must remain outside the stable native-jit path"
+            );
+            assert!(
+                interpreted_native_work > 0,
+                "missed-work telemetry must expose native-capable work around barriers"
+            );
+            assert!(
+                native_barrier_counts
+                    .get("aggregate_operation")
+                    .is_some_and(|count| *count > 0),
+                "aggregate barriers must be reported structurally"
             );
         }
         cases_with_native_entry += usize::from(native_calls > 0 || osr_entries > 0);

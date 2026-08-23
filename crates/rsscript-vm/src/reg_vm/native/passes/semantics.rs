@@ -1,9 +1,56 @@
 use super::*;
 
 #[cfg(feature = "native-jit")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::reg_vm) enum NativeBarrierReason {
+    StaticCall,
+    DynamicCall,
+    ExternalCall,
+    Await,
+    Spawn,
+    ResourceOperation,
+    UnsupportedIntrinsic,
+    AggregateOperation,
+    UnsupportedInstruction,
+}
+
+#[cfg(feature = "native-jit")]
+impl NativeBarrierReason {
+    pub(in crate::reg_vm) const fn as_str(self) -> &'static str {
+        match self {
+            Self::StaticCall => "static_call",
+            Self::DynamicCall => "dynamic_call",
+            Self::ExternalCall => "external_call",
+            Self::Await => "await",
+            Self::Spawn => "spawn",
+            Self::ResourceOperation => "resource_operation",
+            Self::UnsupportedIntrinsic => "unsupported_intrinsic",
+            Self::AggregateOperation => "aggregate_operation",
+            Self::UnsupportedInstruction => "unsupported_instruction",
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::reg_vm) enum NativeLoweringClass {
+    Direct,
+    Helper { estimated_cost: u16 },
+    Yield { reason: NativeBarrierReason },
+    Reject,
+}
+
+#[cfg(feature = "native-jit")]
+impl NativeLoweringClass {
+    pub(in crate::reg_vm) const fn is_native(self) -> bool {
+        matches!(self, Self::Direct | Self::Helper { .. })
+    }
+}
+
+#[cfg(feature = "native-jit")]
 #[derive(Clone, Debug, Default)]
 pub(super) struct NativeInstrSemantics {
-    pub(super) native_subset: bool,
+    pub(super) lowering: NativeLoweringClass,
     pub(super) dst: Option<usize>,
     pub(super) list_write: Option<usize>,
     pub(super) heap_write: bool,
@@ -11,6 +58,13 @@ pub(super) struct NativeInstrSemantics {
     pub(super) control: NativeControlFlow,
     pub(super) reads: RegFootprint,
     pub(super) writes: RegFootprint,
+}
+
+#[cfg(feature = "native-jit")]
+impl Default for NativeLoweringClass {
+    fn default() -> Self {
+        Self::Reject
+    }
 }
 
 #[cfg(feature = "native-jit")]
@@ -329,22 +383,40 @@ pub(super) fn native_instr_semantics(instr: &RegInstr) -> NativeInstrSemantics {
         _ => RegFootprint::All,
     };
 
-    let native_subset = match instr {
+    let lowering = match instr {
         RegInstr::CallIntrinsic {
             intrinsic, args, ..
         } => {
-            native_host_typed_intrinsic(*intrinsic, None)
+            if native_host_typed_intrinsic(*intrinsic, None)
                 .is_some_and(|spec| args.len() == spec.arg_tys().len())
-                || native_inline_convert_intrinsic(*intrinsic)
-                    .is_some_and(|arity| args.len() == arity)
+            {
+                NativeLoweringClass::Helper { estimated_cost: 3 }
+            } else if native_inline_convert_intrinsic(*intrinsic)
+                .is_some_and(|arity| args.len() == arity)
+            {
+                NativeLoweringClass::Direct
+            } else {
+                NativeLoweringClass::Yield {
+                    reason: NativeBarrierReason::UnsupportedIntrinsic,
+                }
+            }
         }
         RegInstr::CallTypedIntrinsic {
             intrinsic,
             type_arg,
             args,
             ..
-        } => native_host_typed_intrinsic(*intrinsic, Some(type_arg.as_str()))
-            .is_some_and(|spec| args.len() == spec.arg_tys().len()),
+        } => {
+            if native_host_typed_intrinsic(*intrinsic, Some(type_arg.as_str()))
+                .is_some_and(|spec| args.len() == spec.arg_tys().len())
+            {
+                NativeLoweringClass::Helper { estimated_cost: 3 }
+            } else {
+                NativeLoweringClass::Yield {
+                    reason: NativeBarrierReason::UnsupportedIntrinsic,
+                }
+            }
+        }
         RegInstr::LoadInt { .. }
         | RegInstr::LoadFloat { .. }
         | RegInstr::LoadBool { .. }
@@ -373,8 +445,8 @@ pub(super) fn native_instr_semantics(instr: &RegInstr) -> NativeInstrSemantics {
         | RegInstr::JumpIfBool { .. }
         | RegInstr::JumpIfIntCompare { .. }
         | RegInstr::Return { .. }
-        | RegInstr::RuntimeError { .. }
-        | RegInstr::StringConcat { .. }
+        | RegInstr::RuntimeError { .. } => NativeLoweringClass::Direct,
+        RegInstr::StringConcat { .. }
         | RegInstr::SetFieldSlot { .. }
         | RegInstr::GetFieldSlot { .. }
         | RegInstr::ListLen { .. }
@@ -396,12 +468,54 @@ pub(super) fn native_instr_semantics(instr: &RegInstr) -> NativeInstrSemantics {
         | RegInstr::NativeClosureId { .. }
         | RegInstr::NativeClosureCapture { .. }
         | RegInstr::NativeFieldClosureId { .. }
-        | RegInstr::NativeFieldClosureCapture { .. } => true,
-        _ => false,
+        | RegInstr::NativeFieldClosureCapture { .. } => {
+            NativeLoweringClass::Helper { estimated_cost: 3 }
+        }
+        RegInstr::CallKnown { .. } => NativeLoweringClass::Yield {
+            reason: NativeBarrierReason::StaticCall,
+        },
+        RegInstr::CallDynamic { .. } | RegInstr::CallClosure { .. } => NativeLoweringClass::Yield {
+            reason: NativeBarrierReason::DynamicCall,
+        },
+        RegInstr::CallExternal { .. } => NativeLoweringClass::Yield {
+            reason: NativeBarrierReason::ExternalCall,
+        },
+        RegInstr::AwaitJoin { .. } | RegInstr::JoinTasks { .. } | RegInstr::SelectWait { .. } => {
+            NativeLoweringClass::Yield {
+                reason: NativeBarrierReason::Await,
+            }
+        }
+        RegInstr::SpawnTask { .. } | RegInstr::CancelTask { .. } => NativeLoweringClass::Yield {
+            reason: NativeBarrierReason::Spawn,
+        },
+        RegInstr::Manage { .. } | RegInstr::ResourceDrop { .. } => NativeLoweringClass::Yield {
+            reason: NativeBarrierReason::ResourceOperation,
+        },
+        RegInstr::MakeStruct { .. }
+        | RegInstr::MakeVariant { .. }
+        | RegInstr::MakeList { .. }
+        | RegInstr::MakeObject { .. }
+        | RegInstr::MakeMap { .. }
+        | RegInstr::MakeClosure { .. }
+        | RegInstr::MakeSome { .. }
+        | RegInstr::LoadNone { .. }
+        | RegInstr::GetField { .. }
+        | RegInstr::SetField { .. }
+        | RegInstr::UnwrapSome { .. }
+        | RegInstr::UnwrapVariantValue { .. }
+        | RegInstr::MatchOption { .. }
+        | RegInstr::MatchResult { .. }
+        | RegInstr::MatchVariant { .. }
+        | RegInstr::TryResult { .. } => NativeLoweringClass::Yield {
+            reason: NativeBarrierReason::AggregateOperation,
+        },
+        _ => NativeLoweringClass::Yield {
+            reason: NativeBarrierReason::UnsupportedInstruction,
+        },
     };
 
     NativeInstrSemantics {
-        native_subset,
+        lowering,
         dst,
         list_write,
         heap_write,
@@ -416,7 +530,42 @@ pub(super) fn native_instr_semantics(instr: &RegInstr) -> NativeInstrSemantics {
 /// core, no heap/calls/async/floats). Tighter than [`jit_supported_instruction`].
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn native_subset_instruction(instr: &RegInstr) -> bool {
-    native_instr_semantics(instr).native_subset
+    native_instr_semantics(instr).lowering.is_native()
+}
+
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn native_lowering_class(instr: &RegInstr) -> NativeLoweringClass {
+    native_instr_semantics(instr).lowering
+}
+
+#[cfg(all(test, feature = "native-jit"))]
+mod lowering_class_tests {
+    use super::*;
+
+    #[test]
+    fn barriers_are_classified_without_changing_subset_eligibility() {
+        let static_call = RegInstr::CallKnown {
+            dst: 0,
+            function: 1,
+            args: Vec::new(),
+            mut_args: Vec::new(),
+        };
+        assert_eq!(
+            native_lowering_class(&static_call),
+            NativeLoweringClass::Yield {
+                reason: NativeBarrierReason::StaticCall,
+            }
+        );
+        assert!(!native_subset_instruction(&static_call));
+
+        let add = RegInstr::AddInt {
+            dst: 0,
+            lhs: 1,
+            rhs: 2,
+        };
+        assert_eq!(native_lowering_class(&add), NativeLoweringClass::Direct);
+        assert!(native_subset_instruction(&add));
+    }
 }
 
 /// The register a native-subset instruction definitely writes (its `dst`), if any.

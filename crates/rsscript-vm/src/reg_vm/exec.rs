@@ -1552,6 +1552,31 @@ impl RegVm {
                 }
                 self.tick()?;
                 #[cfg(feature = "native-jit")]
+                if let Some(native) = self.native.as_mut()
+                    && native.collect_stats
+                {
+                    match native_lowering_class(instr) {
+                        NativeLoweringClass::Direct => {
+                            native.stats.interpreted_native_work =
+                                native.stats.interpreted_native_work.saturating_add(1);
+                        }
+                        NativeLoweringClass::Helper { estimated_cost } => {
+                            native.stats.interpreted_native_work = native
+                                .stats
+                                .interpreted_native_work
+                                .saturating_add(u64::from(estimated_cost));
+                        }
+                        NativeLoweringClass::Yield { reason } => {
+                            *native
+                                .stats
+                                .native_barrier_counts
+                                .entry(reason.as_str().to_string())
+                                .or_default() += 1;
+                        }
+                        NativeLoweringClass::Reject => {}
+                    }
+                }
+                #[cfg(feature = "native-jit")]
                 self.record_native_branch_feedback(&func, instr, base, ip)?;
                 ip += 1;
                 // Pure instructions (loads, arithmetic, jumps, matches, heap
