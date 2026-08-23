@@ -55,13 +55,6 @@ impl JitError {
     }
 }
 
-// Migration helper for validation sites. New boundary code should select an
-// explicit kind with `JitError::new`.
-#[allow(non_snake_case)]
-pub(crate) fn JitError(message: String) -> JitError {
-    JitError::invalid_ir(message)
-}
-
 /// Logical language-call depth supplied by an embedding VM. Native stack depth
 /// is tracked separately by the internal ABI.
 #[derive(Clone, Copy, Debug)]
@@ -222,7 +215,7 @@ struct CompiledFunc {
     /// Whether generated code reads and writes the non-null limits cell passed to
     /// the raw entry ABI. Ordinary safe calls must never enter such a function.
     requires_limits: bool,
-    /// OSR-entry (J5.2): when `true`, the function was compiled with
+    /// OSR-entry (OSR): when `true`, the function was compiled with
     /// [`compile_osr`](NativeModule::compile_osr). Its `args_ptr` is the
     /// interpreter's full `n_regs`-wide register *window* (indexed by register),
     /// not a packed `n_params` arg array, so `call` validates the slice length
@@ -624,8 +617,8 @@ impl NativeModule {
         function: &ValidatedJitFunction<'_>,
     ) -> Result<CompiledId, JitError> {
         if function.mode() != validated::ValidationMode::Standard {
-            return Err(JitError(
-                "OSR-validated IR cannot use the normal compile entry".into(),
+            return Err(JitError::invalid_ir(
+                "OSR-validated IR cannot use the normal compile entry",
             ));
         }
         self.compile_inner(function, None, None, LimitChecks::default())
@@ -839,7 +832,7 @@ impl NativeModule {
             .iter()
             .map(|function| {
                 validated_return_type(function, false)
-                    .ok_or_else(|| JitError("recursive group member has no Return".into()))
+                    .ok_or_else(|| JitError::invalid_ir("recursive group member has no Return"))
             })
             .collect::<Result<_, _>>()?;
         for (member_index, function) in funcs.iter().enumerate() {
@@ -848,7 +841,7 @@ impl NativeModule {
                 .iter()
                 .any(|instr| matches!(instr, JitInstr::CallNative { .. }))
             {
-                return Err(JitError(format!(
+                return Err(JitError::invalid_ir(format!(
                     "recursive group member {member_index} contains unsupported CallNative"
                 )));
             }
@@ -865,7 +858,7 @@ impl NativeModule {
                     JitValueType::Int | JitValueType::Bool | JitValueType::Float
                 )
             {
-                return Err(JitError(format!(
+                return Err(JitError::invalid_ir(format!(
                     "recursive group member {member_index} must use scalar parameters and return"
                 )));
             }
@@ -880,19 +873,19 @@ impl NativeModule {
                 };
                 let callee_index = *group_index as usize;
                 let Some(callee) = funcs.get(callee_index) else {
-                    return Err(JitError(format!(
+                    return Err(JitError::invalid_ir(format!(
                         "CallGroup group_index {callee_index} out of range"
                     )));
                 };
                 if args.len() != callee.n_params as usize {
-                    return Err(JitError(format!(
+                    return Err(JitError::invalid_ir(format!(
                         "CallGroup got {} args, group member {callee_index} expects {}",
                         args.len(),
                         callee.n_params
                     )));
                 }
                 if function.reg_types[*dst as usize] != return_types[callee_index] {
-                    return Err(JitError(format!(
+                    return Err(JitError::invalid_ir(format!(
                         "CallGroup result register {dst} has type {:?}, group member {callee_index} returns {:?}",
                         function.reg_types[*dst as usize], return_types[callee_index]
                     )));
@@ -904,7 +897,7 @@ impl NativeModule {
                 {
                     let actual = function.reg_types[arg as usize];
                     if actual != *expected {
-                        return Err(JitError(format!(
+                        return Err(JitError::invalid_ir(format!(
                             "CallGroup arg {arg_index} has type {actual:?}, group member {callee_index} expects {expected:?}"
                         )));
                     }
@@ -1032,34 +1025,34 @@ impl NativeModule {
                 continue;
             };
             if callee.module_id != self.id {
-                return Err(JitError(
-                    "CallNative callee belongs to a different module".into(),
+                return Err(JitError::invalid_ir(
+                    "CallNative callee belongs to a different module",
                 ));
             }
             let compiled = self
                 .funcs
                 .get(callee.index)
-                .ok_or_else(|| JitError("CallNative callee index is out of range".into()))?;
+                .ok_or_else(|| JitError::invalid_ir("CallNative callee index is out of range"))?;
             if compiled.osr {
-                return Err(JitError(
-                    "CallNative does not support OSR callees yet".into(),
+                return Err(JitError::invalid_ir(
+                    "CallNative does not support OSR callees yet",
                 ));
             }
             if !compiled.scalar_leaf_callable {
-                return Err(JitError(
-                    "CallNative callee is not a scalar-callable function".into(),
+                return Err(JitError::invalid_ir(
+                    "CallNative callee is not a scalar-callable function",
                 ));
             }
             if compiled.n_params != args.len() {
-                return Err(JitError(format!(
+                return Err(JitError::invalid_ir(format!(
                     "CallNative got {} args, callee expects {}",
                     args.len(),
                     compiled.n_params
                 )));
             }
             let Some(return_type) = compiled.return_type else {
-                return Err(JitError(
-                    "CallNative callee has no scalar Return instruction".into(),
+                return Err(JitError::invalid_ir(
+                    "CallNative callee has no scalar Return instruction",
                 ));
             };
             if matches!(
@@ -1069,19 +1062,19 @@ impl NativeModule {
                     | JitValueType::FlatFloat
                     | JitValueType::FlatFloatMut
             ) {
-                return Err(JitError(format!(
+                return Err(JitError::invalid_ir(format!(
                     "CallNative callee return type {return_type:?} is not callable"
                 )));
             }
             if function.reg_types[*dst as usize] != return_type {
-                return Err(JitError(format!(
+                return Err(JitError::invalid_ir(format!(
                     "CallNative result register {dst} is {:?}, callee returns {return_type:?}",
                     function.reg_types[*dst as usize]
                 )));
             }
             for (i, (&arg, &expected)) in args.iter().zip(compiled.param_types.iter()).enumerate() {
                 if function.reg_types[arg as usize] != expected {
-                    return Err(JitError(format!(
+                    return Err(JitError::invalid_ir(format!(
                         "CallNative arg {i}: caller register {arg} is {:?}, callee expects {expected:?}",
                         function.reg_types[arg as usize]
                     )));
@@ -1133,7 +1126,7 @@ impl NativeModule {
     }
 
     /// Run with a host context (see [`call_with_host_ctx`](Self::call_with_host_ctx))
-    /// and a non-null J0.5 limits cell. `limits_ptr` must point at a live, immovable
+    /// and a non-null native limit accounting limits cell. `limits_ptr` must point at a live, immovable
     /// `[i64; 3]` = `[steps, step_budget, cancel_addr]` for the call's duration: an
     /// armed OSR variant reads `step_budget`/`cancel_addr`, accumulates into and writes
     /// back `steps`. Unarmed variants ignore it (so [`call`](Self::call) passes null).
@@ -1170,7 +1163,7 @@ impl NativeModule {
             .iter()
             .filter_map(|&(reg, ty)| {
                 let &bits = payload.get(payload_base + reg as usize)?;
-                // Heap-aware deopt (J0.1): only a TRUE scalar (`Int`/`Float`) reg is
+                // Heap-aware deopt (heap-aware deopt): only a TRUE scalar (`Int`/`Float`) reg is
                 // reconstructible as a deopt value. A non-scalar reg — a `Handle` (heap
                 // table index) or a `FlatInt`/`FlatFloat` (raw borrow-pinned buffer
                 // pointer) — carries no scalar payload; the interpreter frame already
@@ -1182,7 +1175,7 @@ impl NativeModule {
                     JitValueType::Bool => DeoptValue::Bool(bits != 0),
                     JitValueType::Float => DeoptValue::Float(f64::from_bits(bits as u64)),
                     // A `Handle` carries its heap-table index: the consumer resolves it
-                    // against the live JIT heap (J0.1 live-after heap-payload). A flat reg
+                    // against the live JIT heap (heap-aware deopt live-after heap-payload). A flat reg
                     // is a raw borrow-pinned buffer pointer with no such mapping.
                     JitValueType::Handle => DeoptValue::Handle(bits),
                     JitValueType::FlatInt
@@ -1463,7 +1456,7 @@ impl NativeModule {
                     // Heap-result return ABI: a Handle-returning function's
                     // `out` is an output-table handle, signalled distinctly so the
                     // host materializes a heap value from it. The scalar path is
-                    // byte-for-byte unchanged. §7.2: this branch runs ONLY on a
+                    // byte-for-byte unchanged. the transactional fallback contract: this branch runs ONLY on a
                     // clean completion (`completed != 0 && bail.get() == 0`); any
                     // bail takes the `else` (`Deopt`) arm, so no heap result is
                     // ever reported on a bailed attempt.
@@ -1474,7 +1467,7 @@ impl NativeModule {
                     }
                 } else {
                     let safepoint_id = SafepointId(safepoint as u32);
-                    // Decode the captured live registers via the J0.1a state-map.
+                    // Decode the captured live registers via the deopt state-map state-map.
                     // A real bail site (id >= 1) names a `sites[id - 1]` entry; an
                     // anonymous bail (id 0, e.g. fell off the end) has no site, so
                     // `live` is empty.

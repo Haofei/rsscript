@@ -157,7 +157,7 @@ pub(super) fn native_osr_region_defined_regs(
 /// register (`reg >= n_params`, a function-local accumulator that is handle-accessed,
 /// not flat-pinned — e.g. a `List<String>` builder). A PARAMETER list stays vetoed
 /// (conservative: it may be the pinned flat buffer; growing it is UB). This unblocks
-/// native heap-value list building (J0.4 #1) while preserving flat-param safety and the
+/// native heap-value list building (transactional heap mutation) while preserving flat-param safety and the
 /// outer-loop selection for flat-param builder/consumer shapes.
 #[cfg(feature = "native-jit")]
 pub(super) fn native_osr_growth_admissible(

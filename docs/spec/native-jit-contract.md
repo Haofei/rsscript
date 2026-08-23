@@ -18,6 +18,10 @@ does not add an isolation boundary and never changes Provider authority.
   typed `NativeJitOptions`; diagnostic front ends may translate their own flags.
 - Every call crosses the versioned `JitCallFrame` ABI. The frame owns bail,
   safepoint, deoptimization, depth, limit, and host-context state for that call.
+- Register definitions, register uses, control-flow shape, heap visibility,
+  deoptimization, and OSR eligibility are classified by the exhaustive
+  `JitInstr::effects` API. Validators and tiering must consume those facts rather
+  than maintain independent opcode lists.
 
 ## Internal contracts
 
@@ -47,3 +51,11 @@ Static frame estimates are admission heuristics, not a hard safety proof.
 
 Native reports distinguish resident, published, rejected-resident, and reserved
 arena bytes. Under compile-once-publish, rejected-resident bytes must remain zero.
+
+## Hardening gate
+
+The weekly hardening workflow runs interpreter/native differential tests, forced
+deoptimization and rollback cases, 64/128/256 KiB host-stack entries, guard-page
+flat-buffer bounds tests, AddressSanitizer coverage for host wrappers, structured
+IR fuzzing, and the workload scorecard. ASan does not instrument generated machine
+code; guard pages and canary/boundary fixtures cover direct native memory accesses.

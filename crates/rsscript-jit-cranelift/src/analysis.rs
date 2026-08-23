@@ -341,7 +341,7 @@ pub(super) fn interval_analysis(program: &JitFunction) -> Vec<Vec<Interval>> {
         out
     };
 
-    // Edge-sensitive (branch-conditioned) refinement (J4.3+). When predecessor `p`
+    // Edge-sensitive (branch-conditioned) refinement (branch-conditioned range refinement). When predecessor `p`
     // is a `JumpIfIntCompare` and the edge `p -> succ` is governed by a comparison
     // fact, tighten the operand intervals flowed along that *specific* edge by the
     // asserted relation. This is what lets a loop counter `i` — TOP at the loop
@@ -461,7 +461,7 @@ pub(super) fn interval_analysis(program: &JitFunction) -> Vec<Vec<Interval>> {
     // register at the safe TOP. Lattice height per register ≤ 3.
     let mut pinned_top: Vec<Vec<bool>> = (0..n).map(|_| vec![false; n_regs]).collect();
 
-    // PHASE 1 — plain monotone fixpoint (unchanged J4.3 lattice). Branch refinement
+    // PHASE 1 — plain monotone fixpoint (unchanged interval range analysis lattice). Branch refinement
     // is deliberately NOT applied here: it is a non-propagating, query-time narrowing
     // (Phase 2 below). Keeping it out of the fixpoint preserves the original
     // termination argument exactly (height-3 lattice + sticky-TOP pinning) — a refined
@@ -537,7 +537,7 @@ pub(super) fn interval_analysis(program: &JitFunction) -> Vec<Vec<Interval>> {
         }
     }
 
-    // PHASE 2 — branch-conditioned refinement (J4.3+), propagated through
+    // PHASE 2 — branch-conditioned refinement (branch-conditioned range refinement), propagated through
     // single-predecessor body chains but NOT across joins.
     //
     // A loop counter is tightened on the loop GUARD's body edge (e.g. `i <= N - 1`),

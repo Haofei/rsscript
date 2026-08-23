@@ -499,7 +499,7 @@ impl RegVm {
     /// Try to run `func` on the native (Cranelift) tier. Returns
     /// [`NativeAttempt::Completed`] if the compiled code ran to completion;
     /// [`NativeAttempt::Resumed`] if a native bail was reconstructed into the
-    /// interpreter at a safepoint (J0.2, only under `precise_deopt`); or
+    /// interpreter at a safepoint (precise deopt, only under `precise_deopt`); or
     /// [`NativeAttempt::Fallback`] when the function isn't native-eligible, an
     /// argument isn't the inferred type, or the native code bailed and precise
     /// resume did not (or could not) apply — in all of which cases the caller
@@ -526,7 +526,7 @@ impl RegVm {
         // / `cancel`. When either preemption limit is armed we refuse to dispatch
         // natively and fall back to the tier-0 executor (and interpreter), which
         // `tick()` on every instruction. `allocation_budget` is ALSO in this gate now that
-        // the native subset can mutate/allocate heap (§7.1 rule 9 write helpers): an
+        // the native subset can mutate/allocate heap (the native heap-helper contract write helpers): an
         // allocating native attempt runs off the meter and would not trip
         // `allocation_budget`, so a function could grow the accounted cumulative allocation total past the
         // limit without erroring. Refusing native while `allocation_budget` is armed keeps
@@ -737,7 +737,7 @@ impl RegVm {
                             }
                         }
                         None => {
-                            // J2: if translation failed *only* because a structurally
+                            // profile-guided inlining: if translation failed *only* because a structurally
                             // inlinable `CallClosure` site hasn't yet warmed to a
                             // monomorphic decision, the verdict is NOT invariant —
                             // re-attempt on a later (warmer) call. Don't cache and
@@ -1054,7 +1054,7 @@ impl RegVm {
         // shared borrows are held, no `borrow_mut` can succeed, so the backing `Vec`
         // cannot reallocate or mutate — hence the raw `as_ptr()` we hand to native
         // code stays valid and immovable for the call's duration. Native-eligible
-        // functions are side-effect-free (§7.2), so they never even attempt a write;
+        // functions are side-effect-free (the transactional fallback contract), so they never even attempt a write;
         // the pinned borrow is the belt-and-suspenders that makes the raw read sound
         // regardless. Every index the native code computes is bounds-checked against
         // the matching `lens` entry (→ fallback on OOB), so it never reads past the
@@ -1278,7 +1278,7 @@ impl RegVm {
                 } else {
                     false
                 };
-                // J0.2 precise resume: take it ONLY when the flag is on AND this is
+                // precise resume: take it ONLY when the flag is on AND this is
                 // a real, mapped safepoint (id ≥ 1 with a recorded site). Anything
                 // else (flag off, anonymous/early bail, or a missing site) falls
                 // back to the safe re-run-from-top default.
@@ -1348,7 +1348,7 @@ impl RegVm {
         }
     }
 
-    /// J5.2 OSR (on-stack replacement). The interpreter has reached `header_ip` —
+    /// OSR (on-stack replacement). The interpreter has reached `header_ip` —
     /// the entry of a qualifying native-subset hot loop in `func` — with the active
     /// frame's window at `base`. Hand that window to an OSR-compiled native loop
     /// body (OSR-entry loads the live-in registers from the window and jumps to the
@@ -1481,7 +1481,7 @@ impl RegVm {
             shape,
         };
 
-        // J0.1 #7 (live-after heap payload): classify each param by its LIVE value, for the
+        // heap-aware deopt #7 (live-after heap payload): classify each param by its LIVE value, for the
         // OSR translator to seed a param used in-region ONLY as a dissolved Result/Option
         // payload `Move` (instruction inference can't type it — no typed use). `None` =
         // don't seed: a `List`/`Deque` may be flat-classified (Handle≠Flat conflicts), and
@@ -1550,7 +1550,7 @@ impl RegVm {
             // function (independent of the current ip). The header gate decides when
             // to actually fire.
             //
-            // OSR × J3: detect the loop on the ORIGINAL code (detection understands
+            // OSR × scalar replacement: detect the loop on the ORIGINAL code (detection understands
             // `MatchOption` as a two-way branch, so an Option-bearing body is shaped
             // correctly), then scalar-replace any non-escaping scalar `Option` that
             // lives ENTIRELY inside that loop region — turning the alloc-bound body
@@ -1587,7 +1587,7 @@ impl RegVm {
                 // and is copied through — it must not veto OSR for the hot loop. When
                 // the original code has no analyzable loop there is nothing to OSR, so
                 // bail before inlining.
-                // OSR × J3 combinator expansion (deopt-before-heap, Slice 2): BEFORE
+                // OSR × scalar replacement combinator expansion (deopt-before-heap, Slice 2): BEFORE
                 // inlining, lower each Option/Result combinator intrinsic
                 // (`Option.map`/`and_then`/`unwrap_or`, `Result.map`/`and_then`/
                 // `unwrap_or`) in the loop region into primitive match/construct form
@@ -1636,7 +1636,7 @@ impl RegVm {
                                 string_literals,
                             )| {
                                 let n_jit_regs = jit_fn.n_regs as usize;
-                                // J0.5 mem: a `ListPush*` flat-capacity growth now charges
+                                // native limit accounting mem: a `ListPush*` flat-capacity growth now charges
                                 // `allocation_budget` in its host helper (the only native-subset op
                                 // the interpreter bills), so an allocating loop runs natively
                                 // under an armed budget and bails to the interpreter at the
@@ -1785,14 +1785,14 @@ impl RegVm {
                         .iter()
                         .map(|&idx| ip_map0[idx])
                         .collect();
-                    // OSR × J3 for STRING LENGTH-LAW FOLDING: BEFORE the Result/Option/
+                    // OSR × scalar replacement for STRING LENGTH-LAW FOLDING: BEFORE the Result/Option/
                     // variant/struct passes, dissolve any non-escaping string built ONLY
                     // to be measured (`String.len` of `concat`/`slice`/`from_int`/literal/
                     // `Move`). Each `String.len` folds to arithmetic on operand byte
                     // lengths (verified laws — byte len, additive concat, ASCII slice
                     // clamp, `from_int` sign/zero/`i64::MIN` digit count) and the now-dead
                     // string allocations are DELETED — read-only (no heap write; Exec Spec
-                    // §7.2 holds), turning a length-only string loop into pure-scalar Int
+                    // the transactional fallback contract holds), turning a length-only string loop into pure-scalar Int
                     // code the native subset accepts. An escaping string, an unprovable
                     // length law (non-ASCII slice), or a `String.len` not traceable to a
                     // foldable producer bails the whole pass; a body with no foldable
@@ -1807,7 +1807,7 @@ impl RegVm {
                         &inlined_code, n_regs0, lp_sl.header, lp_sl.exit,
                     )
                     .and_then(|(inlined_code, n_regs0, ip_map_sl)| {
-                    // OSR × J3 for BYTES LENGTH-LAW FOLDING (read-only sibling of the
+                    // OSR × scalar replacement for BYTES LENGTH-LAW FOLDING (read-only sibling of the
                     // string fold above): dissolve any non-escaping Bytes value built
                     // ONLY to be measured (`Bytes.len` of `Bytes.slice`/
                     // `Bytes.from_string`/`Move`/a constant-length source) into byte-
@@ -1823,7 +1823,7 @@ impl RegVm {
                         &inlined_code, n_regs0, lp_by.header, lp_by.exit,
                     )
                     .and_then(|(inlined_code, n_regs0, ip_map_by)| {
-                    // OSR × J3 for LIST FULL-SLICE QUERY FOLDING: dissolve a
+                    // OSR × scalar replacement for LIST FULL-SLICE QUERY FOLDING: dissolve a
                     // non-escaping `List.slice(list, 0, List.len(list))` whose result
                     // is only used by read-only list queries. The materialized shallow
                     // copy is observably equivalent to a handle alias while the source
@@ -1845,7 +1845,7 @@ impl RegVm {
                             lp_checked.header,
                             lp_checked.exit,
                         )?;
-                    // OSR × J3 for RESULTS (deopt-before-heap, Slice 1): scalar-replace
+                    // OSR × scalar replacement for RESULTS (deopt-before-heap, Slice 1): scalar-replace
                     // any non-escaping, statically-always-`Ok` `Result<Scalar,_>` living
                     // entirely inside the region. An inlined leaf whose `Err` arm built a
                     // heap value (or a combinator's expanded `Err` arm) left a native
@@ -1865,7 +1865,7 @@ impl RegVm {
                         &inlined_code, n_regs0, lp_r.header, lp_r.exit,
                     )
                     .and_then(|(code_r, n_regs_r, ip_map_r, recipes_r)| {
-                        // OSR × J3 for OPTIONS: dissolve any non-escaping scalar Option
+                        // OSR × scalar replacement for OPTIONS: dissolve any non-escaping scalar Option
                         // living entirely inside the region. After Result-SR the region
                         // carries only Option ops + native subset, so the strict
                         // subset-or-option gate is satisfied. Identity (no Option) ⇒
@@ -1875,7 +1875,7 @@ impl RegVm {
                             native_scalar_replace_options_in_region(
                                 &code_r, n_regs_r, lp1.header, lp1.exit,
                             )?;
-                        // OSR × J3 for VARIANTS: after dissolving Options/Results, re-detect
+                        // OSR × scalar replacement for VARIANTS: after dissolving Options/Results, re-detect
                         // the loop on the transformed stream and scalar-replace any
                         // non-escaping user variant whose arms carry only scalar fields
                         // (N>=0 fields per arm) living entirely inside that region
@@ -1890,7 +1890,7 @@ impl RegVm {
                             native_scalar_replace_variants_in_region(
                                 &code1, n_regs1, lp_v.header, lp_v.exit,
                             )?;
-                        // OSR × J3 for STRUCTS: after dissolving Options and variants,
+                        // OSR × scalar replacement for STRUCTS: after dissolving Options and variants,
                         // re-detect the loop on the transformed stream and scalar-replace
                         // any non-escaping flat user struct living entirely inside that
                         // region (`MakeStruct`/`GetFieldSlot` → per-slot `Move`). When
@@ -1904,7 +1904,7 @@ impl RegVm {
                             native_scalar_replace_structs_in_region(
                                 &code2, n_regs2, lp_s.header, lp_s.exit,
                             )?;
-                        // OSR × J3 for LOOP-CARRIED STRUCTS: after the loop-LOCAL
+                        // OSR × scalar replacement for LOOP-CARRIED STRUCTS: after the loop-LOCAL
                         // struct pass, dissolve a struct created in the pre-header,
                         // mutated in place across iterations (`SetFieldSlot`), and dead
                         // after the loop into loop-carried scalar leaf registers (the
@@ -2051,7 +2051,7 @@ impl RegVm {
                             )
                                 .and_then(|(jit_fn, params, derived_liveins, scalar_fields, reg_types, written_regs, string_literals)| {
                                     let n_jit_regs = jit_fn.n_regs as usize;
-                                    // J0.5 mem: `ListPush*` now charges `allocation_budget` in its
+                                    // native limit accounting mem: `ListPush*` now charges `allocation_budget` in its
                                     // helper (the only native-subset billed op), so an
                                     // allocating loop runs natively and bails at the exact
                                     // over-budget push — no blanket decline needed.
@@ -2195,7 +2195,7 @@ impl RegVm {
                 })
                 })
                 });
-                // OSR × J2: a capturing/monomorphic closure inline is profile-
+                // OSR × profile-guided inlining: a capturing/monomorphic closure inline is profile-
                 // guided, so on the first header hit (cold profile) the inline gate
                 // declines and `entry` is `None`. Caching that permanently would
                 // disable OSR forever — exactly the `try_native` warmup hazard. If a
@@ -2340,9 +2340,9 @@ impl RegVm {
         // (List/struct) param its heap-table index (the host helpers read through
         // it), and an unwritten / non-scalar slot contributes 0 (native only ever
         // loads the live-in subset, all of which are written by definite-assignment
-        // at the header). Under OSR × J3 the window is wider than `func.regs` by the
+        // at the header). Under OSR × scalar replacement the window is wider than `func.regs` by the
         // fresh tag/payload registers; only original registers `0..func.regs` carry
-        // an interpreter value, and the J3-added slots stay 0 — the loop body assigns
+        // an interpreter value, and the scalar replacement-added slots stay 0 — the loop body assigns
         // them (LoadBool tag, Move payload) before any read, so their live-in value
         // is irrelevant. A drop guard clears the heap table on every exit path.
         let mut heap_tx = JitNativeCallFrame::begin();
@@ -2636,7 +2636,7 @@ impl RegVm {
         }
 
         // Phase 3: run the OSR loop body natively.
-        // J0.5: seed the limits cell for an armed variant. `emit_step`/`emit_cancel`
+        // native limit accounting: seed the limits cell for an armed variant. `emit_step`/`emit_cancel`
         // were fixed at the top of this call from `self.limits`; the compiled variant
         // matches (same eval-constant limits), so a non-null cell is required exactly
         // when armed. `steps` flows in here and back out below into `self.steps`.
@@ -2650,7 +2650,7 @@ impl RegVm {
                 .map_or(0, |flag| flag.as_atomic() as *const _ as i64);
             jit_set_limits_cell(self.steps as i64, step_budget, cancel_addr);
         }
-        // J0.5 mem: seed the mem cell before EVERY OSR call (armed budget or `-1` to
+        // native limit accounting mem: seed the mem cell before EVERY OSR call (armed budget or `-1` to
         // disarm). The `ListPush*` helper charges flat-capacity growth against it; on a
         // clean exit we read `allocated_bytes` back to commit, on a bail the rollback+rerun
         // discards it. Independent of the step `limits_ptr` (helper-side).
@@ -2694,7 +2694,7 @@ impl RegVm {
         // The pinned borrows are no longer needed once the native call returns.
         drop(flat_guards);
         drop(flat_mut_guards);
-        // J0.5: fold the steps native paid (clean completion OR deopt both wrote it
+        // native limit accounting: fold the steps native paid (clean completion OR deopt both wrote it
         // back) into the interpreter's counter, so resuming the interpreter continues
         // the single tick stream with no double-/under-count.
         if emit_step {
@@ -2803,7 +2803,7 @@ impl RegVm {
                 for (slot, value) in aggregate_liveouts {
                     self.set_reg(slot, value);
                 }
-                // J0.5 mem: this is the CLEAN OSR exit (heap writes committed above), so
+                // native limit accounting mem: this is the CLEAN OSR exit (heap writes committed above), so
                 // commit the `ListPush*` byte charges the native loop accumulated into the
                 // interpreter's cumulative allocation total. (A bail takes the `_` arm below, which aborts the
                 // heap tx and reruns on the interpreter — discarding the native charges.)

@@ -425,7 +425,7 @@ fn native_inline_leaf_calls_inner(
         // precise-resume path — see the soundness note in `deopt_replaceable_cold_arms`),
         // so the interpreter re-runs the loop and performs the arm itself — even when the
         // arm allocates, writes a (possibly caller-aliased) collection, or calls another
-        // function. Execution Spec §7.2 holds unchanged.
+        // function. the transactional fallback contract holds unchanged.
         let (cold, arm_start) = deopt_replaceable_cold_arms(&callee.code, &reachable);
         let mut cmap = vec![0usize; callee.code.len()];
         let mut direct_spawn_results = vec![false; callee.regs];
@@ -592,8 +592,8 @@ fn native_inline_leaf_calls_inner(
                     });
                     ip_map.push(origin);
                 }
-                // J3 branch-shaped match ops (OSR×inline only): two callee ip targets,
-                // each remapped via the callee's `cmap`. The J3 region passes dissolve
+                // scalar replacement branch-shaped match ops (OSR×inline only): two callee ip targets,
+                // each remapped via the callee's `cmap`. The scalar replacement region passes dissolve
                 // the matched variant/Option/struct afterward.
                 RegInstr::MatchOption {
                     src,
@@ -768,7 +768,7 @@ fn native_inline_leaf_calls_inner(
             // profile, no identity guard — the closure value never exists at runtime),
             // so we inline its body directly: materialize each scalar capture from the
             // `MakeClosure`'s (still-live) capture registers, bind the call args, and
-            // splice the body. This is the sibling of the J2 monomorphic path with the
+            // splice the body. This is the sibling of the profile-guided inlining monomorphic path with the
             // guard removed and the captures sourced from the alloc site instead of a
             // heap closure handle.
             RegInstr::CallClosure {
@@ -789,7 +789,7 @@ fn native_inline_leaf_calls_inner(
                 }
                 let base = next_reg;
                 next_reg += callee.regs;
-                // Capture layout matches the J2 inline path: capture regs `0..captures`
+                // Capture layout matches the profile-guided inlining inline path: capture regs `0..captures`
                 // live BELOW the params. Materialize each capture by MOVING the alloc
                 // site's (already-live) capture register into `base + k_cap` — no heap
                 // closure ever exists, so there is no `NativeClosureCapture` read. A
@@ -953,7 +953,7 @@ fn native_inline_leaf_calls_inner(
                 && monomorphic_closure_inline_target(unit, func, profile, call_count, i)
                     .is_some() =>
             {
-                // J2.1 profile-guided monomorphic inlining: J1 profiled this site as
+                // profile-guided monomorphic inlining: bounded type profiled this site as
                 // calling exactly one callee `k` (non-capturing, native-inlinable).
                 // Guard the closure's identity, then inline `k`'s body. On a callee
                 // mismatch the guard bails (re-run-from-top fallback), so the
@@ -972,7 +972,7 @@ fn native_inline_leaf_calls_inner(
                 ip_map.push(i);
                 let base = next_reg;
                 next_reg += callee.regs;
-                // Capturing-closure inlining (OSR × J2): a closure callee lays out
+                // Capturing-closure inlining (OSR × profile-guided inlining): a closure callee lays out
                 // its capture registers `0..captures` BELOW its params, so the
                 // splice window is `[captures.. params.. locals]`. Materialize each
                 // scalar capture into `base + k` via the host helper, then bind the
@@ -1022,14 +1022,14 @@ fn native_inline_leaf_calls_inner(
                 && polymorphic_closure_inline_targets(unit, func, profile, call_count, i)
                     .is_some() =>
             {
-                // J2.2 polymorphic inline cache: J1 profiled this site as calling 2–3
+                // polymorphic inline cache: bounded type profiled this site as calling 2–3
                 // distinct callees, EVERY one non-capturing and native-inlinable. Read
                 // the closure's function id ONCE, then dispatch: `if id == Kj { inline
                 // body of Kj; jump join }` for each speculated callee; if NONE match,
                 // bail via the existing re-run-from-top fallback (a `RuntimeError`,
                 // which lowers to `JitInstr::Bail`). Sound: every inlined body is
                 // side-effect-free, so re-running from the top on a miss is safe —
-                // identical discipline to J2.1's single-guard bail.
+                // identical discipline to monomorphic inlining's single-guard bail.
                 debug_assert!(mut_args.is_empty());
                 let targets =
                     polymorphic_closure_inline_targets(unit, func, profile, call_count, i)?;
@@ -1090,7 +1090,7 @@ fn native_inline_leaf_calls_inner(
                     }
                     let base = next_reg;
                     next_reg += callee.regs;
-                    // Capturing-closure inline (OSR × J2.2): like the monomorphic
+                    // Capturing-closure inline (OSR × polymorphic inline cache): like the monomorphic
                     // path, a closure callee lays out its capture registers `0..
                     // captures` BELOW its params. Materialize each scalar capture
                     // from THIS arm's matched closure handle (`*closure`) into
@@ -1142,7 +1142,7 @@ fn native_inline_leaf_calls_inner(
             // OUTER-caller branch-shaped match ops: when a leaf is inlined, the
             // caller's instruction indices shift, so the two ip targets of an outer
             // `MatchResult`/`MatchOption`/`MatchVariant`/`MatchMapGet` must be remapped
-            // through `index_map` (the J3 region passes later dissolve these). Without
+            // through `index_map` (the scalar replacement region passes later dissolve these). Without
             // a region leaf inline these copy-through unchanged (identity index_map).
             RegInstr::MatchOption {
                 some_ip, none_ip, ..

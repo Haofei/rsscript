@@ -1,5 +1,5 @@
 /// Like [`native_callee_inlinable`] but permits a **capturing** closure callee
-/// (OSR × J2): every capture must be materialized as a scalar at the inline site
+/// (OSR × profile-guided inlining): every capture must be materialized as a scalar at the inline site
 /// (the gate enforces scalarity via the profile's `captures_all_scalar` bit), so
 /// the body addresses its capture registers `0..captures` exactly like ordinary
 /// scalar params. `n_args` is the call's argument count, which must equal the
@@ -36,7 +36,7 @@ pub(in crate::reg_vm) fn native_capturing_callee_inlinable(
 /// `Move` of the result into the call's destination plus a jump to the join point
 /// just past the spliced block. `None` if any call target is not inlinable (the
 /// function then falls back).
-/// If the `CallClosure` at instruction index `i` in `func` qualifies for J2
+/// If the `CallClosure` at instruction index `i` in `func` qualifies for profile-guided inlining
 /// profile-guided monomorphic inlining, return the observed callee's function id
 /// `k` (into `unit.functions`); otherwise `None`.
 ///
@@ -45,7 +45,7 @@ pub(in crate::reg_vm) fn native_capturing_callee_inlinable(
 /// - `func.code[i]` is a `CallClosure` with **no `mut` args** and a closure operand
 ///   that is a **parameter** (`< func.params`), i.e. a native-visible handle (the
 ///   higher-order "take a closure, call it" shape);
-/// - J1's profile for site `i` is **Monomorphic** with exactly one observed callee
+/// - bounded profile collection's profile for site `i` is **Monomorphic** with exactly one observed callee
 ///   key `k` (so the identity guard has a single speculated target);
 /// - `unit.functions[k]` is **non-capturing** and [`native_callee_inlinable`] at the
 ///   call's arity (side-effect-free, splice-able).
@@ -132,7 +132,7 @@ pub(in crate::reg_vm) fn monomorphic_closure_inline_target(
     if !mut_args.is_empty() || !native_readable_closure_operand(func, closure) {
         return None;
     }
-    // J1 profile: compile only after the bounded sampling window freezes. Before
+    // bounded type profile: compile only after the bounded sampling window freezes. Before
     // then a one-callee observation can still mature into a polymorphic site, and
     // caching an early monomorphic native body would permanently hide that shape.
     if call_count < PROFILE_RECORD_LIMIT {
@@ -168,10 +168,10 @@ pub(in crate::reg_vm) fn monomorphic_closure_inline_target(
     Some(k)
 }
 
-/// J2.2 polymorphic inline cache gate. If the `CallClosure` at instruction index
+/// polymorphic inline cache gate. If the `CallClosure` at instruction index
 /// `i` qualifies, return its 2–3 observed callee ids (into `unit.functions`);
 /// otherwise `None`. Sibling to [`monomorphic_closure_inline_target`] — after the
-/// bounded J1 sampling window freezes, a site is EITHER mono (single-guard path)
+/// bounded bounded profile collection sampling window freezes, a site is EITHER mono (single-guard path)
 /// OR poly (this dispatch path), never both.
 ///
 /// All of the following must hold (any failure ⇒ leave the site on its normal
@@ -179,7 +179,7 @@ pub(in crate::reg_vm) fn monomorphic_closure_inline_target(
 /// - `func.code[i]` is a `CallClosure` with **no `mut` args** and a closure operand
 ///   that is a **parameter** (`< func.params`), i.e. a native-visible handle (same
 ///   shape gate as the monomorphic case);
-/// - J1's profile for site `i` is **Polymorphic** — by construction (J1 caps the
+/// - bounded profile collection's profile for site `i` is **Polymorphic** — by construction (bounded profile collection caps the
 ///   observed set at 4 and marks >3 as Megamorphic) this means **2 or 3** distinct
 ///   observed callee keys;
 /// - **EVERY** observed callee is **non-capturing** and [`native_callee_inlinable`]
@@ -212,7 +212,7 @@ pub(in crate::reg_vm) fn polymorphic_closure_inline_targets(
     if !mut_args.is_empty() || !native_readable_closure_operand(func, closure) {
         return None;
     }
-    // J1 profile: compile only after the bounded sampling window freezes, so the
+    // bounded type profile: compile only after the bounded sampling window freezes, so the
     // 2- or 3-target PIC is derived from a stable observed set.
     if call_count < PROFILE_RECORD_LIMIT {
         return None;
@@ -221,7 +221,7 @@ pub(in crate::reg_vm) fn polymorphic_closure_inline_targets(
     if feedback.state() != MonoState::Polymorphic {
         return None;
     }
-    // Polymorphic ⇒ 2 or 3 distinct observed callees (J1 caps at 4 / >3 ⇒ Mega).
+    // Polymorphic ⇒ 2 or 3 distinct observed callees (bounded profile collection caps at 4 / >3 ⇒ Mega).
     let n = feedback.observed.len();
     if !(2..=3).contains(&n) {
         return None;
@@ -253,13 +253,13 @@ pub(in crate::reg_vm) fn polymorphic_closure_inline_targets(
     Some(ranked.into_iter().map(|(k, _, _)| k).collect())
 }
 
-/// True if `func` contains a `CallClosure` that *structurally* could become J2-
+/// True if `func` contains a `CallClosure` that *structurally* could become profile-guided inlining-
 /// inlinable (non-`mut`, closure operand is a parameter handle, observed/observable
-/// callee native-inlinable) but whose J1 profile has **not yet frozen** on a stable
+/// callee native-inlinable) but whose bounded type profile has **not yet frozen** on a stable
 /// mono/poly decision. While such a site is pending, native translation must be
 /// RETRIED on a later (warmer) call rather than cached as permanently ineligible —
 /// otherwise a function that tiers up to native before its profile warms would be
-/// disabled forever and J2 could never fire.
+/// disabled forever and profile-guided inlining could never fire.
 ///
 /// Returns false once the profile is frozen ([`PROFILE_RECORD_LIMIT`] reached): the
 /// decision (mono → single guard, poly → PIC, mega/ineligible → no inline) is then
@@ -298,7 +298,7 @@ pub(in crate::reg_vm) fn native_translation_pending_on_profile(
     })
 }
 
-/// Whether `instr` is one of the four `Option` register-ops that the J3 scalar-
+/// Whether `instr` is one of the four `Option` register-ops that the scalar-
 /// replacement pre-pass dissolves into tag + payload scalar registers.
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn is_option_op(instr: &RegInstr) -> bool {
@@ -360,7 +360,7 @@ fn option_regs_definitely_assigned_before_region_reads(
 
 /// The register *read* positions (value operands) of an instruction that is in the
 /// native subset ([`native_subset_instruction`]) or is one of the four `Option`
-/// ops ([`is_option_op`]). Used by J3 escape analysis to find every use of an
+/// ops ([`is_option_op`]). Used by scalar replacement escape analysis to find every use of an
 /// Option register. Deliberately NOT a full enumeration of every `RegInstr` — the
 /// scalar-replacement pass only ever calls it after confirming every reachable
 /// instruction is in exactly this set, so a future enum addition outside the subset
@@ -450,7 +450,7 @@ pub(in crate::reg_vm) fn subset_or_option_reads(instr: &RegInstr) -> Option<Vec<
     })
 }
 
-/// Whether `instr` is one of the three variant register-ops that the J3 scalar-
+/// Whether `instr` is one of the three variant register-ops that the scalar-
 /// replacement dissolves into a tag + payload scalar register pair.
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn is_variant_op(instr: &RegInstr) -> bool {
@@ -462,7 +462,7 @@ pub(in crate::reg_vm) fn is_variant_op(instr: &RegInstr) -> bool {
     )
 }
 
-/// Whether `instr` is a struct construction op that the J3 struct scalar-replacement
+/// Whether `instr` is a struct construction op that the scalar replacement struct scalar-replacement
 /// dissolves into one scalar register per field slot. `GetFieldSlot` is already in
 /// the native subset (it is also a heap-read on a handle param), so the struct pass
 /// only needs to additionally accept `MakeStruct` inside the region.
@@ -471,7 +471,7 @@ pub(in crate::reg_vm) fn is_make_struct_op(instr: &RegInstr) -> bool {
     matches!(instr, RegInstr::MakeStruct { .. })
 }
 
-/// J3 (escape analysis + scalar replacement). Identify `Option` registers that are
+/// scalar replacement (escape analysis + scalar replacement). Identify `Option` registers that are
 /// NON-ESCAPING with a *scalar* payload and rewrite the function's `RegInstr` code
 /// so each such Option is dissolved into two scalar registers — `tag` (Bool,
 /// true=Some / false=None) and `payload` — leaving only native-subset ops (so the
@@ -784,7 +784,7 @@ impl CombinatorKind {
     }
 }
 
-/// OSR × J3 (deopt-before-heap, Slice 2): expand the six Option/Result combinator
+/// OSR × scalar replacement (deopt-before-heap, Slice 2): expand the six Option/Result combinator
 /// intrinsics (`Option.map`/`and_then`/`unwrap_or`, `Result.map`/`and_then`/
 /// `unwrap_or`) that appear inside the loop region `[header, exit)` into primitive
 /// match/construct form, leaving the mapper closure call as an in-region
@@ -804,7 +804,7 @@ impl CombinatorKind {
 /// - `ResultUnwrapOr(r,d)` → `match r { Ok(v) => v, Err(_) => d }`
 ///
 /// The `Result` `Err` arm rebuilds a HEAP `Err` in the interpreter; building heap is
-/// forbidden on the native path (Exec Spec §7.2), so that arm becomes a native
+/// forbidden on the native path (the transactional fallback contract), so that arm becomes a native
 /// `Bail` (a `RuntimeError` sentinel — identical to the Slice-1 cold-arm splice).
 /// Because the inlined `checked` leaf's own `Err` arm already bailed, the `Result`
 /// reaching `ResultMap`/`ResultAndThen` is statically always-`Ok` after inlining,
@@ -1228,13 +1228,13 @@ pub(in crate::reg_vm) fn native_expand_option_result_combinators_in_region(
     Some((new_code, next_reg, ip_map))
 }
 
-/// OSR × J3 (string length-law folding): a non-escaping string register `s`
+/// OSR × scalar replacement (string length-law folding): a non-escaping string register `s`
 /// inside the loop region `[header, exit)` whose EVERY use is `String.len(s)`,
 /// another foldable producer's operand, or a `Move` to a foldable register, can
 /// have its allocation DELETED — every `String.len(s)` is replaced by arithmetic
 /// on operand lengths, and the producer instruction(s) are dropped. This stays
 /// READ-ONLY (it removes allocations, never performs a heap write — Exec Spec
-/// §7.2 holds), so a length-only string loop becomes pure-scalar and OSRs.
+/// the transactional fallback contract holds), so a length-only string loop becomes pure-scalar and OSRs.
 ///
 /// VERIFIED length laws (against the interpreter's exact `String` semantics):
 /// - `String.len` is the BYTE length (`str::len`, see [`RegIntrinsic::StringLen`]).
@@ -2052,11 +2052,11 @@ pub(in crate::reg_vm) fn native_string_length_fold_in_region(
     Some((new_code, next_reg, ip_map))
 }
 
-/// OSR × J3 for BYTES LENGTH-LAW FOLDING (the read-only sibling of
+/// OSR × scalar replacement for BYTES LENGTH-LAW FOLDING (the read-only sibling of
 /// [`native_string_length_fold_in_region`]): dissolve a non-escaping Bytes value built
 /// ONLY to be measured (`Bytes.len` of `Bytes.slice`/`Bytes.from_string`/`Move`/a
 /// constant-length source) into byte-length arithmetic, DELETING the now-dead Bytes
-/// allocation. Read-only (no heap write; Exec Spec §7.2 holds), turning a length-only
+/// allocation. Read-only (no heap write; the transactional fallback contract holds), turning a length-only
 /// Bytes loop into pure-scalar Int code the native subset accepts.
 ///
 /// Why a separate pass from the String fold: Bytes are RAW bytes with NO char/grapheme
@@ -2787,7 +2787,7 @@ pub(in crate::reg_vm) enum OsrMaterializeValue {
 pub(in crate::reg_vm) const MAX_OSR_MATERIALIZE_DEPTH: usize = 8;
 pub(in crate::reg_vm) const MAX_OSR_MATERIALIZE_NODES: usize = 64;
 
-/// OSR × J3: scalar-replace non-escaping scalar `Option`s that live entirely
+/// OSR × scalar replacement: scalar-replace non-escaping scalar `Option`s that live entirely
 /// inside the loop region `[header, exit)` of an otherwise native-INELIGIBLE
 /// function (one whose pre/post-loop code does I/O — calls, `Output.write`, …, which
 /// the whole-function [`native_scalar_replace_options`] would reject).
@@ -2918,7 +2918,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_options_in_region(
         return None;
     }
 
-    // J0.1(b) live-after always-`Some` Option reconstruction (the Option analog of the
+    // heap-aware deopt(b) live-after always-`Some` Option reconstruction (the Option analog of the
     // Result pass). Originally ANY out-of-region read of an OPT register bailed. We now
     // allow a read AFTER the region by reconstructing `Some(payload)` at OSR-exit from
     // its scalar payload register, with the same soundness obligations as the Result
@@ -3008,7 +3008,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_options_in_region(
         }
     }
 
-    // J0.1(b) Some-Option reconstruction recipes.
+    // heap-aware deopt(b) Some-Option reconstruction recipes.
     let option_recipes: Vec<OsrMaterializeRecipe> = reconstruct
         .iter()
         .enumerate()
@@ -3191,7 +3191,7 @@ pub(in crate::reg_vm) fn is_result_ctor_name(name: &str) -> bool {
     name == "Ok" || name == "Err"
 }
 
-/// OSR × J3 for RESULTS (deopt-before-heap, Slice 1): scalar-replace a non-escaping
+/// OSR × scalar replacement for RESULTS (deopt-before-heap, Slice 1): scalar-replace a non-escaping
 /// `Result<Scalar, _>` that is **statically always-`Ok`** on the native path and
 /// lives entirely inside the loop region `[header, exit)` of an otherwise native-
 /// INELIGIBLE function. Mirrors [`native_scalar_replace_options_in_region`] but for
@@ -3214,7 +3214,7 @@ pub(in crate::reg_vm) fn is_result_ctor_name(name: &str) -> bool {
 /// and `R` is dead at both OSR boundaries (`instr_read_regs`/`instr_written_reg`, with
 /// `RegFootprint::All ⇒ bail`). The always-`Ok` rewrite is sound because the only way
 /// the program reaches the dissolved `MatchResult` is by having built an `Ok` (the
-/// `Err` constructor bailed to the interpreter before any heap op — Exec Spec §7.2), so
+/// `Err` constructor bailed to the interpreter before any heap op — the transactional fallback contract), so
 /// the `Err` arm is dynamically unreachable on the native path; rewriting it to a
 /// statically-dead `Jump`/`Bail` cannot change observable behavior.
 ///
@@ -3282,7 +3282,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
         }
     }
 
-    // Two-armed (J0.1 #7 follow-up): a reachable `MakeVariant{Err}` on a RES register
+    // Two-armed (heap-aware deopt #7 follow-up): a reachable `MakeVariant{Err}` on a RES register
     // means the Result is NOT statically always-`Ok`. Instead of bailing, dissolve it
     // with an explicit `Ok`/`Err` tag + a shared scalar payload register (the tag routes
     // the `MatchResult` and selects which arm's `UnwrapVariantValue` reads the payload).
@@ -3361,7 +3361,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
         }
     }
 
-    // Boundary soundness + J0.1(b) live-after reconstruction. Originally every RES
+    // Boundary soundness + heap-aware deopt(b) live-after reconstruction. Originally every RES
     // register had to be DEAD outside `[header, exit)`. We now also allow a RES
     // register that is only READ after the region by reconstructing `Ok(payload)` at
     // OSR-exit from its scalar payload register, because the pass already proved every
@@ -3456,7 +3456,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
         }
     }
 
-    // J0.1(b) recipes for each live-after RES register. Always-`Ok` recipes carry no
+    // heap-aware deopt(b) recipes for each live-after RES register. Always-`Ok` recipes carry no
     // tag (`None`) ⇒ reconstruct `Ok(payload)`; this path has a single payload register,
     // so the (unused) err-payload slot mirrors it.
     let recipes: Vec<ResultRecipe> = reconstruct

@@ -1,4 +1,4 @@
-/// Two-armed scalar `Result` dissolution (J0.1 #7 follow-up). Companion to
+/// Two-armed scalar `Result` dissolution (heap-aware deopt #7 follow-up). Companion to
 /// [`native_scalar_replace_results_in_region`]'s always-`Ok` path: handles a Result
 /// constructed as EITHER `Ok(scalar)` or `Err(scalar)` in-region and consumed (matched)
 /// in-region. Each RES register becomes a boolean `tag` (true = `Ok`) plus one shared
@@ -329,7 +329,7 @@ fn native_scalar_replace_two_armed_results_in_region(
     Some((new_code, next_reg, ip_map, recipes))
 }
 
-/// OSR × J3 for VARIANTS: scalar-replace non-escaping user `sum`/variant values that
+/// OSR × scalar replacement for VARIANTS: scalar-replace non-escaping user `sum`/variant values that
 /// live entirely inside the loop region `[header, exit)` of an otherwise native-
 /// INELIGIBLE function. Mirrors [`native_scalar_replace_options_in_region`] but for
 /// `MakeVariant`/`MatchVariant`/`UnwrapVariantValue`.
@@ -922,7 +922,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
     Some((new_code, next_reg, ip_map, recipes))
 }
 
-/// OSR × J3 for non-escaping FLAT user STRUCTS. Mirrors
+/// OSR × scalar replacement for non-escaping FLAT user STRUCTS. Mirrors
 /// Resolve the declared layout shape (`field_names`) of a struct-valued register by
 /// walking its in-region definitions. A register defined by `MakeStruct` carries the
 /// shape directly; a `Move` forwards its source's shape; a `GetFieldSlot{dst, base,
@@ -1668,7 +1668,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     Some((new_code, next_reg, ip_map, recipes))
 }
 
-/// OSR × J3 (loop-carried struct scalar replacement). Extends
+/// OSR × scalar replacement (loop-carried struct scalar replacement). Extends
 /// [`native_scalar_replace_structs_in_region`] to a struct that is CREATED BEFORE the
 /// loop, MUTATED IN PLACE across iterations (`SetFieldSlot`), and DEAD after the loop.
 ///
@@ -2081,7 +2081,7 @@ pub(in crate::reg_vm) fn native_loop_carried_struct_in_region(
 }
 
 /// Registers an instruction READS (value operands). Returns [`RegFootprint::All`]
-/// for any variant whose read set we do not exhaustively model. Used by OSR × J3 to
+/// for any variant whose read set we do not exhaustively model. Used by OSR × scalar replacement to
 /// prove a scalar-replaced Option register is dead at the loop boundary.
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn instr_read_regs(instr: &RegInstr) -> RegFootprint {

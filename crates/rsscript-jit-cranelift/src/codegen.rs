@@ -154,7 +154,7 @@ pub(crate) fn build_function(
     // each bail site can record its live (entry-assigned) registers. Purely
     // host-side analysis — it shapes no emitted code.
     let assigned_in = definite_assignment(program, osr_header.is_some());
-    // Forward integer-interval analysis (J4.3): per-instruction sound ranges for
+    // Forward integer-interval analysis (interval range analysis): per-instruction sound ranges for
     // Int registers, used purely to elide provably-non-overflowing checks. Like
     // `definite_assignment`, host-side only — it shapes no code beyond choosing the
     // checked vs unchecked arithmetic form.
@@ -289,13 +289,13 @@ pub(crate) fn build_function(
         frame_ptr,
         FRAME_LOGICAL_DEPTH_LIMIT,
     );
-    // Limits cell pointer (J0.5): `[steps, step_budget, cancel_addr]`. Read only by an
+    // Limits cell pointer (native limit accounting): `[steps, step_budget, cancel_addr]`. Read only by an
     // armed OSR variant; forwarded verbatim to native callees so the whole native
     // chain shares one accounting/cancel cell.
     let limits_ptr = bcx
         .ins()
         .load(ptr_ty, MemFlags::trusted(), frame_ptr, FRAME_LIMITS);
-    // J0.5 limit-tracking variables, materialized only for an armed compile so an
+    // native limit accounting limit-tracking variables, materialized only for an armed compile so an
     // unarmed function emits byte-identical code. `steps_var` accumulates the
     // interpreter-equivalent instruction count (one tick per instruction); `limit_var`
     // holds the `step_budget`; `cancel_addr_var` holds the host `AtomicBool` address.
@@ -453,7 +453,7 @@ pub(crate) fn build_function(
     }
     for &cold_ip in &program.cold_blocks {
         if (cold_ip as usize) >= n {
-            return Err(JitError(format!(
+            return Err(JitError::invalid_ir(format!(
                 "cold block instruction {cold_ip} is out of range for {n} instructions"
             )));
         }
@@ -562,7 +562,7 @@ pub(crate) fn build_function(
         Some(header) => {
             let header = header as usize;
             let target = block_for.get(header).copied().flatten().ok_or_else(|| {
-                JitError(format!(
+                JitError::invalid_ir(format!(
                     "OSR header ip {header} is not a leader / jump-target block"
                 ))
             })?;
@@ -576,7 +576,7 @@ pub(crate) fn build_function(
         }
     }
 
-    // J0.5: loop headers = any instruction that is the target of a backward control
+    // native limit accounting: loop headers = any instruction that is the target of a backward control
     // transfer (`target <= source`). Each loop's header dominates its body and runs
     // once per iteration, so emitting the budget/cancel check at every header entry is
     // exactly "check on every backedge" — and it naturally covers nested/inner loops
@@ -651,7 +651,7 @@ pub(crate) fn build_function(
             bcx.seal_block(body_block);
             bcx.def_var(memo_scope_backedges[scope_index], zero);
         }
-        // J0.5 step accounting: tick once per instruction, before its body — exactly
+        // native limit accounting step accounting: tick once per instruction, before its body — exactly
         // where the interpreter calls `tick()` (one tick per dispatched instruction),
         // so the native count matches the interpreter's stream tick-for-tick.
         if let Some(steps_var) = steps_var {
@@ -659,7 +659,7 @@ pub(crate) fn build_function(
             let s1 = bcx.ins().iadd_imm(s, 1);
             bcx.def_var(steps_var, s1);
         }
-        // J0.5 limit check at every loop header (= once per iteration of every loop,
+        // native limit accounting limit check at every loop header (= once per iteration of every loop,
         // incl. nested). On `steps > step_budget` or a set `cancel` flag, deopt with
         // `resume_ip = i` (re-enter the loop on the interpreter, which then enforces
         // the limit as the single source of truth). Steps are written back on the
@@ -1174,11 +1174,11 @@ pub(crate) fn build_function(
                 // window, so it gets its own scratch slots (sized to the callee and
                 // discarded on bail). Forward depth+1; the entry guard bounds the stack.
                 let k = *group_index as usize;
-                let member = group
-                    .get(k)
-                    .ok_or_else(|| JitError(format!("CallGroup group_index {k} out of range")))?;
+                let member = group.get(k).ok_or_else(|| {
+                    JitError::invalid_ir(format!("CallGroup group_index {k} out of range"))
+                })?;
                 if args.len() != member.n_params {
-                    return Err(JitError(format!(
+                    return Err(JitError::invalid_ir(format!(
                         "CallGroup got {} args, group member {k} expects {}",
                         args.len(),
                         member.n_params
@@ -1187,7 +1187,7 @@ pub(crate) fn build_function(
                 for (i_arg, (&arg, expected)) in args.iter().zip(&member.param_types).enumerate() {
                     let actual = program.reg_types[arg as usize];
                     if actual != *expected {
-                        return Err(JitError(format!(
+                        return Err(JitError::invalid_ir(format!(
                             "CallGroup arg {i_arg} has type {actual:?}, group member {k} expects {expected:?}"
                         )));
                     }
@@ -1663,7 +1663,7 @@ pub(crate) fn build_function(
             JitInstr::Return { src } => {
                 let v = bcx.use_var(reg(*src));
                 bcx.ins().store(MemFlags::trusted(), v, out_ptr, 0);
-                // J0.5: a clean native completion writes the accumulated step count
+                // native limit accounting: a clean native completion writes the accumulated step count
                 // back to the host cell, so the interpreter continues from the exact
                 // tick total native paid (no skipped/double count).
                 if let Some(steps_var) = steps_var {
@@ -1679,7 +1679,7 @@ pub(crate) fn build_function(
                 terminated = true;
             }
             JitInstr::OsrExit => {
-                // OSR-exit (J5.2): the loop has exited. Deopt *unconditionally* at
+                // OSR-exit (OSR): the loop has exited. Deopt *unconditionally* at
                 // this ip, capturing the live-out window so the host resumes the
                 // interpreter here (precise-deopt). Reuse `bail_if` in its
                 // unconditional mode: it mints a stable safepoint id, records the
@@ -1858,7 +1858,7 @@ pub(crate) fn build_function(
 
     // Fallback block body: not completed.
     bcx.switch_to_block(fallback);
-    // J0.5: every deopt edge funnels through `fallback`, so a single steps write-back
+    // native limit accounting: every deopt edge funnels through `fallback`, so a single steps write-back
     // here covers all bails (budget/cancel/guard/OSR-exit). `steps_var` is an SSA
     // Variable, so `use_var` resolves to the accumulated count on whichever edge
     // bailed — the interpreter then resumes with the exact paid tick total.
@@ -2005,7 +2005,7 @@ struct DeoptCtx<'a> {
     /// [`NativeModule::compile_forcing_all_bails`]). `None` on the default
     /// [`compile`](NativeModule::compile) path, where every site is guarded.
     forced: Option<ForcedDeopt>,
-    /// OSR-exit (J5.2): when set, the site about to be minted bails unconditionally
+    /// OSR-exit (OSR): when set, the site about to be minted bails unconditionally
     /// (the loop-exit edge always deopts). Independent of `forced` (which is keyed
     /// by a specific id); this applies to whatever id this single `bail_if` mints.
     unconditional: bool,

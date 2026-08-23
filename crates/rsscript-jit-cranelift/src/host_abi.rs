@@ -97,7 +97,7 @@ pub type ListSetFloatFn = extern "C" fn(HostCtx, i64, i64, f64) -> i64;
 pub type ListPushIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
 /// `(list_handle, value_handle: i64) -> i64`: push a **heap** element (e.g. a `String`
 /// or nested collection) onto a `List<HeapType>`. The value handle is resolved to its
-/// heap value (host-owned) and appended; the write is journaled (§7.2 rollback). A
+/// heap value (host-owned) and appended; the write is journaled (the transaction rollback contract). A
 /// wrong-type/invalid handle signals a bail out-of-band.
 pub type ListPushHandleFn = extern "C" fn(HostCtx, i64, i64) -> i64;
 /// `(list_handle, value: f64) -> i64`: push a `Float` list element (the write-side

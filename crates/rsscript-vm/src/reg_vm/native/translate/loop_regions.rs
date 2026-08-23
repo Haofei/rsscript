@@ -4,7 +4,7 @@
 
 use super::*;
 
-/// A single natural loop identified for OSR (J5.2): the conservative shape this
+/// A single natural loop identified for OSR (OSR): the conservative shape this
 /// slice compiles. `header` is the loop's entry instruction (a conditional branch
 /// that is the target of the loop's backedge); `exit` is the post-loop instruction
 /// the header's branch leaves to. Native execution OSR-enters at `header` and
@@ -35,7 +35,7 @@ pub(in crate::reg_vm) struct OsrScalarField {
 }
 
 /// A compiled OSR loop cached per function. The OSR loop is detected and compiled
-/// on the (possibly J3-scalar-replaced) `code`, so its native `resume_ip` indexes
+/// on the (possibly scalar replacement-scalar-replaced) `code`, so its native `resume_ip` indexes
 /// that transformed stream. The interpreter, however, executes the ORIGINAL
 /// `func.code`; the two stored `orig_*` ips translate the OSR boundary back:
 ///   - `orig_header`: the original-code header ip the interpreter must be at for
@@ -46,7 +46,7 @@ pub(in crate::reg_vm) struct OsrScalarField {
 ///     single exit.
 ///   - `orig_exit`: the ORIGINAL-code post-loop ip the interpreter resumes at —
 ///     `ip_map[trans_exit]`. Set the frame ip to this after an OSR-exit.
-/// Loop-carried (live-in/out) registers keep their original indices (J3 only adds
+/// Loop-carried (live-in/out) registers keep their original indices (scalar replacement only adds
 /// fresh tag/payload regs used strictly inside the loop and dead at both
 /// boundaries), so the marshalling window and live-out restore are unchanged.
 #[cfg(feature = "native-jit")]
@@ -57,7 +57,7 @@ pub(in crate::reg_vm) struct OsrEntry {
     pub(in crate::reg_vm) trans_exit: usize,
     pub(in crate::reg_vm) orig_exit: usize,
     /// Width of the OSR register window the native ABI expects — the TRANSFORMED
-    /// register count (`func.regs` plus any J3-added tag/payload regs). The
+    /// register count (`func.regs` plus any scalar replacement-added tag/payload regs). The
     /// marshalling window and `lens` slice must be exactly this wide.
     pub(in crate::reg_vm) n_jit_regs: usize,
     pub(in crate::reg_vm) param_types: Vec<NativeTy>,
@@ -247,7 +247,7 @@ pub(in crate::reg_vm) fn detect_natural_loops(code: &[RegInstr]) -> Vec<OsrLoop>
 pub(in crate::reg_vm) fn detect_single_natural_loop(code: &[RegInstr]) -> Option<OsrLoop> {
     let n = code.len();
     // Collect backedges from the shared native CFG descriptor. This matters when
-    // this runs on UNTRANSFORMED code (OSR x J3, before scalar replacement): a
+    // this runs on UNTRANSFORMED code (OSR x scalar replacement, before scalar replacement): a
     // match arm that jumps backward must be treated like any other control edge.
     let backedges = NativeRegionCfg::prefix(code, code.len())?.backedges();
     // At least one backedge ⇒ a loop exists.

@@ -527,7 +527,7 @@ pub(crate) enum RegInstr {
         /// AOT's `&mut` argument semantics.
         mut_args: Vec<usize>,
     },
-    /// Synthetic, native-JIT-only guard (J2 profile-guided monomorphic inlining).
+    /// Synthetic, native-JIT-only guard (profile-guided monomorphic inlining).
     /// NEVER emitted by the lowerer and NEVER executed by the interpreter — it is
     /// synthesized only inside [`native_inline_leaf_calls`], in code consumed solely
     /// by [`translate_to_native_jit`]. Lowers to a [`vm_jit::JitInstr::GuardClosureId`]:
@@ -539,7 +539,7 @@ pub(crate) enum RegInstr {
         closure: Reg,
         expected: usize,
     },
-    /// Synthetic, native-JIT-only id read (J2.2 polymorphic inline cache). NEVER
+    /// Synthetic, native-JIT-only id read (polymorphic inline cache). NEVER
     /// emitted by the lowerer and NEVER executed by the interpreter — synthesized
     /// only inside [`native_inline_leaf_calls`] and consumed solely by
     /// [`translate_to_native_jit`]. Lowers to a [`vm_jit::JitInstr::ClosureId`]:
@@ -552,7 +552,7 @@ pub(crate) enum RegInstr {
         dst: Reg,
         closure: Reg,
     },
-    /// Synthetic, native-JIT-only capture materialization (OSR × J2 capturing-
+    /// Synthetic, native-JIT-only capture materialization (OSR × profile-guided inlining capturing-
     /// closure inlining). NEVER emitted by the lowerer and NEVER executed by the
     /// interpreter — synthesized only inside [`native_inline_leaf_calls`] (right
     /// after a [`NativeGuardClosureId`]) and consumed solely by

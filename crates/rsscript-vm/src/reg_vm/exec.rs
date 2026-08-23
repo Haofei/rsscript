@@ -149,7 +149,7 @@ impl RegVm {
     /// memory meter, so all three preemption/accounting limits must be unarmed (it
     /// `tick()`s on the interpreter/tier-0 paths instead). The single source of truth
     /// for both the native-tier gate (`try_native`) and the recursive native fast
-    /// paths (self-recursive + mutual-recursive); see execution spec §6.2 (Model A).
+    /// paths (self-recursive + mutual-recursive); see the native limit fallback contract.
     pub(super) fn native_limits_unarmed(&self) -> bool {
         self.limits.step_budget.is_none()
             && self.limits.cancel.is_none()
@@ -1361,7 +1361,7 @@ impl RegVm {
                         self.set_reg(frame.ret_dst, value);
                         continue 'frames;
                     }
-                    // J0.2 precise resume: `try_native` already restored the live
+                    // precise resume: `try_native` already restored the live
                     // register window and set this frame's `ip` to the safepoint
                     // `resume_ip`. Re-enter the interpreter loop; because `ip != 0`
                     // the re-entry skips the native/tier-0 dispatch and resumes
@@ -1690,7 +1690,7 @@ impl RegVm {
                                     type_name.as_deref().unwrap_or("<non-struct value>")
                                 )));
                             };
-                            // J1 type feedback (warm-gated + bounded inside the
+                            // bounded profile collection type feedback (warm-gated + bounded inside the
                             // helper): record the resolved callee identity at this
                             // site. The dispatch DECISION above (`callee_id`) is
                             // unchanged — we only observe it. `ip` was already
@@ -1883,7 +1883,7 @@ impl RegVm {
                                     )));
                                 }
                             };
-                            // J1 type feedback (warm-gated + bounded inside the
+                            // bounded profile collection type feedback (warm-gated + bounded inside the
                             // helper): the closure's underlying function id is its
                             // stable identity (one callee ⇒ monomorphic). Recording
                             // does not change which closure runs; `ip` already

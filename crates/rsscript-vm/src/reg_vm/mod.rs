@@ -703,7 +703,7 @@ impl RegVmExecutable {
     ) -> Result<EvalOutput, EvalError> {
         self.eval_main_with_args_native_inner(
             args, 0, false, false,
-            // J0.1: precise resume is the production DEFAULT. A native guard bail
+            // heap-aware deopt: precise resume is the production DEFAULT. A native guard bail
             // reconstructs the live interpreter window (heap-aware: scalars restored,
             // heap/flat regs left to the frame) and resumes at the safepoint. It is
             // byte-identical to re-run-from-top (validated corpus-wide), which remains
@@ -723,7 +723,7 @@ impl RegVmExecutable {
     ) -> Result<(EvalOutput, NativeStats), EvalError> {
         self.eval_main_with_args_native_inner(
             args, 0, false, true,
-            // J0.1: precise resume is the production default (see
+            // heap-aware deopt: precise resume is the production default (see
             // `eval_main_with_args_native`).
             true, false, None, false,
         )
@@ -782,7 +782,7 @@ impl RegVmExecutable {
         self.eval_main_with_args_native_inner(args, 0, false, true, true, true, None, false)
     }
 
-    /// Run `main` with the native tier AND J5.2 OSR forced on (deterministically,
+    /// Run `main` with the native tier AND OSR forced on (deterministically,
     /// independent of production options): a function with a qualifying native-subset
     /// hot loop runs that loop natively mid-function (OSR-entry at the header,
     /// OSR-exit/precise-resume at the post-loop ip). Must equal every other backend
@@ -800,7 +800,7 @@ impl RegVmExecutable {
         .map(|(output, _stats)| output)
     }
 
-    /// Run `main` with the native tier AND J0.2 precise resume forced on,
+    /// Run `main` with the native tier AND precise resume forced on,
     /// regardless of the production plan. Native code runs for real; when it
     /// bails at a real guard safepoint, the live interpreter register window is
     /// reconstructed and interpretation resumes AT the safepoint (instead of re-
@@ -1677,7 +1677,7 @@ struct TrackedResource {
 ///
 /// `Completed` carries the native result (the caller finishes the frame exactly
 /// like the `Return` arm). `Resumed` means a native bail was reconstructed into
-/// the interpreter at the safepoint's `resume_ip` (J0.2, only under the
+/// the interpreter at the safepoint's `resume_ip` (precise deopt, only under the
 /// `precise_deopt` flag): the live register window has been restored and the
 /// frame's `ip` advanced, so the caller just re-enters the interpreter loop.
 /// `Fallback` means native did not produce a value (ineligible, arg mismatch, or
@@ -1975,13 +1975,13 @@ struct NativeState {
     /// Whether to collect telemetry. Keep timing and counter updates out of the
     /// native-call hot path unless a caller explicitly asks for them.
     collect_stats: bool,
-    /// J0.2 precise deopt: when set, a native bail at a known safepoint
+    /// precise deopt: when set, a native bail at a known safepoint
     /// reconstructs the interpreter register window from the captured live values
     /// and resumes interpretation AT the safepoint's `resume_ip`, instead of
     /// re-running the function from the top. Default `false` ⇒ byte-identical
     /// re-run-from-top (the safe baseline). Selected by the execution plan.
     precise_deopt: bool,
-    /// J5.2 OSR (on-stack replacement): when set, a function with a qualifying
+    /// OSR (on-stack replacement): when set, a function with a qualifying
     /// native-subset hot loop (see [`detect_single_natural_loop`]) runs that loop
     /// natively *mid-function* — the interpreter reaches the loop header, hands the
     /// register window to an OSR-compiled loop body, then resumes at the post-loop
@@ -2185,7 +2185,7 @@ pub struct NativeStats {
     pub compile_nanos: u128,
     /// Total nanoseconds spent executing native code.
     pub run_nanos: u128,
-    /// J5.2: OSR-entries that ran a loop natively mid-function and resumed at the
+    /// OSR: OSR-entries that ran a loop natively mid-function and resumed at the
     /// post-loop ip (the forced-trigger success count).
     pub osr_entries: u64,
     /// Step 1 cost model: regions that translated (were eligible) but the
@@ -2399,7 +2399,7 @@ fn jit_missed_opt_report(
         // lowerer's defensive `LoadUnit; Return` (≤ 2 instructions, no real work) is
         // not a "hot region" worth a block unless it accumulated profile feedback.
         // Tiny higher-order dispatchers often contain only `CallClosure; Return`,
-        // and their profile is exactly the data J2 speculation consumes.
+        // and their profile is exactly the data profile-guided inlining speculation consumes.
         if func.code.len() <= 2 && profile_lines.is_empty() {
             continue;
         }
@@ -2870,13 +2870,13 @@ thread_local! {
         const { RefCell::new(None) };
     static JIT_DEQUE_HANDLE_CACHE: RefCell<Option<JitDequeHandleCache>> =
         const { RefCell::new(None) };
-    /// J0.5 limits cell: `[steps, step_budget, cancel_addr]`, read/written in place by
-    /// an armed OSR native variant through a raw pointer (Exec-Spec §6.2). `step_budget`
+    /// native limit accounting limits cell: `[steps, step_budget, cancel_addr]`, read/written in place by
+    /// an armed OSR native variant through a raw pointer (the native limit ABI contract). `step_budget`
     /// is `-1` when unarmed; `cancel_addr` is `0` when unarmed or the address of the
     /// host `AtomicBool` otherwise. The host seeds it before the call and reads `steps`
     /// back after, so one tick stream spans native and interpreter.
     static JIT_LIMITS_CELL: std::cell::Cell<[i64; 3]> = const { std::cell::Cell::new([0, -1, 0]) };
-    /// J0.5 mem cell: `[allocated_bytes, allocation_budget]`. Unlike the step cell this is charged by
+    /// native limit accounting mem cell: `[allocated_bytes, allocation_budget]`. Unlike the step cell this is charged by
     /// the `ListPush*` HOST HELPER (the only native-subset op the interpreter bills to
     /// `allocation_budget`), not by generated code. `allocation_budget` is `-1` when unarmed (the helper
     /// then charges nothing). The host seeds it before a native call and, on a CLEAN OSR
@@ -2886,7 +2886,7 @@ thread_local! {
     static JIT_MEM_CELL: std::cell::Cell<[i64; 2]> = const { std::cell::Cell::new([0, -1]) };
 }
 
-/// Seed the J0.5 limits cell before an armed OSR native call. `steps` is the current
+/// Seed the native limit accounting limits cell before an armed OSR native call. `steps` is the current
 /// interpreter step count, `step_budget` is the budget (or `-1`), `cancel_addr` is the
 /// `AtomicBool` address (or `0`).
 #[cfg(feature = "native-jit")]
@@ -2894,14 +2894,14 @@ fn jit_set_limits_cell(steps: i64, step_budget: i64, cancel_addr: i64) {
     JIT_LIMITS_CELL.with(|cell| cell.set([steps, step_budget, cancel_addr]));
 }
 
-/// Read the accumulated step count back out of the J0.5 limits cell after an armed OSR
+/// Read the accumulated step count back out of the native limit accounting limits cell after an armed OSR
 /// native call (clean completion or deopt both write it back).
 #[cfg(feature = "native-jit")]
 fn jit_limits_cell_steps() -> i64 {
     JIT_LIMITS_CELL.with(|cell| cell.get()[0])
 }
 
-/// Seed the J0.5 mem cell before a native call. `allocated_bytes` is the interpreter's current
+/// Seed the native limit accounting mem cell before a native call. `allocated_bytes` is the interpreter's current
 /// accounted cumulative allocation total; `allocation_budget` is the budget (or `-1` to disarm — every non-mem-armed
 /// native call MUST seed `-1` so a stale armed budget never leaks into the `ListPush*`
 /// helper).
@@ -4354,7 +4354,7 @@ fn rss_jit_field_set_int_with_ctx(ctx: JitHostCallCtx, handle: i64, slot: i64, v
     }
 }
 
-/// J0.4 #1 (heap-value struct write): set a struct/variant field to a **heap** value —
+/// transactional heap mutation (heap-value struct write): set a struct/variant field to a **heap** value —
 /// the heap analog of [`rss_jit_field_set_int`]. Resolves the value handle, then COW-
 /// rebuilds the struct with the field replaced and publishes the new value (ReplacesInput
 /// + writeback to the root). A scalar field at the slot is a shape mismatch ⇒ bail.
@@ -4708,11 +4708,11 @@ fn rss_jit_list_push_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value: i64) 
     }
 }
 
-/// J0.4 #1 (heap-value collection write): push a **heap** element onto a
+/// transactional heap mutation (heap-value collection write): push a **heap** element onto a
 /// `List<HeapType>` — the value side of item #1 (the key side is
 /// [`rss_jit_map_insert_handle_key_int`]). The value handle is resolved to its heap
 /// value (host-owned, input or output table) and appended via the journaled list write
-/// (rolled back on a later bail, §7.2). A wrong-type/invalid handle bails.
+/// (rolled back on a later bail, the transactional fallback contract). A wrong-type/invalid handle bails.
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_list_push_handle(
     _ctx: vm_jit::HostCtx,
@@ -4850,11 +4850,11 @@ fn rss_jit_map_insert_int_with_ctx(ctx: JitHostCallCtx, handle: i64, key: i64, v
     }
 }
 
-/// J0.4 #1 (heap-key collection write): insert an `Int` value under a **heap key**
+/// transactional heap mutation (heap-key collection write): insert an `Int` value under a **heap key**
 /// (e.g. a `String`) — the non-`Int`-key analog of [`rss_jit_map_insert_int`]. The key
 /// handle is resolved to its heap value and wrapped in `VmMapKey`, so hashing/equality
 /// is the host's own canonical map-key semantics (never re-implemented in native). The
-/// map write is journaled, so a later bail rolls it back (§7.2). A wrong container/key
+/// map write is journaled, so a later bail rolls it back (the transactional fallback contract). A wrong container/key
 /// shape signals a bail.
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_map_insert_handle_key_int(
@@ -5084,11 +5084,11 @@ fn rss_jit_set_insert_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value: i64)
     }
 }
 
-/// J0.4 #1 (heap-value collection write): insert a **heap** value (e.g. a `String`) into
+/// transactional heap mutation (heap-value collection write): insert a **heap** value (e.g. a `String`) into
 /// a `Set<HeapType>`. The value handle is resolved to its heap value and wrapped in
 /// `VmMapKey` — hashing/equality is the host's own canonical key, never re-implemented in
 /// native (a set is a map with `Unit` values, like [`rss_jit_set_insert_int`]). The write
-/// is journaled (§7.2 rollback). A wrong shape/invalid handle bails.
+/// is journaled (the transaction rollback contract). A wrong shape/invalid handle bails.
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_set_insert_handle(
     _ctx: vm_jit::HostCtx,
@@ -5180,10 +5180,10 @@ fn rss_jit_sorted_set_insert_int_with_ctx(ctx: JitHostCallCtx, handle: i64, valu
     }
 }
 
-/// J0.4 #1 (heap-value collection write): insert a **heap** value (e.g. `String`) into a
+/// transactional heap mutation (heap-value collection write): insert a **heap** value (e.g. `String`) into a
 /// sorted set — the heap analog of [`rss_jit_sorted_set_insert_int`]. The value handle is
 /// resolved and the host's own `sorted_insert_vm` (ordering + dedup) does the work; the
-/// write is journaled (§7.2). A wrong shape/invalid handle bails.
+/// write is journaled (the transactional fallback contract). A wrong shape/invalid handle bails.
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_sorted_set_insert_handle(
     _ctx: vm_jit::HostCtx,
@@ -5392,10 +5392,10 @@ fn rss_jit_sorted_map_insert_int_with_ctx(
     }
 }
 
-/// J0.4 #1 (heap-key collection write): insert an `Int` value under a **heap** key (e.g.
+/// transactional heap mutation (heap-key collection write): insert an `Int` value under a **heap** key (e.g.
 /// `String`) into a sorted map — the heap-key analog of [`rss_jit_sorted_map_insert_int`].
 /// The key handle is resolved and the host's own `sorted_map_insert_in_place` (ordering)
-/// does the work; the write is journaled (§7.2). A wrong shape/invalid handle bails.
+/// does the work; the write is journaled (the transactional fallback contract). A wrong shape/invalid handle bails.
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_sorted_map_insert_handle_key_int(
     _ctx: vm_jit::HostCtx,
@@ -5647,9 +5647,9 @@ fn rss_jit_deque_push_back_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value:
     }
 }
 
-/// J0.4 #1 (heap-value collection write): push a **heap** value onto the back of a
+/// transactional heap mutation (heap-value collection write): push a **heap** value onto the back of a
 /// `Deque<HeapType>` — the heap analog of [`rss_jit_deque_push_back_int`]. Resolves the
-/// value handle; the write is journaled (§7.2). A wrong shape/invalid handle bails.
+/// value handle; the write is journaled (the transactional fallback contract). A wrong shape/invalid handle bails.
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_deque_push_back_handle(
     _ctx: vm_jit::HostCtx,
@@ -5722,9 +5722,9 @@ fn rss_jit_deque_push_front_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value
     }
 }
 
-/// J0.4 #1 (heap-value collection write): push a **heap** value onto the front of a
+/// transactional heap mutation (heap-value collection write): push a **heap** value onto the front of a
 /// `Deque<HeapType>` — the heap analog of [`rss_jit_deque_push_front_int`]. Resolves the
-/// value handle; the write is journaled (§7.2). A wrong shape/invalid handle bails.
+/// value handle; the write is journaled (the transactional fallback contract). A wrong shape/invalid handle bails.
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_deque_push_front_handle(
     _ctx: vm_jit::HostCtx,
@@ -5902,7 +5902,7 @@ extern "C" fn rss_jit_list_get_float(_ctx: vm_jit::HostCtx, handle: i64, index: 
 }
 
 /// The underlying function id of the closure behind `handle`, as `i64`. Used by the
-/// J2 monomorphic-inlining guard ([`vm_jit::JitInstr::GuardClosureId`]). Total: a
+/// profile-guided inlining monomorphic-inlining guard ([`vm_jit::JitInstr::GuardClosureId`]). Total: a
 /// non-closure / invalid handle, or a function id too large for `i64`, returns `-1`,
 /// which never equals a real (`>= 0`) callee id, so the guard simply bails. Never
 /// signals the out-of-band bail flag.

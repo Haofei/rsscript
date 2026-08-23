@@ -1,4 +1,59 @@
 use super::*;
+
+#[test]
+fn map_match_effect_metadata_covers_int_and_float_symmetrically() {
+    let instructions = [
+        JitInstr::MatchMapGetInt {
+            map: 1,
+            key: 2,
+            value_dst: 3,
+            some_ip: 4,
+            none_ip: 5,
+        },
+        JitInstr::MatchMapGetFloat {
+            map: 1,
+            key: 2,
+            value_dst: 3,
+            some_ip: 4,
+            none_ip: 5,
+        },
+        JitInstr::MatchSortedMapGetInt {
+            map: 1,
+            key: 2,
+            value_dst: 3,
+            some_ip: 4,
+            none_ip: 5,
+        },
+        JitInstr::MatchSortedMapGetFloat {
+            map: 1,
+            key: 2,
+            value_dst: 3,
+            some_ip: 4,
+            none_ip: 5,
+        },
+    ];
+    for instruction in instructions {
+        assert_eq!(instruction.defined_register(), Some(3));
+        let mut uses = Vec::new();
+        instruction.visit_used_registers(|reg| uses.push(reg));
+        assert_eq!(uses, [1, 2]);
+        assert_eq!(
+            instruction.effects(),
+            JitInstrEffects {
+                control_flow: JitControlFlow::Split {
+                    first: 4,
+                    second: 5,
+                },
+                heap: JitHeapEffect::Read,
+                may_deopt: true,
+                osr_supported: true,
+            }
+        );
+        let mut heap_inputs = Vec::new();
+        instruction.visit_osr_heap_inputs(|reg| heap_inputs.push(reg));
+        assert_eq!(heap_inputs, [1]);
+    }
+}
 use crate::codegen::NATIVE_RECURSION_DEPTH_CAP_MAX;
 
 /// Test shim: validate as a non-OSR program (the common case for these IR

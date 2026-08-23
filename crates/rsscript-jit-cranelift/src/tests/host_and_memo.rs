@@ -28,7 +28,7 @@ fn rejects_memoized_heap_writing_host_helper() {
 // `Handle` register reports `CompletedHandle` carrying the i64 it returned (an
 // opaque output-table handle), while the scalar path stays `Completed`. This
 // pass-through (`fn(h) -> h`) performs no allocation/mutation; the host
-// materializes from its output table only on this clean completion (§7.2-safe).
+// materializes from its output table only on this clean completion (the transactional fallback contract).
 #[test]
 fn handle_returning_function_reports_completed_handle() {
     use JitValueType::Handle;
@@ -284,7 +284,7 @@ fn rejects_malformed_memo_scopes() {
 
 // A forced bail of a handle-returning function reports `Deopt`, NOT
 // `CompletedHandle`: the heap result is materialized only on clean completion, so
-// a bailed attempt never reports a heap value (§7.2 no-effect-before-bail).
+// a bailed attempt never reports a heap value (the transactional fallback contract: no effect before bail).
 #[test]
 fn handle_returning_function_bails_as_deopt_not_handle() {
     use JitValueType::Handle;

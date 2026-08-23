@@ -261,7 +261,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     let (code, n_regs, next_ip_map) =
         native_lower_checked_payload_intrinsics_in_region(&code, n_regs, 0, region_exit)?;
     ip_map = native_compose_ip_maps(&ip_map, &next_ip_map)?;
-    // J3/J4: scalar-replace non-escaping aggregate values on the fully-inlined body,
+    // Scalar replacement and range optimization run on the fully inlined body,
     // using the same transform order as OSR. Result runs before Option because it
     // tolerates Option ops while dissolving always-Ok Results; Option is stricter and
     // expects only native-subset instructions plus Option ops. Variant and struct SR
@@ -605,7 +605,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 RegInstr::NativeGuardClosureId { closure, .. } => {
                     native_set_ty(ty, *closure, NativeTy::Handle, c)
                 }
-                // J2.2 dispatch: the closure operand is a native handle; the read
+                // polymorphic inline cache dispatch: the closure operand is a native handle; the read
                 // function id is an `Int` (consumed by integer compares/branches).
                 RegInstr::NativeClosureId { dst, closure } => {
                     native_set_ty(ty, *closure, NativeTy::Handle, c)
@@ -615,7 +615,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                     native_set_ty(ty, *base, NativeTy::Handle, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
-                // Capturing-closure inline (OSR × J2): the closure operand is a
+                // Capturing-closure inline (OSR × profile-guided inlining): the closure operand is a
                 // native handle; the materialized capture `dst` carries the
                 // capture's scalar bits (the `closure_capture` helper returns the
                 // raw i64 bit pattern: an `Int` directly, a `Bool` as 0/1, a
@@ -814,7 +814,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
         return None;
     }
 
-    // J3: a scalar-replaced Option's payload register must be a SCALAR (Int/Float/
+    // scalar replacement: a scalar-replaced Option's payload register must be a SCALAR (Int/Float/
     // Bool, or fully unconstrained — defaults to Int). If inference proved it a
     // `Handle`/flat array, the Some payload was a heap value, so the Option was not
     // truly scalar-replaceable ⇒ bail and leave the function on the interpreter
@@ -1418,7 +1418,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 value,
             } => {
                 // Pick the store helper by the value's type, mirroring the read side:
-                // Float → `FieldSetFloat`; Int/unconstrained → `FieldSetInt`; (J0.4 #1) a
+                // Float → `FieldSetFloat`; Int/unconstrained → `FieldSetInt`; (transactional heap mutation) a
                 // heap value → `FieldSetHandle` (sets the field to a resolved heap value).
                 // A non-matching field then bails at the helper.
                 require(handle_reg(*base))?;
@@ -1565,7 +1565,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 }
             }
             RegInstr::ListPush { dst, list, value } => {
-                // Float → ListPushFloat; Int/unconstrained → ListPushInt; (J0.4 #1) heap
+                // Float → ListPushFloat; Int/unconstrained → ListPushInt; (transactional heap mutation) heap
                 // value (e.g. `String`/nested collection) → ListPushHandle, resolving the
                 // value handle and appending it. A wrong-element-type list bails.
                 require(handle_reg(*list) && int(*dst))?;
@@ -1603,7 +1603,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 value,
             } => {
                 require(handle_reg(*map) && int(*dst))?;
-                // Three shapes: Int-key/Float-value, Int-key/Int-value, and (J0.4 #1)
+                // Three shapes: Int-key/Float-value, Int-key/Int-value, and (transactional heap mutation)
                 // heap-key (e.g. `String`)/Int-value. A heap key is resolved + hashed by
                 // the host's own `VmMapKey` in the helper, never re-hashed in native.
                 let helper = if int(*key) && float(*value) {
@@ -1628,7 +1628,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
             }
             RegInstr::SetInsert { dst, set, value } => {
                 require(handle_reg(*set) && bool_ty(*dst))?;
-                // Int value → SetInsertInt; (J0.4 #1) heap value (e.g. `String`) →
+                // Int value → SetInsertInt; (transactional heap mutation) heap value (e.g. `String`) →
                 // SetInsertHandle, which resolves + hashes the value via the host's key.
                 let helper = if int(*value) {
                     vm_jit::HostHelper::SetInsertInt
@@ -1649,7 +1649,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
             }
             RegInstr::SortedSetInsert { dst, set, value } => {
                 require(handle_reg(*set) && bool_ty(*dst))?;
-                // Int value → SortedSetInsertInt; (J0.4 #1) heap value → SortedSetInsertHandle.
+                // Int value → SortedSetInsertInt; (transactional heap mutation) heap value → SortedSetInsertHandle.
                 let helper = if int(*value) {
                     vm_jit::HostHelper::SortedSetInsertInt
                 } else if handle_reg(*value) {
@@ -1674,7 +1674,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 value,
             } => {
                 require(handle_reg(*map) && int(*value) && int(*dst))?;
-                // Int key → SortedMapInsertInt; (J0.4 #1) heap key → SortedMapInsertHandleKeyInt.
+                // Int key → SortedMapInsertInt; (transactional heap mutation) heap key → SortedMapInsertHandleKeyInt.
                 let helper = if int(*key) {
                     vm_jit::HostHelper::SortedMapInsertInt
                 } else if handle_reg(*key) {
@@ -2137,10 +2137,10 @@ pub(in crate::reg_vm) fn require(condition: bool) -> Option<()> {
 }
 
 /// Build an OSR [`vm_jit::JitFunction`] for the loop `lp` in `code`. `code` is the
-/// (possibly J3-scalar-replaced) instruction stream; `lp.header`/`lp.exit` index
+/// (possibly scalar replacement-scalar-replaced) instruction stream; `lp.header`/`lp.exit` index
 /// into it. The JIT is index-aligned with `code` so a native OSR-exit's
 /// `resume_ip` is the `code` instruction index — which the caller maps back to the
-/// ORIGINAL `func.code` post-loop ip via the J3 ip-map (identity when no Option was
+/// ORIGINAL `func.code` post-loop ip via the scalar replacement ip-map (identity when no Option was
 /// replaced, so the keystone holds: indices into `code` track the interpreter's
 /// resume position through the ip-map).
 ///
@@ -2308,7 +2308,7 @@ fn translate_osr_loop_inner(
             }
         }
     }
-    // J0.1 #7 / J0.4 #1: seed each param the preheader inference left untyped from its
+    // heap-aware deopt #7 / transactional heap mutation: seed each param the preheader inference left untyped from its
     // runtime native type (`try_osr` classifies the live value: Int/Float scalars, heap
     // values → Handle; flat-capable List/Deque withheld as `None`). This types a param
     // used in-region with no typed-use to unify against — a dissolved Result/Option
@@ -2326,7 +2326,7 @@ fn translate_osr_loop_inner(
             ty[reg] = Some(*t);
         }
     }
-    // J0.4 #1 correctness: a heap collection key/value that is a PARAM is classified
+    // transactional heap mutation correctness: a heap collection key/value that is a PARAM is classified
     // `Handle` by `try_osr` from its live value. The collection-op inference below must
     // type such an operand `Handle` (not the default `Int`), or the lowering's
     // `handle_reg` test never fires and a heap key/value is mis-lowered to the Int helper
@@ -3339,7 +3339,7 @@ fn translate_osr_loop_inner(
                         src: r(*value),
                     }
                 } else {
-                    // Float → FieldSetFloat; Int/unconstrained → FieldSetInt; (J0.4 #1)
+                    // Float → FieldSetFloat; Int/unconstrained → FieldSetInt; (transactional heap mutation)
                     // heap value → FieldSetHandle.
                     let helper = if float(*value) {
                         vm_jit::HostHelper::FieldSetFloat
@@ -3512,7 +3512,7 @@ fn translate_osr_loop_inner(
                 value,
             } => {
                 require(handle_reg(*map) && int(*dst))?;
-                // Three shapes: Int-key/Float-value, Int-key/Int-value, and (J0.4 #1)
+                // Three shapes: Int-key/Float-value, Int-key/Int-value, and (transactional heap mutation)
                 // heap-key (e.g. `String`)/Int-value. A heap key is resolved + hashed by
                 // the host's own `VmMapKey` in the helper, never re-hashed in native.
                 let helper = if int(*key) && float(*value) {
@@ -3537,7 +3537,7 @@ fn translate_osr_loop_inner(
             }
             RegInstr::SetInsert { dst, set, value } => {
                 require(handle_reg(*set) && bool_ty(*dst))?;
-                // Int value → SetInsertInt; (J0.4 #1) heap value (e.g. `String`) →
+                // Int value → SetInsertInt; (transactional heap mutation) heap value (e.g. `String`) →
                 // SetInsertHandle, which resolves + hashes the value via the host's key.
                 let helper = if int(*value) {
                     vm_jit::HostHelper::SetInsertInt
@@ -3558,7 +3558,7 @@ fn translate_osr_loop_inner(
             }
             RegInstr::SortedSetInsert { dst, set, value } => {
                 require(handle_reg(*set) && bool_ty(*dst))?;
-                // Int value → SortedSetInsertInt; (J0.4 #1) heap value → SortedSetInsertHandle.
+                // Int value → SortedSetInsertInt; (transactional heap mutation) heap value → SortedSetInsertHandle.
                 let helper = if int(*value) {
                     vm_jit::HostHelper::SortedSetInsertInt
                 } else if handle_reg(*value) {
@@ -3583,7 +3583,7 @@ fn translate_osr_loop_inner(
                 value,
             } => {
                 require(handle_reg(*map) && int(*value) && int(*dst))?;
-                // Int key → SortedMapInsertInt; (J0.4 #1) heap key → SortedMapInsertHandleKeyInt.
+                // Int key → SortedMapInsertInt; (transactional heap mutation) heap key → SortedMapInsertHandleKeyInt.
                 let helper = if int(*key) {
                     vm_jit::HostHelper::SortedMapInsertInt
                 } else if handle_reg(*key) {

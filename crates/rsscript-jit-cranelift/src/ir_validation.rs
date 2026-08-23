@@ -1,12 +1,12 @@
 fn check_zero_init_reg(program: &JitFunction, reg: u32) -> Result<(), JitError> {
     if reg >= program.n_regs {
-        return Err(JitError(format!(
+        return Err(JitError::invalid_ir(format!(
             "zero-initialized register {reg} is out of range (n_regs {})",
             program.n_regs
         )));
     }
     if reg < program.n_params {
-        return Err(JitError(format!(
+        return Err(JitError::invalid_ir(format!(
             "parameter register {reg} cannot be declared zero-initialized"
         )));
     }
@@ -18,7 +18,7 @@ fn check_zero_init_reg(program: &JitFunction, reg: u32) -> Result<(), JitError> 
             | JitValueType::FlatFloat
             | JitValueType::FlatFloatMut
     ) {
-        return Err(JitError(format!(
+        return Err(JitError::invalid_ir(format!(
             "zero-initialized register {reg} must have a scalar type"
         )));
     }
@@ -36,12 +36,12 @@ fn validate_memo_scopes(
         let header = scope.header as usize;
         let exit = scope.exit as usize;
         if header >= exit || exit >= n {
-            return Err(JitError(format!(
+            return Err(JitError::invalid_ir(format!(
                 "memo scope {scope_index}: expected 0 <= header < exit < code length, got [{header}, {exit}) for {n} instructions"
             )));
         }
         if scope.memo_slots.is_empty() {
-            return Err(JitError(format!(
+            return Err(JitError::invalid_ir(format!(
                 "memo scope {scope_index}: memo_slots cannot be empty"
             )));
         }
@@ -52,12 +52,12 @@ fn validate_memo_scopes(
             for target in successors(program, source) {
                 let target_in_scope = target >= header && target < exit;
                 if !source_in_scope && target_in_scope && target != header {
-                    return Err(JitError(format!(
+                    return Err(JitError::invalid_ir(format!(
                         "memo scope {scope_index}: external edge {source} -> {target} enters scope interior"
                     )));
                 }
                 if source_in_scope && !target_in_scope && target != exit {
-                    return Err(JitError(format!(
+                    return Err(JitError::invalid_ir(format!(
                         "memo scope {scope_index}: edge {source} -> {target} leaves scope anywhere other than exit {exit}"
                     )));
                 }
@@ -66,7 +66,7 @@ fn validate_memo_scopes(
                         program.code[source],
                         JitInstr::Jump { target } if target as usize == header
                     ) {
-                        return Err(JitError(format!(
+                        return Err(JitError::invalid_ir(format!(
                             "memo scope {scope_index}: backedge {source} -> {header} must be an unconditional Jump"
                         )));
                     }
@@ -75,29 +75,29 @@ fn validate_memo_scopes(
             }
         }
         if !has_backedge {
-            return Err(JitError(format!(
+            return Err(JitError::invalid_ir(format!(
                 "memo scope {scope_index}: no backedge targets header {header}"
             )));
         }
 
         for &slot in &scope.memo_slots {
             let Some(owner) = memo_slot_owners.get(slot as usize).and_then(|owner| *owner) else {
-                return Err(JitError(format!(
+                return Err(JitError::invalid_ir(format!(
                     "memo scope {scope_index}: memo_slot {slot} has no memoized call site"
                 )));
             };
             let Some(previous_scope) = slot_scopes.get_mut(slot as usize) else {
-                return Err(JitError(format!(
+                return Err(JitError::invalid_ir(format!(
                     "memo scope {scope_index}: memo_slot {slot} is out of range"
                 )));
             };
             if let Some(previous_scope) = previous_scope {
-                return Err(JitError(format!(
+                return Err(JitError::invalid_ir(format!(
                     "memo_slot {slot} belongs to both memo scopes {previous_scope} and {scope_index}"
                 )));
             }
             if owner < header || owner >= exit {
-                return Err(JitError(format!(
+                return Err(JitError::invalid_ir(format!(
                     "memo scope {scope_index}: memo_slot {slot} site {owner} is outside [{header}, {exit})"
                 )));
             }
@@ -107,7 +107,7 @@ fn validate_memo_scopes(
 
     for (slot, scope) in slot_scopes.iter().enumerate() {
         if scope.is_none() {
-            return Err(JitError(format!(
+            return Err(JitError::invalid_ir(format!(
                 "MemoizedHostCall memo_slot {slot} does not belong to a memo scope"
             )));
         }
@@ -120,7 +120,7 @@ fn validate_memo_scopes(
             let strictly_nested = (a.header < b.header && b.exit <= a.exit)
                 || (b.header < a.header && a.exit <= b.exit);
             if !disjoint && !strictly_nested {
-                return Err(JitError(format!(
+                return Err(JitError::invalid_ir(format!(
                     "memo scopes {left} [{}, {}) and {right} [{}, {}) overlap without strict nesting",
                     a.header, a.exit, b.header, b.exit
                 )));
@@ -150,40 +150,40 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
     let n = program.code.len();
 
     if program.reg_types.len() != n_regs {
-        return Err(JitError(format!(
+        return Err(JitError::invalid_ir(format!(
             "reg_types length {} does not match n_regs {n_regs}",
             program.reg_types.len()
         )));
     }
     if program.n_params > program.n_regs {
-        return Err(JitError(format!(
+        return Err(JitError::invalid_ir(format!(
             "n_params {} exceeds n_regs {n_regs}",
             program.n_params
         )));
     }
     if n_regs > MAX_JIT_REGS {
-        return Err(JitError(format!(
+        return Err(JitError::invalid_ir(format!(
             "n_regs {n_regs} exceeds the JIT limit {MAX_JIT_REGS}"
         )));
     }
     if program.n_params as usize > MAX_JIT_PARAMS {
-        return Err(JitError(format!(
+        return Err(JitError::invalid_ir(format!(
             "n_params {} exceeds the JIT limit {MAX_JIT_PARAMS}",
             program.n_params
         )));
     }
     if n > MAX_JIT_INSTRUCTIONS {
-        return Err(JitError(format!(
+        return Err(JitError::invalid_ir(format!(
             "code length {n} exceeds the JIT limit {MAX_JIT_INSTRUCTIONS}"
         )));
     }
     let analysis_cells = n_regs.checked_mul(n).ok_or_else(|| {
-        JitError(format!(
+        JitError::invalid_ir(format!(
             "JIT analysis dimensions overflow: {n} instructions x {n_regs} registers"
         ))
     })?;
     if analysis_cells > MAX_JIT_ANALYSIS_CELLS {
-        return Err(JitError(format!(
+        return Err(JitError::invalid_ir(format!(
             "JIT analysis size {analysis_cells} cells exceeds the limit {MAX_JIT_ANALYSIS_CELLS} \
              ({n} instructions x {n_regs} registers)"
         )));
@@ -193,7 +193,7 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
     }
     for &cold_ip in &program.cold_blocks {
         if (cold_ip as usize) >= n {
-            return Err(JitError(format!(
+            return Err(JitError::invalid_ir(format!(
                 "cold block instruction {cold_ip} is out of range for {n} instructions"
             )));
         }
@@ -203,7 +203,7 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
         if (r as usize) < n_regs {
             Ok(())
         } else {
-            Err(JitError(format!(
+            Err(JitError::invalid_ir(format!(
                 "register {r} out of range (n_regs {n_regs})"
             )))
         }
@@ -225,7 +225,7 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
         if (t as usize) < n {
             Ok(())
         } else {
-            Err(JitError(format!(
+            Err(JitError::invalid_ir(format!(
                 "jump target {t} out of range (code length {n})"
             )))
         }
@@ -237,12 +237,12 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
         check_reg(lhs)?;
         check_reg(rhs)?;
         if is_nonscalar(lhs) || is_nonscalar(rhs) {
-            return Err(JitError(format!(
+            return Err(JitError::invalid_ir(format!(
                 "{op}: operand is a non-scalar (Handle/flat) register"
             )));
         }
         if class(lhs) != class(rhs) {
-            return Err(JitError(format!(
+            return Err(JitError::invalid_ir(format!(
                 "{op}: operand classes differ ({:?} vs {:?})",
                 class(lhs),
                 class(rhs)
@@ -253,7 +253,9 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
     let numeric_pair = |lhs: u32, rhs: u32, op: &str| -> Result<(), JitError> {
         scalar_pair(lhs, rhs, op)?;
         if !matches!(class(lhs), JitValueType::Int | JitValueType::Float) {
-            return Err(JitError(format!("{op}: operands must be Int or Float")));
+            return Err(JitError::invalid_ir(format!(
+                "{op}: operands must be Int or Float"
+            )));
         }
         Ok(())
     };
@@ -262,7 +264,7 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
         numeric_pair(lhs, rhs, op)?;
         check_reg(dst)?;
         if class(dst) != class(lhs) {
-            return Err(JitError(format!(
+            return Err(JitError::invalid_ir(format!(
                 "{op}: result {:?} does not match operands {:?}",
                 class(dst),
                 class(lhs)
@@ -277,7 +279,9 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
         check_reg(rhs)?;
         for r in [dst, lhs, rhs] {
             if class(r) != JitValueType::Int {
-                return Err(JitError(format!("{op}: register {r} must be Int")));
+                return Err(JitError::invalid_ir(format!(
+                    "{op}: register {r} must be Int"
+                )));
             }
         }
         Ok(())
@@ -287,14 +291,16 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
         numeric_pair(lhs, rhs, op)?;
         check_reg(dst)?;
         if class(dst) != JitValueType::Bool {
-            return Err(JitError(format!("{op}: boolean result must be Bool")));
+            return Err(JitError::invalid_ir(format!(
+                "{op}: boolean result must be Bool"
+            )));
         }
         Ok(())
     };
     let require_class = |r: u32, want: JitValueType, op: &str| -> Result<(), JitError> {
         check_reg(r)?;
         if class(r) != want {
-            return Err(JitError(format!(
+            return Err(JitError::invalid_ir(format!(
                 "{op}: register {r} is {:?}, expected {want:?}",
                 class(r)
             )));
@@ -319,7 +325,7 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
                     | (JitValueType::FlatFloat, JitValueType::FlatFloatMut)
             );
         if !type_matches {
-            return Err(JitError(format!(
+            return Err(JitError::invalid_ir(format!(
                 "{op}: register {r} is {actual:?}, expected {want:?}"
             )));
         }
@@ -329,7 +335,9 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
             program.n_params as usize
         };
         if (r as usize) >= window {
-            return Err(JitError(format!("{op}: register {r} is not a parameter")));
+            return Err(JitError::invalid_ir(format!(
+                "{op}: register {r} is not a parameter"
+            )));
         }
         Ok(())
     };
@@ -346,12 +354,12 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
             continue;
         };
         let Some(owner) = memo_slot_owners.get_mut(*memo_slot as usize) else {
-            return Err(JitError(format!(
+            return Err(JitError::invalid_ir(format!(
                 "MemoizedHostCall at instruction {ip}: memo_slot {memo_slot} is out of range for {memo_count} memoization sites"
             )));
         };
         if let Some(owner) = owner {
-            return Err(JitError(format!(
+            return Err(JitError::invalid_ir(format!(
                 "MemoizedHostCall memo_slot {memo_slot} is shared by instructions {owner} and {ip}"
             )));
         }
@@ -364,7 +372,7 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
             if i + 1 < n {
                 Ok(())
             } else {
-                Err(JitError(format!(
+                Err(JitError::invalid_ir(format!(
                     "conditional branch at {i} has no fall-through instruction"
                 )))
             }
@@ -386,12 +394,12 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
                 // moved, so those stay rejected.
                 let is_flat = |r: u32| is_flat_type(class(r));
                 if is_flat(*src) || is_flat(*dst) {
-                    return Err(JitError(
-                        "Move: flat-array registers cannot be moved".into(),
+                    return Err(JitError::invalid_ir(
+                        "Move: flat-array registers cannot be moved",
                     ));
                 }
                 if class(*dst) != class(*src) {
-                    return Err(JitError(format!(
+                    return Err(JitError::invalid_ir(format!(
                         "Move: classes differ ({:?} vs {:?})",
                         class(*dst),
                         class(*src)
@@ -414,12 +422,12 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
             JitInstr::HostCall { helper, dst, args } => {
                 let sig = helper.signature();
                 if sig.found_out {
-                    return Err(JitError(format!(
+                    return Err(JitError::invalid_ir(format!(
                         "HostCall {helper:?}: helper has a private found output"
                     )));
                 }
                 if args.len() != sig.args.len() {
-                    return Err(JitError(format!(
+                    return Err(JitError::invalid_ir(format!(
                         "HostCall {helper:?}: got {} args, expected {}",
                         args.len(),
                         sig.args.len()
@@ -432,7 +440,7 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
                         }
                         HostArg::ImmI64(_) => {
                             if *expected != JitValueType::Int {
-                                return Err(JitError(format!(
+                                return Err(JitError::invalid_ir(format!(
                                     "HostCall {helper:?} arg {i}: immediate used for {expected:?}"
                                 )));
                             }
@@ -443,7 +451,7 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
                     HostResult::Exact(result) => {
                         check_reg(*dst)?;
                         if class(*dst) != result {
-                            return Err(JitError(format!(
+                            return Err(JitError::invalid_ir(format!(
                                 "HostCall {helper:?} result: register {dst} is {:?}, expected {result:?}",
                                 class(*dst)
                             )));
@@ -452,7 +460,7 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
                     HostResult::IntOrFloatBits => {
                         check_reg(*dst)?;
                         if !matches!(class(*dst), JitValueType::Int | JitValueType::Float) {
-                            return Err(JitError(format!(
+                            return Err(JitError::invalid_ir(format!(
                                 "HostCall {helper:?} result: register {dst} is {:?}, expected Int or Float",
                                 class(*dst)
                             )));
@@ -465,17 +473,17 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
             } => {
                 let sig = helper.signature();
                 if sig.found_out {
-                    return Err(JitError(format!(
+                    return Err(JitError::invalid_ir(format!(
                         "MemoizedHostCall {helper:?}: helper has a private found output"
                     )));
                 }
                 if helper.heap_effect().writes_existing_heap() {
-                    return Err(JitError(format!(
+                    return Err(JitError::invalid_ir(format!(
                         "MemoizedHostCall {helper:?}: heap-writing helpers cannot be memoized"
                     )));
                 }
                 if args.len() != sig.args.len() {
-                    return Err(JitError(format!(
+                    return Err(JitError::invalid_ir(format!(
                         "MemoizedHostCall {helper:?}: got {} args, expected {}",
                         args.len(),
                         sig.args.len()
@@ -490,7 +498,7 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
                         )?,
                         HostArg::ImmI64(_) => {
                             if *expected != JitValueType::Int {
-                                return Err(JitError(format!(
+                                return Err(JitError::invalid_ir(format!(
                                     "MemoizedHostCall {helper:?} arg {i}: immediate used for {expected:?}"
                                 )));
                             }
@@ -503,7 +511,7 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
                             result,
                             JitValueType::Int | JitValueType::Bool | JitValueType::Float
                         ) {
-                            return Err(JitError(format!(
+                            return Err(JitError::invalid_ir(format!(
                                 "MemoizedHostCall {helper:?}: result must be a scalar"
                             )));
                         }
@@ -516,7 +524,7 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
                     HostResult::IntOrFloatBits => {
                         check_reg(*dst)?;
                         if !matches!(class(*dst), JitValueType::Int | JitValueType::Float) {
-                            return Err(JitError(format!(
+                            return Err(JitError::invalid_ir(format!(
                                 "MemoizedHostCall {helper:?} result: register {dst} is {:?}, expected Int or Float",
                                 class(*dst)
                             )));
@@ -527,7 +535,7 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
             JitInstr::CallNative { dst, args, .. } => {
                 check_reg(*dst)?;
                 if is_flat_type(class(*dst)) {
-                    return Err(JitError(format!(
+                    return Err(JitError::invalid_ir(format!(
                         "CallNative result register {dst} is a flat-array register"
                     )));
                 }
@@ -538,14 +546,14 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
             JitInstr::CallSelf { dst, args } => {
                 check_reg(*dst)?;
                 if is_flat_type(class(*dst)) {
-                    return Err(JitError(format!(
+                    return Err(JitError::invalid_ir(format!(
                         "CallSelf result register {dst} is a flat-array register"
                     )));
                 }
                 // A self-call invokes THIS function: arity and arg/result classes must
                 // match its own signature (params are regs `0..n_params`).
                 if args.len() != program.n_params as usize {
-                    return Err(JitError(format!(
+                    return Err(JitError::invalid_ir(format!(
                         "CallSelf got {} args, function expects {}",
                         args.len(),
                         program.n_params
@@ -555,7 +563,7 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
                     check_reg(*arg)?;
                     let expected = program.reg_types[i];
                     if class(*arg) != expected {
-                        return Err(JitError(format!(
+                        return Err(JitError::invalid_ir(format!(
                             "CallSelf arg {i}: register {arg} is {:?}, function param is {expected:?}",
                             class(*arg)
                         )));
@@ -569,7 +577,7 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
                 // register references are validated.
                 check_reg(*dst)?;
                 if is_flat_type(class(*dst)) {
-                    return Err(JitError(format!(
+                    return Err(JitError::invalid_ir(format!(
                         "CallGroup result register {dst} is a flat-array register"
                     )));
                 }
@@ -674,8 +682,8 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
             }
             JitInstr::Return { src } => {
                 if osr {
-                    return Err(JitError(
-                        "Return: OSR functions must exit through OsrExit".into(),
+                    return Err(JitError::invalid_ir(
+                        "Return: OSR functions must exit through OsrExit",
                     ));
                 }
                 check_reg(*src)?;
@@ -686,8 +694,8 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
                 // still rejected — it is a (pointer, length) pair, not a single
                 // returnable word.
                 if is_flat_type(class(*src)) {
-                    return Err(JitError(
-                        "Return: cannot return a flat-array register".into(),
+                    return Err(JitError::invalid_ir(
+                        "Return: cannot return a flat-array register",
                     ));
                 }
                 returns.push((i, class(*src)));
@@ -733,7 +741,7 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
                         | JitValueType::FlatFloat
                         | JitValueType::FlatFloatMut
                 ) {
-                    return Err(JitError(format!(
+                    return Err(JitError::invalid_ir(format!(
                         "ListLenDirect base: register {base} is {:?}, expected a flat-array param",
                         class(*base)
                     )));
@@ -744,7 +752,7 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
                     program.n_params as usize
                 };
                 if (*base as usize) >= window {
-                    return Err(JitError(format!(
+                    return Err(JitError::invalid_ir(format!(
                         "ListLenDirect base: register {base} is not a parameter"
                     )));
                 }
@@ -759,7 +767,7 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
                         | JitValueType::FlatFloat
                         | JitValueType::FlatFloatMut
                 ) {
-                    return Err(JitError(format!(
+                    return Err(JitError::invalid_ir(format!(
                         "ListIsEmptyDirect base: register {base} is {:?}, expected a flat-array param",
                         class(*base)
                     )));
@@ -770,7 +778,7 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
                     program.n_params as usize
                 };
                 if (*base as usize) >= window {
-                    return Err(JitError(format!(
+                    return Err(JitError::invalid_ir(format!(
                         "ListIsEmptyDirect base: register {base} is not a parameter"
                     )));
                 }
@@ -779,7 +787,7 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
             JitInstr::GuardClosureId { base, expected } => {
                 require_class(*base, JitValueType::Handle, "GuardClosureId base")?;
                 if *expected < 0 {
-                    return Err(JitError(format!(
+                    return Err(JitError::invalid_ir(format!(
                         "GuardClosureId expected: {expected} is not a valid function id"
                     )));
                 }
@@ -789,8 +797,8 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
             // carries no operands to validate.
             JitInstr::OsrExit => {
                 if !osr {
-                    return Err(JitError(
-                        "OsrExit: normal functions must exit through Return".into(),
+                    return Err(JitError::invalid_ir(
+                        "OsrExit: normal functions must exit through Return",
                     ));
                 }
             }
@@ -805,7 +813,7 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
         }
         match reachable_return_type {
             Some(expected) if expected != ty => {
-                return Err(JitError(format!(
+                return Err(JitError::invalid_ir(format!(
                     "Return: inconsistent result types ({expected:?} vs {ty:?})"
                 )));
             }
@@ -821,7 +829,7 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
         }
         for used in instr_uses(instr) {
             if !assigned_in[ip][used as usize] {
-                return Err(JitError(format!(
+                return Err(JitError::invalid_ir(format!(
                     "instruction {ip} reads register {used} before it is definitely assigned"
                 )));
             }
@@ -835,16 +843,16 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
         .any(|(ip, instr)| reachable[ip] && matches!(instr, JitInstr::CallSelf { .. }));
     if has_call_self {
         let Some(return_type) = reachable_return_type else {
-            return Err(JitError(
-                "CallSelf requires a reachable function Return".into(),
+            return Err(JitError::invalid_ir(
+                "CallSelf requires a reachable function Return",
             ));
         };
         if program.reg_types[..program.n_params as usize]
             .iter()
             .any(|ty| is_flat_type(*ty))
         {
-            return Err(JitError(
-                "CallSelf does not support flat-array parameters".into(),
+            return Err(JitError::invalid_ir(
+                "CallSelf does not support flat-array parameters",
             ));
         }
         for (ip, instr) in program.code.iter().enumerate() {
@@ -852,7 +860,7 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
                 continue;
             };
             if reachable[ip] && program.reg_types[*dst as usize] != return_type {
-                return Err(JitError(format!(
+                return Err(JitError::invalid_ir(format!(
                     "CallSelf result register {dst} is {:?}, function returns {return_type:?}",
                     program.reg_types[*dst as usize]
                 )));
@@ -867,7 +875,7 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
             .any(|instr| matches!(instr, JitInstr::CallGroup { .. })))
         && native_recursion_frame_bytes_estimate(program) > NATIVE_RECURSION_STACK_BUDGET_BYTES
     {
-        return Err(JitError(format!(
+        return Err(JitError::invalid_ir(format!(
             "recursive native frame estimate {} bytes exceeds the {} byte stack budget",
             native_recursion_frame_bytes_estimate(program),
             NATIVE_RECURSION_STACK_BUDGET_BYTES
@@ -913,115 +921,15 @@ pub(crate) fn reachable_jit_instrs(program: &JitFunction) -> Vec<bool> {
 /// The register an instruction definitely writes (its `dst`), if any. Control
 /// instructions (`Return`/`Jump`/`JumpIf*`/`Bail`) and `Nop` write nothing.
 pub(crate) fn instr_def(instr: &JitInstr) -> Option<u32> {
-    match instr {
-        JitInstr::LoadInt { dst, .. }
-        | JitInstr::LoadFloat { dst, .. }
-        | JitInstr::LoadBool { dst, .. }
-        | JitInstr::Move { dst, .. }
-        | JitInstr::Add { dst, .. }
-        | JitInstr::Sub { dst, .. }
-        | JitInstr::Mul { dst, .. }
-        | JitInstr::Div { dst, .. }
-        | JitInstr::Mod { dst, .. }
-        | JitInstr::IntToFloat { dst, .. }
-        | JitInstr::FloatToInt { dst, .. }
-        | JitInstr::HostCall { dst, .. }
-        | JitInstr::MemoizedHostCall { dst, .. }
-        | JitInstr::CallNative { dst, .. }
-        | JitInstr::CallSelf { dst, .. }
-        | JitInstr::CallGroup { dst, .. }
-        | JitInstr::BitAnd { dst, .. }
-        | JitInstr::BitOr { dst, .. }
-        | JitInstr::BitXor { dst, .. }
-        | JitInstr::Shl { dst, .. }
-        | JitInstr::Shr { dst, .. }
-        | JitInstr::Compare { dst, .. }
-        | JitInstr::Equal { dst, .. }
-        | JitInstr::NotEqual { dst, .. }
-        | JitInstr::MatchMapGetInt { value_dst: dst, .. }
-        | JitInstr::MatchMapGetFloat { value_dst: dst, .. }
-        | JitInstr::MatchSortedMapGetInt { value_dst: dst, .. }
-        | JitInstr::MatchSortedMapGetFloat { value_dst: dst, .. }
-        | JitInstr::ListGetIntDirect { dst, .. }
-        | JitInstr::ListSetIntDirect { dst, .. }
-        | JitInstr::ListGetFloatDirect { dst, .. }
-        | JitInstr::ListSetFloatDirect { dst, .. }
-        | JitInstr::ListLenDirect { dst, .. }
-        | JitInstr::ListIsEmptyDirect { dst, .. } => Some(*dst),
-        JitInstr::Nop
-        | JitInstr::TailCallGuard { .. }
-        | JitInstr::Jump { .. }
-        | JitInstr::JumpIfBool { .. }
-        | JitInstr::JumpIfIntCompare { .. }
-        | JitInstr::ProfiledJumpIfBool { .. }
-        | JitInstr::ProfiledJumpIfIntCompare { .. }
-        | JitInstr::Return { .. }
-        | JitInstr::GuardClosureId { .. }
-        | JitInstr::OsrExit
-        | JitInstr::Bail => None,
-    }
+    instr.defined_register()
 }
 
 /// Registers whose current values are semantically consumed by `instr`.
 /// Scratch/cache destinations owned by an instruction are intentionally excluded.
 fn instr_uses(instr: &JitInstr) -> Vec<u32> {
-    match instr {
-        JitInstr::Nop
-        | JitInstr::TailCallGuard { .. }
-        | JitInstr::LoadInt { .. }
-        | JitInstr::LoadFloat { .. }
-        | JitInstr::LoadBool { .. }
-        | JitInstr::Jump { .. }
-        | JitInstr::Bail
-        | JitInstr::OsrExit => Vec::new(),
-        JitInstr::Move { src, .. }
-        | JitInstr::IntToFloat { src, .. }
-        | JitInstr::FloatToInt { src, .. }
-        | JitInstr::Return { src } => vec![*src],
-        JitInstr::Add { lhs, rhs, .. }
-        | JitInstr::Sub { lhs, rhs, .. }
-        | JitInstr::Mul { lhs, rhs, .. }
-        | JitInstr::Div { lhs, rhs, .. }
-        | JitInstr::Mod { lhs, rhs, .. }
-        | JitInstr::BitAnd { lhs, rhs, .. }
-        | JitInstr::BitOr { lhs, rhs, .. }
-        | JitInstr::BitXor { lhs, rhs, .. }
-        | JitInstr::Shl { lhs, rhs, .. }
-        | JitInstr::Shr { lhs, rhs, .. }
-        | JitInstr::Compare { lhs, rhs, .. }
-        | JitInstr::Equal { lhs, rhs, .. }
-        | JitInstr::NotEqual { lhs, rhs, .. }
-        | JitInstr::JumpIfIntCompare { lhs, rhs, .. }
-        | JitInstr::ProfiledJumpIfIntCompare { lhs, rhs, .. } => vec![*lhs, *rhs],
-        JitInstr::HostCall { args, .. } | JitInstr::MemoizedHostCall { args, .. } => args
-            .iter()
-            .filter_map(|arg| match arg {
-                HostArg::Reg(reg) => Some(*reg),
-                HostArg::ImmI64(_) => None,
-            })
-            .collect(),
-        JitInstr::CallNative { args, .. }
-        | JitInstr::CallSelf { args, .. }
-        | JitInstr::CallGroup { args, .. } => args.clone(),
-        JitInstr::MatchMapGetInt { map, key, .. }
-        | JitInstr::MatchMapGetFloat { map, key, .. }
-        | JitInstr::MatchSortedMapGetInt { map, key, .. }
-        | JitInstr::MatchSortedMapGetFloat { map, key, .. } => vec![*map, *key],
-        JitInstr::JumpIfBool { cond, .. } | JitInstr::ProfiledJumpIfBool { cond, .. } => {
-            vec![*cond]
-        }
-        JitInstr::ListGetIntDirect { base, index, .. }
-        | JitInstr::ListGetFloatDirect { base, index, .. } => vec![*base, *index],
-        JitInstr::ListSetIntDirect {
-            base, index, value, ..
-        }
-        | JitInstr::ListSetFloatDirect {
-            base, index, value, ..
-        } => vec![*base, *index, *value],
-        JitInstr::ListLenDirect { base, .. }
-        | JitInstr::ListIsEmptyDirect { base, .. }
-        | JitInstr::GuardClosureId { base, .. } => vec![*base],
-    }
+    let mut uses = Vec::new();
+    instr.visit_used_registers(|reg| uses.push(reg));
+    uses
 }
 
 /// The control-flow successors of instruction `i` (indices into `program.code`):
@@ -1033,50 +941,36 @@ pub(crate) fn successors(program: &JitFunction, i: usize) -> Vec<usize> {
     let n = program.code.len();
     let in_range = |t: u32| (t as usize) < n;
     let next = i + 1;
-    match &program.code[i] {
-        JitInstr::Jump { target } => {
-            if in_range(*target) {
-                vec![*target as usize]
+    match program.code[i].effects().control_flow {
+        JitControlFlow::Jump(target) => {
+            if in_range(target) {
+                vec![target as usize]
             } else {
                 vec![]
             }
         }
-        JitInstr::JumpIfBool { target, .. }
-        | JitInstr::JumpIfIntCompare { target, .. }
-        | JitInstr::ProfiledJumpIfBool { target, .. }
-        | JitInstr::ProfiledJumpIfIntCompare { target, .. } => {
+        JitControlFlow::Conditional(target) => {
             let mut succ = Vec::new();
             if next < n {
                 succ.push(next);
             }
-            if in_range(*target) {
-                succ.push(*target as usize);
+            if in_range(target) {
+                succ.push(target as usize);
             }
             succ
         }
-        JitInstr::MatchMapGetInt {
-            some_ip, none_ip, ..
-        }
-        | JitInstr::MatchMapGetFloat {
-            some_ip, none_ip, ..
-        }
-        | JitInstr::MatchSortedMapGetInt {
-            some_ip, none_ip, ..
-        }
-        | JitInstr::MatchSortedMapGetFloat {
-            some_ip, none_ip, ..
-        } => {
+        JitControlFlow::Split { first, second } => {
             let mut succ = Vec::new();
-            if in_range(*some_ip) {
-                succ.push(*some_ip as usize);
+            if in_range(first) {
+                succ.push(first as usize);
             }
-            if in_range(*none_ip) {
-                succ.push(*none_ip as usize);
+            if in_range(second) {
+                succ.push(second as usize);
             }
             succ
         }
-        JitInstr::Return { .. } | JitInstr::Bail | JitInstr::OsrExit => vec![],
-        _ => {
+        JitControlFlow::Terminal => vec![],
+        JitControlFlow::Fallthrough => {
             if next < n {
                 vec![next]
             } else {

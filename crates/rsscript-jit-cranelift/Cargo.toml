@@ -11,3 +11,6 @@ cranelift-frontend = "0.132.1"
 cranelift-jit = "0.132.1"
 cranelift-module = "0.132.1"
 cranelift-native = "0.132.1"
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"

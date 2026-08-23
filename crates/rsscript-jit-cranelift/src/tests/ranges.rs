@@ -1,4 +1,4 @@
-// --- J4.3: conservative range proof for eliding overflow checks -----------
+// --- interval range analysis: conservative range proof for eliding overflow checks -----------
 
 /// LoadInt c ⇒ [c, c]; an Add of two known constants whose sum fits i64 is
 /// proven non-overflowing (and the proof line is computed in i128).
@@ -419,7 +419,7 @@ fn loop_accumulator_widens_to_top() {
     assert!(!arith_cannot_overflow(&iv[2], &prog.code[2]));
 }
 
-// --- J4.3+: branch-conditioned range refinement for loop counters ----------
+// --- branch-conditioned range refinement: branch-conditioned range refinement for loop counters ----------
 
 /// Build the counted loop
 ///   fn f(limit){ i=0; total=0; while i<limit { total += step; i += incr }; total }
@@ -519,7 +519,7 @@ fn loop_counter_le_increment_stays_checked() {
 /// (iii) A bare `a + b` with unconstrained (TOP) operands and no governing guard
 /// stays CHECKED and bails on a real overflow — refinement never strips a check
 /// when there is no comparison fact to refine by. (Mirrors the param test, kept
-/// here so the J4.3+ slice asserts the negative directly.)
+/// here so the branch-conditioned range refinement slice asserts the negative directly.)
 #[test]
 fn unguarded_add_stays_checked_and_bails() {
     let mut m = module();

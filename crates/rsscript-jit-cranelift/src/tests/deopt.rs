@@ -72,7 +72,7 @@ fn distinct_bail_sites_get_stable_safepoint_ids() {
     ));
 }
 
-// --- J0.1a: deopt state-map (must-analysis) -------------------------------
+// --- deopt state-map: deopt state-map (must-analysis) -------------------------------
 
 #[test]
 fn deopt_map_straightline_single_guard() {
@@ -676,7 +676,7 @@ fn div_by_zero_bails() {
     assert_eq!(m.callt(id, &[i64::MIN, -1]), None);
 }
 
-// --- J0.1b: live-register value capture at deopt --------------------------
+// --- deopt live-register capture: live-register value capture at deopt --------------------------
 
 /// Find the captured value of register `reg` in a deopt outcome's `live` set.
 fn live_value(outcome: &NativeOutcome, reg: u32) -> Option<DeoptValue> {
@@ -789,12 +789,12 @@ fn deopt_capture_records_float_register_value() {
     assert_eq!(live_value(&out, 2), Some(DeoptValue::Float(f)));
 }
 
-// --- J0.3: deopt-at-every-safepoint stress test (master correctness) ------
+// --- forced-deopt stress: deopt-at-every-safepoint stress test (master correctness) ------
 
 /// Force a bail at EVERY safepoint of a few representative functions and verify
 /// the captured safepoint id + live register values are correct at each — even at
 /// safepoints that never fire under the (deliberately in-range, non-overflowing)
-/// inputs. This exercises the J0 capture/map machinery exhaustively: for every
+/// inputs. This exercises the deopt capture/map machinery exhaustively: for every
 /// site `k`, `compile_forcing_bail(f, k)` makes only site `k` bail, and we assert
 /// the outcome is `Deopt { SafepointId(k) }` whose `live` set is exactly the one
 /// `deopt_map().sites[k-1]` advertises, each register carrying the value the
@@ -970,7 +970,7 @@ fn force_bail_at_every_safepoint_captures_correct_state() {
                 }
             };
 
-            // Heap-aware deopt (J0.1): the captured live set is exactly the SCALAR
+            // Heap-aware deopt (heap-aware deopt): the captured live set is exactly the SCALAR
             // (`Int`/`Float`) subset of the map's live set — `Handle`/`FlatInt`/
             // `FlatFloat` regs are reconstructed from the interpreter frame, not the
             // payload, so they are intentionally absent from the capture.

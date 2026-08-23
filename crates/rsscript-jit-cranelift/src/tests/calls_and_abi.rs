@@ -1080,6 +1080,120 @@ fn scalar_machine_entry_runs_on_tiny_guarded_stacks() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn flat_direct_bounds_checks_do_not_touch_guard_pages() {
+    use JitValueType::{FlatInt, FlatIntMut, Int};
+
+    struct Mapping {
+        ptr: *mut libc::c_void,
+        len: usize,
+    }
+    impl Drop for Mapping {
+        fn drop(&mut self) {
+            // SAFETY: `ptr`/`len` are the exact successful `mmap` result owned by
+            // this guard and are released exactly once here.
+            let result = unsafe { libc::munmap(self.ptr, self.len) };
+            debug_assert_eq!(result, 0);
+        }
+    }
+
+    // Put the two-element buffer at the very end of a writable page. If generated
+    // code performs the access before checking `index < len`, the one-past-end
+    // read/write lands in the following PROT_NONE page and the test process traps.
+    // SAFETY: sysconf has no memory-safety preconditions.
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
+    assert!(page >= 4096);
+    let mapping_len = page * 3;
+    // SAFETY: anonymous private mapping; the returned region is checked before use.
+    let raw = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            mapping_len,
+            libc::PROT_NONE,
+            libc::MAP_PRIVATE | libc::MAP_ANON,
+            -1,
+            0,
+        )
+    };
+    assert_ne!(raw, libc::MAP_FAILED);
+    let mapping = Mapping {
+        ptr: raw,
+        len: mapping_len,
+    };
+    // SAFETY: the middle page is contained in the live mapping.
+    assert_eq!(
+        unsafe {
+            libc::mprotect(
+                (mapping.ptr as *mut u8).add(page).cast(),
+                page,
+                libc::PROT_READ | libc::PROT_WRITE,
+            )
+        },
+        0
+    );
+    // SAFETY: the final two i64 slots of the writable middle page are aligned,
+    // initialized below, and remain live until `mapping` drops after both calls.
+    let values = unsafe {
+        std::slice::from_raw_parts_mut(
+            (mapping.ptr as *mut u8)
+                .add(page * 2 - 2 * std::mem::size_of::<i64>())
+                .cast::<i64>(),
+            2,
+        )
+    };
+    values.copy_from_slice(&[11, 22]);
+
+    let mut module = module();
+    let read = module
+        .compile(&ft(
+            2,
+            vec![FlatInt, Int, Int],
+            vec![
+                JitInstr::ListGetIntDirect {
+                    dst: 2,
+                    base: 0,
+                    index: 1,
+                },
+                JitInstr::Return { src: 2 },
+            ],
+        ))
+        .unwrap();
+    let pointer = values.as_ptr() as i64;
+    let args = [pointer, values.len() as i64];
+    let lens = [values.len() as i64, 0];
+    let mut read_proof = [FlatBufferArg::Int(values)];
+    assert!(matches!(
+        module.call_with_host_ctx(read, &args, &lens, 0, &mut read_proof),
+        NativeOutcome::Deopt { .. }
+    ));
+    drop(read_proof);
+
+    let write = module
+        .compile(&ft(
+            3,
+            vec![FlatIntMut, Int, Int, Int],
+            vec![
+                JitInstr::ListSetIntDirect {
+                    dst: 3,
+                    base: 0,
+                    index: 1,
+                    value: 2,
+                },
+                JitInstr::Return { src: 3 },
+            ],
+        ))
+        .unwrap();
+    let args = [pointer, values.len() as i64, 99];
+    let lens = [values.len() as i64, 0, 0];
+    let mut write_proof = [FlatBufferArg::IntMut(values)];
+    assert!(matches!(
+        module.call_with_host_ctx(write, &args, &lens, 0, &mut write_proof),
+        NativeOutcome::Deopt { .. }
+    ));
+    assert_eq!(values, &[11, 22]);
+}
+
 #[test]
 fn native_call_can_pass_flat_float_arg_to_readonly_callee() {
     use JitValueType::{FlatFloat, Float, Int};

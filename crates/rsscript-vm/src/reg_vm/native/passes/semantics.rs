@@ -322,7 +322,7 @@ fn native_instr_semantics(instr: &RegInstr) -> NativeInstrSemantics {
             S(vec![*value_dst])
         }
         // `SelectWait` writes winner/value; calls with `mut_args` write back to arg
-        // registers — all modelled conservatively as `All` so OSR × J3 bails rather
+        // registers — all modelled conservatively as `All` so OSR × scalar replacement bails rather
         // than risk a missed boundary write.
         _ => RegFootprint::All,
     };
@@ -978,12 +978,12 @@ pub(in crate::reg_vm) fn native_offset_regs(instr: &RegInstr, b: usize) -> Optio
 }
 
 /// Register-offset an instruction for the OSR×inline path, which (unlike the plain
-/// native subset) ALSO accepts the J3-dissolvable value ops: a callee that builds /
+/// native subset) ALSO accepts the scalar replacement-dissolvable value ops: a callee that builds /
 /// destructures a non-escaping `Option`/variant/struct is spliced into the loop body
-/// so the J3 region passes can dissolve it to scalars. The branch-shaped match ops
+/// so the scalar replacement region passes can dissolve it to scalars. The branch-shaped match ops
 /// (`MatchOption`/`MatchResult`/`MatchVariant`/`MatchMapGet`) are remapped by the
 /// splicer (they carry callee ip targets), not here. `None` if neither the native
-/// subset nor a J3 value op.
+/// subset nor a scalar replacement value op.
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn native_offset_regs_j3(instr: &RegInstr, b: usize) -> Option<RegInstr> {
     if let Some(offset) = native_offset_regs(instr, b) {
@@ -1030,7 +1030,7 @@ pub(in crate::reg_vm) fn native_offset_regs_j3(instr: &RegInstr, b: usize) -> Op
 /// deopt-before-heap cold-arm classifier is allowed to see inside a cold arm. These
 /// allocate a fresh `String` from their (read-only) operands and observe/mutate
 /// nothing else — so re-running the arm on the interpreter after a native `Bail`
-/// reproduces it exactly (Execution Spec §7.2). Deliberately a tight whitelist: any
+/// reproduces it exactly (the transactional fallback contract). Deliberately a tight whitelist: any
 /// intrinsic that touches I/O, the environment, collections, time, or RNG is impure
 /// and must NOT appear in a bailable cold arm. Unknown ⇒ false (reject).
 #[cfg(feature = "native-jit")]
@@ -1051,7 +1051,7 @@ pub(in crate::reg_vm) fn cold_arm_pure_intrinsic(intrinsic: &RegIntrinsic) -> bo
 
 /// Whether `instr` is a pure, side-effect-free value-construction instruction that
 /// the deopt-before-heap cold-arm classifier permits inside a bailable cold arm. It
-/// covers the J3-dissolvable value ops (`native_offset_regs_j3`-class), plus the
+/// covers the scalar replacement-dissolvable value ops (`native_offset_regs_j3`-class), plus the
 /// recognized pure HEAP value-builders a cold arm may use to construct its returned
 /// value: `LoadString`, a whitelisted pure `CallIntrinsic` (e.g. `String.copy`),
 /// `StringConcat`, and `MakeVariant`/`MakeStruct` (the `Err(..)` / record the arm
@@ -1125,12 +1125,12 @@ pub(in crate::reg_vm) fn cold_arm_pure_value_op(instr: &RegInstr) -> bool {
 /// sentinel) at `s`: because every op in the arm is side-effect-free, native does
 /// NOTHING observable before bailing, so the existing abandon-and-reinterpret-the-
 /// loop fallback re-runs the whole loop on the interpreter — which rebuilds the heap
-/// value itself (Execution Spec §7.2 holds unchanged; no rollback, no resume-ip).
+/// value itself (the transactional fallback contract holds unchanged; no rollback, no resume-ip).
 ///
 /// Returns `(cold, arm_start)` where `cold[i]` marks every ip in some cold arm and
 /// `arm_start[i]` marks the single `s` of each arm (where the `Bail` is emitted). The
 /// caller treats a reachable, non-cold instruction that is neither native-subset nor
-/// a J3 op / match / branch as a veto (no inline). Conservative throughout: anything
+/// a scalar replacement op / match / branch as a veto (no inline). Conservative throughout: anything
 /// not provably a clean pure tail is simply NOT marked cold (so it must be otherwise
 /// classifiable, else the inline is vetoed).
 #[cfg(feature = "native-jit")]
@@ -1159,14 +1159,14 @@ pub(in crate::reg_vm) fn deopt_replaceable_cold_arms(
         while s > 0 && reachable[s - 1] && cold_arm_pure_value_op(&code[s - 1]) {
             s -= 1;
         }
-        // The arm must build a heap value that the J3 region passes CANNOT dissolve —
+        // The arm must build a heap value that the scalar replacement region passes CANNOT dissolve —
         // otherwise it is a SUPPORTED arm (e.g. the `Ok(scalar)` arm, a
         // `MakeVariant`/`MakeStruct`/`MakeSome` with a scalar payload) that should
         // inline normally and dissolve, NOT bail. The undissolvable builders are the
         // String/heap-scalar producers (`LoadString`, `StringConcat`, a `CallIntrinsic`
         // such as `String.copy`): a `MakeVariant{Err, [String]}` is only cold because
         // its payload flows from one of these. Require at least one such op in
-        // `[s..=e]`; otherwise leave the arm to the normal J3 path (do not mark cold).
+        // `[s..=e]`; otherwise leave the arm to the normal scalar replacement path (do not mark cold).
         let has_undissolvable_heap_builder = (s..=e).any(|j| {
             matches!(
                 &code[j],
@@ -1276,7 +1276,7 @@ pub(in crate::reg_vm) fn deopt_replaceable_cold_arms(
         //      (`resume_ip == trans_exit`); ANY mid-loop bail (a cold-arm `Bail`) takes the
         //      fallback that `heap_tx.abort()`s and re-runs the loop on the interpreter.
         // So native NEVER executes the arm and ALL of its journaled native heap writes (incl.
-        // aliased in-place writes elsewhere in the loop, §7.2) are rolled back before the
+        // aliased in-place writes elsewhere in the loop, the transactional fallback contract) are rolled back before the
         // interpreter replays — the interpreter performs the arm's write itself. Verified:
         // the aliased directed test OSRs + matches the interpreter, and the full
         // differential/soak suites stay green. (Register isolation above still applies to
@@ -1293,18 +1293,18 @@ pub(in crate::reg_vm) fn deopt_replaceable_cold_arms(
 }
 
 /// Whether `callee` can be inlined into the OSR loop body: like
-/// [`native_callee_inlinable`] but ALSO permitting the J3-dissolvable value ops
+/// [`native_callee_inlinable`] but ALSO permitting the scalar replacement-dissolvable value ops
 /// ([`native_offset_regs_j3`]) and the branch-shaped match ops, so a leaf that
 /// builds/destructures a non-escaping `Option`/variant/struct (e.g.
 /// `make_shape`/`area`) qualifies — the value becomes loop-local once inlined and
-/// the J3 region passes dissolve it. Still captureless, arity-matched, side-effect-
-/// free (no calls/suspends/heap-collection/runtime-error/non-J3 ops).
+/// the scalar replacement region passes dissolve it. Still captureless, arity-matched, side-effect-
+/// free (no calls/suspends/heap-collection/runtime-error/non-scalar replacement ops).
 ///
 /// Deopt-before-heap extension: a reachable instruction that is part of a
 /// **deopt-replaceable cold arm** ([`deopt_replaceable_cold_arms`]) is also accepted
 /// — at splice time that arm is replaced by a native `Bail`, so a leaf whose COLD arm
 /// builds a heap value (e.g. `Err(String.copy(..))`) qualifies as long as its
-/// SUPPORTED (non-cold) arms are fully native/J3-dissolvable. When unsure, REJECT.
+/// SUPPORTED (non-cold) arms are fully native/scalar replacement-dissolvable. When unsure, REJECT.
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn native_callee_inlinable_j3(callee: &RegFunction, n_args: usize) -> bool {
     if callee.captures != 0 || callee.params != n_args {

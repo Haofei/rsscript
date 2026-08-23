@@ -1,20 +1,20 @@
 use super::super::*;
 /// Call count at which a function becomes "warm" and starts collecting a
-/// [`FunctionProfile`] (J1). Below this threshold an evaluation allocates and
+/// [`FunctionProfile`] (bounded profile collection). Below this threshold an evaluation allocates and
 /// records nothing — cold code pays only a single saturating counter increment
 /// in its `JitState`. Tuned high enough that one-shot/setup functions
 /// never profile, low enough that a genuinely hot dispatcher is observed within
 /// the first handful of native-tier warm-ups.
 pub(crate) const PROFILE_WARMUP: u32 = 50;
 
-/// Per-function dynamic-call count at which J1 stops sampling: once a function's
+/// Per-function dynamic-call count at which bounded profile collection stops sampling: once a function's
 /// `call_count` reaches this, `JitState::record_call_site` freezes (a single
 /// read + compare, then return) so a dynamic call driven by a hot loop has an
 /// essentially-free steady state. The window `PROFILE_WARMUP..PROFILE_RECORD_LIMIT`
 /// is more than enough samples to settle every site's mono/poly/mega state.
 pub(crate) const PROFILE_RECORD_LIMIT: u32 = PROFILE_WARMUP + 256;
 
-/// Minimum branch samples before branch feedback is strong enough to guide J2
+/// Minimum branch samples before branch feedback is strong enough to guide profile-guided inlining
 /// speculation. Reporting can show smaller samples, but codegen should not treat
 /// them as a stable bias.
 pub(crate) const PROFILE_BRANCH_MIN_SAMPLES: u32 = 16;
@@ -31,9 +31,9 @@ pub(crate) const PROFILE_MAX_CALLEES: usize = 4;
 /// Per-call-site monomorphism state, derived from the number of *distinct*
 /// callee identities observed at a dynamic call site.
 ///
-/// Feeds J2 monomorphic-inlining COMPILE DECISIONS ONLY; it never feeds a
+/// Feeds profile-guided inlining monomorphic-inlining COMPILE DECISIONS ONLY; it never feeds a
 /// computed value and never alters control flow or results (determinism).
-// Read by the J1 tests and J2 profile-guided native inliner; not consumed by
+// Read by the bounded profile collection tests and profile-guided native inliner; not consumed by
 // production interpreter dispatch, which only *writes* feedback.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,7 +91,7 @@ impl BranchBias {
 /// seen. Counts saturate; the observed list is capped at
 /// [`PROFILE_MAX_CALLEES`].
 ///
-/// Drives J2 compile decisions ONLY — never a computed value (determinism).
+/// Drives profile-guided inlining compile decisions ONLY — never a computed value (determinism).
 #[derive(Debug, Clone)]
 pub(crate) struct CallSiteFeedback {
     /// `(callee_key, saturating_count)` for each distinct callee, in first-seen
@@ -102,7 +102,7 @@ pub(crate) struct CallSiteFeedback {
     /// the site is permanently megamorphic even though `observed` is capped.
     pub(crate) overflowed: bool,
     /// `false` once ANY observation at this site saw a closure with a non-scalar
-    /// (heap) capture. Capturing-closure inlining (OSR × J2) materializes captures
+    /// (heap) capture. Capturing-closure inlining (OSR × profile-guided inlining) materializes captures
     /// as scalars via the `closure_capture` host helper, so a site that ever saw a
     /// heap capture is not eligible — the gate then leaves it on the interpreter
     /// path (no inline, no OSR). Starts `true`; ANDed monotonically downward.
@@ -137,8 +137,8 @@ impl CallSiteFeedback {
         self.observed.push((callee_key, 1));
     }
 
-    /// Monomorphism state derived from the distinct-callee count. Read by the J1
-    /// tests and the forthcoming J2 inliner.
+    /// Monomorphism state derived from the distinct-callee count. Read by the bounded profile collection
+    /// tests and the forthcoming profile-guided inlining inliner.
     #[allow(dead_code)]
     pub(crate) fn state(&self) -> MonoState {
         if self.overflowed || self.observed.len() > PROFILE_MAX_CALLEES {
@@ -213,11 +213,11 @@ impl BranchFeedback {
     }
 }
 
-/// Per-function type-feedback profile (J1): feedback for each dynamic call site,
+/// Per-function type-feedback profile (bounded profile collection): feedback for each dynamic call site,
 /// keyed by the site's instruction index within the function's `code`.
 ///
 /// Allocated lazily once a function crosses [`PROFILE_WARMUP`]; cold functions
-/// never allocate one. Consumed by J2 monomorphic inlining to decide what to
+/// never allocate one. Consumed by profile-guided inlining monomorphic inlining to decide what to
 /// compile — it NEVER feeds a computed value and NEVER changes program behavior
 /// (determinism is non-negotiable).
 #[derive(Debug, Clone, Default)]

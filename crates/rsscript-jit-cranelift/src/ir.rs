@@ -361,7 +361,7 @@ pub enum JitInstr {
         dst: u32,
         base: u32,
     },
-    /// Profile-guided monomorphic inlining guard (J2). `base` is a `Handle`
+    /// Profile-guided monomorphic inlining guard (profile-guided inlining). `base` is a `Handle`
     /// register holding a closure handle; reads its underlying function id via
     /// [`HostHelpers::closure_id`] and, if it differs from `expected`, **bails** to
     /// the interpreter (the existing re-run-from-top fallback). Emitted just before
@@ -372,7 +372,7 @@ pub enum JitInstr {
         base: u32,
         expected: i64,
     },
-    /// OSR-exit (J5.2). Marks the post-loop instruction at the loop's exit edge: a
+    /// OSR-exit (OSR). Marks the post-loop instruction at the loop's exit edge: a
     /// function compiled with an OSR-entry (see [`NativeModule::compile_osr`]) runs
     /// only the loop region natively, so reaching this instruction means the loop
     /// has exited and control must return to the interpreter. It lowers to an
@@ -385,7 +385,255 @@ pub enum JitInstr {
     OsrExit,
 }
 
+/// Canonical control-flow shape of one JIT instruction.
+///
+/// This is intentionally owned by the IR model rather than the verifier.  Any new
+/// opcode must choose a shape in the exhaustive [`JitInstr::effects`] match, which
+/// prevents reachability, liveness, and code-generation classifiers from silently
+/// drifting apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JitControlFlow {
+    Fallthrough,
+    Jump(u32),
+    Conditional(u32),
+    Split { first: u32, second: u32 },
+    Terminal,
+}
+
+/// Heap-visible behavior of an instruction. Flat-buffer accesses are included:
+/// although they do not use the VM heap table, they are externally visible memory
+/// reads/writes and therefore belong in aliasing and rollback decisions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JitHeapEffect {
+    None,
+    Read,
+    Write,
+    ReadWrite,
+}
+
+/// Stable, backend-neutral effect facts shared by validation and tiering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JitInstrEffects {
+    pub control_flow: JitControlFlow,
+    pub heap: JitHeapEffect,
+    pub may_deopt: bool,
+    pub osr_supported: bool,
+}
+
 impl JitInstr {
+    /// Return the register definitely defined by this instruction, if any.
+    pub fn defined_register(&self) -> Option<u32> {
+        match self {
+            Self::LoadInt { dst, .. }
+            | Self::LoadFloat { dst, .. }
+            | Self::LoadBool { dst, .. }
+            | Self::Move { dst, .. }
+            | Self::Add { dst, .. }
+            | Self::Sub { dst, .. }
+            | Self::Mul { dst, .. }
+            | Self::Div { dst, .. }
+            | Self::Mod { dst, .. }
+            | Self::IntToFloat { dst, .. }
+            | Self::FloatToInt { dst, .. }
+            | Self::HostCall { dst, .. }
+            | Self::MemoizedHostCall { dst, .. }
+            | Self::CallNative { dst, .. }
+            | Self::CallSelf { dst, .. }
+            | Self::CallGroup { dst, .. }
+            | Self::BitAnd { dst, .. }
+            | Self::BitOr { dst, .. }
+            | Self::BitXor { dst, .. }
+            | Self::Shl { dst, .. }
+            | Self::Shr { dst, .. }
+            | Self::Compare { dst, .. }
+            | Self::Equal { dst, .. }
+            | Self::NotEqual { dst, .. }
+            | Self::MatchMapGetInt { value_dst: dst, .. }
+            | Self::MatchMapGetFloat { value_dst: dst, .. }
+            | Self::MatchSortedMapGetInt { value_dst: dst, .. }
+            | Self::MatchSortedMapGetFloat { value_dst: dst, .. }
+            | Self::ListGetIntDirect { dst, .. }
+            | Self::ListSetIntDirect { dst, .. }
+            | Self::ListGetFloatDirect { dst, .. }
+            | Self::ListSetFloatDirect { dst, .. }
+            | Self::ListLenDirect { dst, .. }
+            | Self::ListIsEmptyDirect { dst, .. } => Some(*dst),
+            Self::Nop
+            | Self::TailCallGuard { .. }
+            | Self::Jump { .. }
+            | Self::JumpIfBool { .. }
+            | Self::JumpIfIntCompare { .. }
+            | Self::ProfiledJumpIfBool { .. }
+            | Self::ProfiledJumpIfIntCompare { .. }
+            | Self::Return { .. }
+            | Self::GuardClosureId { .. }
+            | Self::OsrExit
+            | Self::Bail => None,
+        }
+    }
+
+    /// Visit every register whose current value is consumed by this instruction.
+    pub fn visit_used_registers(&self, mut visit: impl FnMut(u32)) {
+        match self {
+            Self::Nop
+            | Self::TailCallGuard { .. }
+            | Self::LoadInt { .. }
+            | Self::LoadFloat { .. }
+            | Self::LoadBool { .. }
+            | Self::Jump { .. }
+            | Self::Bail
+            | Self::OsrExit => {}
+            Self::Move { src, .. }
+            | Self::IntToFloat { src, .. }
+            | Self::FloatToInt { src, .. }
+            | Self::Return { src } => visit(*src),
+            Self::Add { lhs, rhs, .. }
+            | Self::Sub { lhs, rhs, .. }
+            | Self::Mul { lhs, rhs, .. }
+            | Self::Div { lhs, rhs, .. }
+            | Self::Mod { lhs, rhs, .. }
+            | Self::BitAnd { lhs, rhs, .. }
+            | Self::BitOr { lhs, rhs, .. }
+            | Self::BitXor { lhs, rhs, .. }
+            | Self::Shl { lhs, rhs, .. }
+            | Self::Shr { lhs, rhs, .. }
+            | Self::Compare { lhs, rhs, .. }
+            | Self::Equal { lhs, rhs, .. }
+            | Self::NotEqual { lhs, rhs, .. }
+            | Self::JumpIfIntCompare { lhs, rhs, .. }
+            | Self::ProfiledJumpIfIntCompare { lhs, rhs, .. } => {
+                visit(*lhs);
+                visit(*rhs);
+            }
+            Self::HostCall { args, .. } | Self::MemoizedHostCall { args, .. } => {
+                for arg in args {
+                    if let HostArg::Reg(reg) = arg {
+                        visit(*reg);
+                    }
+                }
+            }
+            Self::CallNative { args, .. }
+            | Self::CallSelf { args, .. }
+            | Self::CallGroup { args, .. } => args.iter().copied().for_each(visit),
+            Self::MatchMapGetInt { map, key, .. }
+            | Self::MatchMapGetFloat { map, key, .. }
+            | Self::MatchSortedMapGetInt { map, key, .. }
+            | Self::MatchSortedMapGetFloat { map, key, .. } => {
+                visit(*map);
+                visit(*key);
+            }
+            Self::JumpIfBool { cond, .. } | Self::ProfiledJumpIfBool { cond, .. } => visit(*cond),
+            Self::ListGetIntDirect { base, index, .. }
+            | Self::ListGetFloatDirect { base, index, .. } => {
+                visit(*base);
+                visit(*index);
+            }
+            Self::ListSetIntDirect {
+                base, index, value, ..
+            }
+            | Self::ListSetFloatDirect {
+                base, index, value, ..
+            } => {
+                visit(*base);
+                visit(*index);
+                visit(*value);
+            }
+            Self::ListLenDirect { base, .. }
+            | Self::ListIsEmptyDirect { base, .. }
+            | Self::GuardClosureId { base, .. } => visit(*base),
+        }
+    }
+
+    /// Canonical effect classification. The exhaustive match is a deliberate
+    /// architecture guard: adding an opcode without deciding its deopt, heap, and
+    /// OSR semantics is a compile error.
+    pub fn effects(&self) -> JitInstrEffects {
+        use JitControlFlow::{Conditional, Fallthrough, Jump, Split, Terminal};
+        use JitHeapEffect::{None, Read, ReadWrite, Write};
+
+        let control_flow = match self {
+            Self::Jump { target } => Jump(*target),
+            Self::JumpIfBool { target, .. }
+            | Self::JumpIfIntCompare { target, .. }
+            | Self::ProfiledJumpIfBool { target, .. }
+            | Self::ProfiledJumpIfIntCompare { target, .. } => Conditional(*target),
+            Self::MatchMapGetInt {
+                some_ip, none_ip, ..
+            }
+            | Self::MatchMapGetFloat {
+                some_ip, none_ip, ..
+            }
+            | Self::MatchSortedMapGetInt {
+                some_ip, none_ip, ..
+            }
+            | Self::MatchSortedMapGetFloat {
+                some_ip, none_ip, ..
+            } => Split {
+                first: *some_ip,
+                second: *none_ip,
+            },
+            Self::Return { .. } | Self::Bail | Self::OsrExit => Terminal,
+            _ => Fallthrough,
+        };
+        let heap = match self {
+            Self::HostCall { helper, .. } | Self::MemoizedHostCall { helper, .. } => {
+                match helper.heap_effect() {
+                    HostHeapEffect::ReadOnly | HostHeapEffect::ExtendsInputHandles => Read,
+                    HostHeapEffect::AllocatesResult => Write,
+                    HostHeapEffect::MutatesInput | HostHeapEffect::ReplacesInput => ReadWrite,
+                }
+            }
+            Self::CallNative { .. } | Self::CallSelf { .. } | Self::CallGroup { .. } => ReadWrite,
+            Self::MatchMapGetInt { .. }
+            | Self::MatchMapGetFloat { .. }
+            | Self::MatchSortedMapGetInt { .. }
+            | Self::MatchSortedMapGetFloat { .. }
+            | Self::ListGetIntDirect { .. }
+            | Self::ListGetFloatDirect { .. }
+            | Self::ListLenDirect { .. }
+            | Self::ListIsEmptyDirect { .. }
+            | Self::GuardClosureId { .. } => Read,
+            Self::ListSetIntDirect { .. } | Self::ListSetFloatDirect { .. } => Write,
+            _ => None,
+        };
+        let may_deopt = matches!(
+            self,
+            Self::TailCallGuard { .. }
+                | Self::Add { .. }
+                | Self::Sub { .. }
+                | Self::Mul { .. }
+                | Self::Div { .. }
+                | Self::Mod { .. }
+                | Self::Shl { .. }
+                | Self::Shr { .. }
+                | Self::HostCall { .. }
+                | Self::MemoizedHostCall { .. }
+                | Self::CallNative { .. }
+                | Self::CallSelf { .. }
+                | Self::CallGroup { .. }
+                | Self::MatchMapGetInt { .. }
+                | Self::MatchMapGetFloat { .. }
+                | Self::MatchSortedMapGetInt { .. }
+                | Self::MatchSortedMapGetFloat { .. }
+                | Self::ProfiledJumpIfBool { .. }
+                | Self::ProfiledJumpIfIntCompare { .. }
+                | Self::ListGetIntDirect { .. }
+                | Self::ListSetIntDirect { .. }
+                | Self::ListGetFloatDirect { .. }
+                | Self::ListSetFloatDirect { .. }
+                | Self::GuardClosureId { .. }
+                | Self::Bail
+                | Self::OsrExit
+        );
+        let osr_supported = !matches!(self, Self::CallSelf { .. } | Self::CallGroup { .. });
+        JitInstrEffects {
+            control_flow,
+            heap,
+            may_deopt,
+            osr_supported,
+        }
+    }
+
     /// Canonical membership test for the TV2 flat-array *direct* ops (read the raw
     /// param buffer / its `lens` slot with no host call). This is the SINGLE source
     /// of truth so the several classification sites (native-leaf eligibility, the
@@ -409,6 +657,12 @@ impl JitInstr {
     /// instruction through OSR. Keeping this classification on the instruction
     /// model prevents VM tiering code from maintaining a second opcode list.
     pub fn visit_osr_heap_inputs(&self, mut visit: impl FnMut(u32)) {
+        if matches!(
+            self.effects().heap,
+            JitHeapEffect::None | JitHeapEffect::Write
+        ) {
+            return;
+        }
         match self {
             JitInstr::HostCall { args, .. } | JitInstr::MemoizedHostCall { args, .. } => {
                 for arg in args {
