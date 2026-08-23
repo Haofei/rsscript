@@ -966,6 +966,7 @@ fn reentrant_host_helper_is_rejected_without_corrupting_outer_call() {
                 outcome,
                 NativeOutcome::Deopt {
                     safepoint_id: SafepointId::ANONYMOUS,
+                    decline: Some(NativeDeclineReason::ReentrantCall),
                     ..
                 }
             ));

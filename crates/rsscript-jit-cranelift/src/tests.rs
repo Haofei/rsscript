@@ -290,6 +290,7 @@ fn native_outcome_completed_accessors_separate_scalar_and_handle() {
         live: Vec::new(),
         child: None,
         logical_depth: None,
+        decline: None,
     };
     assert_eq!(deopt.clone().completed(), None);
     assert_eq!(deopt.clone().completed_handle(), None);

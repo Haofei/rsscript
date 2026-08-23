@@ -382,11 +382,11 @@ pub struct CompiledId {
     pub(crate) index: usize,
 }
 
-use crate::deopt::anonymous_deopt;
 pub use crate::deopt::{
-    DeoptChildSite, DeoptFrame, DeoptMap, DeoptReg, DeoptSite, DeoptValue, NativeOutcome,
-    SafepointId,
+    DeoptChildSite, DeoptFrame, DeoptMap, DeoptReg, DeoptSite, DeoptValue, NativeDeclineReason,
+    NativeOutcome, SafepointId,
 };
+use crate::deopt::{anonymous_deopt, reentrant_decline};
 
 pub(crate) fn is_flat_type(ty: JitValueType) -> bool {
     matches!(
@@ -1347,6 +1347,7 @@ impl NativeModule {
                 live: Vec::new(),
                 child: None,
                 logical_depth: None,
+                decline: None,
             };
         }
         let func = match self.funcs.get(id.index) {
@@ -1357,6 +1358,7 @@ impl NativeModule {
                     live: Vec::new(),
                     child: None,
                     logical_depth: None,
+                    decline: None,
                 };
             }
         };
@@ -1381,15 +1383,11 @@ impl NativeModule {
                 live: Vec::new(),
                 child: None,
                 logical_depth: None,
+                decline: None,
             };
         }
         let Some(_call_guard) = TopLevelCallGuard::enter(&self.call_active) else {
-            return NativeOutcome::Deopt {
-                safepoint_id: SafepointId::ANONYMOUS,
-                live: Vec::new(),
-                child: None,
-                logical_depth: None,
-            };
+            return reentrant_decline();
         };
         let f = func.f;
         let returns_handle = func.returns_handle;
@@ -1479,6 +1477,7 @@ impl NativeModule {
                             .map_or_else(Vec::new, |frame| frame.live.clone()),
                         child: frame.and_then(|frame| frame.child),
                         logical_depth: func.osr.then_some(out.max(0) as usize),
+                        decline: None,
                     }
                 }
             }

@@ -155,7 +155,17 @@ pub enum NativeOutcome {
         /// after validating the designated `OsrExit`; ordinary guard bails replay
         /// the interpreter and therefore discard it.
         logical_depth: Option<usize>,
+        /// A typed pre-execution decline. `None` means generated code actually
+        /// entered and deoptimized (or an ordinary shape check requested fallback).
+        /// Reentrant entry is reported explicitly so hosts do not mistake it for a
+        /// resumable safepoint.
+        decline: Option<NativeDeclineReason>,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeDeclineReason {
+    ReentrantCall,
 }
 
 pub(super) fn anonymous_deopt() -> NativeOutcome {
@@ -164,5 +174,16 @@ pub(super) fn anonymous_deopt() -> NativeOutcome {
         live: Vec::new(),
         child: None,
         logical_depth: None,
+        decline: None,
+    }
+}
+
+pub(super) fn reentrant_decline() -> NativeOutcome {
+    NativeOutcome::Deopt {
+        safepoint_id: SafepointId::ANONYMOUS,
+        live: Vec::new(),
+        child: None,
+        logical_depth: None,
+        decline: Some(NativeDeclineReason::ReentrantCall),
     }
 }

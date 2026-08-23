@@ -18,6 +18,9 @@ does not add an isolation boundary and never changes Provider authority.
   typed `NativeJitOptions`; diagnostic front ends may translate their own flags.
 - Every call crosses the versioned `JitCallFrame` ABI. The frame owns bail,
   safepoint, deoptimization, depth, limit, and host-context state for that call.
+- Reentrant native entry is unsupported and returns the typed
+  `NativeDeclineReason::ReentrantCall`; it is never presented as a resumable
+  generated-code safepoint.
 - Register definitions, register uses, control-flow shape, heap visibility,
   deoptimization, and OSR eligibility are classified by the exhaustive
   `JitInstr::effects` API. Validators and tiering must consume those facts rather
