@@ -57,7 +57,7 @@ impl ExecutableMemoryBudget {
     pub(super) fn reserve(&self, bytes: u64) -> Result<ExecutableMemoryReservation, JitError> {
         self.inner
             .allocated
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |allocated| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |allocated| {
                 allocated
                     .checked_add(bytes)
                     .filter(|total| *total <= self.inner.limit)

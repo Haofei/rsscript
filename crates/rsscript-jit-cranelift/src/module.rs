@@ -576,11 +576,26 @@ impl NativeModule {
                 format!("JIT arena allocation: {error}"),
             )
         })?;
-        Self::new_with_opt_inner(helpers, baseline, arena, reservation, limits)
+        Self::new_with_opt_inner(Some(helpers), baseline, arena, reservation, limits)
+    }
+
+    #[cfg(feature = "fuzzing")]
+    pub(crate) fn new_for_scalar_fuzzing(limits: JitLimits) -> Result<Self, JitError> {
+        const FUZZ_ARENA_BYTES: u64 = 4 * 1024 * 1024;
+        let budget = ExecutableMemoryBudget::new(FUZZ_ARENA_BYTES);
+        let reservation = budget.reserve(arena_allocation_charge(FUZZ_ARENA_BYTES)?)?;
+        let arena =
+            ArenaMemoryProvider::new_with_size(FUZZ_ARENA_BYTES as usize).map_err(|error| {
+                JitError::new(
+                    JitErrorKind::AdmissionRejected,
+                    format!("JIT fuzz arena allocation: {error}"),
+                )
+            })?;
+        Self::new_with_opt_inner(None, true, arena, reservation, limits)
     }
 
     fn new_with_opt_inner(
-        helpers: HostHelpers,
+        helpers: Option<HostHelpers>,
         baseline: bool,
         arena: ArenaMemoryProvider,
         memory_reservation: ExecutableMemoryReservation,
@@ -611,18 +626,25 @@ impl NativeModule {
         // The typed `extern "C"` pointers become the `*const u8` Cranelift's symbol
         // table wants here, where this crate owns the obligation that the address
         // matches the imported signature declared just below.
-        for &helper in HostHelper::all() {
-            builder.symbol(helper.symbol(), helpers.addr(helper));
+        if let Some(helpers) = helpers {
+            for &helper in HostHelper::all() {
+                builder.symbol(helper.symbol(), helpers.addr(helper));
+            }
         }
         let mut module = JITModule::new(builder);
         let imports = HostFuncs {
-            funcs: HostHelper::all()
-                .iter()
-                .map(|&helper| {
-                    let id = declare_import_for(&mut module, helper.symbol(), &helper.signature())?;
-                    Ok((helper, id))
-                })
-                .collect::<Result<Vec<_>, JitError>>()?,
+            funcs: if helpers.is_some() {
+                HostHelper::all()
+                    .iter()
+                    .map(|&helper| {
+                        let id =
+                            declare_import_for(&mut module, helper.symbol(), &helper.signature())?;
+                        Ok((helper, id))
+                    })
+                    .collect::<Result<Vec<_>, JitError>>()?
+            } else {
+                Vec::new()
+            },
         };
         let ctx = module.make_context();
         Ok(Self {

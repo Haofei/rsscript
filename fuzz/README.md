@@ -25,10 +25,11 @@ boundaries:
   `rsscript.execution_report.v1` consumer contract without panicking.
 - **`runner_protocol`** — hostile request/response bytes exercise bounded
   isolated-runner framing and canonical round-trips without panicking.
-- **`jit_ir_validate`** — bounded structured JIT functions must either cross the
-  typed validation boundary or produce a clean rejection; malformed register and
-  control-flow combinations must never panic. It is behind `native-jit` so normal
-  wire fuzzing does not compile Cranelift.
+- **`jit_ir_validate`** — bounded structured JIT functions must either produce a
+  clean validation rejection or continue through a small hard-bounded Cranelift
+  codegen/finalization probe; malformed register and control-flow combinations
+  must never panic. Machine code is never invoked. It is behind `native-jit` so
+  normal wire fuzzing does not compile Cranelift.
 
 ## Running
 

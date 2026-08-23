@@ -44,6 +44,8 @@ mod analysis;
 mod codegen;
 mod deopt;
 mod executable_memory;
+#[cfg(feature = "fuzzing")]
+pub mod fuzzing;
 mod host_abi;
 mod ir;
 mod ir_validation;

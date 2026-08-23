@@ -427,6 +427,25 @@ pub struct JitInstrEffects {
 }
 
 impl JitInstr {
+    /// Imported runtime helper required by this instruction, if any. Codegen uses
+    /// this single classification to declare only helpers reachable from the
+    /// validated function; scalar-only fuzzing therefore needs no fabricated FFI
+    /// function table.
+    pub(crate) fn required_host_helper(&self) -> Option<HostHelper> {
+        match self {
+            Self::HostCall { helper, .. } => Some(*helper),
+            #[cfg(feature = "memoization")]
+            Self::MemoizedHostCall { helper, .. } => Some(*helper),
+            Self::MatchMapGetInt { .. } => Some(HostHelper::MapGetMatchInt),
+            Self::MatchMapGetFloat { .. } => Some(HostHelper::MapGetMatchFloat),
+            Self::MatchSortedMapGetInt { .. } => Some(HostHelper::SortedMapGetInt),
+            Self::MatchSortedMapGetFloat { .. } => Some(HostHelper::SortedMapGetFloat),
+            #[cfg(feature = "speculation")]
+            Self::GuardClosureId { .. } => Some(HostHelper::ClosureId),
+            _ => None,
+        }
+    }
+
     /// Return the register definitely defined by this instruction, if any.
     pub fn defined_register(&self) -> Option<u32> {
         match self {

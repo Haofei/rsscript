@@ -175,10 +175,21 @@ pub(crate) fn build_function(
     let mut bcx = FunctionBuilder::new(func, fbctx);
     let ptr_ty = module.target_config().pointer_type();
 
-    // Per-function references to the imported host helpers (heap reads call these).
-    let helper_refs: Vec<_> = HostHelper::all()
-        .iter()
-        .map(|&helper| {
+    // Per-function references only for helpers reachable from this validated
+    // instruction stream. Besides reducing import work, this lets the detached
+    // scalar fuzz probe exercise validation through finalization without inventing
+    // callable FFI addresses it can never legally execute.
+    let mut required_helpers = Vec::new();
+    for instruction in &program.code {
+        if let Some(helper) = instruction.required_host_helper()
+            && !required_helpers.contains(&helper)
+        {
+            required_helpers.push(helper);
+        }
+    }
+    let helper_refs: Vec<_> = required_helpers
+        .into_iter()
+        .map(|helper| {
             (
                 helper,
                 module.declare_func_in_func(imports.get(helper), bcx.func),

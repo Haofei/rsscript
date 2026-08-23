@@ -46,6 +46,7 @@ path = "../crates/rsscript-runner-protocol"
 [dependencies.rsscript-jit-cranelift]
 path = "../crates/rsscript-jit-cranelift"
 optional = true
+features = ["fuzzing"]
 
 [features]
 native-jit = ["rsscript-sdk/native-jit", "dep:rsscript-jit-cranelift"]

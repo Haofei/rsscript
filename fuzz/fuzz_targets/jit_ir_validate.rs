@@ -1,7 +1,10 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use rsscript_jit_cranelift::{JitCompare, JitFunction, JitInstr, JitValueType, validate_function};
+use rsscript_jit_cranelift::{
+    JitCompare, JitFunction, JitInstr, JitLimits, JitValueType,
+    fuzzing::validate_and_codegen_scalar, validate_function,
+};
 
 const MAX_REGS: u32 = 32;
 const MAX_GENERATED_INSTRUCTIONS: usize = 256;
@@ -82,5 +85,24 @@ fn build_function(data: &[u8]) -> JitFunction {
 
 fuzz_target!(|data: &[u8]| {
     let function = build_function(data);
-    let _ = validate_function(&function);
+    if validate_function(&function).is_ok() {
+        // Keep every codegen attempt small even if a future generator raises its
+        // local caps. The engine independently revalidates against these limits
+        // before allocating executable memory or invoking Cranelift.
+        let limits = JitLimits {
+            max_instructions: MAX_GENERATED_INSTRUCTIONS + MAX_REGS as usize + 1,
+            max_registers: MAX_REGS as usize,
+            max_parameters: MAX_REGS as usize,
+            max_cfg_edges: 512,
+            max_total_operands: 2_048,
+            max_analysis_cells: 16_384,
+            max_deopt_payload_words: 4_096,
+            max_memo_scopes: 0,
+            max_memo_slots: 0,
+            max_native_callees: 0,
+            max_group_members: 0,
+            max_ir_work_units: 65_536,
+        };
+        let _ = validate_and_codegen_scalar(&function, limits);
+    }
 });

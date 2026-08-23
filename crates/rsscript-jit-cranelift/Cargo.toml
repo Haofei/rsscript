@@ -16,6 +16,9 @@ speculation = []
 recursion = []
 # Research-only loop-invariant host-helper memoization.
 memoization = []
+# Coverage-guided harness support. This is not part of the VM or SDK feature
+# surface and only exposes a scalar validation-to-codegen probe to `fuzz/`.
+fuzzing = []
 
 [dependencies]
 cranelift-codegen = "0.132.1"
