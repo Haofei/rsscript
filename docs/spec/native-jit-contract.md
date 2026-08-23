@@ -3,6 +3,14 @@
 The native JIT is an optional accelerator for trusted, in-process execution. It
 does not add an isolation boundary and never changes Provider authority.
 
+The supported `native-jit` feature is intentionally a bounded *feature surface*,
+not yet an accelerator for bounded executions. Whole-function native entry
+currently declines when step, cancellation, deadline, allocation, live-memory,
+intrinsic-call, or Provider-call limits are armed. The interpreter then executes
+the request with the original limits. This fail-closed behavior keeps ordinary
+bounded execution correct; hosts only receive native acceleration from the
+explicit trusted/unbounded execution mode until accounting parity is implemented.
+
 ## Stable invariants
 
 - The interpreter is the semantic oracle. Unsupported operations and guarded
@@ -25,6 +33,11 @@ does not add an isolation boundary and never changes Provider authority.
   deoptimization, and OSR eligibility are classified by the exhaustive
   `JitInstr::effects` API. Validators and tiering must consume those facts rather
   than maintain independent opcode lists.
+- Structural compilation work is bounded by `JitLimits` before Cranelift code
+  generation. Instruction, register, CFG-edge, operand, analysis-word, deopt,
+  memo-scope, callee, and recursive-group counts have deterministic limits.
+  `max_compile_millis` is a soft admission/telemetry limit, not a claim that an
+  in-process Cranelift invocation can be interrupted at a wall-clock deadline.
 
 ## Internal contracts
 
@@ -40,6 +53,21 @@ state. Differential tests against the interpreter enforce these invariants.
 Profile-guided closure PIC and branch-side-exit speculation are excluded from the
 stable SDK path. They remain behind the VM-only `jit-speculation` research feature
 until a canonical compiler workload demonstrates a repeatable end-to-end benefit.
+
+Loop-invariant host-helper memoization is likewise excluded from the stable SDK
+path and compiled only by `jit-memoization-experimental`. Its CFG scope proof and
+runtime memo state must earn retention through the same canonical scorecard.
+
+The Cranelift engine crate is not independently published. Its public root exposes
+only the VM-facing engine, validated IR, typed options/outcomes, host-helper
+contract, and prepared-call boundary. Raw call-frame layout, ABI offsets, helper
+function aliases, codegen internals, and module implementation types remain
+crate-private.
+
+Native rewrites carry `NativeInstructionOrigin { bytecode_ip, resume_ip }` in one
+owned pipeline state. A pass may temporarily return a local new-to-previous map,
+but only the pipeline state composes it; source and deopt-resume identity may not
+travel in unrelated parallel vectors.
 
 ## Native recursion
 
@@ -62,3 +90,10 @@ deoptimization and rollback cases, 64/128/256 KiB host-stack entries, guard-page
 flat-buffer bounds tests, AddressSanitizer coverage for host wrappers, structured
 IR fuzzing, and the workload scorecard. ASan does not instrument generated machine
 code; guard pages and canary/boundary fixtures cover direct native memory accesses.
+
+The stable retention set is baseline scalar/flat-data execution, native leaf-call
+chains, transactional helpers, precise deopt, and the Option/Result/Variant scalar
+replacement paths that enter on the canonical scorecard. Speculation, non-tail
+native recursion, and helper memoization are research features. A local scorecard
+run is diagnostic only; timings become a compatibility or release signal only
+after a controlled-hardware baseline is checked in with machine/toolchain metadata.

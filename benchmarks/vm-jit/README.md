@@ -41,7 +41,9 @@ use. Microbenchmark-only wins are insufficient.
 Current evidence keeps baseline scalar loops, native call chains, and the shared
 Option/Result/Variant scalar-replacement path. Profile-guided closure PIC and
 branch-side-exit speculation are isolated behind the VM-only `jit-speculation`
-feature. Native recursion is isolated behind `jit-recursion-experimental`.
+feature. Native recursion is isolated behind `jit-recursion-experimental`, and
+loop-invariant helper memoization behind `jit-memoization-experimental`. The
+ordinary SDK `native-jit` feature compiles none of those research implementations.
 
 ## Adding a workload
 

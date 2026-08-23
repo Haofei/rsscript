@@ -1197,6 +1197,38 @@ fn cranelift_engine_uses_real_modules_instead_of_flattened_includes() {
     }
 }
 
+#[test]
+fn cranelift_engine_keeps_research_features_and_raw_abi_out_of_the_stable_surface() {
+    let root = workspace_root();
+    let manifest = read(&root.join("crates/rsscript-jit-cranelift/Cargo.toml"));
+    let library = read(&root.join("crates/rsscript-jit-cranelift/src/lib.rs"));
+    let vm_manifest = read(&root.join("crates/rsscript-vm/Cargo.toml"));
+
+    assert!(manifest.contains("publish = false"));
+    for feature in ["speculation = []", "recursion = []", "memoization = []"] {
+        assert!(
+            manifest.contains(feature),
+            "Cranelift manifest is missing isolated research feature `{feature}`"
+        );
+    }
+    assert!(!library.contains("pub use host_abi::*;"));
+    assert!(!library.contains("pub use ir::*;"));
+    assert!(!library.contains("pub use module::*;"));
+    assert!(library.contains("JitCallFrame"));
+    assert!(!library.contains("pub use host_abi::{\n    JitCallFrame"));
+
+    let native_jit = vm_manifest
+        .lines()
+        .find(|line| line.starts_with("native-jit ="))
+        .expect("VM must declare the stable native-jit feature");
+    assert!(!native_jit.contains("speculation"));
+    assert!(!native_jit.contains("recursion"));
+    assert!(!native_jit.contains("memoization"));
+    assert!(vm_manifest.contains("jit-speculation"));
+    assert!(vm_manifest.contains("jit-recursion-experimental"));
+    assert!(vm_manifest.contains("jit-memoization-experimental"));
+}
+
 fn rust_files_below(root: &Path) -> Vec<PathBuf> {
     fn visit(directory: &Path, files: &mut Vec<PathBuf>) {
         let mut entries = fs::read_dir(directory)
