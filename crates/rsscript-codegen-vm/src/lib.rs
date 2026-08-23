@@ -13,7 +13,7 @@ use std::fmt;
 
 use rsscript_abi_model::{DataEffect, ExternalImport, RUNTIME_ABI_VERSION, WireType};
 use rsscript_bytecode::{
-    BytecodeArtifact, BytecodeError, LANGUAGE_SEMANTICS_VERSION, TYPED_EXECUTABLE_FACTS_SCHEMA_V1,
+    BytecodeArtifact, BytecodeError, LANGUAGE_SEMANTICS_VERSION, TYPED_EXECUTABLE_FACTS_SCHEMA_V2,
     TypedCallSiteV1, TypedCallTargetV1, TypedDataEffectV1, TypedExecutableFactsV1, TypedFactTypeV1,
     TypedFunctionFactsV1, TypedLayoutFieldV1, TypedLayoutKindV1, TypedLayoutV1,
     TypedRegisterFactV1, TypedValueOwnershipV1,
@@ -240,7 +240,7 @@ fn typed_executable_facts(
     }
 
     Ok(TypedExecutableFactsV1 {
-        schema: TYPED_EXECUTABLE_FACTS_SCHEMA_V1.to_owned(),
+        schema: TYPED_EXECUTABLE_FACTS_SCHEMA_V2.to_owned(),
         executable_hash: artifact.header.executable_hash.clone(),
         bytecode_isa_version: artifact.header.bytecode_isa_version,
         runtime_abi_version: artifact.header.runtime_abi_version,
@@ -392,8 +392,9 @@ fn typed_function_facts(
         function_ordinal: ordinal as u32,
         registers,
         call_sites,
-        // Ordinary direct-call type substitutions are no longer present in
-        // MirCallTarget::Function. An empty vector means unavailable.
+        // Function-level substitutions are not a sound model: one generic
+        // function may be called with multiple instantiations. Concrete
+        // substitutions live on each direct call site instead.
         generic_substitutions: Vec::new(),
     })
 }
@@ -684,18 +685,36 @@ fn typed_call_site(
                 .as_ref()
                 .map(|value| value.effects.clone())
                 .unwrap_or_else(|| call_target_effects(target));
-            let type_arguments = match target {
-                MirCallTarget::Builtin { type_arguments, .. } => type_arguments
-                    .iter()
-                    .filter_map(|id| mir.ty(*id).cloned())
-                    .collect(),
-                _ => Vec::new(),
+            let (type_parameters, type_arguments) = match target {
+                MirCallTarget::Builtin { type_arguments, .. } => (
+                    Vec::new(),
+                    type_arguments
+                        .iter()
+                        .filter_map(|id| mir.ty(*id).cloned())
+                        .collect(),
+                ),
+                MirCallTarget::FunctionInstance {
+                    type_substitutions, ..
+                } => (
+                    type_substitutions
+                        .iter()
+                        .filter_map(|(parameter, _)| mir.ty(*parameter).cloned())
+                        .collect(),
+                    type_substitutions
+                        .iter()
+                        .filter_map(|(_, argument)| mir.ty(*argument).cloned())
+                        .collect(),
+                ),
+                _ => (Vec::new(), Vec::new()),
             };
             Some(TypedCallSiteV1 {
                 instruction: 0,
                 target: match target {
                     MirCallTarget::Function(id) => {
                         TypedCallTargetV1::KnownFunction(id.index() as u32)
+                    }
+                    MirCallTarget::FunctionInstance { function, .. } => {
+                        TypedCallTargetV1::KnownFunction(function.index() as u32)
                     }
                     MirCallTarget::Builtin { id, .. } => TypedCallTargetV1::Builtin(
                         builtin_descriptor(*id)
@@ -719,6 +738,7 @@ fn typed_call_site(
                 },
                 result,
                 parameter_effects: effects,
+                type_parameters,
                 type_arguments,
             })
         }
@@ -735,6 +755,7 @@ fn typed_call_site(
                 .collect(),
             result: TypedFactTypeV1::Unknown,
             parameter_effects: parameter_modes.iter().copied().map(effect).collect(),
+            type_parameters: Vec::new(),
             type_arguments: Vec::new(),
         }),
         MirInstruction::Spawn { target, .. } => {
@@ -756,6 +777,7 @@ fn typed_call_site(
                     .copied()
                     .map(effect)
                     .collect(),
+                type_parameters: Vec::new(),
                 type_arguments: Vec::new(),
             })
         }
@@ -781,6 +803,40 @@ fn call_target_signature(mir: &MirModule, target: &MirCallTarget) -> Option<Prov
                     .map(|id| mir.ty(*id).cloned())
                     .collect::<Option<Vec<_>>>()?,
                 result: mir.ty(function.signature().result())?.clone(),
+                effects: function
+                    .signature()
+                    .parameter_modes()
+                    .iter()
+                    .copied()
+                    .map(effect)
+                    .collect(),
+            })
+        }
+        MirCallTarget::FunctionInstance {
+            function: id,
+            type_substitutions,
+        } => {
+            let function = mir.function(*id)?;
+            let substitutions = type_substitutions
+                .iter()
+                .map(|(parameter, argument)| {
+                    Some((mir.ty(*parameter)?.clone(), mir.ty(*argument)?.clone()))
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some(ProvenCallSignature {
+                parameters: function
+                    .signature()
+                    .parameter_types()
+                    .iter()
+                    .map(|id| {
+                        mir.ty(*id)
+                            .map(|ty| substitute_wire_type(ty, &substitutions))
+                    })
+                    .collect::<Option<Vec<_>>>()?,
+                result: substitute_wire_type(
+                    mir.ty(function.signature().result())?,
+                    &substitutions,
+                ),
                 effects: function
                     .signature()
                     .parameter_modes()
@@ -827,6 +883,51 @@ fn call_target_signature(mir: &MirModule, target: &MirCallTarget) -> Option<Prov
             })
         }
         MirCallTarget::Builtin { .. } => None,
+    }
+}
+
+fn substitute_wire_type(ty: &WireType, substitutions: &[(WireType, WireType)]) -> WireType {
+    if let Some((_, concrete)) = substitutions.iter().find(|(parameter, _)| parameter == ty) {
+        return concrete.clone();
+    }
+    match ty {
+        WireType::List { element } => WireType::List {
+            element: Box::new(substitute_wire_type(element, substitutions)),
+        },
+        WireType::Map { key, value } => WireType::Map {
+            key: Box::new(substitute_wire_type(key, substitutions)),
+            value: Box::new(substitute_wire_type(value, substitutions)),
+        },
+        WireType::Option { value } => WireType::Option {
+            value: Box::new(substitute_wire_type(value, substitutions)),
+        },
+        WireType::Result { ok, error } => WireType::Result {
+            ok: Box::new(substitute_wire_type(ok, substitutions)),
+            error: Box::new(substitute_wire_type(error, substitutions)),
+        },
+        WireType::Tuple { elements } => WireType::Tuple {
+            elements: elements
+                .iter()
+                .map(|element| substitute_wire_type(element, substitutions))
+                .collect(),
+        },
+        WireType::Named {
+            package,
+            name,
+            arguments,
+        } => WireType::Named {
+            package: package.clone(),
+            name: name.clone(),
+            arguments: arguments
+                .iter()
+                .map(|argument| substitute_wire_type(argument, substitutions))
+                .collect(),
+        },
+        WireType::Qualified { qualifier, value } => WireType::Qualified {
+            qualifier: *qualifier,
+            value: Box::new(substitute_wire_type(value, substitutions)),
+        },
+        other => other.clone(),
     }
 }
 
@@ -1701,7 +1802,8 @@ fn lower_instruction(
             }
             let dst = value_reg(function, *destination);
             match target {
-                MirCallTarget::Function(id) => code.push(instr(
+                MirCallTarget::Function(id)
+                | MirCallTarget::FunctionInstance { function: id, .. } => code.push(instr(
                     "CallKnown",
                     [
                         ("dst", json!(dst)),
@@ -2314,6 +2416,106 @@ mod tests {
             facts.functions[0].registers[1].ty,
             fact_type(Some(&qualified_int))
         );
+    }
+
+    #[test]
+    fn generic_direct_call_retains_bounded_type_arguments_without_changing_call_known() {
+        let int = WireType::Int {
+            bits: 64,
+            signed: true,
+        };
+        let module = MirModule::new(
+            vec![
+                WireType::Named {
+                    package: None,
+                    name: "T".to_owned(),
+                    arguments: Vec::new(),
+                },
+                int.clone(),
+            ],
+            vec![
+                MirFunction::new(
+                    FunctionId::new(0),
+                    MirFunctionSignature::new(vec![], TypeId::new(1), false),
+                    0,
+                    2,
+                    vec![BasicBlock::new(
+                        BlockId::new(0),
+                        vec![
+                            MirInstruction::LoadLiteral {
+                                destination: ValueId::new(0),
+                                value: MirLiteral::Int(7),
+                            },
+                            MirInstruction::Call {
+                                destination: ValueId::new(1),
+                                target: MirCallTarget::FunctionInstance {
+                                    function: FunctionId::new(1),
+                                    type_substitutions: vec![(TypeId::new(0), TypeId::new(1))]
+                                        .into_boxed_slice(),
+                                },
+                                arguments: vec![MirCallArgument::Value(ValueId::new(0))],
+                            },
+                        ],
+                        MirTerminator::Return(Some(ValueId::new(1))),
+                    )],
+                ),
+                MirFunction::new(
+                    FunctionId::new(1),
+                    MirFunctionSignature::with_modes(
+                        vec![TypeId::new(0)],
+                        vec![MirParameterMode::Read],
+                        TypeId::new(0),
+                        false,
+                    ),
+                    1,
+                    1,
+                    vec![BasicBlock::new(
+                        BlockId::new(0),
+                        vec![MirInstruction::ReadPlace {
+                            destination: ValueId::new(0),
+                            place: PlaceId::new(0),
+                        }],
+                        MirTerminator::Return(Some(ValueId::new(0))),
+                    )],
+                ),
+            ],
+            vec![
+                MirFunctionDebug::new("main", vec![]),
+                MirFunctionDebug::new("identity", vec!["value".to_owned()]),
+            ],
+            vec![],
+        )
+        .expect("generic instance MIR verifies")
+        .into_verified()
+        .expect("generic instance MIR admission");
+        let artifact = emit_artifact(
+            &module,
+            &format!("sha256:{}", "a".repeat(64)),
+            &format!("sha256:{}", "b".repeat(64)),
+            "0.1.0",
+        )
+        .expect("emit generic call");
+        let executable: serde_json::Value =
+            rsscript_bytecode::decode_executable_payload(&artifact.payload)
+                .expect("decode executable");
+        assert!(executable["functions"][0]["code"][1]["CallKnown"].is_object());
+        let verified = BytecodeVerifier::default()
+            .verify(&artifact.to_bytes().expect("artifact bytes"))
+            .expect("v2 typed substitutions remain independently bounded");
+        let facts = verified
+            .typed_executable_facts()
+            .expect("typed facts")
+            .facts();
+        assert_eq!(facts.schema, TYPED_EXECUTABLE_FACTS_SCHEMA_V2);
+        assert_eq!(
+            facts.functions[0].call_sites[0].type_parameters,
+            vec![WireType::Named {
+                package: None,
+                name: "T".to_owned(),
+                arguments: Vec::new(),
+            }]
+        );
+        assert_eq!(facts.functions[0].call_sites[0].type_arguments, vec![int]);
     }
 
     #[test]

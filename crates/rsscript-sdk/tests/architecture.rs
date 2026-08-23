@@ -1053,6 +1053,8 @@ fn jit_static_facts_and_missed_optimization_telemetry_stay_structured() {
         "canonical_induction_variables",
         "scalar_unroll_research_candidates",
         "scalar_unroll_declines",
+        "simd_research_candidates",
+        "simd_declines",
     ] {
         assert!(
             vm.contains(field),
@@ -1131,6 +1133,7 @@ fn loop_optimizations_share_canonical_facts_and_keep_unrolling_research_only() {
     assert!(jit_post.contains("fn native_readonly_licm_eligible("));
     assert!(jit_post.contains("helper.heap_reads()"));
     assert!(loops.contains("fn scalar_x2_unroll_research_decision("));
+    assert!(loops.contains("fn simd_research_decision("));
     assert!(!loops.contains("fn native_unroll_scalar_loop_x2("));
     assert!(contract.contains("Scalar x2 unrolling is not enabled"));
     assert!(contract.contains("SIMD remains out of scope"));
@@ -1139,6 +1142,47 @@ fn loop_optimizations_share_canonical_facts_and_keep_unrolling_research_only() {
     assert!(backend_analysis.contains("fn add_canonical_induction_bounds("));
     assert!(backend_analysis.contains("WORK_PER_INSTRUCTION"));
     assert!(backend_analysis.contains("MAX_WORK"));
+}
+
+#[test]
+fn jit_profiles_only_genuinely_dynamic_targets_and_branch_bias() {
+    let root = workspace_root();
+    let profile = read(&root.join("crates/rsscript-vm/src/reg_vm/model/profile.rs"));
+    let inlining = read(&root.join("crates/rsscript-vm/src/reg_vm/native/passes/inlining.rs"));
+
+    assert!(profile.contains("call_sites: HashMap<usize, CallSiteFeedback>"));
+    assert!(profile.contains("branch_sites: HashMap<usize, BranchFeedback>"));
+    for forbidden_static_fact in ["reg_types:", "layout_types:", "field_types:"] {
+        assert!(
+            !profile.contains(forbidden_static_fact),
+            "runtime profile must not rediscover static fact `{forbidden_static_fact}`"
+        );
+    }
+    assert!(inlining.contains("#[cfg(feature = \"jit-speculation\")]"));
+    assert!(inlining.contains("NativeGuardClosureId"));
+}
+
+#[test]
+fn generic_jit_instances_flow_from_semantic_substitutions_not_runtime_guessing() {
+    let root = workspace_root();
+    let inference = read(&root.join("crates/rsscript-semantics/src/hir/infer.rs"));
+    let hir = read(&root.join("crates/rsscript-semantics/src/hir/mod.rs"));
+    let mir = read(&root.join("crates/rsscript-mir/src/lib.rs"));
+    let lowering = read(&root.join("crates/rsscript-lowering/src/mir.rs"));
+    let codegen = read(&root.join("crates/rsscript-codegen-vm/src/lib.rs"));
+    let verifier = read(&root.join("crates/rsscript-bytecode/src/typed_facts.rs"));
+    let vm_facts = read(&root.join("crates/rsscript-vm/src/reg_vm/native/facts.rs"));
+    let tier = read(&root.join("crates/rsscript-vm/src/reg_vm/tier.rs"));
+
+    assert!(inference.contains("fn infer_call_type_arguments("));
+    assert!(hir.contains("type_arguments: Vec<ResolvedType>"));
+    assert!(mir.contains("FunctionInstance"));
+    assert!(mir.contains("type_substitutions: Box<[(TypeId, TypeId)]>"));
+    assert!(lowering.contains("checked_type_to_wire(ty, &self.function_name)"));
+    assert!(codegen.contains("TYPED_EXECUTABLE_FACTS_SCHEMA_V2"));
+    assert!(verifier.contains("type_parameters.len() != call.type_arguments.len()"));
+    assert!(vm_facts.contains("fn instantiate_parameter_storage("));
+    assert!(tier.contains("JitInstanceKey::from_call_site(callee_key, call)"));
 }
 
 #[test]

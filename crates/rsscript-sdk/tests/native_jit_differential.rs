@@ -14,11 +14,28 @@ use rsscript_sdk::{
         ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor, ProviderRegistry,
         RUNTIME_ABI_VERSION, ResourceCleanupContract, WireInterpreterFn, WireValue,
     },
-    report::{ExecutionEngineTelemetry, TerminationReason},
+    report::{ExecutionEngineTelemetry, ExecutionReport, TerminationReason},
     runtime::{
         ExecutionRequest, NativeCostModel, NativeJitOptions, RunLimits, Runtime, TracePolicy,
     },
 };
+
+fn stable_provider_traces(report: &ExecutionReport) -> Vec<serde_json::Value> {
+    report
+        .provider_call_traces
+        .iter()
+        .map(|trace| {
+            serde_json::json!({
+                "provider_id": trace.provider_id,
+                "provider_version": trace.provider_version,
+                "symbol": trace.symbol,
+                "request_bytes": trace.request_bytes,
+                "response_bytes": trace.response_bytes,
+                "result": format!("{:?}", trace.result),
+            })
+        })
+        .collect()
+}
 
 const CASES: &[(&str, &str)] = &[
     (
@@ -32,6 +49,10 @@ const CASES: &[(&str, &str)] = &[
     (
         "calls.rss",
         "fn square(value: Int) -> Int { return value * value } fn main() -> Int { let mut i = 0; let mut total = 0; while i < 2000 { total = total + square(value: i % 97); i = i + 1 }; return total }",
+    ),
+    (
+        "generic-static-instances.rss",
+        "fn identity<T>(value: read T) -> T { return value } fn main() -> Int { let ignored = identity<Float>(value: read 1.5); let mut i = 0; while i < 2000 { i = identity<Int>(value: read i + 1) }; return i }",
     ),
     (
         "call-continuation.rss",
@@ -528,11 +549,22 @@ fn provider_barrier_executes_once_and_reenters_native() {
     );
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     assert_eq!(native.outcome(), interpreter.outcome());
+    assert_eq!(native.stdout, interpreter.stdout);
+    assert_eq!(native.stderr, interpreter.stderr);
+    assert_eq!(native.diagnostics, interpreter.diagnostics);
     assert_eq!(
         native.usage.steps_consumed,
         interpreter.usage.steps_consumed
     );
+    assert_eq!(native.usage.provider_calls, 1);
+    assert_eq!(interpreter.usage.provider_calls, 1);
     assert_eq!(native.provider_call_traces.len(), 1);
+    assert_eq!(interpreter.provider_call_traces.len(), 1);
+    assert_eq!(
+        stable_provider_traces(&native),
+        stable_provider_traces(&interpreter),
+        "mixed-mode execution must preserve every stable Provider trace field; only call_id and elapsed are run-local"
+    );
     let ExecutionEngineTelemetry::Native {
         continuation_entries,
         continuation_yields,

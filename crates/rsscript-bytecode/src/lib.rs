@@ -2693,6 +2693,7 @@ mod tests {
             parameters: vec![],
             result: TypedFactTypeV1::Known(rsscript_abi_model::WireType::Unit),
             parameter_effects: vec![],
+            type_parameters: vec![],
             type_arguments: vec![],
         });
         artifact
@@ -2791,6 +2792,7 @@ mod tests {
             parameters: vec![TypedFactTypeV1::Known(WireType::Bool)],
             result: TypedFactTypeV1::Known(WireType::Bool),
             parameter_effects: vec![TypedDataEffectV1::Read],
+            type_parameters: vec![],
             type_arguments: vec![],
         });
         artifact
@@ -2829,6 +2831,7 @@ mod tests {
             parameters: vec![scalar.clone()],
             result: scalar,
             parameter_effects: vec![TypedDataEffectV1::Mutate],
+            type_parameters: vec![],
             type_arguments: vec![],
         });
         artifact

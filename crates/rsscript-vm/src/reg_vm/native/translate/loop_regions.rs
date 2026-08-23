@@ -156,6 +156,16 @@ pub(in crate::reg_vm) enum ScalarUnrollResearchDecision {
     Decline(&'static str),
 }
 
+/// Structural SIMD research verdict. `Candidate` deliberately means only that
+/// the source loop is worth measuring once typed lane, alias, range, precise
+/// overflow/deopt, and target-vector proofs exist. It never enables codegen.
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::reg_vm) enum SimdResearchDecision {
+    Candidate,
+    Decline(&'static str),
+}
+
 #[cfg(feature = "native-jit")]
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(in crate::reg_vm) struct LoopOptimizationEvidence {
@@ -164,6 +174,8 @@ pub(in crate::reg_vm) struct LoopOptimizationEvidence {
     pub(in crate::reg_vm) induction_variables: u64,
     pub(in crate::reg_vm) unroll_research_candidates: u64,
     pub(in crate::reg_vm) unroll_declines: BTreeMap<String, u64>,
+    pub(in crate::reg_vm) simd_research_candidates: u64,
+    pub(in crate::reg_vm) simd_declines: BTreeMap<String, u64>,
     /// The deliberately linear analysis budget was exhausted. Facts collected
     /// before exhaustion remain conservative, but telemetry must expose that it
     /// is a lower bound rather than silently presenting a partial scan as exact.
@@ -209,7 +221,58 @@ pub(in crate::reg_vm) struct ContinuationRegion {
 pub(in crate::reg_vm) struct ContinuationSlot {
     pub(in crate::reg_vm) vm_reg: usize,
     pub(in crate::reg_vm) ty: NativeTy,
-    pub(in crate::reg_vm) written: bool,
+    pub(in crate::reg_vm) class: ContinuationSlotClass,
+}
+
+/// Boundary role of one dense continuation slot.
+///
+/// This is deliberately explicit rather than inferred from slot order plus a
+/// `written` bit at every call site. It keeps entry marshalling, region-local
+/// temporaries, and per-exit write-back separate as the compact ABI evolves.
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::reg_vm) enum ContinuationSlotClass {
+    LiveIn,
+    Local,
+    LiveOut,
+    LiveInOut,
+}
+
+#[cfg(feature = "native-jit")]
+impl ContinuationSlotClass {
+    pub(in crate::reg_vm) const fn is_live_in(self) -> bool {
+        matches!(self, Self::LiveIn | Self::LiveInOut)
+    }
+
+    pub(in crate::reg_vm) const fn is_live_out(self) -> bool {
+        matches!(self, Self::LiveOut | Self::LiveInOut)
+    }
+}
+
+#[cfg(feature = "native-jit")]
+fn classify_continuation_slots(
+    slots: &mut [ContinuationSlot],
+    n_live_in: usize,
+    exits: &BTreeMap<usize, ContinuationExit>,
+) -> Option<()> {
+    if n_live_in > slots.len() {
+        return None;
+    }
+    let mut live_out = vec![false; slots.len()];
+    for exit in exits.values() {
+        for &slot in exit.live_slots.iter() {
+            *live_out.get_mut(slot as usize)? = true;
+        }
+    }
+    for (index, slot) in slots.iter_mut().enumerate() {
+        slot.class = match (index < n_live_in, live_out[index]) {
+            (true, true) => ContinuationSlotClass::LiveInOut,
+            (true, false) => ContinuationSlotClass::LiveIn,
+            (false, true) => ContinuationSlotClass::LiveOut,
+            (false, false) => ContinuationSlotClass::Local,
+        };
+    }
+    Some(())
 }
 
 /// Static metadata for one normal continuation exit. `live_slots` indexes the
@@ -553,9 +616,10 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
                 (*active && !region.live_in_regs.contains(&reg)).then_some(reg)
             }),
     );
-    let compact_slots = ordered_vm_regs
+    let mut compact_slots = ordered_vm_regs
         .iter()
-        .map(|reg| {
+        .enumerate()
+        .map(|(slot, reg)| {
             let typed = typed_region.value(*reg)?;
             let ty = *reg_types.get(*reg)?;
             if typed.storage.native_ty().is_some_and(|proved| proved != ty) {
@@ -564,14 +628,21 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
             Some(ContinuationSlot {
                 vm_reg: *reg,
                 ty,
-                written: written_regs.get(*reg).copied().unwrap_or(false),
+                class: if slot < region.live_in_regs.len() {
+                    ContinuationSlotClass::LiveIn
+                } else {
+                    ContinuationSlotClass::Local
+                },
             })
         })
         .collect::<Option<Vec<_>>>()?;
-    if compact_slots
-        .iter()
-        .any(|slot| slot.written && slot.ty == NativeTy::Handle)
-    {
+    if compact_slots.iter().enumerate().any(|(slot, metadata)| {
+        written_regs
+            .get(ordered_vm_regs[slot])
+            .copied()
+            .unwrap_or(false)
+            && metadata.ty == NativeTy::Handle
+    }) {
         return None;
     }
     let ordered_old_regs = ordered_vm_regs
@@ -598,6 +669,7 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
             ))
         })
         .collect::<Option<BTreeMap<_, _>>>()?;
+    classify_continuation_slots(&mut compact_slots, region.live_in_regs.len(), &exits)?;
     Some((
         jit_fn,
         compact_slots.into_boxed_slice(),
@@ -611,6 +683,58 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
 #[cfg(all(test, feature = "native-jit"))]
 mod continuation_tests {
     use super::*;
+
+    #[test]
+    fn compact_slots_distinguish_entry_locals_and_per_exit_writeback() {
+        let mut slots = vec![
+            ContinuationSlot {
+                vm_reg: 7,
+                ty: NativeTy::Int,
+                class: ContinuationSlotClass::Local,
+            },
+            ContinuationSlot {
+                vm_reg: 11,
+                ty: NativeTy::Int,
+                class: ContinuationSlotClass::Local,
+            },
+            ContinuationSlot {
+                vm_reg: 23,
+                ty: NativeTy::Float,
+                class: ContinuationSlotClass::Local,
+            },
+            ContinuationSlot {
+                vm_reg: 29,
+                ty: NativeTy::Bool,
+                class: ContinuationSlotClass::Local,
+            },
+        ];
+        let exits = BTreeMap::from([
+            (
+                10,
+                ContinuationExit {
+                    reason: NativeBarrierReason::StaticCall,
+                    live_slots: vec![1, 2].into_boxed_slice(),
+                },
+            ),
+            (
+                20,
+                ContinuationExit {
+                    reason: NativeBarrierReason::FunctionReturn,
+                    live_slots: vec![2].into_boxed_slice(),
+                },
+            ),
+        ]);
+
+        classify_continuation_slots(&mut slots, 2, &exits).expect("valid compact slots");
+        assert_eq!(slots[0].class, ContinuationSlotClass::LiveIn);
+        assert_eq!(slots[1].class, ContinuationSlotClass::LiveInOut);
+        assert_eq!(slots[2].class, ContinuationSlotClass::LiveOut);
+        assert_eq!(slots[3].class, ContinuationSlotClass::Local);
+        assert!(
+            classify_continuation_slots(&mut slots, 5, &exits).is_none(),
+            "an invalid live-in prefix must fail closed"
+        );
+    }
 
     #[test]
     fn enforcing_policy_rejects_tiny_acyclic_regions_before_codegen() {
@@ -1358,6 +1482,57 @@ pub(in crate::reg_vm) fn scalar_x2_unroll_research_decision(
     ScalarUnrollResearchDecision::Candidate
 }
 
+/// Identify a narrow flat-list loop shape for future SIMD experiments without
+/// changing its instruction stream. Static source bytecode does not yet carry
+/// the lane/alias/range proof required for vector codegen, so this function is
+/// evidence collection only and its result cannot authorize a transform.
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn simd_research_decision(
+    code: &[RegInstr],
+    facts: &CanonicalLoopFacts,
+) -> SimdResearchDecision {
+    const MAX_VECTOR_BODY_INSTRUCTIONS: usize = 64;
+    let OsrLoop { header, exit } = facts.region;
+    let Some(induction) = facts.induction else {
+        return SimdResearchDecision::Decline("no_affine_induction");
+    };
+    if induction.constant_step != Some(1) {
+        return SimdResearchDecision::Decline("non_forward_unit_step");
+    }
+    if facts.latches.len() != 1 || facts.exits.len() != 1 {
+        return SimdResearchDecision::Decline("non_canonical_edges");
+    }
+    if exit.saturating_sub(header) > MAX_VECTOR_BODY_INSTRUCTIONS {
+        return SimdResearchDecision::Decline("body_too_large");
+    }
+
+    let mut indexed_reads = 0usize;
+    for (ip, instr) in code.iter().enumerate().take(exit).skip(header) {
+        match instr {
+            RegInstr::ListGet { index, .. } if *index == induction.reg => {
+                indexed_reads = indexed_reads.saturating_add(1);
+            }
+            // Writes require an injective alias proof and an exact scalar
+            // remainder/rollback contract that the current source facts do not
+            // provide. Keep them visible as a stable decline instead of treating
+            // them as read-only candidates.
+            RegInstr::ListSet { .. } => {
+                return SimdResearchDecision::Decline("mutable_alias_proof_missing");
+            }
+            _ if matches!(native_lowering_class(instr), NativeLoweringClass::Direct) => {}
+            _ => return SimdResearchDecision::Decline("non_scalar_or_effectful"),
+        }
+        let allowed_control = ip == facts.condition || facts.latches.contains(&ip);
+        if native_instr_is_control_boundary(instr) && !allowed_control {
+            return SimdResearchDecision::Decline("internal_control_flow");
+        }
+    }
+    if indexed_reads == 0 {
+        return SimdResearchDecision::Decline("no_induction_indexed_list_read");
+    }
+    SimdResearchDecision::Candidate
+}
+
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn loop_optimization_evidence(code: &[RegInstr]) -> LoopOptimizationEvidence {
     let mut evidence = LoopOptimizationEvidence::default();
@@ -1385,6 +1560,16 @@ pub(in crate::reg_vm) fn loop_optimization_evidence(code: &[RegInstr]) -> LoopOp
                 *count = count.saturating_add(1);
             }
         }
+        match simd_research_decision(code, &facts) {
+            SimdResearchDecision::Candidate => {
+                evidence.simd_research_candidates =
+                    evidence.simd_research_candidates.saturating_add(1);
+            }
+            SimdResearchDecision::Decline(reason) => {
+                let count = evidence.simd_declines.entry(reason.to_owned()).or_default();
+                *count = count.saturating_add(1);
+            }
+        }
     }
     evidence
 }
@@ -1408,12 +1593,19 @@ pub(in crate::reg_vm) fn unit_loop_optimization_evidence(
         combined.unroll_research_candidates = combined
             .unroll_research_candidates
             .saturating_add(evidence.unroll_research_candidates);
+        combined.simd_research_candidates = combined
+            .simd_research_candidates
+            .saturating_add(evidence.simd_research_candidates);
         combined.analysis_limit_reached |= evidence.analysis_limit_reached;
         combined.analysis_work_units = combined
             .analysis_work_units
             .saturating_add(evidence.analysis_work_units);
         for (reason, count) in evidence.unroll_declines {
             let total = combined.unroll_declines.entry(reason).or_default();
+            *total = total.saturating_add(count);
+        }
+        for (reason, count) in evidence.simd_declines {
+            let total = combined.simd_declines.entry(reason).or_default();
             *total = total.saturating_add(count);
         }
     }
@@ -1438,6 +1630,33 @@ mod canonical_loop_tests {
                 op: RegIntCompare::Less,
                 expected: false,
                 target: 6,
+            },
+            RegInstr::AddInt {
+                dst: 0,
+                lhs: 0,
+                rhs: 2,
+            },
+            RegInstr::Jump { target: 3 },
+            RegInstr::Return { src: 0 },
+        ]
+    }
+
+    fn read_only_list_scan() -> Vec<RegInstr> {
+        vec![
+            RegInstr::LoadInt { dst: 0, value: 0 },
+            RegInstr::ListLen { dst: 1, list: 3 },
+            RegInstr::LoadInt { dst: 2, value: 1 },
+            RegInstr::JumpIfIntCompare {
+                lhs: 0,
+                rhs: 1,
+                op: RegIntCompare::Less,
+                expected: false,
+                target: 7,
+            },
+            RegInstr::ListGet {
+                dst: 4,
+                list: 3,
+                index: 0,
             },
             RegInstr::AddInt {
                 dst: 0,
@@ -1492,6 +1711,33 @@ mod canonical_loop_tests {
         // The gate reports evidence only: it never rewrites the instruction
         // stream, so exact source-step/deopt semantics remain unchanged.
         assert_eq!(format!("{non_unit:?}"), before);
+    }
+
+    #[test]
+    fn simd_gate_reports_readonly_scan_but_never_rewrites_it() {
+        let scan = read_only_list_scan();
+        let before = format!("{scan:?}");
+        let facts = canonical_loop_at(&scan, 3).expect("canonical list scan");
+        assert_eq!(
+            simd_research_decision(&scan, &facts),
+            SimdResearchDecision::Candidate
+        );
+        let evidence = loop_optimization_evidence(&scan);
+        assert_eq!(evidence.simd_research_candidates, 1);
+        assert_eq!(format!("{scan:?}"), before);
+
+        let mut mutating = scan;
+        mutating[4] = RegInstr::ListSet {
+            dst: 4,
+            list: 3,
+            index: 0,
+            value: 2,
+        };
+        let facts = canonical_loop_at(&mutating, 3).expect("canonical mutable scan");
+        assert_eq!(
+            simd_research_decision(&mutating, &facts),
+            SimdResearchDecision::Decline("mutable_alias_proof_missing")
+        );
     }
 
     #[test]

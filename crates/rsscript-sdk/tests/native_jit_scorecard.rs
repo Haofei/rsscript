@@ -1,11 +1,52 @@
 use rsscript_sdk::{
     artifact::ArtifactVerifier,
     compile::Compiler,
-    provider_api::ProviderRegistry,
-    report::ExecutionEngineTelemetry,
-    runtime::{ExecutionRequest, NativeJitOptions, RunLimits, Runtime},
+    provider_api::{
+        BlockingBehavior, CancellationBehavior, DataEffect, ExternalSymbol, FunctionSignature,
+        ParameterSignature, ProviderCallMode, ProviderDescriptor, ProviderError,
+        ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor, ProviderRegistry,
+        RUNTIME_ABI_VERSION, ResourceCleanupContract, WireInterpreterFn, WireValue,
+    },
+    report::{ExecutionEngineTelemetry, ExecutionReport},
+    runtime::{ExecutionRequest, NativeJitOptions, RunLimits, Runtime, TracePolicy},
 };
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+
+const PROVIDER_INTERFACE: &str = "module host.matrix\npub fn adjust(value: read Int) -> Int\n";
+const PROVIDER_SOURCE: &str = r#"
+module app
+use host.matrix.*
+
+fn bench_size(args: read List<String>, default: Int) -> Int {
+    let raw = Arguments.get_or_default(args: read args, index: 0, default: String.from_int(value: default))
+    match String.parse_int(value: raw) {
+        Some(value) => { return value }
+        None => { return default }
+    }
+}
+
+fn scalar(limit: Int, seed: Int) -> Int {
+    let mut i = 0
+    let mut total = seed
+    while i < limit {
+        total = total + i * 3 - i / 2 + 7
+        i = i + 1
+    }
+    return total
+}
+
+fn main(args: read List<String>) -> Unit {
+    let limit = bench_size(args: read args, default: 2000)
+    let before = scalar(limit, seed: 11)
+    let adjusted = adjust(value: read before)
+    let after = scalar(limit, seed: adjusted)
+    Output.write(message: String.from_int(value: after))
+    return Unit
+}
+"#;
 
 struct ScorecardCase {
     name: &'static str,
@@ -88,7 +129,173 @@ const CASES: &[ScorecardCase] = &[
         size: "200000",
         source: include_str!("../../../benchmarks/vm-jit/kernels/osr_scalar_loop.rss"),
     },
+    ScorecardCase {
+        name: "list-read-loop",
+        pass: "runtime-helper/list",
+        workload: "list",
+        size: "100000",
+        source: include_str!("../../../benchmarks/vm-jit/kernels/native_read_heap.rss"),
+    },
+    ScorecardCase {
+        name: "map-get-loop",
+        pass: "runtime-helper/map",
+        workload: "map",
+        size: "50000",
+        source: include_str!("../../../benchmarks/vm-jit/kernels/native_map_get_match_loop.rss"),
+    },
+    ScorecardCase {
+        name: "string-processing",
+        pass: "runtime-helper/string",
+        workload: "string",
+        size: "2000",
+        source: include_str!("../../../benchmarks/vm-jit/kernels/string_text_processing.rss"),
+    },
+    ScorecardCase {
+        name: "async-call-loop",
+        pass: "continuation/async",
+        workload: "async",
+        size: "2000",
+        source: include_str!("../../../benchmarks/micro/async_call_loop.rss"),
+    },
+    ScorecardCase {
+        name: "generic-mailbox",
+        pass: "static-generic",
+        workload: "generic_calls",
+        size: "2000",
+        source: include_str!("../../../benchmarks/micro/selfhost_mailbox_bench.rss"),
+    },
+    ScorecardCase {
+        name: "provider-mixed-mode",
+        pass: "continuation/provider",
+        workload: "provider",
+        size: "2000",
+        source: PROVIDER_SOURCE,
+    },
 ];
+
+fn provider_registry() -> (ProviderRegistry, Arc<AtomicU64>) {
+    let symbol = ExternalSymbol::new("host.matrix.adjust").expect("valid matrix symbol");
+    let signature = FunctionSignature {
+        parameters: vec![ParameterSignature {
+            name: "value".into(),
+            effect: DataEffect::Read,
+            ty: "Int".into(),
+            retained: false,
+        }],
+        result: "Int".into(),
+        asynchronous: false,
+    };
+    let descriptor = ProviderDescriptor {
+        provider_id: "jit.matrix.provider".into(),
+        provider_version: "1".into(),
+        supported_abi: vec![RUNTIME_ABI_VERSION],
+        record_layouts: Vec::new(),
+        variant_layouts: Vec::new(),
+        functions: vec![ProviderFunctionDescriptor {
+            symbol: symbol.clone(),
+            signature: signature.clone(),
+            entry: "adjust".into(),
+            call_mode: ProviderCallMode::Sync,
+            blocking: BlockingBehavior::NonBlocking,
+            cancellation: CancellationBehavior::NotApplicable,
+            thread_safe: true,
+            reentrant: true,
+            resource_cleanup: ResourceCleanupContract::None,
+            error_mapping: ProviderErrorMapping::StructuredV1,
+        }],
+    };
+    let calls = Arc::new(AtomicU64::new(0));
+    let provider_calls = Arc::clone(&calls);
+    let mut registry = ProviderRegistry::default();
+    registry
+        .register(
+            &descriptor,
+            BTreeMap::from([(
+                symbol,
+                ProviderFunction {
+                    signature,
+                    callable: WireInterpreterFn::new(move |arguments| match arguments.as_slice() {
+                        [WireValue::Int { value }] => {
+                            provider_calls.fetch_add(1, Ordering::SeqCst);
+                            Ok(WireValue::Int { value: value + 4 })
+                        }
+                        _ => Err(ProviderError::invalid_argument(
+                            "adjust expects one Int argument",
+                        )),
+                    }),
+                },
+            )]),
+        )
+        .expect("matrix Provider must match its descriptor");
+    (registry, calls)
+}
+
+fn stable_provider_traces(report: &ExecutionReport) -> Vec<serde_json::Value> {
+    report
+        .provider_call_traces
+        .iter()
+        .map(|trace| {
+            serde_json::json!({
+                "provider_id": trace.provider_id,
+                "provider_version": trace.provider_version,
+                "symbol": trace.symbol,
+                "request_bytes": trace.request_bytes,
+                "response_bytes": trace.response_bytes,
+                "result": format!("{:?}", trace.result),
+            })
+        })
+        .collect()
+}
+
+fn assert_semantic_report_matches(
+    observed: &ExecutionReport,
+    expected: &ExecutionReport,
+    case: &ScorecardCase,
+) {
+    assert_eq!(
+        observed.outcome(),
+        expected.outcome(),
+        "outcome: {}",
+        case.name
+    );
+    assert_eq!(observed.stdout, expected.stdout, "stdout: {}", case.name);
+    assert_eq!(observed.stderr, expected.stderr, "stderr: {}", case.name);
+    assert_eq!(
+        observed.diagnostics, expected.diagnostics,
+        "diagnostics: {}",
+        case.name
+    );
+    // Physical engine accounting is deliberately not normalized here: an
+    // unbounded native region batches source steps and may eliminate source
+    // allocations. Compare the stable semantic/report projection instead.
+    assert_eq!(
+        observed.usage.provider_calls, expected.usage.provider_calls,
+        "Provider calls: {}",
+        case.name
+    );
+    assert_eq!(
+        observed.usage.resources_live_at_return, expected.usage.resources_live_at_return,
+        "resource state: {}",
+        case.name
+    );
+    assert_eq!(
+        stable_provider_traces(observed),
+        stable_provider_traces(expected),
+        "stable Provider traces: {}",
+        case.name
+    );
+    if case.workload == "provider" {
+        assert_eq!(
+            observed.usage.provider_calls, 1,
+            "exactly-once Provider usage"
+        );
+        assert_eq!(
+            observed.provider_call_traces.len(),
+            1,
+            "exactly-once Provider trace"
+        );
+    }
+}
 
 fn median(mut samples: Vec<Duration>) -> Duration {
     samples.sort_unstable();
@@ -116,6 +323,7 @@ fn validate_and_print_engine_matrix(record: serde_json::Value) {
 #[ignore = "full native-JIT performance scorecard"]
 fn native_jit_pass_scorecard() {
     let case_filter = std::env::var("RSS_JIT_CASE").ok();
+    let controlled = std::env::var("RSS_JIT_CONTROLLED").as_deref() == Ok("1");
     let samples = std::env::var("RSS_JIT_SAMPLES")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
@@ -134,6 +342,7 @@ fn native_jit_pass_scorecard() {
             "samples": samples,
             "warmup": warmup,
             "order": "alternating",
+            "controlled": controlled,
         })
     );
     let mut cases_run = 0usize;
@@ -145,7 +354,14 @@ fn native_jit_pass_scorecard() {
             continue;
         }
         cases_run += 1;
-        let built = match Compiler.compile(case.name, case.source) {
+        let built = match if case.workload == "provider" {
+            Compiler.compile_with_interfaces(
+                &[(case.name, case.source)],
+                &[("matrix.rssi", PROVIDER_INTERFACE)],
+            )
+        } else {
+            Compiler.compile(case.name, case.source)
+        } {
             Ok(built) => built,
             Err(error) => {
                 println!(
@@ -165,21 +381,35 @@ fn native_jit_pass_scorecard() {
             .verify(built)
             .unwrap_or_else(|error| panic!("{} verifies: {error}", case.name))
             .admit_trusted_input();
-        let linked = Runtime::new(ProviderRegistry::default())
+        let (providers, provider_calls) = if case.workload == "provider" {
+            let (registry, calls) = provider_registry();
+            (registry, Some(calls))
+        } else {
+            (ProviderRegistry::default(), None)
+        };
+        let linked = Runtime::new(providers)
             .link(&admitted)
             .unwrap_or_else(|error| panic!("{} links: {error}", case.name));
         let limits = RunLimits::unbounded_for_trusted_host();
-        let interpreter_request = || ExecutionRequest::new([case.size]).limits(limits.clone());
+        let interpreter_request = || {
+            let request = ExecutionRequest::new([case.size]).limits(limits.clone());
+            if case.workload == "provider" {
+                request.trace(TracePolicy::MetadataOnly)
+            } else {
+                request
+            }
+        };
         let native_request = || interpreter_request().native_jit(NativeJitOptions::default());
 
         let expected = linked.execute(interpreter_request());
         let mut observed = linked.execute(native_request());
-        assert_eq!(observed.outcome(), expected.outcome(), "{}", case.name);
-        assert_eq!(observed.stdout, expected.stdout, "{}", case.name);
+        assert_semantic_report_matches(&observed, &expected, case);
 
         for _ in 0..warmup {
-            let _ = linked.execute(interpreter_request());
+            let report = linked.execute(interpreter_request());
+            assert_semantic_report_matches(&report, &expected, case);
             observed = linked.execute(native_request());
+            assert_semantic_report_matches(&observed, &expected, case);
         }
         let mut interpreter_samples = Vec::with_capacity(samples);
         let mut native_samples = Vec::with_capacity(samples);
@@ -189,13 +419,13 @@ fn native_jit_pass_scorecard() {
                 let started = Instant::now();
                 let report = linked.execute(interpreter_request());
                 interpreter_samples.push(started.elapsed());
-                assert_eq!(report.outcome(), expected.outcome(), "{}", case.name);
+                assert_semantic_report_matches(&report, &expected, case);
             };
             let mut run_native = || {
                 let started = Instant::now();
                 latest_native = linked.execute(native_request());
                 native_samples.push(started.elapsed());
-                assert_eq!(latest_native.outcome(), expected.outcome(), "{}", case.name);
+                assert_semantic_report_matches(&latest_native, &expected, case);
             };
             if sample % 2 == 0 {
                 run_interpreter();
@@ -220,8 +450,10 @@ fn native_jit_pass_scorecard() {
             readonly_licm_sites,
             bounds_check_sites,
             bounds_checks_elided,
+            scalar_unroll_candidates,
+            simd_candidates,
         ) = match latest_native.telemetry.engine {
-            ExecutionEngineTelemetry::Interpreter => (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+            ExecutionEngineTelemetry::Interpreter => (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
             ExecutionEngineTelemetry::Native {
                 native_calls,
                 native_bails,
@@ -235,6 +467,8 @@ fn native_jit_pass_scorecard() {
                 readonly_licm_sites,
                 direct_list_bounds_check_sites,
                 direct_list_bounds_checks_elided,
+                scalar_unroll_research_candidates,
+                simd_research_candidates,
                 ..
             } => (
                 native_calls,
@@ -249,6 +483,8 @@ fn native_jit_pass_scorecard() {
                 readonly_licm_sites,
                 direct_list_bounds_check_sites,
                 direct_list_bounds_checks_elided,
+                scalar_unroll_research_candidates,
+                simd_research_candidates,
             ),
         };
         println!(
@@ -273,6 +509,23 @@ fn native_jit_pass_scorecard() {
                 "readonly_licm_sites": readonly_licm_sites,
                 "bounds_check_sites": bounds_check_sites,
                 "bounds_checks_elided": bounds_checks_elided,
+                "scalar_unroll_research_candidates": scalar_unroll_candidates,
+                "simd_research_candidates": simd_candidates,
+                "semantic_match": true,
+                "controlled": controlled,
+                "retention_threshold_met": controlled
+                    && native_bails == 0
+                    && interpreter.as_secs_f64() / native.as_secs_f64() >= 1.15,
+                "scalar_unroll_research_gate": if scalar_unroll_candidates > 0 {
+                    "hold_no_transform"
+                } else {
+                    "no_candidate"
+                },
+                "simd_research_gate": if simd_candidates > 0 {
+                    "hold_no_transform"
+                } else {
+                    "no_candidate"
+                },
             })
         );
         let entered = native_calls > 0 || osr_entries > 0 || continuation_entries > 0;
@@ -304,17 +557,33 @@ fn native_jit_pass_scorecard() {
                     "reason": if entered { None } else { Some("native tier declined this workload") }
                 },
                 "aot": {
-                    "status": "not_measured",
+                    "status": if case.workload == "provider" { "unsupported" } else { "not_measured" },
                     "execution_ns": null,
                     "compile_ns": null,
                     "transitions": null,
                     "host_helper_calls": null,
                     "bounds_checks": null,
                     "allocations_eliminated": null,
-                    "reason": "the experimental AOT backend is intentionally outside the Core SDK scorecard"
+                    "reason": if case.workload == "provider" {
+                        "the experimental AOT harness has no versioned Provider ABI binding"
+                    } else {
+                        "the experimental AOT backend is intentionally outside the Core SDK scorecard"
+                    }
                 }
             }
         }));
+        if let Some(provider_calls) = provider_calls {
+            let expected_runs = 2_u64.saturating_mul(
+                1_u64
+                    .saturating_add(warmup as u64)
+                    .saturating_add(samples as u64),
+            );
+            assert_eq!(
+                provider_calls.load(Ordering::SeqCst),
+                expected_runs,
+                "every interpreter/native matrix run must invoke the Provider exactly once"
+            );
+        }
     }
     assert!(
         cases_run > 0,

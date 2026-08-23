@@ -1053,6 +1053,14 @@ pub(super) fn lower_hir_call_expr(
             }
         }
     }
+    let type_arguments = match &resolution {
+        CallResolution::Resolved { signature, .. } => {
+            crate::hir::infer::infer_call_type_arguments(hir, signature, callee, args, value_types)
+        }
+        CallResolution::Ambiguous { .. }
+        | CallResolution::Unknown
+        | CallResolution::EnumVariant => Vec::new(),
+    };
     HirExpr::Call {
         callee: callee.clone(),
         receiver: match callee {
@@ -1067,6 +1075,7 @@ pub(super) fn lower_hir_call_expr(
             _ => None,
         },
         args: hir_args,
+        type_arguments,
         type_name,
         resolution,
         events,

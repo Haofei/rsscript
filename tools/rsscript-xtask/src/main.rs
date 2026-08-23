@@ -909,8 +909,28 @@ mod tests {
             "sample_order": "alternating",
             "cases": [{
                 "case": "mixed-mode-continuation",
+                "pass": "continuation",
+                "status": "entered",
                 "interpreter_ns": 100,
-                "native_ns": 50
+                "native_ns": 50,
+                "speedup": 2.0,
+                "compile_nanos": 10,
+                "resident_code_bytes": 128,
+                "native_calls": 1,
+                "native_bails": 0,
+                "osr_entries": 0,
+                "continuation_entries": 1,
+                "runtime_helper_call_sites": 0,
+                "readonly_licm_sites": 0,
+                "bounds_check_sites": 0,
+                "bounds_checks_elided": 0,
+                "scalar_unroll_research_candidates": 0,
+                "simd_research_candidates": 0,
+                "scalar_unroll_research_gate": "no_candidate",
+                "simd_research_gate": "no_candidate",
+                "semantic_match": true,
+                "controlled": true,
+                "retention_threshold_met": true
             }]
         });
         assert!(validator.is_valid(&valid));

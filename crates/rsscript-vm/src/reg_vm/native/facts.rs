@@ -16,7 +16,7 @@ use crate::text_util::strip_fresh_type;
 /// `Handle` deliberately does not claim a nominal language type. `Unknown` is
 /// fail-closed: it covers erased generics, conflicting register reuse, and
 /// operations for which v1 carries insufficient type evidence.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(in crate::reg_vm) enum VerifiedStorageType {
     #[default]
     Unknown,
@@ -125,6 +125,31 @@ impl VerifiedFunctionFacts {
                 .collect(),
         )
     }
+
+    /// Instantiate only the parameter storage prefix from a call-site contract
+    /// that the typed-facts verifier already matched against both the generic
+    /// executable signature and caller registers. Nominal layouts and all
+    /// non-parameter facts remain unchanged.
+    pub(in crate::reg_vm) fn instantiate_parameter_storage(
+        &self,
+        parameter_count: usize,
+        call: &VerifiedCallSite,
+    ) -> Option<Self> {
+        if call.params.len() != parameter_count || parameter_count > self.reg_types.len() {
+            return None;
+        }
+        let mut instantiated = self.clone();
+        for (register, storage) in instantiated
+            .reg_types
+            .iter_mut()
+            .take(parameter_count)
+            .zip(&call.params)
+        {
+            storage.native_ty()?;
+            *register = *storage;
+        }
+        Some(instantiated)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -190,11 +215,17 @@ impl VerifiedExecutableFacts {
                 {
                     return Err(VerifiedFactsError::TypedFactsMismatch);
                 }
+                let instantiated_direct_call = !typed_call.type_arguments.is_empty()
+                    && matches!(
+                        typed_call.target,
+                        rsscript_bytecode::TypedCallTargetV1::KnownFunction(_)
+                    );
                 for (storage, ty) in call.params.iter_mut().zip(&typed_call.parameters) {
                     if let Some(proved) = typed_storage_type(ty) {
                         match *storage {
                             VerifiedStorageType::Unknown => {}
                             existing if existing == proved => {}
+                            _ if instantiated_direct_call => *storage = proved,
                             _ => return Err(VerifiedFactsError::TypedFactsMismatch),
                         }
                     }
@@ -203,6 +234,7 @@ impl VerifiedExecutableFacts {
                     match call.result {
                         VerifiedStorageType::Unknown => {}
                         existing if existing == proved => {}
+                        _ if instantiated_direct_call => call.result = proved,
                         _ => return Err(VerifiedFactsError::TypedFactsMismatch),
                     }
                 }
@@ -1283,6 +1315,44 @@ mod tests {
         assert_eq!(
             facts.function(0).expect("function").reg_types[0],
             VerifiedStorageType::Unknown
+        );
+    }
+
+    #[test]
+    fn verified_generic_call_instantiates_scalar_parameter_storage() {
+        let base = VerifiedFunctionFacts {
+            reg_types: vec![VerifiedStorageType::Handle, VerifiedStorageType::Unknown]
+                .into_boxed_slice(),
+            call_sites: Vec::new().into_boxed_slice(),
+            effects: Vec::new().into_boxed_slice(),
+            generic_substitutions: Vec::new().into_boxed_slice(),
+        };
+        let call = |storage, argument| VerifiedCallSite {
+            target: VerifiedCallTarget::Known(1),
+            params: vec![storage].into_boxed_slice(),
+            result: storage,
+            param_effects: vec![VerifiedParamEffect::Unknown].into_boxed_slice(),
+            type_arguments: vec![argument].into_boxed_slice(),
+        };
+        let int_call = call(
+            VerifiedStorageType::Int,
+            WireType::Int {
+                bits: 64,
+                signed: true,
+            },
+        );
+        let float_call = call(VerifiedStorageType::Float, WireType::Float { bits: 64 });
+        assert_eq!(
+            base.instantiate_parameter_storage(1, &int_call)
+                .expect("verified Int instance")
+                .reg_types[0],
+            VerifiedStorageType::Int
+        );
+        assert_eq!(
+            base.instantiate_parameter_storage(1, &float_call)
+                .expect("verified Float instance")
+                .reg_types[0],
+            VerifiedStorageType::Float
         );
     }
 

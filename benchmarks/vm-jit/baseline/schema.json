@@ -43,11 +43,59 @@
       "items": {
         "type": "object",
         "additionalProperties": true,
-        "required": ["case", "interpreter_ns", "native_ns"],
+        "required": [
+          "case",
+          "pass",
+          "status",
+          "interpreter_ns",
+          "native_ns",
+          "speedup",
+          "compile_nanos",
+          "resident_code_bytes",
+          "native_calls",
+          "native_bails",
+          "osr_entries",
+          "continuation_entries",
+          "runtime_helper_call_sites",
+          "readonly_licm_sites",
+          "bounds_check_sites",
+          "bounds_checks_elided",
+          "scalar_unroll_research_candidates",
+          "simd_research_candidates",
+          "scalar_unroll_research_gate",
+          "simd_research_gate",
+          "semantic_match",
+          "controlled",
+          "retention_threshold_met"
+        ],
         "properties": {
           "case": { "type": "string", "minLength": 1 },
           "interpreter_ns": { "type": "integer", "minimum": 0 },
-          "native_ns": { "type": "integer", "minimum": 0 }
+          "native_ns": { "type": "integer", "minimum": 0 },
+          "pass": { "type": "string", "minLength": 1 },
+          "status": { "enum": ["entered", "declined"] },
+          "speedup": { "type": "number", "minimum": 0 },
+          "compile_nanos": { "type": "integer", "minimum": 0 },
+          "resident_code_bytes": { "type": "integer", "minimum": 0 },
+          "native_calls": { "type": "integer", "minimum": 0 },
+          "native_bails": { "type": "integer", "minimum": 0 },
+          "osr_entries": { "type": "integer", "minimum": 0 },
+          "continuation_entries": { "type": "integer", "minimum": 0 },
+          "runtime_helper_call_sites": { "type": "integer", "minimum": 0 },
+          "readonly_licm_sites": { "type": "integer", "minimum": 0 },
+          "bounds_check_sites": { "type": "integer", "minimum": 0 },
+          "bounds_checks_elided": { "type": "integer", "minimum": 0 },
+          "scalar_unroll_research_candidates": { "type": "integer", "minimum": 0 },
+          "simd_research_candidates": { "type": "integer", "minimum": 0 },
+          "scalar_unroll_research_gate": {
+            "enum": ["no_candidate", "hold_no_transform"]
+          },
+          "simd_research_gate": {
+            "enum": ["no_candidate", "hold_no_transform"]
+          },
+          "semantic_match": { "const": true },
+          "controlled": { "const": true },
+          "retention_threshold_met": { "type": "boolean" }
         }
       }
     }

@@ -149,11 +149,26 @@ fn native_compile_direct_scalar_callee(
     unit: &RegUnit,
     callee: &RegFunction,
     callee_key: usize,
+    call_site: Option<&VerifiedCallSite>,
     stack: &mut std::collections::HashSet<usize>,
 ) -> Option<NativeCompiledCallee> {
     let facts = Rc::clone(native.verified_facts.as_ref()?);
-    let callee_facts = facts.function(callee_key)?;
-    let instance = JitInstanceKey::from_facts(callee_key, callee_facts)?;
+    let base_facts = facts.function(callee_key)?;
+    let specialized;
+    let callee_facts = if let Some(call) = call_site.filter(|call| !call.type_arguments.is_empty())
+    {
+        specialized = base_facts.instantiate_parameter_storage(callee.params, call)?;
+        &specialized
+    } else {
+        base_facts
+    };
+    // Call-site substitutions select only a bounded code-cache identity. The
+    // translator still consumes `callee_facts`, whose storage/signature facts
+    // were independently cross-checked against the executable.
+    let instance = call_site.map_or_else(
+        || JitInstanceKey::from_type_arguments(callee_key, &[]),
+        |call| JitInstanceKey::from_call_site(callee_key, call),
+    )?;
     let version_key = NativeVersionKey {
         instance: instance.clone(),
         shape: ShapeKey::default(),
@@ -322,9 +337,21 @@ fn native_compiled_call_sites_inner(
         if callee_key == self_key {
             continue;
         }
-        let Some(descriptor) =
-            native_compile_direct_scalar_callee(jit_state, native, unit, callee, callee_key, stack)
-        else {
+        let call_site = native
+            .verified_facts
+            .as_ref()
+            .and_then(|facts| facts.function(self_key))
+            .and_then(|facts| facts.call_site(ip))
+            .cloned();
+        let Some(descriptor) = native_compile_direct_scalar_callee(
+            jit_state,
+            native,
+            unit,
+            callee,
+            callee_key,
+            call_site.as_ref(),
+            stack,
+        ) else {
             continue;
         };
         if args.len() != descriptor.param_tys.len() {
@@ -1870,6 +1897,7 @@ impl RegVm {
             }};
         }
         for (native_reg, region_slot) in entry.slots.iter().take(entry.n_live_in).enumerate() {
+            debug_assert!(region_slot.class.is_live_in());
             let slot = base + region_slot.vm_reg;
             if !self.written.get(slot).copied().unwrap_or(false) {
                 continue;
@@ -2007,7 +2035,7 @@ impl RegVm {
                 native_frame.abort();
                 return false;
             };
-            if !region_slot.written {
+            if !region_slot.class.is_live_out() {
                 continue;
             }
             let value = match region_slot.ty {
@@ -3727,8 +3755,9 @@ fn native_recursive_group(unit: &RegUnit, function_id: usize) -> Option<Vec<usiz
 mod tests {
     use super::{osr_committed_tail_calls, osr_initial_logical_depth};
     use crate::reg_vm::{
-        JitInstanceKey, MAX_JIT_TYPE_ARGUMENTS, NativeParamShape, ShapeKey, VerifiedStorageType,
-        VerifiedTypeArgsKey, VmValue, native_param_shape_with_fact,
+        JitInstanceKey, MAX_JIT_TYPE_ARGUMENTS, NativeParamShape, ShapeKey, VerifiedCallSite,
+        VerifiedCallTarget, VerifiedParamEffect, VerifiedStorageType, VerifiedTypeArgsKey, VmValue,
+        native_param_shape_with_fact,
     };
     use rsscript_abi_model::WireType;
 
@@ -3790,11 +3819,41 @@ mod tests {
             ShapeKey::from_shapes([NativeParamShape::StaticScalar]),
             "static scalar payloads do not create runtime shape versions"
         );
+        assert_eq!(
+            native_param_shape_with_fact(&VmValue::Int(17), VerifiedStorageType::Int),
+            NativeParamShape::StaticScalar,
+            "changing a specialization identity cannot authorize storage or runtime shape"
+        );
     }
 
     #[test]
     fn excessive_type_argument_vectors_fail_closed() {
         let arguments = vec![WireType::Bool; MAX_JIT_TYPE_ARGUMENTS + 1];
         assert_eq!(VerifiedTypeArgsKey::from_verified(&arguments), None);
+    }
+
+    #[test]
+    fn ordered_and_duplicate_generic_instances_do_not_collide() {
+        let int = WireType::Int {
+            bits: 64,
+            signed: true,
+        };
+        let float = WireType::Float { bits: 64 };
+        let site = |arguments: Vec<WireType>| VerifiedCallSite {
+            target: VerifiedCallTarget::Known(1),
+            params: vec![VerifiedStorageType::Int, VerifiedStorageType::Float].into_boxed_slice(),
+            result: VerifiedStorageType::Int,
+            param_effects: vec![VerifiedParamEffect::Unknown; 2].into_boxed_slice(),
+            type_arguments: arguments.into_boxed_slice(),
+        };
+        let ordered = JitInstanceKey::from_call_site(1, &site(vec![int.clone(), float.clone()]))
+            .expect("ordered instance");
+        let swapped = JitInstanceKey::from_call_site(1, &site(vec![float, int.clone()]))
+            .expect("swapped instance");
+        let duplicate = JitInstanceKey::from_call_site(1, &site(vec![int.clone(), int]))
+            .expect("duplicate concrete arguments are valid and bounded");
+        assert_ne!(ordered, swapped);
+        assert_ne!(ordered, duplicate);
+        assert_ne!(swapped, duplicate);
     }
 }

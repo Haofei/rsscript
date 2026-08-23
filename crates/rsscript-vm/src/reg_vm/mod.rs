@@ -1329,13 +1329,17 @@ impl RegVmExecutable {
                             .stats
                             .continuation_compiled_source_instructions,
                         interpreted_native_work: native.stats.interpreted_native_work,
-                        native_barrier_counts: native.stats.native_barrier_counts.clone(),
+                        native_barrier_counts: Box::new(native.stats.native_barrier_counts.clone()),
                         direct_list_bounds_check_sites: native.stats.direct_list_bounds_check_sites,
                         direct_list_bounds_checks_elided: native
                             .stats
                             .direct_list_bounds_checks_elided,
                         readonly_licm_sites: native.stats.memoized_runtime_helper_call_sites,
                         runtime_helper_call_sites: native.stats.runtime_helper_call_sites,
+                        scalar_unroll_research_candidates: native
+                            .stats
+                            .scalar_unroll_research_candidates,
+                        simd_research_candidates: native.stats.simd_research_candidates,
                         resident_code_bytes: native.stats.compiled_code_bytes,
                         published_code_bytes: native.admission.admitted_code_bytes,
                         rejected_resident_bytes: 0,
@@ -1809,7 +1813,12 @@ const MAX_JIT_TYPE_ARGUMENTS: usize = 16;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum VerifiedTypeArgsKey {
     Unavailable,
-    Known(Box<[WireType]>),
+    Known {
+        arguments: Box<[WireType]>,
+        /// Concrete parameter/result storage verified at the call site. This
+        /// prevents reordered substitutions from reusing incompatible code.
+        storage_signature: Box<[VerifiedStorageType]>,
+    },
 }
 
 #[cfg(feature = "native-jit")]
@@ -1821,12 +1830,15 @@ impl VerifiedTypeArgsKey {
         Some(if arguments.is_empty() {
             Self::Unavailable
         } else {
-            Self::Known(arguments.to_vec().into_boxed_slice())
+            Self::Known {
+                arguments: arguments.to_vec().into_boxed_slice(),
+                storage_signature: Box::new([]),
+            }
         })
     }
 
     const fn is_known(&self) -> bool {
-        matches!(self, Self::Known(_))
+        matches!(self, Self::Known { .. })
     }
 }
 
@@ -1840,9 +1852,35 @@ struct JitInstanceKey {
 #[cfg(feature = "native-jit")]
 impl JitInstanceKey {
     fn from_facts(function: usize, facts: &VerifiedFunctionFacts) -> Option<Self> {
+        Self::from_type_arguments(function, &facts.generic_substitutions)
+    }
+
+    /// Build a bounded cache identity from lowering-attested substitutions.
+    /// This key must never authorize a storage class, layout projection, or
+    /// unsafe lowering; those remain gated by executable-cross-checked facts.
+    fn from_type_arguments(function: usize, type_arguments: &[WireType]) -> Option<Self> {
         Some(Self {
             function,
-            type_arguments: VerifiedTypeArgsKey::from_verified(&facts.generic_substitutions)?,
+            type_arguments: VerifiedTypeArgsKey::from_verified(type_arguments)?,
+        })
+    }
+
+    fn from_call_site(function: usize, call: &VerifiedCallSite) -> Option<Self> {
+        if call.type_arguments.len() > MAX_JIT_TYPE_ARGUMENTS {
+            return None;
+        }
+        let mut storage = call.params.to_vec();
+        storage.push(call.result);
+        Some(Self {
+            function,
+            type_arguments: if call.type_arguments.is_empty() {
+                VerifiedTypeArgsKey::Unavailable
+            } else {
+                VerifiedTypeArgsKey::Known {
+                    arguments: call.type_arguments.clone(),
+                    storage_signature: storage.into_boxed_slice(),
+                }
+            },
         })
     }
 }
@@ -2354,6 +2392,12 @@ pub struct NativeStats {
     pub scalar_unroll_research_candidates: u64,
     /// Stable reasons canonical loops fail the research-only unroll gate.
     pub scalar_unroll_declines: BTreeMap<String, u64>,
+    /// Read-only unit-stride list loops worth revisiting once typed lane,
+    /// alias/range, remainder, and precise deopt proofs exist. No SIMD code is
+    /// emitted from this counter.
+    pub simd_research_candidates: u64,
+    /// Stable reasons canonical loops fail the research-only SIMD gate.
+    pub simd_declines: BTreeMap<String, u64>,
     /// Number of source/edge work units consumed by the bounded immutable loop
     /// analysis cached on the verified executable.
     pub loop_analysis_work_units: u64,
@@ -2577,6 +2621,8 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} continuation_entries={} continuatio
         self.scalar_unroll_research_candidates = evidence.unroll_research_candidates;
         self.scalar_unroll_declines
             .clone_from(&evidence.unroll_declines);
+        self.simd_research_candidates = evidence.simd_research_candidates;
+        self.simd_declines.clone_from(&evidence.simd_declines);
         self.loop_analysis_work_units = evidence.analysis_work_units;
         self.loop_analysis_limit_reached = u64::from(evidence.analysis_limit_reached);
     }
@@ -2648,6 +2694,15 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} continuation_entries={} continuatio
             "scalar_unroll_declines".into(),
             crate::serde_json::to_value(&self.scalar_unroll_declines)
                 .expect("scalar unroll decline counts serialize"),
+        );
+        object.insert(
+            "simd_research_candidates".into(),
+            self.simd_research_candidates.into(),
+        );
+        object.insert(
+            "simd_declines".into(),
+            crate::serde_json::to_value(&self.simd_declines)
+                .expect("SIMD decline counts serialize"),
         );
         object.insert(
             "loop_analysis_work_units".into(),

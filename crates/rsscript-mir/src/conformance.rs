@@ -1170,7 +1170,8 @@ impl<'a> Interpreter<'a> {
                             }
                         }
                         let outcome = match target {
-                            MirCallTarget::Function(function) => {
+                            MirCallTarget::Function(function)
+                            | MirCallTarget::FunctionInstance { function, .. } => {
                                 self.call(*function, call_arguments)?
                             }
                             MirCallTarget::External(_) => {

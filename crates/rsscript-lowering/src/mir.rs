@@ -17,7 +17,7 @@ use rsscript_mir::{
     MirTerminator, MirTypeLayout, MirVariantCaseLayout, MirVariantLayout, PlaceId, ResourceTypeId,
     TaskGroupId, TaskId, TypeId, ValueId, VerifiedMir,
 };
-use rsscript_semantics::{ResolvedTypeKind, hir as checked};
+use rsscript_semantics::{ResolvedType, ResolvedTypeKind, hir as checked};
 use rsscript_text::{decode_char_token, decode_string_token, type_root_name};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1411,9 +1411,12 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 callee,
                 receiver,
                 args,
+                type_arguments,
                 resolution,
                 ..
-            } => self.lower_direct_call(callee, receiver.as_ref(), args, resolution),
+            } => {
+                self.lower_direct_call(callee, receiver.as_ref(), args, type_arguments, resolution)
+            }
             checked::HirExpr::Effect {
                 effect: checked::ParamEffect::Read,
                 value,
@@ -1621,6 +1624,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
         callee: &rsscript_syntax::ast::Callee,
         receiver: Option<&checked::HirCallReceiver>,
         args: &[checked::HirCallArg],
+        type_arguments: &[ResolvedType],
         resolution: &checked::CallResolution,
     ) -> Result<ValueId, MirLoweringError> {
         if matches!(resolution, checked::CallResolution::EnumVariant) {
@@ -1684,7 +1688,8 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 .namespace
                 .as_ref()
                 .map(|namespace| format!("{namespace}.{}", signature.name));
-            self.targets
+            let function = self
+                .targets
                 .functions
                 .get(&signature.name)
                 .or_else(|| {
@@ -1693,11 +1698,39 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                         .and_then(|name| self.targets.functions.get(name))
                 })
                 .copied()
-                .map(MirCallTarget::Function)
                 .ok_or_else(|| MirLoweringError::Unsupported {
                     function: self.function_name.to_owned(),
                     construct: "direct checked HIR call target",
-                })?
+                })?;
+            if type_arguments.is_empty() {
+                MirCallTarget::Function(function)
+            } else {
+                let concrete_arguments = type_arguments
+                    .iter()
+                    .map(|ty| checked_type_to_wire(ty, &self.function_name))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .map(|ty| self.types.intern(ty))
+                    .collect::<Vec<_>>();
+                let type_substitutions = signature
+                    .type_params
+                    .iter()
+                    .zip(concrete_arguments)
+                    .map(|(parameter, argument)| {
+                        let parameter = self.types.intern(WireType::Named {
+                            package: None,
+                            name: parameter.clone(),
+                            arguments: Vec::new(),
+                        });
+                        (parameter, argument)
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice();
+                MirCallTarget::FunctionInstance {
+                    function,
+                    type_substitutions,
+                }
+            }
         };
         let mut ordered = args.iter().collect::<Vec<_>>();
         ordered.sort_by_key(|argument| argument.evaluation_index);
@@ -2763,6 +2796,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
             callee,
             receiver,
             args,
+            type_arguments,
             resolution,
             ..
         } = value
@@ -2771,7 +2805,13 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 return self.unsupported("unresolved awaited checked HIR call");
             };
             if signature.is_external && signature.is_async {
-                return self.lower_direct_call(callee, receiver.as_ref(), args, resolution);
+                return self.lower_direct_call(
+                    callee,
+                    receiver.as_ref(),
+                    args,
+                    type_arguments,
+                    resolution,
+                );
             }
         }
         let checked::HirExpr::Ident { name, .. } = value else {

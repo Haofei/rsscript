@@ -398,6 +398,11 @@ pub enum HirExpr {
         callee: Callee,
         receiver: Option<HirCallReceiver>,
         args: Vec<HirCallArg>,
+        /// Concrete generic arguments proved by semantic inference, in the
+        /// callee declaration's type-parameter order. Empty means either a
+        /// nongeneric call or that v1 inference could not prove a complete
+        /// substitution; backend lowering must not guess the missing values.
+        type_arguments: Vec<ResolvedType>,
         resolution: CallResolution,
         events: Vec<HirEffectEvent>,
         type_name: Option<String>,

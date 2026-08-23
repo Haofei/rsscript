@@ -55,6 +55,8 @@ pub(super) fn runtime_collection_intrinsic_borrows_arg(
         arg_name == Some(expected) || (arg_name.is_none() && index == expected_index)
     };
     match (namespace, name) {
+        ("List", "push") => position("value", 1),
+        ("List", "set") => position("value", 2),
         ("Map", "contains_key" | "get" | "remove") => position("key", 1),
         ("Map", "get_or_default") => position("key", 1) || position("default", 2),
         ("Map", "insert" | "insert_old") => position("key", 1) || position("value", 2),
@@ -80,4 +82,28 @@ pub(super) fn is_async_runtime_intrinsic_callee(callee: &Callee) -> bool {
             | ("Receiver", "recv" | "recv_cancellable")
             | ("Stream", "next")
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::runtime_collection_intrinsic_borrows_arg;
+
+    #[test]
+    fn list_mutators_borrow_generic_values_for_the_runtime_abi() {
+        assert!(runtime_collection_intrinsic_borrows_arg(
+            "List",
+            "push",
+            Some("value"),
+            1
+        ));
+        assert!(runtime_collection_intrinsic_borrows_arg(
+            "List", "set", None, 2
+        ));
+        assert!(!runtime_collection_intrinsic_borrows_arg(
+            "List",
+            "push",
+            Some("list"),
+            0
+        ));
+    }
 }

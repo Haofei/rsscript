@@ -72,7 +72,17 @@ impl VirtualObjectAnalysis {
         function: &RegFunction,
         typed: &TypedRegionIr,
     ) -> Option<Self> {
-        Self::derive(function, typed.typed())
+        let mut constructors = Vec::new();
+        for instruction in typed
+            .blocks()
+            .iter()
+            .flat_map(|block| block.instructions.iter())
+        {
+            if let Some(constructor) = typed_virtual_constructor(typed.typed(), instruction)? {
+                constructors.push(constructor);
+            }
+        }
+        Self::derive_with_constructors(function, typed.typed(), constructors)
     }
 
     /// Analyze virtual aggregate candidates in one typed region.
@@ -81,17 +91,27 @@ impl VirtualObjectAnalysis {
     /// definitions, incomplete footprints, or unrecognized consumers classify
     /// an object as escaping/unknown; no caller may turn that into an allocation
     /// elimination. The analysis itself performs no rewrite.
+    #[cfg(test)]
     pub(in crate::reg_vm) fn derive(function: &RegFunction, typed: &TypedRegion) -> Option<Self> {
+        let constructors = function
+            .code
+            .iter()
+            .enumerate()
+            .filter(|(ip, _)| typed.contains_instruction(*ip))
+            .filter_map(|(_, instruction)| virtual_constructor(instruction))
+            .collect::<Vec<_>>();
+        Self::derive_with_constructors(function, typed, constructors)
+    }
+
+    fn derive_with_constructors(
+        function: &RegFunction,
+        typed: &TypedRegion,
+        constructors: Vec<(Reg, VirtualObjectKind, Vec<VirtualFieldValue>)>,
+    ) -> Option<Self> {
         let mut builders: Vec<VirtualBuilder> = Vec::new();
         let mut object_by_reg: Vec<Option<VirtualObjectId>> = vec![None; function.regs];
 
-        for (ip, instruction) in function.code.iter().enumerate() {
-            if !typed.contains_instruction(ip) {
-                continue;
-            }
-            let Some((dst, kind, fields)) = virtual_constructor(instruction) else {
-                continue;
-            };
+        for (dst, kind, fields) in constructors {
             if dst >= function.regs {
                 return None;
             }
@@ -463,6 +483,42 @@ fn virtual_constructor(
     }
 }
 
+fn typed_virtual_constructor(
+    typed: &TypedRegion,
+    instruction: &TypedRegionInstruction,
+) -> Option<Option<(Reg, VirtualObjectKind, Vec<VirtualFieldValue>)>> {
+    let TypedRegionOp::Aggregate {
+        result,
+        kind,
+        fields,
+    } = &instruction.op
+    else {
+        return Some(None);
+    };
+    let kind = match kind {
+        TypedAggregateKind::OptionNone | TypedAggregateKind::OptionSome => {
+            VirtualObjectKind::Option
+        }
+        TypedAggregateKind::Result(_) => VirtualObjectKind::Result,
+        TypedAggregateKind::Variant(layout) => VirtualObjectKind::Variant(Rc::clone(layout)),
+        TypedAggregateKind::Struct(layout) => VirtualObjectKind::Struct(Rc::clone(layout)),
+        TypedAggregateKind::Closure { function } => VirtualObjectKind::Closure {
+            function: *function,
+        },
+        TypedAggregateKind::List | TypedAggregateKind::Map | TypedAggregateKind::Object => {
+            return Some(None);
+        }
+    };
+    Some(Some((
+        typed.reg_for_value(*result)?,
+        kind,
+        fields
+            .iter()
+            .map(|field| typed.reg_for_value(*field).map(VirtualFieldValue::Register))
+            .collect::<Option<Vec<_>>>()?,
+    )))
+}
+
 fn same_virtual_kind(left: &VirtualObjectKind, right: &VirtualObjectKind) -> bool {
     match (left, right) {
         (VirtualObjectKind::Option, VirtualObjectKind::Option)
@@ -757,19 +813,57 @@ mod tests {
         .expect("typed region")
     }
 
+    fn typed_ir(function: &RegFunction, included: &[bool]) -> TypedRegionIr {
+        let unit = RegUnit {
+            functions: vec![Rc::new(function.clone())],
+            function_ids: HashMap::new(),
+            resource_drop_functions: HashMap::new(),
+            types: HashMap::new(),
+            variant_layouts: HashMap::new(),
+            native_signatures: HashMap::new(),
+            closure_identity_observable: false,
+        };
+        let executable = VerifiedExecutableFacts::derive(&unit).expect("facts");
+        TypedRegionIr::derive(
+            function,
+            executable.function(0).expect("function facts"),
+            included,
+        )
+        .expect("typed region IR")
+    }
+
     #[test]
-    fn option_consumed_inside_region_does_not_escape() {
+    fn typed_struct_consumed_inside_region_does_not_escape() {
+        let layout = Rc::new(crate::vm_value::TypeLayout::new(
+            Rc::from("Point"),
+            vec![Rc::from("x")],
+        ));
         let function = function(
-            3,
+            5,
             vec![
                 RegInstr::LoadInt { dst: 0, value: 1 },
-                RegInstr::MakeSome { dst: 1, value: 0 },
-                RegInstr::UnwrapSome { dst: 2, src: 1 },
+                RegInstr::MakeStruct {
+                    dst: 1,
+                    layout,
+                    fields: vec![("x".into(), 0)],
+                },
+                RegInstr::GetFieldSlot {
+                    dst: 2,
+                    base: 1,
+                    slot: 0,
+                },
+                RegInstr::LoadInt { dst: 3, value: 1 },
+                RegInstr::AddInt {
+                    dst: 4,
+                    lhs: 2,
+                    rhs: 3,
+                },
+                RegInstr::Return { src: 4 },
             ],
         );
-        let typed = typed(&function, &[true; 3]);
-        let analysis = VirtualObjectAnalysis::derive(&function, &typed).expect("analysis");
-        let object = analysis.object_for_reg(1).expect("option");
+        let typed = typed_ir(&function, &[true; 6]);
+        let analysis = VirtualObjectAnalysis::derive_ir(&function, &typed).expect("analysis");
+        let object = analysis.object_for_reg(1).expect("struct");
         assert_eq!(object.escape, VirtualEscapeClass::NoEscape);
         assert_eq!(object.materialization, VirtualMaterializationPlan::None);
         assert!(analysis.safely_virtual(object.id));

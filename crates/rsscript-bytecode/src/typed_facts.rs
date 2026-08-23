@@ -7,10 +7,12 @@
 //! every contract that v1 executable metadata can independently reconstruct:
 //! static function signatures, Provider contracts, mutable argument positions,
 //! declared layouts, and opcode-visible register types. It deliberately does
-//! not claim that erased language facts (notably `read` versus `take`, closure
-//! results, and ordinary generic substitutions) were reconstructed. Engines
-//! must still intersect those facts with their executable-local proof before
-//! optimization. An artifact without this section remains a valid v1 artifact
+//! not claim that erased language facts (notably `read` versus `take` and
+//! closure results) were reconstructed. Schema v2 may additionally carry
+//! lowering-attested ordinary generic substitutions. Those values are bounded
+//! cache identities only: they cannot authorize storage, layout, or unsafe
+//! lowering. Engines must still intersect all executable facts with their
+//! executable-local proof before optimization. An artifact without this section remains a valid v1 artifact
 //! and falls back to the conservative executable verifier/runtime analysis path.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -25,6 +27,11 @@ use super::{
 };
 
 pub const TYPED_EXECUTABLE_FACTS_SCHEMA_V1: &str = "rsscript.typed_executable_facts.v1";
+/// v2 keeps the v1 executable unchanged and adds lowering-attested generic
+/// substitutions on ordinary direct calls. These substitutions are bounded
+/// specialization identities only; executable-visible register/signature facts
+/// remain independently checked before native lowering may use them.
+pub const TYPED_EXECUTABLE_FACTS_SCHEMA_V2: &str = "rsscript.typed_executable_facts.v2";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -87,6 +94,10 @@ pub struct TypedCallSiteV1 {
     pub parameters: Vec<TypedFactTypeV1>,
     pub result: TypedFactTypeV1,
     pub parameter_effects: Vec<TypedDataEffectV1>,
+    /// Generic parameter identities in declaration order. Present only for a
+    /// schema-v2 direct known call and paired exactly with `type_arguments`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub type_parameters: Vec<WireType>,
     /// Concrete generic arguments proven by lowering. Empty means unavailable,
     /// not an inferred empty generic parameter list.
     pub type_arguments: Vec<WireType>,
@@ -228,7 +239,9 @@ impl TypedExecutableFactsVerifierV1 {
         if encode_typed_executable_facts(&facts)? != bytes {
             return Err(invalid("typed facts CBOR is not canonical"));
         }
-        if facts.schema != TYPED_EXECUTABLE_FACTS_SCHEMA_V1 {
+        if facts.schema != TYPED_EXECUTABLE_FACTS_SCHEMA_V1
+            && facts.schema != TYPED_EXECUTABLE_FACTS_SCHEMA_V2
+        {
             return Err(invalid("unsupported typed facts schema"));
         }
         let executable_hash = format!("sha256:{:x}", Sha256::digest(&artifact.payload));
@@ -363,7 +376,12 @@ impl TypedExecutableFactsVerifierV1 {
                     artifact,
                     functions.len(),
                 )?;
-                verify_call_type_arguments(call, opcode, &code[instruction])?;
+                verify_call_type_arguments(
+                    call,
+                    opcode,
+                    &code[instruction],
+                    facts.schema == TYPED_EXECUTABLE_FACTS_SCHEMA_V2,
+                )?;
                 if call.parameters.len() != call.parameter_effects.len() {
                     return Err(invalid("call parameter and effect counts differ"));
                 }
@@ -393,11 +411,15 @@ impl TypedExecutableFactsVerifierV1 {
                     &code[instruction],
                     &signatures,
                     &function_facts.registers,
+                    facts.schema == TYPED_EXECUTABLE_FACTS_SCHEMA_V2,
                 )?;
                 for ty in call.parameters.iter().chain(std::iter::once(&call.result)) {
                     verify_fact_type(ty, self.limits.max_type_depth, &mut type_work)?;
                 }
                 for ty in &call.type_arguments {
+                    verify_wire_type(ty, self.limits.max_type_depth, &mut type_work)?;
+                }
+                for ty in &call.type_parameters {
                     verify_wire_type(ty, self.limits.max_type_depth, &mut type_work)?;
                 }
             }
@@ -693,6 +715,7 @@ fn verify_executable_call_contract(
     instruction: &serde_json::Value,
     signatures: &[ExecutableFunctionSignature],
     registers: &[TypedRegisterFactV1],
+    lowering_substitutions: bool,
 ) -> Result<(), BytecodeError> {
     let fields = call_instruction_fields(instruction)?;
     let opcode = instruction
@@ -748,9 +771,13 @@ fn verify_executable_call_contract(
             .cloned()
             .map(TypedFactTypeV1::Known)
             .collect::<Vec<_>>();
-        if call.parameters != parameters
-            || call.result != TypedFactTypeV1::Known(signature.result.clone())
-        {
+        let exact = call.parameters == parameters
+            && call.result == TypedFactTypeV1::Known(signature.result.clone());
+        let instantiated = lowering_substitutions
+            && matches!(call.target, TypedCallTargetV1::KnownFunction(_))
+            && !call.type_arguments.is_empty()
+            && verified_generic_instantiation(call, signature);
+        if !exact && !instantiated {
             return Err(invalid(
                 "typed call parameter or result types differ from executable signature",
             ));
@@ -783,6 +810,179 @@ fn verify_executable_call_contract(
         }
     }
     Ok(())
+}
+
+fn verified_generic_instantiation(
+    call: &TypedCallSiteV1,
+    signature: &ExecutableFunctionSignature,
+) -> bool {
+    if call.type_parameters.len() != call.type_arguments.len() || call.type_parameters.is_empty() {
+        return false;
+    }
+    if call.type_parameters.iter().any(|parameter| {
+        !matches!(parameter, WireType::Named { package: None, arguments, .. } if arguments.is_empty())
+            || (!signature
+                .parameters
+                .iter()
+                .any(|ty| wire_type_contains(ty, parameter))
+                && !wire_type_contains(&signature.result, parameter))
+    }) {
+        return false;
+    }
+    let mut seen = BTreeSet::new();
+    let mut substitutions = call
+        .type_parameters
+        .iter()
+        .cloned()
+        .zip(call.type_arguments.iter().cloned())
+        .collect::<Vec<_>>();
+    if substitutions
+        .iter()
+        .any(|(parameter, _)| !seen.insert(parameter.clone()))
+    {
+        return false;
+    }
+    let parameters_match =
+        signature
+            .parameters
+            .iter()
+            .zip(&call.parameters)
+            .all(|(pattern, actual)| match actual {
+                TypedFactTypeV1::Known(actual) => {
+                    unify_generic_wire_type(pattern, actual, &mut substitutions)
+                }
+                TypedFactTypeV1::Unknown => false,
+            });
+    let result_matches = match &call.result {
+        TypedFactTypeV1::Known(actual) => {
+            unify_generic_wire_type(&signature.result, actual, &mut substitutions)
+        }
+        TypedFactTypeV1::Unknown => false,
+    };
+    parameters_match && result_matches
+}
+
+fn wire_type_contains(ty: &WireType, needle: &WireType) -> bool {
+    if ty == needle {
+        return true;
+    }
+    match ty {
+        WireType::List { element } | WireType::Option { value: element } => {
+            wire_type_contains(element, needle)
+        }
+        WireType::Map { key, value } => {
+            wire_type_contains(key, needle) || wire_type_contains(value, needle)
+        }
+        WireType::Result { ok, error } => {
+            wire_type_contains(ok, needle) || wire_type_contains(error, needle)
+        }
+        WireType::Tuple { elements } => elements
+            .iter()
+            .any(|element| wire_type_contains(element, needle)),
+        WireType::Named { arguments, .. } => arguments
+            .iter()
+            .any(|argument| wire_type_contains(argument, needle)),
+        WireType::Qualified { value, .. } => wire_type_contains(value, needle),
+        WireType::Unit
+        | WireType::Bool
+        | WireType::Int { .. }
+        | WireType::Float { .. }
+        | WireType::String
+        | WireType::Char
+        | WireType::Bytes
+        | WireType::Resource { .. }
+        | WireType::Handle { .. } => false,
+    }
+}
+
+fn unify_generic_wire_type(
+    pattern: &WireType,
+    actual: &WireType,
+    substitutions: &mut Vec<(WireType, WireType)>,
+) -> bool {
+    if pattern == actual {
+        return true;
+    }
+    if matches!(pattern, WireType::Named { package: None, arguments, .. } if arguments.is_empty()) {
+        if let Some((_, previous)) = substitutions
+            .iter()
+            .find(|(parameter, _)| parameter == pattern)
+        {
+            return previous == actual;
+        }
+        return false;
+    }
+    match (pattern, actual) {
+        (WireType::List { element: left }, WireType::List { element: right })
+        | (WireType::Option { value: left }, WireType::Option { value: right }) => {
+            unify_generic_wire_type(left, right, substitutions)
+        }
+        (
+            WireType::Map {
+                key: left_key,
+                value: left_value,
+            },
+            WireType::Map {
+                key: right_key,
+                value: right_value,
+            },
+        ) => {
+            unify_generic_wire_type(left_key, right_key, substitutions)
+                && unify_generic_wire_type(left_value, right_value, substitutions)
+        }
+        (
+            WireType::Result {
+                ok: left_ok,
+                error: left_error,
+            },
+            WireType::Result {
+                ok: right_ok,
+                error: right_error,
+            },
+        ) => {
+            unify_generic_wire_type(left_ok, right_ok, substitutions)
+                && unify_generic_wire_type(left_error, right_error, substitutions)
+        }
+        (WireType::Tuple { elements: left }, WireType::Tuple { elements: right })
+            if left.len() == right.len() =>
+        {
+            left.iter()
+                .zip(right)
+                .all(|(left, right)| unify_generic_wire_type(left, right, substitutions))
+        }
+        (
+            WireType::Named {
+                package: left_package,
+                name: left_name,
+                arguments: left,
+            },
+            WireType::Named {
+                package: right_package,
+                name: right_name,
+                arguments: right,
+            },
+        ) if left_package == right_package
+            && left_name == right_name
+            && left.len() == right.len() =>
+        {
+            left.iter()
+                .zip(right)
+                .all(|(left, right)| unify_generic_wire_type(left, right, substitutions))
+        }
+        (
+            WireType::Qualified {
+                qualifier: left_qualifier,
+                value: left,
+            },
+            WireType::Qualified {
+                qualifier: right_qualifier,
+                value: right,
+            },
+        ) if left_qualifier == right_qualifier => {
+            unify_generic_wire_type(left, right, substitutions)
+        }
+        _ => false,
+    }
 }
 
 fn dynamic_call_signature<'a>(
@@ -1218,11 +1418,26 @@ fn verify_call_type_arguments(
     call: &TypedCallSiteV1,
     opcode: &str,
     instruction: &serde_json::Value,
+    lowering_substitutions: bool,
 ) -> Result<(), BytecodeError> {
     if opcode != "CallTypedIntrinsic" {
-        if !call.type_arguments.is_empty() {
+        if !call.type_arguments.is_empty()
+            && (!lowering_substitutions
+                || opcode != "CallKnown"
+                || !matches!(call.target, TypedCallTargetV1::KnownFunction(_)))
+        {
             return Err(invalid(
-                "v1 call instruction does not prove generic substitutions",
+                "typed call generic substitutions require a v2 known direct call",
+            ));
+        }
+        if call.type_arguments.len() > 16 {
+            return Err(BytecodeError::LimitExceeded(
+                "typed call generic substitutions",
+            ));
+        }
+        if call.type_parameters.len() != call.type_arguments.len() {
+            return Err(invalid(
+                "typed call generic parameter and argument counts differ",
             ));
         }
         return Ok(());
@@ -1241,6 +1456,11 @@ fn verify_call_type_arguments(
     {
         return Err(invalid(
             "typed intrinsic argument does not match executable",
+        ));
+    }
+    if !call.type_parameters.is_empty() {
+        return Err(invalid(
+            "typed intrinsic does not carry ordinary generic parameter identities",
         ));
     }
     Ok(())
@@ -1406,5 +1626,43 @@ mod tests {
                 Err(BytecodeError::InvalidTypedExecutableFacts(_))
             ));
         }
+    }
+
+    #[test]
+    fn generic_substitution_identity_preserves_order_and_duplicates() {
+        let generic = |name: &str| WireType::Named {
+            package: None,
+            name: name.to_owned(),
+            arguments: Vec::new(),
+        };
+        let int = WireType::Int {
+            bits: 64,
+            signed: true,
+        };
+        let float = WireType::Float { bits: 64 };
+        let signature = ExecutableFunctionSignature {
+            parameters: vec![generic("T"), generic("U")],
+            result: generic("T"),
+        };
+        let call = |arguments: Vec<WireType>, parameters: Vec<WireType>| TypedCallSiteV1 {
+            instruction: 0,
+            target: TypedCallTargetV1::KnownFunction(1),
+            parameters: parameters.into_iter().map(TypedFactTypeV1::Known).collect(),
+            result: TypedFactTypeV1::Known(int.clone()),
+            parameter_effects: vec![TypedDataEffectV1::Read; 2],
+            type_parameters: vec![generic("T"), generic("U")],
+            type_arguments: arguments,
+        };
+        assert!(verified_generic_instantiation(
+            &call(
+                vec![int.clone(), int.clone()],
+                vec![int.clone(), int.clone()]
+            ),
+            &signature
+        ));
+        assert!(!verified_generic_instantiation(
+            &call(vec![float.clone(), int.clone()], vec![int.clone(), float]),
+            &signature
+        ));
     }
 }

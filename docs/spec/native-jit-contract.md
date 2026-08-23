@@ -87,6 +87,16 @@ then returns to a VM-owned barrier which performs the next monotonic clock poll.
   by verified function/IP behind an `Rc`; runtime shape specialization consumes
   those facts without rescanning bytecode, while the persistent Artifact remains
   unchanged.
+- Optional typed-executable-facts schema v2 preserves semantic generic parameter
+  identities and concrete arguments as ordered call-site pairs without changing
+  the bytecode-v1 instruction stream. The verifier recursively checks that pair
+  mapping against the executable generic signature and caller register facts.
+  Native instance keys include the ordered arguments plus verified concrete
+  parameter/result storage and remain capped per function. These lowering-attested
+  identities may select a cache instance and seed scalar parameter storage; they
+  never authorize nominal layouts, pointer representations, or unsafe lowering.
+  Typed-facts v1 remains readable and simply falls back to unavailable generic
+  specialization.
 - Structural compilation work is bounded by `JitLimits` before Cranelift code
   generation. Instruction, register, CFG-edge, operand, analysis-word, deopt,
   memo-scope, callee, and recursive-group counts have deterministic limits.
@@ -140,6 +150,16 @@ scalar instructions, and no internal control-flow or effectful helper. Even thos
 candidates remain unchanged until exact source-step charging, overflow/deopt
 resume identity, remainder semantics, differential coverage, and a controlled
 end-to-end benchmark all pass. SIMD remains out of scope.
+
+The executable research gate nevertheless reports SIMD candidates: canonical
+single-latch, forward unit-stride, read-only list scans with no effectful or
+internal control-flow instruction. Mutable scans decline until an injective alias
+proof exists. A candidate counter does not enable vector codegen. Automatic
+promotion additionally requires verified numeric lane types, bounds/range proof,
+exact checked-overflow and deopt lane identity, scalar remainder parity, at least
+twenty controlled samples, and a repeatable 15% end-to-end gain. The scorecard
+prints both scalar-unroll and SIMD candidate counts so a missing implementation
+or missing workload is visible rather than reported as a speedup.
 
 Closure speculation remains a runnable research implementation behind
 `jit-speculation`, with all-feature differential tests and dedicated scorecard

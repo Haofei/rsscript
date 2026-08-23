@@ -542,6 +542,15 @@ pub enum MirInstruction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MirCallTarget {
     Function(FunctionId),
+    /// Direct generic call with a complete semantic substitution in declaration
+    /// order. The v1 executable still encodes `CallKnown`; these type IDs feed
+    /// only the optional versioned facts used by bounded native instances.
+    FunctionInstance {
+        function: FunctionId,
+        /// `(generic parameter type, concrete argument type)` pairs in source
+        /// declaration order.
+        type_substitutions: Box<[(TypeId, TypeId)]>,
+    },
     /// Closed-world protocol dispatch. The receiver's runtime layout is matched
     /// against a canonical `TypeId`; the selected implementation is a resolved
     /// `FunctionId`. Neither source protocol nor method spellings reach MIR.
@@ -2491,13 +2500,44 @@ fn verify_instruction(
             arguments,
         } => {
             define(*destination, defined)?;
+            if let MirCallTarget::FunctionInstance {
+                type_substitutions, ..
+            } = target
+            {
+                for (parameter, argument) in type_substitutions {
+                    if parameter.index() >= type_count || argument.index() >= type_count {
+                        return Err(MirValidationError::InvalidType {
+                            function: function.id,
+                            ty: if parameter.index() >= type_count {
+                                *parameter
+                            } else {
+                                *argument
+                            },
+                        });
+                    }
+                }
+            }
             let expected_modes = match target {
                 MirCallTarget::Function(target) if target.index() < functions.len() => functions
                     [target.index()]
                 .signature
                 .parameter_modes()
                 .to_vec(),
+                MirCallTarget::FunctionInstance {
+                    function: target, ..
+                } if target.index() < functions.len() => functions[target.index()]
+                    .signature
+                    .parameter_modes()
+                    .to_vec(),
                 MirCallTarget::Function(target) => {
+                    return Err(MirValidationError::InvalidFunctionTarget {
+                        function: function.id,
+                        target: *target,
+                    });
+                }
+                MirCallTarget::FunctionInstance {
+                    function: target, ..
+                } => {
                     return Err(MirValidationError::InvalidFunctionTarget {
                         function: function.id,
                         target: *target,

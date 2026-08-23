@@ -106,7 +106,8 @@ pub(in crate::reg_vm) enum TypedRegionOp {
         storage: VerifiedStorageType,
     },
     Call {
-        result: VerifiedStorageType,
+        result: TypedValueId,
+        result_storage: VerifiedStorageType,
         target: VerifiedCallTarget,
         arguments: Box<[TypedValueId]>,
         parameter_effects: Box<[VerifiedParamEffect]>,
@@ -367,6 +368,12 @@ impl TypedRegion {
         &self.field_accesses
     }
 
+    pub(in crate::reg_vm) fn reg_for_value(&self, value: TypedValueId) -> Option<Reg> {
+        self.values
+            .get(value.index_for_runtime())
+            .map(|value| value.vm_reg)
+    }
+
     pub(in crate::reg_vm) fn contains_instruction(&self, ip: usize) -> bool {
         self.included.get(ip).copied().unwrap_or(false)
     }
@@ -524,8 +531,13 @@ impl TypedRegionIr {
         self.summary
     }
 
-    /// Lower the typed blocks back to the existing register stream consumed by
-    /// the mature VM-to-Cranelift translator. Non-region instructions become a
+    /// Project typed blocks into the existing register stream consumed by the
+    /// mature VM-to-Cranelift backend.
+    ///
+    /// Typed field operations and known calls are rebuilt from verified IDs,
+    /// storage, and parameter-effect facts; their source instruction is not the
+    /// lowering authority. Operations not migrated to typed lowering yet retain
+    /// their validated source payload. Non-region instructions become a
     /// defensive boundary and cannot execute natively.
     pub(in crate::reg_vm) fn lower_to_reg_code(
         &self,
@@ -540,11 +552,62 @@ impl TypedRegionIr {
         let mut lowered_count = 0usize;
         for block in &self.blocks {
             for instruction in &block.instructions {
-                *lowered.get_mut(instruction.source_ip)? = instruction.source.clone();
+                *lowered.get_mut(instruction.source_ip)? =
+                    self.lower_instruction_for_native(instruction)?;
                 lowered_count = lowered_count.checked_add(1)?;
             }
         }
         (lowered_count == self.summary.instructions).then_some(lowered)
+    }
+
+    fn lower_instruction_for_native(
+        &self,
+        instruction: &TypedRegionInstruction,
+    ) -> Option<RegInstr> {
+        match &instruction.op {
+            TypedRegionOp::Field(access) => {
+                let base = self.typed.reg_for_value(access.base)?;
+                match access.kind {
+                    TypedFieldAccessKind::Read { result } => Some(RegInstr::GetFieldSlot {
+                        dst: self.typed.reg_for_value(result)?,
+                        base,
+                        slot: access.slot,
+                    }),
+                    TypedFieldAccessKind::Write { result, value } => Some(RegInstr::SetFieldSlot {
+                        dst: self.typed.reg_for_value(result)?,
+                        base,
+                        slot: access.slot,
+                        value: self.typed.reg_for_value(value)?,
+                    }),
+                }
+            }
+            TypedRegionOp::Call {
+                result,
+                target: VerifiedCallTarget::Known(function),
+                arguments,
+                parameter_effects,
+                ..
+            } if matches!(instruction.source, RegInstr::CallKnown { .. }) => {
+                let args = arguments
+                    .iter()
+                    .map(|argument| self.typed.reg_for_value(*argument))
+                    .collect::<Option<Vec<_>>>()?;
+                let mut_args = parameter_effects
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, effect)| {
+                        (*effect == VerifiedParamEffect::Mut).then_some(index)
+                    })
+                    .collect();
+                Some(RegInstr::CallKnown {
+                    dst: self.typed.reg_for_value(*result)?,
+                    function: *function,
+                    args,
+                    mut_args,
+                })
+            }
+            _ => Some(instruction.source.clone()),
+        }
     }
 
     fn validate(&self) -> Option<()> {
@@ -591,6 +654,7 @@ impl TypedRegionIr {
                     }
                     TypedRegionOp::Call {
                         result,
+                        result_storage,
                         target,
                         arguments,
                         parameter_effects,
@@ -602,7 +666,10 @@ impl TypedRegionIr {
                             VerifiedCallTarget::Provider(symbol)
                             | VerifiedCallTarget::Intrinsic(symbol) => !symbol.is_empty(),
                         };
-                        *result != VerifiedStorageType::Unknown
+                        *result_storage != VerifiedStorageType::Unknown
+                            && instruction.writes.contains(result)
+                            && self.typed.values[result.index_for_runtime()].storage
+                                == *result_storage
                             && target_valid
                             && arguments.len() == parameter_effects.len()
                             && arguments.iter().all(|argument| {
@@ -798,6 +865,7 @@ fn typed_region_op(
         _ if facts.call_site(source_ip).is_some() => {
             let call = facts.call_site(source_ip)?;
             let arguments = typed_call_argument_regs(source)?;
+            let result = typed_call_result_reg(source)?;
             if call.params.contains(&VerifiedStorageType::Unknown)
                 || call.result == VerifiedStorageType::Unknown
                 || call.params.len() != arguments.len()
@@ -806,7 +874,8 @@ fn typed_region_op(
                 return None;
             }
             Some(TypedRegionOp::Call {
-                result: call.result,
+                result: value(result)?,
+                result_storage: call.result,
                 target: call.target.clone(),
                 arguments: arguments
                     .iter()
@@ -840,6 +909,19 @@ fn typed_call_argument_regs(source: &RegInstr) -> Option<&[Reg]> {
         | RegInstr::CallClosure { args, .. }
         | RegInstr::CallIntrinsic { args, .. }
         | RegInstr::CallTypedIntrinsic { args, .. } => Some(args),
+        _ => None,
+    }
+}
+
+fn typed_call_result_reg(source: &RegInstr) -> Option<Reg> {
+    match source {
+        RegInstr::CallKnown { dst, .. }
+        | RegInstr::CallDynamic { dst, .. }
+        | RegInstr::SpawnTask { dst, .. }
+        | RegInstr::CallExternal { dst, .. }
+        | RegInstr::CallClosure { dst, .. }
+        | RegInstr::CallIntrinsic { dst, .. }
+        | RegInstr::CallTypedIntrinsic { dst, .. } => Some(*dst),
         _ => None,
     }
 }
@@ -1172,16 +1254,55 @@ mod tests {
             .find_map(|instruction| match &instruction.op {
                 TypedRegionOp::Call {
                     result,
+                    result_storage,
                     target,
                     arguments,
                     parameter_effects,
-                } => Some((result, target, arguments, parameter_effects)),
+                } => Some((result, result_storage, target, arguments, parameter_effects)),
                 _ => None,
             })
             .expect("call op");
-        assert_eq!(*call.0, VerifiedStorageType::Int);
-        assert!(matches!(call.1, VerifiedCallTarget::Intrinsic(_)));
-        assert_eq!(call.2.len(), 1);
+        assert_eq!(ir.typed().values[call.0.index_for_runtime()].vm_reg, 1);
+        assert_eq!(*call.1, VerifiedStorageType::Int);
+        assert!(matches!(call.2, VerifiedCallTarget::Intrinsic(_)));
         assert_eq!(call.3.len(), 1);
+        assert_eq!(call.4.len(), 1);
+    }
+
+    #[test]
+    fn known_call_native_projection_is_rebuilt_from_typed_facts() {
+        let function = function(
+            2,
+            vec![
+                RegInstr::LoadInt { dst: 0, value: 7 },
+                RegInstr::CallKnown {
+                    dst: 1,
+                    function: 99,
+                    args: vec![0],
+                    mut_args: vec![0],
+                },
+                RegInstr::Return { src: 1 },
+            ],
+        );
+        let mut facts = facts(&function);
+        facts.reg_types[1] = VerifiedStorageType::Int;
+        facts.call_sites[1] = Some(VerifiedCallSite {
+            target: VerifiedCallTarget::Known(99),
+            params: vec![VerifiedStorageType::Int].into_boxed_slice(),
+            result: VerifiedStorageType::Int,
+            param_effects: vec![VerifiedParamEffect::Mut].into_boxed_slice(),
+            type_arguments: Box::new([]),
+        });
+        let ir = TypedRegionIr::derive(&function, &facts, &[true; 3]).expect("typed call IR");
+        let lowered = ir.lower_to_reg_code(&function).expect("native projection");
+        assert!(matches!(
+            &lowered[1],
+            RegInstr::CallKnown {
+                dst: 1,
+                function: 99,
+                args,
+                mut_args,
+            } if args == &[0] && mut_args == &[0]
+        ));
     }
 }

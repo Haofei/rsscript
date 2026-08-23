@@ -140,10 +140,44 @@ fn infer_signature_return_type(
     value_types: &HirValueTypes,
 ) -> Option<ResolvedType> {
     let return_type = signature.return_ty.clone()?;
+    let substitutions = infer_signature_substitutions(hir, signature, callee, args, value_types)?;
+    Some(return_type.substitute(&substitutions))
+}
+
+/// Return concrete generic arguments in declaration order when semantic
+/// inference proved every parameter at this call site.  This is the structured
+/// hand-off used by backend lowering: callers must not reconstruct generic
+/// instances from callee spellings or runtime values.
+pub(crate) fn infer_call_type_arguments(
+    hir: &Hir,
+    signature: &FunctionSig,
+    callee: &Callee,
+    args: &[CallArg],
+    value_types: &HirValueTypes,
+) -> Vec<ResolvedType> {
+    let Some(substitutions) =
+        infer_signature_substitutions(hir, signature, callee, args, value_types)
+    else {
+        return Vec::new();
+    };
+    signature
+        .type_params
+        .iter()
+        .map(|parameter| substitutions.get(parameter).cloned())
+        .collect::<Option<Vec<_>>>()
+        .unwrap_or_default()
+}
+
+fn infer_signature_substitutions(
+    hir: &Hir,
+    signature: &FunctionSig,
+    callee: &Callee,
+    args: &[CallArg],
+    value_types: &HirValueTypes,
+) -> Option<BTreeMap<String, ResolvedType>> {
     if signature.type_params.is_empty() {
         return None;
     }
-
     let generic_params = signature
         .type_params
         .iter()
@@ -169,11 +203,7 @@ fn infer_signature_return_type(
         &mut substitutions,
     );
 
-    if substitutions.is_empty() {
-        None
-    } else {
-        Some(return_type.substitute(&substitutions))
-    }
+    (!substitutions.is_empty()).then_some(substitutions)
 }
 
 fn collect_callee_type_substitutions(

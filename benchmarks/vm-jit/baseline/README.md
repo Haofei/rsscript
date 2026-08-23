@@ -23,3 +23,8 @@ versions, fixture digest, affinity/governor, alternating sample order, compile a
 resident-code telemetry, normal yields and native/OSR/continuation entries. It
 refuses fewer than 20 measured samples. Developer-machine scorecards remain CI
 artifacts and must not be copied into this directory as canonical evidence.
+
+Every measured case also carries helper/BCE/LICM evidence,
+scalar-unroll/SIMD research-candidate counts, semantic parity, and the controlled
+15% retention-threshold verdict. A candidate count is not an active optimization
+and cannot make that verdict pass by itself.
