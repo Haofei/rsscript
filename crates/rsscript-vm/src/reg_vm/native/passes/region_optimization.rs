@@ -66,7 +66,7 @@ pub(in crate::reg_vm) fn native_capturing_callee_inlinable(
 ///   a wrong handle simply bails. We require the producer to be exactly one of those
 ///   reads so the operand is provably a fetched heap value (never a scalar register
 ///   reinterpreted as a handle).
-#[cfg(feature = "native-jit")]
+#[cfg(all(feature = "native-jit", feature = "jit-speculation"))]
 pub(in crate::reg_vm) fn native_readable_closure_operand(
     func: &RegFunction,
     closure: usize,
@@ -89,7 +89,7 @@ pub(in crate::reg_vm) fn native_readable_closure_operand(
     read_regs.get(closure).copied().unwrap_or(false)
 }
 
-#[cfg(feature = "native-jit")]
+#[cfg(all(feature = "native-jit", feature = "jit-speculation"))]
 pub(in crate::reg_vm) fn native_readable_or_sinkable_closure_operand_candidate(
     func: &RegFunction,
     closure: usize,
@@ -108,7 +108,15 @@ pub(in crate::reg_vm) fn native_readable_or_sinkable_closure_operand_candidate(
     value_regs.get(closure).copied().unwrap_or(false)
 }
 
-#[cfg(feature = "native-jit")]
+#[cfg(all(feature = "native-jit", not(feature = "jit-speculation")))]
+pub(in crate::reg_vm) fn native_readable_or_sinkable_closure_operand_candidate(
+    _func: &RegFunction,
+    _closure: usize,
+) -> bool {
+    false
+}
+
+#[cfg(all(feature = "native-jit", feature = "jit-speculation"))]
 pub(in crate::reg_vm) fn monomorphic_closure_inline_target(
     unit: &RegUnit,
     func: &RegFunction,
@@ -116,9 +124,6 @@ pub(in crate::reg_vm) fn monomorphic_closure_inline_target(
     call_count: u32,
     i: usize,
 ) -> Option<usize> {
-    if !cfg!(any(test, feature = "jit-speculation")) {
-        return None;
-    }
     let (closure, args, mut_args) = match func.code.get(i)? {
         RegInstr::CallClosure {
             closure,
@@ -170,6 +175,17 @@ pub(in crate::reg_vm) fn monomorphic_closure_inline_target(
     Some(k)
 }
 
+#[cfg(all(feature = "native-jit", not(feature = "jit-speculation")))]
+pub(in crate::reg_vm) fn monomorphic_closure_inline_target(
+    _unit: &RegUnit,
+    _func: &RegFunction,
+    _profile: Option<&FunctionProfile>,
+    _call_count: u32,
+    _i: usize,
+) -> Option<usize> {
+    None
+}
+
 /// polymorphic inline cache gate. If the `CallClosure` at instruction index
 /// `i` qualifies, return its 2–3 observed callee ids (into `unit.functions`);
 /// otherwise `None`. Sibling to [`monomorphic_closure_inline_target`] — after the
@@ -190,7 +206,7 @@ pub(in crate::reg_vm) fn monomorphic_closure_inline_target(
 ///   exact same side-effect-free subset on the interpreter.
 ///
 /// Read-only over the profile (a `try_borrow`, never a panic); never mutates state.
-#[cfg(feature = "native-jit")]
+#[cfg(all(feature = "native-jit", feature = "jit-speculation"))]
 pub(in crate::reg_vm) fn polymorphic_closure_inline_targets(
     unit: &RegUnit,
     func: &RegFunction,
@@ -198,9 +214,6 @@ pub(in crate::reg_vm) fn polymorphic_closure_inline_targets(
     call_count: u32,
     i: usize,
 ) -> Option<Vec<usize>> {
-    if !cfg!(any(test, feature = "jit-speculation")) {
-        return None;
-    }
     let (closure, args, mut_args) = match func.code.get(i)? {
         RegInstr::CallClosure {
             closure,
@@ -255,28 +268,27 @@ pub(in crate::reg_vm) fn polymorphic_closure_inline_targets(
     Some(ranked.into_iter().map(|(k, _, _)| k).collect())
 }
 
-/// True if `func` contains a `CallClosure` that *structurally* could become profile-guided inlining-
-/// inlinable (non-`mut`, closure operand is a parameter handle, observed/observable
-/// callee native-inlinable) but whose bounded type profile has **not yet frozen** on a stable
-/// mono/poly decision. While such a site is pending, native translation must be
-/// RETRIED on a later (warmer) call rather than cached as permanently ineligible —
-/// otherwise a function that tiers up to native before its profile warms would be
-/// disabled forever and profile-guided inlining could never fire.
-///
-/// Returns false once the profile is frozen ([`PROFILE_RECORD_LIMIT`] reached): the
-/// decision (mono → single guard, poly → PIC, mega/ineligible → no inline) is then
-/// stable and the usual NOT_ELIGIBLE caching is sound.
-#[cfg(feature = "native-jit")]
+#[cfg(all(feature = "native-jit", not(feature = "jit-speculation")))]
+pub(in crate::reg_vm) fn polymorphic_closure_inline_targets(
+    _unit: &RegUnit,
+    _func: &RegFunction,
+    _profile: Option<&FunctionProfile>,
+    _call_count: u32,
+    _i: usize,
+) -> Option<Vec<usize>> {
+    None
+}
+
+/// Whether a closure-call site could become eligible after its bounded profile
+/// freezes. The implementation is compiled only for the research feature; the
+/// stable native tier has no retry state for speculative closure shapes.
+#[cfg(all(feature = "native-jit", feature = "jit-speculation"))]
 pub(in crate::reg_vm) fn native_translation_pending_on_profile(
     _unit: &RegUnit,
     func: &RegFunction,
     profile: Option<&FunctionProfile>,
     call_count: u32,
 ) -> bool {
-    if !cfg!(any(test, feature = "jit-speculation")) {
-        return false;
-    }
-    // Frozen profile ⇒ no further state change ⇒ never pending.
     if call_count >= PROFILE_RECORD_LIMIT {
         return false;
     }
@@ -287,17 +299,22 @@ pub(in crate::reg_vm) fn native_translation_pending_on_profile(
             if !mut_args.is_empty() || !native_readable_closure_operand(func, *closure) {
                 return false;
             }
-            // Structurally could still settle on a qualifying mono/poly decision:
-            // either no samples yet, or a non-megamorphic profile that hasn't frozen
-            // (a mono site may stay mono or grow into a qualifying 2–3-callee poly
-            // site; a poly site may add a 3rd inlinable callee). A missing
-            // profile is conservatively pending; a megamorphic site is stable.
             profile
                 .and_then(|profile| profile.call_sites.get(&i))
                 .is_none_or(|feedback| feedback.state() != MonoState::Megamorphic)
         }
         _ => false,
     })
+}
+
+#[cfg(all(feature = "native-jit", not(feature = "jit-speculation")))]
+pub(in crate::reg_vm) fn native_translation_pending_on_profile(
+    _unit: &RegUnit,
+    _func: &RegFunction,
+    _profile: Option<&FunctionProfile>,
+    _call_count: u32,
+) -> bool {
+    false
 }
 
 /// Whether `instr` is one of the four `Option` register-ops that the scalar-

@@ -801,6 +801,7 @@ impl NativeRegionAnalysis {
         self.liveness.live_out(ip, reg)
     }
 
+    #[cfg(feature = "jit-speculation")]
     pub(in crate::reg_vm) fn profile_guidance(
         &self,
         code: &[RegInstr],
@@ -1021,6 +1022,7 @@ impl NativeRegionAnalysis {
         Some(())
     }
 
+    #[cfg(feature = "jit-speculation")]
     fn reachable_defs_closed_under_moves(
         &self,
         code: &[RegInstr],
@@ -1039,6 +1041,7 @@ impl NativeRegionAnalysis {
         Some(mask)
     }
 
+    #[cfg(feature = "jit-speculation")]
     pub(super) fn reachable_heap_read_defs_closed_under_moves(
         &self,
         code: &[RegInstr],
@@ -1049,6 +1052,7 @@ impl NativeRegionAnalysis {
         })
     }
 
+    #[cfg(feature = "jit-speculation")]
     fn reachable_make_closure_defs_closed_under_moves(
         &self,
         code: &[RegInstr],
@@ -1059,6 +1063,7 @@ impl NativeRegionAnalysis {
         })
     }
 
+    #[cfg(feature = "jit-speculation")]
     pub(super) fn native_readable_or_sinkable_closure_operands(
         &self,
         code: &[RegInstr],

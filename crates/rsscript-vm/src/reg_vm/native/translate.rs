@@ -56,20 +56,27 @@ pub(in crate::reg_vm) fn native_whole_function_region_exit(code: &[RegInstr]) ->
     exit
 }
 
-#[cfg(feature = "native-jit")]
+#[cfg(all(feature = "native-jit", feature = "jit-speculation"))]
 fn native_profile_guidance_with_analysis(
     profile: Option<&FunctionProfile>,
     code: &[RegInstr],
     ip_map: &[usize],
     analysis: &NativeRegionAnalysis,
 ) -> NativeProfileGuidance {
-    if !cfg!(any(test, feature = "jit-speculation")) {
-        return NativeProfileGuidance::default();
-    }
     let Some(profile) = profile else {
         return NativeProfileGuidance::default();
     };
     analysis.profile_guidance(code, profile, ip_map)
+}
+
+#[cfg(all(feature = "native-jit", not(feature = "jit-speculation")))]
+fn native_profile_guidance_with_analysis(
+    _profile: Option<&FunctionProfile>,
+    _code: &[RegInstr],
+    _ip_map: &[usize],
+    _analysis: &NativeRegionAnalysis,
+) -> NativeProfileGuidance {
+    NativeProfileGuidance::default()
 }
 
 #[cfg(feature = "native-jit")]

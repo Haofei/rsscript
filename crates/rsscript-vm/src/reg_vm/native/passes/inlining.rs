@@ -330,12 +330,15 @@ fn native_inline_leaf_calls_inner(
         RegInstr::CallKnown { .. } => in_region(i) && !preserve_call_known(i),
         RegInstr::SpawnTask { .. } => in_region(i),
         RegInstr::CallClosure { closure, .. } => {
-            in_region(i)
-                && (sinkable.sink_calls.contains_key(closure)
-                    || monomorphic_closure_inline_target(unit, func, profile, call_count, i)
-                        .is_some()
+            let sinkable_call = sinkable.sink_calls.contains_key(closure);
+            #[cfg(feature = "jit-speculation")]
+            let speculative_call =
+                monomorphic_closure_inline_target(unit, func, profile, call_count, i).is_some()
                     || polymorphic_closure_inline_targets(unit, func, profile, call_count, i)
-                        .is_some())
+                        .is_some();
+            #[cfg(not(feature = "jit-speculation"))]
+            let speculative_call = false;
+            in_region(i) && (sinkable_call || speculative_call)
         }
         _ => false,
     });
@@ -773,6 +776,7 @@ fn native_inline_leaf_calls_inner(
             // splice the body. This is the sibling of the profile-guided inlining monomorphic path with the
             // guard removed and the captures sourced from the alloc site instead of a
             // heap closure handle.
+            #[cfg(feature = "jit-speculation")]
             RegInstr::CallClosure {
                 dst,
                 closure,
@@ -946,6 +950,7 @@ fn native_inline_leaf_calls_inner(
                 });
                 ip_map.push(i);
             }
+            #[cfg(feature = "jit-speculation")]
             RegInstr::CallClosure {
                 dst,
                 closure,
