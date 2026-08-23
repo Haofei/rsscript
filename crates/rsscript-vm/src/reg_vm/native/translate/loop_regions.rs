@@ -34,15 +34,14 @@ pub(in crate::reg_vm) struct OsrScalarField {
     pub(in crate::reg_vm) writeback: bool,
 }
 
-/// One conservative continuation region. The first implementation intentionally
-/// admits only straight-line scalar work. `exit` points at the VM instruction that
-/// must execute next; generated code never executes the barrier itself.
+/// One conservative scalar CFG continuation. Generated code executes only the
+/// marked instructions and yields normally before any entry in `exits`.
 #[cfg(feature = "native-jit")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::reg_vm) struct ContinuationRegion {
     pub(in crate::reg_vm) entry: usize,
-    pub(in crate::reg_vm) exit: usize,
-    pub(in crate::reg_vm) barrier: NativeBarrierReason,
+    pub(in crate::reg_vm) included: Vec<bool>,
+    pub(in crate::reg_vm) exits: BTreeMap<usize, NativeBarrierReason>,
 }
 
 /// A compiled scalar continuation cached per function, entry, and runtime shape.
@@ -51,57 +50,79 @@ pub(in crate::reg_vm) struct ContinuationRegion {
 pub(in crate::reg_vm) struct ContinuationEntry {
     pub(in crate::reg_vm) id: vm_jit::CompiledId,
     pub(in crate::reg_vm) entry: usize,
-    pub(in crate::reg_vm) exit: usize,
-    pub(in crate::reg_vm) barrier: NativeBarrierReason,
+    pub(in crate::reg_vm) exits: BTreeMap<usize, NativeBarrierReason>,
     pub(in crate::reg_vm) n_jit_regs: usize,
     pub(in crate::reg_vm) reg_types: Vec<NativeTy>,
     pub(in crate::reg_vm) written_regs: Vec<bool>,
 }
 
-/// Find the first useful straight-line scalar region beginning at `entry`.
+/// Find a useful scalar CFG region beginning at `entry`.
 ///
-/// This is deliberately narrower than the eventual CFG region builder: it stops
-/// before the first static call or function return, rejects branches and helpers,
-/// and requires enough direct work to amortize one native/VM transition. Those
-/// constraints make the initial continuation path side-effect free and therefore
-/// independent from the heap transaction machinery.
+/// Direct instructions, branches, and loops remain inside the region. Calls,
+/// returns, synchronous helpers, and unsupported operations become normal exits.
+/// Translation and dispatch still reject non-scalar frame shapes.
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn detect_scalar_continuation_region(
     code: &[RegInstr],
     entry: usize,
 ) -> Option<ContinuationRegion> {
     const MIN_DIRECT_WORK: usize = 3;
+    const MAX_REGION_INSTRUCTIONS: usize = 512;
+    const MAX_REGION_EXITS: usize = 16;
     if entry >= code.len() {
         return None;
     }
+    let mut included = vec![false; code.len()];
+    let mut exits = BTreeMap::new();
+    let mut pending = vec![entry];
     let mut direct_work = 0usize;
-    for (ip, instr) in code.iter().enumerate().skip(entry) {
-        match instr {
-            RegInstr::CallKnown { mut_args, .. } if mut_args.is_empty() => {
-                return (direct_work >= MIN_DIRECT_WORK).then_some(ContinuationRegion {
-                    entry,
-                    exit: ip,
-                    barrier: NativeBarrierReason::StaticCall,
-                });
-            }
-            RegInstr::Return { .. } => {
-                return (direct_work >= MIN_DIRECT_WORK).then_some(ContinuationRegion {
-                    entry,
-                    exit: ip,
-                    barrier: NativeBarrierReason::FunctionReturn,
-                });
-            }
-            RegInstr::Jump { .. }
-            | RegInstr::JumpIfBool { .. }
-            | RegInstr::JumpIfIntCompare { .. }
-            | RegInstr::RuntimeError { .. } => return None,
-            _ if native_lowering_class(instr) == NativeLoweringClass::Direct => {
-                direct_work = direct_work.saturating_add(1);
-            }
-            _ => return None,
+    while let Some(ip) = pending.pop() {
+        let instr = code.get(ip)?;
+        if included[ip] || exits.contains_key(&ip) {
+            continue;
         }
+        let lowering = native_lowering_class(instr);
+        let barrier = match (instr, lowering) {
+            (RegInstr::CallKnown { mut_args, .. }, NativeLoweringClass::Yield { reason })
+                if mut_args.is_empty() =>
+            {
+                Some(reason)
+            }
+            (RegInstr::Return { .. }, _) => Some(NativeBarrierReason::FunctionReturn),
+            (_, NativeLoweringClass::Helper { .. }) => {
+                Some(NativeBarrierReason::UnsupportedIntrinsic)
+            }
+            (_, NativeLoweringClass::Yield { reason }) => Some(reason),
+            (_, NativeLoweringClass::Reject) => Some(NativeBarrierReason::UnsupportedInstruction),
+            _ => None,
+        };
+        if let Some(reason) = barrier {
+            exits.insert(ip, reason);
+            if exits.len() > MAX_REGION_EXITS {
+                return None;
+            }
+            continue;
+        }
+        if lowering != NativeLoweringClass::Direct
+            || matches!(
+                instr,
+                RegInstr::RuntimeError { .. } | RegInstr::TailCallGuard
+            )
+        {
+            return None;
+        }
+        included[ip] = true;
+        direct_work = direct_work.saturating_add(1);
+        if direct_work > MAX_REGION_INSTRUCTIONS {
+            return None;
+        }
+        native_instr_successors(instr, ip, code.len(), |successor| pending.push(successor));
     }
-    None
+    (direct_work >= MIN_DIRECT_WORK && !exits.is_empty()).then_some(ContinuationRegion {
+        entry,
+        included,
+        exits,
+    })
 }
 
 /// Lower a conservative continuation through the mature OSR window-entry path,
@@ -109,11 +130,19 @@ pub(in crate::reg_vm) fn detect_scalar_continuation_region(
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn translate_scalar_continuation_region(
     func: &RegFunction,
-    region: ContinuationRegion,
+    region: &ContinuationRegion,
     param_native_types: &[Option<NativeTy>],
 ) -> Option<(vm_jit::JitFunction, Vec<NativeTy>, Vec<bool>)> {
-    if region.entry >= region.exit || region.exit >= func.code.len() {
+    if region.entry >= func.code.len() || region.included.len() != func.code.len() {
         return None;
+    }
+    let mut synthetic = func.code.clone();
+    for (ip, instr) in synthetic.iter_mut().enumerate().skip(region.entry) {
+        if !region.included[ip] {
+            *instr = RegInstr::RuntimeError {
+                message: "native continuation boundary".to_string(),
+            };
+        }
     }
     let immutable_leaf_params = vec![false; func.params];
     let (
@@ -125,13 +154,13 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
         written_regs,
         string_literals,
     ) = translate_osr_loop_inner(
-        &func.code,
+        &synthetic,
         func.regs,
         func.params,
         func.captures,
         OsrLoop {
             header: region.entry,
-            exit: region.exit,
+            exit: synthetic.len(),
         },
         Vec::new(),
         HashMap::new(),
@@ -147,10 +176,59 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
     {
         return None;
     }
-    *jit_fn.code.get_mut(region.exit)? = vm_jit::JitInstr::RegionExit {
-        exit_id: u32::try_from(region.exit).ok()?,
-    };
+    for &exit in region.exits.keys() {
+        *jit_fn.code.get_mut(exit)? = vm_jit::JitInstr::RegionExit {
+            exit_id: u32::try_from(exit).ok()?,
+        };
+    }
     Some((jit_fn, reg_types, written_regs))
+}
+
+#[cfg(all(test, feature = "native-jit"))]
+mod continuation_tests {
+    use super::*;
+
+    #[test]
+    fn scalar_cfg_region_keeps_branches_and_records_multiple_normal_exits() {
+        let code = vec![
+            RegInstr::LoadInt { dst: 0, value: 7 },
+            RegInstr::LoadInt { dst: 1, value: 3 },
+            RegInstr::LessInt {
+                dst: 2,
+                lhs: 1,
+                rhs: 0,
+            },
+            RegInstr::JumpIfBool {
+                cond: 2,
+                expected: true,
+                target: 6,
+            },
+            RegInstr::AddInt {
+                dst: 3,
+                lhs: 0,
+                rhs: 1,
+            },
+            RegInstr::Return { src: 3 },
+            RegInstr::SubInt {
+                dst: 3,
+                lhs: 0,
+                rhs: 1,
+            },
+            RegInstr::CallKnown {
+                dst: 4,
+                function: 1,
+                args: vec![3],
+                mut_args: Vec::new(),
+            },
+        ];
+        let region = detect_scalar_continuation_region(&code, 0).expect("scalar CFG region");
+        assert!(region.included[3], "conditional branch stays native");
+        assert_eq!(
+            region.exits.get(&5),
+            Some(&NativeBarrierReason::FunctionReturn)
+        );
+        assert_eq!(region.exits.get(&7), Some(&NativeBarrierReason::StaticCall));
+    }
 }
 
 /// A compiled OSR loop cached per function. The OSR loop is detected and compiled

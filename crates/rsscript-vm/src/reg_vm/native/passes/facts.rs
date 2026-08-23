@@ -303,7 +303,7 @@ pub(in crate::reg_vm) enum RegFootprint {
 }
 
 #[cfg(feature = "native-jit")]
-pub(super) fn native_instr_successors(
+pub(in crate::reg_vm) fn native_instr_successors(
     instr: &RegInstr,
     ip: usize,
     code_len: usize,

@@ -24,6 +24,10 @@ const CASES: &[(&str, &str)] = &[
         "struct Boxed { value: Int } fn boundary(value: Int) -> Int { let boxed = Boxed(value: value); return boxed.value } fn main() -> Int { let a = 7; let b = a * 3; let c = b + 11; let d = boundary(value: c); let e = d * 5; let f = e - 9; let g = f + 2; return g }",
     ),
     (
+        "branch-continuation.rss",
+        "struct BoxedBranch { value: Int } fn branch_boundary(value: Int) -> Int { let boxed = BoxedBranch(value: value); return boxed.value } fn choose(flag: Bool) -> Int { let a = 7; let b = a * 3; let c = b + 11; if flag { let d = branch_boundary(value: c); let e = d * 5; let f = e - 9; let g = f + 2; return g } else { let h = c * 2; let i = h + 5; let j = i - 1; return j } } fn main() -> Int { let left = choose(flag: true); let right = choose(flag: false); return left + right }",
+    ),
+    (
         "native-list-write.rss",
         include_str!("../../../benchmarks/vm-jit/kernels/native_list_write_loop.rss"),
     ),
@@ -142,6 +146,12 @@ fn native_engine_matches_the_verified_interpreter_corpus() {
             assert!(
                 continuation_entries >= 2 && continuation_yields >= 2,
                 "both sides of the interpreted call must execute as native continuations"
+            );
+        }
+        if *file == "branch-continuation.rss" {
+            assert!(
+                continuation_entries >= 2 && continuation_yields >= 2,
+                "a branched region and its post-call continuation must both enter; entries={continuation_entries}, yields={continuation_yields}, barriers={native_barrier_counts:?}"
             );
         }
         cases_with_native_entry +=

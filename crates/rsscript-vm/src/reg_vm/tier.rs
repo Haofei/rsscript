@@ -1508,7 +1508,7 @@ impl RegVm {
                     return false;
                 }
                 let compiled =
-                    translate_scalar_continuation_region(func, region, &param_native_types)
+                    translate_scalar_continuation_region(func, &region, &param_native_types)
                         .and_then(|(jit_fn, reg_types, written_regs)| {
                             let admission =
                                 begin_native_compile(native, 1, NativeCodeTier::Baseline)?;
@@ -1539,8 +1539,7 @@ impl RegVm {
                                     Some(ContinuationEntry {
                                         id,
                                         entry: region.entry,
-                                        exit: region.exit,
-                                        barrier: region.barrier,
+                                        exits: region.exits.clone(),
                                         n_jit_regs: jit_fn.n_regs as usize,
                                         reg_types,
                                         written_regs,
@@ -1603,9 +1602,10 @@ impl RegVm {
         let Some(vm_jit::NativeOutcome::Yield { exit_id, live, .. }) = result else {
             return false;
         };
-        if exit_id as usize != entry.exit {
+        let exit = exit_id as usize;
+        let Some(barrier) = entry.exits.get(&exit).copied() else {
             return false;
-        }
+        };
 
         let mut updates = Vec::new();
         for vm_jit::DeoptReg { reg, value } in live {
@@ -1624,7 +1624,7 @@ impl RegVm {
         for (slot, value) in updates {
             self.set_reg(slot, value);
         }
-        self.frames.last_mut().expect("active frame").ip = entry.exit;
+        self.frames.last_mut().expect("active frame").ip = exit;
         if let Some(native) = self.native.as_mut()
             && native.collect_stats
         {
@@ -1634,7 +1634,7 @@ impl RegVm {
             *native
                 .stats
                 .native_barrier_counts
-                .entry(entry.barrier.as_str().to_string())
+                .entry(barrier.as_str().to_string())
                 .or_default() += 1;
         }
         true

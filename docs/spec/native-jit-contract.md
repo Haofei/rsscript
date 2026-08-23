@@ -42,9 +42,10 @@ explicit trusted/unbounded execution mode until accounting parity is implemented
   commits completed region work, materializes its bounded live scalar state, and
   resumes the VM at the barrier instruction. A deopt aborts transactional work
   and follows the existing precise-resume or replay contract. The initial stable
-  continuation slice admits only straight-line scalar regions around non-`mut`
-  `CallKnown` barriers and function returns; heap, branching, async, Provider, and
-  resource barriers remain interpreter-owned until their contracts are added.
+  continuation slice admits bounded scalar CFG regions with branches, loops, and
+  multiple normal exits around non-`mut` `CallKnown` barriers and function
+  returns. Heap values, async, Provider, and resource barriers remain
+  interpreter-owned until their contracts are added.
 - Structural compilation work is bounded by `JitLimits` before Cranelift code
   generation. Instruction, register, CFG-edge, operand, analysis-word, deopt,
   memo-scope, callee, and recursive-group counts have deterministic limits.
