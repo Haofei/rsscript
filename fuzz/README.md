@@ -1,8 +1,8 @@
 # RSScript fuzzing
 
 Coverage-guided ([cargo-fuzz] / libFuzzer) harness for the RSScript front end,
-Artifact verifier, binding descriptors, execution reports, and isolated-runner
-protocol framing.
+Artifact verifier, binding descriptors, execution reports, isolated-runner
+protocol framing, and the structured native-JIT IR validation boundary.
 This is a **standalone crate**, detached from the parent workspace, so it never
 builds during `cargo build --workspace` or stable CI (libFuzzer needs nightly).
 
@@ -25,6 +25,10 @@ boundaries:
   `rsscript.execution_report.v1` consumer contract without panicking.
 - **`runner_protocol`** — hostile request/response bytes exercise bounded
   isolated-runner framing and canonical round-trips without panicking.
+- **`jit_ir_validate`** — bounded structured JIT functions must either cross the
+  typed validation boundary or produce a clean rejection; malformed register and
+  control-flow combinations must never panic. It is behind `native-jit` so normal
+  wire fuzzing does not compile Cranelift.
 
 ## Running
 
@@ -36,6 +40,7 @@ cargo +nightly fuzz run bytecode_artifact
 cargo +nightly fuzz run binding_descriptor
 cargo +nightly fuzz run execution_report
 cargo +nightly fuzz run runner_protocol
+cargo +nightly fuzz run jit_ir_validate --features native-jit
 ```
 
 The scheduled `Runner hardening` workflow runs a bounded `runner_protocol`
@@ -85,4 +90,5 @@ cargo +nightly fuzz run <target> artifacts/<target>/crash-<hash>
 Native JIT parity is covered by the phase-typed
 `native_jit_differential` integration target and the `vm-jit` validation,
 deopt, OSR, allocation, and mutated-IR tests. It no longer depends on the
-retired dynamic SDK compatibility harness.
+retired dynamic SDK compatibility harness. The scheduled JIT hardening workflow
+also runs `jit_ir_validate` with coverage feedback.

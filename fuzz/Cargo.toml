@@ -43,8 +43,12 @@ features = ["execution"]
 [dependencies.rsscript-runner-protocol]
 path = "../crates/rsscript-runner-protocol"
 
+[dependencies.rsscript-jit-cranelift]
+path = "../crates/rsscript-jit-cranelift"
+optional = true
+
 [features]
-native-jit = ["rsscript-sdk/native-jit"]
+native-jit = ["rsscript-sdk/native-jit", "dep:rsscript-jit-cranelift"]
 
 # Prevent this from interfering with `cargo test` over the parent tree.
 [[bin]]
@@ -95,6 +99,17 @@ path = "fuzz_targets/runner_protocol.rs"
 test = false
 doc = false
 bench = false
+
+# Structured, bounded JIT IR must either validate cleanly or produce a typed
+# rejection. This target is feature-gated so ordinary wire-boundary fuzz builds
+# do not compile Cranelift.
+[[bin]]
+name = "jit_ir_validate"
+path = "fuzz_targets/jit_ir_validate.rs"
+test = false
+doc = false
+bench = false
+required-features = ["native-jit"]
 
 [profile.release]
 debug = 1

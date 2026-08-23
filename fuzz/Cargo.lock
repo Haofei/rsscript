@@ -1193,6 +1193,7 @@ dependencies = [
  "jsonschema",
  "libfuzzer-sys",
  "rsscript-bytecode",
+ "rsscript-jit-cranelift",
  "rsscript-runner-protocol",
  "rsscript-sdk",
  "serde_json",

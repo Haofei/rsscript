@@ -12,7 +12,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use rsscript_sdk::{compile::Severity, language::format_source, compile::Compiler};
+use rsscript_sdk::{compile::Compiler, compile::Severity, language::format_source};
 
 fuzz_target!(|data: &[u8]| {
     let Ok(source) = std::str::from_utf8(data) else {

@@ -86,3 +86,6 @@ jobs:
           docker compose run --rm dev bash -lc 'rustup toolchain install nightly-2026-07-20 && (command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --version 0.13.2 --locked) && cd fuzz && cargo +nightly-2026-07-20 fuzz run bytecode_artifact -- -runs=10000 -max_total_time=30'
           docker compose run --rm dev bash -lc 'cd fuzz && cargo +nightly-2026-07-20 fuzz run binding_descriptor -- -runs=10000 -max_total_time=30'
           docker compose run --rm dev bash -lc 'cd fuzz && cargo +nightly-2026-07-20 fuzz run execution_report -- -runs=10000 -max_total_time=30'
+
+      - name: Structured JIT IR validation fuzz smoke
+        run: docker compose run --rm dev bash -lc 'cd fuzz && cargo +nightly-2026-07-20 fuzz run jit_ir_validate --features native-jit -- -runs=20000 -max_total_time=60'

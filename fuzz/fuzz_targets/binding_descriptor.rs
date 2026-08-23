@@ -10,10 +10,8 @@ use libfuzzer_sys::fuzz_target;
 fn validator() -> &'static Validator {
     static VALIDATOR: OnceLock<Validator> = OnceLock::new();
     VALIDATOR.get_or_init(|| {
-        let schema = serde_json::from_str(include_str!(
-            "../../schemas/rsscript-bindings-v1.json"
-        ))
-        .expect("checked-in binding schema must be JSON");
+        let schema = serde_json::from_str(include_str!("../../schemas/rsscript-bindings-v1.json"))
+            .expect("checked-in binding schema must be JSON");
         jsonschema::validator_for(&schema).expect("checked-in binding schema must compile")
     })
 }

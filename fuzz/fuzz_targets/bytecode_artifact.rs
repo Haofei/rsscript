@@ -16,7 +16,10 @@ fuzz_target!(|data: &[u8]| {
             .artifact()
             .to_bytes()
             .expect("a verified Artifact must serialize");
-        assert_eq!(canonical, data, "verified Artifact encoding is not canonical");
+        assert_eq!(
+            canonical, data,
+            "verified Artifact encoding is not canonical"
+        );
         BytecodeVerifier::default()
             .verify(&canonical)
             .expect("a verified Artifact must remain verified after round-trip");

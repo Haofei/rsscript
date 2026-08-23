@@ -63,18 +63,18 @@ use cranelift_codegen::settings::{self, Configurable};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::{ArenaMemoryProvider, JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module, default_libcall_names};
+use deopt::{DeoptChildSite, DeoptMap, DeoptSite};
+pub use deopt::{DeoptFrame, DeoptReg, DeoptValue, NativeOutcome, SafepointId};
 pub use executable_memory::ExecutableMemoryBudget;
 use executable_memory::{ExecutableMemoryReservation, arena_allocation_charge};
-pub use deopt::{DeoptFrame, DeoptReg, DeoptValue, NativeOutcome, SafepointId};
-use deopt::{DeoptChildSite, DeoptMap, DeoptSite};
-pub use host_abi::{
-    FlatBufferArg, HostCtx, HostHeapEffect, HostHeapProjection, HostHelper, HostHelpers,
-};
 use host_abi::{
-    CALL_FRAME_SIZE, FRAME_ABI_VERSION, FRAME_ARGS, FRAME_ARG_COUNT, FRAME_BAIL, FRAME_DEOPT,
+    CALL_FRAME_SIZE, FRAME_ABI_VERSION, FRAME_ARG_COUNT, FRAME_ARGS, FRAME_BAIL, FRAME_DEOPT,
     FRAME_FLAGS, FRAME_HOST_CTX, FRAME_LENS, FRAME_LIMITS, FRAME_LOGICAL_DEPTH,
     FRAME_LOGICAL_DEPTH_LIMIT, FRAME_NATIVE_DEPTH, FRAME_RESULT, FRAME_SAFEPOINT, FRAME_SIZE,
     HostFailureMode, JIT_CALL_ABI_VERSION, JitCallFrame, JitStatus,
+};
+pub use host_abi::{
+    FlatBufferArg, HostCtx, HostHeapEffect, HostHeapProjection, HostHelper, HostHelpers,
 };
 pub use ir::{
     FloatRounding, HostArg, JitCompare, JitControlFlow, JitFunction, JitInstr, JitValueType,
