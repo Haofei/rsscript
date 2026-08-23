@@ -246,7 +246,8 @@ pub(in crate::reg_vm) fn native_region_profitability(
             | JitInstr::TailCallGuard { .. }
             | JitInstr::Return { .. }
             | JitInstr::Bail
-            | JitInstr::OsrExit => {}
+            | JitInstr::OsrExit
+            | JitInstr::RegionExit { .. } => {}
         }
     }
     p.score = score;

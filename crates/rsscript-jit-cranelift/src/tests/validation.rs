@@ -606,6 +606,37 @@ fn osr_exit_returns_updated_logical_tail_depth() {
 }
 
 #[test]
+fn region_exit_is_a_distinct_commit_capable_outcome() {
+    let mut module = module();
+    let function = ft(
+        0,
+        vec![JitValueType::Int],
+        vec![
+            JitInstr::LoadInt { dst: 0, value: 41 },
+            JitInstr::RegionExit { exit_id: 7 },
+        ],
+    );
+    let id = module
+        .compile_osr(&function, 0, false, false)
+        .expect("compile continuation region");
+    let outcome = module.call(id, &[0], &[0]);
+    let NativeOutcome::Yield {
+        exit_id,
+        safepoint_id,
+        live,
+    } = outcome
+    else {
+        panic!("expected normal region yield");
+    };
+    assert_eq!(exit_id, 7);
+    assert_ne!(safepoint_id, SafepointId::ANONYMOUS);
+    assert!(
+        live.iter()
+            .any(|reg| { reg.reg == 0 && reg.value == crate::DeoptValue::Int(41) })
+    );
+}
+
+#[test]
 fn enforces_normal_and_osr_terminators() {
     let normal = f(0, 0, vec![JitInstr::OsrExit]);
     assert!(crate::validate(&normal, false).is_err());

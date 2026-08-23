@@ -137,6 +137,14 @@ pub enum NativeOutcome {
     /// output table is cleared by the VM-side guard, so a bailed attempt has no
     /// observable heap result, preserving transactional fallback equivalence.
     CompletedHandle(i64),
+    /// A planned normal exit from a compiled continuation region. Unlike deopt,
+    /// the embedding VM must materialize the captured live state and commit the
+    /// native transaction before resuming at the region exit.
+    Yield {
+        exit_id: u32,
+        safepoint_id: SafepointId,
+        live: Vec<DeoptReg>,
+    },
     /// The function deopted at `safepoint_id` (a guard bail or a host-helper bail)
     /// and the caller must fall back to the interpreter. `live` carries each
     /// register definitely assigned at the resume point with its captured value

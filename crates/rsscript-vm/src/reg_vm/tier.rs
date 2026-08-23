@@ -1255,6 +1255,17 @@ impl RegVm {
                     }
                 }
             }
+            // Whole-function entries never contain RegionExit. Treat a mismatched
+            // compiled handle as a fail-closed fallback rather than committing a
+            // transaction under continuation semantics.
+            vm_jit::NativeOutcome::Yield { .. } => {
+                heap_tx.abort();
+                if let Some(native) = self.native.as_mut() {
+                    native.record_bail(&version_key);
+                }
+                scratch.restore(self.native.as_mut());
+                NativeAttempt::Fallback
+            }
             vm_jit::NativeOutcome::Deopt {
                 safepoint_id,
                 live,

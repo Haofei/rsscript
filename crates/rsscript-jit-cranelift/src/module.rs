@@ -432,7 +432,9 @@ impl NativeOutcome {
     pub fn completed(self) -> Option<i64> {
         match self {
             NativeOutcome::Completed(value) => Some(value),
-            NativeOutcome::CompletedHandle(_) | NativeOutcome::Deopt { .. } => None,
+            NativeOutcome::CompletedHandle(_)
+            | NativeOutcome::Yield { .. }
+            | NativeOutcome::Deopt { .. } => None,
         }
     }
 
@@ -444,7 +446,9 @@ impl NativeOutcome {
     pub fn completed_handle(self) -> Option<i64> {
         match self {
             NativeOutcome::CompletedHandle(handle) => Some(handle),
-            NativeOutcome::Completed(_) | NativeOutcome::Deopt { .. } => None,
+            NativeOutcome::Completed(_)
+            | NativeOutcome::Yield { .. }
+            | NativeOutcome::Deopt { .. } => None,
         }
     }
 
@@ -460,7 +464,7 @@ impl NativeOutcome {
     pub fn completed_any_bits(self) -> Option<i64> {
         match self {
             NativeOutcome::Completed(value) | NativeOutcome::CompletedHandle(value) => Some(value),
-            NativeOutcome::Deopt { .. } => None,
+            NativeOutcome::Yield { .. } | NativeOutcome::Deopt { .. } => None,
         }
     }
 }
@@ -1577,6 +1581,14 @@ impl NativeModule {
                         NativeOutcome::CompletedHandle(out)
                     } else {
                         NativeOutcome::Completed(out)
+                    }
+                } else if completed == JitStatus::Yielded && bail == 0 {
+                    let safepoint_id = SafepointId(safepoint as u32);
+                    let frame = self.decode_deopt_frame(id, safepoint_id, 0, &buf);
+                    NativeOutcome::Yield {
+                        exit_id: u32::try_from(out).unwrap_or(u32::MAX),
+                        safepoint_id,
+                        live: frame.map_or_else(Vec::new, |frame| frame.live),
                     }
                 } else {
                     let safepoint_id = SafepointId(safepoint as u32);

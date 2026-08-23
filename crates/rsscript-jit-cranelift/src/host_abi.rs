@@ -2,7 +2,7 @@
 /// just forwards it from [`NativeModule::call`] to every imported host helper.
 pub type HostCtx = i64;
 
-pub const JIT_CALL_ABI_VERSION: u32 = 2;
+pub const JIT_CALL_ABI_VERSION: u32 = 3;
 
 /// Single versioned argument passed to generated functions. Keeping the machine
 /// ABI to one pointer prevents caller/codegen parameter-order drift as execution
@@ -57,6 +57,7 @@ pub enum JitStatus {
     Deopt = 0,
     Completed = 1,
     AbiMismatch = 2,
+    Yielded = 3,
 }
 
 pub(crate) const DEFAULT_STANDALONE_JIT_ARENA_BYTES: u64 = 64 * 1024 * 1024;

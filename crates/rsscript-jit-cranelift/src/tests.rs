@@ -65,7 +65,7 @@ fn validate(program: &JitFunction) -> Result<(), JitError> {
 
 #[test]
 fn call_frame_layout_is_versioned_and_stable() {
-    assert_eq!(JIT_CALL_ABI_VERSION, 2);
+    assert_eq!(JIT_CALL_ABI_VERSION, 3);
     assert_eq!(
         CALL_FRAME_SIZE as usize,
         std::mem::size_of::<JitCallFrame>()

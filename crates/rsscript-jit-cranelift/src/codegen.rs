@@ -439,6 +439,7 @@ pub(crate) fn build_function(
 
     // The shared fallback block: "not completed".
     let fallback = bcx.create_block();
+    let yielded = bcx.create_block();
 
     // Constant-modulo proofs require the target list to contain at least the
     // divisor's number of elements. Check that once at anonymous entry instead of
@@ -1772,6 +1773,27 @@ pub(crate) fn build_function(
                 bcx.ins().jump(fallback, &[]);
                 terminated = true;
             }
+            JitInstr::RegionExit { exit_id } => {
+                // A continuation boundary is a normal, commit-capable exit. Capture
+                // the same bounded live-state payload as deopt, but return a distinct
+                // status so the VM cannot accidentally apply rollback/replay semantics.
+                let exit = bcx.ins().iconst(types::I64, i64::from(*exit_id));
+                bcx.ins().store(MemFlags::trusted(), exit, out_ptr, 0);
+                let always = bcx.ins().iconst(types::I8, 1);
+                let cont = bail_if(
+                    &mut bcx,
+                    always,
+                    yielded,
+                    safepoint_ptr,
+                    payload_ptr,
+                    &vars,
+                    &mut next_id,
+                    deopt!(i, unconditional),
+                );
+                bcx.switch_to_block(cont);
+                bcx.ins().jump(yielded, &[]);
+                terminated = true;
+            }
             JitInstr::ListGetIntDirect { dst, base, index } => {
                 let result = emit_direct_get(
                     &mut bcx,
@@ -1932,6 +1954,14 @@ pub(crate) fn build_function(
     }
     let zero8 = bcx.ins().iconst(types::I8, 0);
     bcx.ins().return_(&[zero8]);
+
+    bcx.switch_to_block(yielded);
+    if let Some(steps_var) = steps_var {
+        let steps = bcx.use_var(steps_var);
+        bcx.ins().store(MemFlags::trusted(), steps, limits_ptr, 0);
+    }
+    let yielded_status = bcx.ins().iconst(types::I8, JitStatus::Yielded as i64);
+    bcx.ins().return_(&[yielded_status]);
 
     bcx.seal_all_blocks();
     bcx.finalize();

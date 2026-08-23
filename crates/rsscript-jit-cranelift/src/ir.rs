@@ -389,6 +389,12 @@ pub enum JitInstr {
     /// there (the precise-deopt resume path). Only valid in an OSR compilation; the
     /// default [`compile`](NativeModule::compile) path never emits it.
     OsrExit,
+    /// Planned normal exit from a continuation region. `exit_id` is interpreted
+    /// only by the embedding VM; generated code captures the ordinary bounded
+    /// state-map payload and returns `JitStatus::Yielded`.
+    RegionExit {
+        exit_id: u32,
+    },
 }
 
 /// Canonical control-flow shape of one JIT instruction.
@@ -491,6 +497,7 @@ impl JitInstr {
             | Self::JumpIfIntCompare { .. }
             | Self::Return { .. }
             | Self::OsrExit
+            | Self::RegionExit { .. }
             | Self::Bail => None,
             #[cfg(feature = "speculation")]
             Self::ProfiledJumpIfBool { .. }
@@ -509,7 +516,8 @@ impl JitInstr {
             | Self::LoadBool { .. }
             | Self::Jump { .. }
             | Self::Bail
-            | Self::OsrExit => {}
+            | Self::OsrExit
+            | Self::RegionExit { .. } => {}
             Self::Move { src, .. }
             | Self::IntToFloat { src, .. }
             | Self::FloatToInt { src, .. }
@@ -617,7 +625,7 @@ impl JitInstr {
                 first: *some_ip,
                 second: *none_ip,
             },
-            Self::Return { .. } | Self::Bail | Self::OsrExit => Terminal,
+            Self::Return { .. } | Self::Bail | Self::OsrExit | Self::RegionExit { .. } => Terminal,
             _ => Fallthrough,
         };
         let heap = match self {

@@ -884,6 +884,13 @@ pub(crate) fn validate_with_limits(
                     ));
                 }
             }
+            JitInstr::RegionExit { .. } => {
+                if !osr {
+                    return Err(JitError::invalid_ir(
+                        "RegionExit: normal functions must exit through Return",
+                    ));
+                }
+            }
         }
     }
     #[cfg(feature = "memoization")]

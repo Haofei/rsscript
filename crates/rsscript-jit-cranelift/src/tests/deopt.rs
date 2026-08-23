@@ -389,7 +389,9 @@ fn osr_entry_runs_loop_and_exits_with_live_out() {
                     .expect("total is live-out");
                 assert_eq!(total, expected, "live-out total for n={n}");
             }
-            NativeOutcome::Completed(_) | NativeOutcome::CompletedHandle(_) => {
+            NativeOutcome::Completed(_)
+            | NativeOutcome::CompletedHandle(_)
+            | NativeOutcome::Yield { .. } => {
                 panic!("OSR loop must deopt at exit, not complete")
             }
         }
@@ -683,7 +685,9 @@ fn div_by_zero_bails() {
 fn live_value(outcome: &NativeOutcome, reg: u32) -> Option<DeoptValue> {
     match outcome {
         NativeOutcome::Deopt { live, .. } => live.iter().find(|r| r.reg == reg).map(|r| r.value),
-        NativeOutcome::Completed(_) | NativeOutcome::CompletedHandle(_) => None,
+        NativeOutcome::Completed(_)
+        | NativeOutcome::CompletedHandle(_)
+        | NativeOutcome::Yield { .. } => None,
     }
 }
 
@@ -966,7 +970,9 @@ fn force_bail_at_every_safepoint_captures_correct_state() {
                     );
                     live
                 }
-                NativeOutcome::Completed(_) | NativeOutcome::CompletedHandle(_) => {
+                NativeOutcome::Completed(_)
+                | NativeOutcome::CompletedHandle(_)
+                | NativeOutcome::Yield { .. } => {
                     panic!("{}: forced site {} did not bail", case.name, k)
                 }
             };
