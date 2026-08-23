@@ -30,7 +30,7 @@ impl RegVm {
                     .ok()
                     .and_then(char::from_u32)
                     .map(VmValue::Char)
-                    .map(|value| VmValue::some(value))
+                    .map(VmValue::some)
                     .unwrap_or(VmValue::OptionNone))
             }
             RegIntrinsic::CharIsAlphanumeric => {

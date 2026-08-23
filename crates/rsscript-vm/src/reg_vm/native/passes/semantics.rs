@@ -660,16 +660,14 @@ pub(in crate::reg_vm) fn native_deepcopy_param_unsoundly_mutated(
             | RegInstr::UnwrapVariantValue { dst, src, .. }
             | RegInstr::DequePopFront { dst, deque: src }
             | RegInstr::DequePopBack { dst, deque: src } = instr
+                && *src < n_regs
+                && *dst < n_regs
+                && tainted[*src]
+                && !tainted[*dst]
+                && native_is_heap_reg(ty, *dst)
             {
-                if *src < n_regs
-                    && *dst < n_regs
-                    && tainted[*src]
-                    && !tainted[*dst]
-                    && native_is_heap_reg(ty, *dst)
-                {
-                    tainted[*dst] = true;
-                    changed = true;
-                }
+                tainted[*dst] = true;
+                changed = true;
             }
         }
     }
@@ -680,22 +678,21 @@ pub(in crate::reg_vm) fn native_deepcopy_param_unsoundly_mutated(
         }
         // (a) IN-PLACE mutation of a tainted heap container — the leak: native mutates the
         // shared `Rc` the interpreter would have left untouched (it mutated only the copy).
-        if let Some(recv) = native_heap_mutation_receiver(instr) {
-            if recv < n_regs && tainted[recv] {
-                return true;
-            }
+        if let Some(recv) = native_heap_mutation_receiver(instr)
+            && recv < n_regs
+            && tainted[recv]
+        {
+            return true;
         }
         // (b) passing a tainted value as a `mut` arg to a (non-inlined) call: the callee
         // mutates it by reference, leaking to our caller. (`read` args are safe.)
         if let RegInstr::CallKnown { args, mut_args, .. }
         | RegInstr::CallClosure { args, mut_args, .. } = instr
-        {
-            if mut_args
+            && mut_args
                 .iter()
                 .any(|&p| args.get(p).is_some_and(is_tainted))
-            {
-                return true;
-            }
+        {
+            return true;
         }
         // (c) STORING a tainted value into caller-visible heap, or (d) RETURNING it. Native
         // would store/return the caller's original `Rc` (the interpreter stores/returns the
@@ -738,10 +735,10 @@ pub(in crate::reg_vm) fn native_deepcopy_param_unsoundly_mutated(
                     return true;
                 }
             }
-            RegInstr::MakeMap { entries, .. } => {
-                if entries.iter().any(|(k, v)| is_tainted(k) || is_tainted(v)) {
-                    return true;
-                }
+            RegInstr::MakeMap { entries, .. }
+                if entries.iter().any(|(k, v)| is_tainted(k) || is_tainted(v)) =>
+            {
+                return true;
             }
             _ => {}
         }
@@ -1205,12 +1202,8 @@ pub(in crate::reg_vm) fn deopt_replaceable_cold_arms(
         // if entry is genuinely a branch target, which for a leaf it is not — but a
         // whole-body cold function would have been native-translated already; be
         // conservative and reject `s == 0`).
-        if s == 0 {
+        if s == 0 || reachable[s - 1] && !native_instr_is_control_boundary(&code[s - 1]) {
             ok = false;
-        } else if reachable[s - 1] {
-            if !native_instr_is_control_boundary(&code[s - 1]) {
-                ok = false;
-            }
         }
         // No external control-flow edge into the interior `(s..=e]`. (An edge to `s`
         // itself from a preceding branch is fine — that is the cold-arm entry.)
@@ -1320,7 +1313,7 @@ pub(in crate::reg_vm) fn native_callee_inlinable_j3(callee: &RegFunction, n_args
     let reachable = native_reachable_instructions(&callee.code);
     let (cold, _arm_start) = deopt_replaceable_cold_arms(&callee.code, &reachable);
     callee.code.iter().enumerate().all(|(i, instr)| {
-        let ok = !reachable[i]
+        !reachable[i]
             || cold[i]
             || matches!(
                 instr,
@@ -1335,8 +1328,7 @@ pub(in crate::reg_vm) fn native_callee_inlinable_j3(callee: &RegFunction, n_args
                     | RegInstr::MatchMapGet { .. }
                     | RegInstr::MatchSortedMapGet { .. }
             )
-            || native_offset_regs_j3(instr, 0).is_some();
-        ok
+            || native_offset_regs_j3(instr, 0).is_some()
     })
 }
 

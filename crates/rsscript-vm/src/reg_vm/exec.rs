@@ -895,7 +895,7 @@ impl RegVm {
                     .borrow()
                     .get(&key)
                     .cloned()
-                    .map(|value| VmValue::some(value))
+                    .map(VmValue::some)
                     .unwrap_or(VmValue::OptionNone);
                 self.set_reg(base + *dst, value);
             }
@@ -937,8 +937,7 @@ impl RegVm {
                 let old = map.insert(key, value);
                 self.set_reg(
                     base + *dst,
-                    old.map(|value| VmValue::some(value))
-                        .unwrap_or(VmValue::OptionNone),
+                    old.map(VmValue::some).unwrap_or(VmValue::OptionNone),
                 );
             }
             RegInstr::MapRemove { dst, map, key } => {
@@ -948,8 +947,7 @@ impl RegVm {
                 let old = map.borrow_mut().remove(&key);
                 self.set_reg(
                     base + *dst,
-                    old.map(|value| VmValue::some(value))
-                        .unwrap_or(VmValue::OptionNone),
+                    old.map(VmValue::some).unwrap_or(VmValue::OptionNone),
                 );
             }
             RegInstr::Return { src } => {
@@ -1136,7 +1134,7 @@ impl RegVm {
         let value = expect_list_ref(self.reg(base + list))?
             .borrow_mut()
             .pop()
-            .map(|value| VmValue::some(value))
+            .map(VmValue::some)
             .unwrap_or(VmValue::OptionNone);
         self.set_reg(base + dst, value);
         Ok(())
@@ -1526,24 +1524,14 @@ impl RegVm {
                             // makes a stable retry cheap; a pending profile is re-probed).
                             if !osr_eager {
                                 let cc = self.jit_state.call_count(&func);
-                                if dynamic_osr_bail {
-                                    if let Some(native) = self.native.as_mut() {
-                                        native.osr_triggers.insert(
-                                            region_key,
-                                            OsrTrigger::Counting {
-                                                count: 0,
-                                                probe_cc: cc,
-                                            },
-                                        );
-                                    }
-                                } else if cc > prev_probe_cc
+                                let profile_progressed = cc > prev_probe_cc
                                     && native_translation_pending_on_profile(
                                         &self.unit,
                                         &func,
                                         self.jit_state.profile(&func),
                                         self.jit_state.call_count(&func),
-                                    )
-                                {
+                                    );
+                                if dynamic_osr_bail || profile_progressed {
                                     if let Some(native) = self.native.as_mut() {
                                         native.osr_triggers.insert(
                                             region_key,
@@ -2016,7 +2004,7 @@ impl RegVm {
                             let value = expect_deque_ref(self.reg(base + *deque))?
                                 .borrow_mut()
                                 .pop_back()
-                                .map(|value| VmValue::some(value))
+                                .map(VmValue::some)
                                 .unwrap_or(VmValue::OptionNone);
                             self.set_reg(base + *dst, value);
                         }
@@ -2024,7 +2012,7 @@ impl RegVm {
                             let value = expect_deque_ref(self.reg(base + *deque))?
                                 .borrow_mut()
                                 .pop_front() // O(1), unlike the old `Vec::remove(0)`
-                                .map(|value| VmValue::some(value))
+                                .map(VmValue::some)
                                 .unwrap_or(VmValue::OptionNone);
                             self.set_reg(base + *dst, value);
                         }
@@ -2169,9 +2157,7 @@ impl RegVm {
                                 sorted_map_remove_in_place(list.borrow_mut().as_boxed_mut(), &key)?;
                             self.set_reg(
                                 base + *dst,
-                                removed
-                                    .map(|value| VmValue::some(value))
-                                    .unwrap_or(VmValue::OptionNone),
+                                removed.map(VmValue::some).unwrap_or(VmValue::OptionNone),
                             );
                         }
                         RegInstr::BufferClear { dst, buffer } => {

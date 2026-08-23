@@ -746,7 +746,7 @@ impl RegVm {
                     expect_sorted_map_entries(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let key = intrinsic_arg(&self.stack, base, args, 1)?;
                 Ok(sorted_map_get(&entries, key)
-                    .map(|value| VmValue::some(value))
+                    .map(VmValue::some)
                     .unwrap_or(VmValue::OptionNone))
             }
             RegIntrinsic::PersistentMapInsert => {

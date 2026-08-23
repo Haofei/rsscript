@@ -2,7 +2,7 @@
 /// Shared by `compile_inner` and
 /// `compile_recursive_group` so the ABI is defined in exactly one place.
 ///
-/// `limits ptr` (J0.5) points at a host-owned 3-word `[i64; 3]` cell
+/// `limits ptr` points at a host-owned 3-word `[i64; 3]` cell
 /// `[steps, step_budget, cancel_addr]` used only by an armed OSR variant to enforce
 /// `step_budget`/`cancel` in generated code; unarmed compiles ignore it, and callers
 /// of unarmed functions may pass a null pointer.
@@ -61,15 +61,13 @@ fn build_child_call_frame(
     bcx.ins().stack_addr(ptr_ty, slot, 0)
 }
 
-/// Conservative host stack budget a native recursive call-chain may consume before
+/// Heuristic host stack budget used to decline native recursive call chains before
 /// the entry guard bails to the interpreter. Native `CallSelf`/`CallGroup` recurse
 /// on the host C stack, so the safe call depth is `stack_budget / native_frame_size`
-/// — frame-size-dependent, NOT a fixed count. This budget stays well under the
-/// smallest thread stack we expect to run on (worker/spawned threads can be ~2 MiB),
-/// leaving ample headroom for the interpreter fallback and the host frames sitting
-/// above the native chain. (A fully general guard would compare the live stack
-/// pointer against a captured limit; this static budget achieves the same safety
-/// property — never overflow before bailing — without per-call SP plumbing.)
+/// — frame-size-dependent, NOT a fixed count. This estimate is not a hard stack
+/// boundary: it cannot observe the live stack pointer, caller depth, or final
+/// target-specific spill layout. Non-tail native recursion therefore remains
+/// research-only and disabled in the stable SDK.
 pub(crate) const NATIVE_RECURSION_STACK_BUDGET_BYTES: i64 = 1 << 20; // 1 MiB
 
 /// Ceiling on the derived cap. Small scalar recursive frames (a few hundred bytes)
@@ -117,10 +115,9 @@ pub(crate) fn native_recursion_depth_cap(program: &JitFunction) -> i64 {
     (NATIVE_RECURSION_STACK_BUDGET_BYTES / frame).min(NATIVE_RECURSION_DEPTH_CAP_MAX)
 }
 
-/// In-generated-code `VmLimits` enforcement requested for this compile (J0.5,
-/// Exec-Spec §6.2). Each flag is set only when the corresponding limit is armed AND
-/// the slice can enforce it; an all-`false` value reproduces the byte-identical
-/// pre-J0.5 codegen. Only the OSR loop tier sets either flag today.
+/// In-generated-code `VmLimits` enforcement requested for this compile. Each flag
+/// is set only when the corresponding limit is armed and the generated region can
+/// enforce it. Only the OSR loop tier sets either flag today.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct LimitChecks {
     /// Emit a per-instruction step accumulator, a `steps > step_budget` test on every

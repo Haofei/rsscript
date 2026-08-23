@@ -496,10 +496,10 @@ impl RegVm {
         let len = list.borrow().len();
         let mut filtered = Vec::with_capacity(len);
         let pure_predicate = self.captureless_pure_closure_plan(unit, predicate, 1);
-        if let Some(ref plan) = pure_predicate {
-            if let Some(result) = Self::try_filter_int_list_with_plan(&list, plan) {
-                return result;
-            }
+        if let Some(ref plan) = pure_predicate
+            && let Some(result) = Self::try_filter_int_list_with_plan(&list, plan)
+        {
+            return result;
         }
         let mut pure_regs = Vec::new();
         for index in 0..len {
@@ -539,34 +539,34 @@ impl RegVm {
         // f64 ops, order, NaN/inf, and error behavior). Any case that does not
         // exactly match (wrong shape, non-scalar element, captures present)
         // falls through to the generic interpreter path below.
-        if let Some(form) = recognize_numeric_binary_closure(unit, folder) {
-            if matches!(state, VmValue::Int(_) | VmValue::Float(_)) {
-                let list = list.borrow();
-                if list
-                    .iter()
-                    .all(|item| matches!(item, VmValue::Int(_) | VmValue::Float(_)))
-                {
-                    for item in list.iter() {
-                        // Preserve the closure's operand order exactly: `state`
-                        // and `item` are placed at the two param registers, so
-                        // whichever param the lhs/rhs reads determines the order.
-                        let (lhs, rhs) = if form.lhs_is_state {
-                            (&state, &item)
-                        } else {
-                            (&item, &state)
-                        };
-                        state = eval_numeric_binary(form.op, lhs, rhs)?;
-                    }
-                    return Ok(state);
+        if let Some(form) = recognize_numeric_binary_closure(unit, folder)
+            && matches!(state, VmValue::Int(_) | VmValue::Float(_))
+        {
+            let list = list.borrow();
+            if list
+                .iter()
+                .all(|item| matches!(item, VmValue::Int(_) | VmValue::Float(_)))
+            {
+                for item in list.iter() {
+                    // Preserve the closure's operand order exactly: `state`
+                    // and `item` are placed at the two param registers, so
+                    // whichever param the lhs/rhs reads determines the order.
+                    let (lhs, rhs) = if form.lhs_is_state {
+                        (&state, &item)
+                    } else {
+                        (&item, &state)
+                    };
+                    state = eval_numeric_binary(form.op, lhs, rhs)?;
                 }
+                return Ok(state);
             }
         }
         let len = list.borrow().len();
         let pure_folder = self.captureless_pure_closure_plan(unit, folder, 2);
-        if let Some(ref plan) = pure_folder {
-            if let Some(result) = Self::try_fold_int_list_with_struct_plan(&list, &state, plan) {
-                return result;
-            }
+        if let Some(ref plan) = pure_folder
+            && let Some(result) = Self::try_fold_int_list_with_struct_plan(&list, &state, plan)
+        {
+            return result;
         }
         let mut pure_regs = Vec::new();
         for index in 0..len {
@@ -593,10 +593,10 @@ impl RegVm {
         let len = list.borrow().len();
         let mut mapped = Vec::with_capacity(len);
         let pure_mapper = self.captureless_pure_closure_plan(unit, mapper, 1);
-        if let Some(ref plan) = pure_mapper {
-            if let Some(result) = Self::try_map_int_list_with_plan(&list, plan) {
-                return result;
-            }
+        if let Some(ref plan) = pure_mapper
+            && let Some(result) = Self::try_map_int_list_with_plan(&list, plan)
+        {
+            return result;
         }
         let mut pure_regs = Vec::new();
         for index in 0..len {
@@ -1594,9 +1594,7 @@ impl RegVm {
                     return Err(EvalError::Runtime(message.clone()));
                 }
             };
-            if let Err(error) = step {
-                return Err(error);
-            }
+            step?;
         }
         Ok(VmValue::Unit)
     }

@@ -1,10 +1,10 @@
-//! Native (Cranelift) baseline JIT for the RSScript register VM's numeric /
-//! boolean / control-flow core — the native tier of
-//! `docs/spec/RSScript_Execution_Spec_v0.1.md` (§7; status in Appendix B).
+//! Native (Cranelift) JIT for the RSScript register VM's trusted in-process
+//! acceleration path. Its durable embedding and fallback rules are specified in
+//! `docs/spec/native-jit-contract.md`.
 //!
 //! # What it compiles
 //!
-//! A [`JitFunction`] is a stable, versioned slice of the VM's bytecode: the subset
+//! A [`JitFunction`] is a process-local, lockstep representation of the VM subset
 //! that operates on unboxed scalar registers — logical `Int`/`Bool` values stored
 //! in `i64` machine words and `Float` values stored in `f64` — plus heap reads,
 //! native-to-native calls, and a declared set of VM-owned transactional heap

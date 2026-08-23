@@ -199,9 +199,7 @@ fn compute_recursive_int_member_inner(
                 }
                 _ => return None,
             };
-            let Some(step_changed) = step else {
-                return None;
-            };
+            let step_changed = step?;
             changed |= step_changed;
         }
         if !changed {

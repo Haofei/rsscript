@@ -85,7 +85,7 @@ impl RegVm {
                 Ok(list
                     .borrow()
                     .first()
-                    .map(|value| VmValue::some(value))
+                    .map(VmValue::some)
                     .unwrap_or(VmValue::OptionNone))
             }
             RegIntrinsic::ListFlatMap => {
@@ -164,7 +164,7 @@ impl RegVm {
                 Ok(list
                     .borrow()
                     .last()
-                    .map(|value| VmValue::some(value))
+                    .map(VmValue::some)
                     .unwrap_or(VmValue::OptionNone))
             }
             RegIntrinsic::ListDedup => {

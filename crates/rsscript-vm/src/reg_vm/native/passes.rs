@@ -1,8 +1,13 @@
 //! Native-JIT analysis, eligibility, fold, scalar-replacement, inlining and
-//! closure-sink passes. Pure code-movement out of `reg_vm::mod` (Phase 2);
-//! every item retains its original `#[cfg(feature = "native-jit")]` attribute
-//! verbatim (now redundant under the cfg-gated `native` module, but harmless).
-#![allow(unused_imports)]
+//! closure-sink passes.
+#![allow(
+    unused_imports,
+    clippy::doc_lazy_continuation,
+    clippy::needless_range_loop,
+    clippy::ptr_arg,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 
 use std::collections::BTreeSet;
 

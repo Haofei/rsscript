@@ -202,7 +202,7 @@ fn native_compile_direct_scalar_callee(
     if native.collect_stats {
         native.stats.translated += 1;
     }
-    let Some(admission) = begin_native_compile(native, 1) else {
+    let Some(admission) = begin_native_compile(native, 1, NativeCodeTier::Baseline) else {
         stack.remove(&callee_key);
         return None;
     };
@@ -233,21 +233,21 @@ fn native_compile_direct_scalar_callee(
         return None;
     }
     let verify_native = cfg!(debug_assertions) || jit_native_verify_is_strict();
-    if verify_native {
-        if let Err(err) = jit_verify_compiled_native(
+    if verify_native
+        && let Err(err) = jit_verify_compiled_native(
             &native.baseline_module,
             id,
             &jit_fn,
             native.forced_safepoint,
-        ) {
-            debug_assert!(false, "native verifier failed: {err}");
-            if jit_native_verify_is_strict() {
-                if native.collect_stats {
-                    native.stats.compile_failed += 1;
-                }
-                stack.remove(&callee_key);
-                return None;
+        )
+    {
+        debug_assert!(false, "native verifier failed: {err}");
+        if jit_native_verify_is_strict() {
+            if native.collect_stats {
+                native.stats.compile_failed += 1;
             }
+            stack.remove(&callee_key);
+            return None;
         }
     }
     record_native_compile_stats(native, id, &jit_fn, NativeCodeTier::Baseline);
@@ -458,9 +458,7 @@ fn osr_loop_candidate_score(code: &[RegInstr], lp: OsrLoop) -> (u8, u8, u8, usiz
     let has_closure_call = region
         .iter()
         .any(|instr| matches!(instr, RegInstr::CallClosure { .. }));
-    let has_heap_write = region
-        .iter()
-        .any(|instr| native_instruction_has_heap_write(instr));
+    let has_heap_write = region.iter().any(native_instruction_has_heap_write);
     let has_list_read = region
         .iter()
         .any(|instr| matches!(instr, RegInstr::ListGet { .. } | RegInstr::ListLen { .. }));
@@ -651,7 +649,9 @@ impl RegVm {
                                     .set_native_status(func, NATIVE_STATUS_NOT_ELIGIBLE);
                                 None
                             } else {
-                                let Some(admission) = begin_native_compile(native, 1) else {
+                                let Some(admission) =
+                                    begin_native_compile(native, 1, NativeCodeTier::Baseline)
+                                else {
                                     native.cache.insert(version_key.clone(), None);
                                     return NativeAttempt::Fallback;
                                 };
@@ -678,23 +678,20 @@ impl RegVm {
                                         }
                                         let verify_native =
                                             cfg!(debug_assertions) || jit_native_verify_is_strict();
-                                        if verify_native {
-                                            if let Err(err) = jit_verify_compiled_native(
+                                        if verify_native
+                                            && let Err(err) = jit_verify_compiled_native(
                                                 &native.baseline_module,
                                                 id,
                                                 &jit_fn,
                                                 native.forced_safepoint,
-                                            ) {
-                                                debug_assert!(
-                                                    false,
-                                                    "native verifier failed: {err}"
-                                                );
-                                                if jit_native_verify_is_strict() {
-                                                    if native.collect_stats {
-                                                        native.stats.compile_failed += 1;
-                                                    }
-                                                    return NativeAttempt::Fallback;
+                                            )
+                                        {
+                                            debug_assert!(false, "native verifier failed: {err}");
+                                            if jit_native_verify_is_strict() {
+                                                if native.collect_stats {
+                                                    native.stats.compile_failed += 1;
                                                 }
+                                                return NativeAttempt::Fallback;
                                             }
                                         }
                                         record_native_compile_stats(
@@ -783,7 +780,8 @@ impl RegVm {
                 if *accumulated >= native.optimize_work_threshold
                     && !native.optimized_cache.contains_key(&version_key)
                     && let Some(jit_fn) = native.optimization_sources.remove(&version_key)
-                    && let Some(admission) = begin_native_compile(native, 1)
+                    && let Some(admission) =
+                        begin_native_compile(native, 1, NativeCodeTier::Optimized)
                 {
                     let compiled = if native.force_all_safepoints {
                         native
@@ -938,8 +936,7 @@ impl RegVm {
                 native.record_bail(&version_key);
             }
         };
-        for index in 0..n {
-            let param_type = param_types[index];
+        for (index, param_type) in param_types.iter().copied().enumerate().take(n) {
             let value = self.reg(base + index);
             let bits = match param_type {
                 NativeTy::Int => match value {
@@ -1074,8 +1071,8 @@ impl RegVm {
         {
             let mut flat_iter = flat_guards.iter();
             let mut flat_mut_iter = flat_mut_guards.iter_mut();
-            for index in 0..n {
-                match param_types[index] {
+            for (index, param_type) in param_types.iter().copied().enumerate().take(n) {
+                match param_type {
                     NativeTy::FlatInt => {
                         let slice = flat_iter
                             .next()
@@ -1535,12 +1532,12 @@ impl RegVm {
             selected_tier,
         ) = {
             // Fast path: cached and NOT at the header ⇒ nothing to do (no clone).
-            if let Some(native) = self.native.as_ref() {
-                if let Some(entry) = native.osr_cache.get(&osr_version_key) {
-                    match entry {
-                        Some(e) if e.orig_header == header_ip => {}
-                        _ => return false,
-                    }
+            if let Some(native) = self.native.as_ref()
+                && let Some(entry) = native.osr_cache.get(&osr_version_key)
+            {
+                match entry {
+                    Some(e) if e.orig_header == header_ip => {}
+                    _ => return false,
                 }
             }
             // Clone the unit handle before borrowing `self.native` mutably: the OSR
@@ -1651,7 +1648,8 @@ impl RegVm {
                                     return None;
                                 }
                                 let heap_input_regs = osr_heap_input_regs(&jit_fn);
-                                let admission = begin_native_compile(native, 1)?;
+                                let admission =
+                                    begin_native_compile(native, 1, NativeCodeTier::Baseline)?;
                                 match native.baseline_module.compile_osr(
                                     &jit_fn,
                                     lp.header as u32,
@@ -1669,20 +1667,20 @@ impl RegVm {
                                         }
                                         let verify_native =
                                             cfg!(debug_assertions) || jit_native_verify_is_strict();
-                                        if verify_native {
-                                            if let Err(err) = jit_verify_compiled_osr(
+                                        if verify_native
+                                            && let Err(err) = jit_verify_compiled_osr(
                                                 &native.baseline_module,
                                                 id,
                                                 &jit_fn,
                                                 lp.exit,
-                                            ) {
-                                                debug_assert!(
-                                                    false,
-                                                    "native OSR verifier failed: {err}"
-                                                );
-                                                if jit_native_verify_is_strict() {
-                                                    return None;
-                                                }
+                                            )
+                                        {
+                                            debug_assert!(
+                                                false,
+                                                "native OSR verifier failed: {err}"
+                                            );
+                                            if jit_native_verify_is_strict() {
+                                                return None;
                                             }
                                         }
                                         record_native_compile_stats(
@@ -2064,7 +2062,11 @@ impl RegVm {
                                         return None;
                                     }
                                     let heap_input_regs = osr_heap_input_regs(&jit_fn);
-                                    let admission = begin_native_compile(native, 1)?;
+                                    let admission = begin_native_compile(
+                                        native,
+                                        1,
+                                        NativeCodeTier::Baseline,
+                                    )?;
                                     match native.baseline_module.compile_osr(&jit_fn, lp.header as u32, emit_step, emit_cancel) {
                                         Ok(id) => {
                                             if !finish_native_compile(
@@ -2077,8 +2079,8 @@ impl RegVm {
                                             }
                                             let verify_native =
                                                 cfg!(debug_assertions) || jit_native_verify_is_strict();
-                                            if verify_native {
-                                                if let Err(err) = jit_verify_compiled_osr(
+                                            if verify_native
+                                                && let Err(err) = jit_verify_compiled_osr(
                                                     &native.baseline_module,
                                                     id,
                                                     &jit_fn,
@@ -2089,7 +2091,6 @@ impl RegVm {
                                                         return None;
                                                     }
                                                 }
-                                            }
                                             record_native_compile_stats(
                                                 native,
                                                 id,
@@ -2245,7 +2246,8 @@ impl RegVm {
                 if *accumulated >= native.optimize_work_threshold
                     && !native.optimized_osr_cache.contains_key(&osr_version_key)
                     && let Some(source) = native.osr_optimization_sources.remove(&osr_version_key)
-                    && let Some(admission) = begin_native_compile(native, 1)
+                    && let Some(admission) =
+                        begin_native_compile(native, 1, NativeCodeTier::Optimized)
                 {
                     let compiled = native
                         .optimized_module
@@ -2698,10 +2700,10 @@ impl RegVm {
         if emit_step {
             self.steps = jit_limits_cell_steps() as u64;
         }
-        if let Some(native) = self.native.as_mut() {
-            if let Some(elapsed) = elapsed {
-                native.stats.run_nanos += elapsed;
-            }
+        if let Some(native) = self.native.as_mut()
+            && let Some(elapsed) = elapsed
+        {
+            native.stats.run_nanos += elapsed;
         }
 
         // Phase 4: OSR-exit. The loop always exits via the `OsrExit` safepoint (a
@@ -2811,7 +2813,7 @@ impl RegVm {
                 let mut scalar_writebacks: Vec<(usize, Vec<(usize, i64)>)> = Vec::new();
                 for field in scalar_fields.iter().filter(|field| field.writeback) {
                     let Some(value) = live.iter().find_map(|live_reg| {
-                        (live_reg.reg as usize == field.native_reg).then(|| {
+                        (live_reg.reg as usize == field.native_reg).then_some({
                             match live_reg.value {
                                 vm_jit::DeoptValue::Int(value) => Some(value),
                                 vm_jit::DeoptValue::Bool(_) => None,

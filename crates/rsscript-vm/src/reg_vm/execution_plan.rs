@@ -154,7 +154,8 @@ impl NativeExecutionPlan {
             report: false,
             forced_safepoint: None,
             force_all_safepoints: false,
-            allow_recursive_calls: options.allow_recursive_calls,
+            allow_recursive_calls: options.allow_recursive_calls
+                && cfg!(feature = "jit-recursion-experimental"),
             cost_model: options.cost_model,
             osr_work_threshold: options.osr_work_threshold,
             admission: NativeAdmissionPolicy {
@@ -239,5 +240,15 @@ mod tests {
             !NativeJitOptions::default().allow_recursive_calls,
             "host-stack recursion must require an explicit trusted-host opt-in"
         );
+    }
+
+    #[cfg(all(feature = "native-jit", not(feature = "jit-recursion-experimental")))]
+    #[test]
+    fn stable_native_feature_cannot_enable_host_stack_recursion() {
+        let plan = NativeExecutionPlan::from_options(NativeJitOptions {
+            allow_recursive_calls: true,
+            ..NativeJitOptions::default()
+        });
+        assert!(!plan.allow_recursive_calls);
     }
 }

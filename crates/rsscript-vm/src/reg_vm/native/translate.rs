@@ -1,7 +1,12 @@
-//! Native-JIT IR producers and OSR-loop detection. Pure code-movement out of
-//! `reg_vm::mod` (Phase 2); every item retains its original
-//! `#[cfg(feature = "native-jit")]` attribute verbatim.
-#![allow(unused_imports)]
+//! Native-JIT IR producers and OSR-loop detection.
+// Translation works over parallel register/IP maps whose indices are semantic;
+// the typed tuple results are the private handoff between lowering stages.
+#![allow(
+    unused_imports,
+    clippy::needless_range_loop,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 
 use super::super::*;
 use super::passes::*;
@@ -2314,10 +2319,11 @@ fn translate_osr_loop_inner(
     // the seed and the inference agree. Fill-`None` only, so a flat-list param the region
     // pass classifies wins.
     for (reg, seed) in param_native_types.iter().enumerate().take(n_params) {
-        if let Some(t) = seed {
-            if reg < n_regs && ty[reg].is_none() {
-                ty[reg] = Some(*t);
-            }
+        if let Some(t) = seed
+            && reg < n_regs
+            && ty[reg].is_none()
+        {
+            ty[reg] = Some(*t);
         }
     }
     // J0.4 #1 correctness: a heap collection key/value that is a PARAM is classified
@@ -2682,18 +2688,17 @@ fn translate_osr_loop_inner(
         // grouping (hence behavior) is identical to the old converging cases.
         let mut handle_alias: Vec<usize> = (0..n_regs).collect();
         for i in lp.header..lp.exit {
-            if let RegInstr::Move { dst, src } = &code[i] {
-                if *dst < n_regs
-                    && *src < n_regs
-                    && ty[*dst] == Some(NativeTy::Handle)
-                    && ty[*src] == Some(NativeTy::Handle)
-                {
-                    let rd = osr_uf_find(&mut handle_alias, *dst);
-                    let rs = osr_uf_find(&mut handle_alias, *src);
-                    if rd != rs {
-                        let (lo, hi) = if rd < rs { (rd, rs) } else { (rs, rd) };
-                        handle_alias[hi] = lo;
-                    }
+            if let RegInstr::Move { dst, src } = &code[i]
+                && *dst < n_regs
+                && *src < n_regs
+                && ty[*dst] == Some(NativeTy::Handle)
+                && ty[*src] == Some(NativeTy::Handle)
+            {
+                let rd = osr_uf_find(&mut handle_alias, *dst);
+                let rs = osr_uf_find(&mut handle_alias, *src);
+                if rd != rs {
+                    let (lo, hi) = if rd < rs { (rd, rs) } else { (rs, rd) };
+                    handle_alias[hi] = lo;
                 }
             }
         }
@@ -2705,22 +2710,23 @@ fn translate_osr_loop_inner(
         let mut field_reads: Vec<Option<FieldRead>> = vec![None; n_regs];
         let mut field_read_disq = vec![false; n_regs];
         for i in lp.header..lp.exit {
-            if let Some(dst) = native_subset_dst(&code[i]) {
-                if dst < n_regs {
-                    written_in_loop[dst] = true;
-                }
+            if let Some(dst) = native_subset_dst(&code[i])
+                && dst < n_regs
+            {
+                written_in_loop[dst] = true;
             }
-            if let RegInstr::GetFieldSlot { dst, base, slot } = &code[i] {
-                if *dst < n_regs && *base < n_regs {
-                    let read = FieldRead {
-                        base: handle_alias[*base],
-                        slot: *slot,
-                    };
-                    match field_reads[*dst] {
-                        None => field_reads[*dst] = Some(read),
-                        Some(existing) if existing == read => {}
-                        Some(_) => field_read_disq[*dst] = true,
-                    }
+            if let RegInstr::GetFieldSlot { dst, base, slot } = &code[i]
+                && *dst < n_regs
+                && *base < n_regs
+            {
+                let read = FieldRead {
+                    base: handle_alias[*base],
+                    slot: *slot,
+                };
+                match field_reads[*dst] {
+                    None => field_reads[*dst] = Some(read),
+                    Some(existing) if existing == read => {}
+                    Some(_) => field_read_disq[*dst] = true,
                 }
             }
         }
@@ -2783,9 +2789,9 @@ fn translate_osr_loop_inner(
                     }
                 }
                 RegInstr::ListPush { list, value, .. } if is_handle_reg(*list) => {
-                    if ty[*value] != Some(NativeTy::Int) {
-                        st[*list] = S::Disq;
-                    } else if matches!(st[*list], S::Flat(NativeTy::FlatFloat)) {
+                    if ty[*value] != Some(NativeTy::Int)
+                        || matches!(st[*list], S::Flat(NativeTy::FlatFloat))
+                    {
                         st[*list] = S::Disq;
                     }
                 }
@@ -2804,8 +2810,7 @@ fn translate_osr_loop_inner(
                 _ => {}
             }
         }
-        let field_is_stable =
-            |read: FieldRead| !field_slot_written.iter().any(|written| *written == read);
+        let field_is_stable = |read: FieldRead| !field_slot_written.contains(&read);
         let mut field_kinds: Vec<(FieldRead, NativeTy)> = Vec::new();
         for reg in 0..n_regs {
             let Some(read) = field_reads[reg] else {
@@ -2907,18 +2912,17 @@ fn translate_osr_loop_inner(
         // computation above. Same class grouping, but guaranteed to converge.
         let mut alias: Vec<usize> = (0..n_regs).collect();
         for i in lp.header..lp.exit {
-            if let RegInstr::Move { dst, src } = &code[i] {
-                if *dst < n_regs
-                    && *src < n_regs
-                    && ty[*dst] == Some(NativeTy::Handle)
-                    && ty[*src] == Some(NativeTy::Handle)
-                {
-                    let rd = osr_uf_find(&mut alias, *dst);
-                    let rs = osr_uf_find(&mut alias, *src);
-                    if rd != rs {
-                        let (lo, hi) = if rd < rs { (rd, rs) } else { (rs, rd) };
-                        alias[hi] = lo;
-                    }
+            if let RegInstr::Move { dst, src } = &code[i]
+                && *dst < n_regs
+                && *src < n_regs
+                && ty[*dst] == Some(NativeTy::Handle)
+                && ty[*src] == Some(NativeTy::Handle)
+            {
+                let rd = osr_uf_find(&mut alias, *dst);
+                let rs = osr_uf_find(&mut alias, *src);
+                if rd != rs {
+                    let (lo, hi) = if rd < rs { (rd, rs) } else { (rs, rd) };
+                    alias[hi] = lo;
                 }
             }
         }

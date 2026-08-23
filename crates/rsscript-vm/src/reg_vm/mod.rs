@@ -1,29 +1,3 @@
-#![allow(
-    clippy::collapsible_if,
-    clippy::collapsible_match,
-    clippy::derivable_impls,
-    clippy::doc_lazy_continuation,
-    clippy::if_same_then_else,
-    clippy::items_after_test_module,
-    clippy::let_and_return,
-    clippy::manual_contains,
-    clippy::manual_slice_fill,
-    clippy::mutable_key_type,
-    clippy::needless_borrow,
-    clippy::needless_lifetimes,
-    clippy::needless_range_loop,
-    clippy::nonminimal_bool,
-    clippy::op_ref,
-    clippy::ptr_arg,
-    clippy::question_mark,
-    clippy::redundant_closure,
-    clippy::too_many_arguments,
-    clippy::type_complexity,
-    clippy::unnecessary_lazy_evaluations,
-    clippy::useless_conversion
-)]
-// VM/JIT compatibility code keeps its lint debt local to this implementation tree.
-
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -1856,11 +1830,88 @@ struct OsrVersionKey {
 /// State for the native JIT tier: the Cranelift modules owning compiled code,
 /// bounded per-function/per-region shape caches, and tiering/deopt knobs.
 #[cfg(feature = "native-jit")]
+struct LazyNativeModule {
+    helpers: vm_jit::HostHelpers,
+    baseline: bool,
+    budget: vm_jit::ExecutableMemoryBudget,
+    arena_bytes: u64,
+    module: Option<vm_jit::NativeModule>,
+    initialization_error: Option<String>,
+}
+
+#[cfg(feature = "native-jit")]
+impl LazyNativeModule {
+    fn new(
+        helpers: vm_jit::HostHelpers,
+        baseline: bool,
+        budget: vm_jit::ExecutableMemoryBudget,
+        arena_bytes: u64,
+    ) -> Self {
+        Self {
+            helpers,
+            baseline,
+            budget,
+            arena_bytes,
+            module: None,
+            initialization_error: None,
+        }
+    }
+
+    /// Allocate executable memory and build the host ISA only when the first
+    /// profitable region is actually admitted. A native-enabled execution that
+    /// stays on the interpreter therefore reserves no executable arena and pays
+    /// no Cranelift initialization cost.
+    fn ensure_initialized(&mut self) -> bool {
+        if self.module.is_some() {
+            return true;
+        }
+        if self.initialization_error.is_some() {
+            return false;
+        }
+        match vm_jit::NativeModule::new_with_opt_and_memory_budget(
+            self.helpers,
+            self.baseline,
+            self.budget.clone(),
+            self.arena_bytes,
+        ) {
+            Ok(module) => {
+                self.module = Some(module);
+                true
+            }
+            Err(error) => {
+                self.initialization_error = Some(error.to_string());
+                false
+            }
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+impl std::ops::Deref for LazyNativeModule {
+    type Target = vm_jit::NativeModule;
+
+    fn deref(&self) -> &Self::Target {
+        self.module
+            .as_ref()
+            .expect("native module must be initialized before use")
+    }
+}
+
+#[cfg(feature = "native-jit")]
+impl std::ops::DerefMut for LazyNativeModule {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.module
+            .as_mut()
+            .expect("native module must be initialized before use")
+    }
+}
+
+#[cfg(feature = "native-jit")]
 struct NativeState {
-    baseline_module: vm_jit::NativeModule,
+    baseline_module: LazyNativeModule,
     /// The speed-optimized tier. `None` is the explicit
     /// baseline-only diagnostic mode.
-    optimized_module: Option<vm_jit::NativeModule>,
+    optimized_module: Option<LazyNativeModule>,
     /// Shared hard executable-memory boundary for every tier in this run.
     executable_memory_budget: vm_jit::ExecutableMemoryBudget,
     /// Process-local JIT work admission. This bounds code made available for
@@ -3854,15 +3905,15 @@ fn jit_heap_deque_handle_with_ctx(
     ctx: JitHostCallCtx,
     handle: i64,
 ) -> Option<Rc<RefCell<VecDeque<VmValue>>>> {
-    if handle >= 0 {
-        if let Some(cached) = JIT_DEQUE_HANDLE_CACHE.with(|cache| {
+    if handle >= 0
+        && let Some(cached) = JIT_DEQUE_HANDLE_CACHE.with(|cache| {
             let cache = cache.borrow();
             cache
                 .as_ref()
                 .and_then(|cached| (cached.handle == handle).then(|| Rc::clone(&cached.deque)))
-        }) {
-            return Some(cached);
-        }
+        })
+    {
+        return Some(cached);
     }
     ctx.heap_read_handle(handle, |value| match value {
         VmValue::Deque(deque) => Some(Rc::clone(deque)),
@@ -4676,6 +4727,7 @@ extern "C" fn rss_jit_list_push_handle(
 }
 
 #[cfg(feature = "native-jit")]
+#[allow(clippy::collapsible_match)] // Guarded `Some` arms are not exhaustive.
 fn rss_jit_list_push_handle_with_ctx(ctx: JitHostCallCtx, handle: i64, value_handle: i64) -> i64 {
     // Resolve the heap value (clone it out of its table) before the journaled write.
     let Some(value) = ctx.heap_read_handle(value_handle, |value| Some(value.clone())) else {
@@ -4685,12 +4737,10 @@ fn rss_jit_list_push_handle_with_ctx(ctx: JitHostCallCtx, handle: i64, value_han
     match ctx.with_journaled_list_write(handle, move |list| list.checked_push_accounted(value).ok())
     {
         Some(grew) => {
-            if jit_mem_charge(grew as i64) {
-                0
-            } else {
+            if !jit_mem_charge(grew as i64) {
                 ctx.signal_bail();
-                0
             }
+            0
         }
         None => {
             ctx.signal_bail();
@@ -4712,17 +4762,16 @@ extern "C" fn rss_jit_list_push_float(_ctx: vm_jit::HostCtx, handle: i64, value:
 /// `rss_jit_list_get_float`. A non-Float list / invalid handle bails out-of-band,
 /// so a mis-typed lowering falls back to the interpreter.
 #[cfg(feature = "native-jit")]
+#[allow(clippy::collapsible_match)] // Guarded `Some` arms are not exhaustive.
 fn rss_jit_list_push_float_with_ctx(ctx: JitHostCallCtx, handle: i64, value: f64) -> i64 {
     match ctx.with_journaled_list_write(handle, |list| {
         list.checked_push_accounted(VmValue::Float(value)).ok()
     }) {
         Some(grew) => {
-            if jit_mem_charge(grew as i64) {
-                0
-            } else {
+            if !jit_mem_charge(grew as i64) {
                 ctx.signal_bail();
-                0
             }
+            0
         }
         None => {
             ctx.signal_bail();
@@ -6486,6 +6535,7 @@ impl NativeState {
         )
     }
 
+    #[allow(clippy::too_many_arguments)] // Test-only diagnostic constructor; production uses a plan.
     fn new_with_opt_and_forced_safepoint(
         tier_up_threshold: u32,
         force_bail: bool,
@@ -6518,25 +6568,21 @@ impl NativeState {
         };
         let optimized_arena_bytes = max_code_bytes.saturating_sub(baseline_arena_bytes);
         Ok(Self {
-            baseline_module: vm_jit::NativeModule::new_with_opt_and_memory_budget(
+            baseline_module: LazyNativeModule::new(
                 jit_host_helpers(),
                 !eager_optimized,
                 executable_memory_budget.clone(),
                 baseline_arena_bytes,
-            )
-            .map_err(|e| EvalError::Runtime(e.to_string()))?,
+            ),
             optimized_module: if baseline || eager_optimized {
                 None
             } else {
-                Some(
-                    vm_jit::NativeModule::new_with_opt_and_memory_budget(
-                        jit_host_helpers(),
-                        false,
-                        executable_memory_budget.clone(),
-                        optimized_arena_bytes,
-                    )
-                    .map_err(|e| EvalError::Runtime(e.to_string()))?,
-                )
+                Some(LazyNativeModule::new(
+                    jit_host_helpers(),
+                    false,
+                    executable_memory_budget.clone(),
+                    optimized_arena_bytes,
+                ))
             },
             executable_memory_budget,
             admission: NativeAdmissionBudget {

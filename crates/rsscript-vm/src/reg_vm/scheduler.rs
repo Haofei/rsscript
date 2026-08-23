@@ -265,14 +265,13 @@ impl RegVm {
         winner: TaskId,
     ) -> Result<(), EvalError> {
         for handle in handles {
-            if *handle != winner {
-                if let Some(task) = self.tasks.remove(handle)
-                    && task.done.is_none()
-                {
-                    self.tasks_cancelled = self.tasks_cancelled.saturating_add(1);
-                    self.tasks_live = self.tasks_live.saturating_sub(1);
-                    self.cleanup_task_resource_scopes(unit, *handle)?;
-                }
+            if *handle != winner
+                && let Some(task) = self.tasks.remove(handle)
+                && task.done.is_none()
+            {
+                self.tasks_cancelled = self.tasks_cancelled.saturating_add(1);
+                self.tasks_live = self.tasks_live.saturating_sub(1);
+                self.cleanup_task_resource_scopes(unit, *handle)?;
             }
         }
         Ok(())

@@ -503,7 +503,7 @@ impl NativeModule {
 
     /// Build a native module at a selectable optimization level.
     ///
-    /// `baseline == true` selects the Phase-2 path-B **baseline tier**:
+    /// `baseline == true` selects the **baseline tier**:
     /// `opt_level="none"`. Everything else — IR translation, host helpers, the
     /// bail-flag deopt protocol — is byte-for-byte identical to the optimizing
     /// path; only the Cranelift ISA `opt_level` flag changes. The win is
@@ -673,8 +673,8 @@ impl NativeModule {
         )
     }
 
-    /// Compile `function` as an **OSR (on-stack replacement) entry** at `header_ip`
-    /// (J5.2). Instead of the normal param-loading entry, the generated function's
+    /// Compile `function` as an **OSR (on-stack replacement) entry** at `header_ip`.
+    /// Instead of the normal param-loading entry, the generated function's
     /// entry block treats its `args_ptr` argument as the interpreter's **register
     /// window** (an `i64`/`f64` array of width `n_regs`, indexed by register), loads
     /// the registers definitely-assigned on entry to `header_ip` (the loop's
@@ -692,8 +692,8 @@ impl NativeModule {
     /// with an `n_regs`-long `lens` slice. An out-of-range `header_ip` (no leader
     /// block) is rejected as a [`JitError`].
     ///
-    /// `step_limit`/`cancel_armed` request in-generated-code `VmLimits` enforcement
-    /// (J0.5, Exec-Spec §6.2): when set, the loop ticks `step_budget` per instruction
+    /// `step_limit`/`cancel_armed` request in-generated-code `VmLimits` enforcement:
+    /// when set, the loop ticks `step_budget` per instruction
     /// and tests it (plus polls `cancel`) at every header, bailing to the interpreter
     /// — which then enforces the limit. The caller must use the unsafe raw limits
     /// entry with a valid non-null limits cell; ordinary safe call modes reject this

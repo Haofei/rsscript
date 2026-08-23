@@ -260,9 +260,11 @@ pub(in crate::reg_vm) fn native_region_profitability(
     //    distinct from a clean native-call leaf (`pic_sites == 0`), which is left to
     //    the adaptive `NATIVE_NOAMORTIZE_GIVEUP` demotion and never declined here.
     //
-    p.decline = (has_backedge && score <= DECLINE_AT)
-        || (!has_backedge && score < LOOP_FREE_MIN_SCORE)
-        || (!has_backedge && p.pic_sites > 0);
+    p.decline = if has_backedge {
+        score <= DECLINE_AT
+    } else {
+        score < LOOP_FREE_MIN_SCORE || p.pic_sites > 0
+    };
     p
 }
 

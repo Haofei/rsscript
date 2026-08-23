@@ -1,5 +1,8 @@
 //! Post-lowering analyses and rewrites for native JIT instruction streams.
 
+// These analyses intentionally keep instruction indices aligned across rewrites.
+#![allow(clippy::needless_range_loop, clippy::too_many_arguments)]
+
 use super::*;
 
 #[cfg(feature = "native-jit")]
@@ -309,9 +312,7 @@ where
                 }
             }
         } else {
-            for flag in &mut ok {
-                *flag = false;
-            }
+            ok.fill(false);
             break;
         }
         let allowed_read = query_read(instr).or_else(|| match instr {
@@ -332,9 +333,7 @@ where
                 }
             }
             RegFootprint::All => {
-                for flag in &mut ok {
-                    *flag = false;
-                }
+                ok.fill(false);
                 break;
             }
         }
@@ -388,7 +387,7 @@ pub(super) fn native_memoize_loop_invariant_runtime_helper_calls(
                 && native_field_load_args_loop_stable(
                     &args,
                     &invariants,
-                    &jit_code,
+                    jit_code,
                     heap_provenance.as_ref(),
                     lp.header,
                     lp.exit,
@@ -399,7 +398,7 @@ pub(super) fn native_memoize_loop_invariant_runtime_helper_calls(
                 && native_loop_preserves_heap_query(
                     &args,
                     NativeHeapDomain::Projection(vm_jit::HostHeapProjection::CollectionLen),
-                    &jit_code,
+                    jit_code,
                     heap_provenance.as_ref(),
                     lp.header,
                     lp.exit,
@@ -420,8 +419,8 @@ pub(super) fn native_memoize_loop_invariant_runtime_helper_calls(
             let Some(&result_ty) = native_reg_types.get(dst as usize) else {
                 continue;
             };
-            if !native_memoizable_result_type(helper, result_ty)
-                && !(field_load_eligible
+            if !(native_memoizable_result_type(helper, result_ty)
+                || field_load_eligible
                     && matches!(result_ty, NativeTy::Int | NativeTy::Bool | NativeTy::Float))
             {
                 continue;
@@ -437,10 +436,9 @@ pub(super) fn native_memoize_loop_invariant_runtime_helper_calls(
                 .write_count
                 .get(dst as usize)
                 .is_some_and(|count| *count == 1)
+                && let Some(derived) = invariants.derived_invariant.get_mut(dst as usize)
             {
-                if let Some(derived) = invariants.derived_invariant.get_mut(dst as usize) {
-                    *derived = true;
-                }
+                *derived = true;
             }
         }
         if next_memo_slot > first_memo_slot {
@@ -925,10 +923,9 @@ fn native_propagate_derived_loop_invariant(
         .get(*dst)
         .is_some_and(|count| *count == 1)
         && native_reg_loop_invariant_at(*src, invariants, ip)
+        && let Some(derived) = invariants.derived_invariant.get_mut(*dst)
     {
-        if let Some(derived) = invariants.derived_invariant.get_mut(*dst) {
-            *derived = true;
-        }
+        *derived = true;
     }
 }
 
@@ -969,22 +966,19 @@ fn native_memo_scope_representable(code: &[RegInstr], header: usize, exit: usize
             code.get(ip),
             Some(RegInstr::Jump { target }) if *target == header
         )
-    }) && !(header..exit).any(|ip| {
-        let targets_header = match code.get(ip) {
-            Some(RegInstr::JumpIfBool { target, .. })
-            | Some(RegInstr::JumpIfIntCompare { target, .. }) => *target == header,
-            Some(RegInstr::MatchOption {
-                some_ip, none_ip, ..
-            })
-            | Some(RegInstr::MatchMapGet {
-                some_ip, none_ip, ..
-            })
-            | Some(RegInstr::MatchSortedMapGet {
-                some_ip, none_ip, ..
-            }) => *some_ip == header || *none_ip == header,
-            _ => false,
-        };
-        targets_header
+    }) && !(header..exit).any(|ip| match code.get(ip) {
+        Some(RegInstr::JumpIfBool { target, .. })
+        | Some(RegInstr::JumpIfIntCompare { target, .. }) => *target == header,
+        Some(RegInstr::MatchOption {
+            some_ip, none_ip, ..
+        })
+        | Some(RegInstr::MatchMapGet {
+            some_ip, none_ip, ..
+        })
+        | Some(RegInstr::MatchSortedMapGet {
+            some_ip, none_ip, ..
+        }) => *some_ip == header || *none_ip == header,
+        _ => false,
     })
 }
 

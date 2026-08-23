@@ -31,12 +31,12 @@ fn wire_value_from_vm_value_inner(
     active: &mut HashSet<usize>,
 ) -> Result<WireValue, EvalError> {
     let node = vm_value_node_id(value);
-    if let Some(node) = node {
-        if !active.insert(node) {
-            return Err(EvalError::Runtime(
-                "cyclic value cannot cross a Provider wire boundary".into(),
-            ));
-        }
+    if let Some(node) = node
+        && !active.insert(node)
+    {
+        return Err(EvalError::Runtime(
+            "cyclic value cannot cross a Provider wire boundary".into(),
+        ));
     }
     let result = match (value, expected) {
         (VmValue::Unit, WireType::Unit) => Ok(WireValue::Unit),
@@ -309,6 +309,7 @@ fn wire_value_from_vm_value_inner(
     result
 }
 
+#[allow(clippy::mutable_key_type)] // ValueMap validates/hash-freezes keys at construction.
 pub(super) fn vm_value_from_wire_value(
     value: WireValue,
     expected: &WireType,

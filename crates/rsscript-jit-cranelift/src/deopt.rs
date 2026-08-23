@@ -28,9 +28,9 @@ impl SafepointId {
 /// register absent from `live` is not guaranteed assigned on every path to the
 /// resume point, so it carries no meaningful value to reconstruct.
 ///
-/// This slice (J0.1a) only *computes and stores* the map; nothing reads it into the
-/// running ABI yet (no payload is captured, no emitted code changes). It is the
-/// schema foundation for J0.1b's payload capture and J0.2's reconstruction.
+/// Generated code captures these registers into the call frame's deoptimization
+/// payload. The embedding VM consumes the map to reconstruct a precise interpreter
+/// resume window after transactional rollback.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeoptSite {
     /// The `JitInstr` index to resume interpretation at (the bailing instruction).
@@ -86,8 +86,8 @@ pub enum DeoptValue {
     /// A float register's value (decoded from its captured 8-byte bit pattern).
     Float(f64),
     /// A `Handle` register's captured heap-table index. Carries no VM value by itself;
-    /// the consumer resolves the index against the still-live JIT heap (J0.1 live-after
-    /// heap-payload reconstruction). NOT written back as a raw scalar.
+    /// the consumer resolves the index against the still-live JIT heap during
+    /// heap-payload reconstruction. It is never written back as a raw scalar.
     Handle(i64),
 }
 
@@ -132,20 +132,18 @@ pub enum NativeOutcome {
     /// a function whose return register is a [`JitValueType::Handle`]; the scalar
     /// [`Completed`](NativeOutcome::Completed) path is byte-for-byte unchanged.
     ///
-    /// **§7.2-safety:** the host materializes the result **only** on this clean
+    /// The host materializes the result **only** on this clean
     /// completion; **any** bail returns [`Deopt`](NativeOutcome::Deopt) and the
     /// output table is cleared by the VM-side guard, so a bailed attempt has no
-    /// observable heap result and §7.2's fallback-equivalence proof holds.
+    /// observable heap result, preserving transactional fallback equivalence.
     CompletedHandle(i64),
     /// The function deopted at `safepoint_id` (a guard bail or a host-helper bail)
     /// and the caller must fall back to the interpreter. `live` carries each
     /// register definitely assigned at the resume point with its captured value
-    /// (per the J0.1a state-map); it is empty for a deopt rejected before the call
-    /// (id/length mismatch). The caller's behavior depends on its mode (J0.2): by
-    /// default it re-runs the function from the top and ignores `live` (sound after
-    /// the embedding VM rolls back transactional writes); with precise deopt enabled (`RSS_JIT_PRECISE_DEOPT`)
-    /// it consumes `live` to reconstruct the interpreter window and resumes at the
-    /// safepoint's `resume_ip` instead. `child` is populated when this deopt came
+    /// according to the function's state map; it is empty for a deopt rejected
+    /// before the call (id/length mismatch). The embedding VM rolls back
+    /// transactional writes, consumes `live`, reconstructs the interpreter window,
+    /// and resumes at the safepoint's `resume_ip`. `child` is populated when this deopt came
     /// from a nested [`JitInstr::CallNative`] callee; embedders that support full
     /// native frame-chain deopt can inspect it, while conservative embedders may
     /// still resume/re-run at this caller safepoint.

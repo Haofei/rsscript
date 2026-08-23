@@ -117,7 +117,7 @@ pub(super) fn json_optional_typed_path_value(
 ) -> Result<VmValue, VmValue> {
     match json_value_at(value, path) {
         Ok(value) if value.is_null() => Ok(VmValue::OptionNone),
-        Ok(value) => convert(value).map(|value| VmValue::some(value)),
+        Ok(value) => convert(value).map(VmValue::some),
         Err(_) => Ok(VmValue::OptionNone),
     }
 }
@@ -203,14 +203,12 @@ pub(super) fn json_optional_typed_field_value(
 ) -> Result<VmValue, VmValue> {
     match value.get(name) {
         Some(value) if value.is_null() => Ok(VmValue::OptionNone),
-        Some(value) => convert(value)
-            .map(|value| VmValue::some(value))
-            .ok_or_else(|| {
-                json_error_value(format!(
-                    "JSON field `{name}` is not {} {type_name}",
-                    json_type_article(type_name)
-                ))
-            }),
+        Some(value) => convert(value).map(VmValue::some).ok_or_else(|| {
+            json_error_value(format!(
+                "JSON field `{name}` is not {} {type_name}",
+                json_type_article(type_name)
+            ))
+        }),
         None => Ok(VmValue::OptionNone),
     }
 }

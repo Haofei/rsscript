@@ -137,6 +137,7 @@ impl RegVm {
     }
 
     #[cfg(feature = "native-jit")]
+    #[allow(clippy::too_many_arguments)] // Explicit deopt-frame reconstruction state.
     pub(super) fn try_resume_native_child_deopt_chain(
         &mut self,
         unit: &RegUnit,

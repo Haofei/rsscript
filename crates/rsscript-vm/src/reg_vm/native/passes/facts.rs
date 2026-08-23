@@ -223,20 +223,19 @@ fn native_jit_heap_fact_dst(instr: &vm_jit::JitInstr) -> Option<u32> {
 }
 
 #[cfg(feature = "native-jit")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 enum NativeControlFlow {
+    #[default]
     Fallthrough,
     Jump(usize),
-    Branch { target: usize },
-    Split { first: usize, second: usize },
+    Branch {
+        target: usize,
+    },
+    Split {
+        first: usize,
+        second: usize,
+    },
     Terminal,
-}
-
-#[cfg(feature = "native-jit")]
-impl Default for NativeControlFlow {
-    fn default() -> Self {
-        Self::Fallthrough
-    }
 }
 
 #[cfg(feature = "native-jit")]
@@ -274,17 +273,11 @@ impl NativeControlFlow {
 /// not fully model, so an omission is sound — it over-approximates liveness and can
 /// only cause more OSR bails, never a missed escape).
 #[cfg(feature = "native-jit")]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub(in crate::reg_vm) enum RegFootprint {
     Some(Vec<usize>),
+    #[default]
     All,
-}
-
-#[cfg(feature = "native-jit")]
-impl Default for RegFootprint {
-    fn default() -> Self {
-        Self::All
-    }
 }
 
 #[cfg(feature = "native-jit")]
@@ -356,7 +349,7 @@ impl NativeRegionCfg {
             let Some(successors) = self.successors(ip) else {
                 continue;
             };
-            if ip >= header && successors.iter().any(|&target| target == header) {
+            if ip >= header && successors.contains(&header) {
                 backedges.push(ip);
             }
         }
@@ -1031,7 +1024,7 @@ impl NativeRegionAnalysis {
     fn native_readable_or_sinkable_closure_operands(&self, code: &[RegInstr]) -> Option<Vec<bool>> {
         let mut heap_reads = self.reachable_heap_read_defs_closed_under_moves(code)?;
         let make_closures = self.reachable_make_closure_defs_closed_under_moves(code)?;
-        for (dst, src) in heap_reads.iter_mut().zip(make_closures.into_iter()) {
+        for (dst, src) in heap_reads.iter_mut().zip(make_closures) {
             *dst |= src;
         }
         Some(heap_reads)
@@ -1235,9 +1228,7 @@ fn native_full_list_slice_elision_candidate(
     if analysis.live_in(i, list) != Some(true) || analysis.live_out(i, dst) != Some(true) {
         return None;
     }
-    let Some((len_source, len_ip)) = analysis.list_len_source_before(len, i) else {
-        return None;
-    };
+    let (len_source, len_ip) = analysis.list_len_source_before(len, i)?;
     if len_source != list {
         return None;
     }

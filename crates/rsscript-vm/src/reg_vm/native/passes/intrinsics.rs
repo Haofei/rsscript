@@ -77,8 +77,7 @@ impl NativeHostIntrinsic {
     pub(in crate::reg_vm) fn consumes_output_handles(self) -> bool {
         self.helper
             .arg_types()
-            .iter()
-            .any(|ty| *ty == vm_jit::JitValueType::Handle)
+            .contains(&vm_jit::JitValueType::Handle)
     }
 }
 

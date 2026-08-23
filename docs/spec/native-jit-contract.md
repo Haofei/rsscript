@@ -37,9 +37,11 @@ until a canonical compiler workload demonstrates a repeatable end-to-end benefit
 ## Native recursion
 
 Tail recursion may be lowered to a loop. Non-tail self or group recursion uses the
-host stack and therefore remains opt-in until it is implemented with an explicit
-frame stack, a trampoline, or a target-backed live stack-limit check. Static frame
-estimates are admission heuristics, not a hard safety proof.
+host stack and therefore requires both the VM-only
+`jit-recursion-experimental` feature and explicit trusted-host opt-in; it is not
+available through the stable SDK. It remains experimental until implemented with
+an explicit frame stack, a trampoline, or a target-backed live stack-limit check.
+Static frame estimates are admission heuristics, not a hard safety proof.
 
 ## Telemetry
 

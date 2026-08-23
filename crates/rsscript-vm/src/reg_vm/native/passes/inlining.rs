@@ -94,11 +94,12 @@ fn native_callee_captures_all_scalar(callee: &RegFunction) -> bool {
     loop {
         let mut grew = false;
         for instr in &callee.code {
-            if let RegInstr::Move { dst, src } = instr {
-                if derived.contains(src) && !derived.contains(dst) {
-                    derived.insert(*dst);
-                    grew = true;
-                }
+            if let RegInstr::Move { dst, src } = instr
+                && derived.contains(src)
+                && !derived.contains(dst)
+            {
+                derived.insert(*dst);
+                grew = true;
             }
         }
         if !grew {
@@ -155,12 +156,13 @@ pub(in crate::reg_vm) fn loop_local_sinkable_closures(
         loop {
             let mut grew = false;
             for (di, dinstr) in func.code.iter().enumerate() {
-                if let RegInstr::Move { dst, src } = dinstr {
-                    if value_regs.contains(src) && !value_regs.contains(dst) {
-                        value_regs.insert(*dst);
-                        def_indices.insert(di);
-                        grew = true;
-                    }
+                if let RegInstr::Move { dst, src } = dinstr
+                    && value_regs.contains(src)
+                    && !value_regs.contains(dst)
+                {
+                    value_regs.insert(*dst);
+                    def_indices.insert(di);
+                    grew = true;
                 }
             }
             if !grew {

@@ -592,10 +592,10 @@ pub(super) fn map_key_from_value(value: &VmValue) -> Result<(VmMapKey, usize), E
             return false;
         }
         let node = crate::vm_value::vm_value_node_id(value);
-        if let Some(node) = node {
-            if !active.insert(node) {
-                return false;
-            }
+        if let Some(node) = node
+            && !active.insert(node)
+        {
+            return false;
         }
         let hashable = match value {
             VmValue::Unit

@@ -1167,6 +1167,10 @@ fn register_vm_execution_policy_is_snapshotted_before_running() {
     assert!(!vm.contains("std::env::var_os(\"RSS_JIT_"));
     assert!(!vm.contains("std::env::var(\"RSS_JIT_"));
     assert!(vm.contains("NativeState::new_with_plan(native)"));
+    assert!(
+        !vm.starts_with("#![allow("),
+        "the register VM root must not hide directory-wide lint debt"
+    );
 
     let plan = read(&root.join("crates/rsscript-vm/src/reg_vm/execution_plan.rs"));
     assert!(plan.contains("struct ExecutionPlan"));
@@ -1175,6 +1179,22 @@ fn register_vm_execution_policy_is_snapshotted_before_running() {
     assert!(plan.contains("max_code_bytes"));
     assert!(plan.contains("max_compile_millis"));
     assert!(plan.contains("optimize_work_threshold"));
+    assert!(plan.contains("jit-recursion-experimental"));
+}
+
+#[test]
+fn cranelift_engine_uses_real_modules_instead_of_flattened_includes() {
+    let root = workspace_root();
+    for path in rust_files_below(&root.join("crates/rsscript-jit-cranelift/src")) {
+        let source = read(&path);
+        assert!(
+            !source
+                .lines()
+                .any(|line| line.trim_start().starts_with("include!(")),
+            "{} must use Rust modules instead of flattening source into one namespace",
+            path.display()
+        );
+    }
 }
 
 fn rust_files_below(root: &Path) -> Vec<PathBuf> {

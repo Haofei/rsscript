@@ -70,12 +70,11 @@ fn native_scalar_replace_two_armed_results_in_region(
                     }
                     RegFootprint::All => return None,
                 }
-                if let RegInstr::UnwrapVariantValue { dst, .. }
-                | RegInstr::MakeVariant { dst, .. } = other
+                if let RegInstr::UnwrapVariantValue { dst, .. } | RegInstr::MakeVariant { dst, .. } =
+                    other
+                    && res[*dst]
                 {
-                    if res[*dst] {
-                        return None;
-                    }
+                    return None;
                 }
             }
         }
@@ -452,12 +451,11 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
                 if reads.into_iter().any(|r| var[r]) {
                     return None;
                 }
-                if let RegInstr::UnwrapVariantValue { dst, .. }
-                | RegInstr::MakeVariant { dst, .. } = other
+                if let RegInstr::UnwrapVariantValue { dst, .. } | RegInstr::MakeVariant { dst, .. } =
+                    other
+                    && var[*dst]
                 {
-                    if var[*dst] {
-                        return None;
-                    }
+                    return None;
                 }
             }
         }
@@ -512,12 +510,13 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
         r
     }
     for i in header..exit {
-        if let RegInstr::Move { dst, src } = &code[i] {
-            if var[*dst] && var[*src] {
-                let (a, b) = (find(&mut parent, *dst), find(&mut parent, *src));
-                if a != b {
-                    parent[a] = b;
-                }
+        if let RegInstr::Move { dst, src } = &code[i]
+            && var[*dst]
+            && var[*src]
+        {
+            let (a, b) = (find(&mut parent, *dst), find(&mut parent, *src));
+            if a != b {
+                parent[a] = b;
             }
         }
     }
@@ -573,30 +572,30 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
     let mut class_arm_layout: HashMap<(usize, String), Rc<crate::vm_value::TypeLayout>> =
         HashMap::new();
     for i in header..exit {
-        if let RegInstr::MakeVariant { dst, layout, .. } = &code[i] {
-            if var[*dst] {
-                let root = find(&mut parent, *dst);
-                let key = (root, layout.name.to_string());
-                let shape = layout.field_names.clone();
-                match class_arm_fields.get(&key) {
-                    Some(prev) if *prev != shape => return None, // shape contradiction
-                    Some(_) => {}
-                    None => {
-                        class_arm_fields.insert(key, shape);
-                    }
+        if let RegInstr::MakeVariant { dst, layout, .. } = &code[i]
+            && var[*dst]
+        {
+            let root = find(&mut parent, *dst);
+            let key = (root, layout.name.to_string());
+            let shape = layout.field_names.clone();
+            match class_arm_fields.get(&key) {
+                Some(prev) if *prev != shape => return None, // shape contradiction
+                Some(_) => {}
+                None => {
+                    class_arm_fields.insert(key, shape);
                 }
-                let key = (root, layout.name.to_string());
-                match class_arm_layout.get(&key) {
-                    Some(previous)
-                        if previous.name != layout.name
-                            || previous.field_names != layout.field_names =>
-                    {
-                        return None;
-                    }
-                    Some(_) => {}
-                    None => {
-                        class_arm_layout.insert(key, Rc::clone(layout));
-                    }
+            }
+            let key = (root, layout.name.to_string());
+            match class_arm_layout.get(&key) {
+                Some(previous)
+                    if previous.name != layout.name
+                        || previous.field_names != layout.field_names =>
+                {
+                    return None;
+                }
+                Some(_) => {}
+                None => {
+                    class_arm_layout.insert(key, Rc::clone(layout));
                 }
             }
         }
@@ -1122,14 +1121,12 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
                 } if strv[*dst] => {
                     let set = nested_slots.entry(layout.field_names.clone()).or_default();
                     for (name, src) in fields {
-                        if strv[*src] {
-                            if let Some(slot) =
-                                layout.field_names.iter().position(|n| &**n == &**name)
-                            {
-                                if set.insert(slot) {
-                                    changed = true;
-                                }
-                            }
+                        if strv[*src]
+                            && let Some(slot) =
+                                layout.field_names.iter().position(|n| **n == **name)
+                            && set.insert(slot)
+                        {
+                            changed = true;
                         }
                     }
                 }
@@ -1141,13 +1138,12 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
                     // class shaping; here we conservatively promote `dst` to STR when the
                     // slot is nested under any shape that `base` is built with. Since a
                     // register has a single shape, we look it up from its def.
-                    if !strv[*dst] {
-                        if let Some(shape) = struct_shape_of_reg(code, header, exit, *base) {
-                            if nested_slots.get(&shape).is_some_and(|s| s.contains(slot)) {
-                                strv[*dst] = true;
-                                changed = true;
-                            }
-                        }
+                    if !strv[*dst]
+                        && let Some(shape) = struct_shape_of_reg(code, header, exit, *base)
+                        && nested_slots.get(&shape).is_some_and(|s| s.contains(slot))
+                    {
+                        strv[*dst] = true;
+                        changed = true;
                     }
                 }
                 _ => {}
@@ -1171,7 +1167,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
             } if strv[*dst] => {
                 let set = nested_slots.get(&layout.field_names);
                 for (name, src) in fields {
-                    let slot = layout.field_names.iter().position(|n| &**n == &**name)?;
+                    let slot = layout.field_names.iter().position(|n| **n == **name)?;
                     let is_nested = set.is_some_and(|s| s.contains(&slot));
                     if strv[*src] != is_nested {
                         return None; // scalar-in-struct-slot or struct-in-scalar-slot
@@ -1197,10 +1193,9 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
                     return None;
                 }
                 if let RegInstr::GetFieldSlot { dst, .. } | RegInstr::MakeStruct { dst, .. } = other
+                    && strv[*dst]
                 {
-                    if strv[*dst] {
-                        return None;
-                    }
+                    return None;
                 }
             }
         }
@@ -1316,10 +1311,11 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     let mut anchors: HashMap<(usize, usize), usize> = HashMap::new();
     // (a) plain Move aliases.
     for i in header..exit {
-        if let RegInstr::Move { dst, src } = &code[i] {
-            if strv[*dst] && strv[*src] {
-                union(&mut parent, *dst, *src);
-            }
+        if let RegInstr::Move { dst, src } = &code[i]
+            && strv[*dst]
+            && strv[*src]
+        {
+            union(&mut parent, *dst, *src);
         }
     }
     // (b)+(c): union nested-slot anchors with their inner struct registers. Iterate to a
@@ -1336,7 +1332,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
                 } if strv[*dst] => {
                     for (name, src) in fields {
                         if strv[*src] {
-                            let slot = layout.field_names.iter().position(|n| &**n == &**name)?;
+                            let slot = layout.field_names.iter().position(|n| **n == **name)?;
                             let a = anchor_of(&mut parent, &mut anchors, *dst, slot);
                             let before = find(&mut parent, a);
                             union(&mut parent, a, *src);
@@ -1364,28 +1360,28 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     let mut class_shape: HashMap<usize, Vec<Rc<str>>> = HashMap::new();
     let mut class_layout: HashMap<usize, Rc<crate::vm_value::TypeLayout>> = HashMap::new();
     for i in header..exit {
-        if let RegInstr::MakeStruct { dst, layout, .. } = &code[i] {
-            if strv[*dst] {
-                let root = find(&mut parent, *dst);
-                let shape = layout.field_names.clone();
-                match class_shape.get(&root) {
-                    Some(existing) if *existing != shape => return None, // shape mismatch
-                    Some(_) => {}
-                    None => {
-                        class_shape.insert(root, shape);
-                    }
+        if let RegInstr::MakeStruct { dst, layout, .. } = &code[i]
+            && strv[*dst]
+        {
+            let root = find(&mut parent, *dst);
+            let shape = layout.field_names.clone();
+            match class_shape.get(&root) {
+                Some(existing) if *existing != shape => return None, // shape mismatch
+                Some(_) => {}
+                None => {
+                    class_shape.insert(root, shape);
                 }
-                match class_layout.get(&root) {
-                    Some(previous)
-                        if previous.name != layout.name
-                            || previous.field_names != layout.field_names =>
-                    {
-                        return None;
-                    }
-                    Some(_) => {}
-                    None => {
-                        class_layout.insert(root, Rc::clone(layout));
-                    }
+            }
+            match class_layout.get(&root) {
+                Some(previous)
+                    if previous.name != layout.name
+                        || previous.field_names != layout.field_names =>
+                {
+                    return None;
+                }
+                Some(_) => {}
+                None => {
+                    class_layout.insert(root, Rc::clone(layout));
                 }
             }
         }
@@ -1449,7 +1445,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
                     if strv[*src] {
                         continue;
                     }
-                    let slot = layout.field_names.iter().position(|n| &**n == &**name)?;
+                    let slot = layout.field_names.iter().position(|n| **n == **name)?;
                     if !class_slot_reg.contains_key(&(root, slot)) {
                         return None;
                     }
@@ -1749,10 +1745,10 @@ pub(in crate::reg_vm) fn native_loop_carried_struct_in_region(
     let mut base_regs: Vec<usize> = Vec::new();
     for i in header..exit {
         match &code[i] {
-            RegInstr::GetFieldSlot { base, .. } | RegInstr::SetFieldSlot { base, .. } => {
-                if !base_regs.contains(base) {
-                    base_regs.push(*base);
-                }
+            RegInstr::GetFieldSlot { base, .. } | RegInstr::SetFieldSlot { base, .. }
+                if !base_regs.contains(base) =>
+            {
+                base_regs.push(*base);
             }
             _ => {}
         }
@@ -1879,7 +1875,7 @@ pub(in crate::reg_vm) fn native_loop_carried_struct_in_region(
     let mut slot_leaf: Vec<Option<usize>> = vec![None; n_slots];
     let mut seen_leaves: Vec<usize> = Vec::new();
     for (name, src) in fields.iter() {
-        let slot = layout.field_names.iter().position(|n| &**n == &**name)?;
+        let slot = layout.field_names.iter().position(|n| **n == **name)?;
         if slot >= n_slots {
             return None;
         }

@@ -178,7 +178,8 @@ impl RegVm {
                                 if !is_scalar(&ret) || !param_tys.iter().all(is_scalar) {
                                     return None;
                                 }
-                                let admission = begin_native_compile(native, 1)?;
+                                let admission =
+                                    begin_native_compile(native, 1, NativeCodeTier::Baseline)?;
                                 match native.baseline_module.compile(&jit_fn) {
                                     Ok(id) => {
                                         if finish_native_compile(
@@ -351,7 +352,8 @@ impl RegVm {
                         member_sigs.push((param_tys, ret));
                         jit_funcs.push(jit_fn);
                     }
-                    let admission = begin_native_compile(native, jit_funcs.len())?;
+                    let admission =
+                        begin_native_compile(native, jit_funcs.len(), NativeCodeTier::Baseline)?;
                     let ids = match native.baseline_module.compile_recursive_group(&jit_funcs) {
                         Ok(ids) => ids,
                         Err(_) => {

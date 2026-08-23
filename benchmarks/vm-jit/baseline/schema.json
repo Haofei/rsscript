@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rsscript.dev/schemas/native-jit-baseline-v1.json",
+  "title": "RSScript native JIT canonical baseline v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "commit",
+    "cpu",
+    "os",
+    "arch",
+    "rust_version",
+    "cranelift_version",
+    "profile",
+    "warmup",
+    "samples",
+    "fixture_digest",
+    "cases"
+  ],
+  "properties": {
+    "schema": { "const": "rsscript.native_jit_baseline.v1" },
+    "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "cpu": { "type": "string", "minLength": 1 },
+    "os": { "type": "string", "minLength": 1 },
+    "arch": { "type": "string", "minLength": 1 },
+    "rust_version": { "type": "string", "minLength": 1 },
+    "cranelift_version": { "type": "string", "minLength": 1 },
+    "profile": { "const": "release" },
+    "warmup": { "type": "integer", "minimum": 1 },
+    "samples": { "type": "integer", "minimum": 3 },
+    "fixture_digest": { "type": "string", "minLength": 1 },
+    "cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["case", "interpreter_ns", "native_ns"],
+        "properties": {
+          "case": { "type": "string", "minLength": 1 },
+          "interpreter_ns": { "type": "integer", "minimum": 0 },
+          "native_ns": { "type": "integer", "minimum": 0 }
+        }
+      }
+    }
+  }
+}

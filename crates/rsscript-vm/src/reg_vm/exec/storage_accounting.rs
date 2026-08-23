@@ -359,10 +359,10 @@ impl RegVm {
         excluded: &HashSet<usize>,
         visited: &mut HashSet<usize>,
     ) -> usize {
-        if let Some(node) = Self::storage_node_id(value) {
-            if excluded.contains(&node) || !visited.insert(node) {
-                return 0;
-            }
+        if let Some(node) = Self::storage_node_id(value)
+            && (excluded.contains(&node) || !visited.insert(node))
+        {
+            return 0;
         }
         match value {
             VmValue::Unit

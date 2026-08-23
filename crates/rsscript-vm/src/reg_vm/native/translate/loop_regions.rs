@@ -1,5 +1,7 @@
 //! Natural-loop discovery and OSR region metadata.
 
+#![allow(clippy::doc_lazy_continuation, clippy::needless_range_loop)]
+
 use super::*;
 
 /// A single natural loop identified for OSR (J5.2): the conservative shape this
@@ -151,10 +153,8 @@ pub(in crate::reg_vm) fn detect_natural_loop_at(
             RegInstr::RuntimeError { .. } => {}
             RegInstr::MatchOption {
                 some_ip, none_ip, ..
-            } => {
-                if !in_region(*some_ip) || !in_region(*none_ip) {
-                    return None;
-                }
+            } if (!in_region(*some_ip) || !in_region(*none_ip)) => {
+                return None;
             }
             _ => {}
         }

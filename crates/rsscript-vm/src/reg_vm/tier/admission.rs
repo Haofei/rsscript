@@ -8,6 +8,7 @@ pub(super) struct NativeCompileAdmission {
 pub(super) fn begin_native_compile(
     native: &mut NativeState,
     regions: usize,
+    tier: NativeCodeTier,
 ) -> Option<NativeCompileAdmission> {
     let exhausted = native.admission.code_exhausted
         || native.admission.admitted_code_bytes >= native.admission.max_code_bytes
@@ -18,6 +19,19 @@ pub(super) fn begin_native_compile(
                 .stats
                 .admission_rejected
                 .saturating_add(regions as u64);
+        }
+        return None;
+    }
+    let initialized = match tier {
+        NativeCodeTier::Baseline => native.baseline_module.ensure_initialized(),
+        NativeCodeTier::Optimized => native
+            .optimized_module
+            .as_mut()
+            .is_some_and(LazyNativeModule::ensure_initialized),
+    };
+    if !initialized {
+        if native.collect_stats {
+            native.stats.compile_failed = native.stats.compile_failed.saturating_add(1);
         }
         return None;
     }

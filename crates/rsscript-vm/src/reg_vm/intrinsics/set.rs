@@ -93,7 +93,7 @@ impl RegVm {
                 let map = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let key = intrinsic_arg(&self.stack, base, args, 1)?;
                 Ok(sorted_map_get_in_place(&map.borrow(), key)?
-                    .map(|value| VmValue::some(value))
+                    .map(VmValue::some)
                     .unwrap_or(VmValue::OptionNone))
             }
             RegIntrinsic::SortedMapIsEmpty => {

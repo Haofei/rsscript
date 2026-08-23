@@ -599,10 +599,9 @@ pub(in crate::reg_vm) fn native_scalar_replace_options(
                 if let RegInstr::UnwrapSome { dst, .. }
                 | RegInstr::MakeSome { dst, .. }
                 | RegInstr::LoadNone { dst } = other
+                    && opt[*dst]
                 {
-                    if opt[*dst] {
-                        return None;
-                    }
+                    return None;
                 }
             }
         }
@@ -865,13 +864,13 @@ pub(in crate::reg_vm) fn native_expand_option_result_combinators_in_region(
         // conservatively fails this lookup and bails).
         let mut found: Option<usize> = None;
         for (mi, instr) in code.iter().enumerate() {
-            if let RegInstr::MakeClosure { dst, function, .. } = instr {
-                if *dst == mapper_reg {
-                    if !in_region(mi) || found.is_some() {
-                        return None;
-                    }
-                    found = Some(*function);
+            if let RegInstr::MakeClosure { dst, function, .. } = instr
+                && *dst == mapper_reg
+            {
+                if !in_region(mi) || found.is_some() {
+                    return None;
                 }
+                found = Some(*function);
             }
         }
         let k = found?;
@@ -2892,10 +2891,9 @@ pub(in crate::reg_vm) fn native_scalar_replace_options_in_region(
                 | RegInstr::LoadNone { dst }
                 | RegInstr::DequePopFront { dst, .. }
                 | RegInstr::DequePopBack { dst, .. } = other
+                    && opt[*dst]
                 {
-                    if opt[*dst] {
-                        return None;
-                    }
+                    return None;
                 }
             }
         }
@@ -3264,10 +3262,10 @@ pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
     // `MakeVariant{Ok|Err}` dsts, close under in-region `Move` aliasing.
     let mut res = vec![false; n_regs];
     for i in header..exit {
-        if let RegInstr::MakeVariant { dst, layout, .. } = &code[i] {
-            if is_result_ctor_name(&layout.name) {
-                res[*dst] = true;
-            }
+        if let RegInstr::MakeVariant { dst, layout, .. } = &code[i]
+            && is_result_ctor_name(&layout.name)
+        {
+            res[*dst] = true;
         }
     }
     analysis.close_region_move_aliases(code, &mut res)?;
@@ -3277,10 +3275,10 @@ pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
     // interpreter (the boundary/escape gates below would also catch it, but bailing
     // early is clearer and conservative).
     for i in header..exit {
-        if let RegInstr::MatchResult { src, .. } = &code[i] {
-            if !res[*src] {
-                return None;
-            }
+        if let RegInstr::MatchResult { src, .. } = &code[i]
+            && !res[*src]
+        {
+            return None;
         }
     }
 
@@ -3353,12 +3351,11 @@ pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
                     }
                     RegFootprint::All => return None,
                 }
-                if let RegInstr::UnwrapVariantValue { dst, .. }
-                | RegInstr::MakeVariant { dst, .. } = other
+                if let RegInstr::UnwrapVariantValue { dst, .. } | RegInstr::MakeVariant { dst, .. } =
+                    other
+                    && res[*dst]
                 {
-                    if res[*dst] {
-                        return None;
-                    }
+                    return None;
                 }
             }
         }
