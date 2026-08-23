@@ -762,6 +762,13 @@ impl RegVm {
                         }
                     };
                     native.cache.insert(version_key.clone(), entry.clone());
+                    if entry.is_some() {
+                        native
+                            .whole_controllers
+                            .entry(version_key.clone())
+                            .or_default()
+                            .compiled(false);
+                    }
                     if entry.is_some() && native.collect_stats {
                         native.stats.shape_versions += 1;
                     }
@@ -772,12 +779,12 @@ impl RegVm {
             let mut selected_entry = entry;
             if native.optimized_module.is_some() {
                 let work = u64::from(interpreted_region_work(&func.code));
-                let accumulated = native
-                    .promotion_work
+                let promote = native
+                    .whole_controllers
                     .entry(version_key.clone())
-                    .or_insert(0);
-                *accumulated = accumulated.saturating_add(work);
-                if *accumulated >= native.optimize_work_threshold
+                    .or_default()
+                    .observe_native_work(work, native.optimize_work_threshold);
+                if promote
                     && !native.optimized_cache.contains_key(&version_key)
                     && let Some(jit_fn) = native.optimization_sources.remove(&version_key)
                     && let Some(admission) =
@@ -833,6 +840,11 @@ impl RegVm {
                                         native
                                             .optimized_cache
                                             .insert(version_key.clone(), promoted);
+                                        native
+                                            .whole_controllers
+                                            .entry(version_key.clone())
+                                            .or_default()
+                                            .compiled(true);
                                         if native.collect_stats {
                                             native.stats.promotions += 1;
                                         }
@@ -1195,7 +1207,11 @@ impl RegVm {
                     }
                     // Consecutive-bail semantics: a clean completion clears the
                     // give-up counter, so only *sustained* failure demotes a function.
-                    native.bail_counts.insert(version_key.clone(), 0);
+                    native
+                        .whole_controllers
+                        .entry(version_key.clone())
+                        .or_default()
+                        .successful_entry();
                 }
                 debug_assert_ne!(
                     ret_type,
@@ -1237,7 +1253,11 @@ impl RegVm {
                             if native.report {
                                 native.report_native_ok.insert(native_key);
                             }
-                            native.bail_counts.insert(version_key.clone(), 0);
+                            native
+                                .whole_controllers
+                                .entry(version_key.clone())
+                                .or_default()
+                                .successful_entry();
                         }
                         let result = NativeAttempt::Completed(value);
                         scratch.restore(self.native.as_mut());
@@ -1444,7 +1464,7 @@ impl RegVm {
         base: usize,
         entry_ip: usize,
     ) -> bool {
-        if JitCallCtx::is_active() || !should_probe_continuation_entry(&func.code, entry_ip) {
+        if JitCallCtx::is_active() {
             return false;
         }
         // The scalar region has a one-to-one source instruction map, so generated
@@ -1454,6 +1474,19 @@ impl RegVm {
         // regions below; the next VM-owned barrier polls the clock.
         let cancel_armed = self.limits.cancel.is_some();
         let function = self.jit_state.function_ordinal(func);
+        let is_candidate = {
+            let Some(native) = self.native.as_mut() else {
+                return false;
+            };
+            native
+                .continuation_entry_sets
+                .entry(function)
+                .or_insert_with(|| Rc::new(ContinuationEntrySet::from_code(&func.code)))
+                .contains(entry_ip)
+        };
+        if !is_candidate {
+            return false;
+        }
         let region = {
             let Some(native) = self.native.as_mut() else {
                 return false;
@@ -1462,37 +1495,71 @@ impl RegVm {
                 .continuation_plans
                 .entry((function, entry_ip))
                 .or_insert_with(|| {
-                    detect_scalar_continuation_region(&func.code, entry_ip).map(Rc::new)
+                    detect_scalar_continuation_region(&func.code, func.regs, entry_ip).map(Rc::new)
                 })
                 .clone()
         };
         let Some(region) = region else {
             return false;
         };
+        let decision = self.native.as_ref().map(|native| {
+            continuation_decision(
+                &region,
+                native.cost_model,
+                self.limits.step_budget.is_some(),
+                self.limits.deadline.is_some(),
+            )
+        });
+        if !matches!(decision, Some(ContinuationDecision::Compile)) {
+            return false;
+        }
+        // Runtime controls can reject this particular entry even when the
+        // structural plan is generally dispatchable. Check them before shape
+        // construction and codegen so an already-cancelled, expired, or
+        // under-budget run cannot populate the executable arena with code it can
+        // never enter.
+        if self
+            .limits
+            .deadline
+            .is_some_and(rsscript_operation::MonotonicDeadline::is_expired)
+        {
+            return false;
+        }
+        if let Some(budget) = self.limits.step_budget
+            && self.steps.saturating_add(region.source_instructions as u64) > budget
+        {
+            return false;
+        }
+        if self
+            .limits
+            .cancel
+            .as_ref()
+            .is_some_and(|token| token.is_cancelled())
+        {
+            return false;
+        }
 
-        // The first slice is scalar-only. Reject any initialized non-scalar frame
-        // slot before translation/caching; later region slices can add heap table
-        // and transaction support without weakening this boundary.
-        let shape = ShapeKey::from_shapes((0..func.regs).map(|reg| {
+        // Continuations admit scalars plus opaque read-only heap handles. Flat
+        // borrows and unsupported runtime values remain outside this boundary.
+        let shape = ShapeKey::from_shapes(region.live_in_regs.iter().map(|reg| {
+            let reg = *reg;
             let slot = base + reg;
-            if !region.active_regs.get(reg).copied().unwrap_or(false)
-                || !self.written.get(slot).copied().unwrap_or(false)
-            {
+            if !self.written.get(slot).copied().unwrap_or(false) {
                 NativeParamShape::Unsupported
             } else {
                 native_param_shape(&self.stack[slot])
             }
         }));
-        let scalar_frame = (0..func.regs).all(|reg| {
+        let supported_frame = region.live_in_regs.iter().all(|reg| {
+            let reg = *reg;
             let slot = base + reg;
-            !region.active_regs.get(reg).copied().unwrap_or(false)
-                || !self.written.get(slot).copied().unwrap_or(false)
-                || matches!(
-                    self.stack.get(slot),
-                    Some(VmValue::Int(_) | VmValue::Bool(_) | VmValue::Float(_))
+            !self.written.get(slot).copied().unwrap_or(false)
+                || !matches!(
+                    native_param_shape(&self.stack[slot]),
+                    NativeParamShape::Unsupported
                 )
         });
-        if !scalar_frame {
+        if !supported_frame {
             return false;
         }
         let version_key = ContinuationVersionKey {
@@ -1501,11 +1568,44 @@ impl RegVm {
             shape,
             cancel_armed,
         };
+        // Closed-loop continuations amortize compilation within one activation.
+        // Acyclic regions must first demonstrate repeated interpreted work; this
+        // prevents a one-shot 512-instruction suffix from paying Cranelift startup
+        // merely because it cleared the transition-profitability threshold.
+        let compile_ready = {
+            let Some(native) = self.native.as_mut() else {
+                return false;
+            };
+            if native.continuation_cache.contains_key(&version_key) {
+                true
+            } else {
+                let threshold = if region.has_backedge
+                    || !matches!(native.cost_model, NativeCostModel::Enforce)
+                {
+                    0
+                } else {
+                    (region.source_instructions as u64)
+                        .saturating_mul(2)
+                        .max(1_024)
+                };
+                native
+                    .continuation_controllers
+                    .entry(version_key.clone())
+                    .or_default()
+                    .observe_interpreted_work(region.source_instructions as u64, threshold)
+            }
+        };
+        if !compile_ready {
+            return false;
+        }
         let param_native_types: Vec<Option<NativeTy>> = (0..func.params)
             .map(|reg| match self.reg(base + reg) {
                 VmValue::Int(_) => Some(NativeTy::Int),
                 VmValue::Bool(_) => Some(NativeTy::Bool),
                 VmValue::Float(_) => Some(NativeTy::Float),
+                value if native_param_shape(value) == NativeParamShape::Handle => {
+                    Some(NativeTy::Handle)
+                }
                 _ => None,
             })
             .collect();
@@ -1528,7 +1628,7 @@ impl RegVm {
                 }
                 let compiled =
                     translate_scalar_continuation_region(func, &region, &param_native_types)
-                        .and_then(|(jit_fn, active_regs, reg_types, written_regs)| {
+                        .and_then(|(jit_fn, slots, n_live_in, exits)| {
                             let admission =
                                 begin_native_compile(native, 1, NativeCodeTier::Baseline)?;
                             match native.baseline_module.compile_osr(
@@ -1560,16 +1660,27 @@ impl RegVm {
                                                 .continuation_compiled_source_instructions
                                                 .saturating_add(region.source_instructions as u64);
                                     }
+                                    native
+                                        .continuation_controllers
+                                        .entry(version_key.clone())
+                                        .or_default()
+                                        .compiled(false);
+                                    // No controlled canonical baseline currently
+                                    // clears the optimized-continuation retention
+                                    // gate. Keep the common controller state at
+                                    // baseline instead of inventing an unmeasured
+                                    // promotion path.
+                                    debug_assert_eq!(
+                                        continuation_tier_decision(None),
+                                        ContinuationTierDecision::BaselineOnly
+                                    );
                                     Some(Rc::new(ContinuationEntry {
                                         id,
                                         entry: region.entry,
-                                        exits: region.exits.clone(),
+                                        exits,
                                         n_jit_regs: jit_fn.n_regs as usize,
-                                        source_instructions: region.source_instructions,
-                                        has_backedge: region.has_backedge,
-                                        active_regs,
-                                        reg_types,
-                                        written_regs,
+                                        n_live_in,
+                                        slots,
                                     }))
                                 }
                                 Err(_) => {
@@ -1593,43 +1704,6 @@ impl RegVm {
             return false;
         };
         debug_assert_eq!(entry.entry, entry_ip);
-        if matches!(
-            self.native.as_ref().map(|native| native.cost_model),
-            Some(NativeCostModel::Enforce)
-        ) && !entry.has_backedge
-            && entry.source_instructions < MIN_CONTINUATION_ADMISSION_WORK
-        {
-            return false;
-        }
-        if self.limits.deadline.is_some()
-            && (entry.has_backedge
-                || self
-                    .limits
-                    .deadline
-                    .is_some_and(rsscript_operation::MonotonicDeadline::is_expired))
-        {
-            return false;
-        }
-        if self.limits.step_budget.is_some() {
-            if entry.has_backedge {
-                return false;
-            }
-            let Some(budget) = self.limits.step_budget else {
-                return false;
-            };
-            if self.steps.saturating_add(entry.source_instructions as u64) > budget {
-                return false;
-            }
-        }
-        if self
-            .limits
-            .cancel
-            .as_ref()
-            .is_some_and(|token| token.is_cancelled())
-        {
-            return false;
-        }
-
         // Continuations use the same evaluation-local grow-only marshalling
         // buffers as OSR. A mixed function may cross this boundary thousands of
         // times; allocating two register-width vectors per transition otherwise
@@ -1638,24 +1712,30 @@ impl RegVm {
             Some(native) => take_osr_native_call_scratch(native, entry.n_jit_regs),
             None => return false,
         };
+        let mut native_frame = JitNativeCallFrame::begin();
         macro_rules! decline_continuation {
             () => {{
+                native_frame.abort();
                 scratch.restore(self.native.as_mut());
                 return false;
             }};
         }
-        for (reg, ty) in entry.reg_types.iter().copied().enumerate() {
-            if !entry.active_regs.get(reg).copied().unwrap_or(false) {
-                continue;
-            }
-            let slot = base + reg;
+        for (native_reg, region_slot) in entry.slots.iter().take(entry.n_live_in).enumerate() {
+            let slot = base + region_slot.vm_reg;
             if !self.written.get(slot).copied().unwrap_or(false) {
                 continue;
             }
-            scratch.window[reg] = match (ty, self.stack.get(slot)) {
+            scratch.window[native_reg] = match (region_slot.ty, self.stack.get(slot)) {
                 (NativeTy::Int, Some(VmValue::Int(value))) => *value,
                 (NativeTy::Bool, Some(VmValue::Bool(value))) => i64::from(*value),
                 (NativeTy::Float, Some(VmValue::Float(value))) => value.to_bits() as i64,
+                (NativeTy::Handle, Some(value)) => {
+                    let Ok(handle) = i64::try_from(native_frame.push_heap_arg(value.clone()))
+                    else {
+                        decline_continuation!();
+                    };
+                    handle
+                }
                 _ => decline_continuation!(),
             };
         }
@@ -1681,19 +1761,28 @@ impl RegVm {
             }
             None => None,
         };
+        let physical_depth = self.frames.len();
+        let prior_tail_calls = self.frames.last().map_or(0, |frame| frame.tail_calls);
+        let initial_depth = osr_initial_logical_depth(physical_depth, prior_tail_calls);
         let result = self.native.as_ref().map(|native| {
-            let (outcome, steps) = native.baseline_module.call_with_step_cancel(
+            let (outcome, steps) = native.baseline_module.call_with_host_ctx_step_cancel(
                 entry.id,
                 &scratch.window,
                 &scratch.lens,
-                initial_steps,
-                native_step_budget,
-                self.limits.cancel.as_ref().map(|token| token.as_atomic()),
+                vm_jit::RegionCallControls {
+                    host_ctx: native_frame.host_ctx(),
+                    logical_depth: vm_jit::LogicalCallDepth {
+                        current: initial_depth,
+                        limit: self.limits.max_depth,
+                    },
+                    initial_steps,
+                    step_budget: native_step_budget,
+                    cancel: self.limits.cancel.as_ref().map(|token| token.as_atomic()),
+                },
             );
             self.steps = steps.max(0) as u64;
             outcome
         });
-        scratch.restore(self.native.as_mut());
         if let Some(native) = self.native.as_mut()
             && let Some(started) = started
         {
@@ -1702,7 +1791,9 @@ impl RegVm {
                 .run_nanos
                 .saturating_add(started.elapsed().as_nanos());
         }
-        let Some(vm_jit::NativeOutcome::Yield { exit_id, live, .. }) = result else {
+        let Some(vm_jit::NativeOutcome::Yield { exit_id }) = result else {
+            native_frame.abort();
+            scratch.restore(self.native.as_mut());
             let cancelled = self
                 .limits
                 .cancel
@@ -1714,31 +1805,77 @@ impl RegVm {
                 .is_some_and(|budget| self.steps > budget);
             if !cancelled && !over_budget {
                 self.steps = steps_before;
+                if let Some(native) = self.native.as_mut() {
+                    let disabled = native
+                        .continuation_controllers
+                        .entry(version_key.clone())
+                        .or_default()
+                        .dynamic_bail(NATIVE_BAIL_GIVEUP_THRESHOLD);
+                    if native.collect_stats {
+                        native.stats.shape_bails += 1;
+                    }
+                    if disabled {
+                        native.continuation_cache.insert(version_key.clone(), None);
+                    }
+                }
             }
             return false;
         };
         let exit = exit_id as usize;
-        let Some(barrier) = entry.exits.get(&exit).copied() else {
+        let Some(exit_meta) = entry.exits.get(&exit) else {
+            native_frame.abort();
+            scratch.restore(self.native.as_mut());
+            if let Some(native) = self.native.as_mut() {
+                native
+                    .continuation_controllers
+                    .entry(version_key.clone())
+                    .or_default()
+                    .disable();
+                native.continuation_cache.insert(version_key.clone(), None);
+            }
             return false;
         };
-
-        let mut updates = Vec::new();
-        for vm_jit::DeoptReg { reg, value } in live {
-            let reg = reg as usize;
-            if reg >= func.regs || !entry.written_regs.get(reg).copied().unwrap_or(false) {
+        let copied = self.native.as_ref().is_some_and(|native| {
+            native.baseline_module.copy_yield_registers(
+                entry.id,
+                &exit_meta.live_slots,
+                &mut scratch.window,
+            )
+        });
+        if !copied {
+            native_frame.abort();
+            scratch.restore(self.native.as_mut());
+            return false;
+        }
+        if native_frame.commit_scalar_with_writebacks(&[]).is_none() {
+            scratch.restore(self.native.as_mut());
+            return false;
+        }
+        for &native_reg in exit_meta.live_slots.iter() {
+            let native_reg = native_reg as usize;
+            let Some(region_slot) = entry.slots.get(native_reg).copied() else {
+                scratch.restore(self.native.as_mut());
+                native_frame.abort();
+                return false;
+            };
+            if !region_slot.written {
                 continue;
             }
-            let value = match (entry.reg_types.get(reg), value) {
-                (Some(NativeTy::Int), vm_jit::DeoptValue::Int(value)) => VmValue::Int(value),
-                (Some(NativeTy::Bool), vm_jit::DeoptValue::Bool(value)) => VmValue::Bool(value),
-                (Some(NativeTy::Float), vm_jit::DeoptValue::Float(value)) => VmValue::Float(value),
-                _ => return false,
+            let value = match region_slot.ty {
+                NativeTy::Int => VmValue::Int(scratch.window[native_reg]),
+                NativeTy::Bool => VmValue::Bool(scratch.window[native_reg] != 0),
+                NativeTy::Float => {
+                    VmValue::Float(f64::from_bits(scratch.window[native_reg] as u64))
+                }
+                _ => {
+                    scratch.restore(self.native.as_mut());
+                    native_frame.abort();
+                    return false;
+                }
             };
-            updates.push((base + reg, value));
+            self.set_reg(base + region_slot.vm_reg, value);
         }
-        for (slot, value) in updates {
-            self.set_reg(slot, value);
-        }
+        scratch.restore(self.native.as_mut());
         self.frames.last_mut().expect("active frame").ip = exit;
         if let Some(native) = self.native.as_mut()
             && native.collect_stats
@@ -1749,8 +1886,15 @@ impl RegVm {
             *native
                 .stats
                 .native_barrier_counts
-                .entry(barrier.as_str().to_string())
+                .entry(exit_meta.reason.as_str().to_string())
                 .or_default() += 1;
+        }
+        if let Some(native) = self.native.as_mut() {
+            native
+                .continuation_controllers
+                .entry(version_key)
+                .or_default()
+                .successful_entry();
         }
         true
     }
@@ -1766,24 +1910,33 @@ impl RegVm {
         }
         let step_armed = self.limits.step_budget.is_some();
         let deadline_armed = self.limits.deadline.is_some();
+        let cost_model = native.cost_model;
         // This gate stops tier-0 from consuming a function with useful mixed-mode
         // work. Bound the static search: scanning all post-barrier suffixes is
         // quadratic in generated call chains, while the first few barriers cover
         // the normal prelude/aggregate setup shapes. Later entries remain lazy.
         const MAX_EAGER_CONTINUATION_PROBES: usize = 8;
-        let has_region = (0..func.code.len())
-            .filter(|entry| should_probe_continuation_entry(&func.code, *entry))
+        let entries = native
+            .continuation_entry_sets
+            .entry(function)
+            .or_insert_with(|| Rc::new(ContinuationEntrySet::from_code(&func.code)))
+            .clone();
+        let has_region = entries
+            .iter()
             .take(MAX_EAGER_CONTINUATION_PROBES)
             .any(|entry| {
                 let region = native
                     .continuation_plans
                     .entry((function, entry))
                     .or_insert_with(|| {
-                        detect_scalar_continuation_region(&func.code, entry).map(Rc::new)
+                        detect_scalar_continuation_region(&func.code, func.regs, entry).map(Rc::new)
                     });
-                region
-                    .as_ref()
-                    .is_some_and(|region| !(step_armed || deadline_armed) || !region.has_backedge)
+                region.as_ref().is_some_and(|region| {
+                    matches!(
+                        continuation_decision(region, cost_model, step_armed, deadline_armed),
+                        ContinuationDecision::Compile
+                    )
+                })
             });
         native.continuation_functions.insert(function, has_region);
         has_region
@@ -2575,6 +2728,17 @@ impl RegVm {
                         native.stats.shape_versions += 1;
                     }
                     native.osr_cache.insert(osr_version_key.clone(), entry);
+                    if native
+                        .osr_cache
+                        .get(&osr_version_key)
+                        .is_some_and(Option::is_some)
+                    {
+                        native
+                            .osr_controllers
+                            .entry(osr_version_key.clone())
+                            .or_default()
+                            .compiled(false);
+                    }
                 }
             } else if native.collect_stats {
                 native.stats.shape_cache_hits += 1;
@@ -2593,17 +2757,22 @@ impl RegVm {
                     Some(OsrTrigger::Counting { count, .. }) => u64::from(*count),
                     _ => 0,
                 };
-                let accumulated = match native.osr_promotion_work.entry(osr_version_key.clone()) {
-                    std::collections::hash_map::Entry::Vacant(entry) => {
-                        entry.insert(trigger_work.max(u64::from(iteration_work)))
-                    }
-                    std::collections::hash_map::Entry::Occupied(entry) => {
-                        let accumulated = entry.into_mut();
-                        *accumulated = accumulated.saturating_add(u64::from(iteration_work));
-                        accumulated
-                    }
+                let controller = native
+                    .osr_controllers
+                    .entry(osr_version_key.clone())
+                    .or_default();
+                let first_promotion_observation = matches!(
+                    controller.state,
+                    RegionTierState::Baseline { native_work: 0, .. }
+                );
+                let promote_work = if first_promotion_observation {
+                    trigger_work.max(u64::from(iteration_work))
+                } else {
+                    u64::from(iteration_work)
                 };
-                if *accumulated >= native.optimize_work_threshold
+                let promote =
+                    controller.observe_native_work(promote_work, native.optimize_work_threshold);
+                if promote
                     && !native.optimized_osr_cache.contains_key(&osr_version_key)
                     && let Some(source) = native.osr_optimization_sources.remove(&osr_version_key)
                     && let Some(admission) =
@@ -2647,6 +2816,11 @@ impl RegVm {
                                         native
                                             .optimized_osr_cache
                                             .insert(osr_version_key.clone(), promoted);
+                                        native
+                                            .osr_controllers
+                                            .entry(osr_version_key.clone())
+                                            .or_default()
+                                            .compiled(true);
                                         if native.collect_stats {
                                             native.stats.promotions += 1;
                                         }
@@ -3257,7 +3431,11 @@ impl RegVm {
                             NativeCodeTier::Optimized => native.stats.optimized_calls += 1,
                         }
                     }
-                    native.osr_bail_counts.insert(osr_version_key.clone(), 0);
+                    native
+                        .osr_controllers
+                        .entry(osr_version_key.clone())
+                        .or_default()
+                        .successful_entry();
                     // Lever 2 (observational): record this function actually OSR-
                     // entered, so the report's `osr: entered` positive matches the
                     // real outcome. Gated on `report`; no effect on any decision.
@@ -3277,11 +3455,16 @@ impl RegVm {
                 heap_tx.abort();
                 if let Some(native) = self.native.as_mut() {
                     native.osr_dynamic_bail = true;
-                    let count = native
-                        .osr_bail_counts
+                    let disabled = native
+                        .osr_controllers
                         .entry(osr_version_key.clone())
-                        .or_insert(0);
-                    *count = count.saturating_add(1);
+                        .or_default()
+                        .dynamic_bail(NATIVE_BAIL_GIVEUP_THRESHOLD);
+                    if disabled {
+                        native.osr_cache.insert(osr_version_key.clone(), None);
+                        native.optimized_osr_cache.remove(&osr_version_key);
+                        native.osr_optimization_sources.remove(&osr_version_key);
+                    }
                     if native.collect_stats {
                         native.stats.shape_bails += 1;
                     }

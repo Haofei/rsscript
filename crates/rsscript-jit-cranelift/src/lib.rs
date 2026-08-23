@@ -88,7 +88,7 @@ pub use ir::{
 pub use limits::JitLimits;
 pub use module::{
     CompiledId, JitError, JitErrorKind, LogicalCallDepth, NativeDeclineReason, NativeModule,
-    PreparedCall, is_native_callable_leaf, signal_bail, user_host_ctx,
+    PreparedCall, RegionCallControls, is_native_callable_leaf, signal_bail, user_host_ctx,
 };
 pub use validated::{ValidatedJitFunction, validate_function};
 

@@ -1799,23 +1799,17 @@ pub(crate) fn build_function(
                 terminated = true;
             }
             JitInstr::RegionExit { exit_id, live } => {
-                // A continuation boundary is a normal, commit-capable exit. Capture
-                // the same bounded live-state payload as deopt, but return a distinct
-                // status so the VM cannot accidentally apply rollback/replay semantics.
+                // A continuation boundary is normal, commit-capable control flow.
+                // Write its statically-known live-out words directly into the
+                // reusable payload. Do not mint a safepoint or a DeoptSite: normal
+                // mixed-mode transfer must not pay exceptional deopt decoding costs.
                 let exit = bcx.ins().iconst(types::I64, i64::from(*exit_id));
                 bcx.ins().store(MemFlags::trusted(), exit, out_ptr, 0);
-                let always = bcx.ins().iconst(types::I8, 1);
-                let cont = bail_if(
-                    &mut bcx,
-                    always,
-                    yielded,
-                    safepoint_ptr,
-                    payload_ptr,
-                    &vars,
-                    &mut next_id,
-                    deopt!(i, live = live),
-                );
-                bcx.switch_to_block(cont);
+                for &reg in live {
+                    let value = bcx.use_var(vars[reg as usize]);
+                    bcx.ins()
+                        .store(MemFlags::trusted(), value, payload_ptr, (reg as i32) * 8);
+                }
                 bcx.ins().jump(yielded, &[]);
                 terminated = true;
             }

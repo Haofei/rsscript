@@ -16,6 +16,10 @@
     "warmup",
     "samples",
     "fixture_digest",
+    "controlled",
+    "cpu_affinity",
+    "cpu_governor",
+    "sample_order",
     "cases"
   ],
   "properties": {
@@ -28,8 +32,12 @@
     "cranelift_version": { "type": "string", "minLength": 1 },
     "profile": { "const": "release" },
     "warmup": { "type": "integer", "minimum": 1 },
-    "samples": { "type": "integer", "minimum": 3 },
+    "samples": { "type": "integer", "minimum": 20 },
     "fixture_digest": { "type": "string", "minLength": 1 },
+    "controlled": { "const": true },
+    "cpu_affinity": { "type": "string", "minLength": 1 },
+    "cpu_governor": { "type": "string", "minLength": 1 },
+    "sample_order": { "const": "alternating" },
     "cases": {
       "type": "array",
       "items": {

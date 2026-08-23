@@ -1946,15 +1946,14 @@ struct NativeState {
     /// Per-function deterministic interpreted-work counts for baseline tiering.
     /// `0` means "compile on first call" (force-all).
     counts: HashMap<usize, u64>,
-    /// Deterministic interpreted-work accumulated after baseline admission.
-    promotion_work: HashMap<NativeVersionKey, u64>,
+    /// Shared hotness/promotion/demotion lifecycle for whole-function versions.
+    whole_controllers: HashMap<NativeVersionKey, RegionController>,
     optimize_work_threshold: u64,
     /// Per-version *consecutive* runtime-bail counts, keyed like `cache`.
     /// Incremented on every bail after native was chosen (arg mismatch or runtime
     /// guard), reset to 0 on a successful native completion. At
     /// `NATIVE_BAIL_GIVEUP_THRESHOLD` only that shape is negative-cached, so one
     /// failing shape cannot demote successful versions.
-    bail_counts: HashMap<NativeVersionKey, u32>,
     /// Per-version count of native dispatches of a back-edge-free body. At
     /// `NATIVE_NOAMORTIZE_GIVEUP` only that shape is negative-cached. Loop-bearing
     /// bodies are never inserted, so they are never disabled by this counter.
@@ -2015,16 +2014,16 @@ struct NativeState {
     /// Optimized OSR entries and their bounded baseline recompile sources.
     optimized_osr_cache: HashMap<OsrVersionKey, OsrEntry>,
     osr_optimization_sources: HashMap<OsrVersionKey, OsrOptimizationSource>,
-    osr_promotion_work: HashMap<OsrVersionKey, u64>,
-    /// Abnormal OSR exits attributed to the selected shape version. Normal
-    /// `OsrExit` deopts are successful entries and reset this counter.
-    osr_bail_counts: HashMap<OsrVersionKey, u32>,
+    /// Shared hotness/promotion/demotion lifecycle for OSR versions.
+    osr_controllers: HashMap<OsrVersionKey, RegionController>,
     /// Straight-line scalar continuation regions, keyed by exact VM entry IP and
     /// runtime register shape. `None` is a stable decline for that version.
     continuation_cache: HashMap<ContinuationVersionKey, Option<Rc<ContinuationEntry>>>,
+    continuation_controllers: HashMap<ContinuationVersionKey, RegionController>,
     /// Structural CFG plans (including negative results) are shape-independent and
     /// cached separately so probing each interpreter IP stays an O(1) lookup.
     continuation_plans: HashMap<(usize, usize), Option<Rc<ContinuationRegion>>>,
+    continuation_entry_sets: HashMap<usize, Rc<ContinuationEntrySet>>,
     continuation_functions: HashMap<usize, bool>,
     /// Native self-recursion cache (native-call-ABI slice 3; generalized in Phase 2):
     /// per-function stable ordinal key compiled `CallSelf` entry, with the
@@ -6656,9 +6655,8 @@ impl NativeState {
             optimized_cache: HashMap::new(),
             optimization_sources: HashMap::new(),
             counts: HashMap::new(),
-            promotion_work: HashMap::new(),
+            whole_controllers: HashMap::new(),
             optimize_work_threshold,
-            bail_counts: HashMap::new(),
             noamortize_counts: HashMap::new(),
             tier_up_threshold,
             force_bail,
@@ -6677,10 +6675,11 @@ impl NativeState {
             osr_cache: HashMap::new(),
             optimized_osr_cache: HashMap::new(),
             osr_optimization_sources: HashMap::new(),
-            osr_promotion_work: HashMap::new(),
-            osr_bail_counts: HashMap::new(),
+            osr_controllers: HashMap::new(),
             continuation_cache: HashMap::new(),
+            continuation_controllers: HashMap::new(),
             continuation_plans: HashMap::new(),
+            continuation_entry_sets: HashMap::new(),
             continuation_functions: HashMap::new(),
             #[cfg(feature = "jit-recursion-experimental")]
             self_recursive_native: HashMap::new(),
@@ -6709,16 +6708,18 @@ impl NativeState {
     /// threshold negative-caches only that version; invariant translation
     /// failures remain the sole owner of evaluation-local JIT native status.
     fn record_bail(&mut self, version_key: &NativeVersionKey) {
-        let count = self.bail_counts.entry(version_key.clone()).or_insert(0);
-        *count += 1;
+        let disabled = self
+            .whole_controllers
+            .entry(version_key.clone())
+            .or_default()
+            .dynamic_bail(NATIVE_BAIL_GIVEUP_THRESHOLD);
         if self.collect_stats {
             self.stats.shape_bails += 1;
         }
-        if *count >= NATIVE_BAIL_GIVEUP_THRESHOLD {
+        if disabled {
             self.cache.insert(version_key.clone(), None);
             self.optimized_cache.remove(version_key);
             self.optimization_sources.remove(version_key);
-            self.bail_counts.remove(version_key);
         }
     }
 

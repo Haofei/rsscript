@@ -2228,6 +2228,7 @@ pub(in crate::reg_vm) fn translate_osr_loop(
         // No signature available on the bare entry (unit tests): treat every param
         // conservatively (none proven an immutable leaf) so the guard never under-declines.
         &[],
+        true,
     )
 }
 
@@ -2263,6 +2264,7 @@ pub(in crate::reg_vm) fn translate_osr_loop_profiled(
         profile_guidance.hot_branch_edges,
         param_native_types,
         immutable_leaf_params,
+        true,
     )
 }
 
@@ -2292,6 +2294,7 @@ fn translate_osr_loop_inner(
     profile_hot_branch_edges: HashMap<usize, bool>,
     param_native_types: &[Option<NativeTy>],
     immutable_leaf_params: &[bool],
+    enable_flat_buffers: bool,
 ) -> Option<(
     vm_jit::JitFunction,
     Vec<NativeTy>,
@@ -2713,237 +2716,248 @@ fn translate_osr_loop_inner(
     // steady-state fixed-capacity list loops avoid per-iteration host helpers without
     // assuming growth cannot happen. Anything ambiguous (mixed kind, struct alias,
     // heap element, sort, non-Int write) stays on the Handle helper path.
-    let (flat_osr_kind, derived_liveins): (Vec<Option<NativeTy>>, Vec<OsrDerivedLiveIn>) = {
-        #[derive(Clone, Copy, PartialEq)]
-        enum S {
-            Unseen,
-            Flat(NativeTy),
-            Disq,
-        }
-        #[derive(Clone, Copy, PartialEq, Eq)]
-        struct FieldRead {
-            base: usize,
-            slot: usize,
-        }
-        // Group Handle registers connected by in-loop `Move`s into alias classes via
-        // union-find. This MUST be a union-find (not a `handle_alias[dst] =
-        // handle_alias[src]` propagation-to-fixpoint): a cyclic Handle-`Move` graph —
-        // which the two-armed `Result<Handle,_>` dissolution produces (per-arm payload
-        // Moves plus the loop-carried back-edge) — makes the naive propagation OSCILLATE
-        // forever between equivalent labelings, hanging the translator. Union-find by
-        // minimum representative is monotone, so it converges in one pass + a flatten,
-        // and the downstream only compares class representatives for EQUALITY, so the
-        // grouping (hence behavior) is identical to the old converging cases.
-        let mut handle_alias: Vec<usize> = (0..n_regs).collect();
-        for i in lp.header..lp.exit {
-            if let RegInstr::Move { dst, src } = &code[i]
-                && *dst < n_regs
-                && *src < n_regs
-                && ty[*dst] == Some(NativeTy::Handle)
-                && ty[*src] == Some(NativeTy::Handle)
-            {
-                let rd = osr_uf_find(&mut handle_alias, *dst);
-                let rs = osr_uf_find(&mut handle_alias, *src);
-                if rd != rs {
-                    let (lo, hi) = if rd < rs { (rd, rs) } else { (rs, rd) };
-                    handle_alias[hi] = lo;
+    let (flat_osr_kind, derived_liveins): (Vec<Option<NativeTy>>, Vec<OsrDerivedLiveIn>) =
+        if !enable_flat_buffers {
+            (vec![None; n_regs], Vec::new())
+        } else {
+            #[derive(Clone, Copy, PartialEq)]
+            enum S {
+                Unseen,
+                Flat(NativeTy),
+                Disq,
+            }
+            #[derive(Clone, Copy, PartialEq, Eq)]
+            struct FieldRead {
+                base: usize,
+                slot: usize,
+            }
+            // Group Handle registers connected by in-loop `Move`s into alias classes via
+            // union-find. This MUST be a union-find (not a `handle_alias[dst] =
+            // handle_alias[src]` propagation-to-fixpoint): a cyclic Handle-`Move` graph —
+            // which the two-armed `Result<Handle,_>` dissolution produces (per-arm payload
+            // Moves plus the loop-carried back-edge) — makes the naive propagation OSCILLATE
+            // forever between equivalent labelings, hanging the translator. Union-find by
+            // minimum representative is monotone, so it converges in one pass + a flatten,
+            // and the downstream only compares class representatives for EQUALITY, so the
+            // grouping (hence behavior) is identical to the old converging cases.
+            let mut handle_alias: Vec<usize> = (0..n_regs).collect();
+            for i in lp.header..lp.exit {
+                if let RegInstr::Move { dst, src } = &code[i]
+                    && *dst < n_regs
+                    && *src < n_regs
+                    && ty[*dst] == Some(NativeTy::Handle)
+                    && ty[*src] == Some(NativeTy::Handle)
+                {
+                    let rd = osr_uf_find(&mut handle_alias, *dst);
+                    let rs = osr_uf_find(&mut handle_alias, *src);
+                    if rd != rs {
+                        let (lo, hi) = if rd < rs { (rd, rs) } else { (rs, rd) };
+                        handle_alias[hi] = lo;
+                    }
                 }
             }
-        }
-        for r in 0..n_regs {
-            handle_alias[r] = osr_uf_find(&mut handle_alias, r);
-        }
-        // A register written by ANY in-loop instruction is not loop-invariant.
-        let mut written_in_loop = vec![false; n_regs];
-        let mut field_reads: Vec<Option<FieldRead>> = vec![None; n_regs];
-        let mut field_read_disq = vec![false; n_regs];
-        for i in lp.header..lp.exit {
-            if let Some(dst) = native_subset_dst(&code[i])
-                && dst < n_regs
-            {
-                written_in_loop[dst] = true;
+            for r in 0..n_regs {
+                handle_alias[r] = osr_uf_find(&mut handle_alias, r);
             }
-            if let RegInstr::GetFieldSlot { dst, base, slot } = &code[i]
-                && *dst < n_regs
-                && *base < n_regs
-            {
-                let read = FieldRead {
-                    base: handle_alias[*base],
-                    slot: *slot,
-                };
-                match field_reads[*dst] {
-                    None => field_reads[*dst] = Some(read),
-                    Some(existing) if existing == read => {}
-                    Some(_) => field_read_disq[*dst] = true,
+            // A register written by ANY in-loop instruction is not loop-invariant.
+            let mut written_in_loop = vec![false; n_regs];
+            let mut field_reads: Vec<Option<FieldRead>> = vec![None; n_regs];
+            let mut field_read_disq = vec![false; n_regs];
+            for i in lp.header..lp.exit {
+                if let Some(dst) = native_subset_dst(&code[i])
+                    && dst < n_regs
+                {
+                    written_in_loop[dst] = true;
                 }
-            }
-        }
-        let is_handle_reg = |reg: usize| ty[reg] == Some(NativeTy::Handle);
-        let mut st = vec![S::Unseen; n_regs];
-        let mut field_slot_written = Vec::<FieldRead>::new();
-        for i in lp.header..lp.exit {
-            match &code[i] {
-                // A struct read disqualifies the base (it is not a flat list).
-                RegInstr::GetFieldSlot { base, .. } if is_handle_reg(*base) => {
-                    st[*base] = S::Disq;
-                }
-                RegInstr::SetFieldSlot { base, slot, .. } if *base < n_regs => {
-                    field_slot_written.push(FieldRead {
+                if let RegInstr::GetFieldSlot { dst, base, slot } = &code[i]
+                    && *dst < n_regs
+                    && *base < n_regs
+                {
+                    let read = FieldRead {
                         base: handle_alias[*base],
                         slot: *slot,
-                    });
+                    };
+                    match field_reads[*dst] {
+                        None => field_reads[*dst] = Some(read),
+                        Some(existing) if existing == read => {}
+                        Some(_) => field_read_disq[*dst] = true,
+                    }
                 }
-                RegInstr::ListGet { dst, list, .. } if is_handle_reg(*list) => {
-                    // A heap-valued element (e.g. a stored closure/struct) means the
-                    // list is NOT a flat scalar buffer ⇒ disqualify.
-                    if is_handle_reg(*dst) {
-                        st[*list] = S::Disq;
-                    } else {
-                        let kind = if ty[*dst] == Some(NativeTy::Float) {
-                            NativeTy::FlatFloat
+            }
+            let is_handle_reg = |reg: usize| ty[reg] == Some(NativeTy::Handle);
+            let mut st = vec![S::Unseen; n_regs];
+            let mut field_slot_written = Vec::<FieldRead>::new();
+            for i in lp.header..lp.exit {
+                match &code[i] {
+                    // A struct read disqualifies the base (it is not a flat list).
+                    RegInstr::GetFieldSlot { base, .. } if is_handle_reg(*base) => {
+                        st[*base] = S::Disq;
+                    }
+                    RegInstr::SetFieldSlot { base, slot, .. } if *base < n_regs => {
+                        field_slot_written.push(FieldRead {
+                            base: handle_alias[*base],
+                            slot: *slot,
+                        });
+                    }
+                    RegInstr::ListGet { dst, list, .. } if is_handle_reg(*list) => {
+                        // A heap-valued element (e.g. a stored closure/struct) means the
+                        // list is NOT a flat scalar buffer ⇒ disqualify.
+                        if is_handle_reg(*dst) {
+                            st[*list] = S::Disq;
                         } else {
-                            NativeTy::FlatInt
-                        };
-                        st[*list] = match st[*list] {
-                            S::Unseen => S::Flat(kind),
-                            S::Flat(k) if k == kind => S::Flat(kind),
-                            S::Flat(NativeTy::FlatIntMut) if kind == NativeTy::FlatInt => {
-                                S::Flat(NativeTy::FlatIntMut)
-                            }
-                            S::Flat(NativeTy::FlatFloatMut) if kind == NativeTy::FlatFloat => {
-                                S::Flat(NativeTy::FlatFloatMut)
-                            }
-                            _ => S::Disq,
-                        };
+                            let kind = if ty[*dst] == Some(NativeTy::Float) {
+                                NativeTy::FlatFloat
+                            } else {
+                                NativeTy::FlatInt
+                            };
+                            st[*list] = match st[*list] {
+                                S::Unseen => S::Flat(kind),
+                                S::Flat(k) if k == kind => S::Flat(kind),
+                                S::Flat(NativeTy::FlatIntMut) if kind == NativeTy::FlatInt => {
+                                    S::Flat(NativeTy::FlatIntMut)
+                                }
+                                S::Flat(NativeTy::FlatFloatMut) if kind == NativeTy::FlatFloat => {
+                                    S::Flat(NativeTy::FlatFloatMut)
+                                }
+                                _ => S::Disq,
+                            };
+                        }
                     }
-                }
-                RegInstr::ListSet { list, value, .. } if is_handle_reg(*list) => {
-                    if ty[*value] == Some(NativeTy::Int) {
-                        st[*list] = match st[*list] {
-                            S::Unseen
-                            | S::Flat(NativeTy::FlatInt)
-                            | S::Flat(NativeTy::FlatIntMut) => S::Flat(NativeTy::FlatIntMut),
-                            _ => S::Disq,
-                        };
-                    } else if ty[*value] == Some(NativeTy::Float) {
-                        st[*list] = match st[*list] {
-                            S::Unseen
-                            | S::Flat(NativeTy::FlatFloat)
-                            | S::Flat(NativeTy::FlatFloatMut) => S::Flat(NativeTy::FlatFloatMut),
-                            _ => S::Disq,
-                        };
-                    } else {
+                    RegInstr::ListSet { list, value, .. } if is_handle_reg(*list) => {
+                        if ty[*value] == Some(NativeTy::Int) {
+                            st[*list] = match st[*list] {
+                                S::Unseen
+                                | S::Flat(NativeTy::FlatInt)
+                                | S::Flat(NativeTy::FlatIntMut) => S::Flat(NativeTy::FlatIntMut),
+                                _ => S::Disq,
+                            };
+                        } else if ty[*value] == Some(NativeTy::Float) {
+                            st[*list] = match st[*list] {
+                                S::Unseen
+                                | S::Flat(NativeTy::FlatFloat)
+                                | S::Flat(NativeTy::FlatFloatMut) => {
+                                    S::Flat(NativeTy::FlatFloatMut)
+                                }
+                                _ => S::Disq,
+                            };
+                        } else {
+                            st[*list] = S::Disq;
+                        }
+                    }
+                    RegInstr::ListPush { list, value, .. } if is_handle_reg(*list) => {
+                        if ty[*value] != Some(NativeTy::Int)
+                            || matches!(st[*list], S::Flat(NativeTy::FlatFloat))
+                        {
+                            st[*list] = S::Disq;
+                        }
+                    }
+                    RegInstr::ListSort { list, .. } if is_handle_reg(*list) => {
                         st[*list] = S::Disq;
                     }
-                }
-                RegInstr::ListPush { list, value, .. } if is_handle_reg(*list) => {
-                    if ty[*value] != Some(NativeTy::Int)
-                        || matches!(st[*list], S::Flat(NativeTy::FlatFloat))
+                    // `ListLen` is kind-neutral — neither pins nor disqualifies.
+                    // Any closure read off a handle disqualifies (not a flat list).
+                    RegInstr::NativeGuardClosureId { closure, .. }
+                    | RegInstr::NativeClosureId { closure, .. }
+                    | RegInstr::NativeClosureCapture { closure, .. }
+                        if is_handle_reg(*closure) =>
                     {
-                        st[*list] = S::Disq;
+                        st[*closure] = S::Disq;
                     }
+                    _ => {}
                 }
-                RegInstr::ListSort { list, .. } if is_handle_reg(*list) => {
-                    st[*list] = S::Disq;
+            }
+            let field_is_stable = |read: FieldRead| !field_slot_written.contains(&read);
+            let mut field_kinds: Vec<(FieldRead, NativeTy)> = Vec::new();
+            for reg in 0..n_regs {
+                let Some(read) = field_reads[reg] else {
+                    continue;
+                };
+                if field_read_disq[reg] || !is_handle_reg(read.base) || !field_is_stable(read) {
+                    continue;
                 }
-                // `ListLen` is kind-neutral — neither pins nor disqualifies.
-                // Any closure read off a handle disqualifies (not a flat list).
-                RegInstr::NativeGuardClosureId { closure, .. }
-                | RegInstr::NativeClosureId { closure, .. }
-                | RegInstr::NativeClosureCapture { closure, .. }
-                    if is_handle_reg(*closure) =>
+                let S::Flat(kind) = st[reg] else {
+                    continue;
+                };
+                if let Some((_, existing)) = field_kinds
+                    .iter_mut()
+                    .find(|(existing_read, _)| *existing_read == read)
                 {
-                    st[*closure] = S::Disq;
+                    if *existing == kind
+                        || (*existing == NativeTy::FlatIntMut && kind == NativeTy::FlatInt)
+                        || (*existing == NativeTy::FlatFloatMut && kind == NativeTy::FlatFloat)
+                    {
+                        continue;
+                    }
+                    if *existing == NativeTy::FlatInt && kind == NativeTy::FlatIntMut {
+                        *existing = NativeTy::FlatIntMut;
+                        continue;
+                    }
+                    if *existing == NativeTy::FlatFloat && kind == NativeTy::FlatFloatMut {
+                        *existing = NativeTy::FlatFloatMut;
+                        continue;
+                    }
+                    continue;
                 }
-                _ => {}
+                field_kinds.push((read, kind));
             }
-        }
-        let field_is_stable = |read: FieldRead| !field_slot_written.contains(&read);
-        let mut field_kinds: Vec<(FieldRead, NativeTy)> = Vec::new();
-        for reg in 0..n_regs {
-            let Some(read) = field_reads[reg] else {
-                continue;
+            let field_kind = |read: FieldRead| {
+                field_kinds
+                    .iter()
+                    .find_map(|(candidate, kind)| (*candidate == read).then_some(*kind))
             };
-            if field_read_disq[reg] || !is_handle_reg(read.base) || !field_is_stable(read) {
-                continue;
-            }
-            let S::Flat(kind) = st[reg] else {
-                continue;
-            };
-            if let Some((_, existing)) = field_kinds
-                .iter_mut()
-                .find(|(existing_read, _)| *existing_read == read)
-            {
-                if *existing == kind
-                    || (*existing == NativeTy::FlatIntMut && kind == NativeTy::FlatInt)
-                    || (*existing == NativeTy::FlatFloatMut && kind == NativeTy::FlatFloat)
-                {
-                    continue;
-                }
-                if *existing == NativeTy::FlatInt && kind == NativeTy::FlatIntMut {
-                    *existing = NativeTy::FlatIntMut;
-                    continue;
-                }
-                if *existing == NativeTy::FlatFloat && kind == NativeTy::FlatFloatMut {
-                    *existing = NativeTy::FlatFloatMut;
-                    continue;
-                }
-                continue;
-            }
-            field_kinds.push((read, kind));
-        }
-        let field_kind = |read: FieldRead| {
-            field_kinds
-                .iter()
-                .find_map(|(candidate, kind)| (*candidate == read).then_some(*kind))
+            let mut derived = Vec::new();
+            let flat = (0..n_regs)
+                .map(|reg| match st[reg] {
+                    // Only a loop-invariant (never-rewritten) handle qualifies. A handle
+                    // produced INSIDE the loop (ListGetHandle/FieldHandle dst) is written
+                    // in-loop ⇒ excluded here, staying on the Handle path.
+                    S::Flat(k) if !written_in_loop[reg] => Some(k),
+                    // A loop-internal handle loaded from a stable struct field can also
+                    // be marshalled once at OSR entry. The native register is prefilled
+                    // from `base.field_slot`, and the in-loop `GetFieldSlot` becomes a
+                    // no-op. This is the field form of the existing flat-list live-in
+                    // mechanism, not a mailbox-specific helper.
+                    S::Flat(k) if written_in_loop[reg] => {
+                        let read = field_reads[reg]?;
+                        let k = field_kind(read).unwrap_or(k);
+                        if field_read_disq[reg]
+                            || !is_handle_reg(read.base)
+                            || !field_is_stable(read)
+                        {
+                            None
+                        } else {
+                            derived.push(OsrDerivedLiveIn {
+                                native_reg: reg,
+                                base_reg: read.base,
+                                field_slot: read.slot,
+                                ty: k,
+                            });
+                            Some(k)
+                        }
+                    }
+                    S::Unseen if written_in_loop[reg] => {
+                        let read = field_reads[reg]?;
+                        let k = field_kind(read)?;
+                        if field_read_disq[reg]
+                            || !is_handle_reg(read.base)
+                            || !field_is_stable(read)
+                        {
+                            None
+                        } else {
+                            derived.push(OsrDerivedLiveIn {
+                                native_reg: reg,
+                                base_reg: read.base,
+                                field_slot: read.slot,
+                                ty: k,
+                            });
+                            Some(k)
+                        }
+                    }
+                    _ => None,
+                })
+                .collect();
+            (flat, derived)
         };
-        let mut derived = Vec::new();
-        let flat = (0..n_regs)
-            .map(|reg| match st[reg] {
-                // Only a loop-invariant (never-rewritten) handle qualifies. A handle
-                // produced INSIDE the loop (ListGetHandle/FieldHandle dst) is written
-                // in-loop ⇒ excluded here, staying on the Handle path.
-                S::Flat(k) if !written_in_loop[reg] => Some(k),
-                // A loop-internal handle loaded from a stable struct field can also
-                // be marshalled once at OSR entry. The native register is prefilled
-                // from `base.field_slot`, and the in-loop `GetFieldSlot` becomes a
-                // no-op. This is the field form of the existing flat-list live-in
-                // mechanism, not a mailbox-specific helper.
-                S::Flat(k) if written_in_loop[reg] => {
-                    let read = field_reads[reg]?;
-                    let k = field_kind(read).unwrap_or(k);
-                    if field_read_disq[reg] || !is_handle_reg(read.base) || !field_is_stable(read) {
-                        None
-                    } else {
-                        derived.push(OsrDerivedLiveIn {
-                            native_reg: reg,
-                            base_reg: read.base,
-                            field_slot: read.slot,
-                            ty: k,
-                        });
-                        Some(k)
-                    }
-                }
-                S::Unseen if written_in_loop[reg] => {
-                    let read = field_reads[reg]?;
-                    let k = field_kind(read)?;
-                    if field_read_disq[reg] || !is_handle_reg(read.base) || !field_is_stable(read) {
-                        None
-                    } else {
-                        derived.push(OsrDerivedLiveIn {
-                            native_reg: reg,
-                            base_reg: read.base,
-                            field_slot: read.slot,
-                            ty: k,
-                        });
-                        Some(k)
-                    }
-                }
-                _ => None,
-            })
-            .collect();
-        (flat, derived)
-    };
     for reg in 0..n_regs {
         if let Some(kind) = flat_osr_kind[reg] {
             ty[reg] = Some(kind);

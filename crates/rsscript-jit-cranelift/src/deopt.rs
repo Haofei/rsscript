@@ -117,9 +117,8 @@ pub struct DeoptFrame {
     pub child: Option<Box<DeoptFrame>>,
 }
 
-/// Outcome of running a compiled function via [`NativeModule::call`]: either the
-/// function ran to completion with a 64-bit result, or it deopted at a named
-/// safepoint and the interpreter should re-run it.
+/// Outcome of running compiled code via [`NativeModule::call`]: completion, a
+/// planned commit-capable region yield, or exceptional deopt at a named safepoint.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NativeOutcome {
     /// The function completed; the payload is the result bits (an `i64`, or an
@@ -140,11 +139,7 @@ pub enum NativeOutcome {
     /// A planned normal exit from a compiled continuation region. Unlike deopt,
     /// the embedding VM must materialize the captured live state and commit the
     /// native transaction before resuming at the region exit.
-    Yield {
-        exit_id: u32,
-        safepoint_id: SafepointId,
-        live: Vec<DeoptReg>,
-    },
+    Yield { exit_id: u32 },
     /// The function deopted at `safepoint_id` (a guard bail or a host-helper bail)
     /// and the caller must fall back to the interpreter. `live` carries each
     /// register definitely assigned at the resume point with its captured value

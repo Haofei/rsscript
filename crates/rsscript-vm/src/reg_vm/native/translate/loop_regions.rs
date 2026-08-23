@@ -14,6 +14,89 @@ const MIN_CONTINUATION_DIRECT_WORK: usize = 16;
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) const MIN_CONTINUATION_ADMISSION_WORK: usize = 512;
 
+/// Policy decision made from the shape-independent region plan before runtime
+/// shape construction or Cranelift compilation. `Ignore` regions must not
+/// suppress tier-0: they are structurally valid continuation candidates, but the
+/// active execution policy cannot profitably or safely dispatch them.
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::reg_vm) enum ContinuationDecision {
+    Ignore,
+    Compile,
+}
+
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::reg_vm) enum ContinuationTierDecision {
+    BaselineOnly,
+    Promote,
+}
+
+/// Optimized continuation code is admitted only from controlled canonical
+/// evidence, expressed as basis points of end-to-end speedup. No evidence means
+/// baseline-only; microbenchmarks and developer-machine timings cannot silently
+/// grow a third, divergent promotion policy.
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn continuation_tier_decision(
+    canonical_speedup_basis_points: Option<u16>,
+) -> ContinuationTierDecision {
+    if canonical_speedup_basis_points.is_some_and(|speedup| speedup >= 1_150) {
+        ContinuationTierDecision::Promote
+    } else {
+        ContinuationTierDecision::BaselineOnly
+    }
+}
+
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn continuation_decision(
+    region: &ContinuationRegion,
+    cost_model: NativeCostModel,
+    step_armed: bool,
+    deadline_armed: bool,
+) -> ContinuationDecision {
+    if region.has_backedge && (step_armed || deadline_armed) {
+        return ContinuationDecision::Ignore;
+    }
+    if matches!(cost_model, NativeCostModel::Enforce)
+        && !region.has_backedge
+        && region.source_instructions < MIN_CONTINUATION_ADMISSION_WORK
+    {
+        return ContinuationDecision::Ignore;
+    }
+    ContinuationDecision::Compile
+}
+
+/// First supported helper slice for mixed-mode continuations: synchronous,
+/// read-only heap queries with scalar results. Handle-producing helpers and every
+/// heap mutation remain VM barriers until their transaction/accounting contracts
+/// are admitted separately.
+#[cfg(feature = "native-jit")]
+fn continuation_readonly_helper(instr: &RegInstr) -> bool {
+    let scalar_read = |spec: NativeHostIntrinsic| {
+        matches!(
+            spec.result_ty,
+            NativeTy::Int | NativeTy::Bool | NativeTy::Float
+        ) && spec.helper.heap_effect() == vm_jit::HostHeapEffect::ReadOnly
+    };
+    match instr {
+        RegInstr::CallIntrinsic {
+            intrinsic, args, ..
+        } => native_host_typed_intrinsic(*intrinsic, None)
+            .is_some_and(|spec| args.len() == spec.arg_tys().len() && scalar_read(spec)),
+        RegInstr::CallTypedIntrinsic {
+            intrinsic,
+            type_arg,
+            args,
+            ..
+        } => native_host_typed_intrinsic(*intrinsic, Some(type_arg.as_str()))
+            .is_some_and(|spec| args.len() == spec.arg_tys().len() && scalar_read(spec)),
+        // The translator selects a typed read-only helper from inferred value use.
+        // A Handle result is rejected after inference below.
+        RegInstr::ListLen { .. } | RegInstr::ListGet { .. } | RegInstr::GetFieldSlot { .. } => true,
+        _ => false,
+    }
+}
+
 /// A single natural loop identified for OSR (OSR): the conservative shape this
 /// slice compiles. `header` is the loop's entry instruction (a conditional branch
 /// that is the target of the loop's backedge); `exit` is the post-loop instruction
@@ -54,7 +137,26 @@ pub(in crate::reg_vm) struct ContinuationRegion {
     pub(in crate::reg_vm) exits: BTreeMap<usize, NativeBarrierReason>,
     pub(in crate::reg_vm) has_backedge: bool,
     pub(in crate::reg_vm) active_regs: Vec<bool>,
+    pub(in crate::reg_vm) live_in_regs: Vec<usize>,
     pub(in crate::reg_vm) source_instructions: usize,
+}
+
+/// One dense native slot and the VM register whose value it represents.
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone, Copy)]
+pub(in crate::reg_vm) struct ContinuationSlot {
+    pub(in crate::reg_vm) vm_reg: usize,
+    pub(in crate::reg_vm) ty: NativeTy,
+    pub(in crate::reg_vm) written: bool,
+}
+
+/// Static metadata for one normal continuation exit. `live_slots` indexes the
+/// compact native register window, never the full VM register file.
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone)]
+pub(in crate::reg_vm) struct ContinuationExit {
+    pub(in crate::reg_vm) reason: NativeBarrierReason,
+    pub(in crate::reg_vm) live_slots: Box<[u32]>,
 }
 
 /// A compiled scalar continuation cached per function, entry, and runtime shape.
@@ -63,44 +165,54 @@ pub(in crate::reg_vm) struct ContinuationRegion {
 pub(in crate::reg_vm) struct ContinuationEntry {
     pub(in crate::reg_vm) id: vm_jit::CompiledId,
     pub(in crate::reg_vm) entry: usize,
-    pub(in crate::reg_vm) exits: BTreeMap<usize, NativeBarrierReason>,
+    pub(in crate::reg_vm) exits: BTreeMap<usize, ContinuationExit>,
     pub(in crate::reg_vm) n_jit_regs: usize,
-    pub(in crate::reg_vm) source_instructions: usize,
-    pub(in crate::reg_vm) has_backedge: bool,
-    pub(in crate::reg_vm) active_regs: Vec<bool>,
-    pub(in crate::reg_vm) reg_types: Vec<NativeTy>,
-    pub(in crate::reg_vm) written_regs: Vec<bool>,
+    pub(in crate::reg_vm) n_live_in: usize,
+    pub(in crate::reg_vm) slots: Box<[ContinuationSlot]>,
 }
 
-/// Continuations begin at function entry or immediately after a VM-owned
-/// barrier. Probing every instruction would create many overlapping suffix
-/// regions and turn an interpreted hot loop into repeated shape/cache work.
+/// CFG-derived continuation entries. A candidate is function entry or a
+/// successor edge of a VM-owned barrier; textual adjacency is deliberately not
+/// used because calls, matches, cleanup and scheduler resumes may target a
+/// non-adjacent block.
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn is_continuation_entry(code: &[RegInstr], entry: usize) -> bool {
-    entry == 0
-        || entry
-            .checked_sub(1)
-            .and_then(|previous| code.get(previous))
-            .is_some_and(|instr| {
-                !matches!(native_lowering_class(instr), NativeLoweringClass::Direct)
-            })
+#[derive(Debug, Clone)]
+pub(in crate::reg_vm) struct ContinuationEntrySet {
+    candidates: Box<[bool]>,
 }
 
-/// Cheap hot-path filter before the CFG region planner. Entry zero may branch and
-/// receives full analysis; a post-barrier continuation must first expose a useful
-/// straight-line prefix. This rejects per-iteration aggregate/call ping-pong
-/// without a hash lookup, shape construction, or allocation.
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn should_probe_continuation_entry(code: &[RegInstr], entry: usize) -> bool {
-    if !is_continuation_entry(code, entry) {
-        return false;
+impl ContinuationEntrySet {
+    pub(in crate::reg_vm) fn from_code(code: &[RegInstr]) -> Self {
+        let mut candidates = vec![false; code.len()];
+        if !code.is_empty() {
+            candidates[0] = true;
+        }
+        for (ip, instr) in code.iter().enumerate() {
+            if matches!(native_lowering_class(instr), NativeLoweringClass::Direct) {
+                continue;
+            }
+            native_instr_successors(instr, ip, code.len(), |successor| {
+                if let Some(candidate) = candidates.get_mut(successor) {
+                    *candidate = true;
+                }
+            });
+        }
+        Self {
+            candidates: candidates.into_boxed_slice(),
+        }
     }
-    entry == 0
-        || code.get(entry..).is_some_and(|tail| {
-            tail.iter()
-                .take(MIN_CONTINUATION_DIRECT_WORK)
-                .all(|instr| matches!(native_lowering_class(instr), NativeLoweringClass::Direct))
-        }) && code.len().saturating_sub(entry) >= MIN_CONTINUATION_DIRECT_WORK
+
+    pub(in crate::reg_vm) fn contains(&self, entry: usize) -> bool {
+        self.candidates.get(entry).copied().unwrap_or(false)
+    }
+
+    pub(in crate::reg_vm) fn iter(&self) -> impl Iterator<Item = usize> + '_ {
+        self.candidates
+            .iter()
+            .enumerate()
+            .filter_map(|(ip, candidate)| candidate.then_some(ip))
+    }
 }
 
 /// Find a useful scalar CFG region beginning at `entry`.
@@ -111,6 +223,7 @@ pub(in crate::reg_vm) fn should_probe_continuation_entry(code: &[RegInstr], entr
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn detect_scalar_continuation_region(
     code: &[RegInstr],
+    n_regs: usize,
     entry: usize,
 ) -> Option<ContinuationRegion> {
     // A region transition crosses the Rust/native ABI and materializes live
@@ -138,6 +251,7 @@ pub(in crate::reg_vm) fn detect_scalar_continuation_region(
                 Some(reason)
             }
             (RegInstr::Return { .. }, _) => Some(NativeBarrierReason::FunctionReturn),
+            (_, NativeLoweringClass::Helper { .. }) if continuation_readonly_helper(instr) => None,
             (_, NativeLoweringClass::Helper { .. }) => {
                 Some(NativeBarrierReason::UnsupportedIntrinsic)
             }
@@ -152,16 +266,20 @@ pub(in crate::reg_vm) fn detect_scalar_continuation_region(
             }
             continue;
         }
-        if lowering != NativeLoweringClass::Direct
-            || matches!(
-                instr,
-                RegInstr::RuntimeError { .. } | RegInstr::TailCallGuard
-            )
-        {
+        if !matches!(
+            lowering,
+            NativeLoweringClass::Direct | NativeLoweringClass::Helper { .. }
+        ) || matches!(
+            instr,
+            RegInstr::RuntimeError { .. } | RegInstr::TailCallGuard
+        ) {
             return None;
         }
         included[ip] = true;
-        direct_work = direct_work.saturating_add(1);
+        direct_work = direct_work.saturating_add(match lowering {
+            NativeLoweringClass::Helper { estimated_cost } => usize::from(estimated_cost),
+            _ => 1,
+        });
         if direct_work > MAX_REGION_INSTRUCTIONS {
             return None;
         }
@@ -201,7 +319,8 @@ pub(in crate::reg_vm) fn detect_scalar_continuation_region(
                     .max()
                     .map_or(maximum, |reg| maximum.max(reg + 1))
             })
-        })?;
+        })?
+        .max(n_regs);
     let mut active_regs = vec![false; max_reg];
     for (ip, instr) in code.iter().enumerate() {
         if !included[ip] {
@@ -211,12 +330,20 @@ pub(in crate::reg_vm) fn detect_scalar_continuation_region(
             active_regs[reg] = true;
         }
     }
+    let liveness = NativeRegionAnalysis::compute_prefix(code, max_reg, 0, code.len())?;
+    let live_in_regs = (0..max_reg)
+        .filter(|reg| {
+            active_regs.get(*reg).copied().unwrap_or(false)
+                && liveness.live_in(entry, *reg) == Some(true)
+        })
+        .collect();
     Some(ContinuationRegion {
         entry,
         included,
         exits,
         has_backedge,
         active_regs,
+        live_in_regs,
         source_instructions: direct_work,
     })
 }
@@ -228,12 +355,17 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
     func: &RegFunction,
     region: &ContinuationRegion,
     param_native_types: &[Option<NativeTy>],
-) -> Option<(vm_jit::JitFunction, Vec<bool>, Vec<NativeTy>, Vec<bool>)> {
+) -> Option<(
+    vm_jit::JitFunction,
+    Box<[ContinuationSlot]>,
+    usize,
+    BTreeMap<usize, ContinuationExit>,
+)> {
     if region.entry >= func.code.len() || region.included.len() != func.code.len() {
         return None;
     }
     let mut synthetic = func.code.clone();
-    for (ip, instr) in synthetic.iter_mut().enumerate().skip(region.entry) {
+    for (ip, instr) in synthetic.iter_mut().enumerate() {
         if !region.included[ip] {
             *instr = RegInstr::RuntimeError {
                 message: "native continuation boundary".to_string(),
@@ -264,13 +396,17 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
         HashMap::new(),
         param_native_types,
         &immutable_leaf_params,
+        false,
     )?;
     if !derived_liveins.is_empty()
         || !scalar_fields.is_empty()
         || !string_literals.is_empty()
-        || reg_types
-            .iter()
-            .any(|ty| !matches!(ty, NativeTy::Int | NativeTy::Bool | NativeTy::Float))
+        || reg_types.iter().any(|ty| {
+            !matches!(
+                ty,
+                NativeTy::Int | NativeTy::Bool | NativeTy::Float | NativeTy::Handle
+            )
+        })
     {
         return None;
     }
@@ -307,12 +443,156 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
             live,
         };
     }
-    Some((jit_fn, active_regs, reg_types, written_regs))
+    let mut ordered_vm_regs = region.live_in_regs.clone();
+    ordered_vm_regs.extend(
+        region
+            .active_regs
+            .iter()
+            .enumerate()
+            .filter_map(|(reg, active)| {
+                (*active && !region.live_in_regs.contains(&reg)).then_some(reg)
+            }),
+    );
+    let compact_slots = ordered_vm_regs
+        .iter()
+        .map(|reg| {
+            Some(ContinuationSlot {
+                vm_reg: *reg,
+                ty: *reg_types.get(*reg)?,
+                written: written_regs.get(*reg).copied().unwrap_or(false),
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    if compact_slots
+        .iter()
+        .any(|slot| slot.written && slot.ty == NativeTy::Handle)
+    {
+        return None;
+    }
+    let ordered_old_regs = ordered_vm_regs
+        .iter()
+        .map(|reg| u32::try_from(*reg).ok())
+        .collect::<Option<Vec<_>>>()?;
+    jit_fn.compact_registers(
+        &ordered_old_regs,
+        u32::try_from(region.live_in_regs.len()).ok()?,
+    )?;
+    let exits = region
+        .exits
+        .iter()
+        .map(|(ip, reason)| {
+            let vm_jit::JitInstr::RegionExit { live, .. } = jit_fn.code.get(*ip)? else {
+                return None;
+            };
+            Some((
+                *ip,
+                ContinuationExit {
+                    reason: *reason,
+                    live_slots: live.clone().into_boxed_slice(),
+                },
+            ))
+        })
+        .collect::<Option<BTreeMap<_, _>>>()?;
+    Some((
+        jit_fn,
+        compact_slots.into_boxed_slice(),
+        region.live_in_regs.len(),
+        exits,
+    ))
 }
 
 #[cfg(all(test, feature = "native-jit"))]
 mod continuation_tests {
     use super::*;
+
+    #[test]
+    fn enforcing_policy_rejects_tiny_acyclic_regions_before_codegen() {
+        let region = ContinuationRegion {
+            entry: 0,
+            included: vec![true; MIN_CONTINUATION_DIRECT_WORK],
+            exits: BTreeMap::from([(
+                MIN_CONTINUATION_DIRECT_WORK,
+                NativeBarrierReason::FunctionReturn,
+            )]),
+            has_backedge: false,
+            active_regs: vec![true],
+            live_in_regs: vec![0],
+            source_instructions: MIN_CONTINUATION_DIRECT_WORK,
+        };
+        assert_eq!(
+            continuation_decision(&region, NativeCostModel::Enforce, false, false),
+            ContinuationDecision::Ignore
+        );
+        assert_eq!(
+            continuation_decision(&region, NativeCostModel::Off, false, false),
+            ContinuationDecision::Compile
+        );
+    }
+
+    #[test]
+    fn optimized_continuations_require_controlled_retention_evidence() {
+        assert_eq!(
+            continuation_tier_decision(None),
+            ContinuationTierDecision::BaselineOnly
+        );
+        assert_eq!(
+            continuation_tier_decision(Some(1_149)),
+            ContinuationTierDecision::BaselineOnly
+        );
+        assert_eq!(
+            continuation_tier_decision(Some(1_150)),
+            ContinuationTierDecision::Promote
+        );
+    }
+
+    #[test]
+    fn continuation_entries_follow_nonadjacent_cfg_successors() {
+        let code = vec![
+            RegInstr::MatchOption {
+                src: 0,
+                some_ip: 3,
+                none_ip: 5,
+            },
+            RegInstr::RuntimeError {
+                message: "unreachable".into(),
+            },
+            RegInstr::RuntimeError {
+                message: "unreachable".into(),
+            },
+            RegInstr::LoadInt { dst: 1, value: 1 },
+            RegInstr::Return { src: 1 },
+            RegInstr::Return { src: 0 },
+        ];
+        let entries = ContinuationEntrySet::from_code(&code);
+        assert!(entries.contains(0));
+        assert!(entries.contains(3));
+        assert!(entries.contains(5));
+        assert!(!entries.contains(1));
+    }
+
+    #[test]
+    fn armed_backedge_regions_never_suppress_bounded_execution() {
+        let region = ContinuationRegion {
+            entry: 0,
+            included: vec![true; MIN_CONTINUATION_ADMISSION_WORK],
+            exits: BTreeMap::from([(
+                MIN_CONTINUATION_ADMISSION_WORK,
+                NativeBarrierReason::FunctionReturn,
+            )]),
+            has_backedge: true,
+            active_regs: vec![true],
+            live_in_regs: vec![0],
+            source_instructions: MIN_CONTINUATION_ADMISSION_WORK,
+        };
+        assert_eq!(
+            continuation_decision(&region, NativeCostModel::Enforce, true, false),
+            ContinuationDecision::Ignore
+        );
+        assert_eq!(
+            continuation_decision(&region, NativeCostModel::Enforce, false, true),
+            ContinuationDecision::Ignore
+        );
+    }
 
     #[test]
     fn scalar_cfg_region_keeps_branches_and_records_multiple_normal_exits() {
@@ -397,7 +677,7 @@ mod continuation_tests {
                 mut_args: Vec::new(),
             },
         ];
-        let region = detect_scalar_continuation_region(&code, 0).expect("scalar CFG region");
+        let region = detect_scalar_continuation_region(&code, 9, 0).expect("scalar CFG region");
         assert!(region.included[11], "conditional branch stays native");
         assert_eq!(
             region.exits.get(&14),
@@ -431,11 +711,11 @@ mod continuation_tests {
             },
             RegInstr::Jump { target: 0 },
         ];
-        assert!(is_continuation_entry(&code, 0));
-        assert!(is_continuation_entry(&code, 1));
-        assert!(!is_continuation_entry(&code, 2));
-        assert!(!should_probe_continuation_entry(&code, 1));
-        assert!(detect_scalar_continuation_region(&code, 1).is_none());
+        let entries = ContinuationEntrySet::from_code(&code);
+        assert!(entries.contains(0));
+        assert!(entries.contains(1));
+        assert!(!entries.contains(2));
+        assert!(detect_scalar_continuation_region(&code, 2, 1).is_none());
     }
 
     #[test]
@@ -475,7 +755,7 @@ mod continuation_tests {
         });
         assert_eq!(code.len(), 19);
 
-        let region = detect_scalar_continuation_region(&code, 0).expect("closed native loop");
+        let region = detect_scalar_continuation_region(&code, 3, 0).expect("closed native loop");
         assert!(region.has_backedge);
         assert_eq!(
             region.exits.get(&18),

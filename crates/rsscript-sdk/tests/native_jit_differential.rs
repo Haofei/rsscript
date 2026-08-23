@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use rsscript_sdk::{
     artifact::ArtifactVerifier,
@@ -13,7 +14,7 @@ use rsscript_sdk::{
         ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor, ProviderRegistry,
         RUNTIME_ABI_VERSION, ResourceCleanupContract, WireInterpreterFn, WireValue,
     },
-    report::ExecutionEngineTelemetry,
+    report::{ExecutionEngineTelemetry, TerminationReason},
     runtime::{
         ExecutionRequest, NativeCostModel, NativeJitOptions, RunLimits, Runtime, TracePolicy,
     },
@@ -43,6 +44,10 @@ const CASES: &[(&str, &str)] = &[
     (
         "aggregate-continuation.rss",
         "struct AggregateBox { value: Int } fn main() -> Int { let boxed = AggregateBox(value: 13); let extracted = boxed.value; let a = extracted * 3; let b = a + 11; let c = b * 5; let d = c - 9; let e = d + 2; let f = e * 3; let g = f - 4; let h = g + 6; let i = h * 2; return i }",
+    ),
+    (
+        "readonly-helper-continuation.rss",
+        "struct ReadBox { value: Int } fn boundary() -> Int { let boxed = ReadBox(value: 1); return boxed.value } fn hot(text: String, limit: Int) -> Int { let seed = boundary(); let mut i = 0; let mut total = seed; while i < limit { total = total + String.len(value: text); i = i + 1 }; return total } fn main() -> Int { return hot(text: \"rsscript\", limit: 2000) }",
     ),
     (
         "await-continuation.rss",
@@ -132,6 +137,7 @@ fn native_engine_matches_the_verified_interpreter_corpus() {
             osr_entries,
             continuation_entries,
             continuation_yields,
+            continuation_compiled_source_instructions,
             interpreted_native_work,
             native_barrier_counts,
             rejected_resident_bytes,
@@ -191,6 +197,16 @@ fn native_engine_matches_the_verified_interpreter_corpus() {
             assert!(
                 continuation_entries >= 1 && continuation_yields >= 1,
                 "scalar work after aggregate materialization must re-enter native code; entries={continuation_entries}, yields={continuation_yields}, barriers={native_barrier_counts:?}, missed={interpreted_native_work}"
+            );
+        }
+        if *file == "readonly-helper-continuation.rss" {
+            assert!(
+                continuation_entries >= 1 && continuation_yields >= 1,
+                "read-only scalar-result helpers must remain inside a continuation region; entries={continuation_entries}, yields={continuation_yields}, compiled_work={continuation_compiled_source_instructions}, barriers={native_barrier_counts:?}"
+            );
+            assert!(
+                !native_barrier_counts.contains_key("unsupported_intrinsic"),
+                "read-only scalar-result helpers must not force a VM barrier"
             );
         }
         if *file == "await-continuation.rss" {
@@ -312,6 +328,122 @@ fn bounded_step_accounting_matches_across_call_continuations() {
         panic!("cancel-armed native execution must report native telemetry");
     };
     assert!(continuation_entries >= 2);
+}
+
+#[test]
+fn continuation_controls_fail_before_codegen_and_match_every_step_boundary() {
+    let source = "struct StepGate { value: Int } fn boundary(value: Int) -> Int { let boxed = StepGate(value: value); return boxed.value } fn main() -> Int { let a = 7; let b = a * 3; let c = b + 11; let p = c * 2; let q = p - 5; let r = q + 9; let s = r * 2; let d = boundary(value: s); let e = d * 5; let f = e - 9; let g = f + 2; let h = g * 3; let i = h - 4; let j = i + 6; let k = j * 2; return k }";
+    let built = Compiler
+        .compile("continuation-controls.rss", source)
+        .expect("source compiles");
+    let admitted = ArtifactVerifier
+        .verify(built)
+        .expect("artifact verifies")
+        .admit_trusted_input();
+    let linked = Runtime::new(ProviderRegistry::default())
+        .link(&admitted)
+        .expect("artifact links");
+    let completed = linked.execute(ExecutionRequest::default());
+
+    for budget in 0..=completed.usage.steps_consumed.saturating_add(1) {
+        let limits = RunLimits::unbounded_for_trusted_host().with_step_budget(budget);
+        let interpreter = linked.execute(ExecutionRequest::default().limits(limits.clone()));
+        let native = linked.execute(ExecutionRequest::default().limits(limits).native_jit(
+            NativeJitOptions {
+                cost_model: NativeCostModel::Off,
+                ..NativeJitOptions::default()
+            },
+        ));
+        assert_eq!(
+            native.termination_reason(),
+            interpreter.termination_reason()
+        );
+        assert_eq!(
+            native.usage.steps_consumed,
+            interpreter.usage.steps_consumed
+        );
+    }
+
+    let cancelled = CancellationToken::new();
+    cancelled.cancel();
+    let report = linked.execute(
+        ExecutionRequest::default()
+            .limits(RunLimits::unbounded_for_trusted_host().with_cancellation(cancelled))
+            .native_jit(NativeJitOptions {
+                cost_model: NativeCostModel::Off,
+                ..NativeJitOptions::default()
+            }),
+    );
+    assert_eq!(report.termination_reason(), TerminationReason::Cancelled);
+    let ExecutionEngineTelemetry::Native {
+        continuation_compiled_source_instructions,
+        ..
+    } = report.telemetry.engine
+    else {
+        panic!("cancelled native execution must report native telemetry");
+    };
+    assert_eq!(continuation_compiled_source_instructions, 0);
+
+    let report =
+        linked.execute(
+            ExecutionRequest::default()
+                .limits(RunLimits::unbounded_for_trusted_host().with_deadline(
+                    MonotonicDeadline::at(Instant::now() - Duration::from_millis(1)),
+                ))
+                .native_jit(NativeJitOptions {
+                    cost_model: NativeCostModel::Off,
+                    ..NativeJitOptions::default()
+                }),
+        );
+    assert_eq!(
+        report.termination_reason(),
+        TerminationReason::DeadlineExceeded
+    );
+    let ExecutionEngineTelemetry::Native {
+        continuation_compiled_source_instructions,
+        ..
+    } = report.telemetry.engine
+    else {
+        panic!("expired native execution must report native telemetry");
+    };
+    assert_eq!(continuation_compiled_source_instructions, 0);
+}
+
+#[test]
+fn cancellation_during_a_closed_native_continuation_is_observed() {
+    let source = "fn main() -> Int { let mut i = 0; let mut total = 0; while i < 2000000000 { total = total + i; i = i + 1 }; return total }";
+    let built = Compiler
+        .compile("continuation-cancel-mid-region.rss", source)
+        .expect("source compiles");
+    let admitted = ArtifactVerifier
+        .verify(built)
+        .expect("artifact verifies")
+        .admit_trusted_input();
+    let linked = Runtime::new(ProviderRegistry::default())
+        .link(&admitted)
+        .expect("artifact links");
+
+    let token = CancellationToken::new();
+    let trigger = token.clone();
+    let canceller = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(100));
+        trigger.cancel();
+    });
+    let report = linked.execute(
+        ExecutionRequest::default()
+            .limits(RunLimits::unbounded_for_trusted_host().with_cancellation(token))
+            .native_jit(NativeJitOptions::default()),
+    );
+    canceller.join().expect("cancellation thread completes");
+    assert_eq!(report.termination_reason(), TerminationReason::Cancelled);
+    let ExecutionEngineTelemetry::Native {
+        continuation_compiled_source_instructions,
+        ..
+    } = report.telemetry.engine
+    else {
+        panic!("mid-region cancellation must report native telemetry");
+    };
+    assert!(continuation_compiled_source_instructions > 0);
 }
 
 #[test]

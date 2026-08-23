@@ -88,4 +88,6 @@ jobs:
           docker compose run --rm dev bash -lc 'cd fuzz && cargo +nightly-2026-07-20 fuzz run execution_report -- -runs=10000 -max_total_time=30'
 
       - name: Structured JIT IR validation fuzz smoke
-        run: docker compose run --rm dev bash -lc 'cd fuzz && cargo +nightly-2026-07-20 fuzz run jit_ir_validate --features native-jit -- -runs=20000 -max_total_time=60'
+        run: |
+          docker compose run --rm dev bash -lc 'cd fuzz && cargo +nightly-2026-07-20 fuzz run jit_ir_validate --features native-jit -- -runs=20000 -max_total_time=60'
+          docker compose run --rm dev bash -lc 'cd fuzz && cargo +nightly-2026-07-20 fuzz run jit_continuation_differential --features native-jit -- -runs=5000 -max_total_time=60'

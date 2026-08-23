@@ -166,6 +166,119 @@ pub(crate) enum OsrTrigger {
     GaveUp,
 }
 
+/// Shared lifecycle used by every native region kind. Region-specific planners
+/// retain their own cache keys, but compilation hotness and consecutive dynamic
+/// failure use one state machine so whole/OSR/continuation policy cannot silently
+/// invent incompatible meanings for "cold", "compiled", and "disabled".
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RegionTierState {
+    Cold {
+        interpreted_work: u64,
+    },
+    Baseline {
+        consecutive_bails: u32,
+        native_work: u64,
+    },
+    Optimized {
+        consecutive_bails: u32,
+        native_work: u64,
+    },
+    Disabled,
+}
+
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RegionController {
+    pub(crate) state: RegionTierState,
+}
+
+#[cfg(feature = "native-jit")]
+impl Default for RegionController {
+    fn default() -> Self {
+        Self {
+            state: RegionTierState::Cold {
+                interpreted_work: 0,
+            },
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+impl RegionController {
+    pub(crate) fn observe_interpreted_work(&mut self, work: u64, threshold: u64) -> bool {
+        match &mut self.state {
+            RegionTierState::Cold { interpreted_work } => {
+                *interpreted_work = interpreted_work.saturating_add(work);
+                *interpreted_work >= threshold
+            }
+            RegionTierState::Baseline { .. } | RegionTierState::Optimized { .. } => true,
+            RegionTierState::Disabled => false,
+        }
+    }
+
+    pub(crate) fn compiled(&mut self, optimized: bool) {
+        self.state = if optimized {
+            RegionTierState::Optimized {
+                consecutive_bails: 0,
+                native_work: 0,
+            }
+        } else {
+            RegionTierState::Baseline {
+                consecutive_bails: 0,
+                native_work: 0,
+            }
+        };
+    }
+
+    pub(crate) fn observe_native_work(&mut self, work: u64, threshold: u64) -> bool {
+        match &mut self.state {
+            RegionTierState::Baseline { native_work, .. } => {
+                *native_work = native_work.saturating_add(work);
+                *native_work >= threshold
+            }
+            RegionTierState::Optimized { .. } => true,
+            RegionTierState::Cold { .. } | RegionTierState::Disabled => false,
+        }
+    }
+
+    pub(crate) fn successful_entry(&mut self) {
+        match &mut self.state {
+            RegionTierState::Baseline {
+                consecutive_bails, ..
+            }
+            | RegionTierState::Optimized {
+                consecutive_bails, ..
+            } => *consecutive_bails = 0,
+            RegionTierState::Cold { .. } | RegionTierState::Disabled => {}
+        }
+    }
+
+    pub(crate) fn dynamic_bail(&mut self, threshold: u32) -> bool {
+        let count = match &mut self.state {
+            RegionTierState::Baseline {
+                consecutive_bails, ..
+            }
+            | RegionTierState::Optimized {
+                consecutive_bails, ..
+            } => consecutive_bails,
+            RegionTierState::Cold { .. } => return false,
+            RegionTierState::Disabled => return true,
+        };
+        *count = count.saturating_add(1);
+        if *count >= threshold {
+            self.state = RegionTierState::Disabled;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn disable(&mut self) {
+        self.state = RegionTierState::Disabled;
+    }
+}
+
 impl RegFunction {
     #[allow(dead_code)]
     pub(crate) fn placeholder(name: String) -> Self {

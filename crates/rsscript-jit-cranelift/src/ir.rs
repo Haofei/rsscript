@@ -836,5 +836,199 @@ impl JitFunction {
     pub(crate) fn is_float(&self, reg: u32) -> bool {
         self.reg_types[reg as usize] == JitValueType::Float
     }
+
+    /// Compact the register namespace according to `ordered_old_regs`.
+    ///
+    /// This is an in-process producer utility used by the VM's continuation
+    /// lowerer. The first `n_live_in` compact slots become the OSR entry prefix;
+    /// all remaining slots are region-local definitions. Instruction indices are
+    /// deliberately unchanged so source/deopt origin maps stay stable.
+    #[doc(hidden)]
+    pub fn compact_registers(&mut self, ordered_old_regs: &[u32], n_live_in: u32) -> Option<()> {
+        if usize::try_from(n_live_in).ok()? > ordered_old_regs.len() {
+            return None;
+        }
+        let old_len = usize::try_from(self.n_regs).ok()?;
+        if self.reg_types.len() != old_len {
+            return None;
+        }
+        let mut old_to_new = vec![None; old_len];
+        for (new, &old) in ordered_old_regs.iter().enumerate() {
+            let old = usize::try_from(old).ok()?;
+            if old >= old_len || old_to_new[old].is_some() {
+                return None;
+            }
+            old_to_new[old] = Some(u32::try_from(new).ok()?);
+        }
+        for instr in &mut self.code {
+            instr.remap_registers(&old_to_new)?;
+        }
+        for regs in &mut self.resume_live_regs {
+            for reg in regs.iter_mut() {
+                *reg = old_to_new.get(*reg as usize).copied().flatten()?;
+            }
+            regs.sort_unstable();
+            regs.dedup();
+        }
+        for reg in &mut self.zero_init_regs {
+            *reg = old_to_new.get(*reg as usize).copied().flatten()?;
+        }
+        self.zero_init_regs.sort_unstable();
+        self.zero_init_regs.dedup();
+        self.reg_types = ordered_old_regs
+            .iter()
+            .map(|old| self.reg_types.get(*old as usize).copied())
+            .collect::<Option<Vec<_>>>()?;
+        self.n_params = n_live_in;
+        self.n_regs = u32::try_from(ordered_old_regs.len()).ok()?;
+        Some(())
+    }
+}
+
+impl JitInstr {
+    fn remap_registers(&mut self, old_to_new: &[Option<u32>]) -> Option<()> {
+        fn map(reg: &mut u32, old_to_new: &[Option<u32>]) -> Option<()> {
+            *reg = old_to_new.get(*reg as usize).copied().flatten()?;
+            Some(())
+        }
+        fn map_all(regs: &mut [u32], old_to_new: &[Option<u32>]) -> Option<()> {
+            for reg in regs {
+                map(reg, old_to_new)?;
+            }
+            Some(())
+        }
+        fn map_args(args: &mut [HostArg], old_to_new: &[Option<u32>]) -> Option<()> {
+            for arg in args {
+                if let HostArg::Reg(reg) = arg {
+                    map(reg, old_to_new)?;
+                }
+            }
+            Some(())
+        }
+
+        match self {
+            Self::Nop
+            | Self::TailCallGuard { .. }
+            | Self::Jump { .. }
+            | Self::Bail
+            | Self::OsrExit => {}
+            Self::LoadInt { dst, .. }
+            | Self::LoadFloat { dst, .. }
+            | Self::LoadBool { dst, .. } => map(dst, old_to_new)?,
+            Self::Move { dst, src }
+            | Self::IntToFloat { dst, src }
+            | Self::FloatToInt { dst, src, .. } => {
+                map(dst, old_to_new)?;
+                map(src, old_to_new)?;
+            }
+            Self::Add { dst, lhs, rhs }
+            | Self::Sub { dst, lhs, rhs }
+            | Self::Mul { dst, lhs, rhs }
+            | Self::Div { dst, lhs, rhs }
+            | Self::Mod { dst, lhs, rhs }
+            | Self::BitAnd { dst, lhs, rhs }
+            | Self::BitOr { dst, lhs, rhs }
+            | Self::BitXor { dst, lhs, rhs }
+            | Self::Shl { dst, lhs, rhs }
+            | Self::Shr { dst, lhs, rhs }
+            | Self::Compare { dst, lhs, rhs, .. }
+            | Self::Equal { dst, lhs, rhs }
+            | Self::NotEqual { dst, lhs, rhs } => {
+                map(dst, old_to_new)?;
+                map(lhs, old_to_new)?;
+                map(rhs, old_to_new)?;
+            }
+            Self::HostCall { dst, args, .. } => {
+                map(dst, old_to_new)?;
+                map_args(args, old_to_new)?;
+            }
+            #[cfg(feature = "memoization")]
+            Self::MemoizedHostCall { dst, args, .. } => {
+                map(dst, old_to_new)?;
+                map_args(args, old_to_new)?;
+            }
+            Self::CallNative { dst, args, .. } => {
+                map(dst, old_to_new)?;
+                map_all(args, old_to_new)?;
+            }
+            #[cfg(feature = "recursion")]
+            Self::CallSelf { dst, args } | Self::CallGroup { dst, args, .. } => {
+                map(dst, old_to_new)?;
+                map_all(args, old_to_new)?;
+            }
+            Self::MatchMapGetInt {
+                map: base,
+                key,
+                value_dst,
+                ..
+            }
+            | Self::MatchMapGetFloat {
+                map: base,
+                key,
+                value_dst,
+                ..
+            }
+            | Self::MatchSortedMapGetInt {
+                map: base,
+                key,
+                value_dst,
+                ..
+            }
+            | Self::MatchSortedMapGetFloat {
+                map: base,
+                key,
+                value_dst,
+                ..
+            } => {
+                map(base, old_to_new)?;
+                map(key, old_to_new)?;
+                map(value_dst, old_to_new)?;
+            }
+            Self::JumpIfBool { cond, .. } => map(cond, old_to_new)?,
+            #[cfg(feature = "speculation")]
+            Self::ProfiledJumpIfBool { cond, .. } => map(cond, old_to_new)?,
+            Self::JumpIfIntCompare { lhs, rhs, .. } => {
+                map(lhs, old_to_new)?;
+                map(rhs, old_to_new)?;
+            }
+            #[cfg(feature = "speculation")]
+            Self::ProfiledJumpIfIntCompare { lhs, rhs, .. } => {
+                map(lhs, old_to_new)?;
+                map(rhs, old_to_new)?;
+            }
+            Self::Return { src } => map(src, old_to_new)?,
+            Self::ListGetIntDirect { dst, base, index }
+            | Self::ListGetFloatDirect { dst, base, index } => {
+                map(dst, old_to_new)?;
+                map(base, old_to_new)?;
+                map(index, old_to_new)?;
+            }
+            Self::ListSetIntDirect {
+                dst,
+                base,
+                index,
+                value,
+            }
+            | Self::ListSetFloatDirect {
+                dst,
+                base,
+                index,
+                value,
+            } => {
+                map(dst, old_to_new)?;
+                map(base, old_to_new)?;
+                map(index, old_to_new)?;
+                map(value, old_to_new)?;
+            }
+            Self::ListLenDirect { dst, base } | Self::ListIsEmptyDirect { dst, base } => {
+                map(dst, old_to_new)?;
+                map(base, old_to_new)?;
+            }
+            #[cfg(feature = "speculation")]
+            Self::GuardClosureId { base, .. } => map(base, old_to_new)?,
+            Self::RegionExit { live, .. } => map_all(live, old_to_new)?,
+        }
+        Some(())
+    }
 }
 use super::*;

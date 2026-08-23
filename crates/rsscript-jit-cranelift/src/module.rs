@@ -321,6 +321,18 @@ pub struct PreparedCall<'module, 'buffers> {
     flat_args: Vec<FlatBufferArg<'buffers>>,
 }
 
+/// Per-activation host context and bounded-execution cells for a compact mixed-
+/// mode region call. Grouping these values keeps the safe API auditable as the
+/// generated call-frame ABI evolves.
+#[derive(Clone, Copy)]
+pub struct RegionCallControls<'a> {
+    pub host_ctx: HostCtx,
+    pub logical_depth: LogicalCallDepth,
+    pub initial_steps: i64,
+    pub step_budget: Option<i64>,
+    pub cancel: Option<&'a std::sync::atomic::AtomicBool>,
+}
+
 impl<'module, 'buffers> PreparedCall<'module, 'buffers> {
     pub fn scalar(mut self, value: i64) -> Self {
         self.args.push(value);
@@ -1275,6 +1287,38 @@ impl NativeModule {
         (outcome, limits[0])
     }
 
+    /// Execute a compact Handle/scalar region with a VM host context and native
+    /// step/cancellation polling. Flat-buffer entries are intentionally rejected;
+    /// callers needing them must use the borrow-checked prepared-call API.
+    pub fn call_with_host_ctx_step_cancel(
+        &self,
+        id: CompiledId,
+        args: &[i64],
+        lens: &[i64],
+        controls: RegionCallControls<'_>,
+    ) -> (NativeOutcome, i64) {
+        let Some(func) = self.funcs.get(id.index).filter(|_| id.module_id == self.id) else {
+            return (anonymous_deopt(), controls.initial_steps);
+        };
+        if func.reg_types.iter().any(|ty| is_flat_type(*ty)) {
+            return (anonymous_deopt(), controls.initial_steps);
+        }
+        let mut limits = [
+            controls.initial_steps,
+            controls.step_budget.unwrap_or(i64::MAX),
+            controls.cancel.map_or(0, |flag| flag as *const _ as i64),
+        ];
+        let outcome = self.call_inner(
+            id,
+            args,
+            lens,
+            controls.host_ctx,
+            controls.logical_depth,
+            limits.as_mut_ptr(),
+        );
+        (outcome, limits[0])
+    }
+
     /// Run with a host context (see [`call_with_host_ctx`](Self::call_with_host_ctx))
     /// and a non-null native limit accounting limits cell. `limits_ptr` must point at a live, immovable
     /// `[i64; 3]` = `[steps, step_budget, cancel_addr]` for the call's duration: an
@@ -1617,12 +1661,8 @@ impl NativeModule {
                         NativeOutcome::Completed(out)
                     }
                 } else if completed == JitStatus::Yielded && bail == 0 {
-                    let safepoint_id = SafepointId(safepoint as u32);
-                    let frame = self.decode_deopt_frame(id, safepoint_id, 0, &buf);
                     NativeOutcome::Yield {
                         exit_id: u32::try_from(out).unwrap_or(u32::MAX),
-                        safepoint_id,
-                        live: frame.map_or_else(Vec::new, |frame| frame.live),
                     }
                 } else {
                     let safepoint_id = SafepointId(safepoint as u32);
@@ -1643,6 +1683,30 @@ impl NativeModule {
                 }
             }
         }
+    }
+
+    /// Copy statically-declared live-out slots from the most recent planned
+    /// region yield into its compact call window without allocating a deopt frame.
+    pub fn copy_yield_registers(
+        &self,
+        id: CompiledId,
+        live_regs: &[u32],
+        window: &mut [i64],
+    ) -> bool {
+        let Some(func) = self.funcs.get(id.index).filter(|_| id.module_id == self.id) else {
+            return false;
+        };
+        if window.len() != func.n_regs || live_regs.iter().any(|reg| *reg as usize >= func.n_regs) {
+            return false;
+        }
+        let payload = self.deopt_payload.borrow();
+        if payload.len() < func.n_regs {
+            return false;
+        }
+        for &reg in live_regs {
+            window[reg as usize] = payload[reg as usize];
+        }
+        true
     }
 
     /// The per-function [`DeoptMap`] computed at compile time, or `None` if `id`

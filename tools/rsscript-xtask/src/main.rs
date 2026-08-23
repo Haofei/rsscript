@@ -883,4 +883,39 @@ mod tests {
         let instance = serde_json::to_value(metrics).unwrap();
         assert!(validator.is_valid(&instance));
     }
+
+    #[test]
+    fn controlled_jit_baseline_schema_accepts_only_auditable_evidence() {
+        let schema: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../benchmarks/vm-jit/baseline/schema.json"
+        ))
+        .unwrap();
+        let validator = jsonschema::validator_for(&schema).unwrap();
+        let valid = serde_json::json!({
+            "schema": "rsscript.native_jit_baseline.v1",
+            "commit": "0123456789abcdef0123456789abcdef01234567",
+            "cpu": "controlled test CPU",
+            "os": "linux",
+            "arch": "x86_64",
+            "rust_version": "rustc test",
+            "cranelift_version": "cranelift-codegen test",
+            "profile": "release",
+            "warmup": 3,
+            "samples": 25,
+            "fixture_digest": "sha256:test",
+            "controlled": true,
+            "cpu_affinity": "2",
+            "cpu_governor": "performance",
+            "sample_order": "alternating",
+            "cases": [{
+                "case": "mixed-mode-continuation",
+                "interpreter_ns": 100,
+                "native_ns": 50
+            }]
+        });
+        assert!(validator.is_valid(&valid));
+        let mut invalid = valid;
+        invalid["samples"] = 5.into();
+        assert!(!validator.is_valid(&invalid));
+    }
 }

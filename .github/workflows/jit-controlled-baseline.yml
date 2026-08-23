@@ -1,0 +1,32 @@
+name: JIT controlled baseline
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    # This label is intentionally not satisfiable by GitHub-hosted runners. A
+    # canonical baseline is evidence only when the project provisions and audits
+    # the fixed-frequency, affinity-pinned machine behind this label.
+    runs-on: [self-hosted, rsscript-jit-baseline]
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - name: Collect controlled release baseline
+        env:
+          RSS_JIT_CPU_AFFINITY: ${{ vars.RSS_JIT_CPU_AFFINITY }}
+          RSS_JIT_CPU_GOVERNOR: ${{ vars.RSS_JIT_CPU_GOVERNOR }}
+        run: |
+          python3 tools/collect-jit-baseline.py \
+            --controlled \
+            --cpu-affinity "${RSS_JIT_CPU_AFFINITY:?runner must declare affinity}" \
+            --cpu-governor "${RSS_JIT_CPU_GOVERNOR:?runner must declare governor}" \
+            --samples 25 --warmup 3 \
+            --output "canonical-$(uname -s | tr A-Z a-z)-$(uname -m).json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-jit-controlled-baseline
+          path: canonical-*.json
+          if-no-files-found: error

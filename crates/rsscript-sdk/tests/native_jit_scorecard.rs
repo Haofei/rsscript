@@ -90,12 +90,24 @@ fn median(mut samples: Vec<Duration>) -> Duration {
 #[test]
 #[ignore = "full native-JIT performance scorecard"]
 fn native_jit_pass_scorecard() {
+    let samples = std::env::var("RSS_JIT_SAMPLES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(5)
+        .clamp(3, 100);
+    let warmup = std::env::var("RSS_JIT_WARMUP")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(2)
+        .clamp(1, 20);
     println!(
         "JIT_SCORECARD {}",
         serde_json::json!({
             "schema": "rsscript.native_jit_scorecard.v1",
             "profile": "release",
-            "samples": 5,
+            "samples": samples,
+            "warmup": warmup,
+            "order": "alternating",
         })
     );
     for case in CASES {
@@ -127,23 +139,37 @@ fn native_jit_pass_scorecard() {
         let native_request = || interpreter_request().native_jit(NativeJitOptions::default());
 
         let expected = linked.execute(interpreter_request());
-        let observed = linked.execute(native_request());
+        let mut observed = linked.execute(native_request());
         assert_eq!(observed.outcome(), expected.outcome(), "{}", case.name);
         assert_eq!(observed.stdout, expected.stdout, "{}", case.name);
 
-        let mut interpreter_samples = Vec::with_capacity(5);
-        let mut native_samples = Vec::with_capacity(5);
+        for _ in 0..warmup {
+            let _ = linked.execute(interpreter_request());
+            observed = linked.execute(native_request());
+        }
+        let mut interpreter_samples = Vec::with_capacity(samples);
+        let mut native_samples = Vec::with_capacity(samples);
         let mut latest_native = observed;
-        for _ in 0..5 {
-            let started = Instant::now();
-            let report = linked.execute(interpreter_request());
-            interpreter_samples.push(started.elapsed());
-            assert_eq!(report.outcome(), expected.outcome(), "{}", case.name);
-
-            let started = Instant::now();
-            latest_native = linked.execute(native_request());
-            native_samples.push(started.elapsed());
-            assert_eq!(latest_native.outcome(), expected.outcome(), "{}", case.name);
+        for sample in 0..samples {
+            let mut run_interpreter = || {
+                let started = Instant::now();
+                let report = linked.execute(interpreter_request());
+                interpreter_samples.push(started.elapsed());
+                assert_eq!(report.outcome(), expected.outcome(), "{}", case.name);
+            };
+            let mut run_native = || {
+                let started = Instant::now();
+                latest_native = linked.execute(native_request());
+                native_samples.push(started.elapsed());
+                assert_eq!(latest_native.outcome(), expected.outcome(), "{}", case.name);
+            };
+            if sample % 2 == 0 {
+                run_interpreter();
+                run_native();
+            } else {
+                run_native();
+                run_interpreter();
+            }
         }
         let interpreter = median(interpreter_samples);
         let native = median(native_samples);

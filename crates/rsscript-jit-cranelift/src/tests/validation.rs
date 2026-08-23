@@ -638,20 +638,54 @@ fn region_exit_is_a_distinct_commit_capable_outcome() {
         .compile_osr(&function, 0, false, false)
         .expect("compile continuation region");
     let outcome = module.call(id, &[0], &[0]);
-    let NativeOutcome::Yield {
-        exit_id,
-        safepoint_id,
-        live,
-    } = outcome
-    else {
+    let NativeOutcome::Yield { exit_id } = outcome else {
         panic!("expected normal region yield");
     };
     assert_eq!(exit_id, 7);
-    assert_ne!(safepoint_id, SafepointId::ANONYMOUS);
-    assert!(
-        live.iter()
-            .any(|reg| { reg.reg == 0 && reg.value == crate::DeoptValue::Int(41) })
-    );
+    let mut window = [0];
+    assert!(module.copy_yield_registers(id, &[0], &mut window));
+    assert_eq!(window[0], 41);
+}
+
+#[test]
+fn continuation_register_compaction_uses_dense_live_windows() {
+    let mut function = JitFunction {
+        n_params: 8,
+        n_regs: 8,
+        reg_types: vec![JitValueType::Int; 8],
+        zero_init_regs: Vec::new(),
+        code: vec![
+            JitInstr::Add {
+                dst: 7,
+                lhs: 3,
+                rhs: 3,
+            },
+            JitInstr::RegionExit {
+                exit_id: 1,
+                live: vec![7],
+            },
+        ],
+        memo_scopes: Vec::new(),
+        cold_blocks: Vec::new(),
+        resume_live_regs: Vec::new(),
+    };
+    assert!(function.compact_registers(&[3, 7], 1).is_some());
+    assert_eq!((function.n_params, function.n_regs), (1, 2));
+    assert!(matches!(
+        function.code[0],
+        JitInstr::Add {
+            dst: 1,
+            lhs: 0,
+            rhs: 0,
+        }
+    ));
+    assert!(matches!(
+        function.code[1],
+        JitInstr::RegionExit {
+            exit_id: 1,
+            ref live,
+        } if live == &[1]
+    ));
 }
 
 #[test]

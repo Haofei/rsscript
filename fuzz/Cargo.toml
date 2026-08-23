@@ -112,5 +112,16 @@ doc = false
 bench = false
 required-features = ["native-jit"]
 
+# Exercise the interpreter/native continuation state machine, including normal
+# yields, static-call/aggregate barriers, compact register writeback, forced
+# limits, and runtime-shape specialization.
+[[bin]]
+name = "jit_continuation_differential"
+path = "fuzz_targets/jit_continuation_differential.rs"
+test = false
+doc = false
+bench = false
+required-features = ["native-jit"]
+
 [profile.release]
 debug = 1
