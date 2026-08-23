@@ -503,7 +503,12 @@ pub(crate) fn build_function(
                     is_leader[i + 1] = true;
                 }
             }
-            JitInstr::Return { .. } | JitInstr::Bail | JitInstr::OsrExit if i + 1 < n => {
+            JitInstr::Return { .. }
+            | JitInstr::Bail
+            | JitInstr::OsrExit
+            | JitInstr::RegionExit { .. }
+                if i + 1 < n =>
+            {
                 is_leader[i + 1] = true;
             }
             _ => {}

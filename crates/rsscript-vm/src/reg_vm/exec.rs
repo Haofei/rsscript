@@ -1373,6 +1373,15 @@ impl RegVm {
                 }
             }
 
+            // Mixed-mode continuation tier: after whole-function native has first
+            // refusal, run a conservative scalar region and return normally to the
+            // VM immediately before its barrier. This also handles caller
+            // continuations after an interpreted `CallKnown` returns (`ip > 0`).
+            #[cfg(feature = "native-jit")]
+            if self.native.is_some() && self.try_continuation_region(&func, base, ip) {
+                continue 'frames;
+            }
+
             // If native OSR has a candidate loop, let the interpreter reach that
             // header instead of consuming the whole frame in tier-0. Whole-function
             // native has already had first refusal above; this only changes the

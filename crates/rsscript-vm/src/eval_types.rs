@@ -909,6 +909,8 @@ pub enum ExecutionEngineTelemetry {
         native_calls: u64,
         native_bails: u64,
         osr_entries: u64,
+        continuation_entries: u64,
+        continuation_yields: u64,
         /// Weighted native-lowerable work that remained interpreted.
         interpreted_native_work: u64,
         /// Dynamic normal-boundary observations grouped by stable reason.

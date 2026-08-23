@@ -1248,6 +1248,8 @@ impl RegVmExecutable {
                         native_calls: native.stats.native_calls,
                         native_bails: native.stats.native_bails,
                         osr_entries: native.stats.osr_entries,
+                        continuation_entries: native.stats.continuation_entries,
+                        continuation_yields: native.stats.continuation_yields,
                         interpreted_native_work: native.stats.interpreted_native_work,
                         native_barrier_counts: native.stats.native_barrier_counts.clone(),
                         resident_code_bytes: native.stats.compiled_code_bytes,
@@ -1824,6 +1826,14 @@ struct OsrVersionKey {
     shape: ShapeKey,
 }
 
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ContinuationVersionKey {
+    function: usize,
+    entry: usize,
+    shape: ShapeKey,
+}
+
 /// State for the native JIT tier: the Cranelift modules owning compiled code,
 /// bounded per-function/per-region shape caches, and tiering/deopt knobs.
 #[cfg(feature = "native-jit")]
@@ -2005,6 +2015,9 @@ struct NativeState {
     /// Abnormal OSR exits attributed to the selected shape version. Normal
     /// `OsrExit` deopts are successful entries and reset this counter.
     osr_bail_counts: HashMap<OsrVersionKey, u32>,
+    /// Straight-line scalar continuation regions, keyed by exact VM entry IP and
+    /// runtime register shape. `None` is a stable decline for that version.
+    continuation_cache: HashMap<ContinuationVersionKey, Option<ContinuationEntry>>,
     /// Native self-recursion cache (native-call-ABI slice 3; generalized in Phase 2):
     /// per-function stable ordinal key compiled `CallSelf` entry, with the
     /// compiled parameter `NativeTy`s and return `NativeTy` so the dispatcher
@@ -2195,6 +2208,10 @@ pub struct NativeStats {
     /// OSR: OSR-entries that ran a loop natively mid-function and resumed at the
     /// post-loop ip (the forced-trigger success count).
     pub osr_entries: u64,
+    /// Successful entries into a continuation region.
+    pub continuation_entries: u64,
+    /// Normal commit-capable exits back to the VM trampoline.
+    pub continuation_yields: u64,
     /// Step 1 cost model: regions that translated (were eligible) but the
     /// profitability gate kept on the interpreter. In `report` mode this counts
     /// regions that *would* decline without changing execution; in `enforce` mode
@@ -2221,7 +2238,7 @@ impl NativeStats {
         format!(
             "native-jit: considered={} translated={} compiled={} baseline_compiles={} optimized_compiles={} baseline_calls={} optimized_calls={} promotions={} ir_instrs={} code_bytes={} admission_admitted={} admission_admitted_bytes={} admission_rejected={} admission_rejected_bytes={} deopt_sites={} direct_list_bounds_check_sites={} memoized_runtime_helper_call_sites={} runtime_helper_call_sites={} fused_map_match_helper_sites={} direct_list_store_load_forwarded_moves={} native_call_edges={} native_call_depth_max={} profile_closure_guards={} profile_closure_id_reads={} profile_closure_pic_sites={} profile_closure_pic_arms={} profile_branch_sites={} profile_branch_samples={} profile_branch_taken={} profile_branch_fallthrough={} profile_branch_cold_blocks={} profile_branch_side_exits={} not_eligible={} top_decline={} \
 compile_failed={} calls={} bails={} child_bails={} child_resumes={} arg_mismatch={} shape_versions={} shape_cache_hits={} shape_limit_fallbacks={} shape_bails={} tier_deferred={} \
-compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
+compile_ms={:.3} run_ms={:.3} osr_entries={} continuation_entries={} continuation_yields={} unprofitable_declines={}",
             self.considered,
             self.translated,
             self.compiled,
@@ -2270,6 +2287,8 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
             self.compile_nanos as f64 / 1.0e6,
             self.run_nanos as f64 / 1.0e6,
             self.osr_entries,
+            self.continuation_entries,
+            self.continuation_yields,
             self.unprofitable_declines,
         )
     }
@@ -2365,6 +2384,14 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
             "native_barrier_counts".into(),
             crate::serde_json::to_value(&self.native_barrier_counts)
                 .expect("barrier counts serialize"),
+        );
+        object.insert(
+            "continuation_entries".into(),
+            self.continuation_entries.into(),
+        );
+        object.insert(
+            "continuation_yields".into(),
+            self.continuation_yields.into(),
         );
         object.insert("baseline_compiles".into(), self.baseline_compiles.into());
         object.insert("optimized_compiles".into(), self.optimized_compiles.into());
@@ -6637,6 +6664,7 @@ impl NativeState {
             osr_optimization_sources: HashMap::new(),
             osr_promotion_work: HashMap::new(),
             osr_bail_counts: HashMap::new(),
+            continuation_cache: HashMap::new(),
             #[cfg(feature = "jit-recursion-experimental")]
             self_recursive_native: HashMap::new(),
             #[cfg(feature = "jit-recursion-experimental")]

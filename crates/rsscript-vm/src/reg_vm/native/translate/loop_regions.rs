@@ -34,6 +34,125 @@ pub(in crate::reg_vm) struct OsrScalarField {
     pub(in crate::reg_vm) writeback: bool,
 }
 
+/// One conservative continuation region. The first implementation intentionally
+/// admits only straight-line scalar work. `exit` points at the VM instruction that
+/// must execute next; generated code never executes the barrier itself.
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::reg_vm) struct ContinuationRegion {
+    pub(in crate::reg_vm) entry: usize,
+    pub(in crate::reg_vm) exit: usize,
+    pub(in crate::reg_vm) barrier: NativeBarrierReason,
+}
+
+/// A compiled scalar continuation cached per function, entry, and runtime shape.
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone)]
+pub(in crate::reg_vm) struct ContinuationEntry {
+    pub(in crate::reg_vm) id: vm_jit::CompiledId,
+    pub(in crate::reg_vm) entry: usize,
+    pub(in crate::reg_vm) exit: usize,
+    pub(in crate::reg_vm) barrier: NativeBarrierReason,
+    pub(in crate::reg_vm) n_jit_regs: usize,
+    pub(in crate::reg_vm) reg_types: Vec<NativeTy>,
+    pub(in crate::reg_vm) written_regs: Vec<bool>,
+}
+
+/// Find the first useful straight-line scalar region beginning at `entry`.
+///
+/// This is deliberately narrower than the eventual CFG region builder: it stops
+/// before the first static call or function return, rejects branches and helpers,
+/// and requires enough direct work to amortize one native/VM transition. Those
+/// constraints make the initial continuation path side-effect free and therefore
+/// independent from the heap transaction machinery.
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn detect_scalar_continuation_region(
+    code: &[RegInstr],
+    entry: usize,
+) -> Option<ContinuationRegion> {
+    const MIN_DIRECT_WORK: usize = 3;
+    if entry >= code.len() {
+        return None;
+    }
+    let mut direct_work = 0usize;
+    for (ip, instr) in code.iter().enumerate().skip(entry) {
+        match instr {
+            RegInstr::CallKnown { mut_args, .. } if mut_args.is_empty() => {
+                return (direct_work >= MIN_DIRECT_WORK).then_some(ContinuationRegion {
+                    entry,
+                    exit: ip,
+                    barrier: NativeBarrierReason::StaticCall,
+                });
+            }
+            RegInstr::Return { .. } => {
+                return (direct_work >= MIN_DIRECT_WORK).then_some(ContinuationRegion {
+                    entry,
+                    exit: ip,
+                    barrier: NativeBarrierReason::FunctionReturn,
+                });
+            }
+            RegInstr::Jump { .. }
+            | RegInstr::JumpIfBool { .. }
+            | RegInstr::JumpIfIntCompare { .. }
+            | RegInstr::RuntimeError { .. } => return None,
+            _ if native_lowering_class(instr) == NativeLoweringClass::Direct => {
+                direct_work = direct_work.saturating_add(1);
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// Lower a conservative continuation through the mature OSR window-entry path,
+/// replacing its rollback-style `OsrExit` with a commit-capable `RegionExit`.
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn translate_scalar_continuation_region(
+    func: &RegFunction,
+    region: ContinuationRegion,
+    param_native_types: &[Option<NativeTy>],
+) -> Option<(vm_jit::JitFunction, Vec<NativeTy>, Vec<bool>)> {
+    if region.entry >= region.exit || region.exit >= func.code.len() {
+        return None;
+    }
+    let immutable_leaf_params = vec![false; func.params];
+    let (
+        mut jit_fn,
+        _params,
+        derived_liveins,
+        scalar_fields,
+        reg_types,
+        written_regs,
+        string_literals,
+    ) = translate_osr_loop_inner(
+        &func.code,
+        func.regs,
+        func.params,
+        func.captures,
+        OsrLoop {
+            header: region.entry,
+            exit: region.exit,
+        },
+        Vec::new(),
+        HashMap::new(),
+        param_native_types,
+        &immutable_leaf_params,
+    )?;
+    if !derived_liveins.is_empty()
+        || !scalar_fields.is_empty()
+        || !string_literals.is_empty()
+        || reg_types
+            .iter()
+            .any(|ty| !matches!(ty, NativeTy::Int | NativeTy::Bool | NativeTy::Float))
+    {
+        return None;
+    }
+    *jit_fn.code.get_mut(region.exit)? = vm_jit::JitInstr::RegionExit {
+        exit_id: u32::try_from(region.exit).ok()?,
+    };
+    Some((jit_fn, reg_types, written_regs))
+}
+
 /// A compiled OSR loop cached per function. The OSR loop is detected and compiled
 /// on the (possibly scalar replacement-scalar-replaced) `code`, so its native `resume_ip` indexes
 /// that transformed stream. The interpreter, however, executes the ORIGINAL

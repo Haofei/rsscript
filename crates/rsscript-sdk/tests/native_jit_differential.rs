@@ -20,6 +20,10 @@ const CASES: &[(&str, &str)] = &[
         "fn square(value: Int) -> Int { return value * value } fn main() -> Int { let mut i = 0; let mut total = 0; while i < 2000 { total = total + square(value: i % 97); i = i + 1 }; return total }",
     ),
     (
+        "call-continuation.rss",
+        "struct Boxed { value: Int } fn boundary(value: Int) -> Int { let boxed = Boxed(value: value); return boxed.value } fn main() -> Int { let a = 7; let b = a * 3; let c = b + 11; let d = boundary(value: c); let e = d * 5; let f = e - 9; let g = f + 2; return g }",
+    ),
+    (
         "native-list-write.rss",
         include_str!("../../../benchmarks/vm-jit/kernels/native_list_write_loop.rss"),
     ),
@@ -101,6 +105,8 @@ fn native_engine_matches_the_verified_interpreter_corpus() {
         let ExecutionEngineTelemetry::Native {
             native_calls,
             osr_entries,
+            continuation_entries,
+            continuation_yields,
             interpreted_native_work,
             native_barrier_counts,
             rejected_resident_bytes,
@@ -127,7 +133,19 @@ fn native_engine_matches_the_verified_interpreter_corpus() {
                 "aggregate barriers must be reported structurally"
             );
         }
-        cases_with_native_entry += usize::from(native_calls > 0 || osr_entries > 0);
+        if *file == "call-continuation.rss" {
+            assert_eq!(
+                native_calls, 0,
+                "whole-function JIT must decline at the call barrier"
+            );
+            assert_eq!(osr_entries, 0, "the straight-line case must not use OSR");
+            assert!(
+                continuation_entries >= 2 && continuation_yields >= 2,
+                "both sides of the interpreted call must execute as native continuations"
+            );
+        }
+        cases_with_native_entry +=
+            usize::from(native_calls > 0 || osr_entries > 0 || continuation_entries > 0);
     }
     assert!(
         cases_with_native_entry >= 6,

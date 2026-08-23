@@ -11,6 +11,7 @@ pub(in crate::reg_vm) enum NativeBarrierReason {
     ResourceOperation,
     UnsupportedIntrinsic,
     AggregateOperation,
+    FunctionReturn,
     UnsupportedInstruction,
 }
 
@@ -26,17 +27,23 @@ impl NativeBarrierReason {
             Self::ResourceOperation => "resource_operation",
             Self::UnsupportedIntrinsic => "unsupported_intrinsic",
             Self::AggregateOperation => "aggregate_operation",
+            Self::FunctionReturn => "function_return",
             Self::UnsupportedInstruction => "unsupported_instruction",
         }
     }
 }
 
 #[cfg(feature = "native-jit")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(in crate::reg_vm) enum NativeLoweringClass {
     Direct,
-    Helper { estimated_cost: u16 },
-    Yield { reason: NativeBarrierReason },
+    Helper {
+        estimated_cost: u16,
+    },
+    Yield {
+        reason: NativeBarrierReason,
+    },
+    #[default]
     Reject,
 }
 
@@ -58,13 +65,6 @@ pub(super) struct NativeInstrSemantics {
     pub(super) control: NativeControlFlow,
     pub(super) reads: RegFootprint,
     pub(super) writes: RegFootprint,
-}
-
-#[cfg(feature = "native-jit")]
-impl Default for NativeLoweringClass {
-    fn default() -> Self {
-        Self::Reject
-    }
 }
 
 #[cfg(feature = "native-jit")]

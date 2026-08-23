@@ -1434,6 +1434,212 @@ impl RegVm {
         self.resolve_osr_candidates(func).first_header()
     }
 
+    /// Run one conservative scalar continuation region beginning at the current
+    /// interpreter IP. The region commits only register-local scalar work and
+    /// yields before the VM-owned barrier (`CallKnown` or `Return`).
+    #[cfg(feature = "native-jit")]
+    pub(super) fn try_continuation_region(
+        &mut self,
+        func: &RegFunction,
+        base: usize,
+        entry_ip: usize,
+    ) -> bool {
+        if JitCallCtx::is_active()
+            || !self.native_limits_unarmed()
+            || self.limits.max_depth != DEFAULT_MAX_DEPTH
+        {
+            return false;
+        }
+        let Some(region) = detect_scalar_continuation_region(&func.code, entry_ip) else {
+            return false;
+        };
+
+        // The first slice is scalar-only. Reject any initialized non-scalar frame
+        // slot before translation/caching; later region slices can add heap table
+        // and transaction support without weakening this boundary.
+        let shape = ShapeKey::from_shapes((0..func.regs).map(|reg| {
+            let slot = base + reg;
+            if !self.written.get(slot).copied().unwrap_or(false) {
+                NativeParamShape::Unsupported
+            } else {
+                native_param_shape(&self.stack[slot])
+            }
+        }));
+        let scalar_frame = (0..func.regs).all(|reg| {
+            let slot = base + reg;
+            !self.written.get(slot).copied().unwrap_or(false)
+                || matches!(
+                    self.stack.get(slot),
+                    Some(VmValue::Int(_) | VmValue::Bool(_) | VmValue::Float(_))
+                )
+        });
+        if !scalar_frame {
+            return false;
+        }
+        let function = self.jit_state.function_ordinal(func);
+        let version_key = ContinuationVersionKey {
+            function,
+            entry: entry_ip,
+            shape,
+        };
+        let param_native_types: Vec<Option<NativeTy>> = (0..func.params)
+            .map(|reg| match self.reg(base + reg) {
+                VmValue::Int(_) => Some(NativeTy::Int),
+                VmValue::Bool(_) => Some(NativeTy::Bool),
+                VmValue::Float(_) => Some(NativeTy::Float),
+                _ => None,
+            })
+            .collect();
+
+        let entry = {
+            let Some(native) = self.native.as_mut() else {
+                return false;
+            };
+            if !native.continuation_cache.contains_key(&version_key) {
+                let versions = native
+                    .continuation_cache
+                    .keys()
+                    .filter(|key| key.function == function && key.entry == entry_ip)
+                    .count();
+                if versions >= MAX_NATIVE_SHAPE_VERSIONS {
+                    if native.collect_stats {
+                        native.stats.shape_limit_fallbacks += 1;
+                    }
+                    return false;
+                }
+                let compiled =
+                    translate_scalar_continuation_region(func, region, &param_native_types)
+                        .and_then(|(jit_fn, reg_types, written_regs)| {
+                            let admission =
+                                begin_native_compile(native, 1, NativeCodeTier::Baseline)?;
+                            match native.baseline_module.compile_osr(
+                                &jit_fn,
+                                u32::try_from(region.entry).ok()?,
+                                false,
+                                false,
+                            ) {
+                                Ok(id) => {
+                                    if !finish_native_compile(
+                                        native,
+                                        admission,
+                                        &[id],
+                                        NativeCodeTier::Baseline,
+                                    ) {
+                                        return None;
+                                    }
+                                    record_native_compile_stats(
+                                        native,
+                                        id,
+                                        &jit_fn,
+                                        NativeCodeTier::Baseline,
+                                    );
+                                    if native.collect_stats {
+                                        native.stats.shape_versions += 1;
+                                    }
+                                    Some(ContinuationEntry {
+                                        id,
+                                        entry: region.entry,
+                                        exit: region.exit,
+                                        barrier: region.barrier,
+                                        n_jit_regs: jit_fn.n_regs as usize,
+                                        reg_types,
+                                        written_regs,
+                                    })
+                                }
+                                Err(_) => {
+                                    finish_native_compile_failure(native, admission);
+                                    None
+                                }
+                            }
+                        });
+                native
+                    .continuation_cache
+                    .insert(version_key.clone(), compiled);
+            } else if native.collect_stats {
+                native.stats.shape_cache_hits += 1;
+            }
+            native
+                .continuation_cache
+                .get(&version_key)
+                .and_then(Clone::clone)
+        };
+        let Some(entry) = entry else {
+            return false;
+        };
+        debug_assert_eq!(entry.entry, entry_ip);
+
+        let mut window = vec![0i64; entry.n_jit_regs];
+        let lens = vec![0i64; entry.n_jit_regs];
+        for (reg, ty) in entry.reg_types.iter().copied().enumerate() {
+            let slot = base + reg;
+            if !self.written.get(slot).copied().unwrap_or(false) {
+                continue;
+            }
+            window[reg] = match (ty, self.stack.get(slot)) {
+                (NativeTy::Int, Some(VmValue::Int(value))) => *value,
+                (NativeTy::Bool, Some(VmValue::Bool(value))) => i64::from(*value),
+                (NativeTy::Float, Some(VmValue::Float(value))) => value.to_bits() as i64,
+                _ => return false,
+            };
+        }
+
+        let started = self
+            .native
+            .as_ref()
+            .is_some_and(|native| native.collect_stats)
+            .then(std::time::Instant::now);
+        let result = self
+            .native
+            .as_ref()
+            .map(|native| native.baseline_module.call(entry.id, &window, &lens));
+        if let Some(native) = self.native.as_mut()
+            && let Some(started) = started
+        {
+            native.stats.run_nanos = native
+                .stats
+                .run_nanos
+                .saturating_add(started.elapsed().as_nanos());
+        }
+        let Some(vm_jit::NativeOutcome::Yield { exit_id, live, .. }) = result else {
+            return false;
+        };
+        if exit_id as usize != entry.exit {
+            return false;
+        }
+
+        let mut updates = Vec::new();
+        for vm_jit::DeoptReg { reg, value } in live {
+            let reg = reg as usize;
+            if reg >= func.regs || !entry.written_regs.get(reg).copied().unwrap_or(false) {
+                continue;
+            }
+            let value = match (entry.reg_types.get(reg), value) {
+                (Some(NativeTy::Int), vm_jit::DeoptValue::Int(value)) => VmValue::Int(value),
+                (Some(NativeTy::Bool), vm_jit::DeoptValue::Bool(value)) => VmValue::Bool(value),
+                (Some(NativeTy::Float), vm_jit::DeoptValue::Float(value)) => VmValue::Float(value),
+                _ => return false,
+            };
+            updates.push((base + reg, value));
+        }
+        for (slot, value) in updates {
+            self.set_reg(slot, value);
+        }
+        self.frames.last_mut().expect("active frame").ip = entry.exit;
+        if let Some(native) = self.native.as_mut()
+            && native.collect_stats
+        {
+            native.stats.continuation_entries += 1;
+            native.stats.continuation_yields += 1;
+            native.stats.baseline_calls += 1;
+            *native
+                .stats
+                .native_barrier_counts
+                .entry(entry.barrier.as_str().to_string())
+                .or_default() += 1;
+        }
+        true
+    }
+
     #[cfg(feature = "native-jit")]
     pub(super) fn try_osr(&mut self, func: &RegFunction, base: usize, header_ip: usize) -> bool {
         if JitCallCtx::is_active() {
