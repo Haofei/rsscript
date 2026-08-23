@@ -43,6 +43,7 @@ mod tests {
             ],
             memo_scopes: Vec::new(),
             cold_blocks: Vec::new(),
+            resume_live_regs: Vec::new(),
         };
         validate_and_codegen_scalar(&function, JitLimits::default()).unwrap();
     }

@@ -27,6 +27,9 @@ cargo test --locked --release -p rsscript-sdk --features native-jit \
 ```
 
 The scorecard emits one `rsscript.native_jit_scorecard.v1` JSON object per case.
+`mixed-mode-continuation` is the canonical barrier workload: it repeatedly
+executes scalar regions around an interpreter-owned aggregate boundary and guards
+against admitting region transitions that do not beat the interpreter end to end.
 It records interpreter/native wall time, compile time, machine-code residency,
 arena reservation, native calls, bails, and OSR entries. CI logs are the history;
 the repository does not retain ad-hoc developer snapshots.

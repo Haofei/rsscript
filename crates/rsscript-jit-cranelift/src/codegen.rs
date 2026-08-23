@@ -154,6 +154,7 @@ pub(crate) fn build_function(
     limit_checks: LimitChecks,
     native_static_call_depth: u32,
     assigned_in: &[Vec<bool>],
+    deopt_in: &[Vec<bool>],
 ) -> Result<DeoptMap, JitError> {
     #[cfg(not(feature = "recursion"))]
     let _ = (self_func_id, group, native_static_call_depth);
@@ -546,23 +547,37 @@ pub(crate) fn build_function(
         ($ip:expr) => {
             &mut DeoptCtx {
                 ip: $ip as u32,
-                assigned_in,
+                deopt_in,
                 reg_types: &program.reg_types,
                 sites: &mut sites,
                 payload_words: &mut payload_words,
                 forced,
                 unconditional: false,
+                live_override: None,
             }
         };
         ($ip:expr, unconditional) => {
             &mut DeoptCtx {
                 ip: $ip as u32,
-                assigned_in: &assigned_in,
+                deopt_in: &deopt_in,
                 reg_types: &program.reg_types,
                 sites: &mut sites,
                 payload_words: &mut payload_words,
                 forced,
                 unconditional: true,
+                live_override: None,
+            }
+        };
+        ($ip:expr, live = $live:expr) => {
+            &mut DeoptCtx {
+                ip: $ip as u32,
+                deopt_in: &deopt_in,
+                reg_types: &program.reg_types,
+                sites: &mut sites,
+                payload_words: &mut payload_words,
+                forced,
+                unconditional: true,
+                live_override: Some($live),
             }
         };
     }
@@ -1783,7 +1798,7 @@ pub(crate) fn build_function(
                 bcx.ins().jump(fallback, &[]);
                 terminated = true;
             }
-            JitInstr::RegionExit { exit_id } => {
+            JitInstr::RegionExit { exit_id, live } => {
                 // A continuation boundary is a normal, commit-capable exit. Capture
                 // the same bounded live-state payload as deopt, but return a distinct
                 // status so the VM cannot accidentally apply rollback/replay semantics.
@@ -1798,7 +1813,7 @@ pub(crate) fn build_function(
                     payload_ptr,
                     &vars,
                     &mut next_id,
-                    deopt!(i, unconditional),
+                    deopt!(i, live = live),
                 );
                 bcx.switch_to_block(cont);
                 bcx.ins().jump(yielded, &[]);
@@ -2095,8 +2110,10 @@ struct DeoptCtx<'a> {
     /// Index of the instruction currently being lowered (the resume_ip for any
     /// guard it emits).
     ip: u32,
-    /// Definite-assignment sets per instruction (see [`definite_assignment`]).
-    assigned_in: &'a [Vec<bool>],
+    /// Validated source-resume state sets per instruction. Detached clients use
+    /// conservative definite assignment; verified-bytecode translation can add
+    /// precise source liveness without dropping local JIT uses.
+    deopt_in: &'a [Vec<bool>],
     /// Storage class per register, to type each live register.
     reg_types: &'a [JitValueType],
     /// Accumulated sites, in emission (= id) order.
@@ -2113,6 +2130,9 @@ struct DeoptCtx<'a> {
     /// (the loop-exit edge always deopts). Independent of `forced` (which is keyed
     /// by a specific id); this applies to whatever id this single `bail_if` mints.
     unconditional: bool,
+    /// A normal region exit carries a planner-produced minimal state map. Guard
+    /// deopts use the validation-produced live-at-resume set.
+    live_override: Option<&'a [u32]>,
 }
 
 impl DeoptCtx<'_> {
@@ -2120,14 +2140,25 @@ impl DeoptCtx<'_> {
     /// instruction with its entry-assigned (definitely-live) registers. Returns the
     /// same `live` set so the caller can emit the matching payload-capture stores.
     fn record_site(&mut self, child: Option<DeoptChildSite>) -> Vec<(u32, JitValueType)> {
-        let live: Vec<(u32, JitValueType)> = match self.assigned_in.get(self.ip as usize) {
-            Some(set) => set
+        let live: Vec<(u32, JitValueType)> = match self.live_override {
+            Some(regs) => regs
                 .iter()
-                .enumerate()
-                .filter(|&(_, &assigned)| assigned)
-                .map(|(r, _)| (r as u32, self.reg_types[r]))
+                .filter_map(|&reg| {
+                    self.reg_types
+                        .get(reg as usize)
+                        .copied()
+                        .map(|ty| (reg, ty))
+                })
                 .collect(),
-            None => Vec::new(),
+            None => match self.deopt_in.get(self.ip as usize) {
+                Some(set) => set
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_, &needed)| needed)
+                    .map(|(r, _)| (r as u32, self.reg_types[r]))
+                    .collect(),
+                None => Vec::new(),
+            },
         };
         self.sites.push(DeoptSite {
             resume_ip: self.ip,

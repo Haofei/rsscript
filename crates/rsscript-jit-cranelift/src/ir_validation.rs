@@ -1,3 +1,4 @@
+use crate::register_liveness;
 use crate::validated::ValidationFacts;
 
 fn check_zero_init_reg(program: &JitFunction, reg: u32) -> Result<(), JitError> {
@@ -981,7 +982,53 @@ pub(crate) fn validate_with_limits(
             NATIVE_RECURSION_STACK_BUDGET_BYTES
         )));
     }
+    if !program.resume_live_regs.is_empty() && program.resume_live_regs.len() != program.code.len()
+    {
+        return Err(JitError::invalid_ir(format!(
+            "resume liveness has {} entries for {} instructions",
+            program.resume_live_regs.len(),
+            program.code.len()
+        )));
+    }
+    for (ip, regs) in program.resume_live_regs.iter().enumerate() {
+        let mut previous = None;
+        for &reg in regs {
+            if reg >= program.n_regs {
+                return Err(JitError::invalid_ir(format!(
+                    "resume liveness at instruction {ip} names out-of-range register {reg}"
+                )));
+            }
+            if previous.is_some_and(|previous| previous >= reg) {
+                return Err(JitError::invalid_ir(format!(
+                    "resume liveness at instruction {ip} must be sorted and unique"
+                )));
+            }
+            previous = Some(reg);
+        }
+    }
+    let live_in = register_liveness(program);
+    let deopt_in = if program.resume_live_regs.is_empty() {
+        assigned_in.clone()
+    } else {
+        assigned_in
+            .iter()
+            .zip(&live_in)
+            .zip(&program.resume_live_regs)
+            .map(|((assigned, local_live), source_live)| {
+                let mut needed = local_live.clone();
+                for &reg in source_live {
+                    needed[reg as usize] = true;
+                }
+                assigned
+                    .iter()
+                    .zip(needed)
+                    .map(|(&assigned, needed)| assigned && needed)
+                    .collect()
+            })
+            .collect()
+    };
     Ok(ValidationFacts {
+        deopt_in,
         assigned_in,
         return_type: reachable_return_type,
     })

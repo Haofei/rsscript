@@ -28,6 +28,12 @@ const CASES: &[ScorecardCase] = &[
         source: include_str!("../../../benchmarks/vm-jit/kernels/native_call_chain.rss"),
     },
     ScorecardCase {
+        name: "mixed-mode-continuation",
+        pass: "continuation",
+        size: "2000",
+        source: include_str!("../../../benchmarks/vm-jit/kernels/mixed_mode_continuation.rss"),
+    },
+    ScorecardCase {
         name: "option-scalar-replacement",
         pass: "scalar-replacement",
         size: "150000",
@@ -146,16 +152,18 @@ fn native_jit_pass_scorecard() {
             native_bails,
             osr_entries,
             continuation_entries,
+            continuation_compiled_source_instructions,
             compile_nanos,
             resident_code_bytes,
             reserved_arena_bytes,
         ) = match latest_native.telemetry.engine {
-            ExecutionEngineTelemetry::Interpreter => (0, 0, 0, 0, 0, 0, 0),
+            ExecutionEngineTelemetry::Interpreter => (0, 0, 0, 0, 0, 0, 0, 0),
             ExecutionEngineTelemetry::Native {
                 native_calls,
                 native_bails,
                 osr_entries,
                 continuation_entries,
+                continuation_compiled_source_instructions,
                 compile_nanos,
                 resident_code_bytes,
                 reserved_arena_bytes,
@@ -165,6 +173,7 @@ fn native_jit_pass_scorecard() {
                 native_bails,
                 osr_entries,
                 continuation_entries,
+                continuation_compiled_source_instructions,
                 compile_nanos,
                 resident_code_bytes,
                 reserved_arena_bytes,
@@ -187,6 +196,7 @@ fn native_jit_pass_scorecard() {
                 "native_bails": native_bails,
                 "osr_entries": osr_entries,
                 "continuation_entries": continuation_entries,
+                "continuation_compiled_source_instructions": continuation_compiled_source_instructions,
             })
         );
     }

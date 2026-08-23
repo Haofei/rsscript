@@ -868,6 +868,7 @@ impl NativeModule {
             limit_checks,
             native_call_depth,
             validated.assigned_in(),
+            validated.deopt_in(),
         )?;
 
         self.module
@@ -1064,6 +1065,7 @@ impl NativeModule {
                 LimitChecks::default(),
                 0,
                 &validation_facts[i].assigned_in,
+                &validation_facts[i].deopt_in,
             )?;
             self.module
                 .define_function(func_ids[i], &mut self.ctx)

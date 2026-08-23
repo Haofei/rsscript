@@ -1,0 +1,48 @@
+struct BoundaryBox {
+    value: Int
+}
+
+fn bench_size(args: read List<String>, default: Int) -> Int {
+    let raw = Arguments.get_or_default(args: read args, index: 0, default: String.from_int(value: default))
+    match String.parse_int(value: raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+fn mixed(seed: Int) -> Int {
+    let mut value = seed
+    let mut round = 0
+    while round < 500 {
+        value = (value * 3 + round * 7 - value / 2) % 1000003
+        value = (value * 7 + round * 13 - value / 5) % 1000033
+        round = round + 1
+    }
+
+    let boxed = BoundaryBox(value: value)
+    value = boxed.value
+
+    round = 0
+    while round < 500 {
+        value = (value * 5 + round * 11 - value / 3) % 1000033
+        value = (value * 11 + round * 17 - value / 7) % 1000037
+        round = round + 1
+    }
+    return value
+}
+
+fn main(args: read List<String>) -> Unit {
+    let limit = bench_size(args: read args, default: 2000)
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        total = total + mixed(seed: i)
+        i = i + 1
+    }
+    Output.write(message: String.from_int(value: total))
+    return Unit
+}

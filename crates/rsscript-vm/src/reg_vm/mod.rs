@@ -1250,6 +1250,9 @@ impl RegVmExecutable {
                         osr_entries: native.stats.osr_entries,
                         continuation_entries: native.stats.continuation_entries,
                         continuation_yields: native.stats.continuation_yields,
+                        continuation_compiled_source_instructions: native
+                            .stats
+                            .continuation_compiled_source_instructions,
                         interpreted_native_work: native.stats.interpreted_native_work,
                         native_barrier_counts: native.stats.native_barrier_counts.clone(),
                         resident_code_bytes: native.stats.compiled_code_bytes,
@@ -2018,7 +2021,7 @@ struct NativeState {
     osr_bail_counts: HashMap<OsrVersionKey, u32>,
     /// Straight-line scalar continuation regions, keyed by exact VM entry IP and
     /// runtime register shape. `None` is a stable decline for that version.
-    continuation_cache: HashMap<ContinuationVersionKey, Option<ContinuationEntry>>,
+    continuation_cache: HashMap<ContinuationVersionKey, Option<Rc<ContinuationEntry>>>,
     /// Structural CFG plans (including negative results) are shape-independent and
     /// cached separately so probing each interpreter IP stays an O(1) lookup.
     continuation_plans: HashMap<(usize, usize), Option<Rc<ContinuationRegion>>>,
@@ -2215,6 +2218,9 @@ pub struct NativeStats {
     pub osr_entries: u64,
     /// Successful entries into a continuation region.
     pub continuation_entries: u64,
+    /// Direct source instructions represented by admitted continuation regions.
+    /// This is compile-time coverage evidence, not a dynamic execution count.
+    pub continuation_compiled_source_instructions: u64,
     /// Normal commit-capable exits back to the VM trampoline.
     pub continuation_yields: u64,
     /// Step 1 cost model: regions that translated (were eligible) but the
@@ -2393,6 +2399,10 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} continuation_entries={} continuatio
         object.insert(
             "continuation_entries".into(),
             self.continuation_entries.into(),
+        );
+        object.insert(
+            "continuation_compiled_source_instructions".into(),
+            self.continuation_compiled_source_instructions.into(),
         );
         object.insert(
             "continuation_yields".into(),

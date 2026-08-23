@@ -8,6 +8,7 @@ pub(crate) enum ValidationMode {
 
 pub(crate) struct ValidationFacts {
     pub(crate) assigned_in: Vec<Vec<bool>>,
+    pub(crate) deopt_in: Vec<Vec<bool>>,
     pub(crate) return_type: Option<super::JitValueType>,
 }
 
@@ -63,6 +64,10 @@ impl<'a> ValidatedJitFunction<'a> {
 
     pub(crate) fn assigned_in(&self) -> &[Vec<bool>] {
         &self.facts.assigned_in
+    }
+
+    pub(crate) fn deopt_in(&self) -> &[Vec<bool>] {
+        &self.facts.deopt_in
     }
 
     pub(crate) fn return_type(&self) -> Option<super::JitValueType> {

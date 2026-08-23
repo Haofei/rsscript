@@ -1554,8 +1554,13 @@ impl RegVm {
                                     );
                                     if native.collect_stats {
                                         native.stats.shape_versions += 1;
+                                        native.stats.continuation_compiled_source_instructions =
+                                            native
+                                                .stats
+                                                .continuation_compiled_source_instructions
+                                                .saturating_add(region.source_instructions as u64);
                                     }
-                                    Some(ContinuationEntry {
+                                    Some(Rc::new(ContinuationEntry {
                                         id,
                                         entry: region.entry,
                                         exits: region.exits.clone(),
@@ -1565,7 +1570,7 @@ impl RegVm {
                                         active_regs,
                                         reg_types,
                                         written_regs,
-                                    })
+                                    }))
                                 }
                                 Err(_) => {
                                     finish_native_compile_failure(native, admission);
@@ -1588,6 +1593,14 @@ impl RegVm {
             return false;
         };
         debug_assert_eq!(entry.entry, entry_ip);
+        if matches!(
+            self.native.as_ref().map(|native| native.cost_model),
+            Some(NativeCostModel::Enforce)
+        ) && !entry.has_backedge
+            && entry.source_instructions < MIN_CONTINUATION_ADMISSION_WORK
+        {
+            return false;
+        }
         if self.limits.deadline.is_some()
             && (entry.has_backedge
                 || self
@@ -1617,8 +1630,20 @@ impl RegVm {
             return false;
         }
 
-        let mut window = vec![0i64; entry.n_jit_regs];
-        let lens = vec![0i64; entry.n_jit_regs];
+        // Continuations use the same evaluation-local grow-only marshalling
+        // buffers as OSR. A mixed function may cross this boundary thousands of
+        // times; allocating two register-width vectors per transition otherwise
+        // overwhelms the scalar work the region is meant to accelerate.
+        let mut scratch = match self.native.as_mut() {
+            Some(native) => take_osr_native_call_scratch(native, entry.n_jit_regs),
+            None => return false,
+        };
+        macro_rules! decline_continuation {
+            () => {{
+                scratch.restore(self.native.as_mut());
+                return false;
+            }};
+        }
         for (reg, ty) in entry.reg_types.iter().copied().enumerate() {
             if !entry.active_regs.get(reg).copied().unwrap_or(false) {
                 continue;
@@ -1627,11 +1652,11 @@ impl RegVm {
             if !self.written.get(slot).copied().unwrap_or(false) {
                 continue;
             }
-            window[reg] = match (ty, self.stack.get(slot)) {
+            scratch.window[reg] = match (ty, self.stack.get(slot)) {
                 (NativeTy::Int, Some(VmValue::Int(value))) => *value,
                 (NativeTy::Bool, Some(VmValue::Bool(value))) => i64::from(*value),
                 (NativeTy::Float, Some(VmValue::Float(value))) => value.to_bits() as i64,
-                _ => return false,
+                _ => decline_continuation!(),
             };
         }
 
@@ -1643,14 +1668,14 @@ impl RegVm {
         let steps_before = self.steps;
         let initial_steps = {
             let Ok(steps) = i64::try_from(self.steps) else {
-                return false;
+                decline_continuation!();
             };
             steps
         };
         let native_step_budget = match self.limits.step_budget {
             Some(budget) => {
                 let Ok(budget) = i64::try_from(budget) else {
-                    return false;
+                    decline_continuation!();
                 };
                 Some(budget)
             }
@@ -1659,8 +1684,8 @@ impl RegVm {
         let result = self.native.as_ref().map(|native| {
             let (outcome, steps) = native.baseline_module.call_with_step_cancel(
                 entry.id,
-                &window,
-                &lens,
+                &scratch.window,
+                &scratch.lens,
                 initial_steps,
                 native_step_budget,
                 self.limits.cancel.as_ref().map(|token| token.as_atomic()),
@@ -1668,6 +1693,7 @@ impl RegVm {
             self.steps = steps.max(0) as u64;
             outcome
         });
+        scratch.restore(self.native.as_mut());
         if let Some(native) = self.native.as_mut()
             && let Some(started) = started
         {

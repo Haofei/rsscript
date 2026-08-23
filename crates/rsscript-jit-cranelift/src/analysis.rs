@@ -126,6 +126,72 @@ pub(super) fn definite_assignment(program: &JitFunction, osr_entry: bool) -> Vec
     assigned_in
 }
 
+/// Backward register-liveness analysis over the validated JIT CFG. Returns the
+/// registers whose current values may be read at or after each instruction before
+/// being overwritten. Deopt state maps intersect this set with definite assignment:
+/// dead historical temporaries therefore do not inflate generated guards or
+/// continuation payload stores.
+pub(super) fn register_liveness(program: &JitFunction) -> Vec<Vec<bool>> {
+    let n = program.code.len();
+    let n_regs = program.n_regs as usize;
+    if n == 0 {
+        return Vec::new();
+    }
+
+    let mut preds: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for ip in 0..n {
+        for successor in successors(program, ip) {
+            preds[successor].push(ip);
+        }
+    }
+
+    let mut uses = vec![vec![false; n_regs]; n];
+    let mut defs = vec![None; n];
+    for (ip, instruction) in program.code.iter().enumerate() {
+        instruction.visit_used_registers(|reg| {
+            if let Some(used) = uses[ip].get_mut(reg as usize) {
+                *used = true;
+            }
+        });
+        // Match value destinations are edge-defined. Treating them as no-kill is
+        // conservative and preserves an older value on the `None` edge when one
+        // exists; validation still prevents reading a genuinely unassigned value.
+        defs[ip] = match instruction {
+            JitInstr::MatchMapGetInt { .. }
+            | JitInstr::MatchMapGetFloat { .. }
+            | JitInstr::MatchSortedMapGetInt { .. }
+            | JitInstr::MatchSortedMapGetFloat { .. } => None,
+            _ => instruction.defined_register().map(|reg| reg as usize),
+        };
+    }
+
+    let mut live_in = vec![vec![false; n_regs]; n];
+    let mut pending: VecDeque<usize> = (0..n).rev().collect();
+    let mut queued = vec![true; n];
+    while let Some(ip) = pending.pop_front() {
+        queued[ip] = false;
+        let mut next = uses[ip].clone();
+        for successor in successors(program, ip) {
+            for (reg, live) in live_in[successor].iter().copied().enumerate() {
+                if live && defs[ip] != Some(reg) {
+                    next[reg] = true;
+                }
+            }
+        }
+        if next != live_in[ip] {
+            live_in[ip] = next;
+            for &predecessor in &preds[ip] {
+                if !queued[predecessor] {
+                    pending.push_back(predecessor);
+                    queued[predecessor] = true;
+                }
+            }
+        }
+    }
+
+    live_in
+}
+
 /// A sound integer interval `[lo, hi]` (inclusive) over `i128`, an
 /// over-approximation of the set of `i64` values an Int register may hold. Held in
 /// `i128` so the analysis arithmetic itself never overflows. `TOP` is the full

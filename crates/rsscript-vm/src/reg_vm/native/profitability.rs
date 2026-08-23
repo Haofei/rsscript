@@ -360,6 +360,7 @@ mod tests {
             ],
             memo_scopes: Vec::new(),
             cold_blocks: Vec::new(),
+            resume_live_regs: Vec::new(),
         };
         let profitability = native_region_profitability(&function, false);
         assert!(profitability.decline);

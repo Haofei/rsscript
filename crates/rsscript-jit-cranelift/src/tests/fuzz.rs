@@ -228,6 +228,7 @@ fn random_program(rng: &mut Rng) -> JitFunction {
         code,
         memo_scopes: Vec::new(),
         cold_blocks: Vec::new(),
+        resume_live_regs: Vec::new(),
     }
 }
 
@@ -336,6 +337,7 @@ fn fuzz_straightline_execution_never_traps_host() {
             code,
             memo_scopes: Vec::new(),
             cold_blocks: Vec::new(),
+            resume_live_regs: Vec::new(),
         };
         if let Ok(id) = m.compile(&prog) {
             let args: Vec<i64> = (0..n_params).map(|_| rng.next() as i64).collect();

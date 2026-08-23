@@ -55,7 +55,10 @@ mod validated;
 
 #[cfg(test)]
 use analysis::Interval;
-use analysis::{arith_cannot_overflow, definite_assignment, interval_analysis, list_bounds_plan};
+use analysis::{
+    arith_cannot_overflow, definite_assignment, interval_analysis, list_bounds_plan,
+    register_liveness,
+};
 use cranelift_codegen::Context;
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::{

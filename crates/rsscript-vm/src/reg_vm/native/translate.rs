@@ -2158,6 +2158,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
         code: jit_code,
         memo_scopes,
         cold_blocks: profile_guidance.cold_blocks,
+        resume_live_regs: Vec::new(),
     };
     // A self-recursive function uses re-run-from-top deopt (its `CallSelf` is
     // non-chaining and its native frame chain has no bounded deopt payload), so it is
@@ -4036,6 +4037,7 @@ fn translate_osr_loop_inner(
         code: jit_code,
         memo_scopes,
         cold_blocks,
+        resume_live_regs: Vec::new(),
     };
     Some((
         jit_fn,

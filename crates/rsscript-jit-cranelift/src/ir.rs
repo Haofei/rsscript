@@ -390,10 +390,11 @@ pub enum JitInstr {
     /// default [`compile`](NativeModule::compile) path never emits it.
     OsrExit,
     /// Planned normal exit from a continuation region. `exit_id` is interpreted
-    /// only by the embedding VM; generated code captures the ordinary bounded
-    /// state-map payload and returns `JitStatus::Yielded`.
+    /// only by the embedding VM. `live` is the verifier/planner-produced state map
+    /// for that exit; unlike deopt it need not capture every assigned temporary.
     RegionExit {
         exit_id: u32,
+        live: Vec<u32>,
     },
 }
 
@@ -516,8 +517,8 @@ impl JitInstr {
             | Self::LoadBool { .. }
             | Self::Jump { .. }
             | Self::Bail
-            | Self::OsrExit
-            | Self::RegionExit { .. } => {}
+            | Self::OsrExit => {}
+            Self::RegionExit { live, .. } => live.iter().copied().for_each(&mut visit),
             Self::Move { src, .. }
             | Self::IntToFloat { src, .. }
             | Self::FloatToInt { src, .. }
@@ -823,6 +824,12 @@ pub struct JitFunction {
     /// this from dynamic profile feedback; codegen treats it as a layout hint only.
     /// It never changes control flow or values.
     pub cold_blocks: Vec<u32>,
+    /// Optional source-resume liveness supplied by the verified-bytecode
+    /// translator. When present it has one sorted register list per JIT
+    /// instruction. Validation unions it with local JIT liveness and intersects it
+    /// with definite assignment before codegen. Empty keeps the conservative
+    /// all-assigned compatibility behavior used by detached JIT clients.
+    pub resume_live_regs: Vec<Vec<u32>>,
 }
 
 impl JitFunction {

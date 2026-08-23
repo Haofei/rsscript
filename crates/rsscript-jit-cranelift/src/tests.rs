@@ -584,6 +584,7 @@ fn f(n_params: u32, n_regs: u32, code: Vec<JitInstr>) -> JitFunction {
         code,
         memo_scopes: Vec::new(),
         cold_blocks: Vec::new(),
+        resume_live_regs: Vec::new(),
     }
 }
 
@@ -597,6 +598,7 @@ fn ft(n_params: u32, reg_types: Vec<JitValueType>, code: Vec<JitInstr>) -> JitFu
         code,
         memo_scopes: Vec::new(),
         cold_blocks: Vec::new(),
+        resume_live_regs: Vec::new(),
     }
 }
 

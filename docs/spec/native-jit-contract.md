@@ -7,11 +7,13 @@ The supported `native-jit` feature is intentionally a bounded feature surface.
 Whole-function and transformed OSR entry still decline when execution controls
 whose source costs they cannot reproduce are armed. Scalar continuation regions,
 however, have a one-to-one source instruction map: acyclic regions account steps
-exactly and poll host cancellation. Because these regions cannot allocate or call
+exactly and poll host cancellation. Closed native loops are admitted for trusted
+unbounded execution but remain on the interpreter when step or deadline limits are
+armed. Because these regions cannot allocate or call
 intrinsics/Providers, the surrounding VM barriers continue to own those budgets,
 allowing the default bounded profile to accelerate scalar work safely. Armed step
 budgets conservatively keep loop regions in the interpreter. Deadline-armed
-execution likewise admits only acyclic regions (at most 512 source instructions),
+execution likewise admits only acyclic regions (at most 2,048 source instructions),
 then returns to a VM-owned barrier which performs the next monotonic clock poll.
 
 ## Stable invariants
@@ -57,6 +59,11 @@ then returns to a VM-owned barrier which performs the next monotonic clock poll.
   coexist in the VM frame: continuation marshalling validates only the exact
   register footprint of the selected scalar region, so scalar work after an
   interpreter-materialized aggregate can re-enter native code safely.
+- Verified-bytecode continuation lowering attaches source-resume liveness to each
+  generated guard. JIT validation unions those facts with local JIT liveness and
+  intersects them with definite assignment. Dead historical temporaries therefore
+  do not inflate state maps, while detached JIT clients that do not provide source
+  facts retain the conservative all-assigned behavior.
 - Provider calls and `await` are exercised as normal mixed-mode boundaries by
   interpreter/native differential tests. The VM executes each boundary exactly
   once, preserves Provider traces and scheduler semantics, then probes the next
@@ -68,10 +75,13 @@ then returns to a VM-owned barrier which performs the next monotonic clock poll.
   the native source map. A missing step ceiling is represented as `i64::MAX` in
   the private call cell; it disables rejection without disabling usage
   accounting.
-- Stable continuation admission requires at least sixteen direct source
-  instructions and rejects every cyclic mixed-mode region. Pure hot loops remain
-  the responsibility of whole-function JIT or OSR; a loop containing a VM barrier
-  is not allowed to ping-pong across the ABI once per iteration.
+- Region formation requires at least sixteen direct source instructions. Under the
+  enforcing cost model, acyclic dispatch requires at least 512 instructions to
+  amortize the trampoline; diagnostic/off modes can still exercise smaller
+  correctness fixtures. Closed native loops may yield once at a forward barrier,
+  while any backedge to a VM barrier is rejected so execution cannot ping-pong
+  across the ABI once per iteration. The canonical aggregate-boundary workload is
+  the retention gate for this closed-loop shape.
 - Region formation produces evaluation-local facts (included CFG instructions,
   exits, active-register footprint, and exact source work) once. They are cached
   by verified function/IP behind an `Rc`; runtime shape specialization consumes

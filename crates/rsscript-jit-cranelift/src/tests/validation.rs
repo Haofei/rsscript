@@ -82,9 +82,23 @@ fn rejects_reg_types_length_mismatch() {
         code: vec![],
         memo_scopes: Vec::new(),
         cold_blocks: Vec::new(),
+        resume_live_regs: Vec::new(),
     };
     let err = validate(&bad).unwrap_err();
     assert!(err.message.contains("reg_types length"), "{}", err.message);
+}
+
+#[test]
+fn rejects_malformed_source_resume_liveness() {
+    let mut wrong_len = two_param_add();
+    wrong_len.resume_live_regs = vec![vec![0, 1]];
+    let err = validate(&wrong_len).unwrap_err();
+    assert!(err.message.contains("resume liveness"), "{}", err.message);
+
+    let mut unsorted = two_param_add();
+    unsorted.resume_live_regs = vec![vec![1, 0], vec![2]];
+    let err = validate(&unsorted).unwrap_err();
+    assert!(err.message.contains("sorted and unique"), "{}", err.message);
 }
 
 #[test]
@@ -103,6 +117,7 @@ fn rejects_excessive_combined_analysis_dimensions() {
         code: vec![JitInstr::Jump { target: 0 }; 1_000],
         memo_scopes: Vec::new(),
         cold_blocks: Vec::new(),
+        resume_live_regs: Vec::new(),
     };
 
     let error = validate(&program).expect_err("analysis matrices must have a joint limit");
@@ -613,7 +628,10 @@ fn region_exit_is_a_distinct_commit_capable_outcome() {
         vec![JitValueType::Int],
         vec![
             JitInstr::LoadInt { dst: 0, value: 41 },
-            JitInstr::RegionExit { exit_id: 7 },
+            JitInstr::RegionExit {
+                exit_id: 7,
+                live: vec![0],
+            },
         ],
     );
     let id = module

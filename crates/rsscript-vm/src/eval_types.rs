@@ -911,6 +911,8 @@ pub enum ExecutionEngineTelemetry {
         osr_entries: u64,
         continuation_entries: u64,
         continuation_yields: u64,
+        /// Direct source instructions represented by admitted continuation code.
+        continuation_compiled_source_instructions: u64,
         /// Weighted native-lowerable work that remained interpreted.
         interpreted_native_work: u64,
         /// Dynamic normal-boundary observations grouped by stable reason.

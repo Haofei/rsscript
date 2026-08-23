@@ -7,6 +7,13 @@ use super::*;
 #[cfg(feature = "native-jit")]
 const MIN_CONTINUATION_DIRECT_WORK: usize = 16;
 
+/// Stable dispatch threshold derived from the canonical mixed-mode scorecard.
+/// Region formation remains available below this value for telemetry and tests,
+/// but crossing the native/VM trampoline is admitted only when enough source
+/// work exists to amortize state marshalling.
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) const MIN_CONTINUATION_ADMISSION_WORK: usize = 512;
+
 /// A single natural loop identified for OSR (OSR): the conservative shape this
 /// slice compiles. `header` is the loop's entry instruction (a conditional branch
 /// that is the target of the loop's backedge); `exit` is the post-loop instruction
@@ -108,7 +115,7 @@ pub(in crate::reg_vm) fn detect_scalar_continuation_region(
 ) -> Option<ContinuationRegion> {
     // A region transition crosses the Rust/native ABI and materializes live
     // state. Tiny slices lose even when every contained opcode is native-capable.
-    const MAX_REGION_INSTRUCTIONS: usize = 512;
+    const MAX_REGION_INSTRUCTIONS: usize = 2_048;
     const MAX_REGION_EXITS: usize = 16;
     if entry >= code.len() {
         return None;
@@ -175,11 +182,10 @@ pub(in crate::reg_vm) fn detect_scalar_continuation_region(
             barrier_backedge |= successor <= ip && !included[successor];
         });
     }
-    // Cyclic mixed-mode regions need a transition-frequency cost model before
-    // they can be profitable: an ordinary forward barrier inside the loop can
-    // still force one native/VM round trip per iteration. Pure loops already use
-    // whole-function JIT or OSR, so continuations remain acyclic for now.
-    if barrier_backedge || has_backedge {
+    // A backedge to a barrier would cross engines once per iteration and remains
+    // forbidden. A closed native loop whose only exits are forward barriers is
+    // safe and profitable: it yields once after the loop, not on its backedge.
+    if barrier_backedge {
         return None;
     }
     if direct_work < MIN_CONTINUATION_DIRECT_WORK || exits.is_empty() {
@@ -268,9 +274,37 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
     {
         return None;
     }
+    let liveness = NativeRegionAnalysis::compute_prefix(&func.code, func.regs, 0, func.code.len())?;
+    if jit_fn.code.len() != func.code.len() {
+        return None;
+    }
+    // The continuation lowering above preserves source instruction identity.
+    // Attach verifier-derived source-resume liveness to every guard so checked
+    // arithmetic does not capture every historical temporary in a long region.
+    // Local JIT liveness is unioned by the JIT validator, while unmodified frame
+    // registers remain authoritative in the VM and need no payload write-back.
+    jit_fn.resume_live_regs = (0..jit_fn.code.len())
+        .map(|ip| {
+            (0..func.regs)
+                .filter(|reg| {
+                    written_regs.get(*reg).copied().unwrap_or(false)
+                        && liveness.live_in(ip, *reg) == Some(true)
+                })
+                .map(|reg| u32::try_from(reg).ok())
+                .collect::<Option<Vec<_>>>()
+        })
+        .collect::<Option<Vec<_>>>()?;
     for &exit in region.exits.keys() {
+        let live = (0..func.regs)
+            .filter(|reg| {
+                written_regs.get(*reg).copied().unwrap_or(false)
+                    && liveness.live_in(exit, *reg) == Some(true)
+            })
+            .map(|reg| u32::try_from(reg).ok())
+            .collect::<Option<Vec<_>>>()?;
         *jit_fn.code.get_mut(exit)? = vm_jit::JitInstr::RegionExit {
             exit_id: u32::try_from(exit).ok()?,
+            live,
         };
     }
     Some((jit_fn, active_regs, reg_types, written_regs))
@@ -402,6 +436,51 @@ mod continuation_tests {
         assert!(!is_continuation_entry(&code, 2));
         assert!(!should_probe_continuation_entry(&code, 1));
         assert!(detect_scalar_continuation_region(&code, 1).is_none());
+    }
+
+    #[test]
+    fn closed_native_loop_can_yield_once_at_a_forward_barrier() {
+        let mut code = vec![
+            RegInstr::LoadInt { dst: 0, value: 0 },
+            RegInstr::LoadInt { dst: 1, value: 100 },
+            RegInstr::LessInt {
+                dst: 2,
+                lhs: 0,
+                rhs: 1,
+            },
+            RegInstr::JumpIfBool {
+                cond: 2,
+                expected: false,
+                target: 18,
+            },
+        ];
+        for dst in 3..15 {
+            code.push(RegInstr::AddInt {
+                dst,
+                lhs: 0,
+                rhs: 1,
+            });
+        }
+        code.push(RegInstr::AddInt {
+            dst: 0,
+            lhs: 0,
+            rhs: 1,
+        });
+        code.push(RegInstr::Jump { target: 2 });
+        code.push(RegInstr::CallKnown {
+            dst: 15,
+            function: 1,
+            args: vec![0],
+            mut_args: Vec::new(),
+        });
+        assert_eq!(code.len(), 19);
+
+        let region = detect_scalar_continuation_region(&code, 0).expect("closed native loop");
+        assert!(region.has_backedge);
+        assert_eq!(
+            region.exits.get(&18),
+            Some(&NativeBarrierReason::StaticCall)
+        );
     }
 }
 

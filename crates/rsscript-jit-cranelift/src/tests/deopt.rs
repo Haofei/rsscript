@@ -197,6 +197,37 @@ fn deopt_map_two_distinct_sites_track_prior_defs() {
 }
 
 #[test]
+fn source_resume_liveness_excludes_dead_assigned_temporaries() {
+    use JitValueType::{FlatInt, Int};
+    let mut program = ft(
+        3,
+        vec![FlatInt, Int, Int, Int, Int],
+        vec![
+            JitInstr::Add {
+                dst: 3,
+                lhs: 1,
+                rhs: 1,
+            },
+            JitInstr::ListGetIntDirect {
+                dst: 4,
+                base: 0,
+                index: 2,
+            },
+            JitInstr::Return { src: 4 },
+        ],
+    );
+    // At the second guard, reg 3 is definitely assigned but dead in both the
+    // source continuation and local JIT code. Regs 0 and 2 are needed to rerun
+    // the guarded access.
+    program.resume_live_regs = vec![vec![0, 1, 2], vec![0, 2], vec![4]];
+
+    let mut module = module();
+    let id = module.compile(&program).unwrap();
+    let map = module.deopt_map(id).unwrap();
+    assert_eq!(map.sites[1].live, vec![(0, FlatInt), (2, Int)]);
+}
+
+#[test]
 fn deopt_map_must_analysis_excludes_one_armed_def() {
     // A register assigned on only ONE arm before a join with a guard must NOT be
     // in the join's live set (intersection / must-analysis).

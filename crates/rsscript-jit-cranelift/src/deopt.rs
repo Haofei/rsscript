@@ -20,13 +20,13 @@ impl SafepointId {
 /// `resume_ip` is the [`JitInstr`] index the interpreter re-executes when this
 /// guard fires. It is the very instruction whose guard bailed: native code bails
 /// *before* completing that instruction (e.g. before storing an `Add`'s checked
-/// result), so the interpreter must run it again. Its inputs are therefore exactly
-/// the registers definitely assigned on entry to that instruction.
+/// result), so the interpreter must run it again. Its inputs and any values used by
+/// the remaining continuation must therefore be reconstructed.
 ///
-/// `live` lists those entry-assigned registers (definite-assignment / "must"
-/// analysis — see [`definite_assignment`]), each paired with its storage class. A
-/// register absent from `live` is not guaranteed assigned on every path to the
-/// resume point, so it carries no meaningful value to reconstruct.
+/// For verified-bytecode producers, `live` is the intersection of definite
+/// assignment with source-resume plus local JIT liveness, each register paired
+/// with its storage class. Detached clients that provide no source facts retain
+/// the conservative all-definitely-assigned behavior.
 ///
 /// Generated code captures these registers into the call frame's deoptimization
 /// payload. The embedding VM consumes the map to reconstruct a precise interpreter
@@ -35,7 +35,7 @@ impl SafepointId {
 pub struct DeoptSite {
     /// The `JitInstr` index to resume interpretation at (the bailing instruction).
     pub resume_ip: u32,
-    /// Registers definitely assigned on entry to `resume_ip`, each `(reg, type)`.
+    /// Registers definitely assigned and live on entry to `resume_ip`.
     pub live: Vec<(u32, JitValueType)>,
     /// If this safepoint is a native-call edge, the callee's deopt payload is
     /// chained into this function's payload buffer so the host can inspect the
