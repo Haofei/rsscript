@@ -1,11 +1,12 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use rsscript_sdk::{
     artifact::ArtifactVerifier,
     compile::Compiler,
-    operation::CancellationToken,
+    operation::{CancellationToken, MonotonicDeadline},
     provider_api::{
         BlockingBehavior, CancellationBehavior, DataEffect, ExternalSymbol, FunctionSignature,
         ParameterSignature, ProviderCallMode, ProviderDescriptor, ProviderError,
@@ -269,6 +270,27 @@ fn bounded_step_accounting_matches_across_call_continuations() {
     } = bounded_native.telemetry.engine
     else {
         panic!("default bounded execution must report native telemetry");
+    };
+    assert!(continuation_entries >= 2);
+
+    let deadline_native = linked.execute(
+        ExecutionRequest::default()
+            .limits(
+                RunLimits::bounded()
+                    .with_deadline(MonotonicDeadline::after(Duration::from_secs(60))),
+            )
+            .native_jit(NativeJitOptions {
+                cost_model: NativeCostModel::Off,
+                ..NativeJitOptions::default()
+            }),
+    );
+    assert_eq!(deadline_native.outcome(), interpreter.outcome());
+    let ExecutionEngineTelemetry::Native {
+        continuation_entries,
+        ..
+    } = deadline_native.telemetry.engine
+    else {
+        panic!("deadline-armed execution must report native telemetry");
     };
     assert!(continuation_entries >= 2);
 

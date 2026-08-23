@@ -10,8 +10,9 @@ however, have a one-to-one source instruction map: acyclic regions account steps
 exactly and poll host cancellation. Because these regions cannot allocate or call
 intrinsics/Providers, the surrounding VM barriers continue to own those budgets,
 allowing the default bounded profile to accelerate scalar work safely. Armed step
-budgets conservatively keep loop regions in the interpreter, and armed deadlines
-currently keep every continuation in the interpreter.
+budgets conservatively keep loop regions in the interpreter. Deadline-armed
+execution likewise admits only acyclic regions (at most 512 source instructions),
+then returns to a VM-owned barrier which performs the next monotonic clock poll.
 
 ## Stable invariants
 

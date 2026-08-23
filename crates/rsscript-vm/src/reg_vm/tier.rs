@@ -1450,11 +1450,8 @@ impl RegVm {
         // The scalar region has a one-to-one source instruction map, so generated
         // step/cancel accounting is exact. It cannot allocate or invoke an
         // intrinsic/Provider, therefore those meters remain entirely VM-owned at
-        // the surrounding barriers. Deadline polling is not yet represented in
-        // the call frame and must keep this path fail-closed.
-        if self.limits.deadline.is_some() {
-            return false;
-        }
+        // the surrounding barriers. Deadlines are admitted only for finite
+        // regions below; the next VM-owned barrier polls the clock.
         let cancel_armed = self.limits.cancel.is_some();
         let function = self.jit_state.function_ordinal(func);
         let region = {
@@ -1609,6 +1606,15 @@ impl RegVm {
             return false;
         };
         debug_assert_eq!(entry.entry, entry_ip);
+        if self.limits.deadline.is_some()
+            && (entry.has_backedge
+                || self
+                    .limits
+                    .deadline
+                    .is_some_and(rsscript_operation::MonotonicDeadline::is_expired))
+        {
+            return false;
+        }
         if self.limits.step_budget.is_some() {
             if entry.has_backedge {
                 return false;
@@ -1743,9 +1749,6 @@ impl RegVm {
 
     #[cfg(feature = "native-jit")]
     pub(super) fn has_continuation_region(&mut self, func: &RegFunction) -> bool {
-        if self.limits.deadline.is_some() {
-            return false;
-        }
         let function = self.jit_state.function_ordinal(func);
         let Some(native) = self.native.as_mut() else {
             return false;
@@ -1754,6 +1757,7 @@ impl RegVm {
             return has_region;
         }
         let step_armed = self.limits.step_budget.is_some();
+        let deadline_armed = self.limits.deadline.is_some();
         let has_region = (0..func.code.len()).any(|entry| {
             let region = native
                 .continuation_plans
@@ -1761,7 +1765,7 @@ impl RegVm {
                 .or_insert_with(|| detect_scalar_continuation_region(&func.code, entry));
             region
                 .as_ref()
-                .is_some_and(|region| !step_armed || !region.has_backedge)
+                .is_some_and(|region| !(step_armed || deadline_armed) || !region.has_backedge)
         });
         native.continuation_functions.insert(function, has_region);
         has_region
