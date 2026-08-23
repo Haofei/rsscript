@@ -72,6 +72,11 @@ then returns to a VM-owned barrier which performs the next monotonic clock poll.
   instructions and rejects every cyclic mixed-mode region. Pure hot loops remain
   the responsibility of whole-function JIT or OSR; a loop containing a VM barrier
   is not allowed to ping-pong across the ABI once per iteration.
+- Region formation produces evaluation-local facts (included CFG instructions,
+  exits, active-register footprint, and exact source work) once. They are cached
+  by verified function/IP behind an `Rc`; runtime shape specialization consumes
+  those facts without rescanning bytecode, while the persistent Artifact remains
+  unchanged.
 - Structural compilation work is bounded by `JitLimits` before Cranelift code
   generation. Instruction, register, CFG-edge, operand, analysis-word, deopt,
   memo-scope, callee, and recursive-group counts have deterministic limits.

@@ -2021,7 +2021,7 @@ struct NativeState {
     continuation_cache: HashMap<ContinuationVersionKey, Option<ContinuationEntry>>,
     /// Structural CFG plans (including negative results) are shape-independent and
     /// cached separately so probing each interpreter IP stays an O(1) lookup.
-    continuation_plans: HashMap<(usize, usize), Option<ContinuationRegion>>,
+    continuation_plans: HashMap<(usize, usize), Option<Rc<ContinuationRegion>>>,
     continuation_functions: HashMap<usize, bool>,
     /// Native self-recursion cache (native-call-ABI slice 3; generalized in Phase 2):
     /// per-function stable ordinal key compiled `CallSelf` entry, with the

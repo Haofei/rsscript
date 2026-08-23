@@ -1461,7 +1461,9 @@ impl RegVm {
             native
                 .continuation_plans
                 .entry((function, entry_ip))
-                .or_insert_with(|| detect_scalar_continuation_region(&func.code, entry_ip))
+                .or_insert_with(|| {
+                    detect_scalar_continuation_region(&func.code, entry_ip).map(Rc::new)
+                })
                 .clone()
         };
         let Some(region) = region else {
@@ -1471,27 +1473,11 @@ impl RegVm {
         // The first slice is scalar-only. Reject any initialized non-scalar frame
         // slot before translation/caching; later region slices can add heap table
         // and transaction support without weakening this boundary.
-        let region_active_regs = {
-            let mut active = vec![false; func.regs];
-            for (ip, instr) in func.code.iter().enumerate() {
-                if !region.included[ip] {
-                    continue;
-                }
-                let Some(regs) = native_continuation_registers(instr) else {
-                    return false;
-                };
-                for reg in regs {
-                    let Some(slot) = active.get_mut(reg) else {
-                        return false;
-                    };
-                    *slot = true;
-                }
-            }
-            active
-        };
         let shape = ShapeKey::from_shapes((0..func.regs).map(|reg| {
             let slot = base + reg;
-            if !region_active_regs[reg] || !self.written.get(slot).copied().unwrap_or(false) {
+            if !region.active_regs.get(reg).copied().unwrap_or(false)
+                || !self.written.get(slot).copied().unwrap_or(false)
+            {
                 NativeParamShape::Unsupported
             } else {
                 native_param_shape(&self.stack[slot])
@@ -1499,7 +1485,7 @@ impl RegVm {
         }));
         let scalar_frame = (0..func.regs).all(|reg| {
             let slot = base + reg;
-            !region_active_regs[reg]
+            !region.active_regs.get(reg).copied().unwrap_or(false)
                 || !self.written.get(slot).copied().unwrap_or(false)
                 || matches!(
                     self.stack.get(slot),
@@ -1574,11 +1560,7 @@ impl RegVm {
                                         entry: region.entry,
                                         exits: region.exits.clone(),
                                         n_jit_regs: jit_fn.n_regs as usize,
-                                        source_instructions: region
-                                            .included
-                                            .iter()
-                                            .filter(|included| **included)
-                                            .count(),
+                                        source_instructions: region.source_instructions,
                                         has_backedge: region.has_backedge,
                                         active_regs,
                                         reg_types,
@@ -1770,7 +1752,9 @@ impl RegVm {
                 let region = native
                     .continuation_plans
                     .entry((function, entry))
-                    .or_insert_with(|| detect_scalar_continuation_region(&func.code, entry));
+                    .or_insert_with(|| {
+                        detect_scalar_continuation_region(&func.code, entry).map(Rc::new)
+                    });
                 region
                     .as_ref()
                     .is_some_and(|region| !(step_armed || deadline_armed) || !region.has_backedge)

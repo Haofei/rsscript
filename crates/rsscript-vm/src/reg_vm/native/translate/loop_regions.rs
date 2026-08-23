@@ -46,6 +46,8 @@ pub(in crate::reg_vm) struct ContinuationRegion {
     pub(in crate::reg_vm) included: Vec<bool>,
     pub(in crate::reg_vm) exits: BTreeMap<usize, NativeBarrierReason>,
     pub(in crate::reg_vm) has_backedge: bool,
+    pub(in crate::reg_vm) active_regs: Vec<bool>,
+    pub(in crate::reg_vm) source_instructions: usize,
 }
 
 /// A compiled scalar continuation cached per function, entry, and runtime shape.
@@ -180,14 +182,37 @@ pub(in crate::reg_vm) fn detect_scalar_continuation_region(
     if barrier_backedge || has_backedge {
         return None;
     }
-    (direct_work >= MIN_CONTINUATION_DIRECT_WORK && !exits.is_empty()).then_some(
-        ContinuationRegion {
-            entry,
-            included,
-            exits,
-            has_backedge,
-        },
-    )
+    if direct_work < MIN_CONTINUATION_DIRECT_WORK || exits.is_empty() {
+        return None;
+    }
+    let max_reg = code
+        .iter()
+        .enumerate()
+        .filter(|(ip, _)| included[*ip])
+        .try_fold(0usize, |maximum, (_, instr)| {
+            native_continuation_registers(instr).map(|regs| {
+                regs.into_iter()
+                    .max()
+                    .map_or(maximum, |reg| maximum.max(reg + 1))
+            })
+        })?;
+    let mut active_regs = vec![false; max_reg];
+    for (ip, instr) in code.iter().enumerate() {
+        if !included[ip] {
+            continue;
+        }
+        for reg in native_continuation_registers(instr)? {
+            active_regs[reg] = true;
+        }
+    }
+    Some(ContinuationRegion {
+        entry,
+        included,
+        exits,
+        has_backedge,
+        active_regs,
+        source_instructions: direct_work,
+    })
 }
 
 /// Lower a conservative continuation through the mature OSR window-entry path,
@@ -209,15 +234,8 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
             };
         }
     }
-    let mut active_regs = vec![false; func.regs];
-    for (ip, instr) in func.code.iter().enumerate() {
-        if !region.included[ip] {
-            continue;
-        }
-        for reg in native_continuation_registers(instr)? {
-            *active_regs.get_mut(reg)? = true;
-        }
-    }
+    let mut active_regs = region.active_regs.clone();
+    active_regs.resize(func.regs, false);
     let immutable_leaf_params = vec![false; func.params];
     let (
         mut jit_fn,
