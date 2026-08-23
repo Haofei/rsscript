@@ -1377,7 +1377,10 @@ impl RegVm {
             // frame. The same cached probe also runs inside the interpreter loop
             // below so VM-owned barriers can re-enter their continuation.
             #[cfg(feature = "native-jit")]
-            if self.native.is_some() && self.try_continuation_region(&func, base, ip) {
+            if self.native.is_some()
+                && should_probe_continuation_entry(&func.code, ip)
+                && self.try_continuation_region(&func, base, ip)
+            {
                 continue 'frames;
             }
 
@@ -1468,7 +1471,7 @@ impl RegVm {
                 // cheap while allowing the VM to re-enter native code immediately
                 // after it executes an aggregate/call/async-style barrier.
                 #[cfg(feature = "native-jit")]
-                if self.native.is_some() {
+                if self.native.is_some() && should_probe_continuation_entry(&func.code, ip) {
                     self.frames.last_mut().expect("active frame").ip = ip;
                     if self.try_continuation_region(&func, base, ip) {
                         continue 'frames;
@@ -1587,6 +1590,7 @@ impl RegVm {
                 #[cfg(feature = "native-jit")]
                 if let Some(native) = self.native.as_mut()
                     && native.collect_stats
+                    && matches!(native.cost_model, NativeCostModel::Report)
                 {
                     match native_lowering_class(instr) {
                         NativeLoweringClass::Direct => {

@@ -40,7 +40,11 @@ then returns to a VM-owned barrier which performs the next monotonic clock poll.
   normal `Yield` barrier, or `Reject`, rather than as an unstructured boolean.
   Native telemetry reports dynamically interpreted native-capable work and stable
   barrier-reason counts. These observations decide which continuation regions are
-  worth implementing; they do not change execution semantics.
+  worth implementing; they do not change execution semantics. Because dynamic
+  missed-work classification runs on the interpreter hot path, it is collected
+  only under the explicit `NativeCostModel::Report` diagnostic mode. Ordinary
+  telemetry and the default enforcing cost model do not pay that per-instruction
+  cost.
 - ABI v3 distinguishes a planned continuation `Yield` from `Deopt`. A yield
   commits completed region work, materializes its bounded live scalar state, and
   resumes the VM at the barrier instruction. A deopt aborts transactional work
@@ -64,6 +68,10 @@ then returns to a VM-owned barrier which performs the next monotonic clock poll.
   the native source map. A missing step ceiling is represented as `i64::MAX` in
   the private call cell; it disables rejection without disabling usage
   accounting.
+- Stable continuation admission requires at least sixteen direct source
+  instructions and rejects every cyclic mixed-mode region. Pure hot loops remain
+  the responsibility of whole-function JIT or OSR; a loop containing a VM barrier
+  is not allowed to ping-pong across the ABI once per iteration.
 - Structural compilation work is bounded by `JitLimits` before Cranelift code
   generation. Instruction, register, CFG-edge, operand, analysis-word, deopt,
   memo-scope, callee, and recursive-group counts have deterministic limits.

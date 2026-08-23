@@ -1444,7 +1444,7 @@ impl RegVm {
         base: usize,
         entry_ip: usize,
     ) -> bool {
-        if JitCallCtx::is_active() {
+        if JitCallCtx::is_active() || !should_probe_continuation_entry(&func.code, entry_ip) {
             return false;
         }
         // The scalar region has a one-to-one source instruction map, so generated
@@ -1758,15 +1758,23 @@ impl RegVm {
         }
         let step_armed = self.limits.step_budget.is_some();
         let deadline_armed = self.limits.deadline.is_some();
-        let has_region = (0..func.code.len()).any(|entry| {
-            let region = native
-                .continuation_plans
-                .entry((function, entry))
-                .or_insert_with(|| detect_scalar_continuation_region(&func.code, entry));
-            region
-                .as_ref()
-                .is_some_and(|region| !(step_armed || deadline_armed) || !region.has_backedge)
-        });
+        // This gate stops tier-0 from consuming a function with useful mixed-mode
+        // work. Bound the static search: scanning all post-barrier suffixes is
+        // quadratic in generated call chains, while the first few barriers cover
+        // the normal prelude/aggregate setup shapes. Later entries remain lazy.
+        const MAX_EAGER_CONTINUATION_PROBES: usize = 8;
+        let has_region = (0..func.code.len())
+            .filter(|entry| should_probe_continuation_entry(&func.code, *entry))
+            .take(MAX_EAGER_CONTINUATION_PROBES)
+            .any(|entry| {
+                let region = native
+                    .continuation_plans
+                    .entry((function, entry))
+                    .or_insert_with(|| detect_scalar_continuation_region(&func.code, entry));
+                region
+                    .as_ref()
+                    .is_some_and(|region| !(step_armed || deadline_armed) || !region.has_backedge)
+            });
         native.continuation_functions.insert(function, has_region);
         has_region
     }

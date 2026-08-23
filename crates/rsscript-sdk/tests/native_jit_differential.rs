@@ -34,19 +34,19 @@ const CASES: &[(&str, &str)] = &[
     ),
     (
         "call-continuation.rss",
-        "struct Boxed { value: Int } fn boundary(value: Int) -> Int { let boxed = Boxed(value: value); return boxed.value } fn main() -> Int { let a = 7; let b = a * 3; let c = b + 11; let d = boundary(value: c); let e = d * 5; let f = e - 9; let g = f + 2; return g }",
+        "struct Boxed { value: Int } fn boundary(value: Int) -> Int { let boxed = Boxed(value: value); return boxed.value } fn main() -> Int { let a = 7; let b = a * 3; let c = b + 11; let p = c * 2; let q = p - 5; let r = q + 9; let s = r * 2; let d = boundary(value: s); let e = d * 5; let f = e - 9; let g = f + 2; let h = g * 3; let i = h - 4; let j = i + 6; let k = j * 2; return k }",
     ),
     (
         "branch-continuation.rss",
-        "struct BoxedBranch { value: Int } fn branch_boundary(value: Int) -> Int { let boxed = BoxedBranch(value: value); return boxed.value } fn choose(flag: Bool) -> Int { let a = 7; let b = a * 3; let c = b + 11; if flag { let d = branch_boundary(value: c); let e = d * 5; let f = e - 9; let g = f + 2; return g } else { let h = c * 2; let i = h + 5; let j = i - 1; return j } } fn main() -> Int { let left = choose(flag: true); let right = choose(flag: false); return left + right }",
+        "struct BoxedBranch { value: Int } fn branch_boundary(value: Int) -> Int { let boxed = BoxedBranch(value: value); return boxed.value } fn choose(flag: Bool) -> Int { let a = 7; let b = a * 3; let c = b + 11; let p = c * 2; let q = p - 5; let r = q + 9; let s = r * 2; if flag { let d = branch_boundary(value: s); let e = d * 5; let f = e - 9; let g = f + 2; let h = g * 3; let i = h - 4; let j = i + 6; let k = j * 2; return k } else { let h = s * 2; let i = h + 5; let j = i - 1; let k = j * 3; let l = k - 4; let m = l + 6; let n = m * 2; return n } } fn main() -> Int { let left = choose(flag: true); let right = choose(flag: false); return left + right }",
     ),
     (
         "aggregate-continuation.rss",
-        "struct AggregateBox { value: Int } fn main() -> Int { let boxed = AggregateBox(value: 13); let extracted = boxed.value; let a = extracted * 3; let b = a + 11; let c = b * 5; return c }",
+        "struct AggregateBox { value: Int } fn main() -> Int { let boxed = AggregateBox(value: 13); let extracted = boxed.value; let a = extracted * 3; let b = a + 11; let c = b * 5; let d = c - 9; let e = d + 2; let f = e * 3; let g = f - 4; let h = g + 6; let i = h * 2; return i }",
     ),
     (
         "await-continuation.rss",
-        "async fn boundary(value: Int) -> Int { return value + 4 } async fn main() -> Int { let a = 7; let b = a * 3; let c = b + 11; task_group { async let pending = boundary(value: c); let d = await pending; let e = d * 5; let f = e - 9; let g = f + 2; return g } }",
+        "async fn boundary(value: Int) -> Int { return value + 4 } async fn main() -> Int { let a = 7; let b = a * 3; let c = b + 11; let p = c * 2; let q = p - 5; let r = q + 9; let s = r * 2; task_group { async let pending = boundary(value: s); let d = await pending; let e = d * 5; let f = e - 9; let g = f + 2; let h = g * 3; let i = h - 4; let j = i + 6; let k = j * 2; return k } }",
     ),
     (
         "native-list-write.rss",
@@ -108,7 +108,7 @@ fn native_engine_matches_the_verified_interpreter_corpus() {
         let request = || ExecutionRequest::new(["2000"]).limits(limits.clone());
         let interpreter = linked.execute(request());
         let native = linked.execute(request().native_jit(NativeJitOptions {
-            cost_model: NativeCostModel::Off,
+            cost_model: NativeCostModel::Report,
             ..NativeJitOptions::default()
         }));
 
@@ -216,7 +216,7 @@ fn native_engine_matches_the_verified_interpreter_corpus() {
 
 #[test]
 fn bounded_step_accounting_matches_across_call_continuations() {
-    let source = "struct StepBox { value: Int } fn boundary(value: Int) -> Int { let boxed = StepBox(value: value); return boxed.value } fn main() -> Int { let a = 7; let b = a * 3; let c = b + 11; let d = boundary(value: c); let e = d * 5; let f = e - 9; let g = f + 2; return g }";
+    let source = "struct StepBox { value: Int } fn boundary(value: Int) -> Int { let boxed = StepBox(value: value); return boxed.value } fn main() -> Int { let a = 7; let b = a * 3; let c = b + 11; let p = c * 2; let q = p - 5; let r = q + 9; let s = r * 2; let d = boundary(value: s); let e = d * 5; let f = e - 9; let g = f + 2; let h = g * 3; let i = h - 4; let j = i + 6; let k = j * 2; return k }";
     let built = Compiler
         .compile("bounded-continuation.rss", source)
         .expect("source compiles");
@@ -255,7 +255,7 @@ fn bounded_step_accounting_matches_across_call_continuations() {
         ExecutionRequest::default()
             .limits(RunLimits::bounded())
             .native_jit(NativeJitOptions {
-                cost_model: NativeCostModel::Off,
+                cost_model: NativeCostModel::Report,
                 ..NativeJitOptions::default()
             }),
     );
@@ -316,7 +316,7 @@ fn bounded_step_accounting_matches_across_call_continuations() {
 
 #[test]
 fn provider_barrier_executes_once_and_reenters_native() {
-    const SOURCE: &str = "module app\nuse host.math.*\nfn main() -> Int { let a = 7; let b = a * 3; let c = b + 11; let d = adjust(value: read c); let e = d * 5; let f = e - 9; let g = f + 2; return g }";
+    const SOURCE: &str = "module app\nuse host.math.*\nfn main() -> Int { let a = 7; let b = a * 3; let c = b + 11; let p = c * 2; let q = p - 5; let r = q + 9; let s = r * 2; let d = adjust(value: read s); let e = d * 5; let f = e - 9; let g = f + 2; let h = g * 3; let i = h - 4; let j = i + 6; let k = j * 2; return k }";
     const INTERFACE: &str = "module host.math\npub fn adjust(value: read Int) -> Int\n";
 
     let symbol = ExternalSymbol::new("host.math.adjust").expect("test symbol is valid");

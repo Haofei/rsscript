@@ -4,6 +4,9 @@
 
 use super::*;
 
+#[cfg(feature = "native-jit")]
+const MIN_CONTINUATION_DIRECT_WORK: usize = 16;
+
 /// A single natural loop identified for OSR (OSR): the conservative shape this
 /// slice compiles. `header` is the loop's entry instruction (a conditional branch
 /// that is the target of the loop's backedge); `exit` is the post-loop instruction
@@ -60,6 +63,37 @@ pub(in crate::reg_vm) struct ContinuationEntry {
     pub(in crate::reg_vm) written_regs: Vec<bool>,
 }
 
+/// Continuations begin at function entry or immediately after a VM-owned
+/// barrier. Probing every instruction would create many overlapping suffix
+/// regions and turn an interpreted hot loop into repeated shape/cache work.
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn is_continuation_entry(code: &[RegInstr], entry: usize) -> bool {
+    entry == 0
+        || entry
+            .checked_sub(1)
+            .and_then(|previous| code.get(previous))
+            .is_some_and(|instr| {
+                !matches!(native_lowering_class(instr), NativeLoweringClass::Direct)
+            })
+}
+
+/// Cheap hot-path filter before the CFG region planner. Entry zero may branch and
+/// receives full analysis; a post-barrier continuation must first expose a useful
+/// straight-line prefix. This rejects per-iteration aggregate/call ping-pong
+/// without a hash lookup, shape construction, or allocation.
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn should_probe_continuation_entry(code: &[RegInstr], entry: usize) -> bool {
+    if !is_continuation_entry(code, entry) {
+        return false;
+    }
+    entry == 0
+        || code.get(entry..).is_some_and(|tail| {
+            tail.iter()
+                .take(MIN_CONTINUATION_DIRECT_WORK)
+                .all(|instr| matches!(native_lowering_class(instr), NativeLoweringClass::Direct))
+        }) && code.len().saturating_sub(entry) >= MIN_CONTINUATION_DIRECT_WORK
+}
+
 /// Find a useful scalar CFG region beginning at `entry`.
 ///
 /// Direct instructions, branches, and loops remain inside the region. Calls,
@@ -70,7 +104,8 @@ pub(in crate::reg_vm) fn detect_scalar_continuation_region(
     code: &[RegInstr],
     entry: usize,
 ) -> Option<ContinuationRegion> {
-    const MIN_DIRECT_WORK: usize = 3;
+    // A region transition crosses the Rust/native ABI and materializes live
+    // state. Tiny slices lose even when every contained opcode is native-capable.
     const MAX_REGION_INSTRUCTIONS: usize = 512;
     const MAX_REGION_EXITS: usize = 16;
     if entry >= code.len() {
@@ -126,12 +161,33 @@ pub(in crate::reg_vm) fn detect_scalar_continuation_region(
             pending.push(successor);
         });
     }
-    (direct_work >= MIN_DIRECT_WORK && !exits.is_empty()).then_some(ContinuationRegion {
-        entry,
-        included,
-        exits,
-        has_backedge,
-    })
+    // A backedge that lands on a barrier would yield once per loop iteration.
+    // That native/VM ping-pong is predictably worse than keeping the loop in the
+    // interpreter (or letting the existing whole-loop OSR path handle it).
+    let mut barrier_backedge = false;
+    for (ip, instr) in code.iter().enumerate() {
+        if !included[ip] {
+            continue;
+        }
+        native_instr_successors(instr, ip, code.len(), |successor| {
+            barrier_backedge |= successor <= ip && !included[successor];
+        });
+    }
+    // Cyclic mixed-mode regions need a transition-frequency cost model before
+    // they can be profitable: an ordinary forward barrier inside the loop can
+    // still force one native/VM round trip per iteration. Pure loops already use
+    // whole-function JIT or OSR, so continuations remain acyclic for now.
+    if barrier_backedge || has_backedge {
+        return None;
+    }
+    (direct_work >= MIN_CONTINUATION_DIRECT_WORK && !exits.is_empty()).then_some(
+        ContinuationRegion {
+            entry,
+            included,
+            exits,
+            has_backedge,
+        },
+    )
 }
 
 /// Lower a conservative continuation through the mature OSR window-entry path,
@@ -211,6 +267,46 @@ mod continuation_tests {
         let code = vec![
             RegInstr::LoadInt { dst: 0, value: 7 },
             RegInstr::LoadInt { dst: 1, value: 3 },
+            RegInstr::AddInt {
+                dst: 4,
+                lhs: 0,
+                rhs: 1,
+            },
+            RegInstr::AddInt {
+                dst: 5,
+                lhs: 4,
+                rhs: 1,
+            },
+            RegInstr::AddInt {
+                dst: 6,
+                lhs: 5,
+                rhs: 1,
+            },
+            RegInstr::AddInt {
+                dst: 7,
+                lhs: 6,
+                rhs: 1,
+            },
+            RegInstr::AddInt {
+                dst: 8,
+                lhs: 7,
+                rhs: 1,
+            },
+            RegInstr::AddInt {
+                dst: 9,
+                lhs: 8,
+                rhs: 1,
+            },
+            RegInstr::AddInt {
+                dst: 10,
+                lhs: 9,
+                rhs: 1,
+            },
+            RegInstr::AddInt {
+                dst: 11,
+                lhs: 10,
+                rhs: 1,
+            },
             RegInstr::LessInt {
                 dst: 2,
                 lhs: 1,
@@ -219,17 +315,27 @@ mod continuation_tests {
             RegInstr::JumpIfBool {
                 cond: 2,
                 expected: true,
-                target: 6,
+                target: 15,
             },
             RegInstr::AddInt {
                 dst: 3,
                 lhs: 0,
                 rhs: 1,
             },
+            RegInstr::MulInt {
+                dst: 3,
+                lhs: 3,
+                rhs: 1,
+            },
             RegInstr::Return { src: 3 },
             RegInstr::SubInt {
                 dst: 3,
                 lhs: 0,
+                rhs: 1,
+            },
+            RegInstr::MulInt {
+                dst: 3,
+                lhs: 3,
                 rhs: 1,
             },
             RegInstr::CallKnown {
@@ -240,12 +346,44 @@ mod continuation_tests {
             },
         ];
         let region = detect_scalar_continuation_region(&code, 0).expect("scalar CFG region");
-        assert!(region.included[3], "conditional branch stays native");
+        assert!(region.included[11], "conditional branch stays native");
         assert_eq!(
-            region.exits.get(&5),
+            region.exits.get(&14),
             Some(&NativeBarrierReason::FunctionReturn)
         );
-        assert_eq!(region.exits.get(&7), Some(&NativeBarrierReason::StaticCall));
+        assert_eq!(
+            region.exits.get(&17),
+            Some(&NativeBarrierReason::StaticCall)
+        );
+    }
+
+    #[test]
+    fn continuation_entries_do_not_overlap_or_ping_pong_across_a_backedge_barrier() {
+        let code = vec![
+            RegInstr::CallKnown {
+                dst: 0,
+                function: 1,
+                args: Vec::new(),
+                mut_args: Vec::new(),
+            },
+            RegInstr::LoadInt { dst: 1, value: 1 },
+            RegInstr::AddInt {
+                dst: 2,
+                lhs: 0,
+                rhs: 1,
+            },
+            RegInstr::AddInt {
+                dst: 3,
+                lhs: 2,
+                rhs: 1,
+            },
+            RegInstr::Jump { target: 0 },
+        ];
+        assert!(is_continuation_entry(&code, 0));
+        assert!(is_continuation_entry(&code, 1));
+        assert!(!is_continuation_entry(&code, 2));
+        assert!(!should_probe_continuation_entry(&code, 1));
+        assert!(detect_scalar_continuation_region(&code, 1).is_none());
     }
 }
 

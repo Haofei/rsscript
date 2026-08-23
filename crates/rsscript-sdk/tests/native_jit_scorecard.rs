@@ -145,15 +145,17 @@ fn native_jit_pass_scorecard() {
             native_calls,
             native_bails,
             osr_entries,
+            continuation_entries,
             compile_nanos,
             resident_code_bytes,
             reserved_arena_bytes,
         ) = match latest_native.telemetry.engine {
-            ExecutionEngineTelemetry::Interpreter => (0, 0, 0, 0, 0, 0),
+            ExecutionEngineTelemetry::Interpreter => (0, 0, 0, 0, 0, 0, 0),
             ExecutionEngineTelemetry::Native {
                 native_calls,
                 native_bails,
                 osr_entries,
+                continuation_entries,
                 compile_nanos,
                 resident_code_bytes,
                 reserved_arena_bytes,
@@ -162,6 +164,7 @@ fn native_jit_pass_scorecard() {
                 native_calls,
                 native_bails,
                 osr_entries,
+                continuation_entries,
                 compile_nanos,
                 resident_code_bytes,
                 reserved_arena_bytes,
@@ -173,7 +176,7 @@ fn native_jit_pass_scorecard() {
                 "case": case.name,
                 "pass": case.pass,
                 "size": case.size,
-                "status": if native_calls > 0 || osr_entries > 0 { "entered" } else { "declined" },
+                "status": if native_calls > 0 || osr_entries > 0 || continuation_entries > 0 { "entered" } else { "declined" },
                 "interpreter_ns": interpreter.as_nanos(),
                 "native_ns": native.as_nanos(),
                 "speedup": interpreter.as_secs_f64() / native.as_secs_f64(),
@@ -183,6 +186,7 @@ fn native_jit_pass_scorecard() {
                 "native_calls": native_calls,
                 "native_bails": native_bails,
                 "osr_entries": osr_entries,
+                "continuation_entries": continuation_entries,
             })
         );
     }
