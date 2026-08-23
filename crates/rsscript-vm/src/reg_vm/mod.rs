@@ -1832,7 +1832,6 @@ struct ContinuationVersionKey {
     function: usize,
     entry: usize,
     shape: ShapeKey,
-    step_armed: bool,
     cancel_armed: bool,
 }
 

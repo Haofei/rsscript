@@ -57,6 +57,12 @@ currently keep every continuation in the interpreter.
   once, preserves Provider traces and scheduler semantics, then probes the next
   scalar continuation. Generated code never re-enters the interpreter or spans a
   suspension.
+- Continuations always meter their one-to-one source instructions, including in
+  trusted/unbounded mode. Straight-line execution reports therefore preserve
+  interpreter step accounting; scheduler-owned async bookkeeping remains outside
+  the native source map. A missing step ceiling is represented as `i64::MAX` in
+  the private call cell; it disables rejection without disabling usage
+  accounting.
 - Structural compilation work is bounded by `JitLimits` before Cranelift code
   generation. Instruction, register, CFG-edge, operand, analysis-word, deopt,
   memo-scope, callee, and recursive-group counts have deterministic limits.

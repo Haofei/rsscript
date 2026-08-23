@@ -53,8 +53,6 @@ pub(in crate::reg_vm) struct ContinuationEntry {
     pub(in crate::reg_vm) entry: usize,
     pub(in crate::reg_vm) exits: BTreeMap<usize, NativeBarrierReason>,
     pub(in crate::reg_vm) n_jit_regs: usize,
-    pub(in crate::reg_vm) step_armed: bool,
-    pub(in crate::reg_vm) cancel_armed: bool,
     pub(in crate::reg_vm) source_instructions: usize,
     pub(in crate::reg_vm) has_backedge: bool,
     pub(in crate::reg_vm) active_regs: Vec<bool>,

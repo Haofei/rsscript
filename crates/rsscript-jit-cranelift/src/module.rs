@@ -1256,7 +1256,7 @@ impl NativeModule {
     ) -> (NativeOutcome, i64) {
         let mut limits = [
             initial_steps,
-            step_budget.unwrap_or(-1),
+            step_budget.unwrap_or(i64::MAX),
             cancel.map_or(0, |flag| flag as *const _ as i64),
         ];
         let outcome = self.call_inner(

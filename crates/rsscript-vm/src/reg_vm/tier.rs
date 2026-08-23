@@ -1455,7 +1455,6 @@ impl RegVm {
         if self.limits.deadline.is_some() {
             return false;
         }
-        let step_armed = self.limits.step_budget.is_some();
         let cancel_armed = self.limits.cancel.is_some();
         let function = self.jit_state.function_ordinal(func);
         let region = {
@@ -1517,7 +1516,6 @@ impl RegVm {
             function,
             entry: entry_ip,
             shape,
-            step_armed,
             cancel_armed,
         };
         let param_native_types: Vec<Option<NativeTy>> = (0..func.params)
@@ -1553,7 +1551,7 @@ impl RegVm {
                             match native.baseline_module.compile_osr(
                                 &jit_fn,
                                 u32::try_from(region.entry).ok()?,
-                                step_armed,
+                                true,
                                 cancel_armed,
                             ) {
                                 Ok(id) => {
@@ -1579,8 +1577,6 @@ impl RegVm {
                                         entry: region.entry,
                                         exits: region.exits.clone(),
                                         n_jit_regs: jit_fn.n_regs as usize,
-                                        step_armed,
-                                        cancel_armed,
                                         source_instructions: region
                                             .included
                                             .iter()
@@ -1613,7 +1609,7 @@ impl RegVm {
             return false;
         };
         debug_assert_eq!(entry.entry, entry_ip);
-        if entry.step_armed {
+        if self.limits.step_budget.is_some() {
             if entry.has_backedge {
                 return false;
             }
@@ -1657,13 +1653,11 @@ impl RegVm {
             .is_some_and(|native| native.collect_stats)
             .then(std::time::Instant::now);
         let steps_before = self.steps;
-        let initial_steps = if entry.step_armed || entry.cancel_armed {
+        let initial_steps = {
             let Ok(steps) = i64::try_from(self.steps) else {
                 return false;
             };
-            Some(steps)
-        } else {
-            None
+            steps
         };
         let native_step_budget = match self.limits.step_budget {
             Some(budget) => {
@@ -1675,20 +1669,16 @@ impl RegVm {
             None => None,
         };
         let result = self.native.as_ref().map(|native| {
-            if entry.step_armed || entry.cancel_armed {
-                let (outcome, steps) = native.baseline_module.call_with_step_cancel(
-                    entry.id,
-                    &window,
-                    &lens,
-                    initial_steps.expect("armed continuation has an initial step count"),
-                    native_step_budget,
-                    self.limits.cancel.as_ref().map(|token| token.as_atomic()),
-                );
-                self.steps = steps.max(0) as u64;
-                outcome
-            } else {
-                native.baseline_module.call(entry.id, &window, &lens)
-            }
+            let (outcome, steps) = native.baseline_module.call_with_step_cancel(
+                entry.id,
+                &window,
+                &lens,
+                initial_steps,
+                native_step_budget,
+                self.limits.cancel.as_ref().map(|token| token.as_atomic()),
+            );
+            self.steps = steps.max(0) as u64;
+            outcome
         });
         if let Some(native) = self.native.as_mut()
             && let Some(started) = started

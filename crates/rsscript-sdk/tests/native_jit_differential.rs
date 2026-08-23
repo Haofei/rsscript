@@ -159,6 +159,10 @@ fn native_engine_matches_the_verified_interpreter_corpus() {
         }
         if *file == "call-continuation.rss" {
             assert_eq!(
+                native.usage.steps_consumed,
+                interpreter.usage.steps_consumed
+            );
+            assert_eq!(
                 native_calls, 0,
                 "whole-function JIT must decline at the call barrier"
             );
@@ -169,12 +173,20 @@ fn native_engine_matches_the_verified_interpreter_corpus() {
             );
         }
         if *file == "branch-continuation.rss" {
+            assert_eq!(
+                native.usage.steps_consumed,
+                interpreter.usage.steps_consumed
+            );
             assert!(
                 continuation_entries >= 2 && continuation_yields >= 2,
                 "a branched region and its post-call continuation must both enter; entries={continuation_entries}, yields={continuation_yields}, barriers={native_barrier_counts:?}"
             );
         }
         if *file == "aggregate-continuation.rss" {
+            assert_eq!(
+                native.usage.steps_consumed,
+                interpreter.usage.steps_consumed
+            );
             assert!(
                 continuation_entries >= 1 && continuation_yields >= 1,
                 "scalar work after aggregate materialization must re-enter native code; entries={continuation_entries}, yields={continuation_yields}, barriers={native_barrier_counts:?}, missed={interpreted_native_work}"
