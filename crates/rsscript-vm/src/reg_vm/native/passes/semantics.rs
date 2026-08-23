@@ -526,6 +526,25 @@ pub(super) fn native_instr_semantics(instr: &RegInstr) -> NativeInstrSemantics {
     }
 }
 
+/// Exact register footprint used by the conservative scalar continuation
+/// marshaller. `None` means the instruction has an intentionally conservative
+/// all-register footprint and therefore cannot enter this slice.
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn native_continuation_registers(instr: &RegInstr) -> Option<Vec<usize>> {
+    let semantics = native_instr_semantics(instr);
+    let (RegFootprint::Some(mut reads), RegFootprint::Some(writes)) =
+        (semantics.reads, semantics.writes)
+    else {
+        return None;
+    };
+    for reg in writes {
+        if !reads.contains(&reg) {
+            reads.push(reg);
+        }
+    }
+    Some(reads)
+}
+
 /// Whether an instruction is in the *native* JIT subset (integer/boolean/control
 /// core, no heap/calls/async/floats). Tighter than [`jit_supported_instruction`].
 #[cfg(feature = "native-jit")]

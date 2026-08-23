@@ -45,7 +45,10 @@ explicit trusted/unbounded execution mode until accounting parity is implemented
   continuation slice admits bounded scalar CFG regions with branches, loops, and
   multiple normal exits around non-`mut` `CallKnown` barriers and function
   returns. Heap values, async, Provider, and resource barriers remain
-  interpreter-owned until their contracts are added.
+  interpreter-owned until their contracts are added. Unused heap registers may
+  coexist in the VM frame: continuation marshalling validates only the exact
+  register footprint of the selected scalar region, so scalar work after an
+  interpreter-materialized aggregate can re-enter native code safely.
 - Structural compilation work is bounded by `JitLimits` before Cranelift code
   generation. Instruction, register, CFG-edge, operand, analysis-word, deopt,
   memo-scope, callee, and recursive-group counts have deterministic limits.

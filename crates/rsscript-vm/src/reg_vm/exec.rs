@@ -1373,10 +1373,9 @@ impl RegVm {
                 }
             }
 
-            // Mixed-mode continuation tier: after whole-function native has first
-            // refusal, run a conservative scalar region and return normally to the
-            // VM immediately before its barrier. This also handles caller
-            // continuations after an interpreted `CallKnown` returns (`ip > 0`).
+            // Give mixed-mode regions first refusal before tier-0 consumes a fresh
+            // frame. The same cached probe also runs inside the interpreter loop
+            // below so VM-owned barriers can re-enter their continuation.
             #[cfg(feature = "native-jit")]
             if self.native.is_some() && self.try_continuation_region(&func, base, ip) {
                 continue 'frames;
@@ -1394,6 +1393,9 @@ impl RegVm {
             };
             #[cfg(not(feature = "native-jit"))]
             let osr_pre_candidate: Option<usize> = None;
+            #[cfg(feature = "native-jit")]
+            let has_continuation_region =
+                self.native.is_some() && self.has_continuation_region(&func);
 
             // Tier-0 JIT: a fresh JIT-eligible frame runs via the specializing
             // executor (which reuses the interpreter's semantics), then completes
@@ -1401,6 +1403,16 @@ impl RegVm {
             // they are always entered at `ip == 0`.
             if self.jit_enabled
                 && ip == 0
+                && {
+                    #[cfg(feature = "native-jit")]
+                    {
+                        !has_continuation_region
+                    }
+                    #[cfg(not(feature = "native-jit"))]
+                    {
+                        true
+                    }
+                }
                 && {
                     #[cfg(feature = "native-jit")]
                     {
@@ -1451,6 +1463,18 @@ impl RegVm {
             let _osr_candidate: Option<usize> = None;
 
             while let Some(instr) = func.code.get(ip) {
+                // Mixed-mode continuation tier. Structural plans (including
+                // negative results) are cached by function/IP, so this probe stays
+                // cheap while allowing the VM to re-enter native code immediately
+                // after it executes an aggregate/call/async-style barrier.
+                #[cfg(feature = "native-jit")]
+                if self.native.is_some() {
+                    self.frames.last_mut().expect("active frame").ip = ip;
+                    if self.try_continuation_region(&func, base, ip) {
+                        continue 'frames;
+                    }
+                }
+
                 // At most four comparisons are performed for candidate functions.
                 // Each matching header charges and probes only its own RegionKey.
                 #[cfg(feature = "native-jit")]

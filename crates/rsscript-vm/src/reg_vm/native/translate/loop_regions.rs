@@ -52,6 +52,7 @@ pub(in crate::reg_vm) struct ContinuationEntry {
     pub(in crate::reg_vm) entry: usize,
     pub(in crate::reg_vm) exits: BTreeMap<usize, NativeBarrierReason>,
     pub(in crate::reg_vm) n_jit_regs: usize,
+    pub(in crate::reg_vm) active_regs: Vec<bool>,
     pub(in crate::reg_vm) reg_types: Vec<NativeTy>,
     pub(in crate::reg_vm) written_regs: Vec<bool>,
 }
@@ -132,7 +133,7 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
     func: &RegFunction,
     region: &ContinuationRegion,
     param_native_types: &[Option<NativeTy>],
-) -> Option<(vm_jit::JitFunction, Vec<NativeTy>, Vec<bool>)> {
+) -> Option<(vm_jit::JitFunction, Vec<bool>, Vec<NativeTy>, Vec<bool>)> {
     if region.entry >= func.code.len() || region.included.len() != func.code.len() {
         return None;
     }
@@ -142,6 +143,15 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
             *instr = RegInstr::RuntimeError {
                 message: "native continuation boundary".to_string(),
             };
+        }
+    }
+    let mut active_regs = vec![false; func.regs];
+    for (ip, instr) in func.code.iter().enumerate() {
+        if !region.included[ip] {
+            continue;
+        }
+        for reg in native_continuation_registers(instr)? {
+            *active_regs.get_mut(reg)? = true;
         }
     }
     let immutable_leaf_params = vec![false; func.params];
@@ -181,7 +191,7 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
             exit_id: u32::try_from(exit).ok()?,
         };
     }
-    Some((jit_fn, reg_types, written_regs))
+    Some((jit_fn, active_regs, reg_types, written_regs))
 }
 
 #[cfg(all(test, feature = "native-jit"))]

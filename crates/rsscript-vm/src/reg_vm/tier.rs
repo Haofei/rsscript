@@ -1450,16 +1450,45 @@ impl RegVm {
         {
             return false;
         }
-        let Some(region) = detect_scalar_continuation_region(&func.code, entry_ip) else {
+        let function = self.jit_state.function_ordinal(func);
+        let region = {
+            let Some(native) = self.native.as_mut() else {
+                return false;
+            };
+            native
+                .continuation_plans
+                .entry((function, entry_ip))
+                .or_insert_with(|| detect_scalar_continuation_region(&func.code, entry_ip))
+                .clone()
+        };
+        let Some(region) = region else {
             return false;
         };
 
         // The first slice is scalar-only. Reject any initialized non-scalar frame
         // slot before translation/caching; later region slices can add heap table
         // and transaction support without weakening this boundary.
+        let region_active_regs = {
+            let mut active = vec![false; func.regs];
+            for (ip, instr) in func.code.iter().enumerate() {
+                if !region.included[ip] {
+                    continue;
+                }
+                let Some(regs) = native_continuation_registers(instr) else {
+                    return false;
+                };
+                for reg in regs {
+                    let Some(slot) = active.get_mut(reg) else {
+                        return false;
+                    };
+                    *slot = true;
+                }
+            }
+            active
+        };
         let shape = ShapeKey::from_shapes((0..func.regs).map(|reg| {
             let slot = base + reg;
-            if !self.written.get(slot).copied().unwrap_or(false) {
+            if !region_active_regs[reg] || !self.written.get(slot).copied().unwrap_or(false) {
                 NativeParamShape::Unsupported
             } else {
                 native_param_shape(&self.stack[slot])
@@ -1467,7 +1496,8 @@ impl RegVm {
         }));
         let scalar_frame = (0..func.regs).all(|reg| {
             let slot = base + reg;
-            !self.written.get(slot).copied().unwrap_or(false)
+            !region_active_regs[reg]
+                || !self.written.get(slot).copied().unwrap_or(false)
                 || matches!(
                     self.stack.get(slot),
                     Some(VmValue::Int(_) | VmValue::Bool(_) | VmValue::Float(_))
@@ -1476,7 +1506,6 @@ impl RegVm {
         if !scalar_frame {
             return false;
         }
-        let function = self.jit_state.function_ordinal(func);
         let version_key = ContinuationVersionKey {
             function,
             entry: entry_ip,
@@ -1509,7 +1538,7 @@ impl RegVm {
                 }
                 let compiled =
                     translate_scalar_continuation_region(func, &region, &param_native_types)
-                        .and_then(|(jit_fn, reg_types, written_regs)| {
+                        .and_then(|(jit_fn, active_regs, reg_types, written_regs)| {
                             let admission =
                                 begin_native_compile(native, 1, NativeCodeTier::Baseline)?;
                             match native.baseline_module.compile_osr(
@@ -1541,6 +1570,7 @@ impl RegVm {
                                         entry: region.entry,
                                         exits: region.exits.clone(),
                                         n_jit_regs: jit_fn.n_regs as usize,
+                                        active_regs,
                                         reg_types,
                                         written_regs,
                                     })
@@ -1570,6 +1600,9 @@ impl RegVm {
         let mut window = vec![0i64; entry.n_jit_regs];
         let lens = vec![0i64; entry.n_jit_regs];
         for (reg, ty) in entry.reg_types.iter().copied().enumerate() {
+            if !entry.active_regs.get(reg).copied().unwrap_or(false) {
+                continue;
+            }
             let slot = base + reg;
             if !self.written.get(slot).copied().unwrap_or(false) {
                 continue;
@@ -1638,6 +1671,26 @@ impl RegVm {
                 .or_default() += 1;
         }
         true
+    }
+
+    #[cfg(feature = "native-jit")]
+    pub(super) fn has_continuation_region(&mut self, func: &RegFunction) -> bool {
+        let function = self.jit_state.function_ordinal(func);
+        let Some(native) = self.native.as_mut() else {
+            return false;
+        };
+        if let Some(&has_region) = native.continuation_functions.get(&function) {
+            return has_region;
+        }
+        let has_region = (0..func.code.len()).any(|entry| {
+            native
+                .continuation_plans
+                .entry((function, entry))
+                .or_insert_with(|| detect_scalar_continuation_region(&func.code, entry))
+                .is_some()
+        });
+        native.continuation_functions.insert(function, has_region);
+        has_region
     }
 
     #[cfg(feature = "native-jit")]

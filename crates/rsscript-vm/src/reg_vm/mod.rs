@@ -2018,6 +2018,10 @@ struct NativeState {
     /// Straight-line scalar continuation regions, keyed by exact VM entry IP and
     /// runtime register shape. `None` is a stable decline for that version.
     continuation_cache: HashMap<ContinuationVersionKey, Option<ContinuationEntry>>,
+    /// Structural CFG plans (including negative results) are shape-independent and
+    /// cached separately so probing each interpreter IP stays an O(1) lookup.
+    continuation_plans: HashMap<(usize, usize), Option<ContinuationRegion>>,
+    continuation_functions: HashMap<usize, bool>,
     /// Native self-recursion cache (native-call-ABI slice 3; generalized in Phase 2):
     /// per-function stable ordinal key compiled `CallSelf` entry, with the
     /// compiled parameter `NativeTy`s and return `NativeTy` so the dispatcher
@@ -6665,6 +6669,8 @@ impl NativeState {
             osr_promotion_work: HashMap::new(),
             osr_bail_counts: HashMap::new(),
             continuation_cache: HashMap::new(),
+            continuation_plans: HashMap::new(),
+            continuation_functions: HashMap::new(),
             #[cfg(feature = "jit-recursion-experimental")]
             self_recursive_native: HashMap::new(),
             #[cfg(feature = "jit-recursion-experimental")]
