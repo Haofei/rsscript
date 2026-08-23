@@ -1,3 +1,5 @@
+use super::*;
+
 /// The result of [`loop_local_sinkable_closures`].
 #[cfg(feature = "native-jit")]
 #[derive(Default)]

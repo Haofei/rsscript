@@ -1,18 +1,20 @@
+use super::*;
+
 #[cfg(feature = "native-jit")]
 #[derive(Clone, Debug, Default)]
-struct NativeInstrSemantics {
-    native_subset: bool,
-    dst: Option<usize>,
-    list_write: Option<usize>,
-    heap_write: bool,
-    field_slot_access: bool,
-    control: NativeControlFlow,
-    reads: RegFootprint,
-    writes: RegFootprint,
+pub(super) struct NativeInstrSemantics {
+    pub(super) native_subset: bool,
+    pub(super) dst: Option<usize>,
+    pub(super) list_write: Option<usize>,
+    pub(super) heap_write: bool,
+    pub(super) field_slot_access: bool,
+    pub(super) control: NativeControlFlow,
+    pub(super) reads: RegFootprint,
+    pub(super) writes: RegFootprint,
 }
 
 #[cfg(feature = "native-jit")]
-fn native_instr_semantics(instr: &RegInstr) -> NativeInstrSemantics {
+pub(super) fn native_instr_semantics(instr: &RegInstr) -> NativeInstrSemantics {
     use RegFootprint::Some as S;
 
     let list_write = match instr {

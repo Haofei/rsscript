@@ -183,10 +183,6 @@ struct IntrinsicDescriptor {
     /// Whether the intrinsic can be emitted directly in the native subset. The shape
     /// check stays at the call site.
     native_lowerable: bool,
-    /// RESERVED for the future view work (zero-copy slice/borrow lowering). Set
-    /// `false` for every intrinsic today; it exists only so the table shape is right
-    /// for lever-2 / view consumers. No site reads it yet.
-    view_capable: bool,
     /// If `Some`, this intrinsic is one of the six expandable Option/Result
     /// combinators, with its concrete lowering kind. The combinator-expansion pass
     /// uses this for *recognition*; it keeps the per-kind match/construct emission.
@@ -230,7 +226,6 @@ impl Default for IntrinsicDescriptor {
             effect: IntrinsicEffect::Allocate,
             can_fold: false,
             native_lowerable: false,
-            view_capable: false,
             combinator_kind: None,
             string_fold_role: None,
             bytes_fold_role: None,

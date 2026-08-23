@@ -1,3 +1,5 @@
+use super::*;
+
 /// Static type of a register in the native-JIT subset: every register is an
 /// unboxed `i64` holding either an `Int` or a `Bool` (`0`/`1`).
 #[cfg(feature = "native-jit")]

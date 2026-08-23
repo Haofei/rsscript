@@ -1,3 +1,5 @@
+use super::*;
+
 #[cfg(feature = "native-jit")]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum NativeFact<T: Copy + Eq> {
@@ -224,7 +226,7 @@ fn native_jit_heap_fact_dst(instr: &vm_jit::JitInstr) -> Option<u32> {
 
 #[cfg(feature = "native-jit")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-enum NativeControlFlow {
+pub(super) enum NativeControlFlow {
     #[default]
     Fallthrough,
     Jump(usize),
@@ -240,7 +242,7 @@ enum NativeControlFlow {
 
 #[cfg(feature = "native-jit")]
 impl NativeControlFlow {
-    fn successors(self, ip: usize, code_len: usize, mut push: impl FnMut(usize)) {
+    pub(super) fn successors(self, ip: usize, code_len: usize, mut push: impl FnMut(usize)) {
         let fallthrough = ip + 1;
         match self {
             NativeControlFlow::Fallthrough => {
@@ -263,7 +265,7 @@ impl NativeControlFlow {
         }
     }
 
-    fn is_boundary(self) -> bool {
+    pub(super) fn is_boundary(self) -> bool {
         !matches!(self, NativeControlFlow::Fallthrough)
     }
 }
@@ -281,14 +283,19 @@ pub(in crate::reg_vm) enum RegFootprint {
 }
 
 #[cfg(feature = "native-jit")]
-fn native_instr_successors(instr: &RegInstr, ip: usize, code_len: usize, push: impl FnMut(usize)) {
+pub(super) fn native_instr_successors(
+    instr: &RegInstr,
+    ip: usize,
+    code_len: usize,
+    push: impl FnMut(usize),
+) {
     native_instr_semantics(instr)
         .control
         .successors(ip, code_len, push);
 }
 
 #[cfg(feature = "native-jit")]
-fn native_instr_is_control_boundary(instr: &RegInstr) -> bool {
+pub(super) fn native_instr_is_control_boundary(instr: &RegInstr) -> bool {
     native_instr_semantics(instr).control.is_boundary()
 }
 
@@ -392,7 +399,7 @@ impl NativeRegionCfg {
         out
     }
 
-    fn reachable_mask(&self) -> Vec<bool> {
+    pub(super) fn reachable_mask(&self) -> Vec<bool> {
         let mut reachable = vec![false; self.exit - self.entry];
         for ip in self.reachable_ips() {
             if let Some(slot) = self.slot(ip) {
@@ -701,7 +708,7 @@ pub(in crate::reg_vm) struct NativeRegionAnalysis {
     values: NativeRegionValueFacts,
     liveness: NativeRegionLiveness,
     effects: NativeRegionEffects,
-    global_def_counts: Option<Vec<usize>>,
+    pub(super) global_def_counts: Option<Vec<usize>>,
     region_def_counts: Option<Vec<usize>>,
 }
 
@@ -844,7 +851,7 @@ impl NativeRegionAnalysis {
             .alias_class_readonly_for_list_slice(code, self.n_regs, slice_reg)
     }
 
-    fn mark_external_writes(&self, code: &[RegInstr], mask: &mut [bool]) -> Option<()> {
+    pub(super) fn mark_external_writes(&self, code: &[RegInstr], mask: &mut [bool]) -> Option<()> {
         if mask.len() < self.n_regs {
             return None;
         }
@@ -866,21 +873,21 @@ impl NativeRegionAnalysis {
         Some(())
     }
 
-    fn global_def_count(&self, reg: usize) -> Option<usize> {
+    pub(super) fn global_def_count(&self, reg: usize) -> Option<usize> {
         if reg >= self.n_regs {
             return None;
         }
         Some(*self.global_def_counts.as_ref()?.get(reg)?)
     }
 
-    fn region_def_count(&self, reg: usize) -> Option<usize> {
+    pub(super) fn region_def_count(&self, reg: usize) -> Option<usize> {
         if reg >= self.n_regs {
             return None;
         }
         Some(*self.region_def_counts.as_ref()?.get(reg)?)
     }
 
-    fn single_def_ip_of(&self, code: &[RegInstr], reg: usize) -> Option<usize> {
+    pub(super) fn single_def_ip_of(&self, code: &[RegInstr], reg: usize) -> Option<usize> {
         if self.global_def_count(reg)? != 1 {
             return None;
         }
@@ -894,7 +901,7 @@ impl NativeRegionAnalysis {
         None
     }
 
-    fn writer_ips_of(&self, code: &[RegInstr], reg: usize) -> Option<Vec<usize>> {
+    pub(super) fn writer_ips_of(&self, code: &[RegInstr], reg: usize) -> Option<Vec<usize>> {
         if reg >= self.n_regs {
             return None;
         }
@@ -912,7 +919,7 @@ impl NativeRegionAnalysis {
         Some(writers)
     }
 
-    fn mark_external_reads_touching(
+    pub(super) fn mark_external_reads_touching(
         &self,
         code: &[RegInstr],
         source: &[bool],
@@ -939,7 +946,11 @@ impl NativeRegionAnalysis {
         Some(())
     }
 
-    fn close_region_move_aliases(&self, code: &[RegInstr], mask: &mut [bool]) -> Option<()> {
+    pub(super) fn close_region_move_aliases(
+        &self,
+        code: &[RegInstr],
+        mask: &mut [bool],
+    ) -> Option<()> {
         if mask.len() < self.n_regs {
             return None;
         }
@@ -962,7 +973,11 @@ impl NativeRegionAnalysis {
         Some(())
     }
 
-    fn close_reachable_move_aliases(&self, code: &[RegInstr], mask: &mut [bool]) -> Option<()> {
+    pub(super) fn close_reachable_move_aliases(
+        &self,
+        code: &[RegInstr],
+        mask: &mut [bool],
+    ) -> Option<()> {
         if mask.len() < self.n_regs {
             return None;
         }
@@ -1004,7 +1019,10 @@ impl NativeRegionAnalysis {
         Some(mask)
     }
 
-    fn reachable_heap_read_defs_closed_under_moves(&self, code: &[RegInstr]) -> Option<Vec<bool>> {
+    pub(super) fn reachable_heap_read_defs_closed_under_moves(
+        &self,
+        code: &[RegInstr],
+    ) -> Option<Vec<bool>> {
         self.reachable_defs_closed_under_moves(code, |instr| match instr {
             RegInstr::GetFieldSlot { dst, .. } | RegInstr::ListGet { dst, .. } => Some(*dst),
             _ => None,
@@ -1021,7 +1039,10 @@ impl NativeRegionAnalysis {
         })
     }
 
-    fn native_readable_or_sinkable_closure_operands(&self, code: &[RegInstr]) -> Option<Vec<bool>> {
+    pub(super) fn native_readable_or_sinkable_closure_operands(
+        &self,
+        code: &[RegInstr],
+    ) -> Option<Vec<bool>> {
         let mut heap_reads = self.reachable_heap_read_defs_closed_under_moves(code)?;
         let make_closures = self.reachable_make_closure_defs_closed_under_moves(code)?;
         for (dst, src) in heap_reads.iter_mut().zip(make_closures) {
@@ -1030,7 +1051,7 @@ impl NativeRegionAnalysis {
         Some(heap_reads)
     }
 
-    fn forward_definite_regs(
+    pub(super) fn forward_definite_regs(
         &self,
         code: &[RegInstr],
         transfer: impl FnMut(usize, &RegInstr, &mut [bool]) -> Option<()>,

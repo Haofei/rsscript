@@ -1,3 +1,5 @@
+use super::*;
+
 /// Like [`native_callee_inlinable`] but permits a **capturing** closure callee
 /// (OSR × profile-guided inlining): every capture must be materialized as a scalar at the inline site
 /// (the gate enforces scalarity via the profile's `captures_all_scalar` bit), so

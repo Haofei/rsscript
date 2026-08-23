@@ -14,12 +14,19 @@ use std::collections::BTreeSet;
 use super::super::*;
 use super::*;
 
-include!("passes/intrinsics.rs");
-include!("passes/facts.rs");
-include!("passes/semantics.rs");
-include!("passes/region_optimization.rs");
-include!("passes/scalar_replacement.rs");
-include!("passes/inlining.rs");
+mod facts;
+mod inlining;
+mod intrinsics;
+mod region_optimization;
+mod scalar_replacement;
+mod semantics;
+
+pub(in crate::reg_vm) use facts::*;
+pub(in crate::reg_vm) use inlining::*;
+pub(in crate::reg_vm) use intrinsics::*;
+pub(in crate::reg_vm) use region_optimization::*;
+pub(in crate::reg_vm) use scalar_replacement::*;
+pub(in crate::reg_vm) use semantics::*;
 
 #[cfg(all(test, feature = "native-jit"))]
 mod architecture_tests {
@@ -31,10 +38,12 @@ mod architecture_tests {
         let scalar_replacement = include_str!("passes/scalar_replacement.rs");
         let inlining = include_str!("passes/inlining.rs");
 
-        assert!(root.contains("include!(\"passes/facts.rs\")"));
-        assert!(root.contains("include!(\"passes/semantics.rs\")"));
-        assert!(root.contains("include!(\"passes/scalar_replacement.rs\")"));
-        assert!(root.contains("include!(\"passes/inlining.rs\")"));
+        assert!(root.contains("mod facts;"));
+        assert!(root.contains("mod semantics;"));
+        assert!(root.contains("mod scalar_replacement;"));
+        assert!(root.contains("mod inlining;"));
+        let legacy_include = ["include", "!("].concat();
+        assert!(!root.contains(&legacy_include));
         assert!(facts.contains("enum NativeFact"));
         assert!(semantics.contains("struct NativeInstrSemantics"));
         assert!(scalar_replacement.contains("native_scalar_replace_two_armed_results_in_region"));

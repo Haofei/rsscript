@@ -1,3 +1,5 @@
+use super::*;
+
 /// Two-armed scalar `Result` dissolution (heap-aware deopt #7 follow-up). Companion to
 /// [`native_scalar_replace_results_in_region`]'s always-`Ok` path: handles a Result
 /// constructed as EITHER `Ok(scalar)` or `Err(scalar)` in-region and consumed (matched)
@@ -22,7 +24,7 @@
 /// needs the extended deopt ABI (carrying Handle payloads) for the live-after case.
 /// Verified by probe 2026-06-28: same-typed arms OSR; `Result<Int,String>` declines.
 #[cfg(feature = "native-jit")]
-fn native_scalar_replace_two_armed_results_in_region(
+pub(super) fn native_scalar_replace_two_armed_results_in_region(
     code: &[RegInstr],
     n_regs: usize,
     header: usize,
