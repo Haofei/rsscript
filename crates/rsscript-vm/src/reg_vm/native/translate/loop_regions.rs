@@ -109,6 +109,68 @@ pub(in crate::reg_vm) struct OsrLoop {
     pub(in crate::reg_vm) exit: usize,
 }
 
+/// Canonical, source-bytecode loop facts shared by OSR planning and the
+/// experimental helper-hoist analysis. Keeping this projection next to the
+/// single natural-loop recognizer prevents each optimization from inventing a
+/// subtly different meaning of header, latch, preheader, and exit.
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::reg_vm) struct CanonicalLoopFacts {
+    pub(in crate::reg_vm) region: OsrLoop,
+    /// The unique predecessor outside the loop, when one exists. Function-entry
+    /// loops legitimately have no preheader; multiple outside predecessors are
+    /// rejected by the canonical single-entry recognizer.
+    pub(in crate::reg_vm) preheader: Option<usize>,
+    /// Conditional branch that owns the loop's sole normal exit.
+    pub(in crate::reg_vm) condition: usize,
+    /// Every in-loop CFG edge returning to `region.header`, in source order.
+    pub(in crate::reg_vm) latches: Box<[usize]>,
+    /// Normal successor targets outside the loop. The current supported shape
+    /// has exactly one, but retaining the set makes the fact explicit.
+    pub(in crate::reg_vm) exits: Box<[usize]>,
+    pub(in crate::reg_vm) induction: Option<CanonicalInductionVariable>,
+}
+
+/// Conservative affine induction variable recognized from one self-update and
+/// the canonical header comparison. `constant_step` is present only when the
+/// step register has a unique dominating `LoadInt` before the loop and is never
+/// written in the loop.
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::reg_vm) struct CanonicalInductionVariable {
+    pub(in crate::reg_vm) reg: usize,
+    pub(in crate::reg_vm) bound_reg: usize,
+    pub(in crate::reg_vm) update_ip: usize,
+    pub(in crate::reg_vm) step_reg: usize,
+    pub(in crate::reg_vm) constant_step: Option<i64>,
+}
+
+/// The stable reason a canonical loop is not even a research candidate for x2
+/// scalar unrolling. Production code never unrolls from this verdict: source
+/// step accounting, exact overflow/deopt points, and a controlled performance
+/// baseline must be proven before a transform is enabled.
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::reg_vm) enum ScalarUnrollResearchDecision {
+    Candidate,
+    Decline(&'static str),
+}
+
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(in crate::reg_vm) struct LoopOptimizationEvidence {
+    pub(in crate::reg_vm) canonical_loops: u64,
+    pub(in crate::reg_vm) unique_preheaders: u64,
+    pub(in crate::reg_vm) induction_variables: u64,
+    pub(in crate::reg_vm) unroll_research_candidates: u64,
+    pub(in crate::reg_vm) unroll_declines: BTreeMap<String, u64>,
+    /// The deliberately linear analysis budget was exhausted. Facts collected
+    /// before exhaustion remain conservative, but telemetry must expose that it
+    /// is a lower bound rather than silently presenting a partial scan as exact.
+    pub(in crate::reg_vm) analysis_limit_reached: bool,
+    pub(in crate::reg_vm) analysis_work_units: u64,
+}
+
 #[cfg(feature = "native-jit")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::reg_vm) struct OsrDerivedLiveIn {
@@ -365,6 +427,26 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
     if region.entry >= func.code.len() || region.included.len() != func.code.len() {
         return None;
     }
+    let typed_region = TypedRegion::derive(func, facts, &region.included)?;
+    let expected_field_accesses = func
+        .code
+        .iter()
+        .enumerate()
+        .filter(|(ip, instruction)| {
+            region.included[*ip]
+                && matches!(
+                    instruction,
+                    RegInstr::GetFieldSlot { .. } | RegInstr::SetFieldSlot { .. }
+                )
+        })
+        .count();
+    if typed_region.field_accesses().len() != expected_field_accesses {
+        return None;
+    }
+    let virtual_objects = VirtualObjectAnalysis::derive(func, &typed_region)?;
+    if !virtual_objects.is_well_formed(func, &typed_region) {
+        return None;
+    }
     let mut synthetic = func.code.clone();
     for (ip, instr) in synthetic.iter_mut().enumerate() {
         if !region.included[ip] {
@@ -458,9 +540,14 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
     let compact_slots = ordered_vm_regs
         .iter()
         .map(|reg| {
+            let typed = typed_region.value(*reg)?;
+            let ty = *reg_types.get(*reg)?;
+            if typed.storage.native_ty().is_some_and(|proved| proved != ty) {
+                return None;
+            }
             Some(ContinuationSlot {
                 vm_reg: *reg,
-                ty: *reg_types.get(*reg)?,
+                ty,
                 written: written_regs.get(*reg).copied().unwrap_or(false),
             })
         })
@@ -822,136 +909,618 @@ pub(in crate::reg_vm) struct OsrEntry {
 /// [`detect_single_natural_loop`] for the selected `[header, exit)` region, but it
 /// does not reject merely because a setup loop exists before the hot loop.
 #[cfg(feature = "native-jit")]
+fn canonical_induction_variable(
+    code: &[RegInstr],
+    header: usize,
+    exit: usize,
+    condition: usize,
+    budget: &mut CanonicalLoopWorkBudget,
+) -> Option<CanonicalInductionVariable> {
+    let RegInstr::JumpIfIntCompare { lhs, rhs, .. } = code.get(condition)? else {
+        return None;
+    };
+    for &(reg, bound_reg) in &[(*lhs, *rhs), (*rhs, *lhs)] {
+        let mut update = None;
+        let mut writes = 0usize;
+        for (ip, instr) in code.iter().enumerate().take(exit).skip(header) {
+            if !budget.charge(1) {
+                return None;
+            }
+            match instr_written_reg(instr) {
+                RegFootprint::Some(written) if written.contains(&reg) => writes += 1,
+                RegFootprint::All => return None,
+                RegFootprint::Some(_) => {}
+            }
+            let candidate = match instr {
+                RegInstr::AddInt { dst, lhs, rhs } if *dst == reg && *lhs == reg => {
+                    Some((*rhs, false))
+                }
+                RegInstr::AddInt { dst, lhs, rhs } if *dst == reg && *rhs == reg => {
+                    Some((*lhs, false))
+                }
+                RegInstr::SubInt { dst, lhs, rhs } if *dst == reg && *lhs == reg => {
+                    Some((*rhs, true))
+                }
+                _ => None,
+            };
+            if let Some((step_reg, negate)) = candidate
+                && update.replace((ip, step_reg, negate)).is_some()
+            {
+                return None;
+            }
+        }
+        let Some((update_ip, step_reg, negate)) = update else {
+            continue;
+        };
+        if writes != 1
+            || register_written_in(code, step_reg, header, exit, budget)
+            || register_written_in(code, bound_reg, header, exit, budget)
+        {
+            continue;
+        }
+        let constant_step =
+            dominating_int_constant(code, step_reg, header, budget).and_then(|step| {
+                if negate {
+                    step.checked_neg()
+                } else {
+                    Some(step)
+                }
+            });
+        return Some(CanonicalInductionVariable {
+            reg,
+            bound_reg,
+            update_ip,
+            step_reg,
+            constant_step,
+        });
+    }
+    None
+}
+
+#[cfg(feature = "native-jit")]
+fn register_written_in(
+    code: &[RegInstr],
+    reg: usize,
+    start: usize,
+    end: usize,
+    budget: &mut CanonicalLoopWorkBudget,
+) -> bool {
+    for instr in code.iter().take(end).skip(start) {
+        if !budget.charge(1) {
+            // Exhaustion is a conservative decline, never permission to optimize.
+            return true;
+        }
+        if match instr_written_reg(instr) {
+            RegFootprint::Some(written) => written.contains(&reg),
+            RegFootprint::All => true,
+        } {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(feature = "native-jit")]
+fn dominating_int_constant(
+    code: &[RegInstr],
+    reg: usize,
+    before: usize,
+    budget: &mut CanonicalLoopWorkBudget,
+) -> Option<i64> {
+    let mut value = None;
+    for instr in code.iter().take(before) {
+        if !budget.charge(1) {
+            return None;
+        }
+        match instr_written_reg(instr) {
+            RegFootprint::Some(written) if written.contains(&reg) => {
+                value = match instr {
+                    RegInstr::LoadInt { dst, value } if *dst == reg => Some(*value),
+                    _ => None,
+                };
+            }
+            RegFootprint::All => value = None,
+            RegFootprint::Some(_) => {}
+        }
+    }
+    value
+}
+
+/// Candidate-loop analysis is deliberately bounded by a multiple of source
+/// instructions. Building the CFG and predecessor table is one linear pass; all
+/// candidate-specific scans debit this budget, so many nested/backedge headers
+/// cannot turn diagnostics collection into an unbounded quadratic operation.
+#[cfg(feature = "native-jit")]
+const CANONICAL_LOOP_WORK_PER_INSTRUCTION: usize = 32;
+#[cfg(feature = "native-jit")]
+const MAX_CANONICAL_LOOP_WORK_UNITS: usize = 4_000_000;
+
+#[cfg(feature = "native-jit")]
+#[derive(Debug)]
+struct CanonicalLoopWorkBudget {
+    remaining: usize,
+    consumed: usize,
+    exhausted: bool,
+}
+
+#[cfg(feature = "native-jit")]
+impl CanonicalLoopWorkBudget {
+    fn for_code(code: &[RegInstr]) -> Self {
+        let limit = code
+            .len()
+            .checked_mul(CANONICAL_LOOP_WORK_PER_INSTRUCTION)
+            .unwrap_or(MAX_CANONICAL_LOOP_WORK_UNITS)
+            .min(MAX_CANONICAL_LOOP_WORK_UNITS);
+        Self {
+            remaining: limit,
+            consumed: 0,
+            exhausted: false,
+        }
+    }
+
+    fn charge(&mut self, units: usize) -> bool {
+        let Some(remaining) = self.remaining.checked_sub(units) else {
+            self.exhausted = true;
+            self.remaining = 0;
+            return false;
+        };
+        let Some(consumed) = self.consumed.checked_add(units) else {
+            self.exhausted = true;
+            self.remaining = 0;
+            return false;
+        };
+        self.remaining = remaining;
+        self.consumed = consumed;
+        true
+    }
+}
+
+/// One immutable CFG index reused for every candidate header in a function.
+/// `successors` retains the synthetic `code.len()` exit target; predecessors are
+/// materialized once so single-entry checks do not rescan all instructions.
+#[cfg(feature = "native-jit")]
+#[derive(Debug)]
+struct CanonicalLoopGraph {
+    successors: Vec<Vec<usize>>,
+    predecessors: Vec<Vec<usize>>,
+    backedges_by_header: Vec<Vec<usize>>,
+    headers: Vec<usize>,
+}
+
+#[cfg(feature = "native-jit")]
+impl CanonicalLoopGraph {
+    fn build(code: &[RegInstr]) -> Self {
+        let n = code.len();
+        let mut successors = vec![Vec::new(); n];
+        let mut predecessors = vec![Vec::new(); n.saturating_add(1)];
+        let mut backedges_by_header = vec![Vec::new(); n];
+        for (ip, instr) in code.iter().enumerate() {
+            native_instr_successors(instr, ip, n, |target| {
+                if target <= n {
+                    successors[ip].push(target);
+                }
+            });
+            successors[ip].sort_unstable();
+            successors[ip].dedup();
+            for &target in &successors[ip] {
+                predecessors[target].push(ip);
+                if target < n && target <= ip {
+                    backedges_by_header[target].push(ip);
+                }
+            }
+        }
+        let headers = backedges_by_header
+            .iter()
+            .enumerate()
+            .filter_map(|(header, latches)| (!latches.is_empty()).then_some(header))
+            .collect();
+        Self {
+            successors,
+            predecessors,
+            backedges_by_header,
+            headers,
+        }
+    }
+
+    fn facts_at(
+        &self,
+        code: &[RegInstr],
+        header: usize,
+        budget: &mut CanonicalLoopWorkBudget,
+    ) -> Option<CanonicalLoopFacts> {
+        let n = code.len();
+        let latches = self.backedges_by_header.get(header)?;
+        let body_end = latches.iter().copied().max()?;
+
+        let mut cond_ip = header;
+        while cond_ip < n {
+            if !budget.charge(1) {
+                return None;
+            }
+            if matches!(
+                code[cond_ip],
+                RegInstr::Jump { .. }
+                    | RegInstr::JumpIfBool { .. }
+                    | RegInstr::JumpIfIntCompare { .. }
+                    | RegInstr::MatchOption { .. }
+                    | RegInstr::MatchResult { .. }
+                    | RegInstr::MatchVariant { .. }
+                    | RegInstr::MatchMapGet { .. }
+                    | RegInstr::MatchSortedMapGet { .. }
+                    | RegInstr::Return { .. }
+                    | RegInstr::RuntimeError { .. }
+            ) {
+                break;
+            }
+            cond_ip += 1;
+        }
+        if cond_ip > body_end {
+            return None;
+        }
+        let exit = match code.get(cond_ip)? {
+            RegInstr::JumpIfIntCompare { target, .. } | RegInstr::JumpIfBool { target, .. } => {
+                *target
+            }
+            _ => return None,
+        };
+        if exit <= body_end || exit > n {
+            return None;
+        }
+
+        let in_region = |target: usize| target >= header && target < exit;
+        for (ip, instr) in code.iter().enumerate().take(body_end + 1).skip(header) {
+            if !budget.charge(1) {
+                return None;
+            }
+            match instr {
+                RegInstr::Jump { target } if !in_region(*target) => return None,
+                RegInstr::JumpIfBool { target, .. } | RegInstr::JumpIfIntCompare { target, .. }
+                    if ip != cond_ip && !in_region(*target) =>
+                {
+                    return None;
+                }
+                RegInstr::Return { .. } => return None,
+                RegInstr::MatchOption {
+                    some_ip, none_ip, ..
+                } if !in_region(*some_ip) || !in_region(*none_ip) => return None,
+                _ => {}
+            }
+        }
+
+        // No edge outside the region may enter its interior. The predecessor
+        // table makes this proportional to the region's incoming edges rather
+        // than another full-function scan for every header.
+        for target in header.saturating_add(1)..exit {
+            let incoming = self.predecessors.get(target)?;
+            if !budget.charge(incoming.len().max(1)) {
+                return None;
+            }
+            if incoming.iter().any(|source| !in_region(*source)) {
+                return None;
+            }
+        }
+
+        let outside_predecessors = self
+            .predecessors
+            .get(header)?
+            .iter()
+            .copied()
+            .filter(|source| !in_region(*source))
+            .collect::<Vec<_>>();
+        if !budget.charge(outside_predecessors.len().max(1)) || outside_predecessors.len() > 1 {
+            return None;
+        }
+
+        let mut exits = Vec::new();
+        for ip in header..exit {
+            let outgoing = self.successors.get(ip)?;
+            if !budget.charge(outgoing.len().max(1)) {
+                return None;
+            }
+            exits.extend(
+                outgoing
+                    .iter()
+                    .copied()
+                    .filter(|successor| !in_region(*successor)),
+            );
+        }
+        exits.sort_unstable();
+        exits.dedup();
+        if exits.as_slice() != [exit] {
+            return None;
+        }
+
+        let induction = canonical_induction_variable(code, header, exit, cond_ip, budget);
+        Some(CanonicalLoopFacts {
+            region: OsrLoop { header, exit },
+            preheader: outside_predecessors.first().copied(),
+            condition: cond_ip,
+            latches: latches.clone().into_boxed_slice(),
+            exits: exits.into_boxed_slice(),
+            induction,
+        })
+    }
+}
+
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn canonical_loop_at(
+    code: &[RegInstr],
+    header: usize,
+) -> Option<CanonicalLoopFacts> {
+    if header >= code.len() {
+        return None;
+    }
+    let graph = CanonicalLoopGraph::build(code);
+    let mut budget = CanonicalLoopWorkBudget::for_code(code);
+    graph.facts_at(code, header, &mut budget)
+}
+
+#[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn detect_natural_loop_at(
     code: &[RegInstr],
     header: usize,
 ) -> Option<OsrLoop> {
-    let n = code.len();
-    if header >= n {
-        return None;
-    }
-    let backedges = NativeRegionCfg::prefix(code, code.len())?.backedges_to(header);
-    if backedges.is_empty() {
-        return None;
-    }
-    let body_end = backedges.into_iter().max().unwrap();
+    canonical_loop_at(code, header).map(|facts| facts.region)
+}
 
-    let mut cond_ip = header;
-    while cond_ip < n
-        && !matches!(
-            code[cond_ip],
-            RegInstr::Jump { .. }
-                | RegInstr::JumpIfBool { .. }
-                | RegInstr::JumpIfIntCompare { .. }
-                | RegInstr::MatchOption { .. }
-                | RegInstr::MatchResult { .. }
-                | RegInstr::MatchVariant { .. }
-                | RegInstr::MatchMapGet { .. }
-                | RegInstr::MatchSortedMapGet { .. }
-                | RegInstr::Return { .. }
-                | RegInstr::RuntimeError { .. }
-        )
-    {
-        cond_ip += 1;
-    }
-    if cond_ip > body_end {
-        return None;
-    }
-    let exit = match &code[cond_ip] {
-        RegInstr::JumpIfIntCompare { target, .. } | RegInstr::JumpIfBool { target, .. } => *target,
-        _ => return None,
-    };
-    if exit <= body_end || exit > n {
-        return None;
-    }
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn detect_canonical_loops(code: &[RegInstr]) -> Vec<CanonicalLoopFacts> {
+    analyze_canonical_loops(code).facts
+}
 
-    for i in header..=body_end {
-        let in_region = |t: usize| t >= header && t < exit;
-        match &code[i] {
-            RegInstr::Jump { target } => {
-                if !in_region(*target) {
-                    return None;
-                }
-            }
-            RegInstr::JumpIfBool { target, .. } | RegInstr::JumpIfIntCompare { target, .. } => {
-                if i == cond_ip {
-                    continue;
-                }
-                if !in_region(*target) {
-                    return None;
-                }
-            }
-            RegInstr::Return { .. } => return None,
-            RegInstr::RuntimeError { .. } => {}
-            RegInstr::MatchOption {
-                some_ip, none_ip, ..
-            } if (!in_region(*some_ip) || !in_region(*none_ip)) => {
-                return None;
-            }
-            _ => {}
+#[cfg(feature = "native-jit")]
+#[derive(Debug)]
+struct CanonicalLoopAnalysisResult {
+    facts: Vec<CanonicalLoopFacts>,
+    work_units: usize,
+    limit_reached: bool,
+}
+
+#[cfg(feature = "native-jit")]
+fn analyze_canonical_loops(code: &[RegInstr]) -> CanonicalLoopAnalysisResult {
+    let graph = CanonicalLoopGraph::build(code);
+    let mut budget = CanonicalLoopWorkBudget::for_code(code);
+    let mut facts = Vec::new();
+    for &header in &graph.headers {
+        if budget.exhausted {
+            break;
+        }
+        if let Some(loop_facts) = graph.facts_at(code, header, &mut budget) {
+            facts.push(loop_facts);
         }
     }
-
-    for (i, instr) in code.iter().enumerate() {
-        if i >= header && i < exit {
-            continue;
-        }
-        let enters_interior = |t: usize| t > header && t < exit;
-        let bad = match instr {
-            RegInstr::Jump { target }
-            | RegInstr::JumpIfBool { target, .. }
-            | RegInstr::JumpIfIntCompare { target, .. } => enters_interior(*target),
-            RegInstr::MatchOption {
-                some_ip, none_ip, ..
-            }
-            | RegInstr::MatchMapGet {
-                some_ip, none_ip, ..
-            }
-            | RegInstr::MatchSortedMapGet {
-                some_ip, none_ip, ..
-            } => enters_interior(*some_ip) || enters_interior(*none_ip),
-            _ => false,
-        };
-        if bad {
-            return None;
-        }
+    CanonicalLoopAnalysisResult {
+        facts,
+        work_units: budget.consumed,
+        limit_reached: budget.exhausted,
     }
-    Some(OsrLoop { header, exit })
 }
 
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn detect_natural_loops(code: &[RegInstr]) -> Vec<OsrLoop> {
-    let mut headers = Vec::new();
-    for (i, instr) in code.iter().enumerate() {
-        let mut push_header = |target: usize| {
-            if target <= i && !headers.contains(&target) {
-                headers.push(target);
-            }
-        };
-        match instr {
-            RegInstr::MatchOption {
-                some_ip, none_ip, ..
-            }
-            | RegInstr::MatchMapGet {
-                some_ip, none_ip, ..
-            }
-            | RegInstr::MatchSortedMapGet {
-                some_ip, none_ip, ..
-            } => {
-                push_header(*some_ip);
-                push_header(*none_ip);
-            }
-            RegInstr::Jump { target }
-            | RegInstr::JumpIfBool { target, .. }
-            | RegInstr::JumpIfIntCompare { target, .. } => push_header(*target),
-            _ => {}
+    detect_canonical_loops(code)
+        .into_iter()
+        .map(|facts| facts.region)
+        .collect()
+}
+
+/// Strict research-only eligibility for x2 scalar unrolling. Even a
+/// `Candidate` is intentionally not transformed: duplicating instructions must
+/// preserve exact source-step charging, overflow/deopt resume points, and loop
+/// remainder semantics, and no controlled canonical workload has yet justified
+/// that additional correctness surface.
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn scalar_x2_unroll_research_decision(
+    code: &[RegInstr],
+    facts: &CanonicalLoopFacts,
+) -> ScalarUnrollResearchDecision {
+    const MAX_SCALAR_BODY_INSTRUCTIONS: usize = 12;
+    let OsrLoop { header, exit } = facts.region;
+    if facts.latches.len() != 1 || facts.exits.len() != 1 {
+        return ScalarUnrollResearchDecision::Decline("non_canonical_edges");
+    }
+    let Some(induction) = facts.induction else {
+        return ScalarUnrollResearchDecision::Decline("no_affine_induction");
+    };
+    if !matches!(induction.constant_step, Some(1) | Some(-1)) {
+        return ScalarUnrollResearchDecision::Decline("non_unit_constant_step");
+    }
+    if exit.saturating_sub(header) > MAX_SCALAR_BODY_INSTRUCTIONS {
+        return ScalarUnrollResearchDecision::Decline("body_too_large");
+    }
+    for (ip, instr) in code.iter().enumerate().take(exit).skip(header) {
+        if !matches!(native_lowering_class(instr), NativeLoweringClass::Direct) {
+            return ScalarUnrollResearchDecision::Decline("non_scalar_or_effectful");
+        }
+        let allowed_control = ip == facts.condition || facts.latches.contains(&ip);
+        if native_instr_is_control_boundary(instr) && !allowed_control {
+            return ScalarUnrollResearchDecision::Decline("internal_control_flow");
         }
     }
-    headers.sort_unstable();
-    headers
-        .into_iter()
-        .filter_map(|header| detect_natural_loop_at(code, header))
-        .collect()
+    ScalarUnrollResearchDecision::Candidate
+}
+
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn loop_optimization_evidence(code: &[RegInstr]) -> LoopOptimizationEvidence {
+    let mut evidence = LoopOptimizationEvidence::default();
+    let analysis = analyze_canonical_loops(code);
+    evidence.analysis_limit_reached = analysis.limit_reached;
+    evidence.analysis_work_units = u64::try_from(analysis.work_units).unwrap_or(u64::MAX);
+    for facts in analysis.facts {
+        evidence.canonical_loops = evidence.canonical_loops.saturating_add(1);
+        evidence.unique_preheaders = evidence
+            .unique_preheaders
+            .saturating_add(u64::from(facts.preheader.is_some()));
+        evidence.induction_variables = evidence
+            .induction_variables
+            .saturating_add(u64::from(facts.induction.is_some()));
+        match scalar_x2_unroll_research_decision(code, &facts) {
+            ScalarUnrollResearchDecision::Candidate => {
+                evidence.unroll_research_candidates =
+                    evidence.unroll_research_candidates.saturating_add(1);
+            }
+            ScalarUnrollResearchDecision::Decline(reason) => {
+                let count = evidence
+                    .unroll_declines
+                    .entry(reason.to_owned())
+                    .or_default();
+                *count = count.saturating_add(1);
+            }
+        }
+    }
+    evidence
+}
+
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn unit_loop_optimization_evidence(
+    unit: &RegUnit,
+) -> LoopOptimizationEvidence {
+    let mut combined = LoopOptimizationEvidence::default();
+    for function in &unit.functions {
+        let evidence = loop_optimization_evidence(&function.code);
+        combined.canonical_loops = combined
+            .canonical_loops
+            .saturating_add(evidence.canonical_loops);
+        combined.unique_preheaders = combined
+            .unique_preheaders
+            .saturating_add(evidence.unique_preheaders);
+        combined.induction_variables = combined
+            .induction_variables
+            .saturating_add(evidence.induction_variables);
+        combined.unroll_research_candidates = combined
+            .unroll_research_candidates
+            .saturating_add(evidence.unroll_research_candidates);
+        combined.analysis_limit_reached |= evidence.analysis_limit_reached;
+        combined.analysis_work_units = combined
+            .analysis_work_units
+            .saturating_add(evidence.analysis_work_units);
+        for (reason, count) in evidence.unroll_declines {
+            let total = combined.unroll_declines.entry(reason).or_default();
+            *total = total.saturating_add(count);
+        }
+    }
+    combined
+}
+
+#[cfg(all(test, feature = "native-jit"))]
+mod canonical_loop_tests {
+    use super::*;
+
+    fn counted_loop(step: i64) -> Vec<RegInstr> {
+        vec![
+            RegInstr::LoadInt { dst: 0, value: 0 },
+            RegInstr::LoadInt { dst: 1, value: 8 },
+            RegInstr::LoadInt {
+                dst: 2,
+                value: step,
+            },
+            RegInstr::JumpIfIntCompare {
+                lhs: 0,
+                rhs: 1,
+                op: RegIntCompare::Less,
+                expected: false,
+                target: 6,
+            },
+            RegInstr::AddInt {
+                dst: 0,
+                lhs: 0,
+                rhs: 2,
+            },
+            RegInstr::Jump { target: 3 },
+            RegInstr::Return { src: 0 },
+        ]
+    }
+
+    #[test]
+    fn canonical_facts_own_preheader_latch_exit_and_induction_identity() {
+        let code = counted_loop(1);
+        let facts = canonical_loop_at(&code, 3).expect("canonical counted loop");
+        assert_eq!(facts.region, OsrLoop { header: 3, exit: 6 });
+        assert_eq!(facts.preheader, Some(2));
+        assert_eq!(facts.condition, 3);
+        assert_eq!(&*facts.latches, &[5]);
+        assert_eq!(&*facts.exits, &[6]);
+        assert_eq!(
+            facts.induction,
+            Some(CanonicalInductionVariable {
+                reg: 0,
+                bound_reg: 1,
+                update_ip: 4,
+                step_reg: 2,
+                constant_step: Some(1),
+            })
+        );
+        assert_eq!(detect_natural_loop_at(&code, 3), Some(facts.region));
+    }
+
+    #[test]
+    fn scalar_unroll_is_research_only_and_declines_non_unit_steps() {
+        let unit = counted_loop(1);
+        let facts = canonical_loop_at(&unit, 3).unwrap();
+        assert_eq!(
+            scalar_x2_unroll_research_decision(&unit, &facts),
+            ScalarUnrollResearchDecision::Candidate
+        );
+        let evidence = loop_optimization_evidence(&unit);
+        assert_eq!(evidence.unroll_research_candidates, 1);
+
+        let non_unit = counted_loop(2);
+        let before = format!("{non_unit:?}");
+        let facts = canonical_loop_at(&non_unit, 3).unwrap();
+        assert_eq!(
+            scalar_x2_unroll_research_decision(&non_unit, &facts),
+            ScalarUnrollResearchDecision::Decline("non_unit_constant_step")
+        );
+        // The gate reports evidence only: it never rewrites the instruction
+        // stream, so exact source-step/deopt semantics remain unchanged.
+        assert_eq!(format!("{non_unit:?}"), before);
+    }
+
+    #[test]
+    fn many_backedge_headers_stop_at_the_linear_analysis_budget() {
+        const HALF: usize = 2_048;
+        let mut code = (0..HALF)
+            .map(|reg| RegInstr::LoadInt { dst: reg, value: 0 })
+            .collect::<Vec<_>>();
+        // Every trailing jump creates a different candidate header. A naive
+        // per-header CFG rebuild/forward scan performs quadratic work here.
+        code.extend((0..HALF).map(|target| RegInstr::Jump { target }));
+
+        let analysis = analyze_canonical_loops(&code);
+        let linear_limit = code
+            .len()
+            .checked_mul(CANONICAL_LOOP_WORK_PER_INSTRUCTION)
+            .unwrap()
+            .min(MAX_CANONICAL_LOOP_WORK_UNITS);
+        assert!(analysis.limit_reached);
+        assert!(analysis.work_units <= linear_limit);
+        assert!(analysis.facts.is_empty());
+
+        let evidence = loop_optimization_evidence(&code);
+        assert!(evidence.analysis_limit_reached);
+        assert!(evidence.analysis_work_units <= linear_limit as u64);
+    }
+
+    #[test]
+    fn work_budget_exhaustion_is_checked_and_fail_closed() {
+        let mut budget = CanonicalLoopWorkBudget {
+            remaining: 1,
+            consumed: usize::MAX,
+            exhausted: false,
+        };
+        assert!(!budget.charge(1), "consumed overflow must be rejected");
+        assert!(budget.exhausted);
+        assert_eq!(budget.remaining, 0);
+
+        let mut budget = CanonicalLoopWorkBudget {
+            remaining: 1,
+            consumed: 0,
+            exhausted: false,
+        };
+        assert!(!budget.charge(2), "remaining underflow must be rejected");
+        assert!(budget.exhausted);
+        assert_eq!(budget.remaining, 0);
+    }
 }
 
 /// Identify the single natural loop OSR will compile, **conservatively** (any

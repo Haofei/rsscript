@@ -27,6 +27,14 @@ cargo test --locked --release -p rsscript-sdk --features native-jit \
 ```
 
 The scorecard emits one `rsscript.native_jit_scorecard.v1` JSON object per case.
+It also emits one `rsscript.aot_jit_matrix.v1` record, validated against
+`aot-jit-matrix.schema.json`. The matrix records semantic parity, execution and
+compile time, transition counts, and explicit `null` values for metrics the
+current engine cannot report. The Core harness marks AOT as `not_measured`:
+the Rust/AOT backend lives in the experiments workspace and must contribute a
+measurement from its own controlled runner before any AOT/JIT performance
+comparison is claimed. `not_measured` is evidence of a missing measurement,
+not a zero-cost or unsupported engine.
 `mixed-mode-continuation` is the canonical barrier workload: it repeatedly
 executes scalar regions around an interpreter-owned aggregate boundary and guards
 against admitting region transitions that do not beat the interpreter end to end.

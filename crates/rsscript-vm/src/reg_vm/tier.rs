@@ -151,8 +151,11 @@ fn native_compile_direct_scalar_callee(
     callee_key: usize,
     stack: &mut std::collections::HashSet<usize>,
 ) -> Option<NativeCompiledCallee> {
+    let facts = Rc::clone(native.verified_facts.as_ref()?);
+    let callee_facts = facts.function(callee_key)?;
+    let instance = JitInstanceKey::from_facts(callee_key, callee_facts)?;
     let version_key = NativeVersionKey {
-        function: callee_key,
+        instance: instance.clone(),
         shape: ShapeKey::default(),
     };
     if let Some(cached) = native.cache.get(&version_key) {
@@ -160,7 +163,7 @@ fn native_compile_direct_scalar_callee(
             .as_ref()
             .and_then(native_compiled_entry_call_descriptor);
     }
-    if native.whole_shape_count(callee_key) >= MAX_NATIVE_SHAPE_VERSIONS {
+    if native.whole_shape_count(&instance) >= MAX_NATIVE_SHAPE_VERSIONS {
         return None;
     }
     if native_scalar_callee_pending_on_branch_profile(jit_state, callee) {
@@ -174,8 +177,6 @@ fn native_compile_direct_scalar_callee(
         native_compiled_call_sites_inner(jit_state, native, unit, callee, callee_key, stack);
     let profile = jit_state.profile(callee);
     let call_count = jit_state.call_count(callee);
-    let facts = Rc::clone(native.verified_facts.as_ref()?);
-    let callee_facts = facts.function(callee_key)?;
     let translated = if nested_call_sites.is_empty() {
         translate_to_native_jit(unit, callee, callee_facts, profile, call_count)
     } else {
@@ -264,9 +265,14 @@ fn native_compile_direct_scalar_callee(
         string_literals,
         precise_resume_safe,
     );
+    let first_static_instance = version_key.instance.type_arguments.is_known()
+        && !native.has_whole_instance(&version_key.instance);
     native.cache.insert(version_key, Some(entry));
     if native.collect_stats {
         native.stats.shape_versions += 1;
+        if first_static_instance {
+            native.stats.static_type_instances += 1;
+        }
     }
     stack.remove(&callee_key);
     Some(NativeCompiledCallee {
@@ -571,6 +577,14 @@ impl RegVm {
         let Some(function_facts) = verified_facts.function(native_key) else {
             return NativeAttempt::Fallback;
         };
+        let Some(instance) = JitInstanceKey::from_facts(native_key, function_facts) else {
+            if let Some(native) = self.native.as_mut()
+                && native.collect_stats
+            {
+                native.stats.static_instance_limit_fallbacks += 1;
+            }
+            return NativeAttempt::Fallback;
+        };
         let shape = ShapeKey::from_shapes((0..func.params).map(|index| {
             native_param_shape_with_fact(
                 self.reg(base + index),
@@ -582,7 +596,7 @@ impl RegVm {
             )
         }));
         let version_key = NativeVersionKey {
-            function: native_key,
+            instance: instance.clone(),
             shape,
         };
         // Phase 1: tiering + resolve (and lazily compile) the native function.
@@ -617,7 +631,15 @@ impl RegVm {
                     entry.clone()
                 }
                 None => {
-                    if native.whole_shape_count(native_key) >= MAX_NATIVE_SHAPE_VERSIONS {
+                    if native.whole_instance_count(native_key) >= MAX_JIT_INSTANCES_PER_FUNCTION
+                        && !native.has_whole_instance(&instance)
+                    {
+                        if native.collect_stats {
+                            native.stats.static_instance_limit_fallbacks += 1;
+                        }
+                        return NativeAttempt::Fallback;
+                    }
+                    if native.whole_shape_count(&instance) >= MAX_NATIVE_SHAPE_VERSIONS {
                         if native.collect_stats {
                             native.stats.shape_limit_fallbacks += 1;
                         }
@@ -793,6 +815,8 @@ impl RegVm {
                             None
                         }
                     };
+                    let first_static_instance = version_key.instance.type_arguments.is_known()
+                        && !native.has_whole_instance(&version_key.instance);
                     native.cache.insert(version_key.clone(), entry.clone());
                     if entry.is_some() {
                         native
@@ -803,6 +827,9 @@ impl RegVm {
                     }
                     if entry.is_some() && native.collect_stats {
                         native.stats.shape_versions += 1;
+                        if first_static_instance {
+                            native.stats.static_type_instances += 1;
+                        }
                     }
                     entry
                 }
@@ -1517,6 +1544,14 @@ impl RegVm {
         let Some(function_facts) = verified_facts.function(function) else {
             return false;
         };
+        let Some(instance) = JitInstanceKey::from_facts(function, function_facts) else {
+            if let Some(native) = self.native.as_mut()
+                && native.collect_stats
+            {
+                native.stats.static_instance_limit_fallbacks += 1;
+            }
+            return false;
+        };
         let is_candidate = {
             let Some(native) = self.native.as_mut() else {
                 return false;
@@ -1620,7 +1655,7 @@ impl RegVm {
             return false;
         }
         let version_key = ContinuationVersionKey {
-            function,
+            instance: instance.clone(),
             entry: entry_ip,
             shape,
             cancel_armed,
@@ -1672,10 +1707,19 @@ impl RegVm {
                 return false;
             };
             if !native.continuation_cache.contains_key(&version_key) {
+                if native.continuation_instance_count(function, entry_ip)
+                    >= MAX_JIT_INSTANCES_PER_FUNCTION
+                    && !native.has_continuation_instance(&instance, entry_ip)
+                {
+                    if native.collect_stats {
+                        native.stats.static_instance_limit_fallbacks += 1;
+                    }
+                    return false;
+                }
                 let versions = native
                     .continuation_cache
                     .keys()
-                    .filter(|key| key.function == function && key.entry == entry_ip)
+                    .filter(|key| key.instance == instance && key.entry == entry_ip)
                     .count();
                 if versions >= MAX_NATIVE_SHAPE_VERSIONS {
                     if native.collect_stats {
@@ -1714,6 +1758,14 @@ impl RegVm {
                             );
                             if native.collect_stats {
                                 native.stats.shape_versions += 1;
+                                if version_key.instance.type_arguments.is_known()
+                                    && !native.has_continuation_instance(
+                                        &version_key.instance,
+                                        version_key.entry,
+                                    )
+                                {
+                                    native.stats.static_type_instances += 1;
+                                }
                                 native.stats.continuation_compiled_source_instructions = native
                                     .stats
                                     .continuation_compiled_source_instructions
@@ -2034,6 +2086,14 @@ impl RegVm {
         let Some(function_facts) = verified_facts.function(native_key) else {
             return false;
         };
+        let Some(instance) = JitInstanceKey::from_facts(native_key, function_facts) else {
+            if let Some(native) = self.native.as_mut()
+                && native.collect_stats
+            {
+                native.stats.static_instance_limit_fallbacks += 1;
+            }
+            return false;
+        };
         let profile = self.jit_state.profile(func);
         let call_count = self.jit_state.call_count(func);
         let region_key = RegionKey {
@@ -2068,6 +2128,7 @@ impl RegVm {
         }));
         let osr_version_key = OsrVersionKey {
             region: region_key,
+            type_arguments: instance.type_arguments.clone(),
             shape,
         };
 
@@ -2151,7 +2212,17 @@ impl RegVm {
             // returns the code unchanged with an identity ip-map, so plain
             // native-subset OSR is byte-for-byte the old path.
             if !native.osr_cache.contains_key(&osr_version_key) {
-                if native.osr_shape_count(region_key) >= MAX_NATIVE_SHAPE_VERSIONS {
+                if native.osr_instance_count(region_key) >= MAX_JIT_INSTANCES_PER_FUNCTION
+                    && !native.has_osr_instance(region_key, &instance.type_arguments)
+                {
+                    if native.collect_stats {
+                        native.stats.static_instance_limit_fallbacks += 1;
+                    }
+                    return false;
+                }
+                if native.osr_shape_count(region_key, &instance.type_arguments)
+                    >= MAX_NATIVE_SHAPE_VERSIONS
+                {
                     if native.collect_stats {
                         native.stats.shape_limit_fallbacks += 1;
                     }
@@ -2805,6 +2876,14 @@ impl RegVm {
                 {
                     if entry.is_some() && native.collect_stats {
                         native.stats.shape_versions += 1;
+                        if osr_version_key.type_arguments.is_known()
+                            && !native.has_osr_instance(
+                                osr_version_key.region,
+                                &osr_version_key.type_arguments,
+                            )
+                        {
+                            native.stats.static_type_instances += 1;
+                        }
                     }
                     native.osr_cache.insert(osr_version_key.clone(), entry);
                     if native
@@ -3610,8 +3689,10 @@ fn native_recursive_group(unit: &RegUnit, function_id: usize) -> Option<Vec<usiz
 mod tests {
     use super::{osr_committed_tail_calls, osr_initial_logical_depth};
     use crate::reg_vm::{
-        NativeParamShape, VerifiedStorageType, VmValue, native_param_shape_with_fact,
+        JitInstanceKey, MAX_JIT_TYPE_ARGUMENTS, NativeParamShape, ShapeKey, VerifiedStorageType,
+        VerifiedTypeArgsKey, VmValue, native_param_shape_with_fact,
     };
+    use rsscript_abi_model::WireType;
 
     #[test]
     fn osr_logical_depth_round_trips_accumulated_tail_calls() {
@@ -3638,5 +3719,44 @@ mod tests {
             native_param_shape_with_fact(&VmValue::Int(1), VerifiedStorageType::Unknown),
             NativeParamShape::Int
         );
+    }
+
+    #[test]
+    fn verified_type_arguments_are_a_static_instance_dimension() {
+        let int = VerifiedTypeArgsKey::from_verified(&[WireType::Int {
+            bits: 64,
+            signed: true,
+        }])
+        .expect("one verifier-owned type argument is bounded");
+        let float = VerifiedTypeArgsKey::from_verified(&[WireType::Float { bits: 64 }])
+            .expect("one verifier-owned type argument is bounded");
+        assert_ne!(int, float);
+        assert!(int.is_known());
+        assert_eq!(
+            VerifiedTypeArgsKey::from_verified(&[]),
+            Some(VerifiedTypeArgsKey::Unavailable),
+            "empty v1 substitutions remain explicitly unavailable"
+        );
+
+        let int_instance = JitInstanceKey {
+            function: 7,
+            type_arguments: int,
+        };
+        let float_instance = JitInstanceKey {
+            function: 7,
+            type_arguments: float,
+        };
+        assert_ne!(int_instance, float_instance);
+        assert_eq!(
+            ShapeKey::from_shapes([NativeParamShape::StaticScalar]),
+            ShapeKey::from_shapes([NativeParamShape::StaticScalar]),
+            "static scalar payloads do not create runtime shape versions"
+        );
+    }
+
+    #[test]
+    fn excessive_type_argument_vectors_fail_closed() {
+        let arguments = vec![WireType::Bool; MAX_JIT_TYPE_ARGUMENTS + 1];
+        assert_eq!(VerifiedTypeArgsKey::from_verified(&arguments), None);
     }
 }

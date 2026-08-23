@@ -157,6 +157,49 @@ fn native_scalar_leaf_callable(function: &JitFunction, osr: bool, _returns_handl
     })
 }
 
+/// Whether a native callee can use the compact scalar child-frame path.
+///
+/// This deliberately does **not** claim to be a raw/direct scalar ABI. Checked
+/// arithmetic can still deopt, so a child safepoint and payload remain necessary
+/// for precise nested reconstruction. The compact path only removes state which
+/// is provably unused by a scalar, helper-free leaf: flat-buffer lengths and the
+/// shared host-helper bail flag load.
+fn native_compact_scalar_frame_callable(
+    function: &JitFunction,
+    osr: bool,
+    returns_handle: bool,
+) -> bool {
+    let compact = !osr
+        && !returns_handle
+        && function.reg_types.iter().all(|ty| {
+            matches!(
+                ty,
+                JitValueType::Int | JitValueType::Bool | JitValueType::Float
+            )
+        })
+        && function.code.iter().all(|instr| {
+            !matches!(
+                instr,
+                JitInstr::HostCall { .. } | JitInstr::CallNative { .. }
+            ) && !instr.is_flat_list_direct()
+        });
+    #[cfg(feature = "memoization")]
+    let compact = compact
+        && function
+            .code
+            .iter()
+            .all(|instr| !matches!(instr, JitInstr::MemoizedHostCall { .. }));
+    #[cfg(feature = "recursion")]
+    let compact = compact
+        && function.code.iter().all(|instr| {
+            !matches!(
+                instr,
+                JitInstr::CallSelf { .. } | JitInstr::CallGroup { .. }
+            )
+        });
+    compact
+}
+
 /// Whether a normal (non-OSR) function can participate in the scalar native-call
 /// ABI. Keep this predicate in vm-jit so tiering and compilation cannot drift.
 pub fn is_native_callable_leaf(function: &JitFunction) -> bool {
@@ -217,6 +260,9 @@ struct CompiledFunc {
     /// Machine-code bytes emitted by Cranelift for this function, including any
     /// constant data reported by `CompiledCode::code_info`.
     code_size_bytes: u64,
+    /// Direct flat-list bounds checks removed by the codegen-only range and
+    /// provenance proof for this compiled function.
+    direct_list_bounds_checks_elided: u64,
     /// Longest native-to-native call chain reachable from this function. A function
     /// with no `CallNative` edges has depth 0; a direct native leaf call has depth 1.
     native_call_depth: u32,
@@ -252,6 +298,10 @@ struct CompiledFunc {
     reg_types: Vec<JitValueType>,
     return_type: Option<JitValueType>,
     scalar_leaf_callable: bool,
+    /// A helper-free scalar leaf can omit the flat-length window and helper-bail
+    /// read in its parent call site. It still uses a versioned `JitCallFrame` and
+    /// child deopt payload because checked scalar operations may deopt precisely.
+    compact_scalar_frame_callable: bool,
 }
 
 #[derive(Clone)]
@@ -262,6 +312,7 @@ pub(crate) struct NativeCallee {
     pub(crate) param_types: Vec<JitValueType>,
     pub(crate) deopt_payload_words: usize,
     pub(crate) return_type: JitValueType,
+    pub(crate) compact_scalar_frame: bool,
 }
 
 /// Metadata for one member of a co-compiled mutually-recursive group
@@ -807,6 +858,8 @@ impl NativeModule {
         let returns_handle = return_type == Some(JitValueType::Handle);
         let scalar_leaf_callable =
             native_scalar_leaf_callable(function, osr_header.is_some(), returns_handle);
+        let compact_scalar_frame_callable =
+            native_compact_scalar_frame_callable(function, osr_header.is_some(), returns_handle);
         let native_callees = self.resolve_native_callees(function)?;
         if native_callees.len() > self.limits.max_native_callees {
             return Err(JitError::new(
@@ -866,7 +919,7 @@ impl NativeModule {
             .declare_function(&name, Linkage::Local, &self.ctx.func.signature)
             .map_err(|e| err("declare", e))?;
 
-        let deopt_map = build_function(
+        let codegen = build_function(
             &mut self.ctx.func,
             &mut self.fbctx,
             &mut self.module,
@@ -911,7 +964,8 @@ impl NativeModule {
             native_depth_cap: native_recursion_depth_cap(function) as u32,
             n_params: function.n_params as usize,
             n_regs: function.n_regs as usize,
-            deopt_map,
+            deopt_map: codegen.deopt_map,
+            direct_list_bounds_checks_elided: codegen.direct_list_bounds_checks_elided,
             requires_limits: limit_checks.any(),
             osr: osr_header.is_some(),
             returns_handle,
@@ -919,6 +973,7 @@ impl NativeModule {
             reg_types: function.reg_types.clone(),
             return_type,
             scalar_leaf_callable,
+            compact_scalar_frame_callable,
         });
         Ok(handle)
     }
@@ -1059,11 +1114,12 @@ impl NativeModule {
         // Phase 2: build + define each member against the declared group ids.
         let mut deopt_maps: Vec<DeoptMap> = Vec::with_capacity(funcs.len());
         let mut code_sizes: Vec<u64> = Vec::with_capacity(funcs.len());
+        let mut bounds_checks_elided: Vec<u64> = Vec::with_capacity(funcs.len());
         for (i, function) in funcs.iter().enumerate() {
             let native_callees = self.resolve_native_callees(function)?;
             self.module.clear_context(&mut self.ctx);
             push_compiled_abi_signature(&mut self.ctx.func, ptr_ty);
-            let deopt_map = build_function(
+            let codegen = build_function(
                 &mut self.ctx.func,
                 &mut self.fbctx,
                 &mut self.module,
@@ -1087,7 +1143,8 @@ impl NativeModule {
                 .compiled_code()
                 .map(|code| u64::from(code.code_info().total_size))
                 .unwrap_or(0);
-            deopt_maps.push(deopt_map);
+            bounds_checks_elided.push(codegen.direct_list_bounds_checks_elided);
+            deopt_maps.push(codegen.deopt_map);
             code_sizes.push(code_size);
         }
         self.module.clear_context(&mut self.ctx);
@@ -1109,6 +1166,7 @@ impl NativeModule {
                 f,
                 id: func_ids[i],
                 code_size_bytes: code_sizes[i],
+                direct_list_bounds_checks_elided: bounds_checks_elided[i],
                 native_call_depth: 0,
                 native_depth_cap: native_recursion_depth_cap(function) as u32,
                 n_params: function.n_params as usize,
@@ -1121,6 +1179,10 @@ impl NativeModule {
                 reg_types: function.reg_types.clone(),
                 return_type: Some(return_types[i]),
                 scalar_leaf_callable,
+                // Recursive groups are research-only and intentionally retain the
+                // full child-frame path; their stack/deopt contract is different
+                // from the bounded acyclic scalar-leaf optimization.
+                compact_scalar_frame_callable: false,
             });
             handles.push(handle);
         }
@@ -1136,6 +1198,18 @@ impl NativeModule {
         self.funcs.get(id.index).map(|func| func.code_size_bytes)
     }
 
+    /// Number of direct flat-list access checks omitted after a sound range and
+    /// provenance proof. This is host-side evidence only; it does not alter the
+    /// checked public IR contract.
+    pub fn direct_list_bounds_checks_elided(&self, id: CompiledId) -> Option<u64> {
+        if id.module_id != self.id {
+            return None;
+        }
+        self.funcs
+            .get(id.index)
+            .map(|func| func.direct_list_bounds_checks_elided)
+    }
+
     /// Longest native-to-native call chain reachable from a compiled function.
     /// Used only for host-side telemetry.
     pub fn native_call_depth(&self, id: CompiledId) -> Option<u32> {
@@ -1143,6 +1217,14 @@ impl NativeModule {
             return None;
         }
         self.funcs.get(id.index).map(|func| func.native_call_depth)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn compact_scalar_frame_callable(&self, id: CompiledId) -> bool {
+        self.funcs
+            .get(id.index)
+            .filter(|_| id.module_id == self.id)
+            .is_some_and(|func| func.compact_scalar_frame_callable)
     }
 
     fn resolve_native_callees(
@@ -1217,6 +1299,7 @@ impl NativeModule {
                 param_types: compiled.param_types.clone(),
                 deopt_payload_words: compiled.deopt_map.payload_words,
                 return_type,
+                compact_scalar_frame: compiled.compact_scalar_frame_callable,
             });
         }
         Ok(callees)

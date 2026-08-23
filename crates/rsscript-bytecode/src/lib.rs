@@ -12,6 +12,10 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+mod typed_facts;
+
+pub use typed_facts::*;
+
 pub const BYTECODE_SCHEMA: &str = "rsscript.bytecode.v1";
 /// Version of the binary Artifact container envelope, independent of language
 /// semantics and instruction-set compatibility.
@@ -25,6 +29,7 @@ const SECTION_HEADER: u8 = 1;
 const SECTION_IMPORTS: u8 = 2;
 const SECTION_CODE: u8 = 3;
 const SECTION_CHECKSUM: u8 = 4;
+const SECTION_TYPED_EXECUTABLE_FACTS: u8 = 5;
 const SECTION_REQUIRED: u8 = 1;
 const SECTION_HEADER_BYTES: usize = 1 + 1 + 8 + 32;
 const MAX_SECTIONS: usize = 64;
@@ -56,6 +61,12 @@ pub struct BytecodeArtifact {
     pub imports: Vec<ExternalImport>,
     pub payload: Vec<u8>,
     pub checksum: String,
+    /// Optional, verifier-owned optimization facts. This section is not part
+    /// of the executable checksum so pre-facts v1 readers can continue to
+    /// consume the executable. The facts carry and verify their own binding to
+    /// `header.executable_hash` before any engine may consume them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typed_executable_facts: Option<Vec<u8>>,
 }
 
 impl BytecodeArtifact {
@@ -87,6 +98,7 @@ impl BytecodeArtifact {
             imports,
             payload,
             checksum: String::new(),
+            typed_executable_facts: None,
         };
         artifact.checksum = artifact.compute_checksum()?;
         Ok(artifact)
@@ -95,25 +107,28 @@ impl BytecodeArtifact {
     pub fn to_bytes(&self) -> Result<Vec<u8>, BytecodeError> {
         let header = encode_executable_payload(&self.header)?;
         let imports = encode_executable_payload(&self.imports)?;
-        let sections = [
-            (SECTION_HEADER, header.as_slice()),
-            (SECTION_IMPORTS, imports.as_slice()),
-            (SECTION_CODE, self.payload.as_slice()),
-            (SECTION_CHECKSUM, self.checksum.as_bytes()),
+        let mut sections = vec![
+            (SECTION_HEADER, SECTION_REQUIRED, header.as_slice()),
+            (SECTION_IMPORTS, SECTION_REQUIRED, imports.as_slice()),
+            (SECTION_CODE, SECTION_REQUIRED, self.payload.as_slice()),
+            (SECTION_CHECKSUM, SECTION_REQUIRED, self.checksum.as_bytes()),
         ];
+        if let Some(facts) = self.typed_executable_facts.as_deref() {
+            sections.push((SECTION_TYPED_EXECUTABLE_FACTS, 0, facts));
+        }
         let mut bytes = Vec::with_capacity(
             BYTECODE_MAGIC.len()
                 + 2
                 + sections
                     .iter()
-                    .map(|(_, data)| SECTION_HEADER_BYTES + data.len())
+                    .map(|(_, _, data)| SECTION_HEADER_BYTES + data.len())
                     .sum::<usize>(),
         );
         bytes.extend_from_slice(BYTECODE_MAGIC);
         bytes.extend_from_slice(&(sections.len() as u16).to_be_bytes());
-        for (kind, data) in sections {
+        for (kind, flags, data) in sections {
             bytes.push(kind);
-            bytes.push(SECTION_REQUIRED);
+            bytes.push(flags);
             bytes.extend_from_slice(&(data.len() as u64).to_be_bytes());
             bytes.extend_from_slice(&Sha256::digest(data));
             bytes.extend_from_slice(data);
@@ -126,6 +141,24 @@ impl BytecodeArtifact {
     pub fn bind_snapshot_digest(&mut self, digest: impl Into<String>) -> Result<(), BytecodeError> {
         self.header.snapshot_digest = Some(digest.into());
         self.checksum = self.compute_checksum()?;
+        Ok(())
+    }
+
+    /// Attach canonical typed executable facts after proving that they are
+    /// bound to this exact executable payload.
+    pub fn attach_typed_executable_facts(
+        &mut self,
+        facts: &TypedExecutableFactsV1,
+    ) -> Result<(), BytecodeError> {
+        if facts.executable_hash != self.header.executable_hash
+            || facts.bytecode_isa_version != self.header.bytecode_isa_version
+            || facts.runtime_abi_version != self.header.runtime_abi_version
+            || facts.interface_catalog_digest != self.header.interface_catalog_digest
+            || facts.imports_hash != typed_facts_imports_hash(self)?
+        {
+            return Err(BytecodeError::TypedFactsBindingMismatch("artifact binding"));
+        }
+        self.typed_executable_facts = Some(encode_typed_executable_facts(facts)?);
         Ok(())
     }
 
@@ -143,6 +176,7 @@ impl BytecodeArtifact {
         let mut imports = None;
         let mut payload = None;
         let mut checksum = None;
+        let mut typed_executable_facts = None;
         let mut previous_kind = 0u8;
         for _ in 0..section_count {
             let kind = take_array::<1>(&mut body)?[0];
@@ -184,6 +218,12 @@ impl BytecodeArtifact {
                             .to_string(),
                     );
                 }
+                SECTION_TYPED_EXECUTABLE_FACTS => {
+                    if flags & SECTION_REQUIRED != 0 {
+                        return Err(BytecodeError::KnownSectionMustBeOptional(kind));
+                    }
+                    typed_executable_facts = Some(data.to_vec());
+                }
                 unknown if flags & SECTION_REQUIRED != 0 => {
                     return Err(BytecodeError::UnknownRequiredSection(unknown));
                 }
@@ -198,6 +238,7 @@ impl BytecodeArtifact {
             imports: imports.ok_or(BytecodeError::MissingSection(SECTION_IMPORTS))?,
             payload: payload.ok_or(BytecodeError::MissingSection(SECTION_CODE))?,
             checksum: checksum.ok_or(BytecodeError::MissingSection(SECTION_CHECKSUM))?,
+            typed_executable_facts,
         })
     }
 
@@ -226,6 +267,7 @@ pub struct BytecodeLimits {
     pub max_functions: usize,
     pub max_registers_per_function: usize,
     pub max_instructions: usize,
+    pub max_typed_facts_bytes: usize,
 }
 
 impl Default for BytecodeLimits {
@@ -237,6 +279,7 @@ impl Default for BytecodeLimits {
             max_functions: 65_536,
             max_registers_per_function: 1_048_576,
             max_instructions: 10_000_000,
+            max_typed_facts_bytes: 16 * 1024 * 1024,
         }
     }
 }
@@ -244,6 +287,7 @@ impl Default for BytecodeLimits {
 #[derive(Debug, Clone)]
 pub struct VerifiedBytecode {
     artifact: BytecodeArtifact,
+    typed_executable_facts: Option<BoundTypedExecutableFactsV1>,
 }
 
 impl VerifiedBytecode {
@@ -253,6 +297,18 @@ impl VerifiedBytecode {
 
     pub fn into_artifact(self) -> BytecodeArtifact {
         self.artifact
+    }
+
+    /// Return typed facts admitted by the independent facts verifier. Callers
+    /// must never deserialize `artifact.typed_executable_facts` themselves.
+    pub fn typed_executable_facts(&self) -> Option<&BoundTypedExecutableFactsV1> {
+        self.typed_executable_facts.as_ref()
+    }
+
+    /// Preserve both the executable and its verifier-owned optimization facts
+    /// across a VM load boundary.
+    pub fn into_parts(self) -> (BytecodeArtifact, Option<BoundTypedExecutableFactsV1>) {
+        (self.artifact, self.typed_executable_facts)
     }
 }
 
@@ -345,8 +401,19 @@ impl BytecodeVerifier {
             context,
         )?;
         verify_executable_payload(&artifact.payload, &artifact.imports, self.limits, context)?;
+        let typed_executable_facts = artifact
+            .typed_executable_facts
+            .as_deref()
+            .map(|facts| {
+                TypedExecutableFactsVerifierV1::new(self.limits.into())
+                    .verify_with_context(facts, &artifact, context)
+            })
+            .transpose()?;
         context.check()?;
-        Ok(VerifiedBytecode { artifact })
+        Ok(VerifiedBytecode {
+            artifact,
+            typed_executable_facts,
+        })
     }
 }
 
@@ -2196,12 +2263,15 @@ pub enum BytecodeError {
     ImportsNotCanonical,
     ImportAbiMismatch,
     ImportSignatureHashMismatch,
+    TypedFactsBindingMismatch(&'static str),
+    InvalidTypedExecutableFacts(String),
     InvalidPayload(String),
     MalformedSectionTable,
     SectionsNotCanonical,
     MissingSection(u8),
     UnknownRequiredSection(u8),
     KnownSectionNotRequired(u8),
+    KnownSectionMustBeOptional(u8),
     InvalidSectionFlags { kind: u8, flags: u8 },
     SectionHashMismatch(u8),
     MalformedChecksum,
@@ -2228,12 +2298,15 @@ pub enum BytecodeErrorCode {
     ImportsNotCanonical,
     ImportAbiMismatch,
     ImportSignatureHashMismatch,
+    TypedFactsBindingMismatch,
+    InvalidTypedExecutableFacts,
     InvalidPayload,
     MalformedSectionTable,
     SectionsNotCanonical,
     MissingSection,
     UnknownRequiredSection,
     KnownSectionNotRequired,
+    KnownSectionMustBeOptional,
     InvalidSectionFlags,
     SectionHashMismatch,
     MalformedChecksum,
@@ -2260,12 +2333,15 @@ impl BytecodeError {
             Self::ImportsNotCanonical => BytecodeErrorCode::ImportsNotCanonical,
             Self::ImportAbiMismatch => BytecodeErrorCode::ImportAbiMismatch,
             Self::ImportSignatureHashMismatch => BytecodeErrorCode::ImportSignatureHashMismatch,
+            Self::TypedFactsBindingMismatch(_) => BytecodeErrorCode::TypedFactsBindingMismatch,
+            Self::InvalidTypedExecutableFacts(_) => BytecodeErrorCode::InvalidTypedExecutableFacts,
             Self::InvalidPayload(_) => BytecodeErrorCode::InvalidPayload,
             Self::MalformedSectionTable => BytecodeErrorCode::MalformedSectionTable,
             Self::SectionsNotCanonical => BytecodeErrorCode::SectionsNotCanonical,
             Self::MissingSection(_) => BytecodeErrorCode::MissingSection,
             Self::UnknownRequiredSection(_) => BytecodeErrorCode::UnknownRequiredSection,
             Self::KnownSectionNotRequired(_) => BytecodeErrorCode::KnownSectionNotRequired,
+            Self::KnownSectionMustBeOptional(_) => BytecodeErrorCode::KnownSectionMustBeOptional,
             Self::InvalidSectionFlags { .. } => BytecodeErrorCode::InvalidSectionFlags,
             Self::SectionHashMismatch(_) => BytecodeErrorCode::SectionHashMismatch,
             Self::MalformedChecksum => BytecodeErrorCode::MalformedChecksum,
@@ -2324,6 +2400,12 @@ impl fmt::Display for BytecodeError {
             Self::ImportSignatureHashMismatch => {
                 formatter.write_str("bytecode import signature does not match its hash")
             }
+            Self::TypedFactsBindingMismatch(field) => {
+                write!(formatter, "typed executable facts {field} mismatch")
+            }
+            Self::InvalidTypedExecutableFacts(message) => {
+                write!(formatter, "invalid typed executable facts: {message}")
+            }
             Self::InvalidPayload(message) => {
                 write!(formatter, "invalid bytecode payload: {message}")
             }
@@ -2345,6 +2427,9 @@ impl fmt::Display for BytecodeError {
                     formatter,
                     "bytecode section {section} is not marked required"
                 )
+            }
+            Self::KnownSectionMustBeOptional(section) => {
+                write!(formatter, "bytecode section {section} must be optional")
             }
             Self::InvalidSectionFlags { kind, flags } => {
                 write!(
@@ -2394,10 +2479,272 @@ mod tests {
             .verify(&bytes)
             .expect("verified");
         assert_eq!(verified.artifact().payload, payload);
+        assert!(verified.typed_executable_facts().is_none());
 
         let mut corrupt = bytes;
         *corrupt.last_mut().expect("non-empty") ^= 1;
         assert!(BytecodeVerifier::default().verify(&corrupt).is_err());
+    }
+
+    #[test]
+    fn optional_typed_facts_round_trip_through_verifier_owned_wrapper() {
+        let payload = minimal_payload();
+        let mut artifact = BytecodeArtifact::new(
+            "0.1.0",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
+            RUNTIME_ABI_VERSION,
+            TEST_SOURCE_DIGEST,
+            vec![],
+            payload,
+        )
+        .expect("artifact");
+        let facts = TypedExecutableFactsV1 {
+            schema: TYPED_EXECUTABLE_FACTS_SCHEMA_V1.to_owned(),
+            executable_hash: artifact.header.executable_hash.clone(),
+            bytecode_isa_version: artifact.header.bytecode_isa_version,
+            runtime_abi_version: artifact.header.runtime_abi_version,
+            interface_catalog_digest: artifact.header.interface_catalog_digest.clone(),
+            imports_hash: typed_facts_imports_hash(&artifact).expect("imports hash"),
+            functions: vec![],
+            layouts: vec![],
+        };
+        artifact
+            .attach_typed_executable_facts(&facts)
+            .expect("attach facts");
+        let verified = BytecodeVerifier::default()
+            .verify(&artifact.to_bytes().expect("encode artifact"))
+            .expect("verify artifact and facts");
+        assert_eq!(
+            verified
+                .typed_executable_facts()
+                .expect("verified facts")
+                .facts(),
+            &facts
+        );
+    }
+
+    #[test]
+    fn malformed_recognized_typed_facts_fail_closed() {
+        let artifact = BytecodeArtifact::new(
+            "0.1.0",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
+            RUNTIME_ABI_VERSION,
+            TEST_SOURCE_DIGEST,
+            vec![],
+            minimal_payload(),
+        )
+        .expect("artifact");
+        let mut bytes = artifact.to_bytes().expect("artifact bytes");
+        bytes[BYTECODE_MAGIC.len()..BYTECODE_MAGIC.len() + 2].copy_from_slice(&5u16.to_be_bytes());
+        append_test_section(&mut bytes, SECTION_TYPED_EXECUTABLE_FACTS, 0, b"not-cbor");
+        assert!(matches!(
+            BytecodeVerifier::default().verify(&bytes),
+            Err(BytecodeError::InvalidTypedExecutableFacts(_))
+        ));
+    }
+
+    #[test]
+    fn typed_facts_digest_binding_rejects_tampering() {
+        let payload = minimal_payload();
+        let mut artifact = BytecodeArtifact::new(
+            "0.1.0",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
+            RUNTIME_ABI_VERSION,
+            TEST_SOURCE_DIGEST,
+            vec![],
+            payload,
+        )
+        .expect("artifact");
+        artifact.typed_executable_facts = Some(
+            encode_typed_executable_facts(&TypedExecutableFactsV1 {
+                schema: TYPED_EXECUTABLE_FACTS_SCHEMA_V1.to_owned(),
+                executable_hash: format!("sha256:{}", "f".repeat(64)),
+                bytecode_isa_version: artifact.header.bytecode_isa_version,
+                runtime_abi_version: artifact.header.runtime_abi_version,
+                interface_catalog_digest: artifact.header.interface_catalog_digest.clone(),
+                imports_hash: typed_facts_imports_hash(&artifact).expect("imports hash"),
+                functions: vec![],
+                layouts: vec![],
+            })
+            .expect("encode facts"),
+        );
+        assert!(matches!(
+            BytecodeVerifier::default().verify(&artifact.to_bytes().expect("artifact bytes")),
+            Err(BytecodeError::TypedFactsBindingMismatch("executable hash"))
+        ));
+    }
+
+    #[test]
+    fn typed_facts_have_an_independent_size_limit() {
+        let payload = minimal_payload();
+        let mut artifact = BytecodeArtifact::new(
+            "0.1.0",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
+            RUNTIME_ABI_VERSION,
+            TEST_SOURCE_DIGEST,
+            vec![],
+            payload,
+        )
+        .expect("artifact");
+        let facts = TypedExecutableFactsV1 {
+            schema: TYPED_EXECUTABLE_FACTS_SCHEMA_V1.to_owned(),
+            executable_hash: artifact.header.executable_hash.clone(),
+            bytecode_isa_version: artifact.header.bytecode_isa_version,
+            runtime_abi_version: artifact.header.runtime_abi_version,
+            interface_catalog_digest: artifact.header.interface_catalog_digest.clone(),
+            imports_hash: typed_facts_imports_hash(&artifact).expect("imports hash"),
+            functions: vec![],
+            layouts: vec![],
+        };
+        artifact
+            .attach_typed_executable_facts(&facts)
+            .expect("attach facts");
+        let limits = BytecodeLimits {
+            max_typed_facts_bytes: 1,
+            ..BytecodeLimits::default()
+        };
+        assert!(matches!(
+            BytecodeVerifier::new(limits).verify(&artifact.to_bytes().expect("artifact bytes")),
+            Err(BytecodeError::LimitExceeded("typed facts bytes"))
+        ));
+    }
+
+    #[test]
+    fn typed_facts_cannot_be_transplanted_between_import_catalogs() {
+        let symbol = ExternalSymbol::new("host.test.value").expect("symbol");
+        let make = |result: rsscript_abi_model::WireType| {
+            let signature = FunctionSignature {
+                parameters: vec![],
+                result,
+                asynchronous: false,
+            };
+            BytecodeArtifact::new(
+                "0.1.0",
+                "0.1.0",
+                TEST_CATALOG_DIGEST,
+                RUNTIME_ABI_VERSION,
+                TEST_SOURCE_DIGEST,
+                vec![ExternalImport {
+                    symbol: symbol.clone(),
+                    signature: signature.clone(),
+                    signature_hash: signature.hash(),
+                    abi_version: RUNTIME_ABI_VERSION,
+                }],
+                external_call_payload(symbol.as_str()),
+            )
+            .expect("artifact")
+        };
+        let mut source = make(rsscript_abi_model::WireType::Unit);
+        let facts = empty_function_facts(&source, 1);
+        source
+            .attach_typed_executable_facts(&facts)
+            .expect("attach source facts");
+
+        let mut recipient = make(rsscript_abi_model::WireType::Int {
+            bits: 64,
+            signed: true,
+        });
+        recipient.typed_executable_facts = source.typed_executable_facts;
+        let error = BytecodeVerifier::default()
+            .verify(&recipient.to_bytes().expect("recipient bytes"))
+            .expect_err("transplanted facts must fail");
+        assert!(
+            matches!(
+                error,
+                BytecodeError::TypedFactsBindingMismatch("imports hash")
+            ),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn typed_call_target_must_match_the_bound_instruction() {
+        let symbol = ExternalSymbol::new("host.test.value").expect("symbol");
+        let signature = FunctionSignature {
+            parameters: vec![],
+            result: rsscript_abi_model::WireType::Unit,
+            asynchronous: false,
+        };
+        let mut artifact = BytecodeArtifact::new(
+            "0.1.0",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
+            RUNTIME_ABI_VERSION,
+            TEST_SOURCE_DIGEST,
+            vec![ExternalImport {
+                symbol: symbol.clone(),
+                signature: signature.clone(),
+                signature_hash: signature.hash(),
+                abi_version: RUNTIME_ABI_VERSION,
+            }],
+            external_call_payload(symbol.as_str()),
+        )
+        .expect("artifact");
+        let mut facts = empty_function_facts(&artifact, 1);
+        facts.functions[0].call_sites.push(TypedCallSiteV1 {
+            instruction: 0,
+            target: TypedCallTargetV1::Provider(1),
+            parameters: vec![],
+            result: TypedFactTypeV1::Known(rsscript_abi_model::WireType::Unit),
+            parameter_effects: vec![],
+            type_arguments: vec![],
+        });
+        artifact
+            .attach_typed_executable_facts(&facts)
+            .expect("attachment checks only envelope binding");
+        let error = BytecodeVerifier::default()
+            .verify(&artifact.to_bytes().expect("artifact bytes"))
+            .expect_err("mismatched target must fail");
+        assert!(
+            matches!(
+                error,
+                BytecodeError::InvalidTypedExecutableFacts(ref message)
+                    if message.contains("out of range")
+            ),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn v1_known_functions_cannot_claim_erased_generic_substitutions() {
+        let symbol = ExternalSymbol::new("host.test.value").expect("symbol");
+        let signature = FunctionSignature {
+            parameters: vec![],
+            result: rsscript_abi_model::WireType::Unit,
+            asynchronous: false,
+        };
+        let mut artifact = BytecodeArtifact::new(
+            "0.1.0",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
+            RUNTIME_ABI_VERSION,
+            TEST_SOURCE_DIGEST,
+            vec![ExternalImport {
+                symbol: symbol.clone(),
+                signature: signature.clone(),
+                signature_hash: signature.hash(),
+                abi_version: RUNTIME_ABI_VERSION,
+            }],
+            external_call_payload(symbol.as_str()),
+        )
+        .expect("artifact");
+        let mut facts = empty_function_facts(&artifact, 1);
+        facts.functions[0].generic_substitutions = vec![rsscript_abi_model::WireType::Int {
+            bits: 64,
+            signed: true,
+        }];
+        artifact
+            .attach_typed_executable_facts(&facts)
+            .expect("attach bound facts");
+        assert!(matches!(
+            BytecodeVerifier::default().verify(&artifact.to_bytes().expect("artifact bytes")),
+            Err(BytecodeError::InvalidTypedExecutableFacts(message))
+                if message.contains("does not prove function generic substitutions")
+        ));
     }
 
     #[test]
@@ -2648,7 +2995,7 @@ mod tests {
         .expect("artifact");
         let mut bytes = artifact.to_bytes().expect("bytes");
         bytes[BYTECODE_MAGIC.len()..BYTECODE_MAGIC.len() + 2].copy_from_slice(&5u16.to_be_bytes());
-        append_test_section(&mut bytes, 5, 0, b"future metadata");
+        append_test_section(&mut bytes, 63, 0, b"future metadata");
 
         BytecodeVerifier::default()
             .verify(&bytes)
@@ -2669,11 +3016,11 @@ mod tests {
         .expect("artifact");
         let mut bytes = artifact.to_bytes().expect("bytes");
         bytes[BYTECODE_MAGIC.len()..BYTECODE_MAGIC.len() + 2].copy_from_slice(&5u16.to_be_bytes());
-        append_test_section(&mut bytes, 5, SECTION_REQUIRED, b"future semantics");
+        append_test_section(&mut bytes, 63, SECTION_REQUIRED, b"future semantics");
 
         assert!(matches!(
             BytecodeVerifier::default().verify(&bytes),
-            Err(BytecodeError::UnknownRequiredSection(5))
+            Err(BytecodeError::UnknownRequiredSection(63))
         ));
     }
 
@@ -3242,6 +3589,52 @@ mod tests {
         .expect("minimal payload")
     }
 
+    fn external_call_payload(symbol: &str) -> Vec<u8> {
+        encode_executable_payload(&serde_json::json!({
+            "functions": [{
+                "name": "main", "params": 0, "captures": 0, "regs": 1,
+                "local_regs": {},
+                "code": [
+                    {"CallExternal": {"dst": 0, "key": symbol, "args": [], "mut_args": []}},
+                    {"Return": {"src": 0}}
+                ]
+            }],
+            "function_ids": {"main": 0},
+            "resource_drop_functions": {},
+            "types": {},
+            "native_signatures": {"main": {"params": [], "return_type": "Unit"}},
+            "closure_identity_observable": false
+        }))
+        .expect("external call payload")
+    }
+
+    fn empty_function_facts(
+        artifact: &BytecodeArtifact,
+        registers: usize,
+    ) -> TypedExecutableFactsV1 {
+        TypedExecutableFactsV1 {
+            schema: TYPED_EXECUTABLE_FACTS_SCHEMA_V1.to_owned(),
+            executable_hash: artifact.header.executable_hash.clone(),
+            bytecode_isa_version: artifact.header.bytecode_isa_version,
+            runtime_abi_version: artifact.header.runtime_abi_version,
+            interface_catalog_digest: artifact.header.interface_catalog_digest.clone(),
+            imports_hash: typed_facts_imports_hash(artifact).expect("imports hash"),
+            functions: vec![TypedFunctionFactsV1 {
+                function_ordinal: 0,
+                registers: vec![
+                    TypedRegisterFactV1 {
+                        ty: TypedFactTypeV1::Unknown,
+                        ownership: TypedValueOwnershipV1::Unknown,
+                    };
+                    registers
+                ],
+                call_sites: vec![],
+                generic_substitutions: vec![],
+            }],
+            layouts: vec![],
+        }
+    }
+
     proptest! {
         #[test]
         fn arbitrary_bounded_input_is_rejected_without_panicking(bytes in prop::collection::vec(any::<u8>(), 0..4096)) {
@@ -3252,6 +3645,7 @@ mod tests {
                 max_functions: 32,
                 max_registers_per_function: 256,
                 max_instructions: 1024,
+                max_typed_facts_bytes: 1024,
             });
             let _ = verifier.verify(&bytes);
         }

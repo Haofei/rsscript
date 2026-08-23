@@ -19,6 +19,9 @@ boundaries:
 - **`bytecode_artifact`** — hostile bytes must be rejected cleanly by the
   section decoder and independent verifier; accepted Artifacts must round-trip
   to exactly the same canonical bytes.
+- **`typed_executable_facts`** — keeps a frozen v1 executable payload fixed and
+  treats its optional typed-facts section as hostile bytes. Accepted facts must
+  be canonical, digest-bound to that executable, and verifier-round-trip safe.
 - **`binding_descriptor`** — arbitrary UTF-8/TOML is projected through the
   strict `rsscript.bindings.v1` schema without panicking.
 - **`execution_report`** — arbitrary JSON is checked against the strict
@@ -38,6 +41,7 @@ cargo install cargo-fuzz                 # once
 cargo +nightly fuzz run parse_check
 cargo +nightly fuzz run format_idempotent
 cargo +nightly fuzz run bytecode_artifact
+cargo +nightly fuzz run typed_executable_facts
 cargo +nightly fuzz run binding_descriptor
 cargo +nightly fuzz run execution_report
 cargo +nightly fuzz run runner_protocol
@@ -93,3 +97,6 @@ Native JIT parity is covered by the phase-typed
 deopt, OSR, allocation, and mutated-IR tests. It no longer depends on the
 retired dynamic SDK compatibility harness. The scheduled JIT hardening workflow
 also runs `jit_ir_validate` with coverage feedback.
+The same workflow runs `typed_executable_facts` separately from the whole
+Artifact fuzzer: a valid executable never makes optional optimization facts
+trusted by association.

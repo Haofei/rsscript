@@ -66,6 +66,10 @@ pub(in crate::reg_vm) struct VerifiedCallSite {
     pub(in crate::reg_vm) params: Box<[VerifiedStorageType]>,
     pub(in crate::reg_vm) result: VerifiedStorageType,
     pub(in crate::reg_vm) param_effects: Box<[VerifiedParamEffect]>,
+    /// Concrete generic arguments admitted by the typed-facts verifier. An
+    /// empty slice means unavailable in the current v1 lowering; it must never
+    /// be reconstructed from a symbol spelling or runtime value.
+    pub(in crate::reg_vm) type_arguments: Box<[WireType]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -91,6 +95,11 @@ pub(in crate::reg_vm) struct VerifiedFunctionFacts {
     pub(in crate::reg_vm) reg_types: Box<[VerifiedStorageType]>,
     pub(in crate::reg_vm) call_sites: Box<[Option<VerifiedCallSite>]>,
     pub(in crate::reg_vm) effects: Box<[VerifiedInstrEffects]>,
+    /// Concrete substitutions for this emitted function instance, when the
+    /// lowering retained them. v1 ordinary direct calls currently leave this
+    /// empty, so native caches use an explicit unavailable key rather than
+    /// pretending that the function is monomorphic.
+    pub(in crate::reg_vm) generic_substitutions: Box<[WireType]>,
 }
 
 impl VerifiedFunctionFacts {
@@ -140,6 +149,84 @@ impl VerifiedExecutableFacts {
     /// same executable envelope.
     pub(in crate::reg_vm) fn derive(unit: &RegUnit) -> Result<Self, VerifiedFactsError> {
         Self::derive_with_limits(unit, VerifiedFactsLimits::default())
+    }
+
+    /// Project verifier-owned typed facts onto the execution-local facts used
+    /// by native lowering. Instruction effects still come from the decoded
+    /// executable. Persisted scalar storage claims must agree with an
+    /// independently derived class; until full typed data-flow verification
+    /// exists they never promote a conservative v1-derived `Unknown`.
+    pub(in crate::reg_vm) fn derive_with_typed(
+        unit: &RegUnit,
+        typed: &rsscript_bytecode::BoundTypedExecutableFactsV1,
+    ) -> Result<Self, VerifiedFactsError> {
+        let mut derived = Self::derive(unit)?;
+        let typed = typed.facts();
+        if typed.functions.len() != derived.functions.len() {
+            return Err(VerifiedFactsError::TypedFactsMismatch);
+        }
+        for (function, typed_function) in derived.functions.iter_mut().zip(&typed.functions) {
+            if function.reg_types.len() != typed_function.registers.len() {
+                return Err(VerifiedFactsError::TypedFactsMismatch);
+            }
+            for (storage, typed_register) in
+                function.reg_types.iter_mut().zip(&typed_function.registers)
+            {
+                if let Some(proved) = typed_storage_type(&typed_register.ty) {
+                    match *storage {
+                        VerifiedStorageType::Unknown => {}
+                        existing if existing == proved => {}
+                        _ => return Err(VerifiedFactsError::TypedFactsMismatch),
+                    }
+                }
+            }
+            for typed_call in &typed_function.call_sites {
+                let Some(Some(call)) = function.call_sites.get_mut(typed_call.instruction as usize)
+                else {
+                    return Err(VerifiedFactsError::TypedFactsMismatch);
+                };
+                if typed_call.parameters.len() != call.params.len()
+                    || typed_call.parameter_effects.len() != call.param_effects.len()
+                {
+                    return Err(VerifiedFactsError::TypedFactsMismatch);
+                }
+                for (storage, ty) in call.params.iter_mut().zip(&typed_call.parameters) {
+                    if let Some(proved) = typed_storage_type(ty) {
+                        match *storage {
+                            VerifiedStorageType::Unknown => {}
+                            existing if existing == proved => {}
+                            _ => return Err(VerifiedFactsError::TypedFactsMismatch),
+                        }
+                    }
+                }
+                if let Some(proved) = typed_storage_type(&typed_call.result) {
+                    match call.result {
+                        VerifiedStorageType::Unknown => {}
+                        existing if existing == proved => {}
+                        _ => return Err(VerifiedFactsError::TypedFactsMismatch),
+                    }
+                }
+                for (effect, typed_effect) in call
+                    .param_effects
+                    .iter_mut()
+                    .zip(&typed_call.parameter_effects)
+                {
+                    *effect = match typed_effect {
+                        rsscript_bytecode::TypedDataEffectV1::Mutate => VerifiedParamEffect::Mut,
+                        rsscript_bytecode::TypedDataEffectV1::Read
+                        | rsscript_bytecode::TypedDataEffectV1::Take
+                        | rsscript_bytecode::TypedDataEffectV1::Unknown => {
+                            VerifiedParamEffect::Unknown
+                        }
+                    };
+                }
+                call.type_arguments = typed_call.type_arguments.clone().into_boxed_slice();
+            }
+            if !typed_function.generic_substitutions.is_empty() {
+                return Err(VerifiedFactsError::TypedFactsMismatch);
+            }
+        }
+        Ok(derived)
     }
 
     pub(in crate::reg_vm) fn function(&self, ordinal: usize) -> Option<&VerifiedFunctionFacts> {
@@ -244,6 +331,35 @@ pub(in crate::reg_vm) enum VerifiedFactsError {
     TooManyInstructions,
     FactsBudgetExceeded,
     InvalidRegister { function: usize, register: Reg },
+    TypedFactsMismatch,
+}
+
+fn typed_storage_type(ty: &rsscript_bytecode::TypedFactTypeV1) -> Option<VerifiedStorageType> {
+    use rsscript_abi_model::WireType;
+    let rsscript_bytecode::TypedFactTypeV1::Known(ty) = ty else {
+        return None;
+    };
+    fn wire_storage_type(ty: &WireType) -> VerifiedStorageType {
+        match ty {
+            WireType::Unit => VerifiedStorageType::Unit,
+            WireType::Bool => VerifiedStorageType::Bool,
+            WireType::Int { .. } => VerifiedStorageType::Int,
+            WireType::Float { .. } => VerifiedStorageType::Float,
+            WireType::Char => VerifiedStorageType::Char,
+            WireType::String
+            | WireType::Bytes
+            | WireType::List { .. }
+            | WireType::Map { .. }
+            | WireType::Option { .. }
+            | WireType::Result { .. }
+            | WireType::Tuple { .. }
+            | WireType::Named { .. }
+            | WireType::Resource { .. }
+            | WireType::Handle { .. } => VerifiedStorageType::Handle,
+            WireType::Qualified { value, .. } => wire_storage_type(value),
+        }
+    }
+    Some(wire_storage_type(ty))
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -380,6 +496,7 @@ fn derive_function_facts(
         reg_types: constraints.finish(),
         call_sites: call_sites.into_boxed_slice(),
         effects: effects.into_boxed_slice(),
+        generic_substitutions: Box::new([]),
     })
 }
 
@@ -727,6 +844,7 @@ fn call_site_from_signature(
         params,
         result,
         param_effects: parameter_effects(arg_count, mut_args),
+        type_arguments: Box::new([]),
     }
 }
 
@@ -757,6 +875,7 @@ fn intrinsic_call_site(
         params,
         result,
         param_effects: vec![VerifiedParamEffect::Unknown; arg_count].into_boxed_slice(),
+        type_arguments: Box::new([]),
     }
 }
 
@@ -983,6 +1102,7 @@ fn instruction_may_allocate(instruction: &RegInstr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::serde_json;
     use std::collections::HashMap;
     use std::rc::Rc;
 
@@ -1203,5 +1323,79 @@ mod tests {
         )
         .expect_err("register limit must reject");
         assert_eq!(error, VerifiedFactsError::TooManyRegisters { function: 0 });
+    }
+
+    #[test]
+    fn persisted_type_claim_cannot_override_executable_storage_proof() {
+        let payload = rsscript_bytecode::encode_executable_payload(&serde_json::json!({
+            "functions": [{
+                "name": "main", "params": 0, "captures": 0, "regs": 1,
+                "local_regs": {},
+                "code": [
+                    {"LoadInt": {"dst": 0, "value": 7}},
+                    {"Return": {"src": 0}}
+                ]
+            }],
+            "function_ids": {"main": 0},
+            "resource_drop_functions": {},
+            "types": {},
+            "native_signatures": {"main": {"params": [], "return_type": "Int"}},
+            "closure_identity_observable": false
+        }))
+        .expect("payload");
+        let mut artifact = rsscript_bytecode::BytecodeArtifact::new(
+            "0.1.0",
+            "0.1.0",
+            format!("sha256:{}", "a".repeat(64)),
+            rsscript_abi_model::RUNTIME_ABI_VERSION,
+            format!("sha256:{}", "b".repeat(64)),
+            vec![],
+            payload,
+        )
+        .expect("artifact");
+        let facts = rsscript_bytecode::TypedExecutableFactsV1 {
+            schema: rsscript_bytecode::TYPED_EXECUTABLE_FACTS_SCHEMA_V1.to_owned(),
+            executable_hash: artifact.header.executable_hash.clone(),
+            bytecode_isa_version: artifact.header.bytecode_isa_version,
+            runtime_abi_version: artifact.header.runtime_abi_version,
+            interface_catalog_digest: artifact.header.interface_catalog_digest.clone(),
+            imports_hash: rsscript_bytecode::typed_facts_imports_hash(&artifact)
+                .expect("imports hash"),
+            functions: vec![rsscript_bytecode::TypedFunctionFactsV1 {
+                function_ordinal: 0,
+                registers: vec![rsscript_bytecode::TypedRegisterFactV1 {
+                    ty: rsscript_bytecode::TypedFactTypeV1::Known(
+                        rsscript_abi_model::WireType::Float { bits: 64 },
+                    ),
+                    ownership: rsscript_bytecode::TypedValueOwnershipV1::Copy,
+                }],
+                call_sites: vec![],
+                generic_substitutions: vec![],
+            }],
+            layouts: vec![],
+        };
+        artifact
+            .attach_typed_executable_facts(&facts)
+            .expect("attach facts");
+        let verified = rsscript_bytecode::BytecodeVerifier::default()
+            .verify(&artifact.to_bytes().expect("artifact bytes"))
+            .expect("structurally verified facts");
+        let unit = unit(vec![function(
+            "main",
+            0,
+            1,
+            vec![
+                RegInstr::LoadInt { dst: 0, value: 7 },
+                RegInstr::Return { src: 0 },
+            ],
+        )]);
+        assert_eq!(
+            VerifiedExecutableFacts::derive_with_typed(
+                &unit,
+                verified.typed_executable_facts().expect("typed facts"),
+            )
+            .expect_err("conflicting storage claim must fail"),
+            VerifiedFactsError::TypedFactsMismatch
+        );
     }
 }

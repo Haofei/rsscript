@@ -22,7 +22,9 @@ impl RegVm {
                 native
                     .cache
                     .iter()
-                    .find(|(version, entry)| version.function == key && entry.as_ref().is_some())
+                    .find(|(version, entry)| {
+                        version.instance.function == key && entry.as_ref().is_some()
+                    })
                     .and_then(|(_, entry)| entry.as_ref())
             })
             .map(|entry| entry.0)

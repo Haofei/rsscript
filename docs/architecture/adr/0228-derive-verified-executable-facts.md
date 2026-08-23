@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-23
-- Implementation: Phase 1 complete; Phase 2 requires a separate format ADR
+- Implementation: Phase 1 complete; Phase 2 minimum boundary implemented by ADR 0229
 
 ## Problem
 
@@ -91,9 +91,12 @@ language semantics, Provider ABI, runtime ABI, or SDK API.
 
 ### Phase 2: persisted typed executable facts
 
+ADR 0229 now specifies and accepts this phase. The requirements below are kept
+as the security and migration rationale that the concrete section must satisfy.
+
 Optimizations that require nominal layout identity, generic arguments, exact
-call signatures, or program-point ownership and effect facts require a future
-`TypedExecutableFactsV1` section. That section is a versioned executable
+call signatures, or program-point ownership and effect facts use the optional
+`TypedExecutableFactsV1` section specified by ADR 0229. That section is a versioned executable
 contract, not a serialization of compiler-owned `SemanticTypeFacts`.
 
 At minimum the future envelope must bind:
@@ -167,8 +170,8 @@ address space. Reaching any limit returns a typed decline or verification
 failure and leaves interpreter execution available; it must not produce partial
 facts.
 
-`TypedExecutableFactsV1` requires its own bounded decoder. Before a future
-writer is enabled, its format ADR must select concrete limits for section bytes,
+`TypedExecutableFactsV1` has its own bounded decoder. ADR 0229 and its writer
+select concrete limits for section bytes,
 type/layout/signature counts, per-function values, CFG edges, ownership events,
 materialization nodes, and total fact cells. Nested records use explicit depth
 and node limits. Generic arguments and materialization graphs may not be decoded
@@ -181,8 +184,7 @@ cache keys include the executable digest and all fact representations that can
 affect generated code. A change to fact derivation invalidates native cache
 entries; it does not invalidate the underlying Artifact.
 
-Phase 2 requires a separate cutover ADR before implementation. The expected
-migration is:
+ADR 0229 is the separate Phase 2 cutover decision. Its migration is:
 
 1. define canonical wire DTOs, limits, and an independent verifier;
 2. add malformed, tampered, N-1 reader, and deterministic-encoding fixtures;

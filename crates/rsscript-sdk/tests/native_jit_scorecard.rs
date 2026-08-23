@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 struct ScorecardCase {
     name: &'static str,
     pass: &'static str,
+    workload: &'static str,
     size: &'static str,
     source: &'static str,
 }
@@ -18,42 +19,49 @@ const CASES: &[ScorecardCase] = &[
     ScorecardCase {
         name: "scalar-loop",
         pass: "baseline",
+        workload: "pure_scalar",
         size: "200000",
         source: include_str!("../../../benchmarks/vm-jit/kernels/native_scalar_loop.rss"),
     },
     ScorecardCase {
         name: "native-call-chain",
         pass: "inlining/native-call",
+        workload: "static_calls",
         size: "150000",
         source: include_str!("../../../benchmarks/vm-jit/kernels/native_call_chain.rss"),
     },
     ScorecardCase {
         name: "mixed-mode-continuation",
         pass: "continuation",
+        workload: "struct",
         size: "2000",
         source: include_str!("../../../benchmarks/vm-jit/kernels/mixed_mode_continuation.rss"),
     },
     ScorecardCase {
         name: "option-scalar-replacement",
         pass: "scalar-replacement",
+        workload: "option_result",
         size: "150000",
         source: include_str!("../../../benchmarks/vm-jit/kernels/native_option_scalar_replace.rss"),
     },
     ScorecardCase {
         name: "result-scalar-replacement",
         pass: "scalar-replacement",
+        workload: "option_result",
         size: "150000",
         source: include_str!("../../../benchmarks/vm-jit/kernels/native_result_scalar_replace.rss"),
     },
     ScorecardCase {
         name: "struct-scalar-replacement",
         pass: "scalar-replacement",
+        workload: "struct",
         size: "150000",
         source: include_str!("../../../benchmarks/vm-jit/kernels/native_struct_scalar_replace.rss"),
     },
     ScorecardCase {
         name: "variant-scalar-replacement",
         pass: "scalar-replacement",
+        workload: "variant",
         size: "150000",
         source: include_str!(
             "../../../benchmarks/vm-jit/kernels/native_variant_scalar_replace.rss"
@@ -62,18 +70,21 @@ const CASES: &[ScorecardCase] = &[
     ScorecardCase {
         name: "profile-closure-pic",
         pass: "profile/PIC",
+        workload: "closure",
         size: "100000",
         source: include_str!("../../../benchmarks/vm-jit/kernels/profile_closure_pic.rss"),
     },
     ScorecardCase {
         name: "profile-branch-side-exit",
         pass: "profile/side-exit",
+        workload: "pure_scalar",
         size: "100000",
         source: include_str!("../../../benchmarks/vm-jit/kernels/profile_branch_side_exits.rss"),
     },
     ScorecardCase {
         name: "osr-scalar-loop",
         pass: "osr",
+        workload: "osr",
         size: "200000",
         source: include_str!("../../../benchmarks/vm-jit/kernels/osr_scalar_loop.rss"),
     },
@@ -82,6 +93,20 @@ const CASES: &[ScorecardCase] = &[
 fn median(mut samples: Vec<Duration>) -> Duration {
     samples.sort_unstable();
     samples[samples.len() / 2]
+}
+
+fn validate_and_print_engine_matrix(record: serde_json::Value) {
+    let schema: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../benchmarks/vm-jit/aot-jit-matrix.schema.json"
+    ))
+    .expect("AOT/JIT matrix schema is valid JSON");
+    let validator = jsonschema::validator_for(&schema).expect("AOT/JIT matrix schema compiles");
+    let errors = validator
+        .iter_errors(&record)
+        .map(|error| error.to_string())
+        .collect::<Vec<_>>();
+    assert!(errors.is_empty(), "matrix schema errors: {errors:#?}");
+    println!("AOT_JIT_MATRIX {record}");
 }
 
 /// Non-blocking full scorecard used by the weekly hardening workflow. The scalar
@@ -225,5 +250,45 @@ fn native_jit_pass_scorecard() {
                 "continuation_compiled_source_instructions": continuation_compiled_source_instructions,
             })
         );
+        let entered = native_calls > 0 || osr_entries > 0 || continuation_entries > 0;
+        validate_and_print_engine_matrix(serde_json::json!({
+            "schema": "rsscript.aot_jit_matrix.v1",
+            "workload": case.workload,
+            "semantic_match": true,
+            "engines": {
+                "interpreter": {
+                    "status": "measured",
+                    "execution_ns": interpreter.as_nanos(),
+                    "compile_ns": 0,
+                    "transitions": 0,
+                    "host_helper_calls": null,
+                    "bounds_checks": null,
+                    "allocations_eliminated": null,
+                    "reason": null
+                },
+                "jit": {
+                    "status": if entered { "measured" } else { "declined" },
+                    "execution_ns": native.as_nanos(),
+                    "compile_ns": compile_nanos,
+                    "transitions": native_calls
+                        .saturating_add(osr_entries)
+                        .saturating_add(continuation_entries),
+                    "host_helper_calls": null,
+                    "bounds_checks": null,
+                    "allocations_eliminated": null,
+                    "reason": if entered { None } else { Some("native tier declined this workload") }
+                },
+                "aot": {
+                    "status": "not_measured",
+                    "execution_ns": null,
+                    "compile_ns": null,
+                    "transitions": null,
+                    "host_helper_calls": null,
+                    "bounds_checks": null,
+                    "allocations_eliminated": null,
+                    "reason": "the experimental AOT backend is intentionally outside the Core SDK scorecard"
+                }
+            }
+        }));
     }
 }

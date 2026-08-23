@@ -874,6 +874,59 @@ fn armed_osr_rejects_the_ordinary_call_mode() {
 }
 
 #[test]
+fn armed_osr_reserves_block_cost_and_falls_back_at_first_unpaid_step() {
+    let mut m = module();
+    // One loop iteration dispatches JumpIf, Sub, Jump (three source steps).
+    // With a budget of five, the second iteration may pay JumpIf+Sub but must
+    // decline before Jump. The returned step count must therefore be exactly 5,
+    // never the end-of-loop overshoot produced by a late backedge check.
+    let code = vec![
+        JitInstr::LoadInt { dst: 1, value: 1 },
+        JitInstr::JumpIfIntCompare {
+            lhs: 0,
+            rhs: 1,
+            op: JitCompare::Gt,
+            expected: false,
+            target: 4,
+        },
+        JitInstr::Sub {
+            dst: 0,
+            lhs: 0,
+            rhs: 1,
+        },
+        JitInstr::Jump { target: 1 },
+        JitInstr::OsrExit,
+    ];
+    let id = m.compile_osr(&f(1, 2, code), 1, true, false).unwrap();
+    let window = [3, 1];
+    let lens = [0; 2];
+    let (outcome, steps) = m.call_with_step_cancel(id, &window, &lens, 0, Some(5), None);
+    assert_eq!(
+        steps, 5,
+        "native accounting must not charge an unpaid block"
+    );
+    let NativeOutcome::Deopt { safepoint_id, .. } = outcome else {
+        panic!("insufficient segment reservation must deopt");
+    };
+    assert_ne!(safepoint_id, SafepointId::ANONYMOUS);
+    let site = &m.deopt_map(id).unwrap().sites[safepoint_id.0 as usize - 1];
+    assert_eq!(
+        site.resume_ip, 3,
+        "the VM must resume at Jump, whose next interpreter tick observes the exhausted budget"
+    );
+
+    // The exact full-loop cost remains unchanged when the budget is sufficient:
+    // two complete three-instruction iterations plus the final conditional.
+    let (outcome, steps) = m.call_with_step_cancel(id, &window, &lens, 0, Some(10), None);
+    assert_eq!(steps, 7);
+    assert!(matches!(
+        outcome,
+        NativeOutcome::Deopt { safepoint_id, .. }
+            if safepoint_id != SafepointId::ANONYMOUS
+    ));
+}
+
+#[test]
 fn cancel_uses_atomic_load() {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};

@@ -51,6 +51,10 @@ fn native_scalar_call_invokes_compiled_int_leaf() {
             ],
         ))
         .unwrap();
+    assert!(
+        m.compact_scalar_frame_callable(callee),
+        "helper-free scalar leaves should omit the child lens window"
+    );
     // caller(x) = add2(x, 7) * 2
     let caller = m
         .compile(&f(
@@ -76,6 +80,51 @@ fn native_scalar_call_invokes_compiled_int_leaf() {
 
     assert_eq!(m.callt(caller, &[5]), Some(24));
     assert_eq!(m.callt(caller, &[-10]), Some(-6));
+}
+
+#[test]
+fn compact_scalar_child_frame_preserves_precise_nested_deopt() {
+    let mut m = module();
+    let callee = m
+        .compile(&f(
+            2,
+            3,
+            vec![
+                JitInstr::Div {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                JitInstr::Return { src: 2 },
+            ],
+        ))
+        .unwrap();
+    assert!(m.compact_scalar_frame_callable(callee));
+    let caller = m
+        .compile(&f(
+            2,
+            3,
+            vec![
+                JitInstr::CallNative {
+                    callee,
+                    dst: 2,
+                    args: vec![0, 1],
+                },
+                JitInstr::Return { src: 2 },
+            ],
+        ))
+        .unwrap();
+
+    assert_eq!(m.callt(caller, &[12, 3]), Some(4));
+    let outcome = m.call(caller, &[12, 0], &[0, 0]);
+    assert!(matches!(
+        outcome,
+        NativeOutcome::Deopt {
+            safepoint_id,
+            child: Some(_),
+            ..
+        } if safepoint_id != SafepointId::ANONYMOUS
+    ));
 }
 
 #[test]

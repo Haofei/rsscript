@@ -957,6 +957,11 @@ fn same_base_list_len_modulo_elides_access_but_preserves_mod_deopt_ip() {
 
     let mut m = module();
     let id = m.compile(&program).unwrap();
+    assert_eq!(
+        m.direct_list_bounds_checks_elided(id),
+        Some(1),
+        "compiled metadata must expose the range proof as evidence"
+    );
     assert_eq!(m.deopt_map(id).unwrap().sites.len(), 2);
     let empty: [i64; 0] = [];
     match m.call_with_host_ctx(

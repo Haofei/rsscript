@@ -464,16 +464,17 @@ pub(super) fn native_memoize_loop_invariant_runtime_helper_calls(
     let mut memo_scopes = Vec::new();
     let heap_provenance =
         NativeHeapProvenanceFacts::compute(code, jit_code, n_params, native_reg_types);
-    let loops = detect_natural_loops(code);
-    for lp in &loops {
+    let loops = detect_canonical_loops(code);
+    for loop_facts in &loops {
+        let lp = loop_facts.region;
         // Scope lowering marks only unconditional jumps as backedges. This covers
         // structured `while` loops without splitting conditional CFG edges.
-        if !native_memo_scope_representable(code, lp.header, lp.exit) {
+        if !native_memo_scope_representable(code, loop_facts) {
             continue;
         }
         let first_memo_slot = next_memo_slot;
         let Some(mut invariants) =
-            native_loop_invariant_regs(code, reachable, lp.header, lp.exit, original_n_regs)
+            native_loop_invariant_regs(code, reachable, loop_facts, original_n_regs)
         else {
             continue;
         };
@@ -975,10 +976,10 @@ struct NativeLoopInvariants {
 fn native_loop_invariant_regs(
     code: &[RegInstr],
     reachable: &[bool],
-    header: usize,
-    exit: usize,
+    facts: &CanonicalLoopFacts,
     n_regs: usize,
 ) -> Option<NativeLoopInvariants> {
+    let OsrLoop { header, exit } = facts.region;
     let mut written = vec![false; n_regs];
     let mut constant_int = vec![None; n_regs];
     let mut constant_string: Vec<Option<Rc<String>>> = vec![None; n_regs];
@@ -1115,26 +1116,14 @@ fn native_reg_loop_invariant_at(
 
 #[cfg(feature = "native-jit")]
 #[cfg(feature = "jit-memoization-experimental")]
-fn native_memo_scope_representable(code: &[RegInstr], header: usize, exit: usize) -> bool {
-    (header..exit).any(|ip| {
-        matches!(
-            code.get(ip),
-            Some(RegInstr::Jump { target }) if *target == header
-        )
-    }) && !(header..exit).any(|ip| match code.get(ip) {
-        Some(RegInstr::JumpIfBool { target, .. })
-        | Some(RegInstr::JumpIfIntCompare { target, .. }) => *target == header,
-        Some(RegInstr::MatchOption {
-            some_ip, none_ip, ..
+fn native_memo_scope_representable(code: &[RegInstr], facts: &CanonicalLoopFacts) -> bool {
+    !facts.latches.is_empty()
+        && facts.latches.iter().all(|latch| {
+            matches!(
+                code.get(*latch),
+                Some(RegInstr::Jump { target }) if *target == facts.region.header
+            )
         })
-        | Some(RegInstr::MatchMapGet {
-            some_ip, none_ip, ..
-        })
-        | Some(RegInstr::MatchSortedMapGet {
-            some_ip, none_ip, ..
-        }) => *some_ip == header || *none_ip == header,
-        _ => false,
-    })
 }
 
 #[cfg(all(test, feature = "native-jit"))]

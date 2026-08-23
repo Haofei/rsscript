@@ -111,6 +111,18 @@ until a canonical compiler workload demonstrates a repeatable end-to-end benefit
 Loop-invariant host-helper memoization is likewise excluded from the stable SDK
 path and compiled only by `jit-memoization-experimental`. Its CFG scope proof and
 runtime memo state must earn retention through the same canonical scorecard.
+OSR selection and that experimental helper-hoist consume one canonical loop-fact
+projection: unique preheader (when present), header condition, latches, exits, and
+a conservative affine induction variable. The existing backend range proof may
+remove an individual flat-list bounds check, and reports the exact eliminated-site
+count separately from checks retained.
+
+Scalar x2 unrolling is not enabled. The VM reports only research candidates that
+have one latch and exit, a unit constant induction step, at most twelve direct
+scalar instructions, and no internal control-flow or effectful helper. Even those
+candidates remain unchanged until exact source-step charging, overflow/deopt
+resume identity, remainder semantics, differential coverage, and a controlled
+end-to-end benchmark all pass. SIMD remains out of scope.
 
 Nested and loop-carried struct scalar replacement is retained for research behind
 the VM-only `jit-struct-sr-experimental` feature. The ordinary SDK `native-jit`

@@ -96,7 +96,7 @@ scope = "bytecode"
 operation = "set_byte"
 offset = 610
 value = 5
-expected = "unknown required section 5"
+expected = "section 5 must be optional"
 
 [[case]]
 name = "bytecode-code-section-not-required"

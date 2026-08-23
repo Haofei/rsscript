@@ -1190,6 +1190,7 @@ dependencies = [
 name = "rsscript-fuzz"
 version = "0.0.0"
 dependencies = [
+ "base64",
  "jsonschema",
  "libfuzzer-sys",
  "rsscript-bytecode",

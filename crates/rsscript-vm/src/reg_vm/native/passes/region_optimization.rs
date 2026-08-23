@@ -2769,44 +2769,6 @@ pub(in crate::reg_vm) fn native_bytes_length_fold_in_region(
     Some((new_code, next_reg, ip_map))
 }
 
-/// A bounded clean-OSR-exit reconstruction tree. Aggregate scalar replacement
-/// emits only register leaves; the cache builder later verifies that every leaf
-/// is represented by the deopt ABI as a scalar or owned heap handle.
-#[cfg(feature = "native-jit")]
-#[derive(Clone, Debug)]
-pub(in crate::reg_vm) struct OsrMaterializeRecipe {
-    pub(in crate::reg_vm) dst_reg: usize,
-    pub(in crate::reg_vm) value: OsrMaterializeValue,
-}
-
-#[cfg(feature = "native-jit")]
-#[derive(Clone, Debug)]
-pub(in crate::reg_vm) struct OsrMaterializeVariantArm {
-    pub(in crate::reg_vm) tag: i64,
-    pub(in crate::reg_vm) layout: Rc<crate::vm_value::TypeLayout>,
-    pub(in crate::reg_vm) fields: Vec<OsrMaterializeValue>,
-}
-
-#[cfg(feature = "native-jit")]
-#[derive(Clone, Debug)]
-pub(in crate::reg_vm) enum OsrMaterializeValue {
-    Register(usize),
-    OptionSome(Box<OsrMaterializeValue>),
-    #[cfg(any(test, feature = "jit-struct-sr-experimental"))]
-    Struct {
-        layout: Rc<crate::vm_value::TypeLayout>,
-        fields: Vec<OsrMaterializeValue>,
-    },
-    Variant {
-        /// `None` is a statically selected single arm (used by always-Ok Result).
-        tag_reg: Option<usize>,
-        arms: Vec<OsrMaterializeVariantArm>,
-    },
-}
-
-pub(in crate::reg_vm) const MAX_OSR_MATERIALIZE_DEPTH: usize = 8;
-pub(in crate::reg_vm) const MAX_OSR_MATERIALIZE_NODES: usize = 64;
-
 /// OSR × scalar replacement: scalar-replace non-escaping scalar `Option`s that live entirely
 /// inside the loop region `[header, exit)` of an otherwise native-INELIGIBLE
 /// function (one whose pre/post-loop code does I/O — calls, `Output.write`, …, which
@@ -3250,9 +3212,6 @@ pub(in crate::reg_vm) fn is_result_ctor_name(name: &str) -> bool {
 /// of different native types (e.g. `Result<Int, String>`) don't force a single payload
 /// register into conflicting types. Only the arm matching the live `tag` is read at
 /// reconstruction, so the other (possibly stale) payload is never observed.
-#[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) type ResultRecipe = (usize, usize, usize, Option<usize>);
-
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
     code: &[RegInstr],

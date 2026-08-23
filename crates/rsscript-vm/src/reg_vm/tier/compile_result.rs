@@ -150,6 +150,8 @@ pub(super) fn record_native_compile_stats(
     native.stats.compiled_ir_instrs += jit_fn.code.len() as u64;
     native.stats.compiled_code_bytes += module.code_size_bytes(id).unwrap_or(0);
     native.stats.direct_list_bounds_check_sites += telemetry.direct_list_bounds_check_sites;
+    native.stats.direct_list_bounds_checks_elided +=
+        module.direct_list_bounds_checks_elided(id).unwrap_or(0);
     native.stats.memoized_runtime_helper_call_sites += telemetry.memoized_runtime_helper_call_sites;
     native.stats.runtime_helper_call_sites += telemetry.runtime_helper_call_sites;
     native.stats.fused_map_match_helper_sites += telemetry.fused_map_match_helper_sites;

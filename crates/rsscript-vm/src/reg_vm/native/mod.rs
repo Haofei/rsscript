@@ -6,8 +6,10 @@ mod facts;
 mod passes;
 mod profitability;
 mod translate;
+mod typed_region;
 
 pub(in crate::reg_vm) use facts::*;
 pub(super) use passes::*;
 pub(super) use profitability::*;
 pub(super) use translate::*;
+pub(in crate::reg_vm) use typed_region::*;

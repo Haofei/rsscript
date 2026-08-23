@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use rsscript_bytecode::{BytecodeArtifact, BytecodeError, VerifiedBytecode};
+use rsscript_bytecode::{
+    BoundTypedExecutableFactsV1, BytecodeArtifact, BytecodeError, VerifiedBytecode,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::serde_json;
@@ -35,11 +37,18 @@ struct WireFunction {
 pub(super) struct VerifiedRegBytecode {
     artifact: BytecodeArtifact,
     executable: RegUnit,
+    typed_executable_facts: Option<BoundTypedExecutableFactsV1>,
 }
 
 impl VerifiedRegBytecode {
-    pub(super) fn into_parts(self) -> (BytecodeArtifact, RegUnit) {
-        (self.artifact, self.executable)
+    pub(super) fn into_parts(
+        self,
+    ) -> (
+        BytecodeArtifact,
+        RegUnit,
+        Option<BoundTypedExecutableFactsV1>,
+    ) {
+        (self.artifact, self.executable, self.typed_executable_facts)
     }
 }
 
@@ -73,7 +82,7 @@ pub(super) fn decode_verified_bytecode(
     verified: VerifiedBytecode,
     context: rsscript_bytecode::VerificationContext<'_>,
 ) -> Result<VerifiedRegBytecode, EvalError> {
-    let artifact = verified.into_artifact();
+    let (artifact, typed_executable_facts) = verified.into_parts();
     context.check().map_err(bytecode_error)?;
     // `VerifiedBytecode` is constructed only by `BytecodeVerifier`, which
     // owns payload, register, control-flow, and import validation. The VM is
@@ -83,6 +92,7 @@ pub(super) fn decode_verified_bytecode(
     Ok(VerifiedRegBytecode {
         artifact,
         executable: executable.into_reg_unit(),
+        typed_executable_facts,
     })
 }
 

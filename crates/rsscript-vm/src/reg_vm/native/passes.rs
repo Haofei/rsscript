@@ -20,6 +20,7 @@ mod intrinsics;
 mod region_optimization;
 mod scalar_replacement;
 mod semantics;
+mod virtual_objects;
 
 pub(in crate::reg_vm) use facts::*;
 pub(in crate::reg_vm) use inlining::*;
@@ -27,6 +28,7 @@ pub(in crate::reg_vm) use intrinsics::*;
 pub(in crate::reg_vm) use region_optimization::*;
 pub(in crate::reg_vm) use scalar_replacement::*;
 pub(in crate::reg_vm) use semantics::*;
+pub(in crate::reg_vm) use virtual_objects::*;
 
 #[cfg(all(test, feature = "native-jit"))]
 mod architecture_tests {
@@ -37,16 +39,19 @@ mod architecture_tests {
         let semantics = include_str!("passes/semantics.rs");
         let scalar_replacement = include_str!("passes/scalar_replacement.rs");
         let inlining = include_str!("passes/inlining.rs");
+        let virtual_objects = include_str!("passes/virtual_objects.rs");
 
         assert!(root.contains("mod facts;"));
         assert!(root.contains("mod semantics;"));
         assert!(root.contains("mod scalar_replacement;"));
         assert!(root.contains("mod inlining;"));
+        assert!(root.contains("mod virtual_objects;"));
         let legacy_include = ["include", "!("].concat();
         assert!(!root.contains(&legacy_include));
         assert!(facts.contains("enum NativeFact"));
         assert!(semantics.contains("struct NativeInstrSemantics"));
         assert!(scalar_replacement.contains("native_scalar_replace_two_armed_results_in_region"));
         assert!(inlining.contains("native_inline_leaf_calls"));
+        assert!(virtual_objects.contains("struct VirtualObjectAnalysis"));
     }
 }

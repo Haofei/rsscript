@@ -486,10 +486,17 @@ enum PureStep {
 pub struct RegVmExecutable {
     unit: Rc<RegUnit>,
     artifact: rsscript_bytecode::BytecodeArtifact,
+    /// Static facts admitted together with the executable by the bytecode
+    /// verifier. Engines consume this wrapper rather than reparsing raw bytes.
+    typed_executable_facts: Option<Rc<rsscript_bytecode::BoundTypedExecutableFactsV1>>,
     /// Lazily derived once per verified executable. Interpreter-only execution
     /// pays no facts cost even in a binary that was built with native JIT.
     #[cfg(feature = "native-jit")]
     verified_facts: std::cell::OnceCell<Result<Rc<VerifiedExecutableFacts>, VerifiedFactsError>>,
+    /// Immutable loop evidence is derived at most once from the verified code
+    /// and reused by every telemetry-enabled execution of this executable.
+    #[cfg(feature = "native-jit")]
+    loop_optimization_evidence: std::cell::OnceCell<LoopOptimizationEvidence>,
 }
 
 impl RegVmExecutable {
@@ -499,7 +506,7 @@ impl RegVmExecutable {
     pub fn from_verified_bytecode(
         verified: rsscript_bytecode::VerifiedBytecode,
     ) -> Result<Self, EvalError> {
-        let (artifact, unit) = bytecode::decode_verified_bytecode(
+        let (artifact, unit, typed_executable_facts) = bytecode::decode_verified_bytecode(
             verified,
             rsscript_bytecode::VerificationContext::default(),
         )?
@@ -507,8 +514,11 @@ impl RegVmExecutable {
         Ok(Self {
             unit: Rc::new(unit),
             artifact,
+            typed_executable_facts: typed_executable_facts.map(Rc::new),
             #[cfg(feature = "native-jit")]
             verified_facts: std::cell::OnceCell::new(),
+            #[cfg(feature = "native-jit")]
+            loop_optimization_evidence: std::cell::OnceCell::new(),
         })
     }
 
@@ -530,6 +540,12 @@ impl RegVmExecutable {
 
     pub fn bytecode_artifact(&self) -> &rsscript_bytecode::BytecodeArtifact {
         &self.artifact
+    }
+
+    pub fn typed_executable_facts(
+        &self,
+    ) -> Option<&rsscript_bytecode::BoundTypedExecutableFactsV1> {
+        self.typed_executable_facts.as_deref()
     }
 
     /// Return the canonical result value for `main` when its v1 declaration
@@ -616,10 +632,29 @@ impl RegVmExecutable {
             }
             #[cfg(feature = "native-jit")]
             TierPlan::Native(native) => {
-                let verified_facts = match self
-                    .verified_facts
-                    .get_or_init(|| VerifiedExecutableFacts::derive(&self.unit).map(Rc::new))
-                {
+                let verified_facts = match self.verified_facts.get_or_init(|| {
+                    self.typed_executable_facts
+                        .as_deref()
+                        .map_or_else(
+                            || VerifiedExecutableFacts::derive(&self.unit),
+                            |typed| {
+                                match VerifiedExecutableFacts::derive_with_typed(&self.unit, typed)
+                                {
+                                    Ok(facts) => Ok(facts),
+                                    // Typed facts are optional optimization evidence. A
+                                    // producer bug or hostile contradiction must never make
+                                    // interpreter-correct execution fail merely because the
+                                    // host opted into native acceleration. Discard all persisted
+                                    // evidence and retain the bytecode-local conservative proof.
+                                    Err(VerifiedFactsError::TypedFactsMismatch) => {
+                                        VerifiedExecutableFacts::derive(&self.unit)
+                                    }
+                                    Err(error) => Err(error),
+                                }
+                            },
+                        )
+                        .map(Rc::new)
+                }) {
                     Ok(facts) => Rc::clone(facts),
                     Err(error) => {
                         return Err(EvalError::Runtime(format!(
@@ -1012,6 +1047,10 @@ impl RegVmExecutable {
             && native.collect_stats
         {
             native.stats.add_profile_feedback(&self.unit, jit_state);
+            let loop_evidence = self
+                .loop_optimization_evidence
+                .get_or_init(|| unit_loop_optimization_evidence(&self.unit));
+            native.stats.add_loop_optimization_evidence(loop_evidence);
             let facts = native
                 .verified_facts
                 .as_deref()
@@ -1261,6 +1300,10 @@ impl RegVmExecutable {
             && native.collect_stats
         {
             native.stats.add_profile_feedback(&self.unit, &vm.jit_state);
+            let loop_evidence = self
+                .loop_optimization_evidence
+                .get_or_init(|| unit_loop_optimization_evidence(&self.unit));
+            native.stats.add_loop_optimization_evidence(loop_evidence);
             let facts = native
                 .verified_facts
                 .as_deref()
@@ -1739,6 +1782,65 @@ type NativeCompiledEntry = (
 #[cfg(feature = "native-jit")]
 const MAX_NATIVE_SHAPE_VERSIONS: usize = 2;
 
+/// Maximum verifier-proved generic instances admitted for one source function
+/// during an evaluation. Static type arguments and runtime representation
+/// shapes are separate dimensions: this cap bounds monomorphization/code size,
+/// while [`MAX_NATIVE_SHAPE_VERSIONS`] bounds the few genuinely dynamic layouts
+/// within each admitted instance.
+#[cfg(feature = "native-jit")]
+const MAX_JIT_INSTANCES_PER_FUNCTION: usize = 8;
+#[cfg(feature = "native-jit")]
+const MAX_JIT_TYPE_ARGUMENTS: usize = 16;
+
+/// Concrete substitutions admitted by the typed-facts verifier.
+///
+/// v1 lowering does not yet retain ordinary direct-call substitutions. Empty
+/// input therefore means `Unavailable`, not "proved nongeneric". This explicit
+/// state is the fail-closed bridge: native caching can consume real type
+/// arguments as soon as lowering supplies them without guessing from function
+/// names, register values, or source spellings.
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum VerifiedTypeArgsKey {
+    Unavailable,
+    Known(Box<[WireType]>),
+}
+
+#[cfg(feature = "native-jit")]
+impl VerifiedTypeArgsKey {
+    fn from_verified(arguments: &[WireType]) -> Option<Self> {
+        if arguments.len() > MAX_JIT_TYPE_ARGUMENTS {
+            return None;
+        }
+        Some(if arguments.is_empty() {
+            Self::Unavailable
+        } else {
+            Self::Known(arguments.to_vec().into_boxed_slice())
+        })
+    }
+
+    const fn is_known(&self) -> bool {
+        matches!(self, Self::Known(_))
+    }
+}
+
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct JitInstanceKey {
+    function: usize,
+    type_arguments: VerifiedTypeArgsKey,
+}
+
+#[cfg(feature = "native-jit")]
+impl JitInstanceKey {
+    fn from_facts(function: usize, facts: &VerifiedFunctionFacts) -> Option<Self> {
+        Some(Self {
+            function,
+            type_arguments: VerifiedTypeArgsKey::from_verified(&facts.generic_substitutions)?,
+        })
+    }
+}
+
 /// Stable runtime ABI shape used for bounded native multiversioning. Scalar
 /// payloads and collection lengths are deliberately absent. Heap identities are
 /// included only where the runtime already exposes stable dispatch metadata:
@@ -1864,7 +1966,7 @@ fn native_param_shape_with_fact(value: &VmValue, fact: VerifiedStorageType) -> N
 #[cfg(feature = "native-jit")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct NativeVersionKey {
-    function: usize,
+    instance: JitInstanceKey,
     shape: ShapeKey,
 }
 
@@ -1872,13 +1974,14 @@ struct NativeVersionKey {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct OsrVersionKey {
     region: RegionKey,
+    type_arguments: VerifiedTypeArgsKey,
     shape: ShapeKey,
 }
 
 #[cfg(feature = "native-jit")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ContinuationVersionKey {
-    function: usize,
+    instance: JitInstanceKey,
     entry: usize,
     shape: ShapeKey,
     cancel_armed: bool,
@@ -2213,6 +2316,28 @@ pub struct NativeStats {
     pub deopt_sites: u64,
     /// Bounds checks retained on direct flat-list loads and stores.
     pub direct_list_bounds_check_sites: u64,
+    /// Direct flat-list bounds checks removed by the backend's existing range
+    /// and provenance proof. Kept separate from retained sites so benchmarks
+    /// can demonstrate an actual elimination rather than infer one.
+    pub direct_list_bounds_checks_elided: u64,
+    /// Canonical natural loops recognized from the shared OSR/helper-hoist facts.
+    pub canonical_loops: u64,
+    /// Canonical loops with one explicit predecessor outside the loop.
+    pub canonical_loop_preheaders: u64,
+    /// Canonical loops with a conservative affine induction-variable proof.
+    pub canonical_induction_variables: u64,
+    /// Tiny, pure scalar loops that pass strict x2 research eligibility. No
+    /// production unrolling is enabled until accounting/deopt parity and a
+    /// controlled end-to-end gain are demonstrated.
+    pub scalar_unroll_research_candidates: u64,
+    /// Stable reasons canonical loops fail the research-only unroll gate.
+    pub scalar_unroll_declines: BTreeMap<String, u64>,
+    /// Number of source/edge work units consumed by the bounded immutable loop
+    /// analysis cached on the verified executable.
+    pub loop_analysis_work_units: u64,
+    /// One or more functions hit the linear loop-analysis work ceiling. Other
+    /// loop counters are conservative lower bounds when this is non-zero.
+    pub loop_analysis_limit_reached: u64,
     /// Loop-invariant scalar host calls emitted with lazy memoization.
     pub memoized_runtime_helper_call_sites: u64,
     /// Ordinary, non-memoized host calls emitted across compiled regions.
@@ -2252,6 +2377,12 @@ pub struct NativeStats {
     pub arg_mismatch: u64,
     /// Baseline shape versions admitted to whole-function or OSR caches.
     pub shape_versions: u64,
+    /// Native region instances keyed by verifier-proved concrete type
+    /// arguments. Empty/erased v1 substitutions are intentionally excluded.
+    pub static_type_instances: u64,
+    /// Static instances declined by the bounded type-argument or per-function
+    /// monomorphization limits.
+    pub static_instance_limit_fallbacks: u64,
     /// Dispatches served by an existing shape-specific native version.
     pub shape_cache_hits: u64,
     /// New shapes declined after a tier/site reached its two-version cap.
@@ -2305,7 +2436,7 @@ impl NativeStats {
     fn summary(&self) -> String {
         format!(
             "native-jit: verified_known_reg_types={} verified_unknown_reg_types={} verified_known_call_sites={} verified_instruction_effects={} considered={} translated={} compiled={} baseline_compiles={} optimized_compiles={} baseline_calls={} optimized_calls={} promotions={} ir_instrs={} code_bytes={} admission_admitted={} admission_admitted_bytes={} admission_rejected={} admission_rejected_bytes={} deopt_sites={} direct_list_bounds_check_sites={} memoized_runtime_helper_call_sites={} runtime_helper_call_sites={} fused_map_match_helper_sites={} direct_list_store_load_forwarded_moves={} native_call_edges={} native_call_depth_max={} profile_closure_guards={} profile_closure_id_reads={} profile_closure_pic_sites={} profile_closure_pic_arms={} profile_branch_sites={} profile_branch_samples={} profile_branch_taken={} profile_branch_fallthrough={} profile_branch_cold_blocks={} profile_branch_side_exits={} not_eligible={} top_decline={} \
-compile_failed={} calls={} bails={} child_bails={} child_resumes={} arg_mismatch={} shape_versions={} shape_cache_hits={} shape_limit_fallbacks={} shape_bails={} tier_deferred={} \
+compile_failed={} calls={} bails={} child_bails={} child_resumes={} arg_mismatch={} shape_versions={} static_type_instances={} static_instance_limit_fallbacks={} shape_cache_hits={} shape_limit_fallbacks={} shape_bails={} tier_deferred={} \
 compile_ms={:.3} run_ms={:.3} osr_entries={} continuation_entries={} continuation_yields={} unprofitable_declines={}",
             self.verified_known_reg_types,
             self.verified_unknown_reg_types,
@@ -2352,6 +2483,8 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} continuation_entries={} continuatio
             self.native_child_resumes,
             self.arg_mismatch,
             self.shape_versions,
+            self.static_type_instances,
+            self.static_instance_limit_fallbacks,
             self.shape_cache_hits,
             self.shape_limit_fallbacks,
             self.shape_bails,
@@ -2407,6 +2540,17 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} continuation_entries={} continuatio
         self.profile_branch_samples = taken.saturating_add(fallthrough);
     }
 
+    fn add_loop_optimization_evidence(&mut self, evidence: &LoopOptimizationEvidence) {
+        self.canonical_loops = evidence.canonical_loops;
+        self.canonical_loop_preheaders = evidence.unique_preheaders;
+        self.canonical_induction_variables = evidence.induction_variables;
+        self.scalar_unroll_research_candidates = evidence.unroll_research_candidates;
+        self.scalar_unroll_declines
+            .clone_from(&evidence.unroll_declines);
+        self.loop_analysis_work_units = evidence.analysis_work_units;
+        self.loop_analysis_limit_reached = u64::from(evidence.analysis_limit_reached);
+    }
+
     /// Telemetry as JSON for VM/JIT benchmark and reporting harnesses.
     pub fn to_json(&self) -> crate::serde_json::Value {
         let mut value = crate::serde_json::json!({
@@ -2454,6 +2598,36 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} continuation_entries={} continuatio
         });
         let object = value.as_object_mut().expect("stats JSON is an object");
         object.insert(
+            "direct_list_bounds_checks_elided".into(),
+            self.direct_list_bounds_checks_elided.into(),
+        );
+        object.insert("canonical_loops".into(), self.canonical_loops.into());
+        object.insert(
+            "canonical_loop_preheaders".into(),
+            self.canonical_loop_preheaders.into(),
+        );
+        object.insert(
+            "canonical_induction_variables".into(),
+            self.canonical_induction_variables.into(),
+        );
+        object.insert(
+            "scalar_unroll_research_candidates".into(),
+            self.scalar_unroll_research_candidates.into(),
+        );
+        object.insert(
+            "scalar_unroll_declines".into(),
+            crate::serde_json::to_value(&self.scalar_unroll_declines)
+                .expect("scalar unroll decline counts serialize"),
+        );
+        object.insert(
+            "loop_analysis_work_units".into(),
+            self.loop_analysis_work_units.into(),
+        );
+        object.insert(
+            "loop_analysis_limit_reached".into(),
+            self.loop_analysis_limit_reached.into(),
+        );
+        object.insert(
             "verified_known_reg_types".into(),
             self.verified_known_reg_types.into(),
         );
@@ -2500,6 +2674,14 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} continuation_entries={} continuatio
             self.fused_map_match_helper_sites.into(),
         );
         object.insert("shape_versions".into(), self.shape_versions.into());
+        object.insert(
+            "static_type_instances".into(),
+            self.static_type_instances.into(),
+        );
+        object.insert(
+            "static_instance_limit_fallbacks".into(),
+            self.static_instance_limit_fallbacks.into(),
+        );
         object.insert("shape_cache_hits".into(), self.shape_cache_hits.into());
         object.insert(
             "shape_limit_fallbacks".into(),
@@ -6826,18 +7008,61 @@ impl NativeState {
         }
     }
 
-    fn whole_shape_count(&self, function: usize) -> usize {
+    fn whole_shape_count(&self, instance: &JitInstanceKey) -> usize {
         self.cache
             .keys()
-            .filter(|key| key.function == function)
+            .filter(|key| &key.instance == instance)
             .count()
     }
 
-    fn osr_shape_count(&self, region: RegionKey) -> usize {
+    fn whole_instance_count(&self, function: usize) -> usize {
+        self.cache
+            .keys()
+            .filter(|key| key.instance.function == function)
+            .map(|key| &key.instance.type_arguments)
+            .collect::<HashSet<_>>()
+            .len()
+    }
+
+    fn has_whole_instance(&self, instance: &JitInstanceKey) -> bool {
+        self.cache.keys().any(|key| &key.instance == instance)
+    }
+
+    fn osr_shape_count(&self, region: RegionKey, type_arguments: &VerifiedTypeArgsKey) -> usize {
+        self.osr_cache
+            .keys()
+            .filter(|key| key.region == region && &key.type_arguments == type_arguments)
+            .count()
+    }
+
+    fn osr_instance_count(&self, region: RegionKey) -> usize {
         self.osr_cache
             .keys()
             .filter(|key| key.region == region)
-            .count()
+            .map(|key| &key.type_arguments)
+            .collect::<HashSet<_>>()
+            .len()
+    }
+
+    fn has_osr_instance(&self, region: RegionKey, type_arguments: &VerifiedTypeArgsKey) -> bool {
+        self.osr_cache
+            .keys()
+            .any(|key| key.region == region && &key.type_arguments == type_arguments)
+    }
+
+    fn continuation_instance_count(&self, function: usize, entry: usize) -> usize {
+        self.continuation_cache
+            .keys()
+            .filter(|key| key.instance.function == function && key.entry == entry)
+            .map(|key| &key.instance.type_arguments)
+            .collect::<HashSet<_>>()
+            .len()
+    }
+
+    fn has_continuation_instance(&self, instance: &JitInstanceKey, entry: usize) -> bool {
+        self.continuation_cache
+            .keys()
+            .any(|key| &key.instance == instance && key.entry == entry)
     }
 }
 

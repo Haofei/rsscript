@@ -315,7 +315,7 @@ pub(in crate::reg_vm) fn native_instr_successors(
 }
 
 #[cfg(feature = "native-jit")]
-pub(super) fn native_instr_is_control_boundary(instr: &RegInstr) -> bool {
+pub(in crate::reg_vm) fn native_instr_is_control_boundary(instr: &RegInstr) -> bool {
     native_instr_semantics(instr).control.is_boundary()
 }
 
@@ -365,22 +365,6 @@ impl NativeRegionCfg {
     pub(in crate::reg_vm) fn successors(&self, ip: usize) -> Option<&[usize]> {
         self.slot(ip)
             .and_then(|slot| self.successors.get(slot).map(Vec::as_slice))
-    }
-
-    pub(in crate::reg_vm) fn backedges_to(&self, header: usize) -> Vec<usize> {
-        if !self.contains(header) {
-            return Vec::new();
-        }
-        let mut backedges = Vec::new();
-        for ip in self.entry..self.exit {
-            let Some(successors) = self.successors(ip) else {
-                continue;
-            };
-            if ip >= header && successors.contains(&header) {
-                backedges.push(ip);
-            }
-        }
-        backedges
     }
 
     #[cfg(any(test, feature = "jit-diagnostics"))]

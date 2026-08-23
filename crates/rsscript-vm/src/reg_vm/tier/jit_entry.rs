@@ -125,6 +125,8 @@ impl RegVm {
         let key = self.jit_state.function_ordinal(func);
         let profile = self.jit_state.profile(func);
         let call_count = self.jit_state.call_count(func);
+        let verified_facts = Rc::clone(self.native.as_ref()?.verified_facts.as_ref()?);
+        let function_facts = verified_facts.function(function_id)?;
         let (id, param_tys, ret) = {
             let native = self.native.as_mut()?;
             if !native.allow_recursive_calls {
@@ -160,6 +162,7 @@ impl RegVm {
                         translate_to_native_jit_with_calls(
                             unit,
                             func,
+                            function_facts,
                             profile,
                             call_count,
                             &std::collections::HashMap::new(),
@@ -306,6 +309,7 @@ impl RegVm {
             return None;
         }
         let key = self.jit_state.function_ordinal(func);
+        let verified_facts = Rc::clone(self.native.as_ref()?.verified_facts.as_ref()?);
         // Resolve the called member's native id, its parameter types (to marshal each
         // scalar arg) and its return type (to wrap the i64 result). Cached per member;
         // compiling any member compiles the whole group.
@@ -350,6 +354,7 @@ impl RegVm {
                         let (jit_fn, ret, param_tys, _l, _pr) = translate_to_native_jit_with_calls(
                             unit,
                             mfunc,
+                            verified_facts.function(member)?,
                             self.jit_state.profile(mfunc),
                             self.jit_state.call_count(mfunc),
                             &std::collections::HashMap::new(),

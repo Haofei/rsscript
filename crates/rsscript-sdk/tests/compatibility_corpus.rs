@@ -10,8 +10,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use rsscript_bytecode::BytecodeArtifact;
 use rsscript_sdk::{
-    ProviderRegistry, TerminationReason,
+    ArtifactBundle, ProviderRegistry, TerminationReason,
     artifact::ArtifactVerifier,
     compile::{Compiler, FrontendInputSnapshot},
     provider_api::{
@@ -201,6 +202,14 @@ fn artifact_provider_compatibility_corpus_is_fail_closed_and_provider_neutral() 
             include_str!("../../rsscript-bytecode/fixtures/v1/reference.rssbundle.base64").trim(),
         )
         .expect("checked-in v1 compatibility bundle is base64");
+    let legacy_bundle_envelope = ArtifactBundle::from_bytes(&legacy_bundle)
+        .expect("the pre-facts v1 Bundle remains structurally readable");
+    let legacy_artifact = BytecodeArtifact::from_bytes(legacy_bundle_envelope.artifact_bytes())
+        .expect("the pre-facts v1 fixture remains structurally readable");
+    assert!(
+        legacy_artifact.typed_executable_facts.is_none(),
+        "the frozen v1 fixture proves typed facts remain optional"
+    );
     let legacy = ArtifactVerifier
         .verify_bytes(&legacy_bundle)
         .expect("deployed v1 bundle remains readable")

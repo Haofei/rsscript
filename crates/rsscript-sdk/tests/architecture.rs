@@ -1014,12 +1014,181 @@ fn jit_translation_consumes_verified_facts_without_multiplying_inference_engines
             || translate.contains("VerifiedExecutableFacts"),
         "whole-function, OSR, and continuation translation must consume the shared verified facts projection"
     );
+    assert!(
+        translate.contains("facts.native_type_seed(n_regs, false)?"),
+        "ordinary whole-function scalar translation must seed storage types from verified facts"
+    );
+    assert!(
+        translate.contains("facts: &VerifiedFunctionFacts"),
+        "known-call translation must receive the verified call-site/type projection explicitly"
+    );
     for inference_definition in ["fn native_set_ty(", "fn native_unify("] {
         assert!(
             all_native.matches(inference_definition).count() <= 1,
             "native translation must not grow another ad-hoc inference engine `{inference_definition}`"
         );
     }
+}
+
+#[test]
+fn jit_static_facts_and_missed_optimization_telemetry_stay_structured() {
+    let root = workspace_root();
+    let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));
+    let facts = read(&root.join("crates/rsscript-vm/src/reg_vm/native/facts.rs"));
+
+    for field in [
+        "verified_known_reg_types",
+        "verified_unknown_reg_types",
+        "verified_known_call_sites",
+        "verified_instruction_effects",
+        "interpreted_native_work",
+        "native_barrier_counts",
+        "native_decline_reasons",
+        "shape_versions",
+        "native_call_edges",
+        "direct_list_bounds_checks_elided",
+        "canonical_loops",
+        "canonical_induction_variables",
+        "scalar_unroll_research_candidates",
+        "scalar_unroll_declines",
+    ] {
+        assert!(
+            vm.contains(field),
+            "native evidence must retain structured telemetry field `{field}`"
+        );
+    }
+    for summary_field in [
+        "known_reg_types",
+        "unknown_reg_types",
+        "known_call_sites",
+        "instruction_effects",
+    ] {
+        assert!(
+            facts.contains(summary_field),
+            "verified facts summary must expose `{summary_field}`"
+        );
+    }
+    assert!(vm.contains("fn jit_missed_opt_report("));
+    assert!(vm.contains("native_decline_reason_counts("));
+    assert!(vm.contains("verified_facts"));
+    assert!(vm.contains("native execution installs verified facts"));
+    assert!(vm.contains("pub fn to_json(&self)"));
+}
+
+#[test]
+fn native_execution_evidence_covers_compact_windows_steps_and_direct_calls() {
+    let root = workspace_root();
+    let regions =
+        read(&root.join("crates/rsscript-vm/src/reg_vm/native/translate/loop_regions.rs"));
+    let tier = read(&root.join("crates/rsscript-vm/src/reg_vm/tier.rs"));
+    let compile_result = read(&root.join("crates/rsscript-vm/src/reg_vm/tier/compile_result.rs"));
+    let jit_ir = read(&root.join("crates/rsscript-jit-cranelift/src/ir.rs"));
+    let jit_module = read(&root.join("crates/rsscript-jit-cranelift/src/module.rs"));
+
+    assert!(regions.contains("struct ContinuationSlot"));
+    assert!(regions.contains("live_in_regs"));
+    assert!(regions.contains("live_slots"));
+    assert!(jit_ir.contains("compact_registers("));
+
+    // Batched accounting is allowed only at conservative CFG/deopt segments;
+    // an insufficient reservation must return at the first unpaid source IP.
+    assert!(tier.contains("emit_step"));
+    assert!(jit_module.contains("step_limit"));
+    let codegen = read(&root.join("crates/rsscript-jit-cranelift/src/codegen.rs"));
+    assert!(codegen.contains("fn step_segment_costs("));
+    assert!(codegen.contains("first uncharged source instruction"));
+
+    assert!(jit_ir.contains("CallNative"));
+    assert!(codegen.contains("build_child_call_frame("));
+    assert!(compile_result.contains("native_call_edges"));
+    assert!(compile_result.contains("JitInstr::CallNative"));
+}
+
+#[test]
+fn loop_optimizations_share_canonical_facts_and_keep_unrolling_research_only() {
+    let root = workspace_root();
+    let loops = read(&root.join("crates/rsscript-vm/src/reg_vm/native/translate/loop_regions.rs"));
+    let jit_post = read(&root.join("crates/rsscript-vm/src/reg_vm/native/translate/jit_post.rs"));
+    let contract = read(&root.join("docs/spec/native-jit-contract.md"));
+
+    for fact in [
+        "struct CanonicalLoopFacts",
+        "preheader: Option<usize>",
+        "condition: usize",
+        "latches: Box<[usize]>",
+        "exits: Box<[usize]>",
+        "induction: Option<CanonicalInductionVariable>",
+    ] {
+        assert!(
+            loops.contains(fact),
+            "canonical loop fact `{fact}` is missing"
+        );
+    }
+    assert!(jit_post.contains("detect_canonical_loops(code)"));
+    assert!(jit_post.contains("facts: &CanonicalLoopFacts"));
+    assert!(loops.contains("fn scalar_x2_unroll_research_decision("));
+    assert!(!loops.contains("fn native_unroll_scalar_loop_x2("));
+    assert!(contract.contains("Scalar x2 unrolling is not enabled"));
+    assert!(contract.contains("SIMD remains out of scope"));
+}
+
+#[test]
+fn aot_jit_matrix_schema_requires_honest_per_engine_evidence() {
+    let root = workspace_root();
+    let schema: serde_json::Value = serde_json::from_str(&read(
+        &root.join("benchmarks/vm-jit/aot-jit-matrix.schema.json"),
+    ))
+    .expect("AOT/JIT matrix schema is valid JSON");
+    let validator = jsonschema::validator_for(&schema).expect("AOT/JIT matrix schema compiles");
+    let unavailable = serde_json::json!({
+        "status": "not_measured",
+        "execution_ns": null,
+        "compile_ns": null,
+        "transitions": null,
+        "host_helper_calls": null,
+        "bounds_checks": null,
+        "allocations_eliminated": null,
+        "reason": "engine is outside this harness"
+    });
+    let document = serde_json::json!({
+        "schema": "rsscript.aot_jit_matrix.v1",
+        "workload": "static_calls",
+        "semantic_match": true,
+        "engines": {
+            "interpreter": {
+                "status": "measured",
+                "execution_ns": 100,
+                "compile_ns": 0,
+                "transitions": 0,
+                "host_helper_calls": null,
+                "bounds_checks": null,
+                "allocations_eliminated": null,
+                "reason": null
+            },
+            "jit": {
+                "status": "measured",
+                "execution_ns": 50,
+                "compile_ns": 20,
+                "transitions": 1,
+                "host_helper_calls": 0,
+                "bounds_checks": null,
+                "allocations_eliminated": null,
+                "reason": null
+            },
+            "aot": unavailable
+        }
+    });
+    assert!(validator.is_valid(&document));
+
+    let mut incomplete = document;
+    incomplete["engines"]
+        .as_object_mut()
+        .expect("engines object")
+        .remove("aot");
+    assert!(
+        !validator.is_valid(&incomplete),
+        "the matrix must not silently omit an unmeasured engine"
+    );
 }
 
 #[test]
@@ -1052,6 +1221,9 @@ fn typed_facts_migration_preserves_the_v1_reader_contract() {
         .expect("SDK manifest should parse");
     let compatibility = read(&root.join("crates/rsscript-sdk/tests/compatibility_corpus.rs"));
     let bytecode = read(&root.join("crates/rsscript-bytecode/src/lib.rs"));
+    let typed_facts = read(&root.join("crates/rsscript-bytecode/src/typed_facts.rs"));
+    let fuzz_manifest = read(&root.join("fuzz/Cargo.toml"));
+    let hardening = read(&root.join(".github/workflows/jit-hardening.yml"));
     let fixture = root.join("crates/rsscript-bytecode/fixtures/v1/reference.rssbundle.base64");
     let tests = manifest["test"]
         .as_array()
@@ -1069,6 +1241,19 @@ fn typed_facts_migration_preserves_the_v1_reader_contract() {
     assert!(compatibility.contains("deployed v1 bundle remains readable"));
     assert!(compatibility.contains("ArtifactVerifier"));
     assert!(bytecode.contains("pub const BYTECODE_SCHEMA: &str = \"rsscript.bytecode.v1\";"));
+    for required in [
+        "TypedExecutableFactsVerifierV1",
+        "BoundTypedExecutableFactsV1",
+        "TYPED_EXECUTABLE_FACTS_SCHEMA_V1",
+        "TypedFactsBindingMismatch",
+    ] {
+        assert!(
+            typed_facts.contains(required) || bytecode.contains(required),
+            "optional typed facts contract is missing `{required}`"
+        );
+    }
+    assert!(fuzz_manifest.contains("name = \"typed_executable_facts\""));
+    assert!(hardening.contains("fuzz run typed_executable_facts"));
 }
 
 #[test]

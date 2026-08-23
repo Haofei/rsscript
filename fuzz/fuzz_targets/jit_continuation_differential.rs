@@ -58,9 +58,7 @@ fuzz_target!(|data: &[u8]| {
     ]);
     let step_budget = requested_budget % completed_steps.saturating_add(2).max(1);
     let limits = RunLimits::bounded().with_step_budget(step_budget);
-    let request = || {
-        ExecutionRequest::new(std::iter::empty::<String>()).limits(limits.clone())
-    };
+    let request = || ExecutionRequest::new(std::iter::empty::<String>()).limits(limits.clone());
     let interpreted = linked.execute(request());
     let native = linked.execute(request().native_jit(NativeJitOptions {
         cost_model: NativeCostModel::Report,
@@ -68,10 +66,16 @@ fuzz_target!(|data: &[u8]| {
     }));
 
     assert_eq!(native.outcome(), interpreted.outcome());
-    assert_eq!(native.usage.steps_consumed, interpreted.usage.steps_consumed);
+    assert_eq!(
+        native.usage.steps_consumed,
+        interpreted.usage.steps_consumed
+    );
     assert_eq!(native.stdout, interpreted.stdout);
     assert_eq!(native.stderr, interpreted.stderr);
-    assert_eq!(native.provider_call_traces, interpreted.provider_call_traces);
+    assert_eq!(
+        native.provider_call_traces,
+        interpreted.provider_call_traces
+    );
     assert_eq!(
         native.usage.resources_live_at_return,
         interpreted.usage.resources_live_at_return

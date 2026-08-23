@@ -124,19 +124,93 @@ pub(crate) fn native_recursion_depth_cap(program: &JitFunction) -> i64 {
 /// enforce it. Only the OSR loop tier sets either flag today.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct LimitChecks {
-    /// Emit a per-instruction step accumulator, a `steps > step_budget` test on every
-    /// loop backedge, and a steps write-back on every native exit (clean + deopt), so
-    /// a native loop trips `step_budget` exactly like the interpreter would.
+    /// Emit basic-block/guard-segment source-cost reservation and a steps write-back
+    /// on every native exit. A segment is split after every possibly-deopting
+    /// instruction, so a successful reservation replaces multiple per-instruction
+    /// increments while an insufficient reservation returns to the interpreter at
+    /// the exact first uncharged source instruction.
     pub(crate) step: bool,
     /// Emit a `cancel` poll (load the host `AtomicBool`) on every loop backedge and
     /// bail to the interpreter when set — the interpreter then re-polls and errors.
     pub(crate) cancel: bool,
 }
 
+fn counts_as_source_step(instr: &JitInstr) -> bool {
+    !matches!(
+        instr,
+        JitInstr::RegionExit { .. } | JitInstr::OsrExit | JitInstr::Bail
+    )
+}
+
+/// Instructions which cannot deopt, call a helper, or otherwise leave the current
+/// native activation. Consecutive members inside one CFG basic block may share one
+/// source-step reservation. The list is intentionally conservative: omitting an
+/// instruction only creates a shorter segment; incorrectly adding one could charge
+/// past a mid-segment deopt and violate interpreter parity.
+fn step_batch_safe(instr: &JitInstr) -> bool {
+    matches!(
+        instr,
+        JitInstr::Nop
+            | JitInstr::LoadInt { .. }
+            | JitInstr::LoadFloat { .. }
+            | JitInstr::LoadBool { .. }
+            | JitInstr::Move { .. }
+            | JitInstr::BitAnd { .. }
+            | JitInstr::BitOr { .. }
+            | JitInstr::BitXor { .. }
+            | JitInstr::Compare { .. }
+            | JitInstr::Equal { .. }
+            | JitInstr::NotEqual { .. }
+            | JitInstr::Jump { .. }
+            | JitInstr::JumpIfBool { .. }
+            | JitInstr::JumpIfIntCompare { .. }
+            | JitInstr::Return { .. }
+    )
+}
+
+/// Precompute the source cost charged at each accounting-segment entry.
+///
+/// Segments never cross a CFG leader and end at every instruction that is not on
+/// the conservative no-deopt list. Consequently, if the last instruction bails,
+/// every source instruction precharged for the segment has already reached the
+/// same pre-dispatch tick boundary as the interpreter. If the whole segment does
+/// not fit, generated code leaves `steps` untouched and deopts at the segment entry.
+fn step_segment_costs(program: &JitFunction, is_leader: &[bool]) -> Vec<u32> {
+    let n = program.code.len();
+    let mut starts = is_leader.to_vec();
+    for (i, instr) in program.code.iter().enumerate() {
+        if !step_batch_safe(instr) && i + 1 < n {
+            starts[i + 1] = true;
+        }
+    }
+    let mut costs = vec![0_u32; n];
+    let mut start = 0;
+    while start < n {
+        debug_assert!(starts[start]);
+        let mut end = start + 1;
+        while end < n && !starts[end] {
+            end += 1;
+        }
+        let source_steps = program.code[start..end]
+            .iter()
+            .filter(|instr| counts_as_source_step(instr))
+            .count();
+        costs[start] = u32::try_from(source_steps)
+            .expect("validated JIT instruction limit fits source cost in u32");
+        start = end;
+    }
+    costs
+}
+
 impl LimitChecks {
     pub(crate) fn any(self) -> bool {
         self.step || self.cancel
     }
+}
+
+pub(crate) struct CodegenMetadata {
+    pub(crate) deopt_map: DeoptMap,
+    pub(crate) direct_list_bounds_checks_elided: u64,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -155,7 +229,7 @@ pub(crate) fn build_function(
     native_static_call_depth: u32,
     assigned_in: &[Vec<bool>],
     deopt_in: &[Vec<bool>],
-) -> Result<DeoptMap, JitError> {
+) -> Result<CodegenMetadata, JitError> {
     #[cfg(not(feature = "recursion"))]
     let _ = (self_func_id, group, native_static_call_depth);
     // Definite-assignment facts were computed by validation and are reused here;
@@ -531,6 +605,12 @@ pub(crate) fn build_function(
             }
         })
         .collect();
+    // Source-step cost is reserved once per conservative accounting segment. This
+    // is computed from the same CFG leaders used for codegen and does not affect an
+    // unarmed compile.
+    let step_cost_at = limit_checks
+        .step
+        .then(|| step_segment_costs(program, &is_leader));
     for &cold_ip in &program.cold_blocks {
         if let Some(block) = block_for[cold_ip as usize] {
             bcx.set_cold_block(block);
@@ -730,32 +810,40 @@ pub(crate) fn build_function(
             bcx.seal_block(body_block);
             bcx.def_var(memo_scope_backedges[scope_index], zero);
         }
-        // native limit accounting step accounting: tick once per instruction, before its body — exactly
-        // where the interpreter calls `tick()` (one tick per dispatched instruction),
-        // so the native count matches the interpreter's stream tick-for-tick.
-        if let Some(steps_var) = steps_var
-            && !matches!(
-                &program.code[i],
-                JitInstr::RegionExit { .. } | JitInstr::OsrExit | JitInstr::Bail
-            )
+        // Reserve a whole no-deopt accounting segment before its first source
+        // instruction. If it does not fit, leave `steps` unchanged and resume the
+        // interpreter at this exact IP; the interpreter's next tick is therefore
+        // the first unpaid source step. When it fits, one add replaces all of the
+        // segment's per-instruction increments.
+        if let (Some(steps_var), Some(limit_var), Some(step_cost_at)) =
+            (steps_var, limit_var, step_cost_at.as_ref())
         {
-            let s = bcx.use_var(steps_var);
-            let s1 = bcx.ins().iadd_imm(s, 1);
-            bcx.def_var(steps_var, s1);
+            let cost = step_cost_at[i];
+            if cost != 0 {
+                let steps = bcx.use_var(steps_var);
+                let limit = bcx.use_var(limit_var);
+                let remaining = bcx.ins().isub(limit, steps);
+                let required = bcx.ins().iconst(types::I64, i64::from(cost));
+                let insufficient = bcx.ins().icmp(IntCC::SignedLessThan, remaining, required);
+                let cont = bail_if(
+                    &mut bcx,
+                    insufficient,
+                    fallback,
+                    safepoint_ptr,
+                    payload_ptr,
+                    &vars,
+                    &mut next_id,
+                    deopt!(i),
+                );
+                bcx.switch_to_block(cont);
+                let charged = bcx.ins().iadd(steps, required);
+                bcx.def_var(steps_var, charged);
+            }
         }
-        // native limit accounting limit check at every loop header (= once per iteration of every loop,
-        // incl. nested). On `steps > step_budget` or a set `cancel` flag, deopt with
-        // `resume_ip = i` (re-enter the loop on the interpreter, which then enforces
-        // the limit as the single source of truth). Steps are written back on the
-        // shared fallback edge below, so the interpreter resumes with the exact count.
+        // Cancellation remains a loop-header poll. Step limits were already
+        // reserved above at exact accounting-segment entries.
         if !backedge_target.is_empty() && backedge_target[i] {
             let mut trip: Option<Value> = None;
-            if let (Some(steps_var), Some(limit_var)) = (steps_var, limit_var) {
-                let s = bcx.use_var(steps_var);
-                let lim = bcx.use_var(limit_var);
-                let over = bcx.ins().icmp(IntCC::SignedGreaterThan, s, lim);
-                trip = Some(over);
-            }
             if let Some(cancel_addr_var) = cancel_addr_var {
                 let caddr = bcx.use_var(cancel_addr_var);
                 let flag = bcx.ins().atomic_load(types::I8, MemFlags::trusted(), caddr);
@@ -1064,11 +1152,17 @@ pub(crate) fn build_function(
                     slot_bytes(meta.n_params),
                     3,
                 ));
-                let lens_slot = bcx.create_sized_stack_slot(StackSlotData::new(
-                    StackSlotKind::ExplicitSlot,
-                    slot_bytes(meta.n_params),
-                    3,
-                ));
+                // Scalar helper-free leaves cannot observe a flat-buffer length.
+                // Keep the versioned frame (and child deopt payload) for precise
+                // checked-arithmetic deopt, but do not allocate or populate an
+                // otherwise dead parallel lens window.
+                let lens_slot = (!meta.compact_scalar_frame).then(|| {
+                    bcx.create_sized_stack_slot(StackSlotData::new(
+                        StackSlotKind::ExplicitSlot,
+                        slot_bytes(meta.n_params),
+                        3,
+                    ))
+                });
                 let out_slot = bcx.create_sized_stack_slot(StackSlotData::new(
                     StackSlotKind::ExplicitSlot,
                     8,
@@ -1102,10 +1196,15 @@ pub(crate) fn build_function(
                     } else {
                         zero_i64
                     };
-                    bcx.ins().stack_store(len, lens_slot, (i_arg as i32) * 8);
+                    if let Some(lens_slot) = lens_slot {
+                        bcx.ins().stack_store(len, lens_slot, (i_arg as i32) * 8);
+                    }
                 }
                 let args_ptr_v = bcx.ins().stack_addr(ptr_ty, args_slot, 0);
-                let lens_ptr_v = bcx.ins().stack_addr(ptr_ty, lens_slot, 0);
+                let lens_ptr_v = match lens_slot {
+                    Some(slot) => bcx.ins().stack_addr(ptr_ty, slot, 0),
+                    None => bcx.ins().iconst(ptr_ty, 0),
+                };
                 let out_ptr_v = bcx.ins().stack_addr(ptr_ty, out_slot, 0);
                 let safepoint_ptr_v = bcx.ins().stack_addr(ptr_ty, safepoint_slot, 0);
                 let payload_ptr_v = bcx.ins().stack_addr(ptr_ty, payload_slot, 0);
@@ -1136,12 +1235,19 @@ pub(crate) fn build_function(
                 );
                 let call = bcx.ins().call(native_ref(*callee), &[child_frame]);
                 let completed = bcx.inst_results(call)[0];
-                let child_bail = bcx.ins().load(types::I8, MemFlags::trusted(), bail_ptr, 0);
                 let one_i8 = bcx.ins().iconst(types::I8, 1);
-                let zero_i8_again = bcx.ins().iconst(types::I8, 0);
                 let not_completed = bcx.ins().icmp(IntCC::NotEqual, completed, one_i8);
-                let child_bailed = bcx.ins().icmp(IntCC::NotEqual, child_bail, zero_i8_again);
-                let failed = bcx.ins().bor(not_completed, child_bailed);
+                let failed = if meta.compact_scalar_frame {
+                    // This callee contains neither HostCall nor a nested native
+                    // call, so it cannot set the shared helper-bail byte. Its typed
+                    // status is the complete failure signal.
+                    not_completed
+                } else {
+                    let child_bail = bcx.ins().load(types::I8, MemFlags::trusted(), bail_ptr, 0);
+                    let zero_i8_again = bcx.ins().iconst(types::I8, 0);
+                    let child_bailed = bcx.ins().icmp(IntCC::NotEqual, child_bail, zero_i8_again);
+                    bcx.ins().bor(not_completed, child_bailed)
+                };
                 let cont = bail_if_child_native_failed(
                     &mut bcx,
                     failed,
@@ -1985,9 +2091,12 @@ pub(crate) fn build_function(
     bcx.seal_all_blocks();
     bcx.finalize();
 
-    Ok(DeoptMap {
-        sites,
-        payload_words,
+    Ok(CodegenMetadata {
+        deopt_map: DeoptMap {
+            sites,
+            payload_words,
+        },
+        direct_list_bounds_checks_elided: list_bounds.unchecked_ips.len() as u64,
     })
 }
 

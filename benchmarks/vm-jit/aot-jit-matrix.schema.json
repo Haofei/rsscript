@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rsscript.dev/schemas/aot-jit-matrix-v1.json",
+  "title": "RSScript AOT/JIT differential performance matrix v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "workload", "semantic_match", "engines"],
+  "properties": {
+    "schema": { "const": "rsscript.aot_jit_matrix.v1" },
+    "workload": {
+      "enum": [
+        "pure_scalar",
+        "static_calls",
+        "generic_calls",
+        "struct",
+        "variant",
+        "option_result",
+        "list",
+        "map",
+        "string",
+        "closure",
+        "async",
+        "provider",
+        "osr"
+      ]
+    },
+    "semantic_match": { "type": "boolean" },
+    "engines": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["interpreter", "jit", "aot"],
+      "properties": {
+        "interpreter": { "$ref": "#/$defs/measurement" },
+        "jit": { "$ref": "#/$defs/measurement" },
+        "aot": { "$ref": "#/$defs/measurement" }
+      }
+    }
+  },
+  "$defs": {
+    "measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "execution_ns",
+        "compile_ns",
+        "transitions",
+        "host_helper_calls",
+        "bounds_checks",
+        "allocations_eliminated",
+        "reason"
+      ],
+      "properties": {
+        "status": {
+          "enum": ["measured", "declined", "not_measured", "unsupported"]
+        },
+        "execution_ns": { "type": ["integer", "null"], "minimum": 0 },
+        "compile_ns": { "type": ["integer", "null"], "minimum": 0 },
+        "transitions": { "type": ["integer", "null"], "minimum": 0 },
+        "host_helper_calls": { "type": ["integer", "null"], "minimum": 0 },
+        "bounds_checks": { "type": ["integer", "null"], "minimum": 0 },
+        "allocations_eliminated": { "type": ["integer", "null"], "minimum": 0 },
+        "reason": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

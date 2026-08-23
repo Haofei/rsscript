@@ -33,6 +33,7 @@ benchmarks/vm-jit/kernels/json_parse_only.rss
 benchmarks/vm-jit/kernels/linear_recursion.rss
 benchmarks/vm-jit/kernels/list_sort.rss
 benchmarks/vm-jit/kernels/mailbox_ring_only.rss
+benchmarks/vm-jit/kernels/mixed_mode_continuation.rss
 benchmarks/vm-jit/kernels/native_bytes_slice_len_loop.rss
 benchmarks/vm-jit/kernels/native_call_bool_param.rss
 benchmarks/vm-jit/kernels/native_call_chain.rss
