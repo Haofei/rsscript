@@ -65,11 +65,35 @@ use cranelift_jit::{ArenaMemoryProvider, JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module, default_libcall_names};
 pub use executable_memory::ExecutableMemoryBudget;
 use executable_memory::{ExecutableMemoryReservation, arena_allocation_charge};
-pub use host_abi::*;
-pub use ir::*;
+pub use deopt::{DeoptFrame, DeoptReg, DeoptValue, NativeOutcome, SafepointId};
+use deopt::{DeoptChildSite, DeoptMap, DeoptSite};
+pub use host_abi::{
+    FlatBufferArg, HostCtx, HostHeapEffect, HostHeapProjection, HostHelper, HostHelpers,
+};
+use host_abi::{
+    CALL_FRAME_SIZE, FRAME_ABI_VERSION, FRAME_ARGS, FRAME_ARG_COUNT, FRAME_BAIL, FRAME_DEOPT,
+    FRAME_FLAGS, FRAME_HOST_CTX, FRAME_LENS, FRAME_LIMITS, FRAME_LOGICAL_DEPTH,
+    FRAME_LOGICAL_DEPTH_LIMIT, FRAME_NATIVE_DEPTH, FRAME_RESULT, FRAME_SAFEPOINT, FRAME_SIZE,
+    HostFailureMode, JIT_CALL_ABI_VERSION, JitCallFrame, JitStatus,
+};
+pub use ir::{
+    FloatRounding, HostArg, JitCompare, JitControlFlow, JitFunction, JitInstr, JitValueType,
+    MemoScope,
+};
 pub use limits::JitLimits;
-pub use module::*;
+pub use module::{
+    CompiledId, JitError, JitErrorKind, LogicalCallDepth, NativeDeclineReason, NativeModule,
+    PreparedCall, is_native_callable_leaf, signal_bail, user_host_ctx,
+};
 pub use validated::{ValidatedJitFunction, validate_function};
+
+// Unit tests exercise the crate-private ABI layout and code-generation contract.
+// These imports deliberately stay non-public so production consumers cannot grow
+// accidental dependencies on raw frame offsets or helper function aliases.
+#[cfg(test)]
+use host_abi::*;
+#[cfg(test)]
+use ir::*;
 
 pub(crate) use codegen::{
     LimitChecks, build_function, native_recursion_depth_cap, push_compiled_abi_signature,

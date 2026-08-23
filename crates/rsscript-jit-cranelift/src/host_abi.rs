@@ -50,6 +50,10 @@ pub(crate) const FRAME_LOGICAL_DEPTH_LIMIT: i32 =
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JitStatus {
+    // Generated code returns this discriminant directly. Rust code never needs to
+    // construct the variant, but it must remain in the FFI enum so decoding `0`
+    // is well-defined.
+    #[allow(dead_code)]
     Deopt = 0,
     Completed = 1,
     AbiMismatch = 2,
