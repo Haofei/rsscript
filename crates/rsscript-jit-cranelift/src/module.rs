@@ -1241,6 +1241,38 @@ impl NativeModule {
         self.call_with_host_ctx(id, args, lens, 0, &mut [])
     }
 
+    /// Execute a scalar/window entry compiled with step and/or cancellation
+    /// polling. The limits cell is owned by this safe call for the full machine
+    /// activation; `cancel` is borrowed, so generated code cannot outlive it.
+    /// Returns the outcome and the updated interpreter-equivalent step count.
+    pub fn call_with_step_cancel(
+        &self,
+        id: CompiledId,
+        args: &[i64],
+        lens: &[i64],
+        initial_steps: i64,
+        step_budget: Option<i64>,
+        cancel: Option<&std::sync::atomic::AtomicBool>,
+    ) -> (NativeOutcome, i64) {
+        let mut limits = [
+            initial_steps,
+            step_budget.unwrap_or(-1),
+            cancel.map_or(0, |flag| flag as *const _ as i64),
+        ];
+        let outcome = self.call_inner(
+            id,
+            args,
+            lens,
+            0,
+            LogicalCallDepth {
+                current: 0,
+                limit: usize::MAX,
+            },
+            limits.as_mut_ptr(),
+        );
+        (outcome, limits[0])
+    }
+
     /// Run with a host context (see [`call_with_host_ctx`](Self::call_with_host_ctx))
     /// and a non-null native limit accounting limits cell. `limits_ptr` must point at a live, immovable
     /// `[i64; 3]` = `[steps, step_budget, cancel_addr]` for the call's duration: an

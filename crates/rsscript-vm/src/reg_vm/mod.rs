@@ -1832,6 +1832,8 @@ struct ContinuationVersionKey {
     function: usize,
     entry: usize,
     shape: ShapeKey,
+    step_armed: bool,
+    cancel_armed: bool,
 }
 
 /// State for the native JIT tier: the Cranelift modules owning compiled code,

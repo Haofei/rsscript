@@ -42,6 +42,7 @@ pub(in crate::reg_vm) struct ContinuationRegion {
     pub(in crate::reg_vm) entry: usize,
     pub(in crate::reg_vm) included: Vec<bool>,
     pub(in crate::reg_vm) exits: BTreeMap<usize, NativeBarrierReason>,
+    pub(in crate::reg_vm) has_backedge: bool,
 }
 
 /// A compiled scalar continuation cached per function, entry, and runtime shape.
@@ -52,6 +53,10 @@ pub(in crate::reg_vm) struct ContinuationEntry {
     pub(in crate::reg_vm) entry: usize,
     pub(in crate::reg_vm) exits: BTreeMap<usize, NativeBarrierReason>,
     pub(in crate::reg_vm) n_jit_regs: usize,
+    pub(in crate::reg_vm) step_armed: bool,
+    pub(in crate::reg_vm) cancel_armed: bool,
+    pub(in crate::reg_vm) source_instructions: usize,
+    pub(in crate::reg_vm) has_backedge: bool,
     pub(in crate::reg_vm) active_regs: Vec<bool>,
     pub(in crate::reg_vm) reg_types: Vec<NativeTy>,
     pub(in crate::reg_vm) written_regs: Vec<bool>,
@@ -77,6 +82,7 @@ pub(in crate::reg_vm) fn detect_scalar_continuation_region(
     let mut exits = BTreeMap::new();
     let mut pending = vec![entry];
     let mut direct_work = 0usize;
+    let mut has_backedge = false;
     while let Some(ip) = pending.pop() {
         let instr = code.get(ip)?;
         if included[ip] || exits.contains_key(&ip) {
@@ -117,12 +123,16 @@ pub(in crate::reg_vm) fn detect_scalar_continuation_region(
         if direct_work > MAX_REGION_INSTRUCTIONS {
             return None;
         }
-        native_instr_successors(instr, ip, code.len(), |successor| pending.push(successor));
+        native_instr_successors(instr, ip, code.len(), |successor| {
+            has_backedge |= successor <= ip;
+            pending.push(successor);
+        });
     }
     (direct_work >= MIN_DIRECT_WORK && !exits.is_empty()).then_some(ContinuationRegion {
         entry,
         included,
         exits,
+        has_backedge,
     })
 }
 

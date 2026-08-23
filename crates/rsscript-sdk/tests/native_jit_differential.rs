@@ -1,6 +1,7 @@
 use rsscript_sdk::{
     artifact::ArtifactVerifier,
     compile::Compiler,
+    operation::CancellationToken,
     provider_api::ProviderRegistry,
     report::ExecutionEngineTelemetry,
     runtime::{ExecutionRequest, NativeCostModel, NativeJitOptions, RunLimits, Runtime},
@@ -171,4 +172,83 @@ fn native_engine_matches_the_verified_interpreter_corpus() {
         cases_with_native_entry >= 6,
         "differential corpus must exercise native execution broadly; only {cases_with_native_entry} cases entered"
     );
+}
+
+#[test]
+fn bounded_step_accounting_matches_across_call_continuations() {
+    let source = "struct StepBox { value: Int } fn boundary(value: Int) -> Int { let boxed = StepBox(value: value); return boxed.value } fn main() -> Int { let a = 7; let b = a * 3; let c = b + 11; let d = boundary(value: c); let e = d * 5; let f = e - 9; let g = f + 2; return g }";
+    let built = Compiler
+        .compile("bounded-continuation.rss", source)
+        .expect("source compiles");
+    let admitted = ArtifactVerifier
+        .verify(built)
+        .expect("artifact verifies")
+        .admit_trusted_input();
+    let linked = Runtime::new(ProviderRegistry::default())
+        .link(&admitted)
+        .expect("artifact links");
+    let limits = RunLimits::unbounded_for_trusted_host().with_step_budget(1_000);
+    let interpreter = linked.execute(ExecutionRequest::default().limits(limits.clone()));
+    let native = linked.execute(ExecutionRequest::default().limits(limits).native_jit(
+        NativeJitOptions {
+            cost_model: NativeCostModel::Off,
+            ..NativeJitOptions::default()
+        },
+    ));
+    assert_eq!(native.outcome(), interpreter.outcome());
+    assert_eq!(
+        native.usage.steps_consumed,
+        interpreter.usage.steps_consumed
+    );
+    let ExecutionEngineTelemetry::Native {
+        continuation_entries,
+        ..
+    } = native.telemetry.engine
+    else {
+        panic!("bounded native execution must report native telemetry");
+    };
+    assert!(continuation_entries >= 2);
+
+    let bounded_interpreter =
+        linked.execute(ExecutionRequest::default().limits(RunLimits::bounded()));
+    let bounded_native = linked.execute(
+        ExecutionRequest::default()
+            .limits(RunLimits::bounded())
+            .native_jit(NativeJitOptions {
+                cost_model: NativeCostModel::Off,
+                ..NativeJitOptions::default()
+            }),
+    );
+    assert_eq!(bounded_native.outcome(), bounded_interpreter.outcome());
+    assert_eq!(
+        bounded_native.usage.steps_consumed,
+        bounded_interpreter.usage.steps_consumed
+    );
+    let ExecutionEngineTelemetry::Native {
+        continuation_entries,
+        ..
+    } = bounded_native.telemetry.engine
+    else {
+        panic!("default bounded execution must report native telemetry");
+    };
+    assert!(continuation_entries >= 2);
+
+    let cancel = CancellationToken::new();
+    let cancel_armed = linked.execute(
+        ExecutionRequest::default()
+            .limits(RunLimits::unbounded_for_trusted_host().with_cancellation(cancel))
+            .native_jit(NativeJitOptions {
+                cost_model: NativeCostModel::Off,
+                ..NativeJitOptions::default()
+            }),
+    );
+    assert_eq!(cancel_armed.outcome(), interpreter.outcome());
+    let ExecutionEngineTelemetry::Native {
+        continuation_entries,
+        ..
+    } = cancel_armed.telemetry.engine
+    else {
+        panic!("cancel-armed native execution must report native telemetry");
+    };
+    assert!(continuation_entries >= 2);
 }

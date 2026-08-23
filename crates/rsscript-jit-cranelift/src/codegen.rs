@@ -718,7 +718,12 @@ pub(crate) fn build_function(
         // native limit accounting step accounting: tick once per instruction, before its body — exactly
         // where the interpreter calls `tick()` (one tick per dispatched instruction),
         // so the native count matches the interpreter's stream tick-for-tick.
-        if let Some(steps_var) = steps_var {
+        if let Some(steps_var) = steps_var
+            && !matches!(
+                &program.code[i],
+                JitInstr::RegionExit { .. } | JitInstr::OsrExit | JitInstr::Bail
+            )
+        {
             let s = bcx.use_var(steps_var);
             let s1 = bcx.ins().iadd_imm(s, 1);
             bcx.def_var(steps_var, s1);

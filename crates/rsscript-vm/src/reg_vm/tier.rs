@@ -1444,12 +1444,19 @@ impl RegVm {
         base: usize,
         entry_ip: usize,
     ) -> bool {
-        if JitCallCtx::is_active()
-            || !self.native_limits_unarmed()
-            || self.limits.max_depth != DEFAULT_MAX_DEPTH
-        {
+        if JitCallCtx::is_active() {
             return false;
         }
+        // The scalar region has a one-to-one source instruction map, so generated
+        // step/cancel accounting is exact. It cannot allocate or invoke an
+        // intrinsic/Provider, therefore those meters remain entirely VM-owned at
+        // the surrounding barriers. Deadline polling is not yet represented in
+        // the call frame and must keep this path fail-closed.
+        if self.limits.deadline.is_some() {
+            return false;
+        }
+        let step_armed = self.limits.step_budget.is_some();
+        let cancel_armed = self.limits.cancel.is_some();
         let function = self.jit_state.function_ordinal(func);
         let region = {
             let Some(native) = self.native.as_mut() else {
@@ -1510,6 +1517,8 @@ impl RegVm {
             function,
             entry: entry_ip,
             shape,
+            step_armed,
+            cancel_armed,
         };
         let param_native_types: Vec<Option<NativeTy>> = (0..func.params)
             .map(|reg| match self.reg(base + reg) {
@@ -1544,8 +1553,8 @@ impl RegVm {
                             match native.baseline_module.compile_osr(
                                 &jit_fn,
                                 u32::try_from(region.entry).ok()?,
-                                false,
-                                false,
+                                step_armed,
+                                cancel_armed,
                             ) {
                                 Ok(id) => {
                                     if !finish_native_compile(
@@ -1570,6 +1579,14 @@ impl RegVm {
                                         entry: region.entry,
                                         exits: region.exits.clone(),
                                         n_jit_regs: jit_fn.n_regs as usize,
+                                        step_armed,
+                                        cancel_armed,
+                                        source_instructions: region
+                                            .included
+                                            .iter()
+                                            .filter(|included| **included)
+                                            .count(),
+                                        has_backedge: region.has_backedge,
                                         active_regs,
                                         reg_types,
                                         written_regs,
@@ -1596,6 +1613,25 @@ impl RegVm {
             return false;
         };
         debug_assert_eq!(entry.entry, entry_ip);
+        if entry.step_armed {
+            if entry.has_backedge {
+                return false;
+            }
+            let Some(budget) = self.limits.step_budget else {
+                return false;
+            };
+            if self.steps.saturating_add(entry.source_instructions as u64) > budget {
+                return false;
+            }
+        }
+        if self
+            .limits
+            .cancel
+            .as_ref()
+            .is_some_and(|token| token.is_cancelled())
+        {
+            return false;
+        }
 
         let mut window = vec![0i64; entry.n_jit_regs];
         let lens = vec![0i64; entry.n_jit_regs];
@@ -1620,10 +1656,40 @@ impl RegVm {
             .as_ref()
             .is_some_and(|native| native.collect_stats)
             .then(std::time::Instant::now);
-        let result = self
-            .native
-            .as_ref()
-            .map(|native| native.baseline_module.call(entry.id, &window, &lens));
+        let steps_before = self.steps;
+        let initial_steps = if entry.step_armed || entry.cancel_armed {
+            let Ok(steps) = i64::try_from(self.steps) else {
+                return false;
+            };
+            Some(steps)
+        } else {
+            None
+        };
+        let native_step_budget = match self.limits.step_budget {
+            Some(budget) => {
+                let Ok(budget) = i64::try_from(budget) else {
+                    return false;
+                };
+                Some(budget)
+            }
+            None => None,
+        };
+        let result = self.native.as_ref().map(|native| {
+            if entry.step_armed || entry.cancel_armed {
+                let (outcome, steps) = native.baseline_module.call_with_step_cancel(
+                    entry.id,
+                    &window,
+                    &lens,
+                    initial_steps.expect("armed continuation has an initial step count"),
+                    native_step_budget,
+                    self.limits.cancel.as_ref().map(|token| token.as_atomic()),
+                );
+                self.steps = steps.max(0) as u64;
+                outcome
+            } else {
+                native.baseline_module.call(entry.id, &window, &lens)
+            }
+        });
         if let Some(native) = self.native.as_mut()
             && let Some(started) = started
         {
@@ -1633,6 +1699,18 @@ impl RegVm {
                 .saturating_add(started.elapsed().as_nanos());
         }
         let Some(vm_jit::NativeOutcome::Yield { exit_id, live, .. }) = result else {
+            let cancelled = self
+                .limits
+                .cancel
+                .as_ref()
+                .is_some_and(|token| token.is_cancelled());
+            let over_budget = self
+                .limits
+                .step_budget
+                .is_some_and(|budget| self.steps > budget);
+            if !cancelled && !over_budget {
+                self.steps = steps_before;
+            }
             return false;
         };
         let exit = exit_id as usize;
@@ -1675,6 +1753,9 @@ impl RegVm {
 
     #[cfg(feature = "native-jit")]
     pub(super) fn has_continuation_region(&mut self, func: &RegFunction) -> bool {
+        if self.limits.deadline.is_some() {
+            return false;
+        }
         let function = self.jit_state.function_ordinal(func);
         let Some(native) = self.native.as_mut() else {
             return false;
@@ -1682,12 +1763,15 @@ impl RegVm {
         if let Some(&has_region) = native.continuation_functions.get(&function) {
             return has_region;
         }
+        let step_armed = self.limits.step_budget.is_some();
         let has_region = (0..func.code.len()).any(|entry| {
-            native
+            let region = native
                 .continuation_plans
                 .entry((function, entry))
-                .or_insert_with(|| detect_scalar_continuation_region(&func.code, entry))
-                .is_some()
+                .or_insert_with(|| detect_scalar_continuation_region(&func.code, entry));
+            region
+                .as_ref()
+                .is_some_and(|region| !step_armed || !region.has_backedge)
         });
         native.continuation_functions.insert(function, has_region);
         has_region

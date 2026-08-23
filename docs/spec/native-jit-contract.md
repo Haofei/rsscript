@@ -3,13 +3,15 @@
 The native JIT is an optional accelerator for trusted, in-process execution. It
 does not add an isolation boundary and never changes Provider authority.
 
-The supported `native-jit` feature is intentionally a bounded *feature surface*,
-not yet an accelerator for bounded executions. Whole-function native entry
-currently declines when step, cancellation, deadline, allocation, live-memory,
-intrinsic-call, or Provider-call limits are armed. The interpreter then executes
-the request with the original limits. This fail-closed behavior keeps ordinary
-bounded execution correct; hosts only receive native acceleration from the
-explicit trusted/unbounded execution mode until accounting parity is implemented.
+The supported `native-jit` feature is intentionally a bounded feature surface.
+Whole-function and transformed OSR entry still decline when execution controls
+whose source costs they cannot reproduce are armed. Scalar continuation regions,
+however, have a one-to-one source instruction map: acyclic regions account steps
+exactly and poll host cancellation. Because these regions cannot allocate or call
+intrinsics/Providers, the surrounding VM barriers continue to own those budgets,
+allowing the default bounded profile to accelerate scalar work safely. Armed step
+budgets conservatively keep loop regions in the interpreter, and armed deadlines
+currently keep every continuation in the interpreter.
 
 ## Stable invariants
 
@@ -45,7 +47,8 @@ explicit trusted/unbounded execution mode until accounting parity is implemented
   continuation slice admits bounded scalar CFG regions with branches, loops, and
   multiple normal exits around non-`mut` `CallKnown` barriers and function
   returns. Heap values, async, Provider, and resource barriers remain
-  interpreter-owned until their contracts are added. Unused heap registers may
+  interpreter-owned; after a barrier completes, the VM may enter a later scalar
+  continuation. Unused heap registers may
   coexist in the VM frame: continuation marshalling validates only the exact
   register footprint of the selected scalar region, so scalar work after an
   interpreter-materialized aggregate can re-enter native code safely.
