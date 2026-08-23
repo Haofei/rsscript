@@ -58,6 +58,12 @@ Loop-invariant host-helper memoization is likewise excluded from the stable SDK
 path and compiled only by `jit-memoization-experimental`. Its CFG scope proof and
 runtime memo state must earn retention through the same canonical scorecard.
 
+Nested and loop-carried struct scalar replacement is retained for research behind
+the VM-only `jit-struct-sr-experimental` feature. The ordinary SDK `native-jit`
+path leaves those aggregates unchanged and fails closed to the verified
+interpreter. Re-entry into the supported baseline requires canonical workload
+evidence under the benchmark retention rule.
+
 The Cranelift engine crate is not independently published. Its public root exposes
 only the VM-facing engine, validated IR, typed options/outcomes, host-helper
 contract, and prepared-call boundary. Raw call-frame layout, ABI offsets, helper

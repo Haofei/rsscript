@@ -108,6 +108,13 @@ fn native_engine_matches_the_verified_interpreter_corpus() {
             panic!("native telemetry: {file}");
         };
         assert_eq!(rejected_resident_bytes, 0, "resident rejection: {file}");
+        if *file == "native-struct.rss" {
+            assert_eq!(
+                (native_calls, osr_entries),
+                (0, 0),
+                "struct scalar replacement must remain outside the stable native-jit path"
+            );
+        }
         cases_with_native_entry += usize::from(native_calls > 0 || osr_entries > 0);
     }
     assert!(

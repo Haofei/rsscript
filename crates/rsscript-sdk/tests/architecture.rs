@@ -1227,6 +1227,11 @@ fn cranelift_engine_keeps_research_features_and_raw_abi_out_of_the_stable_surfac
     assert!(vm_manifest.contains("jit-speculation"));
     assert!(vm_manifest.contains("jit-recursion-experimental"));
     assert!(vm_manifest.contains("jit-memoization-experimental"));
+    assert!(vm_manifest.contains("jit-struct-sr-experimental"));
+
+    let scalar_replacement =
+        read(&root.join("crates/rsscript-vm/src/reg_vm/native/passes/scalar_replacement.rs"));
+    assert!(scalar_replacement.contains("feature = \"jit-struct-sr-experimental\""));
 }
 
 fn rust_files_below(root: &Path) -> Vec<PathBuf> {

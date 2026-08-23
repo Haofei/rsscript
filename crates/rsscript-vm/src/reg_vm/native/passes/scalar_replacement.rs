@@ -931,7 +931,10 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
 /// slot}` reading a struct-typed field has the shape of whatever `MakeStruct` wrote
 /// that slot of `base` (i.e. the inner field's own struct shape). Returns `None` when
 /// the shape is ambiguous or not statically resolvable (⇒ the caller bails OSR).
-#[cfg(feature = "native-jit")]
+#[cfg(all(
+    feature = "native-jit",
+    any(test, feature = "jit-struct-sr-experimental")
+))]
 pub(in crate::reg_vm) fn struct_shape_of_reg(
     code: &[RegInstr],
     header: usize,
@@ -1057,7 +1060,10 @@ pub(in crate::reg_vm) fn struct_shape_of_reg(
 ///
 /// Returns `(transformed_code, new_n_regs, ip_map)` with the same transformed→original
 /// `ip_map` discipline as the other two region passes.
-#[cfg(feature = "native-jit")]
+#[cfg(all(
+    feature = "native-jit",
+    any(test, feature = "jit-struct-sr-experimental")
+))]
 pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     code: &[RegInstr],
     n_regs: usize,
@@ -1670,6 +1676,24 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     Some((new_code, next_reg, ip_map, recipes))
 }
 
+/// Stable native-JIT builds intentionally leave struct aggregates to the
+/// interpreter until this transform meets the canonical retention threshold.
+#[cfg(all(
+    feature = "native-jit",
+    not(any(test, feature = "jit-struct-sr-experimental"))
+))]
+pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
+    code: &[RegInstr],
+    n_regs: usize,
+    header: usize,
+    exit: usize,
+) -> Option<(Vec<RegInstr>, usize, Vec<usize>, Vec<OsrMaterializeRecipe>)> {
+    if header >= exit || exit > code.len() {
+        return None;
+    }
+    Some((code.to_vec(), n_regs, (0..code.len()).collect(), Vec::new()))
+}
+
 /// OSR × scalar replacement (loop-carried struct scalar replacement). Extends
 /// [`native_scalar_replace_structs_in_region`] to a struct that is CREATED BEFORE the
 /// loop, MUTATED IN PLACE across iterations (`SetFieldSlot`), and DEAD after the loop.
@@ -1715,7 +1739,10 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
 /// Returns `(transformed_code, new_n_regs, ip_map)` with the same transformed→original
 /// `ip_map` discipline as the other region passes; `new_n_regs == n_regs` (no fresh
 /// regs — leaves reuse the init sources).
-#[cfg(feature = "native-jit")]
+#[cfg(all(
+    feature = "native-jit",
+    any(test, feature = "jit-struct-sr-experimental")
+))]
 pub(in crate::reg_vm) fn native_loop_carried_struct_in_region(
     code: &[RegInstr],
     n_regs: usize,
@@ -2080,6 +2107,24 @@ pub(in crate::reg_vm) fn native_loop_carried_struct_in_region(
         }
     }
     Some((new_code, n_regs, ip_map))
+}
+
+/// Stable native-JIT builds leave loop-carried structs unchanged so native
+/// eligibility fails closed and the verified interpreter remains authoritative.
+#[cfg(all(
+    feature = "native-jit",
+    not(any(test, feature = "jit-struct-sr-experimental"))
+))]
+pub(in crate::reg_vm) fn native_loop_carried_struct_in_region(
+    code: &[RegInstr],
+    n_regs: usize,
+    header: usize,
+    exit: usize,
+) -> Option<(Vec<RegInstr>, usize, Vec<usize>)> {
+    if header >= exit || exit > code.len() {
+        return None;
+    }
+    Some((code.to_vec(), n_regs, (0..code.len()).collect()))
 }
 
 /// Registers an instruction READS (value operands). Returns [`RegFootprint::All`]

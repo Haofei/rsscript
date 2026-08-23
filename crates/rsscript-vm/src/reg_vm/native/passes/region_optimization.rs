@@ -2792,6 +2792,7 @@ pub(in crate::reg_vm) struct OsrMaterializeVariantArm {
 pub(in crate::reg_vm) enum OsrMaterializeValue {
     Register(usize),
     OptionSome(Box<OsrMaterializeValue>),
+    #[cfg(any(test, feature = "jit-struct-sr-experimental"))]
     Struct {
         layout: Rc<crate::vm_value::TypeLayout>,
         fields: Vec<OsrMaterializeValue>,
