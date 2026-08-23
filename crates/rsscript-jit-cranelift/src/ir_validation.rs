@@ -1,3 +1,5 @@
+use crate::validated::ValidationFacts;
+
 fn check_zero_init_reg(program: &JitFunction, reg: u32) -> Result<(), JitError> {
     if reg >= program.n_regs {
         return Err(JitError::invalid_ir(format!(
@@ -112,20 +114,33 @@ fn validate_memo_scopes(
             )));
         }
     }
-    for left in 0..program.memo_scopes.len() {
-        for right in left + 1..program.memo_scopes.len() {
-            let a = &program.memo_scopes[left];
-            let b = &program.memo_scopes[right];
-            let disjoint = a.exit <= b.header || b.exit <= a.header;
-            let strictly_nested = (a.header < b.header && b.exit <= a.exit)
-                || (b.header < a.header && a.exit <= b.exit);
-            if !disjoint && !strictly_nested {
+    // Validate the interval family in O(S log S), not with an O(S²) pairwise
+    // comparison. Sorting outer scopes before inner scopes makes a simple stack
+    // sufficient to reject crossing intervals and equal-header pseudo-nesting.
+    let mut ordered: Vec<usize> = (0..program.memo_scopes.len()).collect();
+    ordered.sort_unstable_by_key(|&index| {
+        let scope = &program.memo_scopes[index];
+        (scope.header, std::cmp::Reverse(scope.exit))
+    });
+    let mut stack: Vec<usize> = Vec::new();
+    for index in ordered {
+        let scope = &program.memo_scopes[index];
+        while stack
+            .last()
+            .is_some_and(|&parent| program.memo_scopes[parent].exit <= scope.header)
+        {
+            stack.pop();
+        }
+        if let Some(&parent_index) = stack.last() {
+            let parent = &program.memo_scopes[parent_index];
+            if scope.header <= parent.header || scope.exit > parent.exit {
                 return Err(JitError::invalid_ir(format!(
-                    "memo scopes {left} [{}, {}) and {right} [{}, {}) overlap without strict nesting",
-                    a.header, a.exit, b.header, b.exit
+                    "memo scopes {parent_index} [{}, {}) and {index} [{}, {}) overlap without strict nesting",
+                    parent.header, parent.exit, scope.header, scope.exit
                 )));
             }
         }
+        stack.push(index);
     }
     Ok(())
 }
@@ -140,12 +155,16 @@ fn validate_memo_scopes(
 /// operand class (and forbids `Handle`), the int-only ops (`Mod`, bit/shift) require
 /// `Int`, comparisons yield a logical `Bool`, and `Handle` registers are only valid
 /// as the `base` of a heap read.
+#[cfg(test)]
 pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
-    const MAX_JIT_REGS: usize = 65_536;
-    const MAX_JIT_PARAMS: usize = 16_384;
-    const MAX_JIT_INSTRUCTIONS: usize = 1_000_000;
-    const MAX_JIT_ANALYSIS_CELLS: usize = 1_000_000;
+    validate_with_limits(program, osr, &JitLimits::default()).map(|_| ())
+}
 
+pub(crate) fn validate_with_limits(
+    program: &JitFunction,
+    osr: bool,
+    limits: &JitLimits,
+) -> Result<ValidationFacts, JitError> {
     let n_regs = program.n_regs as usize;
     let n = program.code.len();
 
@@ -161,20 +180,22 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
             program.n_params
         )));
     }
-    if n_regs > MAX_JIT_REGS {
+    if n_regs > limits.max_registers {
         return Err(JitError::invalid_ir(format!(
-            "n_regs {n_regs} exceeds the JIT limit {MAX_JIT_REGS}"
+            "n_regs {n_regs} exceeds the JIT limit {}",
+            limits.max_registers
         )));
     }
-    if program.n_params as usize > MAX_JIT_PARAMS {
+    if program.n_params as usize > limits.max_parameters {
         return Err(JitError::invalid_ir(format!(
-            "n_params {} exceeds the JIT limit {MAX_JIT_PARAMS}",
-            program.n_params
+            "n_params {} exceeds the JIT limit {}",
+            program.n_params, limits.max_parameters
         )));
     }
-    if n > MAX_JIT_INSTRUCTIONS {
+    if n > limits.max_instructions {
         return Err(JitError::invalid_ir(format!(
-            "code length {n} exceeds the JIT limit {MAX_JIT_INSTRUCTIONS}"
+            "code length {n} exceeds the JIT limit {}",
+            limits.max_instructions
         )));
     }
     let analysis_cells = n_regs.checked_mul(n).ok_or_else(|| {
@@ -182,10 +203,53 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
             "JIT analysis dimensions overflow: {n} instructions x {n_regs} registers"
         ))
     })?;
-    if analysis_cells > MAX_JIT_ANALYSIS_CELLS {
+    if analysis_cells > limits.max_analysis_cells {
         return Err(JitError::invalid_ir(format!(
-            "JIT analysis size {analysis_cells} cells exceeds the limit {MAX_JIT_ANALYSIS_CELLS} \
-             ({n} instructions x {n_regs} registers)"
+            "JIT analysis size {analysis_cells} cells exceeds the limit {} \
+             ({n} instructions x {n_regs} registers)",
+            limits.max_analysis_cells
+        )));
+    }
+    let mut cfg_edges = 0usize;
+    let mut total_operands = 0usize;
+    for (ip, instr) in program.code.iter().enumerate() {
+        cfg_edges = cfg_edges
+            .checked_add(successors(program, ip).len())
+            .ok_or_else(|| JitError::invalid_ir("JIT CFG edge count overflow"))?;
+        instr.visit_used_registers(|_| total_operands = total_operands.saturating_add(1));
+    }
+    if cfg_edges > limits.max_cfg_edges {
+        return Err(JitError::invalid_ir(format!(
+            "JIT CFG has {cfg_edges} edges, exceeding the limit {}",
+            limits.max_cfg_edges
+        )));
+    }
+    if total_operands > limits.max_total_operands {
+        return Err(JitError::invalid_ir(format!(
+            "JIT IR has {total_operands} register operands, exceeding the limit {}",
+            limits.max_total_operands
+        )));
+    }
+    if program.memo_scopes.len() > limits.max_memo_scopes {
+        return Err(JitError::invalid_ir(format!(
+            "JIT IR has {} memo scopes, exceeding the limit {}",
+            program.memo_scopes.len(),
+            limits.max_memo_scopes
+        )));
+    }
+    let work = limits
+        .checked_work(
+            n,
+            n_regs,
+            cfg_edges,
+            total_operands,
+            program.memo_scopes.len(),
+        )
+        .ok_or_else(|| JitError::invalid_ir("JIT compilation work estimate overflow"))?;
+    if work > limits.max_ir_work_units {
+        return Err(JitError::invalid_ir(format!(
+            "JIT compilation work estimate {work} exceeds the limit {}",
+            limits.max_ir_work_units
         )));
     }
     for &reg in &program.zero_init_regs {
@@ -348,6 +412,12 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
         .iter()
         .filter(|instr| matches!(instr, JitInstr::MemoizedHostCall { .. }))
         .count();
+    if memo_count > limits.max_memo_slots {
+        return Err(JitError::invalid_ir(format!(
+            "JIT IR has {memo_count} memo slots, exceeding the limit {}",
+            limits.max_memo_slots
+        )));
+    }
     let mut memo_slot_owners = vec![None; memo_count];
     for (ip, instr) in program.code.iter().enumerate() {
         let JitInstr::MemoizedHostCall { memo_slot, .. } = instr else {
@@ -881,24 +951,9 @@ pub(crate) fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError>
             NATIVE_RECURSION_STACK_BUDGET_BYTES
         )));
     }
-    Ok(())
-}
-
-/// Return the ABI result type after [`validate`] has established that every
-/// return agrees and that OSR entries contain no `Return` instruction.
-pub(crate) fn validated_return_type(program: &JitFunction, osr: bool) -> Option<JitValueType> {
-    if osr {
-        return None;
-    }
-    let reachable = reachable_jit_instrs(program);
-    program.code.iter().enumerate().find_map(|(ip, instr)| {
-        if !reachable[ip] {
-            return None;
-        }
-        match instr {
-            JitInstr::Return { src } => Some(program.reg_types[*src as usize]),
-            _ => None,
-        }
+    Ok(ValidationFacts {
+        assigned_in,
+        return_type: reachable_return_type,
     })
 }
 

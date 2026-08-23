@@ -39,8 +39,10 @@ fn build_child_call_frame(
     let abi = bcx
         .ins()
         .iconst(types::I32, i64::from(JIT_CALL_ABI_VERSION));
-    let flags = bcx.ins().iconst(types::I32, 0);
+    let frame_size = bcx.ins().iconst(types::I32, i64::from(CALL_FRAME_SIZE));
+    let flags = bcx.ins().iconst(types::I64, 0);
     bcx.ins().stack_store(abi, slot, FRAME_ABI_VERSION);
+    bcx.ins().stack_store(frame_size, slot, FRAME_SIZE);
     bcx.ins().stack_store(flags, slot, FRAME_FLAGS);
     for (value, offset) in [
         (args, FRAME_ARGS),
@@ -149,11 +151,10 @@ pub(crate) fn build_function(
     group: &[NativeGroupMember],
     limit_checks: LimitChecks,
     native_static_call_depth: u32,
+    assigned_in: &[Vec<bool>],
 ) -> Result<DeoptMap, JitError> {
-    // Definite-assignment ("must") sets per instruction, computed once up front so
-    // each bail site can record its live (entry-assigned) registers. Purely
-    // host-side analysis — it shapes no emitted code.
-    let assigned_in = definite_assignment(program, osr_header.is_some());
+    // Definite-assignment facts were computed by validation and are reused here;
+    // codegen never repeats the most expensive structural dataflow pass.
     // Forward integer-interval analysis (interval range analysis): per-instruction sound ranges for
     // Int registers, used purely to elide provably-non-overflowing checks. Like
     // `definite_assignment`, host-side only — it shapes no code beyond choosing the
@@ -253,6 +254,33 @@ pub(crate) fn build_function(
     bcx.switch_to_block(entry);
     let params = bcx.block_params(entry).to_vec();
     let frame_ptr = params[0];
+    // The ABI prefix is the only memory read permitted before compatibility is
+    // established. A lockstep mismatch declines without touching pointer fields.
+    let abi_version = bcx.ins().load(
+        types::I32,
+        MemFlags::trusted(),
+        frame_ptr,
+        FRAME_ABI_VERSION,
+    );
+    let frame_size = bcx
+        .ins()
+        .load(types::I32, MemFlags::trusted(), frame_ptr, FRAME_SIZE);
+    let expected_version = bcx
+        .ins()
+        .iconst(types::I32, i64::from(JIT_CALL_ABI_VERSION));
+    let required_size = bcx.ins().iconst(types::I32, i64::from(CALL_FRAME_SIZE));
+    let version_ok = bcx.ins().icmp(IntCC::Equal, abi_version, expected_version);
+    let size_ok = bcx
+        .ins()
+        .icmp(IntCC::UnsignedGreaterThanOrEqual, frame_size, required_size);
+    let abi_ok = bcx.ins().band(version_ok, size_ok);
+    let compatible = bcx.create_block();
+    let incompatible = bcx.create_block();
+    bcx.ins().brif(abi_ok, compatible, &[], incompatible, &[]);
+    bcx.switch_to_block(incompatible);
+    let status = bcx.ins().iconst(types::I8, JitStatus::AbiMismatch as i64);
+    bcx.ins().return_(&[status]);
+    bcx.switch_to_block(compatible);
     let args_ptr = bcx
         .ins()
         .load(ptr_ty, MemFlags::trusted(), frame_ptr, FRAME_ARGS);
@@ -483,7 +511,7 @@ pub(crate) fn build_function(
         ($ip:expr) => {
             &mut DeoptCtx {
                 ip: $ip as u32,
-                assigned_in: &assigned_in,
+                assigned_in,
                 reg_types: &program.reg_types,
                 sites: &mut sites,
                 payload_words: &mut payload_words,

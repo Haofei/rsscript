@@ -1,9 +1,14 @@
-use super::{JitError, JitFunction, validate};
+use super::{JitError, JitFunction, JitLimits, validate_with_limits};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ValidationMode {
     Standard,
     Osr,
+}
+
+pub(crate) struct ValidationFacts {
+    pub(crate) assigned_in: Vec<Vec<bool>>,
+    pub(crate) return_type: Option<super::JitValueType>,
 }
 
 /// A JIT function whose structural, type, control-flow, and resource invariants
@@ -15,21 +20,37 @@ pub(crate) enum ValidationMode {
 pub struct ValidatedJitFunction<'a> {
     function: &'a JitFunction,
     mode: ValidationMode,
+    facts: ValidationFacts,
 }
 
 impl<'a> ValidatedJitFunction<'a> {
     /// Validate a function for normal entry compilation.
     pub fn new(function: &'a JitFunction) -> Result<Self, JitError> {
-        Self::for_mode(function, ValidationMode::Standard)
+        Self::for_mode(function, ValidationMode::Standard, &JitLimits::default())
     }
 
-    pub(crate) fn for_osr(function: &'a JitFunction) -> Result<Self, JitError> {
-        Self::for_mode(function, ValidationMode::Osr)
+    pub(crate) fn for_osr_with_limits(
+        function: &'a JitFunction,
+        limits: &JitLimits,
+    ) -> Result<Self, JitError> {
+        Self::for_mode(function, ValidationMode::Osr, limits)
     }
 
-    fn for_mode(function: &'a JitFunction, mode: ValidationMode) -> Result<Self, JitError> {
-        validate(function, mode == ValidationMode::Osr)?;
-        Ok(Self { function, mode })
+    pub fn with_limits(function: &'a JitFunction, limits: &JitLimits) -> Result<Self, JitError> {
+        Self::for_mode(function, ValidationMode::Standard, limits)
+    }
+
+    fn for_mode(
+        function: &'a JitFunction,
+        mode: ValidationMode,
+        limits: &JitLimits,
+    ) -> Result<Self, JitError> {
+        let facts = validate_with_limits(function, mode == ValidationMode::Osr, limits)?;
+        Ok(Self {
+            function,
+            mode,
+            facts,
+        })
     }
 
     pub(crate) fn function(&self) -> &'a JitFunction {
@@ -38,6 +59,14 @@ impl<'a> ValidatedJitFunction<'a> {
 
     pub(crate) fn mode(&self) -> ValidationMode {
         self.mode
+    }
+
+    pub(crate) fn assigned_in(&self) -> &[Vec<bool>] {
+        &self.facts.assigned_in
+    }
+
+    pub(crate) fn return_type(&self) -> Option<super::JitValueType> {
+        self.facts.return_type
     }
 }
 

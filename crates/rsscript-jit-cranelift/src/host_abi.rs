@@ -2,7 +2,7 @@
 /// just forwards it from [`NativeModule::call`] to every imported host helper.
 pub type HostCtx = i64;
 
-pub const JIT_CALL_ABI_VERSION: u32 = 1;
+pub const JIT_CALL_ABI_VERSION: u32 = 2;
 
 /// Single versioned argument passed to generated functions. Keeping the machine
 /// ABI to one pointer prevents caller/codegen parameter-order drift as execution
@@ -10,7 +10,10 @@ pub const JIT_CALL_ABI_VERSION: u32 = 1;
 #[repr(C)]
 pub struct JitCallFrame {
     pub abi_version: u32,
-    pub flags: u32,
+    /// Size of the caller-provided frame. Generated code validates this prefix
+    /// before loading any pointer-bearing field.
+    pub frame_size: u32,
+    pub flags: u64,
     pub args: *const i64,
     pub lens: *const i64,
     pub arg_count: usize,
@@ -27,6 +30,7 @@ pub struct JitCallFrame {
 
 pub(crate) const CALL_FRAME_SIZE: u32 = std::mem::size_of::<JitCallFrame>() as u32;
 pub(crate) const FRAME_ABI_VERSION: i32 = std::mem::offset_of!(JitCallFrame, abi_version) as i32;
+pub(crate) const FRAME_SIZE: i32 = std::mem::offset_of!(JitCallFrame, frame_size) as i32;
 pub(crate) const FRAME_FLAGS: i32 = std::mem::offset_of!(JitCallFrame, flags) as i32;
 pub(crate) const FRAME_ARGS: i32 = std::mem::offset_of!(JitCallFrame, args) as i32;
 pub(crate) const FRAME_LENS: i32 = std::mem::offset_of!(JitCallFrame, lens) as i32;
@@ -48,6 +52,7 @@ pub(crate) const FRAME_LOGICAL_DEPTH_LIMIT: i32 =
 pub enum JitStatus {
     Deopt = 0,
     Completed = 1,
+    AbiMismatch = 2,
 }
 
 pub(crate) const DEFAULT_STANDALONE_JIT_ARENA_BYTES: u64 = 64 * 1024 * 1024;

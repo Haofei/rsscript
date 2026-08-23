@@ -1053,6 +1053,7 @@ fn scalar_machine_entry_runs_on_tiny_guarded_stacks() {
                 let mut deopt = [0_i64; 3];
                 let mut frame = JitCallFrame {
                     abi_version: JIT_CALL_ABI_VERSION,
+                    frame_size: CALL_FRAME_SIZE,
                     flags: 0,
                     args: args.as_ptr(),
                     lens: lens.as_ptr(),
@@ -1077,6 +1078,51 @@ fn scalar_machine_entry_runs_on_tiny_guarded_stacks() {
             .expect("tiny-stack native worker starts")
             .join()
             .expect("scalar native entry must stay within the guarded stack");
+    }
+}
+
+#[test]
+fn machine_entry_rejects_incompatible_frame_prefix_before_pointer_loads() {
+    use JitValueType::Int;
+    let mut module = module();
+    let function = module
+        .compile(&ft(1, vec![Int], vec![JitInstr::Return { src: 0 }]))
+        .unwrap();
+    let entry = module.test_raw_entry(function).unwrap();
+    let args = [41_i64];
+    let lens = [0_i64];
+
+    for (abi_version, frame_size) in [
+        (JIT_CALL_ABI_VERSION + 1, CALL_FRAME_SIZE),
+        (JIT_CALL_ABI_VERSION, CALL_FRAME_SIZE - 1),
+    ] {
+        let mut result = 99_i64;
+        let mut bail = 0_u8;
+        let mut safepoint = 0_i64;
+        let mut deopt = [0_i64; 1];
+        let mut frame = JitCallFrame {
+            abi_version,
+            frame_size,
+            flags: 0,
+            args: args.as_ptr(),
+            lens: lens.as_ptr(),
+            arg_count: args.len(),
+            host_ctx: 0,
+            limits: std::ptr::null(),
+            result: &mut result,
+            bail: &mut bail,
+            safepoint: &mut safepoint,
+            deopt: deopt.as_mut_ptr(),
+            native_depth: 0,
+            logical_depth: 0,
+            logical_depth_limit: usize::MAX,
+        };
+        // SAFETY: `frame` provides the complete ABI prefix. The generated entry
+        // must reject it before consulting any pointer-bearing field.
+        let status = unsafe { entry(&mut frame) };
+        assert_eq!(status, JitStatus::AbiMismatch);
+        assert_eq!(result, 99);
+        assert_eq!(bail, 0);
     }
 }
 
@@ -1122,16 +1168,14 @@ fn flat_direct_bounds_checks_do_not_touch_guard_pages() {
         len: mapping_len,
     };
     // SAFETY: the middle page is contained in the live mapping.
-    assert_eq!(
-        unsafe {
-            libc::mprotect(
-                (mapping.ptr as *mut u8).add(page).cast(),
-                page,
-                libc::PROT_READ | libc::PROT_WRITE,
-            )
-        },
-        0
-    );
+    let protect_result = unsafe {
+        libc::mprotect(
+            (mapping.ptr as *mut u8).add(page).cast(),
+            page,
+            libc::PROT_READ | libc::PROT_WRITE,
+        )
+    };
+    assert_eq!(protect_result, 0);
     // SAFETY: the final two i64 slots of the writable middle page are aligned,
     // initialized below, and remain live until `mapping` drops after both calls.
     let values = unsafe {
@@ -1162,12 +1206,13 @@ fn flat_direct_bounds_checks_do_not_touch_guard_pages() {
     let pointer = values.as_ptr() as i64;
     let args = [pointer, values.len() as i64];
     let lens = [values.len() as i64, 0];
-    let mut read_proof = [FlatBufferArg::Int(values)];
-    assert!(matches!(
-        module.call_with_host_ctx(read, &args, &lens, 0, &mut read_proof),
-        NativeOutcome::Deopt { .. }
-    ));
-    drop(read_proof);
+    {
+        let mut read_proof = [FlatBufferArg::Int(values)];
+        assert!(matches!(
+            module.call_with_host_ctx(read, &args, &lens, 0, &mut read_proof),
+            NativeOutcome::Deopt { .. }
+        ));
+    }
 
     let write = module
         .compile(&ft(

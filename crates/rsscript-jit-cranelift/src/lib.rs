@@ -47,6 +47,7 @@ mod executable_memory;
 mod host_abi;
 mod ir;
 mod ir_validation;
+mod limits;
 mod module;
 mod validated;
 
@@ -66,6 +67,7 @@ pub use executable_memory::ExecutableMemoryBudget;
 use executable_memory::{ExecutableMemoryReservation, arena_allocation_charge};
 pub use host_abi::*;
 pub use ir::*;
+pub use limits::JitLimits;
 pub use module::*;
 pub use validated::{ValidatedJitFunction, validate_function};
 
@@ -74,9 +76,9 @@ pub(crate) use codegen::{
     native_recursion_frame_bytes_estimate, push_compiled_abi_signature,
 };
 pub(crate) use host_abi::{DEFAULT_STANDALONE_JIT_ARENA_BYTES, HostHelperSig, HostResult};
-pub(crate) use ir_validation::{
-    instr_def, reachable_jit_instrs, successors, validate, validated_return_type,
-};
+#[cfg(test)]
+pub(crate) use ir_validation::validate;
+pub(crate) use ir_validation::{instr_def, reachable_jit_instrs, successors, validate_with_limits};
 pub(crate) use module::{ForcedDeopt, HostFuncs, NativeCallee, NativeGroupMember, is_flat_type};
 
 #[cfg(test)]

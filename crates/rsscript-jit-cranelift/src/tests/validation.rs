@@ -109,6 +109,20 @@ fn rejects_excessive_combined_analysis_dimensions() {
 }
 
 #[test]
+fn deterministic_work_budget_rejects_before_expensive_analysis() {
+    let program = f(1, 1, vec![JitInstr::Return { src: 0 }]);
+    let limits = JitLimits {
+        max_ir_work_units: 0,
+        ..JitLimits::default()
+    };
+    let error = ValidatedJitFunction::with_limits(&program, &limits)
+        .err()
+        .expect("zero work budget must reject even a minimal function");
+    assert_eq!(error.kind, JitErrorKind::InvalidIr);
+    assert!(error.message.contains("work estimate"), "{}", error.message);
+}
+
+#[test]
 fn rejects_inconsistent_return_types() {
     use JitValueType::{Bool, Handle, Int};
     let err = validate(&ft(

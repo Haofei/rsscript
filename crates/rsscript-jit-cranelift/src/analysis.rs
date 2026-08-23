@@ -2,6 +2,7 @@ use super::{
     HostHelper, JitCompare, JitFunction, JitInstr, JitValueType, instr_def, reachable_jit_instrs,
     successors,
 };
+use std::collections::VecDeque;
 
 /// Definite-assignment ("must") analysis over the [`JitInstr`] CFG. Returns, per
 /// instruction index `i`, the set (as a `reg -> bool` vector of width `n_regs`) of
@@ -57,8 +58,7 @@ pub(super) fn definite_assignment(program: &JitFunction, osr_entry: bool) -> Vec
         })
         .collect();
 
-    let out_for_edge = |in_set: &[bool], i: usize, successor: usize| -> Vec<bool> {
-        let mut out = in_set.to_vec();
+    let edge_def = |i: usize, successor: usize| -> Option<u32> {
         match &program.code[i] {
             JitInstr::MatchMapGetInt {
                 value_dst,
@@ -83,45 +83,42 @@ pub(super) fn definite_assignment(program: &JitFunction, osr_entry: bool) -> Vec
                 some_ip,
                 none_ip,
                 ..
-            } if successor == *some_ip as usize && some_ip != none_ip => {
-                out[*value_dst as usize] = true;
-            }
+            } if successor == *some_ip as usize && some_ip != none_ip => Some(*value_dst),
             JitInstr::MatchMapGetInt { .. }
             | JitInstr::MatchMapGetFloat { .. }
             | JitInstr::MatchSortedMapGetInt { .. }
-            | JitInstr::MatchSortedMapGetFloat { .. } => {}
-            _ => {
-                if let Some(d) = instr_def(&program.code[i])
-                    && (d as usize) < n_regs
-                {
-                    out[d as usize] = true;
-                }
-            }
+            | JitInstr::MatchSortedMapGetFloat { .. } => None,
+            _ => instr_def(&program.code[i]),
         }
-        out
     };
 
-    // Iterate to a fixpoint. Intersection is monotone (only clears bits), so the
-    // loop terminates in at most `n_regs * n` bit-clears.
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for j in 1..n {
-            if preds[j].is_empty() {
-                // Unreachable block: leave at the full set (it has no resume site of
-                // its own that we rely on; its inputs are vacuously satisfied).
-                continue;
+    // Worklist fixpoint: only successors of a changed input are reconsidered.
+    // This preserves the monotone intersection analysis while avoiding repeated
+    // full-CFG scans and temporary predecessor-output vectors.
+    let mut pending: VecDeque<usize> = (1..n).collect();
+    let mut queued = vec![true; n];
+    queued[0] = false;
+    while let Some(j) = pending.pop_front() {
+        queued[j] = false;
+        if preds[j].is_empty() {
+            // Unreachable block: leave at the full set (it has no resume site of
+            // its own that we rely on; its inputs are vacuously satisfied).
+            continue;
+        }
+        let mut new_in = vec![true; n_regs];
+        for &p in &preds[j] {
+            let edge_def = edge_def(p, j).map(|reg| reg as usize);
+            for (reg, assigned) in new_in.iter_mut().enumerate() {
+                *assigned &= assigned_in[p][reg] || edge_def == Some(reg);
             }
-            let mut new_in = vec![true; n_regs];
-            for &p in &preds[j] {
-                let out = out_for_edge(&assigned_in[p], p, j);
-                for r in 0..n_regs {
-                    new_in[r] = new_in[r] && out[r];
+        }
+        if new_in != assigned_in[j] {
+            assigned_in[j] = new_in;
+            for successor in successors(program, j) {
+                if successor != 0 && !queued[successor] {
+                    pending.push_back(successor);
+                    queued[successor] = true;
                 }
-            }
-            if new_in != assigned_in[j] {
-                assigned_in[j] = new_in;
-                changed = true;
             }
         }
     }

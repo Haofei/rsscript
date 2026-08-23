@@ -277,6 +277,7 @@ pub struct NativeModule {
     id: u64,
     /// Declared host-helper imports (see [`HostHelpers`]).
     imports: HostFuncs,
+    limits: JitLimits,
     call_active: std::cell::Cell<bool>,
     deopt_payload: std::cell::RefCell<Vec<i64>>,
     /// Keeps the shared hard-budget reservation alive for the arena's lifetime.
@@ -386,7 +387,7 @@ pub use crate::deopt::{
     DeoptChildSite, DeoptFrame, DeoptMap, DeoptReg, DeoptSite, DeoptValue, NativeDeclineReason,
     NativeOutcome, SafepointId,
 };
-use crate::deopt::{anonymous_deopt, reentrant_decline};
+use crate::deopt::{abi_mismatch_decline, anonymous_deopt, reentrant_decline};
 
 pub(crate) fn is_flat_type(ty: JitValueType) -> bool {
     matches!(
@@ -526,6 +527,22 @@ impl NativeModule {
         budget: ExecutableMemoryBudget,
         arena_bytes: u64,
     ) -> Result<Self, JitError> {
+        Self::new_with_opt_and_memory_budget_and_limits(
+            helpers,
+            baseline,
+            budget,
+            arena_bytes,
+            JitLimits::default(),
+        )
+    }
+
+    pub fn new_with_opt_and_memory_budget_and_limits(
+        helpers: HostHelpers,
+        baseline: bool,
+        budget: ExecutableMemoryBudget,
+        arena_bytes: u64,
+        limits: JitLimits,
+    ) -> Result<Self, JitError> {
         let reservation = budget.reserve(arena_allocation_charge(arena_bytes)?)?;
         let arena_bytes = usize::try_from(arena_bytes).map_err(|_| {
             JitError::new(
@@ -539,7 +556,7 @@ impl NativeModule {
                 format!("JIT arena allocation: {error}"),
             )
         })?;
-        Self::new_with_opt_inner(helpers, baseline, arena, reservation)
+        Self::new_with_opt_inner(helpers, baseline, arena, reservation, limits)
     }
 
     fn new_with_opt_inner(
@@ -547,6 +564,7 @@ impl NativeModule {
         baseline: bool,
         arena: ArenaMemoryProvider,
         memory_reservation: ExecutableMemoryReservation,
+        limits: JitLimits,
     ) -> Result<Self, JitError> {
         let mut flags = settings::builder();
         // Plain JIT: no PIC. Optimize for speed on the hot path, or skip
@@ -595,6 +613,7 @@ impl NativeModule {
             counter: 0,
             id: NEXT_MODULE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             imports,
+            limits,
             call_active: std::cell::Cell::new(false),
             deopt_payload: std::cell::RefCell::new(Vec::new()),
             _memory_reservation: memory_reservation,
@@ -603,7 +622,7 @@ impl NativeModule {
 
     /// Compile `function` to native code and return a handle to call it.
     pub fn compile(&mut self, function: &JitFunction) -> Result<CompiledId, JitError> {
-        let validated = ValidatedJitFunction::new(function)?;
+        let validated = ValidatedJitFunction::with_limits(function, &self.limits)?;
         self.compile_validated(&validated)
     }
 
@@ -639,7 +658,7 @@ impl NativeModule {
         function: &JitFunction,
         force_site: u32,
     ) -> Result<CompiledId, JitError> {
-        let validated = ValidatedJitFunction::new(function)?;
+        let validated = ValidatedJitFunction::with_limits(function, &self.limits)?;
         self.compile_inner(
             &validated,
             Some(ForcedDeopt::Site(force_site)),
@@ -657,7 +676,7 @@ impl NativeModule {
         &mut self,
         function: &JitFunction,
     ) -> Result<CompiledId, JitError> {
-        let validated = ValidatedJitFunction::new(function)?;
+        let validated = ValidatedJitFunction::with_limits(function, &self.limits)?;
         self.compile_inner(
             &validated,
             Some(ForcedDeopt::All),
@@ -698,7 +717,7 @@ impl NativeModule {
         step_limit: bool,
         cancel_armed: bool,
     ) -> Result<CompiledId, JitError> {
-        let validated = ValidatedJitFunction::for_osr(function)?;
+        let validated = ValidatedJitFunction::for_osr_with_limits(function, &self.limits)?;
         self.compile_inner(
             &validated,
             None,
@@ -726,11 +745,47 @@ impl NativeModule {
         // `Handle` register returns an output-table handle, not a scalar. Determined
         // purely from the (validated) IR, before codegen. OSR functions never have a
         // top-level `Return` (they exit via `OsrExit`), so this stays `false`.
-        let return_type = validated_return_type(function, osr_header.is_some());
+        let return_type = validated.return_type();
         let returns_handle = return_type == Some(JitValueType::Handle);
         let scalar_leaf_callable =
             native_scalar_leaf_callable(function, osr_header.is_some(), returns_handle);
         let native_callees = self.resolve_native_callees(function)?;
+        if native_callees.len() > self.limits.max_native_callees {
+            return Err(JitError::new(
+                JitErrorKind::AdmissionRejected,
+                format!(
+                    "JIT function has {} native callees, exceeding the limit {}",
+                    native_callees.len(),
+                    self.limits.max_native_callees
+                ),
+            ));
+        }
+        let mut projected_payload_words = function.n_regs as usize;
+        for instr in &function.code {
+            if let JitInstr::CallNative { callee, .. } = instr {
+                let child = native_callees
+                    .iter()
+                    .find(|candidate| candidate.handle == *callee)
+                    .expect("resolved native callee covers every validated CallNative");
+                projected_payload_words = projected_payload_words
+                    .checked_add(1 + child.deopt_payload_words)
+                    .ok_or_else(|| {
+                        JitError::new(
+                            JitErrorKind::AdmissionRejected,
+                            "JIT deoptimization payload size overflow",
+                        )
+                    })?;
+            }
+        }
+        if projected_payload_words > self.limits.max_deopt_payload_words {
+            return Err(JitError::new(
+                JitErrorKind::AdmissionRejected,
+                format!(
+                    "JIT deoptimization payload requires {projected_payload_words} words, exceeding the limit {}",
+                    self.limits.max_deopt_payload_words
+                ),
+            ));
+        }
         let native_call_depth = native_callees
             .iter()
             .filter_map(|callee| self.funcs.get(callee.handle.index))
@@ -766,6 +821,7 @@ impl NativeModule {
             &[],
             limit_checks,
             native_call_depth,
+            validated.assigned_in(),
         )?;
 
         self.module
@@ -821,17 +877,29 @@ impl NativeModule {
         if funcs.is_empty() {
             return Ok(Vec::new());
         }
-        for function in funcs {
-            validate(function, false)?;
+        if funcs.len() > self.limits.max_group_members {
+            return Err(JitError::new(
+                JitErrorKind::AdmissionRejected,
+                format!(
+                    "native recursive group has {} members, exceeding the limit {}",
+                    funcs.len(),
+                    self.limits.max_group_members
+                ),
+            ));
         }
+        let validation_facts: Vec<ValidationFacts> = funcs
+            .iter()
+            .map(|function| validate_with_limits(function, false, &self.limits))
+            .collect::<Result<_, _>>()?;
         // Complete every contextual check before declaring any Cranelift function.
         // A declaration cannot be rolled back, so rejecting later would poison this
         // NativeModule. Ordinary CallNative edges are temporarily unsupported here:
         // their chained child payload can exceed the n_regs-sized group payload.
-        let return_types: Vec<JitValueType> = funcs
+        let return_types: Vec<JitValueType> = validation_facts
             .iter()
-            .map(|function| {
-                validated_return_type(function, false)
+            .map(|facts| {
+                facts
+                    .return_type
                     .ok_or_else(|| JitError::invalid_ir("recursive group member has no Return"))
             })
             .collect::<Result<_, _>>()?;
@@ -948,6 +1016,7 @@ impl NativeModule {
                 &group,
                 LimitChecks::default(),
                 0,
+                &validation_facts[i].assigned_in,
             )?;
             self.module
                 .define_function(func_ids[i], &mut self.ctx)
@@ -1432,6 +1501,7 @@ impl NativeModule {
                 // of the pointers.
                 let mut frame = JitCallFrame {
                     abi_version: JIT_CALL_ABI_VERSION,
+                    frame_size: CALL_FRAME_SIZE,
                     flags: 0,
                     args: args.as_ptr(),
                     lens: lens.as_ptr(),
@@ -1449,7 +1519,9 @@ impl NativeModule {
                 // SAFETY: `f` was finalized from the one-pointer `CompiledAbi`
                 // signature and every pointer in `frame` remains live for the call.
                 let completed = unsafe { f(&mut frame) };
-                if completed == JitStatus::Completed && bail == 0 {
+                if completed == JitStatus::AbiMismatch {
+                    abi_mismatch_decline()
+                } else if completed == JitStatus::Completed && bail == 0 {
                     // Success: leave the payload buffer untouched, build no Vec.
                     // Heap-result return ABI: a Handle-returning function's
                     // `out` is an output-table handle, signalled distinctly so the
@@ -1553,3 +1625,4 @@ pub fn user_host_ctx(context: HostCtx) -> HostCtx {
     unsafe { (*(context as *const HostCallContext)).user }
 }
 use super::*;
+use crate::validated::ValidationFacts;

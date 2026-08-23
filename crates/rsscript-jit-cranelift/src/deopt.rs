@@ -166,6 +166,7 @@ pub enum NativeOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeDeclineReason {
     ReentrantCall,
+    AbiMismatch,
 }
 
 pub(super) fn anonymous_deopt() -> NativeOutcome {
@@ -175,6 +176,16 @@ pub(super) fn anonymous_deopt() -> NativeOutcome {
         child: None,
         logical_depth: None,
         decline: None,
+    }
+}
+
+pub(super) fn abi_mismatch_decline() -> NativeOutcome {
+    NativeOutcome::Deopt {
+        safepoint_id: SafepointId::ANONYMOUS,
+        live: Vec::new(),
+        child: None,
+        logical_depth: None,
+        decline: Some(NativeDeclineReason::AbiMismatch),
     }
 }
 
