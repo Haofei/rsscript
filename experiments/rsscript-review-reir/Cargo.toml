@@ -13,3 +13,6 @@ doctest = false
 [dependencies]
 reir = { path = "../reir" }
 serde_json = "1"
+
+[lints]
+workspace = true

@@ -41,3 +41,6 @@ rsscript-runner-protocol = { path = "../rsscript-runner-protocol", optional = tr
 rsscript-provider-log = { path = "../../providers/log", optional = true }
 serde_json = "1"
 tempfile = "3"
+
+[lints]
+workspace = true

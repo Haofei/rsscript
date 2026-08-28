@@ -2,9 +2,14 @@ name: JIT controlled baseline
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_evidence:
+        description: Publish the attested baseline as an immutable GitHub Release
+        type: boolean
+        default: true
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
   attestations: write
 
@@ -61,3 +66,14 @@ jobs:
             canonical-evidence.json
           if-no-files-found: error
           retention-days: 90
+      - name: Publish durable controlled evidence
+        if: inputs.publish_evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="jit-baseline-${GITHUB_SHA}-${GITHUB_RUN_ID}"
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "JIT controlled baseline ${GITHUB_SHA::12} run ${GITHUB_RUN_ID}" \
+            --notes "Attested controlled-hardware JIT evidence. This release is an immutable measurement record, not a product release." \
+            canonical-*.json

@@ -12,11 +12,13 @@ pub fn functions() -> BTreeMap<ExternalSymbol, ProviderFunction<WireInterpreterF
         function.symbol,
         ProviderFunction {
             signature: function.signature,
-            callable: WireInterpreterFn::new(|mut args| {
-                let WireValue::Int { value: length } = args.remove(0) else {
-                    return Err(ProviderError::invalid_argument("length must be Int"));
+            callable: WireInterpreterFn::new(|args| {
+                let [WireValue::Int { value: length }] = args.as_slice() else {
+                    return Err(ProviderError::invalid_argument(
+                        "bytes expects exactly one Int length",
+                    ));
                 };
-                let length = usize::try_from(length)
+                let length = usize::try_from(*length)
                     .map_err(|_| ProviderError::invalid_argument("length must be non-negative"))?;
                 if length > 16 * 1024 * 1024 {
                     return Err(ProviderError::resource_exhausted(

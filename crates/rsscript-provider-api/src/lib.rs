@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::future::Future;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -12,10 +13,17 @@ pub use rsscript_abi_model::{
     DataEffect, ExternalImport, ExternalSymbol, FunctionSignature, InvalidExternalSymbol,
     ParameterSignature, RUNTIME_ABI_VERSION, SignatureHash, WireCallTypeTable,
     WireRecordFieldLayout, WireRecordLayout, WireResourceHandle, WireResourceTypeId, WireType,
-    WireTypeId, WireTypeTableOverflow, WireValue, WireVariantId, WireVariantLayout,
+    WireTypeId, WireTypeTableOverflow, WireValue, WireVariantCaseLayout, WireVariantId,
+    WireVariantLayout,
 };
 pub use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationId};
 use serde::{Deserialize, Serialize};
+
+mod wire_validation;
+
+pub use wire_validation::{
+    validate_wire_arguments, validate_wire_mutation_result, validate_wire_result,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -604,7 +612,8 @@ impl WireInterpreterFn {
         args: Vec<WireValue>,
     ) -> Result<WireValue, ProviderError> {
         context.check_cancelled()?;
-        (self.inner)(context, args)
+        catch_unwind(AssertUnwindSafe(|| (self.inner)(context, args)))
+            .unwrap_or_else(|_| Err(ProviderError::internal("provider callable panicked")))
     }
 }
 
@@ -670,7 +679,8 @@ impl WireMutationInterpreterFn {
         args: Vec<WireValue>,
     ) -> Result<WireMutationResult, ProviderError> {
         context.check_cancelled()?;
-        (self.inner)(context, args)
+        catch_unwind(AssertUnwindSafe(|| (self.inner)(context, args)))
+            .unwrap_or_else(|_| Err(ProviderError::internal("provider callable panicked")))
     }
 }
 
@@ -973,6 +983,42 @@ pub type WireProviderFuture =
 pub type WireMutationProviderFuture =
     Pin<Box<dyn Future<Output = Result<WireMutationResult, ProviderError>> + Send + 'static>>;
 
+struct PanicContainedWireFuture {
+    inner: WireProviderFuture,
+}
+
+impl Future for PanicContainedWireFuture {
+    type Output = Result<WireValue, ProviderError>;
+
+    fn poll(
+        self: Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let this = self.get_mut();
+        catch_unwind(AssertUnwindSafe(|| this.inner.as_mut().poll(context))).unwrap_or_else(|_| {
+            std::task::Poll::Ready(Err(ProviderError::internal("provider callable panicked")))
+        })
+    }
+}
+
+struct PanicContainedWireMutationFuture {
+    inner: WireMutationProviderFuture,
+}
+
+impl Future for PanicContainedWireMutationFuture {
+    type Output = Result<WireMutationResult, ProviderError>;
+
+    fn poll(
+        self: Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let this = self.get_mut();
+        catch_unwind(AssertUnwindSafe(|| this.inner.as_mut().poll(context))).unwrap_or_else(|_| {
+            std::task::Poll::Ready(Err(ProviderError::internal("provider callable panicked")))
+        })
+    }
+}
+
 type AsyncContextualWireProviderFn =
     dyn Fn(AsyncProviderCallContext, Vec<WireValue>) -> WireProviderFuture + Send + Sync;
 
@@ -998,7 +1044,12 @@ impl AsyncWireInterpreterFn {
         context: AsyncProviderCallContext,
         args: Vec<WireValue>,
     ) -> WireProviderFuture {
-        (self.inner)(context, args)
+        match catch_unwind(AssertUnwindSafe(|| (self.inner)(context, args))) {
+            Ok(inner) => Box::pin(PanicContainedWireFuture { inner }),
+            Err(_) => {
+                Box::pin(async { Err(ProviderError::internal("provider callable panicked")) })
+            }
+        }
     }
 }
 
@@ -1028,7 +1079,12 @@ impl AsyncWireMutationInterpreterFn {
         context: AsyncProviderCallContext,
         args: Vec<WireValue>,
     ) -> WireMutationProviderFuture {
-        (self.inner)(context, args)
+        match catch_unwind(AssertUnwindSafe(|| (self.inner)(context, args))) {
+            Ok(inner) => Box::pin(PanicContainedWireMutationFuture { inner }),
+            Err(_) => {
+                Box::pin(async { Err(ProviderError::internal("provider callable panicked")) })
+            }
+        }
     }
 }
 
@@ -1157,6 +1213,7 @@ pub struct ProviderInvocationContract {
     pub descriptor: ProviderFunctionDescriptor,
 }
 
+#[derive(Clone)]
 pub struct ProviderFunction<T> {
     pub signature: FunctionSignature,
     pub callable: T,
@@ -1428,6 +1485,195 @@ mod tests {
         let encoded = serde_json::to_value(&error).expect("Provider error serializes");
         assert_eq!(encoded["details"]["kind"], "string");
         assert_eq!(encoded["details"]["value"], "NotFound");
+    }
+
+    #[test]
+    fn canonical_wire_validation_rejects_count_collection_and_result_drift() {
+        let signature = FunctionSignature {
+            parameters: vec![ParameterSignature {
+                name: "items".into(),
+                effect: DataEffect::Read,
+                ty: WireType::List {
+                    element: Box::new(WireType::String),
+                },
+                retained: false,
+            }],
+            result: WireType::Bool,
+            asynchronous: false,
+        };
+        assert_eq!(
+            validate_wire_arguments(&signature, &[], &[], &[])
+                .expect_err("missing argument must fail")
+                .code,
+            ProviderErrorCode::InvalidArgument
+        );
+        let types = WireCallTypeTable::for_signature(&signature).expect("bounded signature");
+        let wrong_list = WireValue::List {
+            element_type: types
+                .type_id(&WireType::Int {
+                    bits: 64,
+                    signed: true,
+                })
+                .unwrap_or(WireTypeId::new(u32::MAX)),
+            values: vec![WireValue::Int { value: 1 }],
+        };
+        assert_eq!(
+            validate_wire_arguments(&signature, &[], &[], &[wrong_list])
+                .expect_err("wrong list element identity must fail")
+                .code,
+            ProviderErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            validate_wire_result(
+                &signature,
+                &[],
+                &[],
+                &WireValue::String { value: "no".into() },
+            )
+            .expect_err("wrong result type must fail")
+            .code,
+            ProviderErrorCode::Internal
+        );
+    }
+
+    #[test]
+    fn canonical_wire_validation_rejects_record_variant_and_mutation_drift() {
+        let record_ty = WireType::Named {
+            package: Some("host.test".into()),
+            name: "Record".into(),
+            arguments: Vec::new(),
+        };
+        let variant_ty = WireType::Named {
+            package: Some("host.test".into()),
+            name: "Choice".into(),
+            arguments: Vec::new(),
+        };
+        let signature = FunctionSignature {
+            parameters: vec![
+                ParameterSignature {
+                    name: "record".into(),
+                    effect: DataEffect::Read,
+                    ty: record_ty.clone(),
+                    retained: false,
+                },
+                ParameterSignature {
+                    name: "choice".into(),
+                    effect: DataEffect::Mut,
+                    ty: variant_ty.clone(),
+                    retained: false,
+                },
+            ],
+            result: WireType::Unit,
+            asynchronous: false,
+        };
+        let records = vec![WireRecordLayout {
+            ty: record_ty,
+            fields: vec![WireRecordFieldLayout {
+                name: "value".into(),
+                ty: WireType::String,
+            }],
+        }];
+        let variants = vec![WireVariantLayout {
+            ty: variant_ty,
+            variants: vec![WireVariantCaseLayout {
+                name: "some".into(),
+                fields: vec![WireRecordFieldLayout {
+                    name: "value".into(),
+                    ty: WireType::Int {
+                        bits: 64,
+                        signed: true,
+                    },
+                }],
+            }],
+        }];
+
+        let invalid_arguments = vec![
+            WireValue::Record {
+                type_id: WireTypeId::new(u32::MAX),
+                fields: vec![WireValue::String { value: "x".into() }],
+            },
+            WireValue::Variant {
+                type_id: WireTypeId::new(u32::MAX),
+                variant_id: WireVariantId::new(0),
+                payload: Some(Box::new(WireValue::Int { value: 1 })),
+            },
+        ];
+        assert_eq!(
+            validate_wire_arguments(&signature, &records, &variants, &invalid_arguments)
+                .expect_err("foreign record/variant identities must fail")
+                .code,
+            ProviderErrorCode::InvalidArgument
+        );
+
+        let invalid_mutation = WireMutationResult {
+            result: WireValue::Unit,
+            mutated: Vec::new(),
+        };
+        assert_eq!(
+            validate_wire_mutation_result(&signature, &records, &variants, &invalid_mutation,)
+                .expect_err("missing mutation result must fail")
+                .code,
+            ProviderErrorCode::Internal
+        );
+    }
+
+    #[test]
+    fn public_sync_wire_callable_contains_provider_panics() {
+        let callable = WireInterpreterFn::new(|_| -> Result<WireValue, ProviderError> {
+            panic!("provider bug")
+        });
+        let error = callable
+            .call_with_context(&mut ProviderCallContext::default(), Vec::new())
+            .expect_err("panic must become a Provider error");
+        assert_eq!(error.code, ProviderErrorCode::Internal);
+    }
+
+    #[test]
+    fn every_public_wire_callable_mode_contains_provider_panics() {
+        let mutation =
+            WireMutationInterpreterFn::new(|_| -> Result<WireMutationResult, ProviderError> {
+                panic!("provider bug")
+            });
+        assert_eq!(
+            mutation
+                .call_with_context(&mut ProviderCallContext::default(), Vec::new())
+                .expect_err("mutation panic must become a Provider error")
+                .code,
+            ProviderErrorCode::Internal
+        );
+
+        let asynchronous = AsyncWireInterpreterFn::new(|_, _| async {
+            panic!("provider future bug");
+            #[allow(unreachable_code)]
+            Ok(WireValue::Unit)
+        });
+        let mut future = asynchronous.call(async_context(), Vec::new());
+        let Poll::Ready(result) = poll_wire_future(&mut future) else {
+            panic!("panic containment must complete immediately")
+        };
+        assert_eq!(
+            result
+                .expect_err("async panic must become a Provider error")
+                .code,
+            ProviderErrorCode::Internal
+        );
+
+        let async_mutation = AsyncWireMutationInterpreterFn::new(|_, _| async {
+            panic!("provider mutation future bug");
+            #[allow(unreachable_code)]
+            Ok(WireMutationResult {
+                result: WireValue::Unit,
+                mutated: Vec::new(),
+            })
+        });
+        let mut future = async_mutation.call(async_context(), Vec::new());
+        let waker = Waker::noop();
+        let mut context = Context::from_waker(waker);
+        let Poll::Ready(result) = future.as_mut().poll(&mut context) else {
+            panic!("panic containment must complete immediately")
+        };
+        let error = result.expect_err("async mutation panic must become a Provider error");
+        assert_eq!(error.code, ProviderErrorCode::Internal);
     }
     use proptest::prelude::*;
     use rsscript_abi_model::{DataEffect, ParameterSignature};

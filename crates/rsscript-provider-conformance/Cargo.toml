@@ -9,3 +9,6 @@ publish = false
 
 [dependencies]
 rsscript-provider-api = { path = "../rsscript-provider-api" }
+
+[lints]
+workspace = true

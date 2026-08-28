@@ -17,3 +17,6 @@ serde_json = { version = "1", features = ["preserve_order"] }
 
 [dev-dependencies]
 proptest = "1"
+
+[lints]
+workspace = true

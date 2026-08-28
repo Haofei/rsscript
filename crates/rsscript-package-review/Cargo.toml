@@ -28,3 +28,6 @@ uuid = { version = "1", features = ["v4"] }
 
 [build-dependencies]
 rsscript-build-support = { path = "../rsscript-build-support" }
+
+[lints]
+workspace = true

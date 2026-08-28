@@ -11,3 +11,6 @@ rsscript-operation = { path = "../rsscript-operation" }
 toml = "0.8"
 sha2 = "0.10"
 serde = { version = "1", features = ["derive"] }
+
+[lints]
+workspace = true

@@ -439,7 +439,7 @@ fn native_jit_pass_scorecard() {
         let native = median(native_samples);
         // Timed native samples intentionally use production defaults with
         // telemetry disabled. Collect structural evidence in a separate run so
-        // `Instant::now()` and counter traffic are not part of `native_ns`.
+        // `Instant::now()` and counter traffic are not part of the cold E2E timing.
         let diagnostic_native =
             linked.execute(interpreter_request().native_jit(NativeJitOptions::diagnostic()));
         assert_semantic_report_matches(&diagnostic_native, &expected, case);
@@ -515,10 +515,9 @@ fn native_jit_pass_scorecard() {
                 "size": case.size,
                 "status": if native_calls > 0 || osr_entries > 0 || continuation_entries > 0 { "entered" } else { "declined" },
                 "interpreter_ns": interpreter.as_nanos(),
-                "native_ns": native.as_nanos(),
                 "cold_e2e_native_ns": native.as_nanos(),
                 "diagnostic_native_run_nanos": diagnostic_native_run_nanos,
-                "warm_native_entry_avg_nanos": diagnostic_native_run_nanos
+                "instrumented_native_nanos_per_entry": diagnostic_native_run_nanos
                     / u128::from(native_calls.saturating_add(osr_entries).saturating_add(continuation_entries).max(1)),
                 "speedup": interpreter.as_secs_f64() / native.as_secs_f64(),
                 "compile_nanos": compile_nanos,

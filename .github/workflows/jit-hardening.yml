@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -29,6 +29,7 @@ jobs:
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
 
       - name: Tiny-stack and guard-page boundary tests
+        if: runner.os != 'Windows'
         run: |
           cargo test --locked -p rsscript-jit-cranelift scalar_machine_entry_runs_on_tiny_guarded_stacks -- --nocapture
           cargo test --locked -p rsscript-jit-cranelift flat_direct_bounds_checks_do_not_touch_guard_pages -- --nocapture
@@ -36,6 +37,7 @@ jobs:
       - name: Forced-deopt and transactional rollback tests
         run: |
           cargo test --locked -p rsscript-jit-cranelift force_bail_at_every_safepoint_captures_correct_state -- --nocapture
+          cargo test --locked -p rsscript-sdk --features native-jit --test native_jit_smoke -- --nocapture
           cargo test --locked -p rsscript-sdk --features native-jit --test native_jit_differential -- --nocapture
 
   host-abi-asan:

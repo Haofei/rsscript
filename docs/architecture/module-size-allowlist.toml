@@ -10,83 +10,151 @@ hard_bytes = 80000
 path = "crates/rsscript-bytecode/src/lib.rs"
 max_bytes = 148000
 reason = "Versioned codec and verifier remain one audited wire boundary pending internal partitioning."
+owner = "@Haofei"
+target_bytes = 60000
+decision_by = "2026-12-31"
+tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-codegen-vm/src/lib.rs"
 max_bytes = 114000
 reason = "VM code generation is being partitioned without changing emitted Artifact bytes."
+owner = "@Haofei"
+target_bytes = 60000
+decision_by = "2026-12-31"
+tracking = "module-partition-backlog"
 
 [[allow]]
-path = "crates/rsscript-compiler/src/selfhost_parity/checker.rs"
+path = "experiments/selfhost-parity/src/selfhost_parity/checker.rs"
 max_bytes = 82000
-reason = "Research-only self-host checker corpus remains isolated pending extraction to experiments."
+reason = "Research-only self-host checker corpus is isolated in the experiments workspace pending partitioning."
+owner = "@Haofei"
+target_bytes = 60000
+decision_by = "2026-12-31"
+tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-jit-cranelift/src/codegen.rs"
 max_bytes = 108000
 reason = "Cranelift lowering debt; executable-memory and ABI review remains centralized."
+owner = "@Haofei"
+target_bytes = 60000
+decision_by = "2026-12-31"
+tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-jit-cranelift/src/module.rs"
 max_bytes = 88000
 reason = "Native module lifecycle debt guarded by JIT differential and hardening tests."
+owner = "@Haofei"
+target_bytes = 60000
+decision_by = "2026-12-31"
+tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-lowering/src/mir.rs"
 max_bytes = 159000
 reason = "Typed HIR-to-MIR lowering must be split while preserving diagnostic and source mappings."
+owner = "@Haofei"
+target_bytes = 60000
+decision_by = "2026-12-31"
+tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-mir/src/lib.rs"
 max_bytes = 147000
 reason = "MIR model and verifier are a single versioned contract pending private-module extraction."
+owner = "@Haofei"
+target_bytes = 60000
+decision_by = "2026-12-31"
+tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-project/src/lib.rs"
 max_bytes = 98000
 reason = "Project snapshot and manifest parsing require behavior-preserving module extraction."
+owner = "@Haofei"
+target_bytes = 60000
+decision_by = "2026-12-31"
+tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-sdk/src/lib.rs"
 max_bytes = 124000
 reason = "Stable façade is intentionally single-surface while implementation modules are extracted."
+owner = "@Haofei"
+target_bytes = 60000
+decision_by = "2026-12-31"
+tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-sdk/tests/architecture.rs"
 max_bytes = 206000
 reason = "Historical architecture checks will move into xtask as repository invariants are generalized."
+owner = "@Haofei"
+target_bytes = 60000
+decision_by = "2026-12-31"
+tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-semantics/src/database.rs"
 max_bytes = 136000
 reason = "CompilationSession storage/query partitioning must preserve revision and invalidation behavior."
+owner = "@Haofei"
+target_bytes = 60000
+decision_by = "2026-12-31"
+tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-vm/src/reg_vm/exec.rs"
 max_bytes = 128000
 reason = "Interpreter dispatch extraction is guarded by report-level differential tests."
+owner = "@Haofei"
+target_bytes = 60000
+decision_by = "2026-12-31"
+tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-vm/src/reg_vm/mod.rs"
 max_bytes = 282000
 reason = "Register VM root still owns registries and compatibility-free execution composition."
+owner = "@Haofei"
+target_bytes = 60000
+decision_by = "2026-12-31"
+tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-vm/src/reg_vm/native/passes/region_optimization.rs"
 max_bytes = 154000
 reason = "Region optimization debt is feature-gated and constrained by JIT retention policy."
+owner = "@Haofei"
+target_bytes = 60000
+decision_by = "2026-12-31"
+tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-vm/src/reg_vm/native/passes/scalar_replacement.rs"
 max_bytes = 99000
 reason = "Shared retained aggregate transforms remain differential-tested pending partitioning."
+owner = "@Haofei"
+target_bytes = 60000
+decision_by = "2026-12-31"
+tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-vm/src/reg_vm/native/translate.rs"
 max_bytes = 178000
 reason = "Native translation pipeline extraction must preserve origin/resume/source-cost contracts."
+owner = "@Haofei"
+target_bytes = 60000
+decision_by = "2026-12-31"
+tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-vm/src/reg_vm/tier.rs"
 max_bytes = 201000
 reason = "Whole/OSR/continuation controller debt remains behind the opt-in native engine."
+owner = "@Haofei"
+target_bytes = 60000
+decision_by = "2026-12-31"
+tracking = "module-partition-backlog"

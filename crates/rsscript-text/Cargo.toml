@@ -6,3 +6,6 @@ description = "Shared total text and canonical type-name utilities for RSScript"
 license.workspace = true
 rust-version.workspace = true
 publish = false
+
+[lints]
+workspace = true

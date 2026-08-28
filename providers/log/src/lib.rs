@@ -14,11 +14,13 @@ pub fn functions(
         function.symbol,
         ProviderFunction {
             signature: function.signature,
-            callable: WireInterpreterFn::new(move |mut args| {
-                let WireValue::String { value: message } = args.remove(0) else {
-                    return Err(ProviderError::invalid_argument("message must be String"));
+            callable: WireInterpreterFn::new(move |args| {
+                let [WireValue::String { value: message }] = args.as_slice() else {
+                    return Err(ProviderError::invalid_argument(
+                        "write expects exactly one String message",
+                    ));
                 };
-                sink(&message)?;
+                sink(message)?;
                 Ok(WireValue::Unit)
             }),
         },

@@ -18,3 +18,6 @@ sha2 = "0.10"
 [dev-dependencies]
 base64 = "0.22"
 proptest = "1"
+
+[lints]
+workspace = true

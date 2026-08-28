@@ -1,76 +1,121 @@
-schema = 1
+schema = 2
 
-# Experimental and integration surfaces are time-bounded evidence programs,
-# not permanent compatibility promises. `decision_by` is the latest date at
-# which maintainers must either publish canonical evidence, renew the entry
-# with a rationale, or remove/freeze the implementation.
+# Time-bounded evidence programs. `pending` entries may omit evidence until
+# decision_by; after that date validate-ci fails unless an ADR extends the date
+# or the surface is removed. Extensions are limited to 90 days by review.
 
 [[surface]]
 id = "jit-tier0"
-owner = "project-maintainers"
+workspace = "root"
+kind = "internal"
+package = "rsscript-vm"
+owner = "@Haofei"
+status = "pending"
 maturity = "experimental"
-feature = "rsscript-vm/tier0-internal"
-canonical_workload = "fallback workload matrix"
-minimum_end_to_end_gain_percent = 10
+last_measured_at = "2026-08-28"
 decision_by = "2026-11-30"
+workloads = ["string-text", "mailbox-ring", "closure-dynamic"]
+minimum_end_to_end_gain_percent = 10
+evidence_uri = ""
+evidence_sha256 = ""
 removal_rule = "Remove or merge into the interpreter if controlled fallback workloads do not show a repeatable 10-15% gain."
 
 [[surface]]
 id = "jit-speculation"
-owner = "project-maintainers"
+workspace = "root"
+kind = "cargo_feature"
+package = "rsscript-vm"
+feature = "jit-speculation"
+owner = "@Haofei"
+status = "pending"
 maturity = "research"
-feature = "rsscript-vm/jit-speculation"
-canonical_workload = "profile_closure_pic, profile_branch_cold_blocks"
-minimum_end_to_end_gain_percent = 15
+last_measured_at = "2026-08-28"
 decision_by = "2026-11-30"
-removal_rule = "Remove if gains are microbenchmark-only or the canonical workloads do not clear the retention threshold."
+workloads = ["profile-closure-pic", "profile-branch-cold"]
+minimum_end_to_end_gain_percent = 15
+evidence_uri = ""
+evidence_sha256 = ""
+removal_rule = "Remove if gains are microbenchmark-only or canonical workloads do not clear the threshold."
 
 [[surface]]
 id = "jit-native-recursion"
-owner = "project-maintainers"
+workspace = "root"
+kind = "cargo_feature"
+package = "rsscript-vm"
+feature = "jit-recursion-experimental"
+owner = "@Haofei"
+status = "pending"
 maturity = "research"
-feature = "rsscript-vm/jit-recursion-experimental"
-canonical_workload = "recursion-tree, recursion-linear"
-minimum_end_to_end_gain_percent = 15
+last_measured_at = "2026-08-28"
 decision_by = "2026-11-30"
-removal_rule = "Keep disabled unless a non-heuristic stack boundary and canonical end-to-end benefit are both demonstrated."
+workloads = ["recursion-tree", "recursion-linear"]
+minimum_end_to_end_gain_percent = 15
+evidence_uri = ""
+evidence_sha256 = ""
+removal_rule = "Keep disabled unless a non-heuristic stack boundary and canonical benefit are both demonstrated."
 
 [[surface]]
 id = "jit-struct-scalar-replacement"
-owner = "project-maintainers"
+workspace = "root"
+kind = "cargo_feature"
+package = "rsscript-vm"
+feature = "jit-struct-sr-experimental"
+owner = "@Haofei"
+status = "pending"
 maturity = "research"
-feature = "rsscript-vm/jit-struct-sr-experimental"
-canonical_workload = "native-struct-sr"
-minimum_end_to_end_gain_percent = 15
+last_measured_at = "2026-08-28"
 decision_by = "2026-11-30"
+workloads = ["native-struct-sr"]
+minimum_end_to_end_gain_percent = 15
+evidence_uri = ""
+evidence_sha256 = ""
 removal_rule = "Remove if the canonical aggregate workload does not establish a repeatable end-to-end gain."
 
 [[surface]]
 id = "jit-memoization-engine-switch"
-owner = "project-maintainers"
+workspace = "root"
+kind = "cargo_feature"
+package = "rsscript-jit-cranelift"
+feature = "memoization"
+owner = "@Haofei"
+status = "pending"
 maturity = "research"
-feature = "rsscript-jit-cranelift/memoization"
-canonical_workload = "read-only helper loop matrix"
-minimum_end_to_end_gain_percent = 15
+last_measured_at = "2026-08-28"
 decision_by = "2026-11-30"
-removal_rule = "Delete the compatibility switch when read-only LICM covers all supported consumers or evidence does not justify the separate mode."
+workloads = ["native-read-heap", "native-read-heap-float"]
+minimum_end_to_end_gain_percent = 15
+evidence_uri = ""
+evidence_sha256 = ""
+removal_rule = "Delete when read-only LICM covers consumers or evidence does not justify the separate mode."
 
 [[surface]]
 id = "aot-backend"
-owner = "project-maintainers"
+workspace = "experiments"
+kind = "cargo_package"
+package = "rsscript-aot-backend"
+owner = "@Haofei"
+status = "pending"
 maturity = "experimental"
-feature = "experiments/aot-backend"
-canonical_workload = "AOT-vs-interpreter report differential"
-minimum_end_to_end_gain_percent = 15
+last_measured_at = "2026-08-28"
 decision_by = "2026-12-31"
-removal_rule = "Freeze as a benchmark harness or remove the runtime if no product consumer and report-level differential evidence exist."
+workloads = ["aot_jit_matrix"]
+minimum_end_to_end_gain_percent = 15
+evidence_uri = ""
+evidence_sha256 = ""
+removal_rule = "Freeze as a benchmark harness or remove the runtime if no product consumer and report differential evidence exist."
 
 [[surface]]
 id = "reir-review-integration"
-owner = "project-maintainers"
+workspace = "experiments"
+kind = "cargo_package"
+package = "rsscript-review-reir"
+owner = "@Haofei"
+status = "pending"
 maturity = "integration"
-feature = "experiments/rsscript-review-reir"
-canonical_workload = "neutral semantic facts review corpus"
-minimum_end_to_end_gain_percent = 0
+last_measured_at = "2026-08-28"
 decision_by = "2026-12-31"
-removal_rule = "Remove the integration when it has no external consumer or begins to affect compilation validity."
+workloads = ["reir_tests"]
+minimum_end_to_end_gain_percent = 0
+evidence_uri = ""
+evidence_sha256 = ""
+removal_rule = "Remove when it has no external consumer or begins to affect compilation validity."

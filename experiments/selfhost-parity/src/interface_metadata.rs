@@ -1,6 +1,6 @@
 use crate::syntax::ast::{DataEffect, Item, TypeRef};
 use crate::syntax::parse_source;
-use crate::text_util::{type_arg_names, type_root_name};
+use rsscript_text::{type_arg_names, type_root_name};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct InterfaceMetadata {

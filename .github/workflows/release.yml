@@ -28,15 +28,9 @@ jobs:
           toolchain: 1.96.1
           components: rustfmt, clippy
 
-      - name: Install nextest
-        uses: taiki-e/install-action@6d9ce389421e24f7b73aff5e841bbe5a6b4c974c # nextest
-        with:
-          tool: nextest@0.9.140
-
       - name: Install release supply-chain tools
         run: |
           cargo install cargo-deny --locked --version 0.20.2
-          cargo install cargo-cyclonedx --locked --version 0.5.9
 
       - name: Validate release identity
         if: startsWith(github.ref, 'refs/tags/')
@@ -71,18 +65,6 @@ jobs:
           cargo run --locked -p rsscript-xtask -- test-tier providers
           cargo run --locked -p rsscript-xtask -- test-tier integrations
           cargo run --locked -p rsscript-xtask -- test-tier runner
-          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
-          cargo cyclonedx --format json --describe binaries
-
-      - name: Upload release SBOM
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: release-cyclonedx-${{ github.sha }}
-          path: |
-            crates/rsscript-cli/rss_bin.cdx.json
-            crates/lsp/rss-lsp_bin.cdx.json
-          if-no-files-found: error
-          retention-days: 30
 
   release-build:
     needs: [release-validation]
@@ -119,9 +101,12 @@ jobs:
           TARGET: ${{ matrix.target }}
           SUFFIX: ${{ matrix.suffix }}
         run: |
+          cargo install cargo-cyclonedx --locked --version 0.5.9
           cargo build --locked --frozen --release --target "$TARGET" --bin rss -p rsscript-cli --features native-jit
+          cargo cyclonedx --manifest-path crates/rsscript-cli/Cargo.toml --format json --describe binaries --features native-jit --target "$TARGET"
           mkdir -p dist
           cp "target/$TARGET/release/rss$SUFFIX" "dist/rss-$TARGET$SUFFIX"
+          cp "crates/rsscript-cli/rss_bin.cdx.json" "dist/rss-$TARGET.cdx.json"
           PYTHON="$(command -v python3 || command -v python)" || {
             echo "::error::Python 3 is required to create portable checksums"
             exit 1
@@ -144,6 +129,7 @@ jobs:
           names = [
               f"rss-{target}{suffix}",
               f"BUILD-INFO-{target}.txt",
+              f"rss-{target}.cdx.json",
           ]
           lines = []
           for name in names:
@@ -184,7 +170,8 @@ jobs:
           for INFO in BUILD-INFO-*.txt; do
             grep -Fx "commit=$GITHUB_SHA" "$INFO"
           done
-          test "$(find . -maxdepth 1 -type f -name 'rss-*' | wc -l)" -eq 3
+          test "$(find . -maxdepth 1 -type f -name 'rss-*' ! -name '*.cdx.json' | wc -l)" -eq 3
+          test "$(find . -maxdepth 1 -type f -name 'rss-*.cdx.json' | wc -l)" -eq 3
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0

@@ -12,9 +12,15 @@ on:
       - ".github/workflows/jit-perf.yml"
       - "Cargo.lock"
       - "Cargo.toml"
+      - "Dockerfile"
+      - "compose.yaml"
+      - "crates/rsscript-jit-cranelift/**"
       - "crates/rsscript-vm/src/reg_vm/**"
+      - "crates/rsscript-sdk/Cargo.toml"
+      - "crates/rsscript-sdk/src/**"
       - "crates/rsscript-sdk/tests/native_jit_smoke.rs"
       - "crates/rsscript-sdk/tests/native_jit_differential.rs"
+      - "crates/rsscript-sdk/tests/native_jit_scorecard.rs"
       - "benchmarks/vm-jit/**"
       - "experiments/**"
   push:
@@ -25,9 +31,15 @@ on:
       - ".github/workflows/jit-perf.yml"
       - "Cargo.lock"
       - "Cargo.toml"
+      - "Dockerfile"
+      - "compose.yaml"
+      - "crates/rsscript-jit-cranelift/**"
       - "crates/rsscript-vm/src/reg_vm/**"
+      - "crates/rsscript-sdk/Cargo.toml"
+      - "crates/rsscript-sdk/src/**"
       - "crates/rsscript-sdk/tests/native_jit_smoke.rs"
       - "crates/rsscript-sdk/tests/native_jit_differential.rs"
+      - "crates/rsscript-sdk/tests/native_jit_scorecard.rs"
       - "benchmarks/vm-jit/**"
       - "experiments/**"
 
@@ -56,8 +68,18 @@ jobs:
 
       - name: Check every active experimental package
         run: |
+          cargo install cargo-audit --locked --version 0.21.2
+          cargo install cargo-deny --locked --version 0.20.2
+          cargo audit --file experiments/Cargo.lock --ignore RUSTSEC-2021-0127
+          cargo deny --manifest-path experiments/Cargo.toml check
           cargo clippy --locked --manifest-path experiments/Cargo.toml --workspace --all-targets --all-features -- -D warnings
           cargo test --locked --manifest-path experiments/Cargo.toml --workspace --all-features
+          for TIER in experimental integrations; do
+            cargo run --locked -p rsscript-xtask -- check-tier "$TIER" --workspace experiments --feature-set research
+            cargo run --locked -p rsscript-xtask -- clippy-tier "$TIER" --workspace experiments --feature-set research
+            cargo run --locked -p rsscript-xtask -- test-tier "$TIER" --workspace experiments --feature-set research
+            cargo run --locked -p rsscript-xtask -- doc-tier "$TIER" --workspace experiments --feature-set research
+          done
 
   native-jit:
     name: Native JIT (Cranelift)

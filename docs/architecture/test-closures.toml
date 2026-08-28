@@ -1,0 +1,19 @@
+schema = 1
+
+[[closure]]
+id = "native-jit"
+paths = [
+  "Cargo.lock",
+  "Cargo.toml",
+  "Dockerfile",
+  "compose.yaml",
+  "crates/rsscript-jit-cranelift/**",
+  "crates/rsscript-vm/src/reg_vm/**",
+  "crates/rsscript-sdk/Cargo.toml",
+  "crates/rsscript-sdk/src/**",
+  "crates/rsscript-sdk/tests/native_jit_smoke.rs",
+  "crates/rsscript-sdk/tests/native_jit_differential.rs",
+  "crates/rsscript-sdk/tests/native_jit_scorecard.rs",
+  "benchmarks/vm-jit/**",
+]
+workflows = ["experimental.yml", "jit-perf.yml"]

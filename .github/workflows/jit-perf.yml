@@ -6,7 +6,15 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/jit-perf.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "Dockerfile"
+      - "compose.yaml"
       - "benchmarks/vm-jit/**"
+      - "crates/rsscript-sdk/Cargo.toml"
+      - "crates/rsscript-sdk/src/**"
+      - "crates/rsscript-sdk/tests/native_jit_differential.rs"
+      - "crates/rsscript-sdk/tests/native_jit_scorecard.rs"
       - "crates/rsscript-vm/src/reg_vm/**"
       - "crates/rsscript-sdk/tests/native_jit_smoke.rs"
       - "crates/rsscript-jit-cranelift/**"
@@ -14,7 +22,15 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/jit-perf.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "Dockerfile"
+      - "compose.yaml"
       - "benchmarks/vm-jit/**"
+      - "crates/rsscript-sdk/Cargo.toml"
+      - "crates/rsscript-sdk/src/**"
+      - "crates/rsscript-sdk/tests/native_jit_differential.rs"
+      - "crates/rsscript-sdk/tests/native_jit_scorecard.rs"
       - "crates/rsscript-vm/src/reg_vm/**"
       - "crates/rsscript-sdk/tests/native_jit_smoke.rs"
       - "crates/rsscript-jit-cranelift/**"

@@ -139,6 +139,23 @@ impl fmt::Display for WireTypeTableOverflow {
 
 impl std::error::Error for WireTypeTableOverflow {}
 
+/// A canonical wire value did not match the descriptor-owned type expected at
+/// a Provider boundary. The path is structural and contains no user-supplied
+/// executable identity, so callers may safely include it in diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WireValueTypeError {
+    pub path: String,
+    pub message: String,
+}
+
+impl fmt::Display for WireValueTypeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}: {}", self.path, self.message)
+    }
+}
+
+impl std::error::Error for WireValueTypeError {}
+
 impl WireCallTypeTable {
     /// Build the deterministic type table for a function call. Parameter
     /// types are visited in declaration order, followed by the result type;
@@ -256,6 +273,283 @@ impl WireCallTypeTable {
         WireVariantId::new(1)
     }
 
+    /// Validate one canonical value against the exact linked wire type.
+    ///
+    /// Numeric record, variant, collection-element, and resource identities
+    /// are checked against this call-scoped table. This is deliberately kept
+    /// next to the table construction logic so Provider adapters and runtimes
+    /// cannot acquire independent notions of wire compatibility.
+    pub fn validate_value(
+        &self,
+        expected: &WireType,
+        value: &WireValue,
+    ) -> Result<(), WireValueTypeError> {
+        self.validate_value_at(expected, value, "value")
+    }
+
+    fn validate_value_at(
+        &self,
+        expected: &WireType,
+        value: &WireValue,
+        path: &str,
+    ) -> Result<(), WireValueTypeError> {
+        let mismatch = |message: String| WireValueTypeError {
+            path: path.to_string(),
+            message,
+        };
+        match (expected, value) {
+            (
+                WireType::Qualified {
+                    value: expected, ..
+                },
+                value,
+            ) => self.validate_value_at(expected, value, path),
+            (WireType::Unit, WireValue::Unit) => Ok(()),
+            (WireType::Bool, WireValue::Bool { .. }) => Ok(()),
+            (WireType::Int { .. }, WireValue::Int { .. }) => Ok(()),
+            (WireType::Float { .. }, WireValue::Float { .. }) => Ok(()),
+            (WireType::String, WireValue::String { .. }) => Ok(()),
+            (WireType::Char, WireValue::Char { .. }) => Ok(()),
+            (WireType::Bytes, WireValue::Bytes { .. }) => Ok(()),
+            (
+                WireType::List { element },
+                WireValue::List {
+                    element_type,
+                    values,
+                },
+            ) => {
+                let expected_id = self.type_id(element).ok_or_else(|| {
+                    mismatch("list element type is absent from the linked type table".into())
+                })?;
+                if *element_type != expected_id {
+                    return Err(mismatch("list element type identity does not match".into()));
+                }
+                for (index, value) in values.iter().enumerate() {
+                    self.validate_value_at(element, value, &format!("{path}[{index}]"))?;
+                }
+                Ok(())
+            }
+            (
+                WireType::Map {
+                    key,
+                    value: expected_value,
+                },
+                WireValue::Map {
+                    key_type,
+                    value_type,
+                    entries,
+                },
+            ) => {
+                if *key_type
+                    != self.type_id(key).ok_or_else(|| {
+                        mismatch("map key type is absent from the linked type table".into())
+                    })?
+                    || *value_type
+                        != self.type_id(expected_value).ok_or_else(|| {
+                            mismatch("map value type is absent from the linked type table".into())
+                        })?
+                {
+                    return Err(mismatch(
+                        "map key/value type identity does not match".into(),
+                    ));
+                }
+                for (index, (entry_key, entry_value)) in entries.iter().enumerate() {
+                    self.validate_value_at(key, entry_key, &format!("{path}.key[{index}]"))?;
+                    self.validate_value_at(
+                        expected_value,
+                        entry_value,
+                        &format!("{path}.value[{index}]"),
+                    )?;
+                }
+                Ok(())
+            }
+            (WireType::Tuple { elements }, WireValue::Tuple { values }) => {
+                if elements.len() != values.len() {
+                    return Err(mismatch(format!(
+                        "expected {} tuple elements, received {}",
+                        elements.len(),
+                        values.len()
+                    )));
+                }
+                for (index, (element, value)) in elements.iter().zip(values).enumerate() {
+                    self.validate_value_at(element, value, &format!("{path}.{index}"))?;
+                }
+                Ok(())
+            }
+            (
+                WireType::Option { value: payload },
+                WireValue::Variant {
+                    type_id,
+                    variant_id,
+                    payload: actual,
+                },
+            ) => self.validate_builtin_variant(
+                expected,
+                *type_id,
+                *variant_id,
+                actual.as_deref(),
+                &[
+                    (Self::option_some_variant(), Some(payload.as_ref())),
+                    (Self::option_none_variant(), None),
+                ],
+                path,
+            ),
+            (
+                WireType::Result { ok, error },
+                WireValue::Variant {
+                    type_id,
+                    variant_id,
+                    payload,
+                },
+            ) => self.validate_builtin_variant(
+                expected,
+                *type_id,
+                *variant_id,
+                payload.as_deref(),
+                &[
+                    (Self::result_ok_variant(), Some(ok.as_ref())),
+                    (Self::result_err_variant(), Some(error.as_ref())),
+                ],
+                path,
+            ),
+            (WireType::Named { .. }, WireValue::Record { type_id, fields })
+                if self.record_layout(expected).is_some() =>
+            {
+                if *type_id
+                    != self.type_id(expected).ok_or_else(|| {
+                        mismatch("record type is absent from the linked type table".into())
+                    })?
+                {
+                    return Err(mismatch("record type identity does not match".into()));
+                }
+                let layout = self.record_layout(expected).expect("checked above");
+                if layout.fields.len() != fields.len() {
+                    return Err(mismatch(format!(
+                        "expected {} record fields, received {}",
+                        layout.fields.len(),
+                        fields.len()
+                    )));
+                }
+                for (index, (field, value)) in layout.fields.iter().zip(fields).enumerate() {
+                    self.validate_value_at(
+                        &field.ty,
+                        value,
+                        &format!("{path}.{}[{index}]", field.name),
+                    )?;
+                }
+                Ok(())
+            }
+            (
+                WireType::Named { .. },
+                WireValue::Variant {
+                    type_id,
+                    variant_id,
+                    payload,
+                },
+            ) if self.variant_layout(expected).is_some() => {
+                if *type_id
+                    != self.type_id(expected).ok_or_else(|| {
+                        mismatch("variant type is absent from the linked type table".into())
+                    })?
+                {
+                    return Err(mismatch("variant type identity does not match".into()));
+                }
+                let case = self.variant_case(expected, *variant_id).ok_or_else(|| {
+                    mismatch("variant case identity is outside the linked layout".into())
+                })?;
+                self.validate_variant_payload(&case.fields, payload.as_deref(), path)
+            }
+            (WireType::Resource { .. }, WireValue::Resource { handle })
+            | (WireType::Handle { .. }, WireValue::Resource { handle }) => {
+                let expected_id = self.resource_type_id(expected).ok_or_else(|| {
+                    mismatch("resource type is absent from the linked resource table".into())
+                })?;
+                if handle.resource_type == expected_id {
+                    Ok(())
+                } else {
+                    Err(mismatch("resource type identity does not match".into()))
+                }
+            }
+            _ => Err(mismatch(format!(
+                "wire value kind does not match expected type {expected:?}"
+            ))),
+        }
+    }
+
+    fn validate_builtin_variant(
+        &self,
+        expected: &WireType,
+        type_id: WireTypeId,
+        variant_id: WireVariantId,
+        payload: Option<&WireValue>,
+        cases: &[(WireVariantId, Option<&WireType>)],
+        path: &str,
+    ) -> Result<(), WireValueTypeError> {
+        if Some(type_id) != self.type_id(expected) {
+            return Err(WireValueTypeError {
+                path: path.into(),
+                message: "variant type identity does not match".into(),
+            });
+        }
+        let expected_payload = cases
+            .iter()
+            .find_map(|(id, payload)| (*id == variant_id).then_some(*payload))
+            .ok_or_else(|| WireValueTypeError {
+                path: path.into(),
+                message: "variant case identity is outside the linked layout".into(),
+            })?;
+        match (expected_payload, payload) {
+            (None, None) => Ok(()),
+            (Some(expected), Some(value)) => {
+                self.validate_value_at(expected, value, &format!("{path}.payload"))
+            }
+            (None, Some(_)) => Err(WireValueTypeError {
+                path: path.into(),
+                message: "payload-free variant unexpectedly carries a payload".into(),
+            }),
+            (Some(_), None) => Err(WireValueTypeError {
+                path: path.into(),
+                message: "variant payload is missing".into(),
+            }),
+        }
+    }
+
+    fn validate_variant_payload(
+        &self,
+        fields: &[WireRecordFieldLayout],
+        payload: Option<&WireValue>,
+        path: &str,
+    ) -> Result<(), WireValueTypeError> {
+        match (fields, payload) {
+            ([], None) => Ok(()),
+            ([field], Some(value)) => {
+                self.validate_value_at(&field.ty, value, &format!("{path}.{}", field.name))
+            }
+            (fields, Some(WireValue::Tuple { values })) if fields.len() == values.len() => {
+                for (index, (field, value)) in fields.iter().zip(values).enumerate() {
+                    self.validate_value_at(
+                        &field.ty,
+                        value,
+                        &format!("{path}.{}[{index}]", field.name),
+                    )?;
+                }
+                Ok(())
+            }
+            ([], Some(_)) => Err(WireValueTypeError {
+                path: path.into(),
+                message: "payload-free variant unexpectedly carries a payload".into(),
+            }),
+            (_, None) => Err(WireValueTypeError {
+                path: path.into(),
+                message: "variant payload is missing".into(),
+            }),
+            _ => Err(WireValueTypeError {
+                path: path.into(),
+                message: "variant payload field count does not match".into(),
+            }),
+        }
+    }
+
     fn insert(&mut self, ty: &WireType) -> Result<(), WireTypeTableOverflow> {
         match ty {
             WireType::List { element }
@@ -294,9 +588,12 @@ impl WireCallTypeTable {
             self.types.push(ty.clone());
         }
         let resource = match ty {
-            WireType::Resource { .. } => Some(ty),
+            WireType::Resource { .. } | WireType::Handle { .. } => Some(ty),
             WireType::Qualified { value, .. }
-                if matches!(value.as_ref(), WireType::Resource { .. }) =>
+                if matches!(
+                    value.as_ref(),
+                    WireType::Resource { .. } | WireType::Handle { .. }
+                ) =>
             {
                 Some(value.as_ref())
             }

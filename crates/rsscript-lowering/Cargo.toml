@@ -15,3 +15,6 @@ rsscript-mir = { path = "../rsscript-mir" }
 rsscript-semantics = { path = "../rsscript-semantics" }
 rsscript-syntax = { path = "../rsscript-syntax" }
 rsscript-text = { path = "../rsscript-text" }
+
+[lints]
+workspace = true

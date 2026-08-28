@@ -12,3 +12,6 @@ rsscript-abi-model = { path = "../rsscript-abi-model" }
 rsscript-bytecode = { path = "../rsscript-bytecode" }
 rsscript-mir = { path = "../rsscript-mir" }
 serde_json = "1"
+
+[lints]
+workspace = true

@@ -72,7 +72,7 @@ def validate(document: dict) -> None:
         "pass",
         "status",
         "interpreter_ns",
-        "native_ns",
+        "cold_e2e_native_ns",
         "speedup",
         "compile_nanos",
         "resident_code_bytes",
@@ -148,7 +148,7 @@ def main() -> None:
             continue
         record = json.loads(line.split(marker, 1)[1])
         if "case" in record:
-            if "interpreter_ns" in record and "native_ns" in record:
+            if "interpreter_ns" in record and "cold_e2e_native_ns" in record:
                 records.append(record)
         else:
             header = record

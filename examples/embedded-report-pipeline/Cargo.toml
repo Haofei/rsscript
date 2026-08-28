@@ -12,3 +12,6 @@ rsscript-provider-fs = { path = "../../providers/fs" }
 rsscript-provider-log = { path = "../../providers/log" }
 rsscript-semantics = { path = "../../crates/rsscript-semantics" }
 sha2 = "0.10"
+
+[lints]
+workspace = true

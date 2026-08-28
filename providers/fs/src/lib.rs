@@ -84,13 +84,15 @@ impl RootedFsProvider {
         let read_provider = self.clone();
         let write_provider = self.clone();
         BTreeMap::from([
-            binding(read, move |context, mut args| {
+            binding(read, move |context, args| {
                 context.check_cancelled()?;
-                let WireValue::String { value: path } = args.remove(0) else {
-                    return Err(ProviderError::invalid_argument("path must be String"));
+                let [WireValue::String { value: path }] = args.as_slice() else {
+                    return Err(ProviderError::invalid_argument(
+                        "read_text expects exactly one String path",
+                    ));
                 };
                 let file = read_provider
-                    .open_for_read(&path)
+                    .open_for_read(path)
                     .map_err(|error| ProviderError::from_io("open read path", error))?;
                 let limit = context
                     .remaining_byte_budget
@@ -115,16 +117,19 @@ impl RootedFsProvider {
                 context.check_cancelled()?;
                 Ok(WireValue::String { value: text })
             }),
-            binding(write, move |context, mut args| {
+            binding(write, move |context, args| {
                 context.check_cancelled()?;
-                let WireValue::String { value: path } = args.remove(0) else {
-                    return Err(ProviderError::invalid_argument("path must be String"));
-                };
-                let WireValue::String { value: text } = args.remove(0) else {
-                    return Err(ProviderError::invalid_argument("text must be String"));
+                let [
+                    WireValue::String { value: path },
+                    WireValue::String { value: text },
+                ] = args.as_slice()
+                else {
+                    return Err(ProviderError::invalid_argument(
+                        "write_text expects exactly a String path and String text",
+                    ));
                 };
                 write_provider
-                    .write_text(&path, text.as_bytes())
+                    .write_text(path, text.as_bytes())
                     .map_err(|error| ProviderError::from_io("write text", error))?;
                 Ok(WireValue::Unit)
             }),

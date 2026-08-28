@@ -13,3 +13,6 @@ doctest = false
 rsscript-diagnostics = { path = "../rsscript-diagnostics" }
 rsscript-source-model = { path = "../rsscript-source-model" }
 rsscript-work-budget = { path = "../rsscript-work-budget" }
+
+[lints]
+workspace = true

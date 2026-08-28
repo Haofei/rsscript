@@ -1,6 +1,6 @@
-use crate::analyzer::analyze_source_with_core;
 use crate::diagnostic::{Severity, Span};
 use crate::lexer::{TokenKind, lex};
+use rsscript_semantics::analyze_source_with_core;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]

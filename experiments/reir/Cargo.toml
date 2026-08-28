@@ -21,3 +21,6 @@ sha2 = "0.10"
 toml = "0.8"
 
 [dev-dependencies]
+
+[lints]
+workspace = true

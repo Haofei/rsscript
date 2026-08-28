@@ -4,11 +4,6 @@
 /// output caches whenever the implementation inputs change.
 pub const COMPILED_CACHE_FINGERPRINT: &str = env!("RSSCRIPT_COMPILED_CACHE_FINGERPRINT");
 
-mod analyzer {
-    //! Transitional compiler-local path for callers that have not yet moved to
-    //! the semantic-owned frontend query API.
-    pub(crate) use rsscript_semantics::*;
-}
 #[cfg(feature = "lowering")]
 mod compiler_output;
 mod core_index;
@@ -17,49 +12,12 @@ mod diagnostic {
 }
 mod editor_grammar;
 mod generate;
-#[cfg(all(test, feature = "selfhost-parity"))]
-mod interface_metadata;
 mod interfaces;
 mod lexer {
     pub(crate) use rsscript_syntax::lexer::*;
 }
-#[cfg(all(test, feature = "selfhost-parity"))]
-mod selfhost_parity;
 mod symbols;
 pub mod syntax;
-#[cfg(all(test, feature = "selfhost-parity"))]
-mod test_interfaces;
-#[allow(dead_code)]
-mod text_util {
-    #[allow(unused_imports)]
-    pub(crate) use rsscript_text::*;
-}
-#[cfg(all(test, feature = "selfhost-parity"))]
-mod vm_adapter {
-    use rsscript_vm::{EvalError, RegVmExecutable};
-
-    pub(crate) fn reg_vm_compile_sources(
-        sources: &[(&str, &str)],
-    ) -> Result<RegVmExecutable, EvalError> {
-        let interfaces = crate::interfaces::standard_package_interfaces().collect::<Vec<_>>();
-        let validated = crate::analyzer::validate_sources_with_interfaces(sources, &interfaces)
-            .map_err(EvalError::Diagnostics)?;
-        let snapshot_digest = format!("sha256:{}", "0".repeat(64));
-        let artifact =
-            crate::compiler_output::compile_validated_to_bytecode(&validated, &snapshot_digest)
-                .map_err(|error| EvalError::Runtime(error.to_string()))?;
-        let bytes = artifact
-            .to_bytes()
-            .map_err(|error| EvalError::Runtime(error.to_string()))?;
-        let verified = rsscript_bytecode::BytecodeVerifier::default()
-            .verify(&bytes)
-            .map_err(|error| EvalError::Runtime(error.to_string()))?;
-        RegVmExecutable::from_verified_bytecode(verified)
-    }
-}
-
-#[cfg(all(test, feature = "selfhost-parity"))]
-use rsscript_vm::RegVmExecutable;
 
 #[cfg(feature = "bytecode")]
 pub use compiler_output::{

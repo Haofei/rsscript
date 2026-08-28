@@ -14,3 +14,6 @@ rsscript-semantics = { path = "../../crates/rsscript-semantics" }
 
 [dev-dependencies]
 rsscript-provider-conformance = { path = "../../crates/rsscript-provider-conformance" }
+
+[lints]
+workspace = true

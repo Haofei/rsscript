@@ -11,3 +11,6 @@ rsscript-operation = { path = "../rsscript-operation" }
 rsscript-semantics = { path = "../rsscript-semantics" }
 rsscript-syntax = { path = "../rsscript-syntax" }
 rsscript-diagnostics = { path = "../rsscript-diagnostics" }
+
+[lints]
+workspace = true

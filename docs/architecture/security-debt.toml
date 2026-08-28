@@ -1,0 +1,10 @@
+schema = 1
+
+[[exception]]
+id = "serde-cbor-v1-reader"
+owner = "@Haofei"
+advisory = "RUSTSEC-2021-0127"
+scope = "Read-only bytecode-v1 decoder behind byte and structural verification limits."
+tracking = "bytecode-v2-cutover"
+decision_by = "2026-11-30"
+removal_rule = "Move new writers to v2 and replace serde_cbor with a minimal audited v1 reader before removing the advisory exception."

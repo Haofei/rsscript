@@ -12,3 +12,6 @@ doctest = false
 [dependencies]
 rsscript-source-model = { path = "../rsscript-source-model" }
 rsscript-operation = { path = "../rsscript-operation" }
+
+[lints]
+workspace = true

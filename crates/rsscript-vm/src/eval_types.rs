@@ -20,7 +20,8 @@ pub use rsscript_provider_api::{
     ProviderLoadError, ProviderResource, ProviderResourceRegistry, ProviderResourceTable,
     ProviderTraceSink, ResolvedProviderFunction, ResourceCleanupContract, ResourceHandle,
     WireInterpreterFn, WireMutationInterpreterFn, WireMutationProviderFuture, WireMutationResult,
-    WireProviderFuture,
+    WireProviderFuture, validate_wire_arguments, validate_wire_mutation_result,
+    validate_wire_result,
 };
 
 #[derive(Default)]
@@ -239,6 +240,12 @@ impl ExternalFunction {
         let result = (|| {
             context.check_cancelled()?;
             check_payload_budget(request_bytes, context.remaining_byte_budget, "request")?;
+            validate_wire_arguments(
+                &contract.descriptor.signature,
+                &contract.record_layouts,
+                &contract.variant_layouts,
+                &args,
+            )?;
             if contract.descriptor.blocking == BlockingBehavior::MayBlock
                 && !context.blocking_allowed
             {
@@ -280,6 +287,12 @@ impl ExternalFunction {
                 ));
             }
             let value = result?;
+            validate_wire_result(
+                &contract.descriptor.signature,
+                &contract.record_layouts,
+                &contract.variant_layouts,
+                &value,
+            )?;
             let response_bytes = value.estimated_payload_bytes();
             check_payload_budget(response_bytes, context.remaining_byte_budget, "response")?;
             check_payload_budget(
@@ -343,6 +356,12 @@ impl ExternalFunction {
         let result = (|| {
             context.check_cancelled()?;
             check_payload_budget(request_bytes, context.remaining_byte_budget, "request")?;
+            validate_wire_arguments(
+                &contract.descriptor.signature,
+                &contract.record_layouts,
+                &contract.variant_layouts,
+                &args,
+            )?;
             if contract.descriptor.blocking == BlockingBehavior::MayBlock
                 && !context.blocking_allowed
             {
@@ -396,11 +415,12 @@ impl ExternalFunction {
                 ));
             }
             let value = result?;
-            if value.mutated.len() != expected_mutations {
-                return Err(ProviderError::invalid_argument(
-                    "wire mutation result does not contain every linked mut parameter",
-                ));
-            }
+            validate_wire_mutation_result(
+                &contract.descriptor.signature,
+                &contract.record_layouts,
+                &contract.variant_layouts,
+                &value,
+            )?;
             let response_bytes = value
                 .mutated
                 .iter()
@@ -501,6 +521,12 @@ impl ExternalFunction {
             let result = async {
                 context.check_cancelled()?;
                 check_payload_budget(request_bytes, context.remaining_byte_budget, "request")?;
+                validate_wire_arguments(
+                    &contract.descriptor.signature,
+                    &contract.record_layouts,
+                    &contract.variant_layouts,
+                    &args,
+                )?;
                 if contract.descriptor.call_mode != ProviderCallMode::Async {
                     return Err(ProviderError::unavailable(
                         "async wire callable has a synchronous Provider descriptor",
@@ -536,6 +562,12 @@ impl ExternalFunction {
                     ));
                 }
                 let value = result?;
+                validate_wire_result(
+                    &contract.descriptor.signature,
+                    &contract.record_layouts,
+                    &contract.variant_layouts,
+                    &value,
+                )?;
                 let response_bytes = value.estimated_payload_bytes();
                 check_payload_budget(
                     response_bytes,
@@ -641,6 +673,12 @@ impl ExternalFunction {
             let result = async {
                 context.check_cancelled()?;
                 check_payload_budget(request_bytes, context.remaining_byte_budget, "request")?;
+                validate_wire_arguments(
+                    &contract.descriptor.signature,
+                    &contract.record_layouts,
+                    &contract.variant_layouts,
+                    &args,
+                )?;
                 if contract.descriptor.call_mode != ProviderCallMode::Async {
                     return Err(ProviderError::unavailable(
                         "async wire mutation callable has a synchronous Provider descriptor",
@@ -676,11 +714,12 @@ impl ExternalFunction {
                     ));
                 }
                 let value = result?;
-                if value.mutated.len() != expected_mutations {
-                    return Err(ProviderError::invalid_argument(
-                        "wire mutation result does not contain every linked mut parameter",
-                    ));
-                }
+                validate_wire_mutation_result(
+                    &contract.descriptor.signature,
+                    &contract.record_layouts,
+                    &contract.variant_layouts,
+                    &value,
+                )?;
                 let response_bytes = value
                     .mutated
                     .iter()

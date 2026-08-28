@@ -17,3 +17,6 @@ rsscript-workspace-loader = { path = "../rsscript-workspace-loader" }
 serde_json = "1"
 tower-lsp = "0.20"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "time"] }
+
+[lints]
+workspace = true

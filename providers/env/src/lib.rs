@@ -64,11 +64,13 @@ fn functions_from_values(
         function.symbol,
         ProviderFunction {
             signature: function.signature,
-            callable: WireInterpreterFn::new(move |mut args| {
-                let WireValue::String { value: name } = args.remove(0) else {
-                    return Err(ProviderError::invalid_argument("name must be String"));
+            callable: WireInterpreterFn::new(move |args| {
+                let [WireValue::String { value: name }] = args.as_slice() else {
+                    return Err(ProviderError::invalid_argument(
+                        "get expects exactly one String name",
+                    ));
                 };
-                Ok(match values.get(&name) {
+                Ok(match values.get(name) {
                     Some(value) => WireValue::Variant {
                         type_id: option_type,
                         variant_id: WireCallTypeTable::option_some_variant(),

@@ -31,7 +31,9 @@ percent-encoding = "2"
 futures-util = "0.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 tracing = "0.1"
-imbl = "7.0.0"
 
 [dev-dependencies]
 static_assertions = "1"
+
+[lints]
+workspace = true

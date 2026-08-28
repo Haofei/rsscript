@@ -28,3 +28,6 @@ tempfile = "3"
 
 [build-dependencies]
 rsscript-build-support = { path = "../../crates/rsscript-build-support" }
+
+[lints]
+workspace = true

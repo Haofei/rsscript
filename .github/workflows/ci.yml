@@ -67,9 +67,12 @@ jobs:
 
       - name: Test non-default integration, tooling, and example tiers
         run: |
-          cargo run --locked -p rsscript-xtask -- test-tier integrations
-          cargo run --locked -p rsscript-xtask -- test-tier tooling
-          cargo run --locked -p rsscript-xtask -- test-tier examples
+          for TIER in integrations tooling examples; do
+            cargo run --locked -p rsscript-xtask -- check-tier "$TIER"
+            cargo run --locked -p rsscript-xtask -- clippy-tier "$TIER"
+            cargo run --locked -p rsscript-xtask -- test-tier "$TIER"
+            cargo run --locked -p rsscript-xtask -- doc-tier "$TIER"
+          done
 
   core-platform-security:
     name: Core platform security (${{ matrix.os }})

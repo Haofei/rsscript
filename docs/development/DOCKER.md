@@ -28,7 +28,6 @@ docker compose run --rm dev cargo test -p rsscript-compiler --lib
 docker compose run --rm dev cargo test --workspace --all-targets
 
 # Pre-commit compile gate with the native-JIT feature set.
-docker compose run --rm dev cargo test --manifest-path experiments/Cargo.toml -p rss-testgen --features native-jit --no-run
 
 # Slow release/demo parity checks.
 docker compose run --rm dev cargo test -p rsscript-sdk --test soak -- --ignored
@@ -44,7 +43,6 @@ workflow is available:
 cargo test -p rsscript-compiler --lib                            # focused edit loop
 cargo test --workspace --all-targets                    # exhaustive workspace gate
 cargo test -p rsscript-compiler --no-run            # compile rsscript tests only
-cargo test --manifest-path experiments/Cargo.toml -p rss-testgen --features native-jit --no-run
 cargo clippy --all-targets                 # lints
 cargo fmt --all                            # format
 cargo run -p rsscript-cli --bin rss --features execution -- <args> # drive the verified VM CLI

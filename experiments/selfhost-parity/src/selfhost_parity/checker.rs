@@ -588,7 +588,9 @@ async fn exercise(value: read Int) -> Unit {
 
 #[test]
 fn checker_task_group_async_context_structured_multiset_parity() {
-    let source = include_str!("../../../rsscript-sdk/tests/fixtures/pass/task-group-basic.rss");
+    let source = include_str!(
+        "../../../../crates/rsscript-sdk/tests/fixtures/pass/task-group-basic.rss"
+    );
     for code in ["RS0022", "RS0029"] {
         let oracle = checker_oracle_records("task-group-basic.rss", source, code);
         assert!(
@@ -697,7 +699,9 @@ fn exercise(values: mut List<Plain>, ordered: mut List<Ordered>) -> Unit {
 #[test]
 fn checker_rs0032_map_receiver_protocol_parity() {
     let source =
-        include_str!("../../../rsscript-sdk/tests/fixtures/pass/hashable-struct-map-key.rss");
+        include_str!(
+            "../../../../crates/rsscript-sdk/tests/fixtures/pass/hashable-struct-map-key.rss"
+        );
     let oracle = checker_oracle_records("hashable-struct-map-key.rss", source, "RS0032");
     assert!(
         oracle.is_empty(),
@@ -712,7 +716,9 @@ fn checker_rs0032_map_receiver_protocol_parity() {
 
 #[test]
 fn checker_rs0032_map_field_receiver_protocol_parity() {
-    let source = include_str!("../../../rsscript-sdk/tests/fixtures/pass/receiver-call-basic.rss");
+    let source = include_str!(
+        "../../../../crates/rsscript-sdk/tests/fixtures/pass/receiver-call-basic.rss"
+    );
     let oracle = checker_oracle_records("receiver-call-basic.rss", source, "RS0032");
     assert!(
         oracle.is_empty(),
@@ -730,7 +736,9 @@ fn checker_rs0032_map_field_receiver_protocol_parity() {
 
 #[test]
 fn checker_rs0032_set_receiver_protocol_parity() {
-    let source = include_str!("../../../rsscript-sdk/tests/fixtures/pass/hashable-struct-set.rss");
+    let source = include_str!(
+        "../../../../crates/rsscript-sdk/tests/fixtures/pass/hashable-struct-set.rss"
+    );
     let oracle = checker_oracle_records("hashable-struct-set.rss", source, "RS0032");
     assert!(
         oracle.is_empty(),

@@ -9,6 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::{Duration, Instant};
 
 use rsscript_provider_api::{
@@ -47,6 +48,12 @@ pub enum ProviderConformanceError {
         symbol: ExternalSymbol,
         observed: Option<ProviderErrorCode>,
     },
+    InvalidArgumentPreflight {
+        symbol: ExternalSymbol,
+        case: String,
+        observed: Option<ProviderErrorCode>,
+        unwound: bool,
+    },
 }
 
 impl fmt::Display for ProviderConformanceError {
@@ -69,10 +76,109 @@ pub fn check_wire_provider(
     descriptor: ProviderDescriptor,
     implementations: BTreeMap<ExternalSymbol, ProviderFunction<WireInterpreterFn>>,
 ) -> Result<ProviderConformanceReport, ProviderConformanceError> {
-    check_provider_inner(&descriptor, implementations, |callable, context| {
+    check_provider_inner(&descriptor, implementations.clone(), |callable, context| {
         callable.call_with_context(context, Vec::new()).map(|_| ())
     })?;
+    for function in &descriptor.functions {
+        let callable = &implementations
+            .get(&function.symbol)
+            .expect("registry preflight proved every implementation exists")
+            .callable;
+        let malformed = if function.signature.parameters.is_empty() {
+            vec![rsscript_provider_api::WireValue::Unit]
+        } else {
+            Vec::new()
+        };
+        let mut context = ProviderCallContext::default();
+        let observed = catch_unwind(AssertUnwindSafe(|| {
+            callable.call_with_context(&mut context, malformed)
+        }));
+        let (code, unwound) = match observed {
+            Ok(Err(error)) => (Some(error.code), false),
+            Ok(Ok(_)) => (None, false),
+            Err(_) => (None, true),
+        };
+        if unwound || code != Some(ProviderErrorCode::InvalidArgument) {
+            return Err(ProviderConformanceError::InvalidArgumentPreflight {
+                symbol: function.symbol.clone(),
+                case: "argument count".into(),
+                observed: code,
+                unwound,
+            });
+        }
+        if !function.signature.parameters.is_empty() {
+            for position in 0..function.signature.parameters.len() {
+                let mut arguments = function
+                    .signature
+                    .parameters
+                    .iter()
+                    .map(|parameter| placeholder_wire_value(&parameter.ty))
+                    .collect::<Vec<_>>();
+                arguments[position] = if matches!(
+                    function.signature.parameters[position].ty,
+                    rsscript_provider_api::WireType::Unit
+                ) {
+                    rsscript_provider_api::WireValue::String {
+                        value: "wrong".into(),
+                    }
+                } else {
+                    rsscript_provider_api::WireValue::Unit
+                };
+                let mut context = ProviderCallContext::default();
+                let observed = catch_unwind(AssertUnwindSafe(|| {
+                    callable.call_with_context(&mut context, arguments)
+                }));
+                let (code, unwound) = match observed {
+                    Ok(Err(error)) => (Some(error.code), false),
+                    Ok(Ok(_)) => (None, false),
+                    Err(_) => (None, true),
+                };
+                if unwound || code != Some(ProviderErrorCode::InvalidArgument) {
+                    return Err(ProviderConformanceError::InvalidArgumentPreflight {
+                        symbol: function.symbol.clone(),
+                        case: format!("wrong type at position {position}"),
+                        observed: code,
+                        unwound,
+                    });
+                }
+            }
+        }
+    }
     Ok(conformance_report(&descriptor))
+}
+
+fn placeholder_wire_value(
+    ty: &rsscript_provider_api::WireType,
+) -> rsscript_provider_api::WireValue {
+    use rsscript_provider_api::{WireType, WireTypeId, WireValue};
+    match ty {
+        WireType::Qualified { value, .. } => placeholder_wire_value(value),
+        WireType::Unit => WireValue::Unit,
+        WireType::Bool => WireValue::Bool { value: false },
+        WireType::Int { .. } => WireValue::Int { value: 0 },
+        WireType::Float { .. } => WireValue::Float { value: 0.0 },
+        WireType::String => WireValue::String {
+            value: String::new(),
+        },
+        WireType::Char => WireValue::Char { value: '\0' },
+        WireType::Bytes => WireValue::Bytes { value: Vec::new() },
+        WireType::List { .. } => WireValue::List {
+            element_type: WireTypeId::new(u32::MAX),
+            values: Vec::new(),
+        },
+        WireType::Map { .. } => WireValue::Map {
+            key_type: WireTypeId::new(u32::MAX),
+            value_type: WireTypeId::new(u32::MAX),
+            entries: Vec::new(),
+        },
+        WireType::Tuple { elements } => WireValue::Tuple {
+            values: elements.iter().map(placeholder_wire_value).collect(),
+        },
+        WireType::Option { .. } | WireType::Result { .. } | WireType::Named { .. } => {
+            WireValue::Unit
+        }
+        WireType::Resource { .. } | WireType::Handle { .. } => WireValue::Unit,
+    }
 }
 
 #[track_caller]
@@ -250,7 +356,12 @@ mod tests {
             symbol,
             ProviderFunction {
                 signature,
-                callable: WireInterpreterFn::new(|mut arguments| Ok(arguments.remove(0))),
+                callable: WireInterpreterFn::new(|arguments| match arguments.as_slice() {
+                    [value @ rsscript_provider_api::WireValue::Int { .. }] => Ok(value.clone()),
+                    _ => Err(ProviderError::invalid_argument(
+                        "identity expects exactly one Int",
+                    )),
+                }),
             },
         )]);
         (descriptor, implementations)

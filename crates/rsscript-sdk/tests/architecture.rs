@@ -14,11 +14,6 @@ struct BoundaryCrate {
 
 const UNSAFE_BOUNDARY_CRATES: &[BoundaryCrate] = &[
     BoundaryCrate {
-        package: "rss-native-abi",
-        rust_name: "rss_native_abi",
-        directory: "native-abi",
-    },
-    BoundaryCrate {
         package: "rss-process-guard",
         rust_name: "rss_process_guard",
         directory: "process-guard",
@@ -361,24 +356,25 @@ fn workspace_tiers_are_exhaustive_and_define_default_members() {
 }
 
 #[test]
-fn selfhost_parity_is_an_explicit_research_feature_not_a_release_gate() {
+fn selfhost_parity_is_an_independent_research_package_not_a_release_gate() {
     let root = workspace_root();
     let compiler_manifest = read(&root.join("crates/rsscript-compiler/Cargo.toml"));
-    let compiler = read(&root.join("crates/rsscript-compiler/src/lib.rs"));
+    let experiments_manifest = read(&root.join("experiments/Cargo.toml"));
     let selfhost_workflow = read(&root.join(".github/workflows/selfhost.yml"));
     let release_workflow = read(&root.join(".github/workflows/release.yml"));
 
     assert!(
-        compiler_manifest.contains("selfhost-parity = [\"bytecode\", \"dep:rsscript-vm\"]"),
-        "the Research harness must require an explicit compiler feature"
+        !compiler_manifest.contains("selfhost-parity")
+            && !compiler_manifest.contains("rsscript-vm"),
+        "the Core compiler must not retain the Research harness or a VM dependency"
     );
     assert!(
-        compiler.contains("feature = \"selfhost-parity\""),
-        "self-host test modules must be gated at their compilation boundary"
+        experiments_manifest.contains("\"selfhost-parity\""),
+        "the Research harness must be an independent experiments workspace member"
     );
     assert!(
-        selfhost_workflow.contains("--features selfhost-parity"),
-        "the dedicated Research workflow must opt in to its direct-MIR harness explicitly"
+        selfhost_workflow.contains("-p rsscript-selfhost-parity"),
+        "the dedicated Research workflow must run the independent parity package"
     );
     assert!(
         !release_workflow.contains("selfhost_parity::"),
@@ -742,7 +738,7 @@ fn selfhost_known_type_sets_are_generated() {
         !checker.contains("fn is_builtin_type(") && !checker.contains("fn is_stdlib_type("),
         "self-host type knowledge must come from generated interface metadata"
     );
-    let metadata = read(&root.join("crates/rsscript-compiler/src/interface_metadata.rs"));
+    let metadata = read(&root.join("experiments/selfhost-parity/src/interface_metadata.rs"));
     assert!(metadata.contains("rsscript_semantics::BUILTIN_TYPE_NAMES"));
     assert!(metadata.contains("for name in &metadata.types"));
 }
@@ -1753,7 +1749,7 @@ fn register_vm_has_no_disabled_test_composition_tree() {
 #[test]
 fn selfhost_parity_domains_remain_separate_modules() {
     let root = workspace_root();
-    let aggregator = root.join("crates/rsscript-compiler/src/selfhost_parity.rs");
+    let aggregator = root.join("experiments/selfhost-parity/src/selfhost_parity.rs");
     let source = read(&aggregator);
     let expected = ["lexer", "parser", "checker", "ast_oracle", "ast_parity"];
 
@@ -1768,7 +1764,7 @@ fn selfhost_parity_domains_remain_separate_modules() {
         );
         assert!(
             root.join(format!(
-                "crates/rsscript-compiler/src/selfhost_parity/{domain}.rs"
+                "experiments/selfhost-parity/src/selfhost_parity/{domain}.rs"
             ))
             .is_file(),
             "self-host parity domain `{domain}` must have its own module"
@@ -3929,18 +3925,14 @@ fn lsp_dependency_closure_selects_frontend_only() {
         Some(true),
         "compiler bytecode emission must remain outside the language-service closure"
     );
-    assert_eq!(
-        compiler_manifest["dependencies"]["rsscript-vm"]["optional"].as_bool(),
-        Some(true),
-        "the legacy VM is permitted only through the research-only selfhost feature"
-    );
     assert!(
-        compiler_manifest["features"]["selfhost-parity"]
-            .as_array()
-            .is_some_and(|features| features
-                .iter()
-                .any(|feature| feature.as_str() == Some("dep:rsscript-vm"))),
-        "the optional VM must be selected only by selfhost-parity"
+        compiler_manifest["dependencies"]
+            .get("rsscript-vm")
+            .is_none()
+            && compiler_manifest["features"]
+                .get("selfhost-parity")
+                .is_none(),
+        "frontend-only compiler closure must not retain the self-host VM adapter"
     );
 }
 
@@ -4171,13 +4163,9 @@ fn compiler_default_dependency_closure_is_host_neutral() {
             .get("rsscript-jit-cranelift")
             .is_none()
     );
-    let selfhost_vm = manifest["dependencies"]["rsscript-vm"]
-        .as_table()
-        .expect("self-host parity VM dependency must be declared explicitly");
-    assert_eq!(
-        selfhost_vm.get("optional").and_then(toml::Value::as_bool),
-        Some(true),
-        "the compiler must not select the VM outside the research-only selfhost feature"
+    assert!(
+        manifest["dependencies"].get("rsscript-vm").is_none(),
+        "self-host execution belongs to the independent experiments workspace"
     );
 
     assert!(
@@ -4192,19 +4180,9 @@ fn compiler_default_dependency_closure_is_host_neutral() {
         .collect::<BTreeSet<_>>();
     assert!(manifest["features"].get("execution").is_none());
     assert!(manifest["features"].get("legacy-exec-ir").is_none());
-    let selfhost = manifest["features"]["selfhost-parity"]
-        .as_array()
-        .expect("compiler self-host feature should be declared")
-        .iter()
-        .filter_map(toml::Value::as_str)
-        .collect::<BTreeSet<_>>();
-    assert!(selfhost.contains("dep:rsscript-vm"));
-    assert!(selfhost.contains("bytecode"));
     assert!(
-        manifest["dependencies"]["rsscript-vm"]
-            .get("features")
-            .is_none(),
-        "self-host parity must enter the VM only through verified bytecode"
+        manifest["features"].get("selfhost-parity").is_none(),
+        "compiler must not expose a research self-host feature"
     );
     let bytecode = manifest["features"]["bytecode"]
         .as_array()
@@ -4587,11 +4565,6 @@ fn abi_and_provider_crates_keep_one_way_dependencies() {
     assert!(
         !vm_manifest.contains("features = [\"compatibility\"]"),
         "the register VM must use only the canonical Provider wire API"
-    );
-    let native_source = read(&root.join("experiments/native-abi/src/lib.rs"));
-    assert!(
-        native_source.contains("pub use rsscript_provider_api"),
-        "the native adapter must reuse provider runtime values rather than own them"
     );
 }
 
@@ -5235,7 +5208,8 @@ fn github_workflows_follow_current_workspace_boundaries() {
     }
 
     for current in [
-        "-p rsscript-compiler",
+        "crates/rsscript-compiler/**",
+        "-p rsscript-selfhost-parity",
         "crates/rsscript-bytecode/**",
         "crates/rsscript-provider-api/**",
         "crates/rsscript-provider-conformance/**",

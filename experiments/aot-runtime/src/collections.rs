@@ -463,7 +463,10 @@ pub fn map_new<K, V>() -> HashMap<K, V> {
     HashMap::new()
 }
 
-pub type RssPersistentMap<K, V> = imbl::HashMap<K, V>;
+/// The experimental AOT ABI exposes value-semantics maps. Cloning the standard
+/// map keeps that contract without retaining the unmaintained `imbl` graph;
+/// a future persistent representation must pass the experiment retention gate.
+pub type RssPersistentMap<K, V> = HashMap<K, V>;
 
 pub fn persistent_map_new<K, V>() -> RssPersistentMap<K, V> {
     RssPersistentMap::new()
@@ -493,14 +496,18 @@ pub fn persistent_map_insert<K: Eq + Hash + Clone, V: Clone>(
     key: &K,
     value: &V,
 ) -> RssPersistentMap<K, V> {
-    map.update(key.clone(), value.clone())
+    let mut updated = map.clone();
+    updated.insert(key.clone(), value.clone());
+    updated
 }
 
 pub fn persistent_map_remove<K: Eq + Hash + Clone, V: Clone>(
     map: &RssPersistentMap<K, V>,
     key: &K,
 ) -> RssPersistentMap<K, V> {
-    map.without(key)
+    let mut updated = map.clone();
+    updated.remove(key);
+    updated
 }
 
 pub fn persistent_map_clear<K, V>(_map: &RssPersistentMap<K, V>) -> RssPersistentMap<K, V> {

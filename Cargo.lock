@@ -1783,7 +1783,6 @@ dependencies = [
  "rsscript-semantics",
  "rsscript-syntax",
  "rsscript-text",
- "rsscript-vm",
  "rsscript-work-budget",
  "serde",
  "serde_json",

@@ -99,3 +99,6 @@ required-features = ["native-jit"]
 name = "native_jit_scorecard"
 path = "tests/native_jit_scorecard.rs"
 required-features = ["native-jit"]
+
+[lints]
+workspace = true

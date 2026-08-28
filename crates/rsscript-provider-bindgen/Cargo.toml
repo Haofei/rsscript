@@ -9,3 +9,6 @@ rust-version.workspace = true
 [dependencies]
 rsscript-abi-model = { path = "../rsscript-abi-model" }
 rsscript-semantics = { path = "../rsscript-semantics" }
+
+[lints]
+workspace = true

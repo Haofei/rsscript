@@ -1,0 +1,21 @@
+[package]
+name = "rsscript-selfhost-parity"
+version.workspace = true
+edition.workspace = true
+description = "Research-only RSS-written frontend parity harness"
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+rsscript-bytecode = { path = "../../crates/rsscript-bytecode" }
+rsscript-compiler = { path = "../../crates/rsscript-compiler", features = ["bytecode"] }
+rsscript-diagnostics = { path = "../../crates/rsscript-diagnostics" }
+rsscript-interface-catalog = { path = "../../crates/rsscript-interface-catalog" }
+rsscript-semantics = { path = "../../crates/rsscript-semantics" }
+rsscript-syntax = { path = "../../crates/rsscript-syntax" }
+rsscript-text = { path = "../../crates/rsscript-text" }
+rsscript-vm = { path = "../../crates/rsscript-vm", default-features = false }
+
+[lints]
+workspace = true

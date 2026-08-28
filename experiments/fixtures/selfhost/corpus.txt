@@ -538,5 +538,5 @@ crates/rsscript-sdk/tests/corpus/semantic_mir/unknown_callee.rss
 examples/embedded-report-pipeline/script/isolated.rss
 examples/structured-async-pipeline/script/isolated.rss
 examples/structured-async-pipeline/script/main.rss
-experiments/rss-testgen/tests/corpus/execution_state/completed.rss
-experiments/rss-testgen/tests/corpus/execution_state/infinite_loop.rss
+experiments/fixtures/execution-state/completed.rss
+experiments/fixtures/execution-state/infinite_loop.rss
