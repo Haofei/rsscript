@@ -384,7 +384,10 @@ impl RegVm {
         instr: &RegInstr,
         base: usize,
         ip: &mut usize,
+        branch_feedback: Option<(&RegFunction, usize)>,
     ) -> Result<PureStep, EvalError> {
+        #[cfg(not(feature = "jit-speculation"))]
+        let _ = branch_feedback;
         match instr {
             RegInstr::LoadUnit { dst } => self.set_reg(base + *dst, VmValue::Unit),
             RegInstr::LoadInt { dst, value } => self.set_reg(base + *dst, VmValue::Int(*value)),
@@ -694,7 +697,14 @@ impl RegVm {
                 expected,
                 target,
             } => {
-                if expect_bool_ref(self.reg(base + *cond))? == *expected {
+                let taken = expect_bool_ref(self.reg(base + *cond))? == *expected;
+                #[cfg(feature = "jit-speculation")]
+                if self.native.is_some()
+                    && let Some((func, instr_ip)) = branch_feedback
+                {
+                    self.jit_state.record_branch_site(func, instr_ip, taken);
+                }
+                if taken {
                     *ip = *target;
                 }
             }
@@ -707,7 +717,14 @@ impl RegVm {
             } => {
                 let l = self.reg(base + *lhs);
                 let r = self.reg(base + *rhs);
-                if eval_numeric_compare(*op, l, r)? == *expected {
+                let taken = eval_numeric_compare(*op, l, r)? == *expected;
+                #[cfg(feature = "jit-speculation")]
+                if self.native.is_some()
+                    && let Some((func, instr_ip)) = branch_feedback
+                {
+                    self.jit_state.record_branch_site(func, instr_ip, taken);
+                }
+                if taken {
                     *ip = *target;
                 }
             }
@@ -966,40 +983,6 @@ impl RegVm {
             _ => return Ok(PureStep::NotPure),
         }
         Ok(PureStep::Next)
-    }
-
-    #[cfg(feature = "native-jit")]
-    #[inline(always)]
-    pub(super) fn record_native_branch_feedback(
-        &mut self,
-        func: &RegFunction,
-        instr: &RegInstr,
-        base: usize,
-        instr_ip: usize,
-    ) -> Result<(), EvalError> {
-        if self.native.is_none() {
-            return Ok(());
-        }
-        match instr {
-            RegInstr::JumpIfBool { cond, expected, .. } => {
-                let taken = expect_bool_ref(self.reg(base + *cond))? == *expected;
-                self.jit_state.record_branch_site(func, instr_ip, taken);
-            }
-            RegInstr::JumpIfIntCompare {
-                lhs,
-                rhs,
-                op,
-                expected,
-                ..
-            } => {
-                let taken =
-                    eval_numeric_compare(*op, self.reg(base + *lhs), self.reg(base + *rhs))?
-                        == *expected;
-                self.jit_state.record_branch_site(func, instr_ip, taken);
-            }
-            _ => {}
-        }
-        Ok(())
     }
 
     // ── TV2.2 cold list-opcode bodies (perf-plan §1.3 hot/cold split) ──
@@ -1386,7 +1369,12 @@ impl RegVm {
             // native has already had first refusal above; this only changes the
             // native-active, function-ineligible-but-loop-eligible shape.
             #[cfg(feature = "native-jit")]
-            let osr_pre_candidates = if ip == 0 && self.native.is_some() {
+            let osr_active = self
+                .native
+                .as_ref()
+                .is_some_and(|native| native.auto_osr_enabled || native.eager_osr);
+            #[cfg(feature = "native-jit")]
+            let osr_pre_candidates = if ip == 0 && osr_active {
                 self.resolve_osr_candidates(&func)
             } else {
                 OsrCandidates::default()
@@ -1447,14 +1435,14 @@ impl RegVm {
             // targets functions that are native-INELIGIBLE as a whole (the loop is
             // wrapped by non-native I/O); the verdict is cached in `native.osr_cache`.
             #[cfg(feature = "native-jit")]
-            let (osr_candidates, osr_eager) = if self.native.is_some() {
+            let (osr_candidates, osr_eager) = if osr_active {
                 (
                     if osr_pre_candidates.is_empty() {
                         self.resolve_osr_candidates(&func)
                     } else {
                         osr_pre_candidates
                     },
-                    self.native.as_ref().is_some_and(|n| n.osr_enabled),
+                    self.native.as_ref().is_some_and(|n| n.eager_osr),
                 )
             } else {
                 (OsrCandidates::default(), false)
@@ -1610,15 +1598,23 @@ impl RegVm {
                         NativeLoweringClass::Reject => {}
                     }
                 }
-                #[cfg(feature = "native-jit")]
-                self.record_native_branch_feedback(&func, instr, base, ip)?;
+                #[cfg(feature = "jit-speculation")]
+                let instr_ip = ip;
                 ip += 1;
                 // Pure instructions (loads, arithmetic, jumps, matches, heap
                 // construction, …) run through the shared `try_exec_pure`, the one
                 // copy of their semantics that the JIT executor also uses — so the
                 // two can never diverge. Only frame/suspension/call-shaped
                 // instructions need the interpreter-specific handling below.
-                match self.try_exec_pure(instr, base, &mut ip)? {
+                match self.try_exec_pure(
+                    instr,
+                    base,
+                    &mut ip,
+                    #[cfg(feature = "jit-speculation")]
+                    Some((&func, instr_ip)),
+                    #[cfg(not(feature = "jit-speculation"))]
+                    None,
+                )? {
                     PureStep::Next => {}
                     PureStep::Return(value) => {
                         let frame = self.frames.pop().expect("active frame");
@@ -1755,8 +1751,8 @@ impl RegVm {
                             // unchanged — we only observe it. `ip` was already
                             // advanced past this instruction, so its index is
                             // `ip - 1`.
-                            #[cfg(feature = "native-jit")]
-                            if self.native.is_some() {
+                            #[cfg(feature = "jit-speculation")]
+                            if self.native.is_some() && self.jit_state.should_record_call(&func) {
                                 self.jit_state.record_call_site(
                                     &func,
                                     ip - 1,
@@ -1948,8 +1944,8 @@ impl RegVm {
                             // does not change which closure runs; `ip` already
                             // points past this instruction, so its index is
                             // `ip - 1`.
-                            #[cfg(feature = "native-jit")]
-                            if self.native.is_some() {
+                            #[cfg(feature = "jit-speculation")]
+                            if self.native.is_some() && self.jit_state.should_record_call(&func) {
                                 self.jit_state.record_call_site(
                                     &func,
                                     ip - 1,

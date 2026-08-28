@@ -5,6 +5,7 @@ use super::super::*;
 /// in its `JitState`. Tuned high enough that one-shot/setup functions
 /// never profile, low enough that a genuinely hot dispatcher is observed within
 /// the first handful of native-tier warm-ups.
+#[cfg(feature = "jit-speculation")]
 pub(crate) const PROFILE_WARMUP: u32 = 50;
 
 /// Per-function dynamic-call count at which bounded profile collection stops sampling: once a function's
@@ -12,6 +13,7 @@ pub(crate) const PROFILE_WARMUP: u32 = 50;
 /// read + compare, then return) so a dynamic call driven by a hot loop has an
 /// essentially-free steady state. The window `PROFILE_WARMUP..PROFILE_RECORD_LIMIT`
 /// is more than enough samples to settle every site's mono/poly/mega state.
+#[cfg(feature = "jit-speculation")]
 pub(crate) const PROFILE_RECORD_LIMIT: u32 = PROFILE_WARMUP + 256;
 
 /// Minimum branch samples before branch feedback is strong enough to guide profile-guided inlining
@@ -122,6 +124,7 @@ impl Default for CallSiteFeedback {
 impl CallSiteFeedback {
     /// Record one observation of `callee_key` (saturating). Pure bookkeeping:
     /// has no effect on the call dispatch decision or any value.
+    #[cfg(feature = "jit-speculation")]
     pub(crate) fn record(&mut self, callee_key: u64, captures_scalar: bool) {
         // Monotone AND: one heap-capture observation disqualifies the site forever.
         self.captures_all_scalar &= captures_scalar;
@@ -163,6 +166,7 @@ pub(crate) struct BranchFeedback {
 
 #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
 impl BranchFeedback {
+    #[cfg(feature = "jit-speculation")]
     pub(crate) fn record(&mut self, taken: bool) {
         if taken {
             self.taken = self.taken.saturating_add(1);
@@ -230,6 +234,7 @@ pub(crate) struct FunctionProfile {
 impl FunctionProfile {
     /// Record `callee_key` at the dynamic call site whose instruction index is
     /// `instr_idx`. Observation only — never affects dispatch or values.
+    #[cfg(feature = "jit-speculation")]
     pub(crate) fn record_call(&mut self, instr_idx: usize, callee_key: u64, captures_scalar: bool) {
         self.call_sites
             .entry(instr_idx)
@@ -237,7 +242,7 @@ impl FunctionProfile {
             .record(callee_key, captures_scalar);
     }
 
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    #[cfg(feature = "jit-speculation")]
     pub(crate) fn record_branch(&mut self, instr_idx: usize, taken: bool) {
         self.branch_sites
             .entry(instr_idx)
@@ -269,6 +274,7 @@ impl FunctionProfile {
 /// precondition for materializing captures into an inlined native body via the
 /// `closure_capture` host helper. A non-scalar (heap) capture makes the
 /// capturing-closure inline ineligible; a `Managed` wrapper is unwrapped first.
+#[cfg(feature = "jit-speculation")]
 pub(crate) fn closure_captures_all_scalar(closure: &VmClosure) -> bool {
     closure.captures.iter().all(|c| {
         fn scalar(v: &VmValue) -> bool {

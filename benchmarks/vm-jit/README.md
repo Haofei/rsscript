@@ -27,6 +27,10 @@ cargo test --locked --release -p rsscript-sdk --features native-jit \
 ```
 
 The scorecard emits one `rsscript.native_jit_scorecard.v1` JSON object per case.
+Wall-clock samples use production native options with telemetry disabled. After
+timing completes, the harness performs one separate diagnostic native execution
+to collect compile, code-size, transition, bail, helper, and optimization evidence.
+Diagnostic instrumentation is therefore never included in `native_ns`.
 It also emits one `rsscript.aot_jit_matrix.v1` record, validated against
 `aot-jit-matrix.schema.json`. The matrix records semantic parity, execution and
 compile time, transition counts, and explicit `null` values for metrics the

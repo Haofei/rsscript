@@ -1,6 +1,8 @@
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+#[cfg(feature = "native-jit")]
+use std::collections::BTreeMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
@@ -2189,14 +2191,11 @@ struct NativeState {
     /// re-running the function from the top. Default `false` ⇒ byte-identical
     /// re-run-from-top (the safe baseline). Selected by the execution plan.
     precise_deopt: bool,
-    /// OSR (on-stack replacement): when set, a function with a qualifying
-    /// native-subset hot loop (see [`detect_single_natural_loop`]) runs that loop
-    /// natively *mid-function* — the interpreter reaches the loop header, hands the
-    /// register window to an OSR-compiled loop body, then resumes at the post-loop
-    /// ip with the live-out window (OSR-exit / precise-deopt resume). Default
-    /// execution uses the hot-backedge auto-trigger; this flag selects the eager
-    /// trigger used by deterministic test/bench entry points.
-    osr_enabled: bool,
+    /// Enables threshold-driven OSR for qualifying native-subset loops.
+    auto_osr_enabled: bool,
+    /// Forces the first candidate-loop header to attempt OSR. Reserved for
+    /// deterministic differential and diagnostic entry points.
+    eager_osr: bool,
     /// Deterministically ranked OSR candidates per function. Each fixed-size value
     /// contains at most [`MAX_OSR_REGIONS_PER_FUNCTION`] headers, so a function's
     /// interpreter overhead and native compile exposure stay bounded.
@@ -6954,7 +6953,8 @@ impl NativeState {
             plan.collect_stats,
             plan.baseline,
             plan.precise_deopt,
-            plan.osr_enabled,
+            plan.auto_osr_enabled,
+            plan.eager_osr,
             plan.report,
             plan.forced_safepoint,
             plan.force_all_safepoints,
@@ -6997,7 +6997,7 @@ impl NativeState {
         collect_stats: bool,
         baseline: bool,
         precise_deopt: bool,
-        osr_enabled: bool,
+        eager_osr: bool,
         report: bool,
     ) -> Result<Self, EvalError> {
         Self::new_with_opt_and_forced_safepoint(
@@ -7006,7 +7006,8 @@ impl NativeState {
             collect_stats,
             baseline,
             precise_deopt,
-            osr_enabled,
+            false,
+            eager_osr,
             report,
             None,
             false,
@@ -7024,7 +7025,8 @@ impl NativeState {
         collect_stats: bool,
         baseline: bool,
         precise_deopt: bool,
-        osr_enabled: bool,
+        auto_osr_enabled: bool,
+        eager_osr: bool,
         report: bool,
         forced_safepoint: Option<u32>,
         force_all_safepoints: bool,
@@ -7095,7 +7097,8 @@ impl NativeState {
             stats: NativeStats::default(),
             collect_stats,
             precise_deopt,
-            osr_enabled,
+            auto_osr_enabled,
+            eager_osr,
             osr_candidates: HashMap::new(),
             osr_triggers: HashMap::new(),
             osr_cache: HashMap::new(),

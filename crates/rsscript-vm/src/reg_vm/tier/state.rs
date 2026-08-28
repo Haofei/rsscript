@@ -2,10 +2,10 @@
 //!
 //! A verified bytecode program is immutable data. JIT planning data therefore
 //! never lives on `RegFunction` (which is part of that decoded program): it is
-//! owned by one evaluation and indexed by the verified executable digest plus a
-//! stable function ordinal.  Pointer lookup is only an internal bridge from the
-//! decoded register function to that stable key; no pointer identity is retained
-//! as the identity of a program or a cache entry.
+//! owned by one evaluation and indexed directly by stable function ordinal.
+//! Pointer lookup is only an internal bridge from the decoded register function
+//! to that ordinal; no pointer identity is retained as the identity of a program
+//! or a cache entry.
 
 use super::*;
 
@@ -18,12 +18,6 @@ impl VerifiedProgramIdentity {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(super) struct JitFunctionKey {
-    pub(super) program: VerifiedProgramIdentity,
-    pub(super) ordinal: u32,
-}
-
 #[derive(Debug, Default)]
 struct JitFunctionState {
     tier0_analysis: Option<(bool, bool)>,
@@ -33,11 +27,11 @@ struct JitFunctionState {
     /// default VM build.
     #[cfg(feature = "native-jit")]
     native_status: u8,
-    #[cfg(feature = "native-jit")]
+    #[cfg(feature = "jit-speculation")]
     call_count: u32,
-    #[cfg(feature = "native-jit")]
+    #[cfg(feature = "jit-speculation")]
     branch_count: u32,
-    #[cfg(feature = "native-jit")]
+    #[cfg(feature = "jit-speculation")]
     profile: Option<Box<FunctionProfile>>,
 }
 
@@ -48,8 +42,9 @@ struct JitFunctionState {
 /// feedback with it.
 #[derive(Debug)]
 pub(crate) struct JitState {
-    keys_by_function_pointer: HashMap<usize, JitFunctionKey>,
-    functions: BTreeMap<JitFunctionKey, JitFunctionState>,
+    _program: VerifiedProgramIdentity,
+    ordinal_by_function_pointer: HashMap<usize, u32>,
+    functions: Vec<JitFunctionState>,
 }
 
 impl JitState {
@@ -58,63 +53,56 @@ impl JitState {
         unit: &RegUnit,
     ) -> Self {
         let program = VerifiedProgramIdentity::from_executable_digest(executable_digest);
-        let mut keys_by_function_pointer = HashMap::new();
-        let mut functions = BTreeMap::new();
+        let mut ordinal_by_function_pointer = HashMap::new();
+        let mut functions = Vec::with_capacity(unit.functions.len());
         let eligibility = compute_jit_eligibility(&unit.functions);
         for ((ordinal, function), eligible) in unit.functions.iter().enumerate().zip(eligibility) {
-            let key = JitFunctionKey {
-                program: program.clone(),
-                ordinal: ordinal
-                    .try_into()
-                    .expect("verified function count fits u32"),
-            };
-            keys_by_function_pointer.insert(Rc::as_ptr(function) as usize, key.clone());
-            functions.insert(
-                key,
-                JitFunctionState {
-                    tier0_analysis: Some((eligible, jit_function_has_loop(&function.code))),
-                    ..JitFunctionState::default()
-                },
-            );
+            let ordinal = ordinal
+                .try_into()
+                .expect("verified function count fits u32");
+            ordinal_by_function_pointer.insert(Rc::as_ptr(function) as usize, ordinal);
+            functions.push(JitFunctionState {
+                tier0_analysis: Some((eligible, jit_function_has_loop(&function.code))),
+                ..JitFunctionState::default()
+            });
         }
         Self {
-            keys_by_function_pointer,
+            _program: program,
+            ordinal_by_function_pointer,
             functions,
         }
     }
 
-    fn state(&self, function: &RegFunction) -> &JitFunctionState {
+    #[inline(always)]
+    fn ordinal(&self, function: &RegFunction) -> usize {
         let pointer = function as *const RegFunction as usize;
-        let key = self
-            .keys_by_function_pointer
+        self.ordinal_by_function_pointer
             .get(&pointer)
-            .expect("JIT state must be constructed from the decoded verified unit");
+            .copied()
+            .expect("JIT state must be constructed from the decoded verified unit") as usize
+    }
+
+    #[inline(always)]
+    fn state(&self, function: &RegFunction) -> &JitFunctionState {
         self.functions
-            .get(key)
-            .expect("every JIT function pointer has a stable function state")
+            .get(self.ordinal(function))
+            .expect("every JIT function ordinal has a stable function state")
     }
 
     #[cfg(feature = "native-jit")]
+    #[inline(always)]
     fn state_mut(&mut self, function: &RegFunction) -> &mut JitFunctionState {
-        let pointer = function as *const RegFunction as usize;
-        let key = self
-            .keys_by_function_pointer
-            .get(&pointer)
-            .expect("JIT state must be constructed from the decoded verified unit")
-            .clone();
+        let ordinal = self.ordinal(function);
         self.functions
-            .get_mut(&key)
-            .expect("every JIT function pointer has a stable function state")
+            .get_mut(ordinal)
+            .expect("every JIT function ordinal has a stable function state")
     }
 
     /// Stable, evaluation-local function identity for native side tables.
     #[cfg(feature = "native-jit")]
+    #[inline(always)]
     pub(crate) fn function_ordinal(&self, function: &RegFunction) -> usize {
-        let pointer = function as *const RegFunction as usize;
-        self.keys_by_function_pointer
-            .get(&pointer)
-            .expect("JIT state must be constructed from the decoded verified unit")
-            .ordinal as usize
+        self.ordinal(function)
     }
 
     pub(crate) fn tier0_analysis(&self, function: &RegFunction) -> (bool, bool) {
@@ -135,15 +123,8 @@ impl JitState {
         function: &RegFunction,
         kind: SelfRecursionKind,
     ) {
-        let pointer = function as *const RegFunction as usize;
-        let key = self
-            .keys_by_function_pointer
-            .get(&pointer)
-            .expect("JIT state must be constructed from the decoded verified unit");
-        self.functions
-            .get_mut(key)
-            .expect("every JIT function pointer has a stable function state")
-            .self_recursion_kind = Some(kind);
+        let ordinal = self.ordinal(function);
+        self.functions[ordinal].self_recursion_kind = Some(kind);
     }
 
     #[cfg(feature = "native-jit")]
@@ -156,24 +137,40 @@ impl JitState {
         self.state_mut(function).native_status = status;
     }
 
-    #[cfg(feature = "native-jit")]
+    #[cfg(feature = "jit-speculation")]
     pub(crate) fn call_count(&self, function: &RegFunction) -> u32 {
         self.state(function).call_count
     }
 
-    #[cfg(feature = "native-jit")]
+    #[cfg(all(feature = "native-jit", not(feature = "jit-speculation")))]
+    pub(crate) fn call_count(&self, _function: &RegFunction) -> u32 {
+        0
+    }
+
+    #[cfg(feature = "jit-speculation")]
     pub(crate) fn branch_count(&self, function: &RegFunction) -> u32 {
         self.state(function).branch_count
     }
 
-    #[cfg(feature = "native-jit")]
+    #[cfg(feature = "jit-speculation")]
     pub(crate) fn profile(&self, function: &RegFunction) -> Option<&FunctionProfile> {
         self.state(function).profile.as_deref()
     }
 
+    #[cfg(all(feature = "native-jit", not(feature = "jit-speculation")))]
+    pub(crate) fn profile(&self, _function: &RegFunction) -> Option<&FunctionProfile> {
+        None
+    }
+
+    #[cfg(feature = "jit-speculation")]
+    #[inline(always)]
+    pub(crate) fn should_record_call(&self, function: &RegFunction) -> bool {
+        self.state(function).call_count < PROFILE_RECORD_LIMIT
+    }
+
     /// Warm-gated, bounded dynamic-call feedback. It observes dispatch only and
     /// never changes an interpreted value or branch decision.
-    #[cfg(feature = "native-jit")]
+    #[cfg(feature = "jit-speculation")]
     pub(crate) fn record_call_site(
         &mut self,
         function: &RegFunction,
@@ -199,7 +196,7 @@ impl JitState {
         }
     }
 
-    #[cfg(feature = "native-jit")]
+    #[cfg(feature = "jit-speculation")]
     pub(crate) fn record_branch_site(
         &mut self,
         function: &RegFunction,
@@ -241,20 +238,18 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "native-jit")]
     #[test]
     fn state_keys_function_feedback_by_verified_program_digest_and_ordinal() {
         let unit = unit();
         let first = JitState::for_verified_program("sha256:first", &unit);
         let second = JitState::for_verified_program("sha256:second", &unit);
-        let first_key = first.functions.keys().next().expect("one function");
-        let second_key = second.functions.keys().next().expect("one function");
-
-        assert_eq!(first_key.ordinal, 0);
-        assert_eq!(second_key.ordinal, 0);
-        assert_ne!(first_key.program, second_key.program);
+        assert_eq!(first.function_ordinal(&unit.functions[0]), 0);
+        assert_eq!(second.function_ordinal(&unit.functions[0]), 0);
+        assert_ne!(first._program, second._program);
     }
 
-    #[cfg(feature = "native-jit")]
+    #[cfg(feature = "jit-speculation")]
     #[test]
     fn profile_feedback_is_isolated_per_evaluation() {
         let unit = unit();

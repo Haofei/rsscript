@@ -66,7 +66,8 @@ pub(super) struct NativeExecutionPlan {
     pub(super) collect_stats: bool,
     pub(super) baseline: bool,
     pub(super) precise_deopt: bool,
-    pub(super) osr_enabled: bool,
+    pub(super) auto_osr_enabled: bool,
+    pub(super) eager_osr: bool,
     pub(super) report: bool,
     pub(super) forced_safepoint: Option<u32>,
     pub(super) force_all_safepoints: bool,
@@ -93,7 +94,13 @@ pub(super) struct NativeAdmissionPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NativeJitOptions {
     pub tier_up_threshold: u32,
-    pub enable_osr: bool,
+    /// Enables threshold-driven OSR after interpreted loop work becomes hot.
+    pub enable_auto_osr: bool,
+    /// Forces an OSR attempt on the first candidate-loop header.
+    ///
+    /// This is intended for differential tests and controlled diagnostics, not
+    /// ordinary production execution.
+    pub eager_osr: bool,
     pub collect_telemetry: bool,
     pub max_code_bytes: u64,
     pub max_compile_millis: u64,
@@ -129,8 +136,9 @@ impl Default for NativeJitOptions {
     fn default() -> Self {
         Self {
             tier_up_threshold: 0,
-            enable_osr: true,
-            collect_telemetry: true,
+            enable_auto_osr: true,
+            eager_osr: false,
+            collect_telemetry: false,
             max_code_bytes: 16 * 1024 * 1024,
             max_compile_millis: 2_000,
             optimize_work_threshold: 50_000,
@@ -138,6 +146,20 @@ impl Default for NativeJitOptions {
             osr_work_threshold: 1_000,
             allow_recursive_calls: false,
         }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+impl NativeJitOptions {
+    /// Diagnostic policy with detailed engine counters and timings enabled.
+    pub fn diagnostic() -> Self {
+        Self::default().with_telemetry()
+    }
+
+    /// Explicitly enable detailed native-engine telemetry for this execution.
+    pub fn with_telemetry(mut self) -> Self {
+        self.collect_telemetry = true;
+        self
     }
 }
 
@@ -150,7 +172,8 @@ impl NativeExecutionPlan {
             collect_stats: options.collect_telemetry,
             baseline: false,
             precise_deopt: true,
-            osr_enabled: options.enable_osr,
+            auto_osr_enabled: options.enable_auto_osr,
+            eager_osr: options.eager_osr,
             report: false,
             forced_safepoint: None,
             force_all_safepoints: false,
@@ -181,8 +204,9 @@ impl NativeExecutionPlan {
         force_all_safepoints_override: bool,
     ) -> Self {
         let baseline = false;
-        let osr_enabled = osr_override;
-        let precise_deopt = precise_deopt_override || osr_enabled;
+        let auto_osr_enabled = false;
+        let eager_osr = osr_override;
+        let precise_deopt = precise_deopt_override || eager_osr;
         let report = report_override;
         let force_all_safepoints = forced_safepoint.is_none() && force_all_safepoints_override;
         Self {
@@ -191,7 +215,8 @@ impl NativeExecutionPlan {
             collect_stats,
             baseline,
             precise_deopt,
-            osr_enabled,
+            auto_osr_enabled,
+            eager_osr,
             report,
             forced_safepoint,
             force_all_safepoints,
@@ -236,10 +261,29 @@ mod tests {
             StdoutMode::Streaming
         );
         #[cfg(feature = "native-jit")]
-        assert!(
-            !NativeJitOptions::default().allow_recursive_calls,
-            "host-stack recursion must require an explicit trusted-host opt-in"
-        );
+        {
+            let defaults = NativeJitOptions::default();
+            assert!(
+                !defaults.allow_recursive_calls,
+                "host-stack recursion must require an explicit trusted-host opt-in"
+            );
+            assert!(defaults.enable_auto_osr);
+            assert!(!defaults.eager_osr);
+            assert!(!defaults.collect_telemetry);
+            assert!(NativeJitOptions::diagnostic().collect_telemetry);
+
+            let automatic = NativeExecutionPlan::from_options(defaults);
+            assert!(automatic.auto_osr_enabled);
+            assert!(!automatic.eager_osr);
+
+            let eager = NativeExecutionPlan::from_options(NativeJitOptions {
+                enable_auto_osr: false,
+                eager_osr: true,
+                ..NativeJitOptions::default()
+            });
+            assert!(!eager.auto_osr_enabled);
+            assert!(eager.eager_osr);
+        }
     }
 
     #[cfg(all(feature = "native-jit", not(feature = "jit-recursion-experimental")))]

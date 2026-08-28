@@ -413,7 +413,6 @@ fn native_jit_pass_scorecard() {
         }
         let mut interpreter_samples = Vec::with_capacity(samples);
         let mut native_samples = Vec::with_capacity(samples);
-        let mut latest_native = observed;
         for sample in 0..samples {
             let mut run_interpreter = || {
                 let started = Instant::now();
@@ -423,9 +422,9 @@ fn native_jit_pass_scorecard() {
             };
             let mut run_native = || {
                 let started = Instant::now();
-                latest_native = linked.execute(native_request());
+                let report = linked.execute(native_request());
                 native_samples.push(started.elapsed());
-                assert_semantic_report_matches(&latest_native, &expected, case);
+                assert_semantic_report_matches(&report, &expected, case);
             };
             if sample % 2 == 0 {
                 run_interpreter();
@@ -437,6 +436,12 @@ fn native_jit_pass_scorecard() {
         }
         let interpreter = median(interpreter_samples);
         let native = median(native_samples);
+        // Timed native samples intentionally use production defaults with
+        // telemetry disabled. Collect structural evidence in a separate run so
+        // `Instant::now()` and counter traffic are not part of `native_ns`.
+        let diagnostic_native =
+            linked.execute(interpreter_request().native_jit(NativeJitOptions::diagnostic()));
+        assert_semantic_report_matches(&diagnostic_native, &expected, case);
         let (
             native_calls,
             native_bails,
@@ -452,7 +457,7 @@ fn native_jit_pass_scorecard() {
             bounds_checks_elided,
             scalar_unroll_candidates,
             simd_candidates,
-        ) = match latest_native.telemetry.engine {
+        ) = match diagnostic_native.telemetry.engine {
             ExecutionEngineTelemetry::Interpreter => (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
             ExecutionEngineTelemetry::Native {
                 native_calls,
@@ -573,11 +578,13 @@ fn native_jit_pass_scorecard() {
             }
         }));
         if let Some(provider_calls) = provider_calls {
-            let expected_runs = 2_u64.saturating_mul(
-                1_u64
-                    .saturating_add(warmup as u64)
-                    .saturating_add(samples as u64),
-            );
+            let expected_runs = 2_u64
+                .saturating_mul(
+                    1_u64
+                        .saturating_add(warmup as u64)
+                        .saturating_add(samples as u64),
+                )
+                .saturating_add(1);
             assert_eq!(
                 provider_calls.load(Ordering::SeqCst),
                 expected_runs,

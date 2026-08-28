@@ -873,10 +873,10 @@ fn jit_planning_state_is_kept_out_of_verified_program_objects() {
     assert!(tier.contains("mod state;"));
     for required in [
         "struct VerifiedProgramIdentity",
-        "struct JitFunctionKey",
         "struct JitState",
         "from_executable_digest",
-        "ordinal:",
+        "ordinal_by_function_pointer: HashMap<usize, u32>",
+        "functions: Vec<JitFunctionState>",
     ] {
         assert!(
             state.contains(required),
@@ -907,6 +907,8 @@ fn jit_planning_state_is_kept_out_of_verified_program_objects() {
     assert!(state.contains("call_count: u32"));
     assert!(state.contains("branch_count: u32"));
     assert!(state.contains("profile: Option<Box<FunctionProfile>>"));
+    assert!(!state.contains("BTreeMap<JitFunctionKey"));
+    assert!(!state.contains(".clone();\n        self.functions"));
     for (name, source) in [
         ("interpreter", exec),
         ("native tier", tier),
@@ -1149,6 +1151,8 @@ fn jit_profiles_only_genuinely_dynamic_targets_and_branch_bias() {
     let root = workspace_root();
     let profile = read(&root.join("crates/rsscript-vm/src/reg_vm/model/profile.rs"));
     let inlining = read(&root.join("crates/rsscript-vm/src/reg_vm/native/passes/inlining.rs"));
+    let state = read(&root.join("crates/rsscript-vm/src/reg_vm/tier/state.rs"));
+    let exec = read(&root.join("crates/rsscript-vm/src/reg_vm/exec.rs"));
 
     assert!(profile.contains("call_sites: HashMap<usize, CallSiteFeedback>"));
     assert!(profile.contains("branch_sites: HashMap<usize, BranchFeedback>"));
@@ -1160,6 +1164,9 @@ fn jit_profiles_only_genuinely_dynamic_targets_and_branch_bias() {
     }
     assert!(inlining.contains("#[cfg(feature = \"jit-speculation\")]"));
     assert!(inlining.contains("NativeGuardClosureId"));
+    assert!(state.contains("#[cfg(feature = \"jit-speculation\")]\n    branch_count: u32"));
+    assert!(state.contains("pub(crate) fn should_record_call"));
+    assert!(!exec.contains("record_native_branch_feedback"));
 }
 
 #[test]

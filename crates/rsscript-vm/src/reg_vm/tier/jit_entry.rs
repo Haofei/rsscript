@@ -21,11 +21,9 @@ impl RegVm {
         let mut ip = 0usize;
         while let Some(instr) = func.code.get(ip) {
             self.tick()?;
-            #[cfg(feature = "native-jit")]
+            #[cfg(feature = "jit-speculation")]
             let instr_ip = ip;
             ip += 1;
-            #[cfg(feature = "native-jit")]
-            self.record_native_branch_feedback(func, instr, base, instr_ip)?;
             // Cross-function call: eligibility proved the callee cannot suspend and
             // the call graph is acyclic, so drive it to completion on a fresh frame
             // window above ours, exactly like `drive`'s `CallKnown` but synchronous.
@@ -64,7 +62,15 @@ impl RegVm {
                 self.set_reg(base + *dst, result);
                 continue;
             }
-            match self.try_exec_pure(instr, base, &mut ip)? {
+            match self.try_exec_pure(
+                instr,
+                base,
+                &mut ip,
+                #[cfg(feature = "jit-speculation")]
+                Some((func, instr_ip)),
+                #[cfg(not(feature = "jit-speculation"))]
+                None,
+            )? {
                 PureStep::Next => {}
                 PureStep::Return(value) => return Ok(value),
                 // Eligibility guarantees only pure instructions (and the
@@ -84,12 +90,18 @@ impl RegVm {
         let mut ip = 0usize;
         while let Some(instr) = func.code.get(ip) {
             self.tick()?;
-            #[cfg(feature = "native-jit")]
+            #[cfg(feature = "jit-speculation")]
             let instr_ip = ip;
             ip += 1;
-            #[cfg(feature = "native-jit")]
-            self.record_native_branch_feedback(func, instr, base, instr_ip)?;
-            match self.try_exec_pure(instr, base, &mut ip)? {
+            match self.try_exec_pure(
+                instr,
+                base,
+                &mut ip,
+                #[cfg(feature = "jit-speculation")]
+                Some((func, instr_ip)),
+                #[cfg(not(feature = "jit-speculation"))]
+                None,
+            )? {
                 PureStep::Next => {}
                 PureStep::Return(value) => return Ok(value),
                 PureStep::NotPure => {
@@ -670,7 +682,7 @@ impl RegVm {
                     target,
                 } => {
                     let taken = (stack[base + *cond] != 0) == *expected;
-                    #[cfg(feature = "native-jit")]
+                    #[cfg(feature = "jit-speculation")]
                     if self.native.is_some() {
                         self.jit_state
                             .record_branch_site(&func, frame.ip - 1, taken);
@@ -688,7 +700,7 @@ impl RegVm {
                 } => {
                     let taken =
                         eval_int_compare(*op, stack[base + *lhs], stack[base + *rhs]) == *expected;
-                    #[cfg(feature = "native-jit")]
+                    #[cfg(feature = "jit-speculation")]
                     if self.native.is_some() {
                         self.jit_state
                             .record_branch_site(&func, frame.ip - 1, taken);

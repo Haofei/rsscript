@@ -40,7 +40,7 @@ fn phase_typed_sdk_can_select_trusted_native_execution() {
     let native = linked.execute(
         ExecutionRequest::default()
             .limits(RunLimits::unbounded_for_trusted_host())
-            .native_jit(NativeJitOptions::default()),
+            .native_jit(NativeJitOptions::diagnostic()),
     );
 
     assert_eq!(native.outcome(), reference.outcome());

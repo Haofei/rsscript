@@ -143,9 +143,11 @@ fn native_engine_matches_the_verified_interpreter_corpus() {
         let interpreter = linked.execute(request());
         let native = linked.execute(request().native_jit(NativeJitOptions {
             cost_model: NativeCostModel::Report,
+            collect_telemetry: true,
             // Exercise whole-function call lowering for the two ABI/inlining
             // canaries; the rest of the corpus keeps production OSR enabled.
-            enable_osr: !matches!(*file, "direct-scalar-call.rss" | "static-inline-call.rss"),
+            enable_auto_osr: false,
+            eager_osr: !matches!(*file, "direct-scalar-call.rss" | "static-inline-call.rss"),
             ..NativeJitOptions::default()
         }));
 
@@ -280,6 +282,7 @@ fn bounded_step_accounting_matches_across_call_continuations() {
     let native = linked.execute(ExecutionRequest::default().limits(limits).native_jit(
         NativeJitOptions {
             cost_model: NativeCostModel::Off,
+            collect_telemetry: true,
             ..NativeJitOptions::default()
         },
     ));
@@ -304,6 +307,7 @@ fn bounded_step_accounting_matches_across_call_continuations() {
             .limits(RunLimits::bounded())
             .native_jit(NativeJitOptions {
                 cost_model: NativeCostModel::Report,
+                collect_telemetry: true,
                 ..NativeJitOptions::default()
             }),
     );
@@ -329,6 +333,7 @@ fn bounded_step_accounting_matches_across_call_continuations() {
             )
             .native_jit(NativeJitOptions {
                 cost_model: NativeCostModel::Off,
+                collect_telemetry: true,
                 ..NativeJitOptions::default()
             }),
     );
@@ -348,6 +353,7 @@ fn bounded_step_accounting_matches_across_call_continuations() {
             .limits(RunLimits::unbounded_for_trusted_host().with_cancellation(cancel))
             .native_jit(NativeJitOptions {
                 cost_model: NativeCostModel::Off,
+                collect_telemetry: true,
                 ..NativeJitOptions::default()
             }),
     );
@@ -383,6 +389,7 @@ fn continuation_controls_fail_before_codegen_and_match_every_step_boundary() {
         let native = linked.execute(ExecutionRequest::default().limits(limits).native_jit(
             NativeJitOptions {
                 cost_model: NativeCostModel::Off,
+                collect_telemetry: true,
                 ..NativeJitOptions::default()
             },
         ));
@@ -403,6 +410,7 @@ fn continuation_controls_fail_before_codegen_and_match_every_step_boundary() {
             .limits(RunLimits::unbounded_for_trusted_host().with_cancellation(cancelled))
             .native_jit(NativeJitOptions {
                 cost_model: NativeCostModel::Off,
+                collect_telemetry: true,
                 ..NativeJitOptions::default()
             }),
     );
@@ -424,6 +432,7 @@ fn continuation_controls_fail_before_codegen_and_match_every_step_boundary() {
                 ))
                 .native_jit(NativeJitOptions {
                     cost_model: NativeCostModel::Off,
+                    collect_telemetry: true,
                     ..NativeJitOptions::default()
                 }),
         );
@@ -464,7 +473,7 @@ fn cancellation_during_a_closed_native_continuation_is_observed() {
     let report = linked.execute(
         ExecutionRequest::default()
             .limits(RunLimits::unbounded_for_trusted_host().with_cancellation(token))
-            .native_jit(NativeJitOptions::default()),
+            .native_jit(NativeJitOptions::default().with_telemetry()),
     );
     canceller.join().expect("cancellation thread completes");
     assert_eq!(report.termination_reason(), TerminationReason::Cancelled);
@@ -555,6 +564,7 @@ fn provider_barrier_executes_once_and_reenters_native() {
             .trace(TracePolicy::MetadataOnly)
             .native_jit(NativeJitOptions {
                 cost_model: NativeCostModel::Off,
+                collect_telemetry: true,
                 ..NativeJitOptions::default()
             }),
     );

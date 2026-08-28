@@ -102,7 +102,7 @@ fn native_call_mut_args_supported(mut_args: &[usize], param_tys: &[NativeTy]) ->
     })
 }
 
-#[cfg(feature = "native-jit")]
+#[cfg(feature = "jit-speculation")]
 pub(in crate::reg_vm) fn native_scalar_callee_pending_on_branch_profile(
     jit_state: &JitState,
     func: &RegFunction,
@@ -219,6 +219,7 @@ fn native_compile_direct_scalar_callee(
     if native.whole_shape_count(&instance) >= MAX_NATIVE_SHAPE_VERSIONS {
         return None;
     }
+    #[cfg(feature = "jit-speculation")]
     if native_scalar_callee_pending_on_branch_profile(jit_state, callee) {
         return None;
     }
@@ -632,6 +633,7 @@ impl RegVm {
         if native_status == NATIVE_STATUS_NOT_ELIGIBLE {
             return NativeAttempt::Fallback;
         }
+        #[cfg(feature = "jit-speculation")]
         if native_status == NATIVE_STATUS_PROFILE_PENDING {
             if self.jit_state.call_count(func) < PROFILE_RECORD_LIMIT {
                 return NativeAttempt::Fallback;
@@ -877,6 +879,7 @@ impl RegVm {
                             // monomorphic decision, the verdict is NOT invariant —
                             // re-attempt on a later (warmer) call. Don't cache and
                             // don't mark NOT_ELIGIBLE; just fall back this once.
+                            #[cfg(feature = "jit-speculation")]
                             if native_translation_pending_on_profile(
                                 &unit, func, profile, call_count,
                             ) {
@@ -2991,14 +2994,22 @@ impl RegVm {
                 // cache unpopulated so a later (warmer) header hit retries; once the
                 // profile settles (or there is no pending site) the `None`/`Some`
                 // verdict is stable and we cache it.
-                if entry.is_some()
-                    || !native_translation_pending_on_profile(
-                        &unit,
-                        func,
-                        self.jit_state.profile(func),
-                        self.jit_state.call_count(func),
-                    )
-                {
+                let profile_is_stable = {
+                    #[cfg(feature = "jit-speculation")]
+                    {
+                        !native_translation_pending_on_profile(
+                            &unit,
+                            func,
+                            self.jit_state.profile(func),
+                            self.jit_state.call_count(func),
+                        )
+                    }
+                    #[cfg(not(feature = "jit-speculation"))]
+                    {
+                        true
+                    }
+                };
+                if entry.is_some() || profile_is_stable {
                     if entry.is_some() && native.collect_stats {
                         native.stats.shape_versions += 1;
                         if osr_version_key.type_arguments.is_known()

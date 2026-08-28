@@ -823,6 +823,7 @@ impl NativeRegionAnalysis {
         }
     }
 
+    #[cfg(feature = "jit-speculation")]
     pub(in crate::reg_vm) fn has_reachable_conditional_branch(&self, code: &[RegInstr]) -> bool {
         self.liveness.cfg.reachable_ips().into_iter().any(|ip| {
             matches!(

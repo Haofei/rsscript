@@ -53,8 +53,17 @@ then returns to a VM-owned barrier which performs the next monotonic clock poll.
   worth implementing; they do not change execution semantics. Because dynamic
   missed-work classification runs on the interpreter hot path, it is collected
   only under the explicit `NativeCostModel::Report` diagnostic mode. Ordinary
-  telemetry and the default enforcing cost model do not pay that per-instruction
-  cost.
+  production execution defaults detailed telemetry off, and the default enforcing
+  cost model does not pay that per-instruction cost. `NativeJitOptions::diagnostic`
+  or `with_telemetry` is the explicit opt-in for timings and counters.
+- Branch and dynamic-call feedback exists only under the VM-only
+  `jit-speculation` research feature. The stable `native-jit` build contains no
+  profile maps or profile counters and performs no feedback write on interpreted
+  branches or calls. Research feedback records the branch decision already
+  computed by the interpreter; it may not evaluate the condition a second time.
+- Production OSR distinguishes threshold-driven automatic triggering from eager
+  first-header triggering. Automatic OSR is enabled by default; eager OSR is off
+  by default and reserved for explicit differential or diagnostic execution.
 - ABI v3 distinguishes a planned continuation `Yield` from `Deopt`. A yield
   commits completed region work, materializes its bounded live scalar state, and
   resumes the VM at the barrier instruction. A deopt aborts transactional work
@@ -125,6 +134,9 @@ state. Differential tests against the interpreter enforce these invariants.
 Profile-guided closure PIC and branch-side-exit speculation are excluded from the
 stable SDK path. They remain behind the VM-only `jit-speculation` research feature
 until a canonical compiler workload demonstrates a repeatable end-to-end benefit.
+The evaluation-local function-state table owns the program identity once and uses
+stable ordinals to index a dense function-state vector; program digests are not
+cloned into per-function lookup keys.
 
 The stable native path contains a deliberately narrow read-only LICM subset. Its
 lazy loop-activation memoization is emitted only when verifier-bound typed facts
