@@ -900,16 +900,31 @@ pub struct EvalExecutionReport {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+// The native fields intentionally stay on the tagged variant: this is a
+// versioned, machine-readable report schema, and boxing them would change its
+// JSON shape. Reports are produced once per evaluation, never on the VM/JIT
+// dispatch hot path.
+#[allow(clippy::large_enum_variant)]
 pub enum ExecutionEngineTelemetry {
     #[default]
     Interpreter,
     Native {
         considered: u64,
         compiled: u64,
+        baseline_compiles: u64,
+        optimized_compiles: u64,
+        baseline_calls: u64,
+        optimized_calls: u64,
         native_calls: u64,
         native_bails: u64,
         osr_entries: u64,
         continuation_entries: u64,
+        /// Interpreter positions tested against the continuation candidate bitset.
+        continuation_candidate_checks: u64,
+        /// Candidate positions that performed full native preparation.
+        continuation_full_probes: u64,
+        /// Static continuation instance keys constructed after candidate gating.
+        continuation_instance_key_builds: u64,
         continuation_yields: u64,
         /// Direct source instructions represented by admitted continuation code.
         continuation_compiled_source_instructions: u64,

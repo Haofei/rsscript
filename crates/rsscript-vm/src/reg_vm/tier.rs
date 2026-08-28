@@ -27,6 +27,11 @@ use compile_result::{native_region_is_promotion_eligible, record_native_compile_
 use osr_plan::*;
 pub(crate) use state::JitState;
 
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn osr_controls_unarmed_for_dispatch(limits: &VmLimits) -> bool {
+    osr_execution_controls_unarmed(limits)
+}
+
 /// Step 1 cost model. Consult the profitability gate for a region that already
 /// translated (i.e. is ELIGIBLE native code). Returns `true` only when the gate is
 /// in `enforce` mode AND the region is unprofitable — the caller then keeps the
@@ -786,20 +791,57 @@ impl RegVm {
                                     .set_native_status(func, NATIVE_STATUS_NOT_ELIGIBLE);
                                 None
                             } else {
-                                let Some(admission) =
-                                    begin_native_compile(native, 1, NativeCodeTier::Baseline)
+                                // The default host policy already owns one
+                                // `opt_level=speed` module. Under an explicitly
+                                // tiered policy, a whole function with an
+                                // internal backedge may execute millions of
+                                // iterations in its first native activation;
+                                // static call-count promotion cannot observe
+                                // that work. Compile such bodies directly into
+                                // the optimized module instead of publishing a
+                                // baseline copy that can never accumulate true
+                                // backedge heat.
+                                let initial_tier =
+                                    if has_backedge && native.optimized_module.is_some() {
+                                        NativeCodeTier::Optimized
+                                    } else {
+                                        NativeCodeTier::Baseline
+                                    };
+                                let Some(admission) = begin_native_compile(native, 1, initial_tier)
                                 else {
                                     native.cache.insert(version_key.clone(), None);
                                     return NativeAttempt::Fallback;
                                 };
-                                let compiled = if native.force_all_safepoints {
-                                    native.baseline_module.compile_forcing_all_bails(&jit_fn)
-                                } else {
-                                    match native.forced_safepoint {
-                                        Some(site) => native
-                                            .baseline_module
-                                            .compile_forcing_bail(&jit_fn, site),
-                                        None => native.baseline_module.compile(&jit_fn),
+                                let compiled = match initial_tier {
+                                    NativeCodeTier::Baseline => {
+                                        if native.force_all_safepoints {
+                                            native
+                                                .baseline_module
+                                                .compile_forcing_all_bails(&jit_fn)
+                                        } else {
+                                            match native.forced_safepoint {
+                                                Some(site) => native
+                                                    .baseline_module
+                                                    .compile_forcing_bail(&jit_fn, site),
+                                                None => native.baseline_module.compile(&jit_fn),
+                                            }
+                                        }
+                                    }
+                                    NativeCodeTier::Optimized => {
+                                        let module = native
+                                            .optimized_module
+                                            .as_mut()
+                                            .expect("optimized initial tier requires module");
+                                        if native.force_all_safepoints {
+                                            module.compile_forcing_all_bails(&jit_fn)
+                                        } else {
+                                            match native.forced_safepoint {
+                                                Some(site) => {
+                                                    module.compile_forcing_bail(&jit_fn, site)
+                                                }
+                                                None => module.compile(&jit_fn),
+                                            }
+                                        }
                                     }
                                 };
                                 match compiled {
@@ -808,21 +850,35 @@ impl RegVm {
                                             native,
                                             admission,
                                             &[id],
-                                            NativeCodeTier::Baseline,
+                                            initial_tier,
                                         ) {
                                             native.cache.insert(version_key.clone(), None);
                                             return NativeAttempt::Fallback;
                                         }
                                         let verify_native =
                                             cfg!(debug_assertions) || jit_native_verify_is_strict();
-                                        if verify_native
-                                            && let Err(err) = jit_verify_compiled_native(
-                                                &native.baseline_module,
-                                                id,
-                                                &jit_fn,
-                                                native.forced_safepoint,
-                                            )
-                                        {
+                                        let verification =
+                                            verify_native.then(|| match initial_tier {
+                                                NativeCodeTier::Baseline => {
+                                                    jit_verify_compiled_native(
+                                                        &native.baseline_module,
+                                                        id,
+                                                        &jit_fn,
+                                                        native.forced_safepoint,
+                                                    )
+                                                }
+                                                NativeCodeTier::Optimized => {
+                                                    jit_verify_compiled_native(
+                                                        native.optimized_module.as_ref().expect(
+                                                            "optimized initial tier module",
+                                                        ),
+                                                        id,
+                                                        &jit_fn,
+                                                        native.forced_safepoint,
+                                                    )
+                                                }
+                                            });
+                                        if let Some(Err(err)) = verification {
                                             debug_assert!(false, "native verifier failed: {err}");
                                             if jit_native_verify_is_strict() {
                                                 if native.collect_stats {
@@ -835,9 +891,10 @@ impl RegVm {
                                             native,
                                             id,
                                             &jit_fn,
-                                            NativeCodeTier::Baseline,
+                                            initial_tier,
                                         );
-                                        if native.optimized_module.is_some()
+                                        if matches!(initial_tier, NativeCodeTier::Baseline)
+                                            && native.optimized_module.is_some()
                                             && native_region_is_promotion_eligible(&jit_fn)
                                         {
                                             native
@@ -901,13 +958,26 @@ impl RegVm {
                     };
                     let first_static_instance = version_key.instance.type_arguments.is_known()
                         && !native.has_whole_instance(&version_key.instance);
-                    native.cache.insert(version_key.clone(), entry.clone());
+                    let initially_optimized =
+                        entry
+                            .as_ref()
+                            .is_some_and(|(_, _, _, has_backedge, _, _, _)| {
+                                *has_backedge && native.optimized_module.is_some()
+                            });
+                    if initially_optimized {
+                        native.cache.insert(version_key.clone(), None);
+                        native
+                            .optimized_cache
+                            .insert(version_key.clone(), entry.clone().expect("compiled entry"));
+                    } else {
+                        native.cache.insert(version_key.clone(), entry.clone());
+                    }
                     if entry.is_some() {
                         native
                             .whole_controllers
                             .entry(version_key.clone())
                             .or_default()
-                            .compiled(false);
+                            .compiled(initially_optimized);
                     }
                     if entry.is_some() && native.collect_stats {
                         native.stats.shape_versions += 1;
@@ -1235,7 +1305,10 @@ impl RegVm {
                             .expect("Ints pinned");
                         scratch.args[index] = slice.as_ptr() as i64;
                         scratch.lens[index] = slice.len() as i64;
-                        flat_args.push(vm_jit::FlatBufferArg::Int(slice));
+                        flat_args.push(vm_jit::IndexedFlatBufferArg::new(
+                            index,
+                            vm_jit::FlatBufferArg::Int(slice),
+                        ));
                     }
                     NativeTy::FlatIntMut => {
                         let slice = flat_mut_iter
@@ -1244,7 +1317,10 @@ impl RegVm {
                             .expect("Ints mut pinned");
                         scratch.args[index] = slice.as_mut_ptr() as i64;
                         scratch.lens[index] = slice.len() as i64;
-                        flat_args.push(vm_jit::FlatBufferArg::IntMut(slice));
+                        flat_args.push(vm_jit::IndexedFlatBufferArg::new(
+                            index,
+                            vm_jit::FlatBufferArg::IntMut(slice),
+                        ));
                     }
                     NativeTy::FlatFloat => {
                         let slice = flat_iter
@@ -1253,7 +1329,10 @@ impl RegVm {
                             .expect("Floats pinned");
                         scratch.args[index] = slice.as_ptr() as i64;
                         scratch.lens[index] = slice.len() as i64;
-                        flat_args.push(vm_jit::FlatBufferArg::Float(slice));
+                        flat_args.push(vm_jit::IndexedFlatBufferArg::new(
+                            index,
+                            vm_jit::FlatBufferArg::Float(slice),
+                        ));
                     }
                     NativeTy::FlatFloatMut => {
                         let slice = flat_mut_iter
@@ -1262,7 +1341,10 @@ impl RegVm {
                             .expect("Floats mut pinned");
                         scratch.args[index] = slice.as_mut_ptr() as i64;
                         scratch.lens[index] = slice.len() as i64;
-                        flat_args.push(vm_jit::FlatBufferArg::FloatMut(slice));
+                        flat_args.push(vm_jit::IndexedFlatBufferArg::new(
+                            index,
+                            vm_jit::FlatBufferArg::FloatMut(slice),
+                        ));
                     }
                     _ => {}
                 }
@@ -1294,7 +1376,7 @@ impl RegVm {
                     .as_ref()
                     .expect("optimized dispatch requires optimized module"),
             };
-            let result = module.call_with_host_ctx_at_depth(
+            let result = module.call_with_indexed_flat_args_at_depth(
                 id,
                 &scratch.args,
                 &scratch.lens,
@@ -1548,8 +1630,11 @@ impl RegVm {
     /// Determinism: this only decides *whether/when* to attempt OSR; `try_osr` is
     /// byte-identical to interpretation, so triggering never changes a value.
     #[cfg(feature = "native-jit")]
-    pub(super) fn resolve_osr_candidates(&mut self, func: &RegFunction) -> OsrCandidates {
-        let function = self.jit_state.function_ordinal(func);
+    pub(super) fn resolve_osr_candidates(
+        &mut self,
+        function: usize,
+        func: &RegFunction,
+    ) -> OsrCandidates {
         if let Some(candidates) = self
             .native
             .as_ref()
@@ -1594,7 +1679,8 @@ impl RegVm {
     #[cfg(feature = "native-jit")]
     #[allow(dead_code)]
     pub(super) fn resolve_osr_candidate(&mut self, func: &RegFunction) -> Option<usize> {
-        self.resolve_osr_candidates(func).first_header()
+        let function = self.jit_state.function_ordinal(func);
+        self.resolve_osr_candidates(function, func).first_header()
     }
 
     /// Run one conservative scalar continuation region beginning at the current
@@ -1603,6 +1689,7 @@ impl RegVm {
     #[cfg(feature = "native-jit")]
     pub(super) fn try_continuation_region(
         &mut self,
+        function: usize,
         func: &RegFunction,
         base: usize,
         entry_ip: usize,
@@ -1616,7 +1703,12 @@ impl RegVm {
         // the surrounding barriers. Deadlines are admitted only for finite
         // regions below; the next VM-owned barrier polls the clock.
         let cancel_armed = self.limits.cancel.is_some();
-        let function = self.jit_state.function_ordinal(func);
+        if let Some(native) = self.native.as_mut()
+            && native.collect_stats
+        {
+            native.stats.continuation_full_probes =
+                native.stats.continuation_full_probes.saturating_add(1);
+        }
         let Some(verified_facts) = self
             .native
             .as_ref()
@@ -1628,6 +1720,14 @@ impl RegVm {
         let Some(function_facts) = verified_facts.function(function) else {
             return false;
         };
+        if let Some(native) = self.native.as_mut()
+            && native.collect_stats
+        {
+            native.stats.continuation_instance_key_builds = native
+                .stats
+                .continuation_instance_key_builds
+                .saturating_add(1);
+        }
         let Some(instance) = JitInstanceKey::from_facts(function, function_facts) else {
             if let Some(native) = self.native.as_mut()
                 && native.collect_stats
@@ -1636,19 +1736,12 @@ impl RegVm {
             }
             return false;
         };
-        let is_candidate = {
-            let Some(native) = self.native.as_mut() else {
-                return false;
-            };
+        debug_assert!(self.native.as_ref().is_some_and(|native| {
             native
                 .continuation_entry_sets
-                .entry(function)
-                .or_insert_with(|| Rc::new(ContinuationEntrySet::from_code(&func.code)))
-                .contains(entry_ip)
-        };
-        if !is_candidate {
-            return false;
-        }
+                .get(&function)
+                .is_some_and(|entries| entries.contains(entry_ip))
+        }));
         let region = {
             let Some(native) = self.native.as_mut() else {
                 return false;
@@ -1703,41 +1796,26 @@ impl RegVm {
 
         // Continuations admit scalars plus opaque read-only heap handles. Flat
         // borrows and unsupported runtime values remain outside this boundary.
-        let shape = ShapeKey::from_shapes(region.live_in_regs.iter().map(|reg| {
-            let reg = *reg;
+        let mut live_in_shapes = Vec::with_capacity(region.live_in_regs.len());
+        for &reg in region.live_in_regs.iter() {
             let slot = base + reg;
             if !self.written.get(slot).copied().unwrap_or(false) {
-                NativeParamShape::Unsupported
-            } else {
-                native_param_shape_with_fact(
-                    &self.stack[slot],
-                    function_facts
-                        .reg_types
-                        .get(reg)
-                        .copied()
-                        .unwrap_or_default(),
-                )
+                return false;
             }
-        }));
-        let supported_frame = region.live_in_regs.iter().all(|reg| {
-            let reg = *reg;
-            let slot = base + reg;
-            !self.written.get(slot).copied().unwrap_or(false)
-                || !matches!(
-                    native_param_shape_with_fact(
-                        &self.stack[slot],
-                        function_facts
-                            .reg_types
-                            .get(reg)
-                            .copied()
-                            .unwrap_or_default(),
-                    ),
-                    NativeParamShape::Unsupported
-                )
-        });
-        if !supported_frame {
-            return false;
+            let shape = native_param_shape_with_fact(
+                &self.stack[slot],
+                function_facts
+                    .reg_types
+                    .get(reg)
+                    .copied()
+                    .unwrap_or_default(),
+            );
+            if matches!(shape, NativeParamShape::Unsupported) {
+                return false;
+            }
+            live_in_shapes.push(shape);
         }
+        let shape = ShapeKey::from_shapes(live_in_shapes);
         let version_key = ContinuationVersionKey {
             instance: instance.clone(),
             entry: entry_ip,
@@ -1775,14 +1853,20 @@ impl RegVm {
             return false;
         }
         let param_native_types: Vec<Option<NativeTy>> = (0..func.params)
-            .map(|reg| match self.reg(base + reg) {
-                VmValue::Int(_) => Some(NativeTy::Int),
-                VmValue::Bool(_) => Some(NativeTy::Bool),
-                VmValue::Float(_) => Some(NativeTy::Float),
-                value if native_param_shape(value) == NativeParamShape::Handle => {
-                    Some(NativeTy::Handle)
-                }
-                _ => None,
+            .map(|reg| {
+                function_facts
+                    .reg_types
+                    .get(reg)
+                    .and_then(|fact| fact.native_ty())
+                    .or_else(|| match self.reg(base + reg) {
+                        VmValue::Int(_) => Some(NativeTy::Int),
+                        VmValue::Bool(_) => Some(NativeTy::Bool),
+                        VmValue::Float(_) => Some(NativeTy::Float),
+                        value if native_param_shape(value) == NativeParamShape::Handle => {
+                            Some(NativeTy::Handle)
+                        }
+                        _ => None,
+                    })
             })
             .collect();
 
@@ -2134,8 +2218,12 @@ impl RegVm {
     }
 
     #[cfg(feature = "native-jit")]
-    pub(super) fn has_continuation_region(&mut self, func: &RegFunction) -> bool {
-        let function = self.jit_state.function_ordinal(func);
+    pub(super) fn has_continuation_region(
+        &mut self,
+        function: usize,
+        func: &RegFunction,
+        entries: &ContinuationEntrySet,
+    ) -> bool {
         let Some(native) = self.native.as_mut() else {
             return false;
         };
@@ -2150,11 +2238,6 @@ impl RegVm {
         // quadratic in generated call chains, while the first few barriers cover
         // the normal prelude/aggregate setup shapes. Later entries remain lazy.
         const MAX_EAGER_CONTINUATION_PROBES: usize = 8;
-        let entries = native
-            .continuation_entry_sets
-            .entry(function)
-            .or_insert_with(|| Rc::new(ContinuationEntrySet::from_code(&func.code)))
-            .clone();
         let has_region = entries
             .iter()
             .take(MAX_EAGER_CONTINUATION_PROBES)
@@ -2177,7 +2260,13 @@ impl RegVm {
     }
 
     #[cfg(feature = "native-jit")]
-    pub(super) fn try_osr(&mut self, func: &RegFunction, base: usize, header_ip: usize) -> bool {
+    pub(super) fn try_osr(
+        &mut self,
+        function: usize,
+        func: &RegFunction,
+        base: usize,
+        header_ip: usize,
+    ) -> bool {
         if JitCallCtx::is_active() {
             return false;
         }
@@ -2197,7 +2286,7 @@ impl RegVm {
         if let Some(native) = self.native.as_mut() {
             native.osr_dynamic_bail = false;
         }
-        let native_key = self.jit_state.function_ordinal(func);
+        let native_key = function;
         let Some(verified_facts) = self
             .native
             .as_ref()
@@ -3413,7 +3502,10 @@ impl RegVm {
                     };
                     scratch.window[*reg] = slice.as_ptr() as i64;
                     scratch.lens[*reg] = slice.len() as i64;
-                    flat_args.push(vm_jit::FlatBufferArg::Int(slice));
+                    flat_args.push(vm_jit::IndexedFlatBufferArg::new(
+                        *reg,
+                        vm_jit::FlatBufferArg::Int(slice),
+                    ));
                 }
                 NativeTy::FlatFloat => {
                     let Some(slice) = guard.as_floats_slice() else {
@@ -3421,7 +3513,10 @@ impl RegVm {
                     };
                     scratch.window[*reg] = slice.as_ptr() as i64;
                     scratch.lens[*reg] = slice.len() as i64;
-                    flat_args.push(vm_jit::FlatBufferArg::Float(slice));
+                    flat_args.push(vm_jit::IndexedFlatBufferArg::new(
+                        *reg,
+                        vm_jit::FlatBufferArg::Float(slice),
+                    ));
                 }
                 _ => unreachable!("shared flat slot has mutable/non-flat type"),
             }
@@ -3457,13 +3552,19 @@ impl RegVm {
                     let Some(slice) = guard.as_ints_mut_slice() else {
                         unreachable!("flat kind validated before pinning")
                     };
-                    flat_args.push(vm_jit::FlatBufferArg::IntMut(slice));
+                    flat_args.push(vm_jit::IndexedFlatBufferArg::new(
+                        *reg,
+                        vm_jit::FlatBufferArg::IntMut(slice),
+                    ));
                 }
                 NativeTy::FlatFloatMut => {
                     let Some(slice) = guard.as_floats_mut_slice() else {
                         unreachable!("flat kind validated before pinning")
                     };
-                    flat_args.push(vm_jit::FlatBufferArg::FloatMut(slice));
+                    flat_args.push(vm_jit::IndexedFlatBufferArg::new(
+                        *reg,
+                        vm_jit::FlatBufferArg::FloatMut(slice),
+                    ));
                 }
                 _ => unreachable!("mutable flat owner has non-mutable type"),
             }
@@ -3513,7 +3614,8 @@ impl RegVm {
                 .as_ref()
                 .expect("optimized OSR dispatch requires optimized module"),
         };
-        let result = module.call_with_host_ctx_at_depth(
+        flat_args.sort_unstable_by_key(|proof| proof.index);
+        let result = module.call_with_indexed_flat_args_at_depth(
             id,
             &scratch.window,
             &scratch.lens,
@@ -3595,7 +3697,7 @@ impl RegVm {
                         scratch.restore(self.native.as_mut());
                         return false;
                     };
-                    let Some(value) = JitHostCallCtx::from_token(heap_tx.host_ctx())
+                    let Some(value) = JitHostCallCtx::active()
                         .and_then(|ctx| ctx.heap_read_handle(handle, |value| Some(value.clone())))
                     else {
                         heap_tx.abort();
@@ -3604,7 +3706,7 @@ impl RegVm {
                     };
                     handle_liveouts.push((base + reg, value));
                 }
-                let Some(materialize_ctx) = JitHostCallCtx::from_token(heap_tx.host_ctx()) else {
+                let Some(materialize_ctx) = JitHostCallCtx::active() else {
                     heap_tx.abort();
                     scratch.restore(self.native.as_mut());
                     return false;

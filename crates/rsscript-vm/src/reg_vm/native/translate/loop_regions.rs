@@ -1308,11 +1308,29 @@ impl CanonicalLoopGraph {
         if cond_ip > body_end {
             return None;
         }
-        let exit = match code.get(cond_ip)? {
+        let branch_target = match code.get(cond_ip)? {
             RegInstr::JumpIfIntCompare { target, .. } | RegInstr::JumpIfBool { target, .. } => {
                 *target
             }
             _ => return None,
+        };
+        // The current MIR lowering expresses `while cond { body }` as either
+        // `branch(exit) / fallthrough(body)` or as
+        // `branch(body) / fallthrough(jump exit)`. Treat the latter's one-word
+        // trampoline as the conditional's exit edge; older recognition only
+        // accepted the first shape and silently disabled automatic OSR for every
+        // loop produced by the newer lowering.
+        let (exit, exit_trampoline) = if branch_target > body_end {
+            (branch_target, None)
+        } else {
+            let trampoline = cond_ip.checked_add(1)?;
+            let RegInstr::Jump { target } = code.get(trampoline)? else {
+                return None;
+            };
+            if *target <= body_end {
+                return None;
+            }
+            (*target, Some(trampoline))
         };
         if exit <= body_end || exit > n {
             return None;
@@ -1324,7 +1342,9 @@ impl CanonicalLoopGraph {
                 return None;
             }
             match instr {
-                RegInstr::Jump { target } if !in_region(*target) => return None,
+                RegInstr::Jump { target } if !in_region(*target) && Some(ip) != exit_trampoline => {
+                    return None;
+                }
                 RegInstr::JumpIfBool { target, .. } | RegInstr::JumpIfIntCompare { target, .. }
                     if ip != cond_ip && !in_region(*target) =>
                 {
@@ -1677,6 +1697,32 @@ mod canonical_loop_tests {
         ]
     }
 
+    fn inverted_mir_loop() -> Vec<RegInstr> {
+        vec![
+            RegInstr::LoadInt { dst: 0, value: 0 },
+            RegInstr::LoadInt { dst: 1, value: 8 },
+            RegInstr::LoadInt { dst: 2, value: 1 },
+            RegInstr::LessInt {
+                dst: 3,
+                lhs: 0,
+                rhs: 1,
+            },
+            RegInstr::JumpIfBool {
+                cond: 3,
+                expected: true,
+                target: 6,
+            },
+            RegInstr::Jump { target: 8 },
+            RegInstr::AddInt {
+                dst: 0,
+                lhs: 0,
+                rhs: 2,
+            },
+            RegInstr::Jump { target: 3 },
+            RegInstr::Return { src: 0 },
+        ]
+    }
+
     #[test]
     fn canonical_facts_own_preheader_latch_exit_and_induction_identity() {
         let code = counted_loop(1);
@@ -1697,6 +1743,16 @@ mod canonical_loop_tests {
             })
         );
         assert_eq!(detect_natural_loop_at(&code, 3), Some(facts.region));
+    }
+
+    #[test]
+    fn canonical_facts_accept_mir_branch_body_exit_trampoline_shape() {
+        let code = inverted_mir_loop();
+        let facts = canonical_loop_at(&code, 3).expect("current MIR while loop is canonical");
+        assert_eq!(facts.region, OsrLoop { header: 3, exit: 8 });
+        assert_eq!(facts.condition, 4);
+        assert_eq!(&*facts.latches, &[7]);
+        assert_eq!(&*facts.exits, &[8]);
     }
 
     #[test]
@@ -1878,9 +1934,21 @@ pub(in crate::reg_vm) fn detect_single_natural_loop(code: &[RegInstr]) -> Option
     // The condition must be a `JumpIfIntCompare`/`JumpIfBool` whose `target` is the
     // post-loop exit (the fall-through stays in the loop body). The exit must lie
     // outside the body.
-    let exit = match &code[cond_ip] {
+    let branch_target = match &code[cond_ip] {
         RegInstr::JumpIfIntCompare { target, .. } | RegInstr::JumpIfBool { target, .. } => *target,
         _ => return None,
+    };
+    let (exit, exit_trampoline) = if branch_target > body_end {
+        (branch_target, None)
+    } else {
+        let trampoline = cond_ip.checked_add(1)?;
+        let RegInstr::Jump { target } = code.get(trampoline)? else {
+            return None;
+        };
+        if *target <= body_end {
+            return None;
+        }
+        (*target, Some(trampoline))
     };
     // The loop body is `header..=body_end`; the exit must be after it (the loop's
     // only way out). A header whose exit target points back inside the body is not
@@ -1900,7 +1968,7 @@ pub(in crate::reg_vm) fn detect_single_natural_loop(code: &[RegInstr]) -> Option
         let in_region = |t: usize| t >= header && t < exit;
         match &code[i] {
             RegInstr::Jump { target } => {
-                if !in_region(*target) {
+                if !in_region(*target) && Some(i) != exit_trampoline {
                     return None;
                 }
             }

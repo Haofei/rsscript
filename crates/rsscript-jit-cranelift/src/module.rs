@@ -340,6 +340,37 @@ pub(crate) struct NativeGroupMember {
 /// module's function table). Monotonic; wraparound is not a practical concern.
 static NEXT_MODULE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+fn flat_proof_matches(
+    arg: &mut FlatBufferArg<'_>,
+    expected_type: JitValueType,
+    expected_ptr: Option<&i64>,
+    expected_len: Option<&i64>,
+) -> bool {
+    let (ptr, len, compatible) = match arg {
+        FlatBufferArg::Int(values) => (
+            values.as_ptr() as i64,
+            values.len() as i64,
+            expected_type == JitValueType::FlatInt,
+        ),
+        FlatBufferArg::IntMut(values) => (
+            values.as_mut_ptr() as i64,
+            values.len() as i64,
+            expected_type == JitValueType::FlatIntMut,
+        ),
+        FlatBufferArg::Float(values) => (
+            values.as_ptr() as i64,
+            values.len() as i64,
+            expected_type == JitValueType::FlatFloat,
+        ),
+        FlatBufferArg::FloatMut(values) => (
+            values.as_mut_ptr() as i64,
+            values.len() as i64,
+            expected_type == JitValueType::FlatFloatMut,
+        ),
+    };
+    compatible && expected_ptr == Some(&ptr) && expected_len == Some(&len)
+}
+
 /// Owns the JIT-compiled machine code. Compiled functions live as long as the
 /// module, so callers keep this alive and invoke by [`CompiledId`].
 pub struct NativeModule {
@@ -374,7 +405,7 @@ pub struct PreparedCall<'module, 'buffers> {
     lens: Vec<i64>,
     host_ctx: HostCtx,
     logical_depth: LogicalCallDepth,
-    flat_args: Vec<FlatBufferArg<'buffers>>,
+    flat_args: Vec<IndexedFlatBufferArg<'buffers>>,
 }
 
 /// Per-activation host context and bounded-execution cells for a compact mixed-
@@ -397,30 +428,44 @@ impl<'module, 'buffers> PreparedCall<'module, 'buffers> {
     }
 
     pub fn readonly_int(mut self, values: &'buffers [i64]) -> Self {
+        let index = self.args.len();
         self.args.push(values.as_ptr() as i64);
         self.lens.push(values.len() as i64);
-        self.flat_args.push(FlatBufferArg::Int(values));
+        self.flat_args
+            .push(IndexedFlatBufferArg::new(index, FlatBufferArg::Int(values)));
         self
     }
 
     pub fn unique_int_mut(mut self, values: &'buffers mut [i64]) -> Self {
+        let index = self.args.len();
         self.args.push(values.as_mut_ptr() as i64);
         self.lens.push(values.len() as i64);
-        self.flat_args.push(FlatBufferArg::IntMut(values));
+        self.flat_args.push(IndexedFlatBufferArg::new(
+            index,
+            FlatBufferArg::IntMut(values),
+        ));
         self
     }
 
     pub fn readonly_float(mut self, values: &'buffers [f64]) -> Self {
+        let index = self.args.len();
         self.args.push(values.as_ptr() as i64);
         self.lens.push(values.len() as i64);
-        self.flat_args.push(FlatBufferArg::Float(values));
+        self.flat_args.push(IndexedFlatBufferArg::new(
+            index,
+            FlatBufferArg::Float(values),
+        ));
         self
     }
 
     pub fn unique_float_mut(mut self, values: &'buffers mut [f64]) -> Self {
+        let index = self.args.len();
         self.args.push(values.as_mut_ptr() as i64);
         self.lens.push(values.len() as i64);
-        self.flat_args.push(FlatBufferArg::FloatMut(values));
+        self.flat_args.push(IndexedFlatBufferArg::new(
+            index,
+            FlatBufferArg::FloatMut(values),
+        ));
         self
     }
 
@@ -435,7 +480,7 @@ impl<'module, 'buffers> PreparedCall<'module, 'buffers> {
     }
 
     pub fn execute(mut self) -> NativeOutcome {
-        self.module.call_with_host_ctx_at_depth(
+        self.module.call_with_indexed_flat_args_at_depth(
             self.function,
             &self.args,
             &self.lens,
@@ -758,8 +803,8 @@ impl NativeModule {
     }
 
     /// Compile a function that may become the target of a native-to-native call.
-    /// Eligible infallible scalar leaves receive a second frame-free entry; normal
-    /// top-level compilation never pays that code-size cost.
+    /// Eligible infallible scalar leaves use one frame-free canonical body plus a
+    /// small stable-frame adapter, avoiding a second full function lowering.
     pub fn compile_native_callee(
         &mut self,
         function: &JitFunction,
@@ -946,56 +991,91 @@ impl NativeModule {
             .declare_function(&name, Linkage::Local, &self.ctx.func.signature)
             .map_err(|e| err("declare", e))?;
 
-        let codegen = build_function(
-            &mut self.ctx.func,
-            &mut self.fbctx,
-            &mut self.module,
-            self.imports.clone(),
-            function,
-            forced,
-            osr_header,
-            &native_callees,
-            id,
-            &[],
-            limit_checks,
-            native_call_depth,
-            validated.assigned_in(),
-            validated.deopt_in(),
-        )?;
-
-        self.module
-            .define_function(id, &mut self.ctx)
-            .map_err(|e| err("define", e))?;
-        let mut code_size_bytes = self
-            .ctx
-            .compiled_code()
-            .map(|code| u64::from(code.code_info().total_size))
-            .unwrap_or(0);
-        self.module.clear_context(&mut self.ctx);
-        let direct_scalar_id = if direct_scalar_callable {
-            let return_type = return_type.expect("direct scalar eligibility requires a return");
-            push_direct_scalar_signature(&mut self.ctx.func, function, return_type);
-            let direct_name = format!("rss_jit_direct_{}", self.counter);
-            self.counter += 1;
-            let direct_id = self
-                .module
-                .declare_function(&direct_name, Linkage::Local, &self.ctx.func.signature)
-                .map_err(|e| err("declare direct scalar entry", e))?;
-            build_direct_scalar_function(&mut self.ctx.func, &mut self.fbctx, function)?;
-            self.module
-                .define_function(direct_id, &mut self.ctx)
-                .map_err(|e| err("define direct scalar entry", e))?;
-            code_size_bytes = code_size_bytes.saturating_add(
-                self.ctx
+        let (direct_scalar_id, code_size_bytes, deopt_map, bounds_checks_elided) =
+            if direct_scalar_callable {
+                // The compact scalar body is the canonical implementation. The
+                // stable frame ABI gets only a small adapter, rather than a second
+                // full lowering of the same function.
+                self.module.clear_context(&mut self.ctx);
+                let return_type = return_type.expect("direct scalar eligibility requires a return");
+                push_direct_scalar_signature(&mut self.ctx.func, function, return_type);
+                let direct_name = format!("rss_jit_direct_{}", self.counter);
+                self.counter += 1;
+                let direct_id = self
+                    .module
+                    .declare_function(&direct_name, Linkage::Local, &self.ctx.func.signature)
+                    .map_err(|e| err("declare direct scalar body", e))?;
+                build_direct_scalar_function(&mut self.ctx.func, &mut self.fbctx, function)?;
+                self.module
+                    .define_function(direct_id, &mut self.ctx)
+                    .map_err(|e| err("define direct scalar body", e))?;
+                let direct_bytes = self
+                    .ctx
                     .compiled_code()
                     .map(|code| u64::from(code.code_info().total_size))
-                    .unwrap_or(0),
-            );
-            self.module.clear_context(&mut self.ctx);
-            Some(direct_id)
-        } else {
-            None
-        };
+                    .unwrap_or(0);
+
+                self.module.clear_context(&mut self.ctx);
+                push_compiled_abi_signature(&mut self.ctx.func, ptr_ty);
+                let direct_ref = self
+                    .module
+                    .declare_func_in_func(direct_id, &mut self.ctx.func);
+                build_direct_scalar_frame_wrapper(
+                    &mut self.ctx.func,
+                    &mut self.fbctx,
+                    direct_ref,
+                    function,
+                    return_type,
+                );
+                self.module
+                    .define_function(id, &mut self.ctx)
+                    .map_err(|e| err("define direct scalar frame wrapper", e))?;
+                let wrapper_bytes = self
+                    .ctx
+                    .compiled_code()
+                    .map(|code| u64::from(code.code_info().total_size))
+                    .unwrap_or(0);
+                self.module.clear_context(&mut self.ctx);
+                (
+                    Some(direct_id),
+                    direct_bytes.saturating_add(wrapper_bytes),
+                    DeoptMap::default(),
+                    0,
+                )
+            } else {
+                let codegen = build_function(
+                    &mut self.ctx.func,
+                    &mut self.fbctx,
+                    &mut self.module,
+                    self.imports.clone(),
+                    function,
+                    forced,
+                    osr_header,
+                    &native_callees,
+                    id,
+                    &[],
+                    limit_checks,
+                    native_call_depth,
+                    validated.assigned_in(),
+                    validated.deopt_in(),
+                )?;
+
+                self.module
+                    .define_function(id, &mut self.ctx)
+                    .map_err(|e| err("define", e))?;
+                let code_size_bytes = self
+                    .ctx
+                    .compiled_code()
+                    .map(|code| u64::from(code.code_info().total_size))
+                    .unwrap_or(0);
+                self.module.clear_context(&mut self.ctx);
+                (
+                    None,
+                    code_size_bytes,
+                    codegen.deopt_map,
+                    codegen.direct_list_bounds_checks_elided,
+                )
+            };
         self.module
             .finalize_definitions()
             .map_err(|e| err("finalize", e))?;
@@ -1016,8 +1096,8 @@ impl NativeModule {
             native_depth_cap: native_recursion_depth_cap(function) as u32,
             n_params: function.n_params as usize,
             n_regs: function.n_regs as usize,
-            deopt_map: codegen.deopt_map,
-            direct_list_bounds_checks_elided: codegen.direct_list_bounds_checks_elided,
+            deopt_map,
+            direct_list_bounds_checks_elided: bounds_checks_elided,
             requires_limits: limit_checks.any(),
             osr: osr_header.is_some(),
             returns_handle,
@@ -1681,6 +1761,51 @@ impl NativeModule {
             if matches!(ty, JitValueType::FlatIntMut | JitValueType::FlatFloatMut) {
                 mutable_proofs_used[proof_index] = true;
             }
+        }
+        self.call_inner(id, args, lens, host_ctx, logical_depth, std::ptr::null())
+    }
+
+    /// Linear-time safe flat-buffer entry used by the VM's audited marshaller.
+    /// Proofs must be sorted by ABI slot and contain exactly one proof for every
+    /// flat entry. Pointer, length, kind, module, and function validation remain
+    /// inside this crate; malformed input declines before machine-code entry.
+    pub fn call_with_indexed_flat_args_at_depth(
+        &self,
+        id: CompiledId,
+        args: &[i64],
+        lens: &[i64],
+        host_ctx: HostCtx,
+        flat_args: &mut [IndexedFlatBufferArg<'_>],
+        logical_depth: LogicalCallDepth,
+    ) -> NativeOutcome {
+        let Some(func) = self.funcs.get(id.index).filter(|_| id.module_id == self.id) else {
+            return anonymous_deopt();
+        };
+        if func.requires_limits {
+            return anonymous_deopt();
+        }
+        let entry_types = if func.osr {
+            &func.reg_types
+        } else {
+            &func.param_types
+        };
+        let mut proof_cursor = 0usize;
+        for (index, ty) in entry_types.iter().copied().enumerate() {
+            if !is_flat_type(ty) {
+                continue;
+            }
+            let Some(proof) = flat_args.get_mut(proof_cursor) else {
+                return anonymous_deopt();
+            };
+            if proof.index != index
+                || !flat_proof_matches(&mut proof.value, ty, args.get(index), lens.get(index))
+            {
+                return anonymous_deopt();
+            }
+            proof_cursor += 1;
+        }
+        if proof_cursor != flat_args.len() {
+            return anonymous_deopt();
         }
         self.call_inner(id, args, lens, host_ctx, logical_depth, std::ptr::null())
     }

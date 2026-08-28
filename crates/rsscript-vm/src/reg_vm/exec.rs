@@ -8,6 +8,12 @@ fn accumulate_osr_work(current: u32, iteration_work: u32) -> u32 {
     current.saturating_add(iteration_work)
 }
 
+#[cfg(feature = "native-jit")]
+fn advance_auto_osr_work(current: u32, iteration_work: u32, threshold: u32) -> (u32, bool) {
+    let next = accumulate_osr_work(current, iteration_work);
+    (next, next >= threshold)
+}
+
 impl RegVm {
     pub(super) fn usage(&self) -> crate::ExecutionUsage {
         let resources = self.provider_resources.snapshot().unwrap_or_default();
@@ -1267,8 +1273,12 @@ impl RegVm {
     ) -> Result<VmValue, EvalError> {
         self.ensure_regs(base + function.regs)?;
         let floor = self.frames.len();
+        #[cfg(feature = "native-jit")]
+        let function_ordinal = self.jit_state.function_ordinal(&function);
         self.push_frame(Frame {
             func: function,
+            #[cfg(feature = "native-jit")]
+            function_ordinal,
             ip: 0,
             base,
             ret_dst: usize::MAX,
@@ -1301,6 +1311,8 @@ impl RegVm {
             let base = self.frames.last().expect("active frame").base;
             let next_base = base + func.regs;
             let mut ip = self.frames.last().expect("active frame").ip;
+            #[cfg(feature = "native-jit")]
+            let function_ordinal = self.frames.last().expect("active frame").function_ordinal;
 
             // Native JIT tier: a fresh frame whose function compiles to machine
             // code runs there first (the integer/control core). Completes exactly
@@ -1356,14 +1368,6 @@ impl RegVm {
                 }
             }
 
-            // Give mixed-mode regions first refusal before tier-0 consumes a fresh
-            // frame. The same cached probe also runs inside the interpreter loop
-            // below so VM-owned barriers can re-enter their continuation.
-            #[cfg(feature = "native-jit")]
-            if self.native.is_some() && self.try_continuation_region(&func, base, ip) {
-                continue 'frames;
-            }
-
             // If native OSR has a candidate loop, let the interpreter reach that
             // header instead of consuming the whole frame in tier-0. Whole-function
             // native has already had first refusal above; this only changes the
@@ -1372,18 +1376,28 @@ impl RegVm {
             let osr_active = self
                 .native
                 .as_ref()
-                .is_some_and(|native| native.auto_osr_enabled || native.eager_osr);
+                .is_some_and(|native| native.auto_osr_enabled || native.eager_osr)
+                && super::tier::osr_controls_unarmed_for_dispatch(&self.limits);
             #[cfg(feature = "native-jit")]
             let osr_pre_candidates = if ip == 0 && osr_active {
-                self.resolve_osr_candidates(&func)
+                self.resolve_osr_candidates(function_ordinal, &func)
             } else {
                 OsrCandidates::default()
             };
             #[cfg(not(feature = "native-jit"))]
             let osr_pre_candidate: Option<usize> = None;
             #[cfg(feature = "native-jit")]
-            let has_continuation_region =
-                self.native.is_some() && self.has_continuation_region(&func);
+            let continuation_entries = self.native.as_mut().map(|native| {
+                native
+                    .continuation_entry_sets
+                    .entry(function_ordinal)
+                    .or_insert_with(|| Rc::new(ContinuationEntrySet::from_code(&func.code)))
+                    .clone()
+            });
+            #[cfg(feature = "native-jit")]
+            let has_continuation_region = continuation_entries.as_ref().is_some_and(|entries| {
+                self.has_continuation_region(function_ordinal, &func, entries)
+            });
 
             // Tier-0 JIT: a fresh JIT-eligible frame runs via the specializing
             // executor (which reuses the interpreter's semantics), then completes
@@ -1438,7 +1452,7 @@ impl RegVm {
             let (osr_candidates, osr_eager) = if osr_active {
                 (
                     if osr_pre_candidates.is_empty() {
-                        self.resolve_osr_candidates(&func)
+                        self.resolve_osr_candidates(function_ordinal, &func)
                     } else {
                         osr_pre_candidates
                     },
@@ -1451,27 +1465,90 @@ impl RegVm {
             let _osr_candidate: Option<usize> = None;
 
             while let Some(instr) = func.code.get(ip) {
+                #[cfg(feature = "native-jit")]
+                let osr_candidate = osr_candidates
+                    .iter()
+                    .find(|candidate| candidate.header_ip == ip);
                 // Mixed-mode continuation tier. Structural plans (including
                 // negative results) are cached by function/IP, so this probe stays
                 // cheap while allowing the VM to re-enter native code immediately
                 // after it executes an aggregate/call/async-style barrier.
                 #[cfg(feature = "native-jit")]
-                if self.native.is_some() {
-                    self.frames.last_mut().expect("active frame").ip = ip;
-                    if self.try_continuation_region(&func, base, ip) {
-                        continue 'frames;
+                if osr_candidate.is_none()
+                    && let Some(entries) = continuation_entries.as_ref()
+                {
+                    if let Some(native) = self.native.as_mut()
+                        && native.collect_stats
+                    {
+                        native.stats.continuation_candidate_checks =
+                            native.stats.continuation_candidate_checks.saturating_add(1);
+                    }
+                    if !entries.contains(ip) {
+                        // The overwhelmingly common interpreter instruction is
+                        // not a mixed-mode entry. Keep frame state resident in
+                        // locals and avoid all native preparation in this case.
+                    } else {
+                        // A continuation that envelops a still-counting OSR loop
+                        // would jump over the loop header before its hotness state
+                        // can advance. Give that loop first refusal; after a stable
+                        // OSR decline (`GaveUp`) the continuation becomes eligible
+                        // again, so this never strands useful native work.
+                        let protects_pending_osr = if osr_candidates.is_empty() {
+                            false
+                        } else {
+                            let plan = self.native.as_mut().and_then(|native| {
+                                native
+                                    .continuation_plans
+                                    .entry((function_ordinal, ip))
+                                    .or_insert_with(|| {
+                                        detect_scalar_continuation_region(&func.code, func.regs, ip)
+                                            .map(Rc::new)
+                                    })
+                                    .clone()
+                            });
+                            plan.is_some_and(|region| {
+                                let direct_only_loop = region.has_backedge
+                                    && func.code.iter().enumerate().all(|(region_ip, instr)| {
+                                        !region.included.get(region_ip).copied().unwrap_or(false)
+                                            || matches!(
+                                                native_lowering_class(instr),
+                                                NativeLoweringClass::Direct
+                                            )
+                                    });
+                                direct_only_loop
+                                    && osr_candidates.iter().any(|candidate| {
+                                        region
+                                            .included
+                                            .get(candidate.header_ip)
+                                            .copied()
+                                            .unwrap_or(false)
+                                            && !matches!(
+                                                self.native.as_ref().and_then(|native| {
+                                                    native.osr_triggers.get(&RegionKey {
+                                                        function: function_ordinal,
+                                                        header: candidate.header_ip,
+                                                    })
+                                                }),
+                                                Some(OsrTrigger::GaveUp)
+                                            )
+                                    })
+                            })
+                        };
+                        if !protects_pending_osr {
+                            self.frames.last_mut().expect("active frame").ip = ip;
+                            if self.try_continuation_region(function_ordinal, &func, base, ip) {
+                                continue 'frames;
+                            }
+                        }
                     }
                 }
 
                 // At most four comparisons are performed for candidate functions.
                 // Each matching header charges and probes only its own RegionKey.
                 #[cfg(feature = "native-jit")]
-                if let Some(candidate) = osr_candidates
-                    .iter()
-                    .find(|candidate| candidate.header_ip == ip)
-                {
+                if let Some(candidate) = osr_candidate {
                     let region_key = RegionKey {
-                        function: self.jit_state.function_ordinal(&func),
+                        function: function_ordinal,
                         header: ip,
                     };
                     let trigger = self
@@ -1485,14 +1562,18 @@ impl RegVm {
                         } else {
                             match trigger {
                                 Some(OsrTrigger::Counting { count, probe_cc }) => {
-                                    let next = accumulate_osr_work(count, candidate.iteration_work);
                                     let threshold = self
                                         .native
                                         .as_ref()
                                         .map_or(OSR_BACKEDGE_THRESHOLD, |native| {
                                             native.osr_work_threshold
                                         });
-                                    if next >= threshold {
+                                    let (next, reached) = advance_auto_osr_work(
+                                        count,
+                                        candidate.iteration_work,
+                                        threshold,
+                                    );
+                                    if reached {
                                         true
                                     } else {
                                         if let Some(native) = self.native.as_mut() {
@@ -1516,7 +1597,7 @@ impl RegVm {
                                 _ => self.jit_state.call_count(&func),
                             };
                             self.frames.last_mut().expect("active frame").ip = ip;
-                            if self.try_osr(&func, base, ip) {
+                            if self.try_osr(function_ordinal, &func, base, ip) {
                                 continue 'frames;
                             }
                             let dynamic_osr_bail = self
@@ -1712,6 +1793,8 @@ impl RegVm {
                             self.frames.last_mut().expect("active frame").ip = ip;
                             self.push_frame(Frame {
                                 func: callee,
+                                #[cfg(feature = "native-jit")]
+                                function_ordinal: *callee_id,
                                 ip: 0,
                                 base: next_base,
                                 ret_dst: base + *dst,
@@ -1773,6 +1856,8 @@ impl RegVm {
                             self.frames.last_mut().expect("active frame").ip = ip;
                             self.push_frame(Frame {
                                 func: callee,
+                                #[cfg(feature = "native-jit")]
+                                function_ordinal: callee_id,
                                 ip: 0,
                                 base: next_base,
                                 ret_dst: base + *dst,
@@ -2428,11 +2513,18 @@ impl RegVm {
 
 #[cfg(all(test, feature = "native-jit"))]
 mod tests {
-    use super::accumulate_osr_work;
+    use super::{accumulate_osr_work, advance_auto_osr_work};
 
     #[test]
     fn osr_work_accounting_saturates() {
         assert_eq!(accumulate_osr_work(u32::MAX - 2, 10), u32::MAX);
         assert_eq!(accumulate_osr_work(u32::MAX, 1), u32::MAX);
+    }
+
+    #[test]
+    fn automatic_osr_waits_below_and_fires_at_threshold() {
+        assert_eq!(advance_auto_osr_work(0, 20, 100), (20, false));
+        assert_eq!(advance_auto_osr_work(80, 20, 100), (100, true));
+        assert_eq!(advance_auto_osr_work(99, 5, 100), (104, true));
     }
 }

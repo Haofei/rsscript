@@ -75,8 +75,12 @@ impl RegVm {
             stack[index] = arg;
             written[index] = true;
         }
+        #[cfg(feature = "native-jit")]
+        let function_ordinal = self.jit_state.function_ordinal(&func);
         let frames = vec![Frame {
             func,
+            #[cfg(feature = "native-jit")]
+            function_ordinal,
             ip: 0,
             base: 0,
             ret_dst: usize::MAX,

@@ -81,6 +81,7 @@ use host_abi::{
 };
 pub use host_abi::{
     FlatBufferArg, HostCtx, HostHeapEffect, HostHeapProjection, HostHelper, HostHelpers,
+    IndexedFlatBufferArg,
 };
 pub use ir::{
     FloatRounding, HostArg, JitCompare, JitControlFlow, JitFunction, JitInstr,
@@ -109,7 +110,8 @@ pub(crate) use codegen::{
     NATIVE_RECURSION_STACK_BUDGET_BYTES, native_recursion_frame_bytes_estimate,
 };
 pub(crate) use direct_codegen::{
-    build_direct_scalar_function, direct_scalar_callable, push_direct_scalar_signature,
+    build_direct_scalar_frame_wrapper, build_direct_scalar_function, direct_scalar_callable,
+    push_direct_scalar_signature,
 };
 pub(crate) use host_abi::{DEFAULT_STANDALONE_JIT_ARENA_BYTES, HostHelperSig, HostResult};
 #[cfg(test)]

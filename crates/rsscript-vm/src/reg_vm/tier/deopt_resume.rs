@@ -36,7 +36,7 @@ impl RegVm {
         base: usize,
         n_regs: usize,
         live: &[vm_jit::DeoptReg],
-        host_ctx: vm_jit::HostCtx,
+        _host_ctx: vm_jit::HostCtx,
     ) -> bool {
         let mut materialized = Vec::with_capacity(live.len());
         for vm_jit::DeoptReg { reg, value } in live {
@@ -53,7 +53,11 @@ impl RegVm {
                 // Resolve the heap-table index and clone the actual VmValue so moved
                 // Handle locals and child-frame assignments are restored precisely.
                 vm_jit::DeoptValue::Handle(handle) => {
-                    let Some(value) = JitHostCallCtx::from_token(host_ctx)
+                    // Machine-code helper callbacks receive a call-scoped wrapper
+                    // token. Once the call has returned, the VM owns the still-live
+                    // TLS transaction directly; `host_ctx` is the user token and
+                    // must not be decoded as that wrapper.
+                    let Some(value) = JitHostCallCtx::active()
                         .and_then(|ctx| ctx.heap_read_handle(*handle, |value| Some(value.clone())))
                     else {
                         return false;
@@ -119,6 +123,7 @@ impl RegVm {
         caller_frame.ip = call_ip + 1;
         self.push_frame(Frame {
             func: Rc::clone(&callee),
+            function_ordinal: *function,
             ip: child_resume_ip,
             base: child_base,
             ret_dst: caller_base + *dst,

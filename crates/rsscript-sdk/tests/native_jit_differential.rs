@@ -170,6 +170,9 @@ fn native_engine_matches_the_verified_interpreter_corpus() {
             native_calls,
             osr_entries,
             continuation_entries,
+            continuation_candidate_checks,
+            continuation_full_probes,
+            continuation_instance_key_builds,
             continuation_yields,
             continuation_compiled_source_instructions,
             interpreted_native_work,
@@ -181,6 +184,14 @@ fn native_engine_matches_the_verified_interpreter_corpus() {
             panic!("native telemetry: {file}");
         };
         assert_eq!(rejected_resident_bytes, 0, "resident rejection: {file}");
+        assert!(
+            continuation_full_probes <= continuation_candidate_checks,
+            "full continuation preparation must be candidate-gated: {file}"
+        );
+        assert!(
+            continuation_instance_key_builds <= continuation_full_probes,
+            "instance keys must be built only inside full continuation probes: {file}"
+        );
         if *file == "native-struct.rss" {
             assert_eq!(
                 (native_calls, osr_entries),
@@ -261,6 +272,139 @@ fn native_engine_matches_the_verified_interpreter_corpus() {
     assert!(
         cases_with_native_entry >= 6,
         "differential corpus must exercise native execution broadly; only {cases_with_native_entry} cases entered"
+    );
+}
+
+#[test]
+fn tiered_whole_function_with_backedge_starts_optimized() {
+    let source = "fn main() -> Int { let mut i = 0; let mut total = 0; while i < 20000 { total = total + i * 3; i = i + 1 }; return total }";
+    let built = Compiler
+        .compile("tiered-backedge.rss", source)
+        .expect("tiered backedge source compiles");
+    let admitted = ArtifactVerifier
+        .verify(built)
+        .expect("tiered backedge artifact verifies")
+        .admit_trusted_input();
+    let linked = Runtime::new(ProviderRegistry::default())
+        .link(&admitted)
+        .expect("tiered backedge artifact links");
+    let interpreter =
+        linked.execute(ExecutionRequest::default().limits(RunLimits::unbounded_for_trusted_host()));
+    let native = linked.execute(
+        ExecutionRequest::default()
+            .limits(RunLimits::unbounded_for_trusted_host())
+            .native_jit(NativeJitOptions {
+                tier_up_threshold: 1,
+                collect_telemetry: true,
+                ..NativeJitOptions::default()
+            }),
+    );
+    assert_eq!(native.outcome(), interpreter.outcome());
+    let ExecutionEngineTelemetry::Native {
+        baseline_compiles,
+        optimized_compiles,
+        baseline_calls,
+        optimized_calls,
+        ..
+    } = native.telemetry.engine
+    else {
+        panic!("tiered native execution must return engine telemetry");
+    };
+    assert_eq!(
+        baseline_compiles, 0,
+        "backedge body must skip baseline codegen"
+    );
+    assert!(
+        optimized_compiles > 0,
+        "backedge body must compile at speed"
+    );
+    assert_eq!(
+        baseline_calls, 0,
+        "backedge body must not enter baseline code"
+    );
+    assert!(
+        optimized_calls > 0,
+        "backedge body must execute optimized code"
+    );
+}
+
+#[test]
+fn automatic_osr_waits_enters_at_threshold_and_respects_disable() {
+    let source = "struct Boxed { value: Int } fn main() -> Int { let boxed = Boxed(value: 9); let mut i = 0; let mut total = 0; while i < 2000 { total = total + i * 3; i = i + 1 }; return total + boxed.value }";
+    let built = Compiler
+        .compile("auto-osr-option.rss", source)
+        .expect("automatic OSR source compiles");
+    let admitted = ArtifactVerifier
+        .verify(built)
+        .expect("automatic OSR artifact verifies")
+        .admit_trusted_input();
+    let linked = Runtime::new(ProviderRegistry::default())
+        .link(&admitted)
+        .expect("automatic OSR artifact links");
+    let below_threshold = linked.execute(
+        ExecutionRequest::default()
+            .limits(RunLimits::unbounded_for_trusted_host())
+            .native_jit(NativeJitOptions {
+                enable_auto_osr: true,
+                eager_osr: false,
+                osr_work_threshold: u32::MAX,
+                cost_model: NativeCostModel::Report,
+                collect_telemetry: true,
+                ..NativeJitOptions::default()
+            }),
+    );
+    let ExecutionEngineTelemetry::Native {
+        osr_entries: below_entries,
+        ..
+    } = below_threshold.telemetry.engine
+    else {
+        panic!("below-threshold OSR execution must return native telemetry");
+    };
+    assert_eq!(below_entries, 0, "automatic OSR must wait below threshold");
+
+    let disabled = linked.execute(
+        ExecutionRequest::default()
+            .limits(RunLimits::unbounded_for_trusted_host())
+            .native_jit(NativeJitOptions {
+                enable_auto_osr: false,
+                eager_osr: false,
+                cost_model: NativeCostModel::Report,
+                collect_telemetry: true,
+                ..NativeJitOptions::default()
+            }),
+    );
+    let ExecutionEngineTelemetry::Native {
+        osr_entries: disabled_entries,
+        ..
+    } = disabled.telemetry.engine
+    else {
+        panic!("disabled OSR execution must return native telemetry");
+    };
+    assert_eq!(disabled_entries, 0, "disabled OSR must never enter");
+
+    let native = linked.execute(
+        ExecutionRequest::new(["2000"])
+            .limits(RunLimits::unbounded_for_trusted_host())
+            .native_jit(NativeJitOptions {
+                enable_auto_osr: true,
+                eager_osr: false,
+                osr_work_threshold: 64,
+                cost_model: NativeCostModel::Report,
+                collect_telemetry: true,
+                ..NativeJitOptions::default()
+            }),
+    );
+    let ExecutionEngineTelemetry::Native {
+        osr_entries,
+        continuation_entries,
+        ..
+    } = native.telemetry.engine
+    else {
+        panic!("automatic OSR execution must return native telemetry");
+    };
+    assert!(
+        osr_entries > 0,
+        "threshold-driven OSR must enter a transform-only loop; continuation_entries={continuation_entries}"
     );
 }
 

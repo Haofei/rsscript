@@ -1,10 +1,11 @@
 //! Crate-private native-to-native ABI for infallible scalar leaves.
 //!
-//! The public VM entry remains the versioned `JitCallFrame` ABI. This secondary
-//! entry is emitted only for a leaf whose reachable instructions cannot deopt,
+//! The public VM entry remains the versioned `JitCallFrame` ABI. A compact
+//! scalar body is emitted only for a leaf whose reachable instructions cannot deopt,
 //! allocate, call a helper, suspend, or recurse. Its parameters and result use
 //! their Cranelift scalar types directly, so a native caller needs no child frame,
-//! payload, safepoint, or temporary argument window.
+//! payload, safepoint, or temporary argument window. The frame ABI is a small
+//! adapter around that canonical body, not a second lowering of the function.
 
 use crate::*;
 
@@ -16,7 +17,7 @@ fn scalar_type(ty: JitValueType) -> Option<cranelift_codegen::ir::Type> {
     }
 }
 
-/// Whether a second, frame-free scalar entry can be emitted for `function`.
+/// Whether `function` can use a canonical frame-free scalar body.
 ///
 /// Checked integer arithmetic, shifts, host calls and nested native calls are
 /// intentionally excluded: those operations need the full deopt contract. Float
@@ -81,6 +82,85 @@ pub(crate) fn push_direct_scalar_signature(
     ));
 }
 
+/// Build the stable frame-ABI adapter for an infallible scalar leaf whose only
+/// real body is `direct`. The adapter validates the versioned prefix, loads the
+/// scalar arguments, calls the compact native ABI, stores the result, and
+/// reports completion. Keeping this adapter tiny avoids emitting a second full
+/// copy of the function merely to support top-level VM entry.
+pub(crate) fn build_direct_scalar_frame_wrapper(
+    func: &mut cranelift_codegen::ir::Function,
+    fbctx: &mut FunctionBuilderContext,
+    direct: cranelift_codegen::ir::FuncRef,
+    program: &JitFunction,
+    return_type: JitValueType,
+) {
+    let ptr_ty = func.signature.params[0].value_type;
+    let mut bcx = FunctionBuilder::new(func, fbctx);
+    let entry = bcx.create_block();
+    let compatible = bcx.create_block();
+    let incompatible = bcx.create_block();
+    bcx.append_block_params_for_function_params(entry);
+    bcx.switch_to_block(entry);
+
+    let frame = bcx.block_params(entry)[0];
+    // The prefix is the only part that may be read before compatibility has
+    // been established. This is the same contract as the general codegen path.
+    let abi_version = bcx
+        .ins()
+        .load(types::I32, MemFlags::trusted(), frame, FRAME_ABI_VERSION);
+    let frame_size = bcx
+        .ins()
+        .load(types::I32, MemFlags::trusted(), frame, FRAME_SIZE);
+    let expected_version = bcx
+        .ins()
+        .iconst(types::I32, i64::from(JIT_CALL_ABI_VERSION));
+    let required_size = bcx.ins().iconst(types::I32, i64::from(CALL_FRAME_SIZE));
+    let version_ok = bcx.ins().icmp(IntCC::Equal, abi_version, expected_version);
+    let size_ok = bcx
+        .ins()
+        .icmp(IntCC::UnsignedGreaterThanOrEqual, frame_size, required_size);
+    let abi_ok = bcx.ins().band(version_ok, size_ok);
+    bcx.ins().brif(abi_ok, compatible, &[], incompatible, &[]);
+
+    bcx.switch_to_block(incompatible);
+    let mismatch = bcx.ins().iconst(types::I8, JitStatus::AbiMismatch as i64);
+    bcx.ins().return_(&[mismatch]);
+
+    bcx.switch_to_block(compatible);
+    let args_ptr = bcx
+        .ins()
+        .load(ptr_ty, MemFlags::trusted(), frame, FRAME_ARGS);
+    let result_ptr = bcx
+        .ins()
+        .load(ptr_ty, MemFlags::trusted(), frame, FRAME_RESULT);
+    let mut args = Vec::with_capacity(program.n_params as usize);
+    for (index, ty) in program.reg_types[..program.n_params as usize]
+        .iter()
+        .copied()
+        .enumerate()
+    {
+        let ty = scalar_type(ty).expect("direct wrapper accepts scalar parameters only");
+        args.push(bcx.ins().load(
+            ty,
+            MemFlags::trusted(),
+            args_ptr,
+            i32::try_from(index * 8).expect("bounded JIT parameter offset fits i32"),
+        ));
+    }
+    let call = bcx.ins().call(direct, &args);
+    let result = bcx.inst_results(call)[0];
+    debug_assert_eq!(
+        bcx.func.dfg.value_type(result),
+        scalar_type(return_type).unwrap()
+    );
+    bcx.ins().store(MemFlags::trusted(), result, result_ptr, 0);
+    let completed = bcx.ins().iconst(types::I8, JitStatus::Completed as i64);
+    bcx.ins().return_(&[completed]);
+
+    bcx.seal_all_blocks();
+    bcx.finalize();
+}
+
 pub(crate) fn build_direct_scalar_function(
     func: &mut cranelift_codegen::ir::Function,
     fbctx: &mut FunctionBuilderContext,
@@ -94,31 +174,57 @@ pub(crate) fn build_direct_scalar_function(
     let vars: Vec<_> = (0..program.n_regs as usize)
         .map(|reg| bcx.declare_var(var_ty(reg)))
         .collect();
-    let blocks: Vec<_> = (0..program.code.len())
-        .map(|_| bcx.create_block())
+    // Build blocks only for actual CFG leaders. The former one-block-per-
+    // instruction lowering inflated Cranelift IR and compile/finalize work for
+    // long scalar leaves even though most instructions are straight-line.
+    let mut leaders = vec![false; program.code.len()];
+    if !leaders.is_empty() {
+        leaders[0] = true;
+    }
+    for (ip, instr) in program.code.iter().enumerate() {
+        let mut mark = |target: u32| {
+            if let Some(leader) = leaders.get_mut(target as usize) {
+                *leader = true;
+            }
+        };
+        match instr {
+            JitInstr::Jump { target } => mark(*target),
+            JitInstr::JumpIfBool { target, .. } | JitInstr::JumpIfIntCompare { target, .. } => {
+                mark(*target);
+                if let Some(leader) = leaders.get_mut(ip + 1) {
+                    *leader = true;
+                }
+            }
+            JitInstr::Return { .. } => {
+                if let Some(leader) = leaders.get_mut(ip + 1) {
+                    *leader = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    let blocks: Vec<_> = leaders
+        .iter()
+        .map(|leader| leader.then(|| bcx.create_block()))
         .collect();
     let entry = bcx.create_block();
     bcx.append_block_params_for_function_params(entry);
     bcx.switch_to_block(entry);
     let params = bcx.block_params(entry).to_vec();
-    for reg in 0..program.n_regs as usize {
-        let value = if reg < program.n_params as usize {
-            params[reg]
-        } else if var_ty(reg) == types::F64 {
-            bcx.ins().f64const(0.0)
-        } else {
-            bcx.ins().iconst(types::I64, 0)
-        };
-        bcx.def_var(vars[reg], value);
+    for reg in 0..program.n_params as usize {
+        bcx.def_var(vars[reg], params[reg]);
     }
-    bcx.ins().jump(blocks[0], &[]);
+    bcx.ins()
+        .jump(blocks[0].expect("instruction zero is a CFG leader"), &[]);
 
     let reg = |index: u32| vars[index as usize];
     for (ip, instr) in program.code.iter().enumerate() {
         if !reachable[ip] {
             continue;
         }
-        bcx.switch_to_block(blocks[ip]);
+        if let Some(block) = blocks[ip] {
+            bcx.switch_to_block(block);
+        }
         let mut terminated = false;
         match instr {
             JitInstr::Nop => {}
@@ -217,7 +323,10 @@ pub(crate) fn build_direct_scalar_function(
                 bcx.def_var(reg(*dst), value);
             }
             JitInstr::Jump { target } => {
-                bcx.ins().jump(blocks[*target as usize], &[]);
+                bcx.ins().jump(
+                    blocks[*target as usize].expect("validated jump target is a leader"),
+                    &[],
+                );
                 terminated = true;
             }
             JitInstr::JumpIfBool {
@@ -226,8 +335,9 @@ pub(crate) fn build_direct_scalar_function(
                 target,
             } => {
                 let cond = bcx.use_var(reg(*cond));
-                let target = blocks[*target as usize];
-                let fallthrough = blocks[ip + 1];
+                let target =
+                    blocks[*target as usize].expect("validated conditional target is a leader");
+                let fallthrough = blocks[ip + 1].expect("conditional fallthrough is a leader");
                 if *expected {
                     bcx.ins().brif(cond, target, &[], fallthrough, &[]);
                 } else {
@@ -249,8 +359,9 @@ pub(crate) fn build_direct_scalar_function(
                 } else {
                     bcx.ins().icmp(op.cc(), lhs_value, rhs_value)
                 };
-                let target = blocks[*target as usize];
-                let fallthrough = blocks[ip + 1];
+                let target =
+                    blocks[*target as usize].expect("validated conditional target is a leader");
+                let fallthrough = blocks[ip + 1].expect("conditional fallthrough is a leader");
                 if *expected {
                     bcx.ins().brif(cond, target, &[], fallthrough, &[]);
                 } else {
@@ -276,7 +387,9 @@ pub(crate) fn build_direct_scalar_function(
                     "direct scalar function falls through without a Return",
                 ));
             }
-            bcx.ins().jump(blocks[next], &[]);
+            if let Some(next_block) = blocks[next] {
+                bcx.ins().jump(next_block, &[]);
+            }
         }
     }
     bcx.seal_all_blocks();

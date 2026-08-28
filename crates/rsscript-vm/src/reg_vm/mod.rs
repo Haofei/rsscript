@@ -1322,10 +1322,19 @@ impl RegVmExecutable {
                     crate::ExecutionEngineTelemetry::Native {
                         considered: native.stats.considered,
                         compiled: native.stats.compiled,
+                        baseline_compiles: native.stats.baseline_compiles,
+                        optimized_compiles: native.stats.optimized_compiles,
+                        baseline_calls: native.stats.baseline_calls,
+                        optimized_calls: native.stats.optimized_calls,
                         native_calls: native.stats.native_calls,
                         native_bails: native.stats.native_bails,
                         osr_entries: native.stats.osr_entries,
                         continuation_entries: native.stats.continuation_entries,
+                        continuation_candidate_checks: native.stats.continuation_candidate_checks,
+                        continuation_full_probes: native.stats.continuation_full_probes,
+                        continuation_instance_key_builds: native
+                            .stats
+                            .continuation_instance_key_builds,
                         continuation_yields: native.stats.continuation_yields,
                         continuation_compiled_source_instructions: native
                             .stats
@@ -1429,6 +1438,11 @@ impl RegVmExecutable {
 /// they can never `await`.
 struct Frame {
     func: Rc<RegFunction>,
+    /// Stable ordinal in the verified register unit. Native dispatch side tables
+    /// are dense by this identity, so resolving it once at frame construction
+    /// keeps pointer-to-ordinal hashing out of the interpreter instruction loop.
+    #[cfg(feature = "native-jit")]
+    function_ordinal: usize,
     ip: usize,
     base: usize,
     /// Absolute register in the caller that receives this frame's return value.
@@ -2476,6 +2490,13 @@ pub struct NativeStats {
     pub osr_entries: u64,
     /// Successful entries into a continuation region.
     pub continuation_entries: u64,
+    /// Interpreter instruction positions checked against the hoisted candidate
+    /// bitset. This is collected only in diagnostic mode.
+    pub continuation_candidate_checks: u64,
+    /// Candidate positions that crossed into full continuation preparation.
+    pub continuation_full_probes: u64,
+    /// Static instance keys built after a candidate probe was admitted.
+    pub continuation_instance_key_builds: u64,
     /// Direct source instructions represented by admitted continuation regions.
     /// This is compile-time coverage evidence, not a dynamic execution count.
     pub continuation_compiled_source_instructions: u64,
@@ -2786,6 +2807,18 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} continuation_entries={} continuatio
         object.insert(
             "continuation_entries".into(),
             self.continuation_entries.into(),
+        );
+        object.insert(
+            "continuation_candidate_checks".into(),
+            self.continuation_candidate_checks.into(),
+        );
+        object.insert(
+            "continuation_full_probes".into(),
+            self.continuation_full_probes.into(),
+        );
+        object.insert(
+            "continuation_instance_key_builds".into(),
+            self.continuation_instance_key_builds.into(),
         );
         object.insert(
             "continuation_compiled_source_instructions".into(),

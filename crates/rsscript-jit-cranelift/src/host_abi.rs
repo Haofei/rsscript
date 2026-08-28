@@ -74,6 +74,23 @@ pub enum FlatBufferArg<'a> {
     FloatMut(&'a mut [f64]),
 }
 
+/// A flat-buffer borrow proof bound to one concrete ABI argument/register slot.
+///
+/// The safe call path still checks the generated function's expected storage
+/// type plus the pointer and length words immediately before dispatch. Binding
+/// the proof to its slot lets trusted VM marshalling validate a sorted proof
+/// stream in linear time without allocating a per-call "used proof" bitmap.
+pub struct IndexedFlatBufferArg<'a> {
+    pub index: usize,
+    pub value: FlatBufferArg<'a>,
+}
+
+impl<'a> IndexedFlatBufferArg<'a> {
+    pub const fn new(index: usize, value: FlatBufferArg<'a>) -> Self {
+        Self { index, value }
+    }
+}
+
 /// `(struct_handle, slot) -> i64`: the struct's `slot`-th field as an `Int`.
 pub type FieldIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
 /// `(struct_handle, slot, value) -> i64`: copy-on-write set of an `Int` field,

@@ -360,6 +360,13 @@ fn native_scalar_call_invokes_compiled_float_leaf() {
         ))
         .unwrap();
     assert!(m.has_direct_scalar_entry(callee));
+    // The public frame entry is now a compact adapter around the same direct
+    // body, not a second full lowering. Exercise it independently before using
+    // the native-to-native edge below.
+    let direct_entry = m
+        .callt(callee, &[2.5f64.to_bits() as i64, 4.0f64.to_bits() as i64])
+        .map(|bits| f64::from_bits(bits as u64));
+    assert_eq!(direct_entry, Some(10.0));
     // caller(x: Float) = callee(x, 4.0) - x
     let caller = m
         .compile(&ft(
@@ -1052,6 +1059,55 @@ fn one_mutable_flat_proof_cannot_authorize_two_abi_entries() {
         module.call_with_host_ctx(function, &args, &lens, 0, &mut proof),
         NativeOutcome::Deopt { .. }
     ));
+}
+
+#[test]
+fn indexed_flat_proof_is_bound_to_its_abi_slot() {
+    use JitValueType::{FlatInt, Int};
+    let mut module = module();
+    let function = module
+        .compile(&ft(
+            2,
+            vec![FlatInt, Int],
+            vec![JitInstr::Return { src: 1 }],
+        ))
+        .unwrap();
+    let data = [1_i64, 2];
+    let args = [data.as_ptr() as i64, 7];
+    let lens = [2, 0];
+    let mut wrong_slot = [IndexedFlatBufferArg::new(1, FlatBufferArg::Int(&data))];
+    assert!(matches!(
+        module.call_with_indexed_flat_args_at_depth(
+            function,
+            &args,
+            &lens,
+            0,
+            &mut wrong_slot,
+            LogicalCallDepth {
+                current: 0,
+                limit: usize::MAX,
+            },
+        ),
+        NativeOutcome::Deopt { .. }
+    ));
+
+    let mut exact_slot = [IndexedFlatBufferArg::new(0, FlatBufferArg::Int(&data))];
+    assert_eq!(
+        module
+            .call_with_indexed_flat_args_at_depth(
+                function,
+                &args,
+                &lens,
+                0,
+                &mut exact_slot,
+                LogicalCallDepth {
+                    current: 0,
+                    limit: usize::MAX,
+                },
+            )
+            .completed(),
+        Some(7)
+    );
 }
 
 #[test]
