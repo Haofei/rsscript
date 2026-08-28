@@ -1,9 +1,10 @@
 [package]
 name = "rsscript-package-review"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 description = "Captured package review inputs and compatibility execution for RSScript"
-license = "MIT OR Apache-2.0"
+license.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
@@ -17,6 +18,7 @@ rsscript-syntax = { path = "../rsscript-syntax" }
 rsscript-review-source = { path = "../rsscript-review-source" }
 rsscript-review-core = { path = "../rsscript-review-core" }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 sha2 = "0.10"
 toml = "0.8"
 

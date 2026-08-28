@@ -15,9 +15,10 @@ use rsscript_aot_backend::{lower_source_to_rust_package, write_generated_rust_pa
 use rsscript_sdk::{
     artifact::ArtifactVerifier,
     compile::Compiler,
+    experimental::native_jit::NativeJitOptions,
     provider_api::ProviderRegistry,
     report::ExecutionEngineTelemetry,
-    runtime::{ExecutionRequest, NativeJitOptions, RunLimits, Runtime},
+    runtime::{ExecutionRequest, RunLimits, Runtime},
 };
 
 const SAMPLES: usize = 7;

@@ -1,9 +1,10 @@
 [package]
 name = "reir"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 description = "Review Evidence IR — language-neutral cross-layer review evidence model"
-license = "MIT OR Apache-2.0"
+license.workspace = true
+rust-version.workspace = true
 
 [lib]
 name = "reir"

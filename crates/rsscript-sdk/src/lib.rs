@@ -225,8 +225,18 @@ pub mod runtime {
         AuditPolicy, ExecutionProfileV1, ExecutionRequest, LinkError, LinkedArtifact,
         NondeterminismPolicy, RunLimits, Runtime, TracePolicy,
     };
-    #[cfg(feature = "native-jit")]
-    pub use rsscript_vm::{NativeCostModel, NativeJitOptions};
+}
+
+/// Explicitly unstable, opt-in execution engines.
+///
+/// Types in this module are outside the reviewed SDK compatibility contract.
+/// Hosts must opt into the `native-jit` Cargo feature and pin the repository
+/// revision while using them.
+#[cfg(feature = "native-jit")]
+pub mod experimental {
+    pub mod native_jit {
+        pub use rsscript_vm::{NativeCostModel, NativeJitOptions};
+    }
 }
 
 #[cfg(feature = "execution")]

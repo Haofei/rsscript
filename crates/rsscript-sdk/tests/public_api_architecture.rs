@@ -234,6 +234,9 @@ fn public_api_inventory_covers_the_current_migration_surface() {
         );
     }
     assert!(source.contains("pub fn native_jit(mut self, options: NativeJitOptions) -> Self"));
+    assert!(source.contains("pub mod experimental"));
+    assert!(source.contains("pub mod native_jit"));
+    assert!(source.contains("pub use rsscript_vm::{NativeCostModel, NativeJitOptions}"));
     assert!(
         !source.contains("native_jit_for_trusted_host"),
         "selecting the native engine must not silently remove execution limits"

@@ -65,9 +65,86 @@ impl ConfiguredCommand {
 /// Process capability that maps script-visible command IDs to fixed host
 /// executable configurations. Scripts can never supply an executable path,
 /// ambient environment, or ambient working directory.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct ConfiguredProcessProvider {
     commands: BTreeMap<String, ConfiguredCommand>,
+    execution_slots: Arc<ProcessConcurrencySlots>,
+}
+
+/// Instance-level cap for child processes and their two pipe-reader workers.
+/// The effective process limit is the lower of `max_in_flight_processes` and
+/// half of `max_worker_threads`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProcessConcurrencyPolicy {
+    pub max_in_flight_processes: usize,
+    pub max_worker_threads: usize,
+}
+
+impl Default for ProcessConcurrencyPolicy {
+    fn default() -> Self {
+        Self {
+            max_in_flight_processes: 8,
+            max_worker_threads: 16,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ProcessConcurrencySlots {
+    active: AtomicUsize,
+    limit: usize,
+}
+
+impl ProcessConcurrencySlots {
+    fn from_policy(policy: ProcessConcurrencyPolicy) -> Self {
+        Self {
+            active: AtomicUsize::new(0),
+            limit: policy
+                .max_in_flight_processes
+                .min(policy.max_worker_threads / 2),
+        }
+    }
+
+    fn try_acquire(self: &Arc<Self>) -> Result<ProcessConcurrencyPermit, ProviderError> {
+        let mut active = self.active.load(Ordering::Acquire);
+        loop {
+            if active >= self.limit {
+                return Err(ProviderError::resource_exhausted(format!(
+                    "process Provider concurrency limit ({}) is exhausted",
+                    self.limit
+                )));
+            }
+            match self.active.compare_exchange_weak(
+                active,
+                active + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Ok(ProcessConcurrencyPermit(Arc::clone(self))),
+                Err(observed) => active = observed,
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ProcessConcurrencyPermit(Arc<ProcessConcurrencySlots>);
+
+impl Drop for ProcessConcurrencyPermit {
+    fn drop(&mut self) {
+        self.0.active.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+impl Default for ConfiguredProcessProvider {
+    fn default() -> Self {
+        Self {
+            commands: BTreeMap::new(),
+            execution_slots: Arc::new(ProcessConcurrencySlots::from_policy(
+                ProcessConcurrencyPolicy::default(),
+            )),
+        }
+    }
 }
 
 impl ConfiguredProcessProvider {
@@ -77,16 +154,25 @@ impl ConfiguredProcessProvider {
                 .into_iter()
                 .map(|(id, command)| (id.into(), command))
                 .collect(),
+            execution_slots: Arc::new(ProcessConcurrencySlots::from_policy(
+                ProcessConcurrencyPolicy::default(),
+            )),
         }
     }
 
+    pub fn with_concurrency_policy(mut self, policy: ProcessConcurrencyPolicy) -> Self {
+        self.execution_slots = Arc::new(ProcessConcurrencySlots::from_policy(policy));
+        self
+    }
+
     pub fn functions(&self) -> BTreeMap<ExternalSymbol, ProviderFunction<WireInterpreterFn>> {
-        functions_from_commands(self.commands.clone())
+        functions_from_commands(self.commands.clone(), Arc::clone(&self.execution_slots))
     }
 }
 
 fn functions_from_commands(
     commands: BTreeMap<String, ConfiguredCommand>,
+    execution_slots: Arc<ProcessConcurrencySlots>,
 ) -> BTreeMap<ExternalSymbol, ProviderFunction<WireInterpreterFn>> {
     let contract = descriptor();
     let function = contract.functions.into_iter().next().unwrap();
@@ -140,6 +226,7 @@ fn functions_from_commands(
                         configured.max_script_args
                     )));
                 }
+                let _execution_permit = execution_slots.try_acquire()?;
                 let mut command = Command::new(&configured.executable);
                 command
                     .env_clear()
@@ -280,6 +367,27 @@ fn join_pipe(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn instance_concurrency_slots_fail_closed_and_release() {
+        let slots = Arc::new(ProcessConcurrencySlots::from_policy(
+            ProcessConcurrencyPolicy {
+                max_in_flight_processes: 1,
+                max_worker_threads: 2,
+            },
+        ));
+        let permit = slots.try_acquire().expect("first process slot");
+        let error = slots
+            .try_acquire()
+            .expect_err("second process slot must fail");
+        assert_eq!(
+            error.code,
+            rsscript_provider_api::ProviderErrorCode::ResourceExhausted
+        );
+        drop(permit);
+        slots.try_acquire().expect("released process slot");
+    }
+
     #[test]
     fn conforms_to_provider_contract() {
         let report = rsscript_provider_conformance::assert_wire_provider_conforms(

@@ -17,7 +17,7 @@ Providers, JIT tiers or speculation, AOT/native surfaces, package publishing,
 language-level policy, or a registry.
 
 The authoritative package maturity inventory is
-[`workspace-tiers.toml`](workspace-tiers.toml). Architecture tests require every
+[`workspace-tiers.toml`](../architecture/workspace-tiers.toml). Architecture tests require every
 workspace package to occur in exactly one tier and require only Core,
 applications, and the reference runner to be root default members.
 

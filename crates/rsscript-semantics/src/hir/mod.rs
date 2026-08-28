@@ -547,3 +547,6 @@ use infer::{
     substituted_field_type,
 };
 use lower::callee_name;
+
+#[cfg(test)]
+mod tests;

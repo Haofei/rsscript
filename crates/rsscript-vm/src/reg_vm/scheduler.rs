@@ -76,7 +76,7 @@ impl RegVm {
             written[index] = true;
         }
         #[cfg(feature = "native-jit")]
-        let function_ordinal = self.jit_state.function_ordinal(&func);
+        let function_ordinal = func.ordinal;
         let frames = vec![Frame {
             func,
             #[cfg(feature = "native-jit")]
@@ -514,6 +514,7 @@ mod tests {
 
     fn cancellation_unit() -> Rc<RegUnit> {
         let main = RegFunction {
+            ordinal: 0,
             name: "main".to_string(),
             params: 0,
             captures: 0,
@@ -531,6 +532,7 @@ mod tests {
             ],
         };
         let worker = RegFunction {
+            ordinal: 1,
             name: "worker".to_string(),
             params: 0,
             captures: 0,
@@ -554,12 +556,7 @@ mod tests {
 
     #[test]
     fn explicit_cancel_reaps_a_child_without_marking_it_completed() {
-        let mut vm = RegVm::new(
-            cancellation_unit(),
-            "sha256:test-cancel".to_string(),
-            vec![],
-            HashMap::new(),
-        );
+        let mut vm = RegVm::new(cancellation_unit(), vec![], HashMap::new());
 
         assert!(matches!(vm.run_program("main"), Ok(VmValue::Unit)));
         let usage = vm.usage();
@@ -571,12 +568,7 @@ mod tests {
 
     #[test]
     fn explicit_cancel_rejects_an_unknown_handle() {
-        let mut vm = RegVm::new(
-            cancellation_unit(),
-            "sha256:test-cancel".to_string(),
-            vec![],
-            HashMap::new(),
-        );
+        let mut vm = RegVm::new(cancellation_unit(), vec![], HashMap::new());
         assert!(matches!(
             vm.cancel_task(99),
             Err(EvalError::Runtime(message)) if message.contains("unknown or already-reaped")
@@ -585,12 +577,7 @@ mod tests {
 
     #[test]
     fn cancelling_a_parked_task_drains_its_tracked_resource_scopes() {
-        let mut vm = RegVm::new(
-            cancellation_unit(),
-            "sha256:test-resource-cancel".to_string(),
-            vec![],
-            HashMap::new(),
-        );
+        let mut vm = RegVm::new(cancellation_unit(), vec![], HashMap::new());
         let root = Rc::clone(&vm.unit.functions[0]);
         vm.create_task(root, Vec::new());
         let worker = Rc::clone(&vm.unit.functions[1]);

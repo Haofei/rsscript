@@ -3,18 +3,34 @@
 //! A verified bytecode program is immutable data. JIT planning data therefore
 //! never lives on `RegFunction` (which is part of that decoded program): it is
 //! owned by one evaluation and indexed directly by stable function ordinal.
-//! Pointer lookup is only an internal bridge from the decoded register function
-//! to that ordinal; no pointer identity is retained as the identity of a program
-//! or a cache entry.
+//! Every caller carries the verified function ordinal explicitly; neither
+//! pointer identity nor an unused program-digest wrapper participates in state
+//! lookup.
 
 use super::*;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct VerifiedProgramIdentity(String);
+pub(crate) trait FunctionOrdinal {
+    fn function_ordinal(self) -> usize;
+}
 
-impl VerifiedProgramIdentity {
-    pub(super) fn from_executable_digest(digest: impl Into<String>) -> Self {
-        Self(digest.into())
+impl FunctionOrdinal for usize {
+    #[inline(always)]
+    fn function_ordinal(self) -> usize {
+        self
+    }
+}
+
+impl FunctionOrdinal for &RegFunction {
+    #[inline(always)]
+    fn function_ordinal(self) -> usize {
+        self.ordinal
+    }
+}
+
+impl FunctionOrdinal for &Rc<RegFunction> {
+    #[inline(always)]
+    fn function_ordinal(self) -> usize {
+        self.ordinal
     }
 }
 
@@ -42,129 +58,105 @@ struct JitFunctionState {
 /// feedback with it.
 #[derive(Debug)]
 pub(crate) struct JitState {
-    _program: VerifiedProgramIdentity,
-    ordinal_by_function_pointer: HashMap<usize, u32>,
     functions: Vec<JitFunctionState>,
 }
 
 impl JitState {
-    pub(crate) fn for_verified_program(
-        executable_digest: impl Into<String>,
-        unit: &RegUnit,
-    ) -> Self {
-        let program = VerifiedProgramIdentity::from_executable_digest(executable_digest);
-        let mut ordinal_by_function_pointer = HashMap::new();
+    pub(crate) fn for_verified_program(unit: &RegUnit) -> Self {
         let mut functions = Vec::with_capacity(unit.functions.len());
         let eligibility = compute_jit_eligibility(&unit.functions);
-        for ((ordinal, function), eligible) in unit.functions.iter().enumerate().zip(eligibility) {
-            let ordinal = ordinal
-                .try_into()
-                .expect("verified function count fits u32");
-            ordinal_by_function_pointer.insert(Rc::as_ptr(function) as usize, ordinal);
+        for (function, eligible) in unit.functions.iter().zip(eligibility) {
             functions.push(JitFunctionState {
                 tier0_analysis: Some((eligible, jit_function_has_loop(&function.code))),
                 ..JitFunctionState::default()
             });
         }
-        Self {
-            _program: program,
-            ordinal_by_function_pointer,
-            functions,
-        }
+        Self { functions }
     }
 
     #[inline(always)]
-    fn ordinal(&self, function: &RegFunction) -> usize {
-        let pointer = function as *const RegFunction as usize;
-        self.ordinal_by_function_pointer
-            .get(&pointer)
-            .copied()
-            .expect("JIT state must be constructed from the decoded verified unit") as usize
-    }
-
-    #[inline(always)]
-    fn state(&self, function: &RegFunction) -> &JitFunctionState {
+    fn state(&self, function: impl FunctionOrdinal) -> &JitFunctionState {
         self.functions
-            .get(self.ordinal(function))
+            .get(function.function_ordinal())
             .expect("every JIT function ordinal has a stable function state")
     }
 
     #[cfg(feature = "native-jit")]
     #[inline(always)]
-    fn state_mut(&mut self, function: &RegFunction) -> &mut JitFunctionState {
-        let ordinal = self.ordinal(function);
+    fn state_mut(&mut self, function: impl FunctionOrdinal) -> &mut JitFunctionState {
         self.functions
-            .get_mut(ordinal)
+            .get_mut(function.function_ordinal())
             .expect("every JIT function ordinal has a stable function state")
     }
 
-    /// Stable, evaluation-local function identity for native side tables.
-    #[cfg(feature = "native-jit")]
-    #[inline(always)]
-    pub(crate) fn function_ordinal(&self, function: &RegFunction) -> usize {
-        self.ordinal(function)
+    pub(crate) fn tier0_analysis(
+        &self,
+        function_ordinal: usize,
+        function: &RegFunction,
+    ) -> (bool, bool) {
+        self.state(function_ordinal)
+            .tier0_analysis
+            .unwrap_or_else(|| {
+                (
+                    function.code.iter().all(jit_supported_instruction),
+                    jit_function_has_loop(&function.code),
+                )
+            })
     }
 
-    pub(crate) fn tier0_analysis(&self, function: &RegFunction) -> (bool, bool) {
-        self.state(function).tier0_analysis.unwrap_or_else(|| {
-            (
-                function.code.iter().all(jit_supported_instruction),
-                jit_function_has_loop(&function.code),
-            )
-        })
-    }
-
-    pub(crate) fn self_recursion_kind(&self, function: &RegFunction) -> Option<SelfRecursionKind> {
+    pub(crate) fn self_recursion_kind(
+        &self,
+        function: impl FunctionOrdinal,
+    ) -> Option<SelfRecursionKind> {
         self.state(function).self_recursion_kind
     }
 
     pub(crate) fn set_self_recursion_kind(
         &mut self,
-        function: &RegFunction,
+        function: impl FunctionOrdinal,
         kind: SelfRecursionKind,
     ) {
-        let ordinal = self.ordinal(function);
-        self.functions[ordinal].self_recursion_kind = Some(kind);
+        self.functions[function.function_ordinal()].self_recursion_kind = Some(kind);
     }
 
     #[cfg(feature = "native-jit")]
-    pub(crate) fn native_status(&self, function: &RegFunction) -> u8 {
+    pub(crate) fn native_status(&self, function: impl FunctionOrdinal) -> u8 {
         self.state(function).native_status
     }
 
     #[cfg(feature = "native-jit")]
-    pub(crate) fn set_native_status(&mut self, function: &RegFunction, status: u8) {
+    pub(crate) fn set_native_status(&mut self, function: impl FunctionOrdinal, status: u8) {
         self.state_mut(function).native_status = status;
     }
 
     #[cfg(feature = "jit-speculation")]
-    pub(crate) fn call_count(&self, function: &RegFunction) -> u32 {
+    pub(crate) fn call_count(&self, function: impl FunctionOrdinal) -> u32 {
         self.state(function).call_count
     }
 
     #[cfg(all(feature = "native-jit", not(feature = "jit-speculation")))]
-    pub(crate) fn call_count(&self, _function: &RegFunction) -> u32 {
+    pub(crate) fn call_count(&self, _function: impl FunctionOrdinal) -> u32 {
         0
     }
 
     #[cfg(feature = "jit-speculation")]
-    pub(crate) fn branch_count(&self, function: &RegFunction) -> u32 {
+    pub(crate) fn branch_count(&self, function: impl FunctionOrdinal) -> u32 {
         self.state(function).branch_count
     }
 
     #[cfg(feature = "jit-speculation")]
-    pub(crate) fn profile(&self, function: &RegFunction) -> Option<&FunctionProfile> {
+    pub(crate) fn profile(&self, function: impl FunctionOrdinal) -> Option<&FunctionProfile> {
         self.state(function).profile.as_deref()
     }
 
     #[cfg(all(feature = "native-jit", not(feature = "jit-speculation")))]
-    pub(crate) fn profile(&self, _function: &RegFunction) -> Option<&FunctionProfile> {
+    pub(crate) fn profile(&self, _function: impl FunctionOrdinal) -> Option<&FunctionProfile> {
         None
     }
 
     #[cfg(feature = "jit-speculation")]
     #[inline(always)]
-    pub(crate) fn should_record_call(&self, function: &RegFunction) -> bool {
+    pub(crate) fn should_record_call(&self, function: impl FunctionOrdinal) -> bool {
         self.state(function).call_count < PROFILE_RECORD_LIMIT
     }
 
@@ -173,7 +165,7 @@ impl JitState {
     #[cfg(feature = "jit-speculation")]
     pub(crate) fn record_call_site(
         &mut self,
-        function: &RegFunction,
+        function: impl FunctionOrdinal,
         instr_idx: usize,
         callee_key: u64,
         captures_scalar: bool,
@@ -199,7 +191,7 @@ impl JitState {
     #[cfg(feature = "jit-speculation")]
     pub(crate) fn record_branch_site(
         &mut self,
-        function: &RegFunction,
+        function: impl FunctionOrdinal,
         instr_idx: usize,
         taken: bool,
     ) {
@@ -240,35 +232,31 @@ mod tests {
 
     #[cfg(feature = "native-jit")]
     #[test]
-    fn state_keys_function_feedback_by_verified_program_digest_and_ordinal() {
+    fn state_is_indexed_by_verified_function_ordinal() {
         let unit = unit();
-        let first = JitState::for_verified_program("sha256:first", &unit);
-        let second = JitState::for_verified_program("sha256:second", &unit);
-        assert_eq!(first.function_ordinal(&unit.functions[0]), 0);
-        assert_eq!(second.function_ordinal(&unit.functions[0]), 0);
-        assert_ne!(first._program, second._program);
+        let state = JitState::for_verified_program(&unit);
+        assert_eq!(state.tier0_analysis(0, &unit.functions[0]), (true, false));
     }
 
     #[cfg(feature = "jit-speculation")]
     #[test]
     fn profile_feedback_is_isolated_per_evaluation() {
         let unit = unit();
-        let function = &unit.functions[0];
-        let mut first = JitState::for_verified_program("sha256:first", &unit);
-        let second = JitState::for_verified_program("sha256:second", &unit);
+        let mut first = JitState::for_verified_program(&unit);
+        let second = JitState::for_verified_program(&unit);
 
         for _ in 0..=PROFILE_WARMUP {
-            first.record_call_site(function, 7, 42, true);
+            first.record_call_site(0, 7, 42, true);
         }
 
-        assert_eq!(first.call_count(function), PROFILE_WARMUP + 1);
+        assert_eq!(first.call_count(0), PROFILE_WARMUP + 1);
         assert!(
             first
-                .profile(function)
+                .profile(0)
                 .and_then(|profile| profile.call_sites.get(&7))
                 .is_some()
         );
-        assert_eq!(second.call_count(function), 0);
-        assert!(second.profile(function).is_none());
+        assert_eq!(second.call_count(0), 0);
+        assert!(second.profile(0).is_none());
     }
 }

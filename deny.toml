@@ -1,0 +1,41 @@
+[graph]
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-apple-darwin",
+  "x86_64-pc-windows-msvc",
+]
+all-features = true
+
+[advisories]
+# Bytecode v1 uses serde_cbor as part of its persisted encoding contract.
+# Replacing it requires a versioned bytecode migration rather than a dependency
+# swap. The decoder remains bounded and verifier-gated; track the format change
+# separately and keep every other advisory blocking.
+ignore = ["RUSTSEC-2021-0127"]
+
+[bans]
+multiple-versions = "warn"
+# Internal path dependencies are intentionally lockstep during the alpha
+# workspace phase. Keep them visible without blocking until publication adds
+# explicit compatible versions.
+wildcards = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+
+[licenses]
+confidence-threshold = 0.8
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "CDLA-Permissive-2.0",
+  "ISC",
+  "MIT",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]

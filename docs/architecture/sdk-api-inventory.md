@@ -77,7 +77,9 @@ snapshot plus the immutable `FrontendInputSnapshot` accepted by `Compiler`.
 ## Optional native tier
 
 The trusted in-process native tier is an explicit SDK feature. Hosts select it
-through typed `NativeJitOptions`; selecting it never changes execution limits.
+through typed `experimental::native_jit::NativeJitOptions`; the experimental
+namespace deliberately carries no Rust source-compatibility promise, while
+selecting it never changes execution limits.
 The report exposes only stable engine telemetry, not `NativeStats`, opcodes,
 registers, OSR plans, or backend implementation state. AOT, REIR, review/risk,
 and compiler-internal APIs remain outside this inventory.

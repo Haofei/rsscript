@@ -1,9 +1,10 @@
 [package]
 name = "rsscript-jit-cranelift"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 description = "Optional bounded Cranelift execution engine for trusted in-process RSScript hosts"
-license = "MIT OR Apache-2.0"
+license.workspace = true
+rust-version.workspace = true
 publish = false
 
 [features]

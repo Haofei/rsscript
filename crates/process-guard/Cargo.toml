@@ -1,9 +1,10 @@
 [package]
 name = "rss-process-guard"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 description = "Small process resource-limit boundary for RSScript child workers"
-license = "MIT OR Apache-2.0"
+license.workspace = true
+rust-version.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 serde_json = "1"

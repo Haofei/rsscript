@@ -57,7 +57,9 @@ impl WireUnit {
         let functions = self
             .functions
             .into_iter()
-            .map(|function| RegFunction {
+            .enumerate()
+            .map(|(ordinal, function)| RegFunction {
+                ordinal,
                 name: function.name,
                 params: function.params,
                 captures: function.captures,

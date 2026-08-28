@@ -1,9 +1,10 @@
 [package]
 name = "rsscript-compiler"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 description = "RSScript frontend, semantic analysis, and provider-neutral lowering implementation"
-license = "MIT OR Apache-2.0"
+license.workspace = true
+rust-version.workspace = true
 publish = false
 
 [lib]
@@ -41,7 +42,6 @@ lowering = [
 # is the normal compiler-to-artifact path; execution remains an SDK/runtime
 # concern.
 bytecode = ["lowering", "dep:rsscript-bytecode", "dep:rsscript-codegen-vm"]
-language-service = []
 # The RSS-written frontend is a research parity harness.  Keep it out of Core
 # test builds; the dedicated self-host workflow opts in explicitly.
 selfhost-parity = ["bytecode", "dep:rsscript-vm"]

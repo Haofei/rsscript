@@ -87,6 +87,10 @@ pub(crate) enum SelfRecursionKind {
 
 #[derive(Debug, Clone)]
 pub(crate) struct RegFunction {
+    /// Stable ordinal assigned by the verified bytecode decoder. This is a
+    /// general program identity used by frames and side tables; it is not JIT
+    /// feedback and never changes during execution.
+    pub(crate) ordinal: usize,
     // `params`/`captures` are metadata read only by the native JIT (translation);
     // `name` is retained as diagnostic/debug metadata.
     #[allow(dead_code)]
@@ -283,6 +287,7 @@ impl RegFunction {
     #[allow(dead_code)]
     pub(crate) fn placeholder(name: String) -> Self {
         Self {
+            ordinal: 0,
             name,
             params: 0,
             captures: 0,

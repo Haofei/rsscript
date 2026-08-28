@@ -1332,6 +1332,7 @@ mod tests {
 
     fn function(regs: usize, code: Vec<RegInstr>) -> RegFunction {
         RegFunction {
+            ordinal: 0,
             name: "typed".into(),
             params: 0,
             captures: 0,

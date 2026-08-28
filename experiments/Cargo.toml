@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "artifact-store",
     "aot-backend",
     "aot-model",
     "aot-runtime",
@@ -14,3 +15,17 @@ default-members = []
 # deliberately stay outside both workspace member sets so a Core build cannot
 # accidentally compile or publish their fixture bridge.
 exclude = ["fixtures/native-abi-fixture/native/rust"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.96.1"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"

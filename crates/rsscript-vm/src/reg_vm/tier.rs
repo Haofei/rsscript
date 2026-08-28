@@ -377,7 +377,7 @@ fn native_compiled_call_sites_inner(
         let Some(callee) = unit.functions.get(*function) else {
             continue;
         };
-        let callee_key = jit_state.function_ordinal(callee);
+        let callee_key = callee.ordinal;
         if callee_key == self_key {
             continue;
         }
@@ -651,7 +651,7 @@ impl RegVm {
         // The unit is needed to resolve inlinable callees; clone the `Rc` so the
         // mutable `self.native` borrow below doesn't conflict.
         let unit = Rc::clone(&self.unit);
-        let native_key = self.jit_state.function_ordinal(func);
+        let native_key = func.ordinal;
         let profile = self.jit_state.profile(func);
         let call_count = self.jit_state.call_count(func);
         let Some(verified_facts) = self
@@ -1679,7 +1679,7 @@ impl RegVm {
     #[cfg(feature = "native-jit")]
     #[allow(dead_code)]
     pub(super) fn resolve_osr_candidate(&mut self, func: &RegFunction) -> Option<usize> {
-        let function = self.jit_state.function_ordinal(func);
+        let function = func.ordinal;
         self.resolve_osr_candidates(function, func).first_header()
     }
 
@@ -2624,6 +2624,7 @@ impl RegVm {
                         if eregs != func.regs || ecode.len() != func.code.len() =>
                     {
                         let f_e = RegFunction {
+                            ordinal: func.ordinal,
                             name: func.name.clone(),
                             params: func.params,
                             captures: func.captures,
@@ -3842,9 +3843,7 @@ impl RegVm {
                     // entered, so the report's `osr: entered` positive matches the
                     // real outcome. Gated on `report`; no effect on any decision.
                     if native.report {
-                        native
-                            .report_osr_ok
-                            .insert(self.jit_state.function_ordinal(func));
+                        native.report_osr_ok.insert(func.ordinal);
                     }
                 }
                 scratch.restore(self.native.as_mut());

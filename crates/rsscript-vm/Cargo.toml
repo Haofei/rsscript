@@ -1,9 +1,10 @@
 [package]
 name = "rsscript-vm"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 description = "Verified bytecode VM for owned RSScript executable IR"
-license = "MIT OR Apache-2.0"
+license.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
@@ -34,9 +35,6 @@ jit-speculation = ["native-jit", "vm-jit/speculation"]
 # estimate. Keep it unavailable to the stable SDK until an explicit-stack or
 # measured-stack implementation provides a real boundary.
 jit-recursion-experimental = ["native-jit", "vm-jit/recursion"]
-# Compatibility alias retained for research invocations. The supported native
-# path independently enables only the verifier/alias-gated read-only LICM subset.
-jit-memoization-experimental = ["native-jit", "vm-jit/memoization"]
 # Nested and loop-carried struct scalar replacement has not met the canonical
 # workload retention threshold. Keep the implementation available to VM
 # research builds without making it part of the stable SDK `native-jit` path.

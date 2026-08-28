@@ -1,8 +1,9 @@
 use rsscript_sdk::{
     artifact::ArtifactVerifier,
     compile::Compiler,
+    experimental::native_jit::NativeJitOptions,
     provider_api::ProviderRegistry,
-    runtime::{ExecutionRequest, NativeJitOptions, RunLimits, Runtime},
+    runtime::{ExecutionRequest, RunLimits, Runtime},
 };
 use std::time::Instant;
 

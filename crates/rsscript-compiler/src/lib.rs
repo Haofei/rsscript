@@ -16,19 +16,15 @@ mod diagnostic {
     pub use rsscript_diagnostics::*;
 }
 mod editor_grammar;
-mod formatter;
 mod generate;
-mod hir;
 #[cfg(all(test, feature = "selfhost-parity"))]
 mod interface_metadata;
 mod interfaces;
 mod lexer {
     pub(crate) use rsscript_syntax::lexer::*;
 }
-mod lint;
 #[cfg(all(test, feature = "selfhost-parity"))]
 mod selfhost_parity;
-mod semantic;
 mod symbols;
 pub mod syntax;
 #[cfg(all(test, feature = "selfhost-parity"))]
@@ -80,13 +76,11 @@ pub use diagnostic::{
     format_diagnostics_json_with_source,
 };
 pub use editor_grammar::{VSCODE_GRAMMAR_PATH, vscode_tmlanguage_json};
-pub use formatter::{format_program, format_source};
 pub use generate::{
     CommitBehavior, Completion, CompletionKind, ContinuationOptions, Continuations, Effect,
     ExpectedType, GenerateContext, LiteralClass, PrefixStatus, SymbolCompleteness, TextRange,
     TypeRef, prefix_status, valid_continuations,
 };
-pub use lint::lint_source;
 pub use rsscript_semantics::{
     analyze_frontend_input_snapshot_with_operation, analyze_source, analyze_source_result,
     analyze_source_result_with_operation, analyze_source_with_core, analyze_source_with_interfaces,
@@ -100,8 +94,9 @@ pub use rsscript_semantics::{
     validate_sources_with_interfaces, validate_sources_with_interfaces_with_operation,
     validate_sources_with_interfaces_without_core,
 };
+pub use rsscript_syntax::{format_program, format_source, lint_source};
 
-pub use semantic::{
+pub use rsscript_semantics::{
     AnalysisResult, FrontendCompletion, FrontendInputSnapshot, FrontendStopReason,
     SemanticDatabase, SourceFileSnapshot, SourceSnapshot, ValidatedProgram,
 };

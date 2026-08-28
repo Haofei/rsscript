@@ -871,18 +871,24 @@ fn jit_planning_state_is_kept_out_of_verified_program_objects() {
     let entry = read(&root.join("crates/rsscript-vm/src/reg_vm/tier/jit_entry.rs"));
 
     assert!(tier.contains("mod state;"));
-    for required in [
-        "struct VerifiedProgramIdentity",
-        "struct JitState",
-        "from_executable_digest",
-        "ordinal_by_function_pointer: HashMap<usize, u32>",
-        "functions: Vec<JitFunctionState>",
-    ] {
+    for required in ["struct JitState", "functions: Vec<JitFunctionState>"] {
         assert!(
             state.contains(required),
             "JIT state side table must retain `{required}`"
         );
     }
+    for retired in [
+        "struct VerifiedProgramIdentity",
+        "from_executable_digest",
+        "ordinal_by_function_pointer",
+    ] {
+        assert!(
+            !state.contains(retired),
+            "retired JIT identity bridge must not return: `{retired}`"
+        );
+    }
+    assert!(model.contains("pub(crate) ordinal: usize"));
+    assert!(bytecode.contains(".enumerate()"));
     for forbidden in [
         "\n    jit_analysis:",
         "\n    jit_self_recursion_kind:",
@@ -1622,7 +1628,7 @@ fn cranelift_engine_keeps_research_features_and_raw_abi_out_of_the_stable_surfac
     assert!(!native_jit.contains("memoization"));
     assert!(vm_manifest.contains("jit-speculation"));
     assert!(vm_manifest.contains("jit-recursion-experimental"));
-    assert!(vm_manifest.contains("jit-memoization-experimental"));
+    assert!(!vm_manifest.contains("jit-memoization-experimental"));
     assert!(vm_manifest.contains("jit-struct-sr-experimental"));
 
     let scalar_replacement =
@@ -2106,14 +2112,15 @@ fn package_analysis_schema_is_an_artifact_contract_not_compiler_implementation()
             .exists(),
         "compiler must not retain package evidence presentation"
     );
-    let package_format = read(&root.join("crates/rsscript-review/src/format.rs"));
+    let package_format = read(&root.join("crates/rsscript-package-review/src/format.rs"));
     assert!(
         !package_format.contains("format_package_analysis_json"),
         "review adapter must not define a second presentation for Artifact-owned analysis evidence"
     );
-    let review_manifest: toml::Value =
-        toml::from_str(&read(&root.join("crates/rsscript-review/Cargo.toml")))
-            .expect("review adapter manifest should parse");
+    let review_manifest: toml::Value = toml::from_str(&read(
+        &root.join("crates/rsscript-package-review/Cargo.toml"),
+    ))
+    .expect("package review manifest should parse");
     let review_dependencies = normal_dependency_packages(&review_manifest);
     assert!(
         review_dependencies.contains("rsscript-package-model"),
@@ -2296,10 +2303,8 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
             .is_file()
     );
     assert!(
-        rust_files_below(&root.join("crates/rsscript-compiler/src/hir"))
-            .iter()
-            .all(|path| path.ends_with("tests.rs")),
-        "the compiler façade must not retain HIR implementation files"
+        !root.join("crates/rsscript-compiler/src/hir").exists(),
+        "the compiler façade must not retain a HIR compatibility directory"
     );
 
     let semantics = read(&root.join("crates/rsscript-semantics/src/lib.rs"));
@@ -2455,7 +2460,13 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
             "semantics must own phase contract `{owned}`"
         );
     }
-    let compiler_projection = read(&root.join("crates/rsscript-compiler/src/semantic.rs"));
+    assert!(
+        !root
+            .join("crates/rsscript-compiler/src/semantic.rs")
+            .exists(),
+        "the closed semantic forwarding module must remain deleted"
+    );
+    let compiler_projection = read(&root.join("crates/rsscript-compiler/src/lib.rs"));
     for forbidden in [
         "pub struct SourceSnapshot",
         "pub struct SemanticDatabase",

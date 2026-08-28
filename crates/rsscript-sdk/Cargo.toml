@@ -1,9 +1,10 @@
 [package]
 name = "rsscript-sdk"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 description = "Stable compiler, VM, and Provider embedding facade for RSScript"
-license = "MIT OR Apache-2.0"
+license.workspace = true
+rust-version.workspace = true
 publish = false
 autotests = false
 
@@ -35,7 +36,7 @@ native-jit = [
 [dependencies]
 rsscript-abi-model = { path = "../rsscript-abi-model", optional = true }
 rsscript-artifact = { path = "../rsscript-artifact", optional = true }
-rsscript_compiler = { package = "rsscript-compiler", path = "../rsscript-compiler", default-features = false, features = ["language-service"] }
+rsscript_compiler = { package = "rsscript-compiler", path = "../rsscript-compiler", default-features = false }
 rsscript-operation = { path = "../rsscript-operation" }
 rsscript-bytecode = { path = "../rsscript-bytecode", optional = true }
 rsscript-interface-catalog = { path = "../rsscript-interface-catalog", optional = true }

@@ -33,6 +33,11 @@ jobs:
         with:
           tool: nextest@0.9.140
 
+      - name: Install release supply-chain tools
+        run: |
+          cargo install cargo-deny --locked --version 0.20.2
+          cargo install cargo-cyclonedx --locked --version 0.5.9
+
       - name: Validate release identity
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
@@ -56,9 +61,28 @@ jobs:
 
       - name: Validate locked workspace
         run: |
+          cargo deny check
           cargo fmt --all -- --check
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked --all-targets
+          cargo test --locked -p rsscript-sdk --features execution
+          cargo test --locked -p rsscript-sdk --features native-jit --test native_jit_smoke
+          cargo test --locked -p rsscript-sdk --features native-jit --test native_jit_differential
+          cargo run --locked -p rsscript-xtask -- test-tier providers
+          cargo run --locked -p rsscript-xtask -- test-tier integrations
+          cargo run --locked -p rsscript-xtask -- test-tier runner
+          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          cargo cyclonedx --format json --describe binaries
+
+      - name: Upload release SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-cyclonedx-${{ github.sha }}
+          path: |
+            crates/rsscript-cli/rss_bin.cdx.json
+            crates/lsp/rss-lsp_bin.cdx.json
+          if-no-files-found: error
+          retention-days: 30
 
   release-build:
     needs: [release-validation]

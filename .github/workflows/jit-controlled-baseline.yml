@@ -5,6 +5,8 @@ on:
 
 permissions:
   contents: read
+  id-token: write
+  attestations: write
 
 jobs:
   collect:
@@ -25,8 +27,37 @@ jobs:
             --cpu-governor "${RSS_JIT_CPU_GOVERNOR:?runner must declare governor}" \
             --samples 25 --warmup 3 \
             --output "canonical-$(uname -s | tr A-Z a-z)-$(uname -m).json"
+      - name: Record immutable evidence identity
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 - <<'PY'
+          import glob, hashlib, json, os, pathlib
+          files = sorted(glob.glob("canonical-*.json"))
+          if len(files) != 1:
+              raise SystemExit(f"expected one canonical baseline, found {files}")
+          path = pathlib.Path(files[0])
+          evidence = {
+              "schema": "rsscript.native_jit_baseline_evidence.v1",
+              "commit": os.environ["GITHUB_SHA"],
+              "workflow_run": os.environ["RUN_URL"],
+              "artifact_file": path.name,
+              "artifact_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+          }
+          pathlib.Path("canonical-evidence.json").write_text(
+              json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+      - name: Attest controlled baseline
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: "canonical-*.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: native-jit-controlled-baseline
-          path: canonical-*.json
+          path: |
+            canonical-*.json
+            canonical-evidence.json
           if-no-files-found: error
+          retention-days: 90

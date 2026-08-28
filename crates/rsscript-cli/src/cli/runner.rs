@@ -19,7 +19,7 @@ use rsscript_runner_protocol::{
     read_response, validate_response_profile, write_request, write_response,
 };
 #[cfg(feature = "native-jit")]
-use rsscript_sdk::runtime::NativeJitOptions;
+use rsscript_sdk::experimental::native_jit::NativeJitOptions;
 use rsscript_sdk::{
     artifact::{
         ARTIFACT_BUNDLE_MAGIC, AdmissionError, ArtifactAdmission, ArtifactAdmissionPolicy,

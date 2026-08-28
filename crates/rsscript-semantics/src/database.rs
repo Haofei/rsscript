@@ -2325,6 +2325,67 @@ mod tests {
     }
 
     #[test]
+    fn validated_program_requires_complete_error_free_analysis() {
+        let validated = crate::validate_source("main.rss", "fn main() -> Unit { return Unit }\n")
+            .expect("clean source should validate");
+        assert_eq!(validated.database().sources().files()[0].path(), "main.rss");
+        assert_eq!(validated.database().source_programs().len(), 1);
+
+        let diagnostics =
+            crate::validate_source("invalid.rss", "fn main() -> Int { return Missing.value }\n")
+                .expect_err("frontend errors must not construct ValidatedProgram");
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.severity.is_error())
+        );
+    }
+
+    #[test]
+    fn semantic_database_interns_shared_signature_and_field_types() {
+        let source = r#"
+struct Holder<U> {
+    value: U
+}
+
+fn first<U, W>(left: read U, right: read W) -> U {
+    return left
+}
+
+fn main() -> Unit {
+    let value: Int = first(left: read 1, right: read "unused")
+    return Unit
+}
+"#;
+        let validated =
+            crate::validate_source("structural-types.rss", source).expect("valid source");
+        let database = validated.database();
+        let types = database.hir().semantic_types();
+        let first = types
+            .functions()
+            .find(|(name, _)| *name == "first")
+            .map(|(_, facts)| facts)
+            .expect("first signature facts");
+        let holder = types.named_type("Holder").expect("Holder type facts");
+
+        assert_eq!(first.type_parameters.as_ref(), ["U", "W"]);
+        assert_eq!(types.arena().get(first.parameters[0].1).to_string(), "U");
+        assert_eq!(types.arena().get(first.parameters[1].1).to_string(), "W");
+        assert_eq!(
+            first
+                .return_type
+                .map(|ty| types.arena().get(ty).to_string())
+                .as_deref(),
+            Some("U")
+        );
+        assert_eq!(
+            first.parameters[0].1, holder.fields[0].1,
+            "structurally identical U facts must share one TypeId"
+        );
+        assert!(database.interned_type_count() >= 3);
+    }
+
+    #[test]
     fn frontend_input_snapshot_keeps_source_and_interface_roles_separate() {
         let input = FrontendInputSnapshot::from_sources(
             [("main.rss", "fn main() -> Unit { return Unit }")],

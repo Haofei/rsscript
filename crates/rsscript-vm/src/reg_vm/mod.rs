@@ -618,12 +618,7 @@ impl RegVmExecutable {
         external_bindings: HashMap<String, ExternalFunction>,
         plan: &ExecutionPlan,
     ) -> Result<RegVm, EvalError> {
-        let mut vm = RegVm::new(
-            Rc::clone(&self.unit),
-            self.artifact.header.executable_hash.clone(),
-            args,
-            external_bindings,
-        );
+        let mut vm = RegVm::new(Rc::clone(&self.unit), args, external_bindings);
         vm.set_limits(plan.limits.clone());
         vm.stream_stdout = plan.stdout == StdoutMode::Streaming;
         match &plan.tier {
@@ -2896,7 +2891,7 @@ fn jit_missed_opt_report(
         if func.code.len() <= 2 && profile_lines.is_empty() {
             continue;
         }
-        let key = jit_state.function_ordinal(func);
+        let key = func.ordinal;
         let mut block = vec![format!("jit-report: fn `{}`", func.name)];
 
         // --- Native-tier verdict --------------------------------------------------

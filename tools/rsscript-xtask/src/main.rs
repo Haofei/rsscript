@@ -128,15 +128,79 @@ fn main() -> Result<(), Box<dyn Error>> {
     match arguments.next().as_deref() {
         Some("core-metrics") => run_core_metrics(parse_arguments(arguments)?),
         Some("validate-ci") => validate_ci(),
+        Some("test-tier") => test_tier(arguments),
         _ => Err(
-            "usage:\n  cargo run -p rsscript-xtask --release -- core-metrics [--iterations N] [--output FILE] [--check SLO]\n  cargo run -p rsscript-xtask -- validate-ci"
+            "usage:\n  cargo run -p rsscript-xtask --release -- core-metrics [--iterations N] [--output FILE] [--check SLO]\n  cargo run -p rsscript-xtask -- validate-ci\n  cargo run -p rsscript-xtask -- test-tier TIER [--all-features]"
                 .into(),
         ),
     }
 }
 
+const PACKAGE_TIERS: &[&str] = &[
+    "core",
+    "applications",
+    "runner",
+    "providers",
+    "integrations",
+    "experimental",
+    "optional_engines",
+    "research",
+    "tooling",
+    "examples",
+];
+
+fn tier_document(root: &Path) -> Result<toml::Value, Box<dyn Error>> {
+    Ok(toml::from_str(&fs::read_to_string(
+        root.join("docs/architecture/workspace-tiers.toml"),
+    )?)?)
+}
+
+fn tier_packages(document: &toml::Value, tier: &str) -> Result<Vec<String>, Box<dyn Error>> {
+    if !PACKAGE_TIERS.contains(&tier) {
+        return Err(format!("unknown workspace tier `{tier}`").into());
+    }
+    document[tier]
+        .as_array()
+        .ok_or_else(|| format!("workspace tier `{tier}` must be an array"))?
+        .iter()
+        .map(|package| {
+            package
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| format!("workspace tier `{tier}` contains a non-string").into())
+        })
+        .collect()
+}
+
+fn test_tier(mut arguments: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
+    let tier = arguments.next().ok_or("test-tier requires a tier name")?;
+    let all_features = arguments.any(|argument| argument == "--all-features");
+    let root = workspace_root();
+    let document = tier_document(&root)?;
+    let packages = tier_packages(&document, &tier)?;
+    if packages.is_empty() {
+        println!("workspace tier `{tier}` is empty");
+        return Ok(());
+    }
+    let mut command = Command::new("cargo");
+    command.current_dir(&root).args(["test", "--locked"]);
+    if all_features {
+        command.arg("--all-features");
+    }
+    for package in &packages {
+        command.args(["-p", package]);
+    }
+    let status = command.status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("Cargo tests failed for workspace tier `{tier}`").into())
+    }
+}
+
 #[derive(Debug)]
 struct CargoPackageInventory {
+    manifest_dir: PathBuf,
     features: BTreeSet<String>,
     tests: BTreeSet<String>,
     test_sources: BTreeSet<PathBuf>,
@@ -149,6 +213,10 @@ fn validate_ci() -> Result<(), Box<dyn Error>> {
     let root = workspace_root();
     let root_inventory = cargo_inventory(&root, None)?;
     let experiments_inventory = cargo_inventory(&root, Some("experiments/Cargo.toml"))?;
+    validate_workspace_tiers(&root, &root_inventory)?;
+    validate_security_workflow_coverage(&root, &root_inventory)?;
+    validate_experimental_retention(&root)?;
+    validate_module_sizes(&root)?;
     let workflow_dir = root.join(".github/workflows");
     validate_sdk_test_reachability(&root, &root_inventory)?;
     let mut workflows = fs::read_dir(&workflow_dir)?
@@ -176,6 +244,72 @@ fn validate_ci() -> Result<(), Box<dyn Error>> {
         }
     }
     println!("validated {checked} workflow Cargo command line(s)");
+    Ok(())
+}
+
+fn validate_experimental_retention(root: &Path) -> Result<(), Box<dyn Error>> {
+    let path = root.join("docs/architecture/experimental-retention.toml");
+    let document: toml::Value = toml::from_str(&fs::read_to_string(&path)?)?;
+    if document["schema"].as_integer() != Some(1) {
+        return Err("experimental retention inventory must use schema 1".into());
+    }
+    let surfaces = document["surface"]
+        .as_array()
+        .ok_or("experimental retention inventory must contain [[surface]] entries")?;
+    let mut ids = BTreeSet::new();
+    for surface in surfaces {
+        let table = surface
+            .as_table()
+            .ok_or("experimental retention surface must be a table")?;
+        let required_strings = [
+            "id",
+            "owner",
+            "maturity",
+            "feature",
+            "canonical_workload",
+            "decision_by",
+            "removal_rule",
+        ];
+        for field in required_strings {
+            if table
+                .get(field)
+                .and_then(toml::Value::as_str)
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                return Err(format!("experimental retention entry is missing `{field}`").into());
+            }
+        }
+        let id = table["id"].as_str().expect("validated id");
+        if !ids.insert(id) {
+            return Err(format!("experimental retention id `{id}` is duplicated").into());
+        }
+        let date = table["decision_by"].as_str().expect("validated date");
+        if date.len() != 10
+            || date.as_bytes().get(4) != Some(&b'-')
+            || date.as_bytes().get(7) != Some(&b'-')
+            || !date
+                .bytes()
+                .enumerate()
+                .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
+        {
+            return Err(
+                format!("experimental retention `{id}` has invalid decision_by `{date}`").into(),
+            );
+        }
+        if table
+            .get("minimum_end_to_end_gain_percent")
+            .and_then(toml::Value::as_integer)
+            .is_none_or(|gain| !(0..=100).contains(&gain))
+        {
+            return Err(format!(
+                "experimental retention `{id}` needs a 0-100 minimum gain threshold"
+            )
+            .into());
+        }
+    }
+    if surfaces.is_empty() {
+        return Err("experimental retention inventory must not be empty".into());
+    }
     Ok(())
 }
 
@@ -242,6 +376,7 @@ fn cargo_inventory(
         inventory.insert(
             name.to_owned(),
             CargoPackageInventory {
+                manifest_dir: package_root.to_path_buf(),
                 features,
                 tests,
                 test_sources,
@@ -250,6 +385,162 @@ fn cargo_inventory(
         );
     }
     Ok(inventory)
+}
+
+fn validate_workspace_tiers(
+    root: &Path,
+    inventory: &BTreeMap<String, CargoPackageInventory>,
+) -> Result<(), Box<dyn Error>> {
+    let document = tier_document(root)?;
+    let mut classified = BTreeSet::new();
+    let ci = document["ci"]
+        .as_table()
+        .ok_or("workspace tier inventory must contain a [ci] table")?;
+    for tier in PACKAGE_TIERS {
+        let packages = tier_packages(&document, tier)?;
+        if !packages.is_empty() {
+            let workflows = ci
+                .get(*tier)
+                .and_then(toml::Value::as_array)
+                .ok_or_else(|| format!("non-empty tier `{tier}` must map to CI workflows"))?;
+            if workflows.is_empty() {
+                return Err(format!("non-empty tier `{tier}` has no CI workflow").into());
+            }
+            for workflow in workflows {
+                let workflow = workflow
+                    .as_str()
+                    .ok_or_else(|| format!("CI mapping for `{tier}` contains a non-string"))?;
+                if !root.join(".github/workflows").join(workflow).is_file() {
+                    return Err(format!("tier `{tier}` names missing workflow `{workflow}`").into());
+                }
+            }
+        }
+        for package in packages {
+            if !inventory.contains_key(&package) {
+                return Err(format!("tier `{tier}` contains unknown package `{package}`").into());
+            }
+            if !classified.insert(package.clone()) {
+                return Err(format!("package `{package}` occurs in multiple tiers").into());
+            }
+        }
+    }
+    let actual = inventory.keys().cloned().collect::<BTreeSet<_>>();
+    if classified != actual {
+        let missing = actual.difference(&classified).cloned().collect::<Vec<_>>();
+        let stale = classified.difference(&actual).cloned().collect::<Vec<_>>();
+        return Err(format!(
+            "workspace tier inventory mismatch; missing={missing:?}, stale={stale:?}"
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn validate_security_workflow_coverage(
+    root: &Path,
+    inventory: &BTreeMap<String, CargoPackageInventory>,
+) -> Result<(), Box<dyn Error>> {
+    let document = tier_document(root)?;
+    let boundaries = document["security_boundaries"]
+        .as_array()
+        .ok_or("workspace tier inventory must declare security_boundaries")?;
+    let workflow = fs::read_to_string(root.join(".github/workflows/security-sensitive.yml"))?;
+    let path_prefixes = workflow
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("- \"")?.strip_suffix("/**\""))
+        .collect::<Vec<_>>();
+    for package in boundaries {
+        let package = package
+            .as_str()
+            .ok_or("security_boundaries contains a non-string")?;
+        let metadata = inventory
+            .get(package)
+            .ok_or_else(|| format!("security boundary package `{package}` does not exist"))?;
+        let directory = metadata
+            .manifest_dir
+            .strip_prefix(root)
+            .map_err(|_| format!("package `{package}` is outside the root workspace"))?
+            .to_string_lossy()
+            .replace('\\', "/");
+        if !path_prefixes
+            .iter()
+            .any(|prefix| directory == *prefix || directory.starts_with(&format!("{prefix}/")))
+        {
+            return Err(format!(
+                "security boundary `{package}` is missing a path filter covering `{directory}/**`"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn validate_module_sizes(root: &Path) -> Result<(), Box<dyn Error>> {
+    let allowlist_path = root.join("docs/architecture/module-size-allowlist.toml");
+    let document: toml::Value = toml::from_str(&fs::read_to_string(&allowlist_path)?)?;
+    let warn_bytes = document["warn_bytes"].as_integer().unwrap_or(50_000) as u64;
+    let hard_bytes = document["hard_bytes"].as_integer().unwrap_or(80_000) as u64;
+    let mut allowed = BTreeMap::new();
+    for entry in document["allow"]
+        .as_array()
+        .ok_or("module size allowlist must contain [[allow]] entries")?
+    {
+        let path = entry["path"]
+            .as_str()
+            .ok_or("module size allow entry requires path")?;
+        let max_bytes = entry["max_bytes"]
+            .as_integer()
+            .ok_or("module size allow entry requires max_bytes")? as u64;
+        let reason = entry["reason"]
+            .as_str()
+            .ok_or("module size allow entry requires reason")?;
+        if reason.trim().is_empty() {
+            return Err(format!("module size allow entry `{path}` has no reason").into());
+        }
+        allowed.insert(path.to_owned(), max_bytes);
+    }
+
+    let mut pending = vec![
+        root.join("crates"),
+        root.join("providers"),
+        root.join("tools"),
+    ];
+    while let Some(path) = pending.pop() {
+        for entry in fs::read_dir(path)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                if path.file_name().is_none_or(|name| name != "target") {
+                    pending.push(path);
+                }
+                continue;
+            }
+            if path.extension().is_none_or(|extension| extension != "rs") {
+                continue;
+            }
+            let size = fs::metadata(&path)?.len();
+            let relative = path
+                .strip_prefix(root)
+                .expect("scanned source is below workspace root")
+                .to_string_lossy()
+                .replace('\\', "/");
+            if size > hard_bytes {
+                let max = allowed.get(&relative).ok_or_else(|| {
+                    format!(
+                        "Rust source `{relative}` is {size} bytes (> {hard_bytes}); split it or add a reviewed debt entry"
+                    )
+                })?;
+                if size > *max {
+                    return Err(format!(
+                        "Rust source `{relative}` grew to {size} bytes above its debt ceiling {max}"
+                    )
+                    .into());
+                }
+            } else if size > warn_bytes {
+                eprintln!("warning: large Rust source `{relative}` is {size} bytes");
+            }
+        }
+    }
+    Ok(())
 }
 
 fn collect_test_functions(package_root: &Path) -> Result<BTreeSet<String>, Box<dyn Error>> {
@@ -801,6 +1092,7 @@ mod tests {
         BTreeMap::from([(
             "example".into(),
             CargoPackageInventory {
+                manifest_dir: PathBuf::from("crates/example"),
                 features: BTreeSet::from(["execution".into()]),
                 tests: BTreeSet::from(["integration".into()]),
                 test_sources: BTreeSet::new(),

@@ -26,7 +26,10 @@ When documents disagree, use this order:
 | [releasing.md](releasing.md) | Multi-platform binaries, dry-run, provenance, and SDK distribution |
 | [package.md](package.md) | Implemented package artifacts, commands, review model, and trust boundary |
 | [architecture/ARCHITECTURE.md](architecture/ARCHITECTURE.md) | Module ownership and dependency rules |
-| [architecture/migration-baseline.md](architecture/migration-baseline.md) | Historical migration evidence and retained regression fixtures |
+| [architecture/workspace-tiers.toml](architecture/workspace-tiers.toml) | Machine-checked package maturity and CI ownership |
+| [architecture/experimental-retention.toml](architecture/experimental-retention.toml) | Time-bounded evidence and removal rules for research surfaces |
+| [architecture/module-size-allowlist.toml](architecture/module-size-allowlist.toml) | Enforced module-size debt ceilings |
+| [archive/migration-baseline.md](archive/migration-baseline.md) | Archived migration evidence and retained regression fixtures |
 | [development/DEVELOPMENT.md](development/DEVELOPMENT.md) | Local development and verification |
 | [development/DOCKER.md](development/DOCKER.md) | Containerized development |
 | [self-hosting.md](self-hosting.md) | Experimental self-hosting goal, current coverage, and validation contract |

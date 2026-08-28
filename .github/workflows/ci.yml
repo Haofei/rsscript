@@ -24,6 +24,11 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Enforce dependency licenses and sources
+        run: |
+          cargo install cargo-deny --locked --version 0.20.2
+          cargo deny check bans licenses sources
+
   core:
     name: Core locked workspace
     runs-on: ubuntu-latest
@@ -59,6 +64,12 @@ jobs:
           cargo test --locked
           cargo test --locked -p rsscript-sdk --features execution
           cargo test --locked -p rsscript-cli --features execution
+
+      - name: Test non-default integration, tooling, and example tiers
+        run: |
+          cargo run --locked -p rsscript-xtask -- test-tier integrations
+          cargo run --locked -p rsscript-xtask -- test-tier tooling
+          cargo run --locked -p rsscript-xtask -- test-tier examples
 
   core-platform-security:
     name: Core platform security (${{ matrix.os }})

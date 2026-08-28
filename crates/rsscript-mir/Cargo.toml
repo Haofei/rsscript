@@ -1,9 +1,10 @@
 [package]
 name = "rsscript-mir"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 description = "Typed control-flow MIR for RSScript executable backends"
-license = "MIT OR Apache-2.0"
+license.workspace = true
+rust-version.workspace = true
 publish = false
 
 [lib]

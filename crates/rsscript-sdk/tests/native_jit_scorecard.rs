@@ -1,6 +1,7 @@
 use rsscript_sdk::{
     artifact::ArtifactVerifier,
     compile::Compiler,
+    experimental::native_jit::NativeJitOptions,
     provider_api::{
         BlockingBehavior, CancellationBehavior, DataEffect, ExternalSymbol, FunctionSignature,
         ParameterSignature, ProviderCallMode, ProviderDescriptor, ProviderError,
@@ -8,7 +9,7 @@ use rsscript_sdk::{
         RUNTIME_ABI_VERSION, ResourceCleanupContract, WireInterpreterFn, WireValue,
     },
     report::{ExecutionEngineTelemetry, ExecutionReport},
-    runtime::{ExecutionRequest, NativeJitOptions, RunLimits, Runtime, TracePolicy},
+    runtime::{ExecutionRequest, RunLimits, Runtime, TracePolicy},
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;

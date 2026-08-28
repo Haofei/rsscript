@@ -1,9 +1,10 @@
 [package]
 name = "rsscript-interface-catalog"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 description = "Platform-neutral RSScript core and standard package interface catalog"
-license = "MIT OR Apache-2.0"
+license.workspace = true
+rust-version.workspace = true
 publish = false
 
 [lib]

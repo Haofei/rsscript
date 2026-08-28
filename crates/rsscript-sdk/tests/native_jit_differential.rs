@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use rsscript_sdk::{
     artifact::ArtifactVerifier,
     compile::Compiler,
+    experimental::native_jit::{NativeCostModel, NativeJitOptions},
     operation::{CancellationToken, MonotonicDeadline},
     provider_api::{
         BlockingBehavior, CancellationBehavior, DataEffect, ExternalSymbol, FunctionSignature,
@@ -15,9 +16,7 @@ use rsscript_sdk::{
         RUNTIME_ABI_VERSION, ResourceCleanupContract, WireInterpreterFn, WireValue,
     },
     report::{ExecutionEngineTelemetry, ExecutionReport, TerminationReason},
-    runtime::{
-        ExecutionRequest, NativeCostModel, NativeJitOptions, RunLimits, Runtime, TracePolicy,
-    },
+    runtime::{ExecutionRequest, RunLimits, Runtime, TracePolicy},
 };
 
 fn stable_provider_traces(report: &ExecutionReport) -> Vec<serde_json::Value> {

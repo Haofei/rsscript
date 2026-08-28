@@ -142,8 +142,8 @@ The stable native path contains a deliberately narrow read-only LICM subset. Its
 lazy loop-activation memoization is emitted only when verifier-bound typed facts
 produce flow-sensitive ownership/alias evidence, every operand is invariant, and
 the existing heap-provenance scan proves that no overlapping write occurs. The
-legacy `jit-memoization-experimental` feature remains a compatibility alias; it
-does not widen this production proof. OSR selection and helper-hoisting consume
+lower-level engine `memoization` feature remains research-only and does not widen
+this production proof. OSR selection and helper-hoisting consume
 one canonical loop-fact
 projection: unique preheader (when present), header condition, latches, exits, and
 a conservative affine induction variable. The existing backend range proof may

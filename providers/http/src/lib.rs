@@ -3,6 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::net::{IpAddr, ToSocketAddrs};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{RecvTimeoutError, sync_channel};
 use std::time::{Duration, Instant};
 
@@ -26,6 +28,71 @@ pub struct HttpProvider {
     client: reqwest::blocking::Client,
     allowed_origins: BTreeSet<String>,
     max_response_bytes: usize,
+    request_slots: Arc<ConcurrencySlots>,
+    worker_slots: Arc<ConcurrencySlots>,
+}
+
+/// Instance-owned bound for blocking HTTP work. Saturation fails closed with
+/// `ResourceExhausted`; the synchronous Provider API never creates an unbounded
+/// queue of waiting host threads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HttpConcurrencyPolicy {
+    pub max_in_flight_requests: usize,
+    pub max_worker_threads: usize,
+}
+
+impl Default for HttpConcurrencyPolicy {
+    fn default() -> Self {
+        Self {
+            max_in_flight_requests: 16,
+            max_worker_threads: 16,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ConcurrencySlots {
+    active: AtomicUsize,
+    limit: usize,
+}
+
+impl ConcurrencySlots {
+    fn new(limit: usize) -> Self {
+        Self {
+            active: AtomicUsize::new(0),
+            limit,
+        }
+    }
+
+    fn try_acquire(self: &Arc<Self>, resource: &str) -> Result<ConcurrencyPermit, ProviderError> {
+        let mut active = self.active.load(Ordering::Acquire);
+        loop {
+            if active >= self.limit {
+                return Err(ProviderError::resource_exhausted(format!(
+                    "HTTP Provider {resource} concurrency limit ({}) is exhausted",
+                    self.limit
+                )));
+            }
+            match self.active.compare_exchange_weak(
+                active,
+                active + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Ok(ConcurrencyPermit(Arc::clone(self))),
+                Err(observed) => active = observed,
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ConcurrencyPermit(Arc<ConcurrencySlots>);
+
+impl Drop for ConcurrencyPermit {
+    fn drop(&mut self) {
+        self.0.active.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,11 +159,23 @@ impl HttpProvider {
             client,
             allowed_origins,
             max_response_bytes: MAX_RESPONSE_BYTES,
+            request_slots: Arc::new(ConcurrencySlots::new(
+                HttpConcurrencyPolicy::default().max_in_flight_requests,
+            )),
+            worker_slots: Arc::new(ConcurrencySlots::new(
+                HttpConcurrencyPolicy::default().max_worker_threads,
+            )),
         })
     }
 
     pub fn with_max_response_bytes(mut self, limit: usize) -> Self {
         self.max_response_bytes = limit.min(MAX_RESPONSE_BYTES);
+        self
+    }
+
+    pub fn with_concurrency_policy(mut self, policy: HttpConcurrencyPolicy) -> Self {
+        self.request_slots = Arc::new(ConcurrencySlots::new(policy.max_in_flight_requests));
+        self.worker_slots = Arc::new(ConcurrencySlots::new(policy.max_worker_threads));
         self
     }
 
@@ -145,17 +224,20 @@ impl HttpProvider {
                         .chain([provider.max_response_bytes])
                         .min()
                         .unwrap_or(provider.max_response_bytes);
+                    let request_permit = provider.request_slots.try_acquire("request")?;
                     if context.cancellation.is_some() {
-                        execute_get_cancellable(
-                            context,
-                            provider.clone(),
+                        let worker_permit = provider.worker_slots.try_acquire("worker")?;
+                        let request = PendingGet {
+                            provider: provider.clone(),
                             url,
                             timeout,
                             deadline_controls_timeout,
                             limit,
                             response_type,
-                        )
+                        };
+                        execute_get_cancellable(context, request, (request_permit, worker_permit))
                     } else {
+                        let _request_permit = request_permit;
                         execute_get(
                             &provider,
                             url,
@@ -171,30 +253,36 @@ impl HttpProvider {
     }
 }
 
-/// Run a blocking transport on an owned worker when a cancellation token is
-/// present. This makes cancellation observable by the VM without waiting for
-/// the transport timeout. The abandoned worker remains bounded by the request
-/// timeout and response-size limit and cannot publish a late result.
-fn execute_get_cancellable(
-    context: &rsscript_provider_api::ProviderCallContext<'_>,
+struct PendingGet {
     provider: HttpProvider,
     url: reqwest::Url,
     timeout: Duration,
     deadline_controls_timeout: bool,
     limit: usize,
     response_type: WireTypeId,
+}
+
+/// Run a blocking transport on an owned worker when a cancellation token is
+/// present. This makes cancellation observable by the VM without waiting for
+/// the transport timeout. The abandoned worker remains bounded by the request
+/// timeout and response-size limit and cannot publish a late result.
+fn execute_get_cancellable(
+    context: &rsscript_provider_api::ProviderCallContext<'_>,
+    request: PendingGet,
+    permits: (ConcurrencyPermit, ConcurrencyPermit),
 ) -> Result<WireValue, ProviderError> {
     let (sender, receiver) = sync_channel(1);
     std::thread::Builder::new()
         .name("rsscript-http-provider".into())
         .spawn(move || {
+            let (_request_permit, _worker_permit) = permits;
             let result = execute_get(
-                &provider,
-                url,
-                timeout,
-                deadline_controls_timeout,
-                limit,
-                response_type,
+                &request.provider,
+                request.url,
+                request.timeout,
+                request.deadline_controls_timeout,
+                request.limit,
+                request.response_type,
             );
             let _ = sender.send(result);
         })
@@ -347,6 +435,21 @@ fn response_too_large(limit: usize) -> ProviderError {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn instance_concurrency_slots_fail_closed_and_release() {
+        let slots = Arc::new(ConcurrencySlots::new(1));
+        let permit = slots.try_acquire("request").expect("first slot");
+        let error = slots
+            .try_acquire("request")
+            .expect_err("second slot must fail");
+        assert_eq!(
+            error.code,
+            rsscript_provider_api::ProviderErrorCode::ResourceExhausted
+        );
+        drop(permit);
+        slots.try_acquire("request").expect("released slot");
+    }
 
     #[test]
     fn conforms_to_provider_contract_without_network_access() {

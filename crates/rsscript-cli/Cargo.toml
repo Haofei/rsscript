@@ -1,9 +1,10 @@
 [package]
 name = "rsscript-cli"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 description = "Command-line composition root for RSScript"
-license = "MIT OR Apache-2.0"
+license.workspace = true
+rust-version.workspace = true
 
 [[bin]]
 name = "rss"

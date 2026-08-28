@@ -11,13 +11,19 @@ on:
       - "crates/process-guard/**"
       - "experiments/reir/**"
       - "crates/rsscript-bytecode/**"
+      - "experiments/artifact-store/**"
       - "crates/rsscript-cli/**"
       - "crates/rsscript-compiler/**"
       - "crates/rsscript-operation/**"
       - "crates/rsscript-provider-api/**"
       - "crates/rsscript-provider-bindgen/**"
       - "crates/rsscript-provider-conformance/**"
+      - "crates/rsscript-package-review/**"
+      - "crates/rsscript-review-core/**"
+      - "crates/rsscript-review-source/**"
+      - "crates/rsscript-runner-protocol/**"
       - "crates/rsscript-vm/src/reg_vm/**"
+      - "crates/rsscript-vm/**"
       - "crates/rsscript-vm/src/eval_types.rs"
       - "experiments/aot-runtime/**"
       - "crates/rsscript-jit-cranelift/**"
@@ -34,13 +40,19 @@ on:
       - "crates/process-guard/**"
       - "experiments/reir/**"
       - "crates/rsscript-bytecode/**"
+      - "experiments/artifact-store/**"
       - "crates/rsscript-cli/**"
       - "crates/rsscript-compiler/**"
       - "crates/rsscript-operation/**"
       - "crates/rsscript-provider-api/**"
       - "crates/rsscript-provider-bindgen/**"
       - "crates/rsscript-provider-conformance/**"
+      - "crates/rsscript-package-review/**"
+      - "crates/rsscript-review-core/**"
+      - "crates/rsscript-review-source/**"
+      - "crates/rsscript-runner-protocol/**"
       - "crates/rsscript-vm/src/reg_vm/**"
+      - "crates/rsscript-vm/**"
       - "crates/rsscript-vm/src/eval_types.rs"
       - "experiments/aot-runtime/**"
       - "crates/rsscript-jit-cranelift/**"
@@ -90,6 +102,8 @@ jobs:
 
       - name: Test review and runtime boundaries
         run: |
+          cargo run --locked -p rsscript-xtask -- test-tier integrations
+          cargo test --locked --manifest-path experiments/Cargo.toml -p rsscript-artifact-store
           cargo test --locked --manifest-path experiments/Cargo.toml -p reir
           cargo test --locked -p rss-lsp
           cargo test --locked --manifest-path experiments/Cargo.toml -p rsscript-aot-runtime --lib

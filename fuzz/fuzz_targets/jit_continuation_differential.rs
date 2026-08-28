@@ -4,8 +4,9 @@ use libfuzzer_sys::fuzz_target;
 use rsscript_sdk::{
     artifact::ArtifactVerifier,
     compile::Compiler,
+    experimental::native_jit::{NativeCostModel, NativeJitOptions},
     provider_api::ProviderRegistry,
-    runtime::{ExecutionRequest, NativeCostModel, NativeJitOptions, RunLimits, Runtime},
+    runtime::{ExecutionRequest, RunLimits, Runtime},
 };
 
 fn source(shape: u8, limit: u16) -> String {

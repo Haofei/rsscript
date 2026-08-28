@@ -1234,6 +1234,7 @@ mod tests {
 
     fn function(name: &str, params: usize, regs: usize, code: Vec<RegInstr>) -> Rc<RegFunction> {
         Rc::new(RegFunction {
+            ordinal: 0,
             name: name.to_owned(),
             params,
             captures: 0,

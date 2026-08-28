@@ -134,7 +134,7 @@ impl RegVm {
         if !self.native_limits_unarmed() || self.limits.max_depth != DEFAULT_MAX_DEPTH {
             return None;
         }
-        let key = self.jit_state.function_ordinal(func);
+        let key = func.ordinal;
         let profile = self.jit_state.profile(func);
         let call_count = self.jit_state.call_count(func);
         let verified_facts = Rc::clone(self.native.as_ref()?.verified_facts.as_ref()?);
@@ -320,7 +320,7 @@ impl RegVm {
         if args.len() != func.params {
             return None;
         }
-        let key = self.jit_state.function_ordinal(func);
+        let key = func.ordinal;
         let verified_facts = Rc::clone(self.native.as_ref()?.verified_facts.as_ref()?);
         // Resolve the called member's native id, its parameter types (to marshal each
         // scalar arg) and its return type (to wrap the i64 result). Cached per member;
@@ -402,7 +402,7 @@ impl RegVm {
                     (Some(scc), Some((ids, member_sigs))) if ids.len() == scc.len() => {
                         let mut mine = None;
                         for (i, &member) in scc.iter().enumerate() {
-                            let mkey = self.jit_state.function_ordinal(&unit.functions[member]);
+                            let mkey = unit.functions[member].ordinal;
                             let (param_tys, ret) = member_sigs[i].clone();
                             let entry = (ids[i], param_tys, ret);
                             native
@@ -419,8 +419,7 @@ impl RegVm {
                         match group {
                             Some(scc) => {
                                 for member in scc {
-                                    let mkey =
-                                        self.jit_state.function_ordinal(&unit.functions[member]);
+                                    let mkey = unit.functions[member].ordinal;
                                     native.mutual_recursive_native.insert(mkey, None);
                                 }
                             }

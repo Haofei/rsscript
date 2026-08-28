@@ -3,7 +3,6 @@ resolver = "3"
 members = [
     "crates/rsscript-abi-model",
     "crates/rsscript-artifact",
-    "crates/rsscript-artifact-store",
     "crates/rsscript-bytecode",
     "crates/rsscript-codegen-vm",
     "crates/rsscript-corelib",
@@ -23,7 +22,6 @@ members = [
     "crates/rsscript-project",
     "crates/rsscript-package-model",
     "crates/rsscript-package-review",
-    "crates/rsscript-review",
     "crates/rsscript-review-core",
     "crates/rsscript-review-source",
     "crates/rsscript-runner-protocol",

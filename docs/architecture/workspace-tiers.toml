@@ -53,7 +53,6 @@ providers = [
 
 integrations = [
   "rsscript-package-review",
-  "rsscript-review",
   "rsscript-review-core",
   "rsscript-review-source",
 ]
@@ -72,7 +71,6 @@ research = [
 ]
 
 tooling = [
-  "rsscript-artifact-store",
   "rsscript-build-support",
   "rsscript-provider-bindgen",
   "rsscript-provider-conformance",
@@ -91,3 +89,40 @@ fixture_roots = [
   "experiments/fixtures/selfhost",
   "experiments/fixtures/native-abi-fixture",
 ]
+
+# Packages whose bytes, host authority, process boundary, verification, or
+# risk-evidence behavior require the dedicated security workflow whenever their
+# source directory changes.
+security_boundaries = [
+  "rsscript-bytecode",
+  "rsscript-jit-cranelift",
+  "rsscript-package-review",
+  "rsscript-provider-api",
+  "rsscript-provider-bindgen",
+  "rsscript-provider-conformance",
+  "rsscript-provider-cli",
+  "rsscript-provider-entropy",
+  "rsscript-provider-env",
+  "rsscript-provider-fs",
+  "rsscript-provider-http",
+  "rsscript-provider-log",
+  "rsscript-provider-process",
+  "rsscript-provider-time",
+  "rsscript-review-core",
+  "rsscript-review-source",
+  "rsscript-runner-protocol",
+  "rsscript-vm",
+  "rss-process-guard",
+]
+
+[ci]
+core = ["ci.yml"]
+applications = ["ci.yml"]
+runner = ["ci.yml", "security-sensitive.yml"]
+providers = ["security-sensitive.yml"]
+integrations = ["ci.yml", "security-sensitive.yml"]
+experimental = ["experimental.yml"]
+optional_engines = ["experimental.yml", "jit-hardening.yml", "jit-perf.yml"]
+research = ["experimental.yml"]
+tooling = ["ci.yml", "security-sensitive.yml"]
+examples = ["ci.yml"]

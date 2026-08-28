@@ -73,7 +73,8 @@ Current evidence keeps baseline scalar loops, native call chains, and the shared
 Option/Result/Variant scalar-replacement path. Profile-guided closure PIC and
 branch-side-exit speculation are isolated behind the VM-only `jit-speculation`
 feature. Native recursion is isolated behind `jit-recursion-experimental`, and
-loop-invariant helper memoization behind `jit-memoization-experimental`. The
+loop-invariant helper memoization behind the lower-level engine's research-only
+`memoization` feature. The
 struct scalar-replacement implementation is isolated behind
 `jit-struct-sr-experimental` after the canonical case failed to establish stable
 native entry and end-to-end benefit. The ordinary SDK `native-jit` feature

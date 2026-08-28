@@ -52,12 +52,11 @@ impl RegVm {
 
     pub(super) fn new(
         unit: Rc<RegUnit>,
-        executable_digest: String,
         entry_args: Vec<String>,
         external_bindings: HashMap<String, ExternalFunction>,
     ) -> Self {
         Self {
-            jit_state: JitState::for_verified_program(executable_digest, &unit),
+            jit_state: JitState::for_verified_program(&unit),
             unit,
             entry_args,
             external_bindings,
@@ -361,8 +360,8 @@ impl RegVm {
     /// functions gain nothing from the specializing executor, so JIT-ing them in a
     /// hot call would only add overhead. This keeps the JIT at-least-parity with
     /// the interpreter.
-    pub(super) fn is_jit_eligible(&self, func: &RegFunction) -> bool {
-        let (eligible, has_loop) = self.jit_state.tier0_analysis(func);
+    pub(super) fn is_jit_eligible(&self, function_ordinal: usize, func: &RegFunction) -> bool {
+        let (eligible, has_loop) = self.jit_state.tier0_analysis(function_ordinal, func);
         // Production: only JIT functions with a loop (where the specializing
         // executor pays off). `jit_force_all` (tests) JITs every eligible function
         // so the differential verifies the whole covered subset.
@@ -1274,7 +1273,7 @@ impl RegVm {
         self.ensure_regs(base + function.regs)?;
         let floor = self.frames.len();
         #[cfg(feature = "native-jit")]
-        let function_ordinal = self.jit_state.function_ordinal(&function);
+        let function_ordinal = function.ordinal;
         self.push_frame(Frame {
             func: function,
             #[cfg(feature = "native-jit")]
@@ -1425,7 +1424,7 @@ impl RegVm {
                         osr_pre_candidate.is_none()
                     }
                 }
-                && self.is_jit_eligible(&func)
+                && self.is_jit_eligible(func.ordinal, &func)
             {
                 let value = self.run_jit(unit, &func, base)?;
                 let frame = self.frames.pop().expect("active frame");
