@@ -533,6 +533,9 @@ fn validate_test_closures(root: &Path) -> Result<(), Box<dyn Error>> {
         for workflow in workflows {
             let workflow = workflow.as_str().ok_or("workflow must be a string")?;
             let source = fs::read_to_string(root.join(".github/workflows").join(workflow))?;
+            if !source.lines().any(|line| line.trim() == "paths:") {
+                continue;
+            }
             for path in paths {
                 let path = path.as_str().ok_or("closure path must be a string")?;
                 if !source.contains(&format!("\"{path}\"")) {
@@ -716,6 +719,7 @@ fn validate_experiments_tiers(
         .into());
     }
     let workflow = fs::read_to_string(root.join(".github/workflows/security-sensitive.yml"))?;
+    let filters_paths = workflow.lines().any(|line| line.trim() == "paths:");
     for boundary in document["security_boundaries"]
         .as_array()
         .ok_or("experiments tier inventory needs security_boundaries")?
@@ -731,7 +735,7 @@ fn validate_experiments_tiers(
             .strip_prefix(root)?
             .to_string_lossy()
             .replace('\\', "/");
-        if !workflow.contains(&format!("\"{directory}/**\"")) {
+        if filters_paths && !workflow.contains(&format!("\"{directory}/**\"")) {
             return Err(format!(
                 "experimental security boundary `{package}` lacks `{directory}/**` workflow coverage"
             )
@@ -813,6 +817,9 @@ fn validate_security_workflow_coverage(
         .as_array()
         .ok_or("workspace tier inventory must declare security_boundaries")?;
     let workflow = fs::read_to_string(root.join(".github/workflows/security-sensitive.yml"))?;
+    if !workflow.lines().any(|line| line.trim() == "paths:") {
+        return Ok(());
+    }
     let path_prefixes = workflow
         .lines()
         .filter_map(|line| line.trim().strip_prefix("- \"")?.strip_suffix("/**\""))

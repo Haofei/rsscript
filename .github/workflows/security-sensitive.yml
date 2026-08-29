@@ -3,58 +3,8 @@ name: Security-sensitive paths
 on:
   pull_request:
     branches: [main]
-    paths:
-      - ".github/workflows/**"
-      - "Dockerfile"
-      - "compose.yaml"
-      - "crates/lsp/**"
-      - "crates/process-guard/**"
-      - "experiments/reir/**"
-      - "crates/rsscript-bytecode/**"
-      - "experiments/artifact-store/**"
-      - "crates/rsscript-cli/**"
-      - "crates/rsscript-compiler/**"
-      - "crates/rsscript-operation/**"
-      - "crates/rsscript-provider-api/**"
-      - "crates/rsscript-provider-bindgen/**"
-      - "crates/rsscript-provider-conformance/**"
-      - "crates/rsscript-package-review/**"
-      - "crates/rsscript-review-core/**"
-      - "crates/rsscript-review-source/**"
-      - "crates/rsscript-runner-protocol/**"
-      - "crates/rsscript-vm/**"
-      - "experiments/aot-runtime/**"
-      - "crates/rsscript-jit-cranelift/**"
-      - "fuzz/**"
-      - "integrations/**"
-      - "providers/**"
   push:
     branches: [main]
-    paths:
-      - ".github/workflows/**"
-      - "Dockerfile"
-      - "compose.yaml"
-      - "crates/lsp/**"
-      - "crates/process-guard/**"
-      - "experiments/reir/**"
-      - "crates/rsscript-bytecode/**"
-      - "experiments/artifact-store/**"
-      - "crates/rsscript-cli/**"
-      - "crates/rsscript-compiler/**"
-      - "crates/rsscript-operation/**"
-      - "crates/rsscript-provider-api/**"
-      - "crates/rsscript-provider-bindgen/**"
-      - "crates/rsscript-provider-conformance/**"
-      - "crates/rsscript-package-review/**"
-      - "crates/rsscript-review-core/**"
-      - "crates/rsscript-review-source/**"
-      - "crates/rsscript-runner-protocol/**"
-      - "crates/rsscript-vm/**"
-      - "experiments/aot-runtime/**"
-      - "crates/rsscript-jit-cranelift/**"
-      - "fuzz/**"
-      - "integrations/**"
-      - "providers/**"
   workflow_dispatch:
 
 permissions:
