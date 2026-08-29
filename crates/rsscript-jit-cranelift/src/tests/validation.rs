@@ -365,7 +365,7 @@ fn rejects_zero_initialized_handle_scratch() {
     assert!(err.message.contains("scalar type"), "{}", err.message);
 }
 
-#[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+#[cfg(feature = "readonly-licm")]
 #[test]
 fn rejects_duplicate_or_out_of_range_memo_slots() {
     use JitValueType::{Handle, Int};
@@ -412,7 +412,7 @@ fn rejects_duplicate_or_out_of_range_memo_slots() {
     );
 }
 
-#[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+#[cfg(feature = "readonly-licm")]
 #[test]
 fn rejects_handle_returning_memoized_helper() {
     use JitValueType::{Handle, Int};

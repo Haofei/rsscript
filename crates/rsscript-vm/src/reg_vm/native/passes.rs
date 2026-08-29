@@ -1,19 +1,11 @@
 //! Native-JIT analysis, eligibility, fold, scalar-replacement, inlining and
 //! closure-sink passes.
-#![allow(
-    unused_imports,
-    clippy::doc_lazy_continuation,
-    clippy::needless_range_loop,
-    clippy::ptr_arg,
-    clippy::too_many_arguments,
-    clippy::type_complexity
-)]
-
 use std::collections::BTreeSet;
 
 use super::super::*;
 use super::*;
 
+mod bytes_fold;
 mod facts;
 mod inlining;
 mod intrinsics;
@@ -22,6 +14,7 @@ mod scalar_replacement;
 mod semantics;
 mod virtual_objects;
 
+pub(in crate::reg_vm) use bytes_fold::*;
 pub(in crate::reg_vm) use facts::*;
 pub(in crate::reg_vm) use inlining::*;
 pub(in crate::reg_vm) use intrinsics::*;
@@ -35,12 +28,14 @@ mod architecture_tests {
     #[test]
     fn native_passes_are_partitioned_by_invariant() {
         let root = include_str!("passes.rs");
+        let bytes_fold = include_str!("passes/bytes_fold.rs");
         let facts = include_str!("passes/facts.rs");
         let semantics = include_str!("passes/semantics.rs");
         let scalar_replacement = include_str!("passes/scalar_replacement.rs");
         let inlining = include_str!("passes/inlining.rs");
         let virtual_objects = include_str!("passes/virtual_objects.rs");
 
+        assert!(root.contains("mod bytes_fold;"));
         assert!(root.contains("mod facts;"));
         assert!(root.contains("mod semantics;"));
         assert!(root.contains("mod scalar_replacement;"));
@@ -48,6 +43,7 @@ mod architecture_tests {
         assert!(root.contains("mod virtual_objects;"));
         let legacy_include = ["include", "!("].concat();
         assert!(!root.contains(&legacy_include));
+        assert!(bytes_fold.contains("native_bytes_length_fold_in_region"));
         assert!(facts.contains("enum NativeFact"));
         assert!(semantics.contains("struct NativeInstrSemantics"));
         assert!(scalar_replacement.contains("native_scalar_replace_two_armed_results_in_region"));

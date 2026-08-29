@@ -1,4 +1,4 @@
-#[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+#[cfg(feature = "readonly-licm")]
 #[test]
 fn rejects_memoized_heap_writing_host_helper() {
     use JitValueType::{Handle, Int};
@@ -54,19 +54,19 @@ fn handle_returning_function_reports_completed_handle() {
     }
 }
 
-#[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+#[cfg(feature = "readonly-licm")]
 static MEMOIZED_SPLIT_COUNT_CALLS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
-#[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+#[cfg(feature = "readonly-licm")]
 static MEMOIZED_SPLIT_COUNT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-#[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+#[cfg(feature = "readonly-licm")]
 extern "C" fn counting_string_split_count(_ctx: HostCtx, _value: i64, _delimiter: i64) -> i64 {
     MEMOIZED_SPLIT_COUNT_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     5
 }
 
-#[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+#[cfg(feature = "readonly-licm")]
 #[test]
 fn memoized_host_call_reuses_first_scalar_result_in_loop() {
     use JitValueType::{Handle, Int};
@@ -129,7 +129,7 @@ fn memoized_host_call_reuses_first_scalar_result_in_loop() {
     );
 }
 
-#[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+#[cfg(feature = "readonly-licm")]
 fn nested_memo_program(osr: bool) -> JitFunction {
     use JitValueType::{Handle, Int};
 
@@ -194,7 +194,7 @@ fn nested_memo_program(osr: bool) -> JitFunction {
     program
 }
 
-#[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+#[cfg(feature = "readonly-licm")]
 #[test]
 fn nested_memo_scope_resets_once_per_outer_activation_and_stays_lazy() {
     let _count_guard = MEMOIZED_SPLIT_COUNT_LOCK.lock().unwrap();
@@ -220,7 +220,7 @@ fn nested_memo_scope_resets_once_per_outer_activation_and_stays_lazy() {
     );
 }
 
-#[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+#[cfg(feature = "readonly-licm")]
 #[test]
 fn nested_memo_scope_osr_entry_resets_then_preserves_backedges() {
     let _count_guard = MEMOIZED_SPLIT_COUNT_LOCK.lock().unwrap();
@@ -244,7 +244,7 @@ fn nested_memo_scope_osr_entry_resets_then_preserves_backedges() {
     );
 }
 
-#[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+#[cfg(feature = "readonly-licm")]
 #[test]
 fn rejects_malformed_memo_scopes() {
     let mut unscoped = nested_memo_program(false);

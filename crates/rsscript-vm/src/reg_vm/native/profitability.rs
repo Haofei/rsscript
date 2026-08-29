@@ -18,13 +18,14 @@
 #![cfg(feature = "native-jit")]
 
 use crate::reg_vm::RegInstr;
-use vm_jit::{HostHelper, JitFunction, JitInstr};
+#[cfg(test)]
+use vm_jit::JitInstr;
+use vm_jit::{JitFunction, JitInstrCostClass};
 
 // --- Credit weights (native-favourable per-op work) -------------------------
 const W_SCALAR_ALU: i64 = 2; // Add/Sub/Mul/.../Compare/Equal: native arithmetic vs VM dispatch
 const W_LOAD_MOVE: i64 = 1; // LoadInt/Move/conversions: cheap but still beats a dispatch
 const W_BRANCH: i64 = 1; // Jump/JumpIf*: native control flow
-#[cfg(feature = "jit-speculation")]
 const W_PROFILED_BRANCH: i64 = 2; // profile-guided branch: a genuine native win
 const W_DIRECT_LIST: i64 = 3; // List*Direct: replaced a per-element host call — big win
 const W_MATCH_MAP_GET: i64 = 2; // fused Map.get+match: partly native
@@ -150,83 +151,47 @@ pub(in crate::reg_vm) fn native_region_profitability(
     let mut score: i64 = 0;
     for instr in &jit_fn.code {
         p.hot_instrs += 1;
-        match instr {
-            JitInstr::Add { .. }
-            | JitInstr::Sub { .. }
-            | JitInstr::Mul { .. }
-            | JitInstr::Div { .. }
-            | JitInstr::Mod { .. }
-            | JitInstr::BitAnd { .. }
-            | JitInstr::BitOr { .. }
-            | JitInstr::BitXor { .. }
-            | JitInstr::Shl { .. }
-            | JitInstr::Shr { .. }
-            | JitInstr::Compare { .. }
-            | JitInstr::Equal { .. }
-            | JitInstr::NotEqual { .. } => {
+        match instr.descriptor().cost_class {
+            JitInstrCostClass::ScalarAlu => {
                 p.scalar_ops += 1;
                 score += W_SCALAR_ALU;
             }
-            JitInstr::LoadInt { .. }
-            | JitInstr::LoadFloat { .. }
-            | JitInstr::LoadBool { .. }
-            | JitInstr::Move { .. }
-            | JitInstr::IntToFloat { .. }
-            | JitInstr::FloatToInt { .. } => {
+            JitInstrCostClass::LoadMove => {
                 p.scalar_ops += 1;
                 score += W_LOAD_MOVE;
             }
-            JitInstr::Jump { .. }
-            | JitInstr::JumpIfBool { .. }
-            | JitInstr::JumpIfIntCompare { .. } => {
+            JitInstrCostClass::Branch => {
                 score += W_BRANCH;
             }
-            #[cfg(feature = "jit-speculation")]
-            JitInstr::ProfiledJumpIfBool { .. } | JitInstr::ProfiledJumpIfIntCompare { .. } => {
+            JitInstrCostClass::ProfiledBranch => {
                 score += W_PROFILED_BRANCH;
             }
-            // Flat-list direct set (get/set/len/is_empty). Kept as explicit patterns
-            // (not `is_flat_list_direct`) so the exhaustive `match` still forces a new
-            // `*Direct` op to be classified here — the complementary drift guard to
-            // the shared predicate used by the boolean leaf/subset sites.
-            JitInstr::ListGetIntDirect { .. }
-            | JitInstr::ListGetFloatDirect { .. }
-            | JitInstr::ListSetIntDirect { .. }
-            | JitInstr::ListSetFloatDirect { .. }
-            | JitInstr::ListLenDirect { .. }
-            | JitInstr::ListIsEmptyDirect { .. } => {
+            JitInstrCostClass::DirectList => {
                 p.direct_reads += 1;
                 score += W_DIRECT_LIST;
             }
-            JitInstr::MatchMapGetInt { .. }
-            | JitInstr::MatchMapGetFloat { .. }
-            | JitInstr::MatchSortedMapGetInt { .. }
-            | JitInstr::MatchSortedMapGetFloat { .. } => {
+            JitInstrCostClass::MapMatch => {
                 score += W_MATCH_MAP_GET;
             }
-            JitInstr::MemoizedHostCall { .. } => {
+            JitInstrCostClass::CachedReadonlyHostCall => {
                 score += W_MEMOIZED_HOSTCALL;
             }
-            JitInstr::HostCall {
-                helper: HostHelper::ClosureId,
-                ..
-            } => {
+            JitInstrCostClass::ClosureIdentityHostCall => {
                 // The polymorphic closure inline-cache dispatch read. Its arm ladder
                 // is credited above as scalar ops; this heavy debit reflects that the
                 // ladder is really per-iteration dispatch overhead, not useful work.
                 p.pic_sites += 1;
                 score -= W_CLOSURE_PIC;
             }
-            JitInstr::HostCall { .. } => {
+            JitInstrCostClass::HostCall => {
                 p.runtime_helper_calls += 1;
                 score -= W_HOST_CALL;
             }
-            #[cfg(feature = "jit-speculation")]
-            JitInstr::GuardClosureId { .. } => {
+            JitInstrCostClass::ClosureGuard => {
                 p.closure_guards += 1;
                 score -= W_CLOSURE_GUARD;
             }
-            JitInstr::CallNative { .. } => {
+            JitInstrCostClass::NativeCall => {
                 // A call avoids interpreter re-entry but still constructs a child
                 // call frame and deopt chain. The scorecard showed a loop-free
                 // 80-call wrapper regressing by orders of magnitude, so charge the
@@ -235,17 +200,7 @@ pub(in crate::reg_vm) fn native_region_profitability(
                 p.native_calls += 1;
                 score -= W_NATIVE_CALL;
             }
-            #[cfg(feature = "jit-recursion-experimental")]
-            JitInstr::CallSelf { .. } | JitInstr::CallGroup { .. } => {
-                p.native_calls += 1;
-                score -= W_NATIVE_CALL;
-            }
-            JitInstr::Nop
-            | JitInstr::TailCallGuard { .. }
-            | JitInstr::Return { .. }
-            | JitInstr::Bail
-            | JitInstr::OsrExit
-            | JitInstr::RegionExit { .. } => {}
+            JitInstrCostClass::Neutral => {}
         }
     }
     p.score = score;

@@ -10,6 +10,8 @@ on:
       - "Cargo.toml"
       - "Dockerfile"
       - "compose.yaml"
+      - "tools/compare-jit-baseline.py"
+      - "tools/tests/test_compare_jit_baseline.py"
       - "benchmarks/vm-jit/**"
       - "crates/rsscript-sdk/Cargo.toml"
       - "crates/rsscript-sdk/src/**"
@@ -26,6 +28,8 @@ on:
       - "Cargo.toml"
       - "Dockerfile"
       - "compose.yaml"
+      - "tools/compare-jit-baseline.py"
+      - "tools/tests/test_compare_jit_baseline.py"
       - "benchmarks/vm-jit/**"
       - "crates/rsscript-sdk/Cargo.toml"
       - "crates/rsscript-sdk/src/**"
@@ -52,6 +56,22 @@ jobs:
 
       - name: Build dev container
         run: docker compose build dev
+
+      - name: Validate baseline comparator
+        run: python3 tools/tests/test_compare_jit_baseline.py
+
+      - name: Verify writable container caches
+        run: |
+          docker compose run --rm dev sh -lc '
+            id
+            stat -c "%U:%G %a %n" \
+              /work/target \
+              /usr/local/cargo/registry \
+              /usr/local/cargo/git
+            test -w /work/target
+            test -w /usr/local/cargo/registry
+            test -w /usr/local/cargo/git
+          '
 
       - name: JIT perf gate
         run: docker compose run --rm dev cargo test --locked --release -p rsscript-sdk --features native-jit --test native_jit_smoke native_hot_loop_release_gate_beats_the_interpreter -- --nocapture

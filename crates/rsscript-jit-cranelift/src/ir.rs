@@ -139,7 +139,7 @@ pub enum JitInstr {
     /// Memo slots are a dense, function-local namespace, separate from public VM
     /// registers. This keeps the IR source-index aligned without changing register
     /// windows, definite assignment, or deopt payloads.
-    #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+    #[cfg(feature = "readonly-licm")]
     MemoizedHostCall {
         helper: HostHelper,
         dst: u32,
@@ -433,7 +433,199 @@ pub struct JitInstrEffects {
     pub osr_supported: bool,
 }
 
+/// Profitability category shared by the VM tiering policy and the backend.
+/// We keep policy weights outside the IR, but the semantic opcode category lives
+/// here so adding an instruction cannot silently miss one of several hand-written
+/// capability tables.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JitInstrCostClass {
+    Neutral,
+    ScalarAlu,
+    LoadMove,
+    Branch,
+    ProfiledBranch,
+    DirectList,
+    MapMatch,
+    CachedReadonlyHostCall,
+    HostCall,
+    ClosureIdentityHostCall,
+    ClosureGuard,
+    NativeCall,
+}
+
+/// Canonical backend capabilities of one JIT instruction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JitInstrDescriptor {
+    pub effects: JitInstrEffects,
+    pub cost_class: JitInstrCostClass,
+    pub native_leaf: bool,
+    pub compact_scalar_frame: bool,
+    pub step_batch_safe: bool,
+}
+
 impl JitInstr {
+    /// Return the single capability/effect descriptor consumed by codegen,
+    /// native-call admission, and VM profitability accounting.
+    pub fn descriptor(&self) -> JitInstrDescriptor {
+        use JitInstrCostClass as Cost;
+
+        let native_leaf = matches!(
+            self,
+            Self::Nop
+                | Self::TailCallGuard { .. }
+                | Self::LoadInt { .. }
+                | Self::LoadFloat { .. }
+                | Self::LoadBool { .. }
+                | Self::Move { .. }
+                | Self::Add { .. }
+                | Self::Sub { .. }
+                | Self::Mul { .. }
+                | Self::Div { .. }
+                | Self::Mod { .. }
+                | Self::IntToFloat { .. }
+                | Self::FloatToInt { .. }
+                | Self::BitAnd { .. }
+                | Self::BitOr { .. }
+                | Self::BitXor { .. }
+                | Self::Shl { .. }
+                | Self::Shr { .. }
+                | Self::Compare { .. }
+                | Self::Equal { .. }
+                | Self::NotEqual { .. }
+                | Self::Jump { .. }
+                | Self::JumpIfBool { .. }
+                | Self::JumpIfIntCompare { .. }
+                | Self::CallNative { .. }
+                | Self::HostCall { .. }
+                | Self::Return { .. }
+                | Self::Bail
+                | Self::ListGetIntDirect { .. }
+                | Self::ListSetIntDirect { .. }
+                | Self::ListGetFloatDirect { .. }
+                | Self::ListSetFloatDirect { .. }
+                | Self::ListLenDirect { .. }
+                | Self::ListIsEmptyDirect { .. }
+        );
+        #[cfg(feature = "speculation")]
+        let native_leaf = native_leaf
+            || matches!(
+                self,
+                Self::ProfiledJumpIfBool { .. }
+                    | Self::ProfiledJumpIfIntCompare { .. }
+                    | Self::GuardClosureId { .. }
+            );
+        #[cfg(feature = "recursion")]
+        let native_leaf =
+            native_leaf || matches!(self, Self::CallSelf { .. } | Self::CallGroup { .. });
+        #[cfg(feature = "readonly-licm")]
+        let native_leaf = native_leaf || matches!(self, Self::MemoizedHostCall { .. });
+        let native_leaf = native_leaf
+            && !matches!(
+                self,
+                Self::HostCall { helper, .. } if helper.heap_effect().extends_input_handles()
+            );
+        #[cfg(feature = "readonly-licm")]
+        let native_leaf = native_leaf
+            && !matches!(
+                self,
+                Self::MemoizedHostCall { helper, .. }
+                    if helper.heap_effect().extends_input_handles()
+            );
+
+        let compact_scalar_frame = !matches!(self, Self::HostCall { .. } | Self::CallNative { .. })
+            && !self.is_flat_list_direct();
+        #[cfg(feature = "readonly-licm")]
+        let compact_scalar_frame =
+            compact_scalar_frame && !matches!(self, Self::MemoizedHostCall { .. });
+        #[cfg(feature = "recursion")]
+        let compact_scalar_frame =
+            compact_scalar_frame && !matches!(self, Self::CallSelf { .. } | Self::CallGroup { .. });
+
+        let step_batch_safe = matches!(
+            self,
+            Self::Nop
+                | Self::LoadInt { .. }
+                | Self::LoadFloat { .. }
+                | Self::LoadBool { .. }
+                | Self::Move { .. }
+                | Self::BitAnd { .. }
+                | Self::BitOr { .. }
+                | Self::BitXor { .. }
+                | Self::Compare { .. }
+                | Self::Equal { .. }
+                | Self::NotEqual { .. }
+                | Self::Jump { .. }
+                | Self::JumpIfBool { .. }
+                | Self::JumpIfIntCompare { .. }
+                | Self::Return { .. }
+        );
+
+        let cost_class = match self {
+            Self::Add { .. }
+            | Self::Sub { .. }
+            | Self::Mul { .. }
+            | Self::Div { .. }
+            | Self::Mod { .. }
+            | Self::BitAnd { .. }
+            | Self::BitOr { .. }
+            | Self::BitXor { .. }
+            | Self::Shl { .. }
+            | Self::Shr { .. }
+            | Self::Compare { .. }
+            | Self::Equal { .. }
+            | Self::NotEqual { .. } => Cost::ScalarAlu,
+            Self::LoadInt { .. }
+            | Self::LoadFloat { .. }
+            | Self::LoadBool { .. }
+            | Self::Move { .. }
+            | Self::IntToFloat { .. }
+            | Self::FloatToInt { .. } => Cost::LoadMove,
+            Self::Jump { .. } | Self::JumpIfBool { .. } | Self::JumpIfIntCompare { .. } => {
+                Cost::Branch
+            }
+            #[cfg(feature = "speculation")]
+            Self::ProfiledJumpIfBool { .. } | Self::ProfiledJumpIfIntCompare { .. } => {
+                Cost::ProfiledBranch
+            }
+            Self::ListGetIntDirect { .. }
+            | Self::ListSetIntDirect { .. }
+            | Self::ListGetFloatDirect { .. }
+            | Self::ListSetFloatDirect { .. }
+            | Self::ListLenDirect { .. }
+            | Self::ListIsEmptyDirect { .. } => Cost::DirectList,
+            Self::MatchMapGetInt { .. }
+            | Self::MatchMapGetFloat { .. }
+            | Self::MatchSortedMapGetInt { .. }
+            | Self::MatchSortedMapGetFloat { .. } => Cost::MapMatch,
+            #[cfg(feature = "readonly-licm")]
+            Self::MemoizedHostCall { .. } => Cost::CachedReadonlyHostCall,
+            Self::HostCall {
+                helper: HostHelper::ClosureId,
+                ..
+            } => Cost::ClosureIdentityHostCall,
+            Self::HostCall { .. } => Cost::HostCall,
+            #[cfg(feature = "speculation")]
+            Self::GuardClosureId { .. } => Cost::ClosureGuard,
+            Self::CallNative { .. } => Cost::NativeCall,
+            #[cfg(feature = "recursion")]
+            Self::CallSelf { .. } | Self::CallGroup { .. } => Cost::NativeCall,
+            Self::Nop
+            | Self::TailCallGuard { .. }
+            | Self::Return { .. }
+            | Self::Bail
+            | Self::OsrExit
+            | Self::RegionExit { .. } => Cost::Neutral,
+        };
+
+        JitInstrDescriptor {
+            effects: self.effects(),
+            cost_class,
+            native_leaf,
+            compact_scalar_frame,
+            step_batch_safe,
+        }
+    }
+
     /// Imported runtime helper required by this instruction, if any. Codegen uses
     /// this single classification to declare only helpers reachable from the
     /// validated function; scalar-only fuzzing therefore needs no fabricated FFI
@@ -441,7 +633,7 @@ impl JitInstr {
     pub(crate) fn required_host_helper(&self) -> Option<HostHelper> {
         match self {
             Self::HostCall { helper, .. } => Some(*helper),
-            #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+            #[cfg(feature = "readonly-licm")]
             Self::MemoizedHostCall { helper, .. } => Some(*helper),
             Self::MatchMapGetInt { .. } => Some(HostHelper::MapGetMatchInt),
             Self::MatchMapGetFloat { .. } => Some(HostHelper::MapGetMatchFloat),
@@ -487,7 +679,7 @@ impl JitInstr {
             | Self::ListSetFloatDirect { dst, .. }
             | Self::ListLenDirect { dst, .. }
             | Self::ListIsEmptyDirect { dst, .. } => Some(*dst),
-            #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+            #[cfg(feature = "readonly-licm")]
             Self::MemoizedHostCall { dst, .. } => Some(*dst),
             #[cfg(feature = "recursion")]
             Self::CallSelf { dst, .. } | Self::CallGroup { dst, .. } => Some(*dst),
@@ -552,7 +744,7 @@ impl JitInstr {
                     }
                 }
             }
-            #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+            #[cfg(feature = "readonly-licm")]
             Self::MemoizedHostCall { args, .. } => {
                 for arg in args {
                     if let HostArg::Reg(reg) = arg {
@@ -635,7 +827,7 @@ impl JitInstr {
                 HostHeapEffect::AllocatesResult => Write,
                 HostHeapEffect::MutatesInput | HostHeapEffect::ReplacesInput => ReadWrite,
             },
-            #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+            #[cfg(feature = "readonly-licm")]
             Self::MemoizedHostCall { helper, .. } => match helper.heap_effect() {
                 HostHeapEffect::ReadOnly | HostHeapEffect::ExtendsInputHandles => Read,
                 HostHeapEffect::AllocatesResult => Write,
@@ -680,7 +872,7 @@ impl JitInstr {
                 | Self::Bail
                 | Self::OsrExit
         );
-        #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+        #[cfg(feature = "readonly-licm")]
         let may_deopt = may_deopt || matches!(self, Self::MemoizedHostCall { .. });
         #[cfg(feature = "recursion")]
         let may_deopt = may_deopt || matches!(self, Self::CallSelf { .. } | Self::CallGroup { .. });
@@ -741,7 +933,7 @@ impl JitInstr {
                     }
                 }
             }
-            #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+            #[cfg(feature = "readonly-licm")]
             JitInstr::MemoizedHostCall { args, .. } => {
                 for arg in args {
                     if let HostArg::Reg(reg) = arg {
@@ -998,7 +1190,7 @@ impl JitInstr {
                 map(dst, old_to_new)?;
                 map_args(args, old_to_new)?;
             }
-            #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+            #[cfg(feature = "readonly-licm")]
             Self::MemoizedHostCall { dst, args, .. } => {
                 map(dst, old_to_new)?;
                 map_args(args, old_to_new)?;

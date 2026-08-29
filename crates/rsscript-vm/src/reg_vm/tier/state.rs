@@ -218,6 +218,7 @@ impl JitState {
 mod tests {
     use super::*;
 
+    #[cfg(any(feature = "native-jit", feature = "jit-speculation"))]
     fn unit() -> RegUnit {
         RegUnit {
             functions: vec![Rc::new(RegFunction::placeholder("main".into()))],

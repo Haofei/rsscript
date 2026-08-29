@@ -1654,10 +1654,6 @@ mod tests {
                 "readonly_licm_sites": 0,
                 "bounds_check_sites": 0,
                 "bounds_checks_elided": 0,
-                "scalar_unroll_research_candidates": 0,
-                "simd_research_candidates": 0,
-                "scalar_unroll_research_gate": "no_candidate",
-                "simd_research_gate": "no_candidate",
                 "semantic_match": true,
                 "controlled": true,
                 "retention_threshold_met": true

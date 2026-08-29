@@ -40,6 +40,9 @@
 #![deny(clippy::undocumented_unsafe_blocks)]
 #![deny(clippy::missing_safety_doc)]
 
+#[cfg(not(target_pointer_width = "64"))]
+compile_error!("rsscript native JIT currently requires a 64-bit target");
+
 mod analysis;
 mod codegen;
 mod deopt;
@@ -84,8 +87,8 @@ pub use host_abi::{
     IndexedFlatBufferArg,
 };
 pub use ir::{
-    FloatRounding, HostArg, JitCompare, JitControlFlow, JitFunction, JitInstr,
-    JitInstructionOrigin, JitValueType, MemoScope,
+    FloatRounding, HostArg, JitCompare, JitControlFlow, JitFunction, JitInstr, JitInstrCostClass,
+    JitInstrDescriptor, JitInstructionOrigin, JitValueType, MemoScope,
 };
 pub use limits::JitLimits;
 pub use module::{

@@ -28,7 +28,7 @@ fn check_zero_init_reg(program: &JitFunction, reg: u32) -> Result<(), JitError> 
     Ok(())
 }
 
-#[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+#[cfg(feature = "readonly-licm")]
 fn validate_memo_scopes(
     program: &JitFunction,
     memo_slot_owners: &[Option<usize>],
@@ -463,13 +463,13 @@ pub(crate) fn validate_with_limits(
     };
 
     let mut returns = Vec::new();
-    #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+    #[cfg(feature = "readonly-licm")]
     let memo_count = program
         .code
         .iter()
         .filter(|instr| matches!(instr, JitInstr::MemoizedHostCall { .. }))
         .count();
-    #[cfg(not(any(feature = "memoization", feature = "readonly-licm")))]
+    #[cfg(not(feature = "readonly-licm"))]
     let memo_count = 0;
     if memo_count > limits.max_memo_slots {
         return Err(JitError::invalid_ir(format!(
@@ -477,9 +477,9 @@ pub(crate) fn validate_with_limits(
             limits.max_memo_slots
         )));
     }
-    #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+    #[cfg(feature = "readonly-licm")]
     let mut memo_slot_owners: Vec<Option<usize>> = vec![None; memo_count];
-    #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+    #[cfg(feature = "readonly-licm")]
     for (ip, instr) in program.code.iter().enumerate() {
         let JitInstr::MemoizedHostCall { memo_slot, .. } = instr else {
             continue;
@@ -599,7 +599,7 @@ pub(crate) fn validate_with_limits(
                     }
                 }
             }
-            #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+            #[cfg(feature = "readonly-licm")]
             JitInstr::MemoizedHostCall {
                 helper, dst, args, ..
             } => {
@@ -948,9 +948,9 @@ pub(crate) fn validate_with_limits(
             }
         }
     }
-    #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+    #[cfg(feature = "readonly-licm")]
     validate_memo_scopes(program, &memo_slot_owners)?;
-    #[cfg(not(any(feature = "memoization", feature = "readonly-licm")))]
+    #[cfg(not(feature = "readonly-licm"))]
     if !program.memo_scopes.is_empty() {
         return Err(JitError::new(
             JitErrorKind::UnsupportedInstruction,

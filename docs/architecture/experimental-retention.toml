@@ -72,23 +72,6 @@ evidence_sha256 = ""
 removal_rule = "Remove if the canonical aggregate workload does not establish a repeatable end-to-end gain."
 
 [[surface]]
-id = "jit-memoization-engine-switch"
-workspace = "root"
-kind = "cargo_feature"
-package = "rsscript-jit-cranelift"
-feature = "memoization"
-owner = "@Haofei"
-status = "pending"
-maturity = "research"
-last_measured_at = "2026-08-28"
-decision_by = "2026-11-30"
-workloads = ["native-read-heap", "native-read-heap-float"]
-minimum_end_to_end_gain_percent = 15
-evidence_uri = ""
-evidence_sha256 = ""
-removal_rule = "Delete when read-only LICM covers consumers or evidence does not justify the separate mode."
-
-[[surface]]
 id = "aot-backend"
 workspace = "experiments"
 kind = "cargo_package"

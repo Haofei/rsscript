@@ -135,32 +135,6 @@ pub(crate) struct LimitChecks {
     pub(crate) cancel: bool,
 }
 
-/// Instructions which cannot deopt, call a helper, or otherwise leave the current
-/// native activation. Consecutive members inside one CFG basic block may share one
-/// source-step reservation. The list is intentionally conservative: omitting an
-/// instruction only creates a shorter segment; incorrectly adding one could charge
-/// past a mid-segment deopt and violate interpreter parity.
-fn step_batch_safe(instr: &JitInstr) -> bool {
-    matches!(
-        instr,
-        JitInstr::Nop
-            | JitInstr::LoadInt { .. }
-            | JitInstr::LoadFloat { .. }
-            | JitInstr::LoadBool { .. }
-            | JitInstr::Move { .. }
-            | JitInstr::BitAnd { .. }
-            | JitInstr::BitOr { .. }
-            | JitInstr::BitXor { .. }
-            | JitInstr::Compare { .. }
-            | JitInstr::Equal { .. }
-            | JitInstr::NotEqual { .. }
-            | JitInstr::Jump { .. }
-            | JitInstr::JumpIfBool { .. }
-            | JitInstr::JumpIfIntCompare { .. }
-            | JitInstr::Return { .. }
-    )
-}
-
 /// Precompute the source cost charged at each accounting-segment entry.
 ///
 /// Segments never cross a CFG leader and end at every instruction that is not on
@@ -172,7 +146,7 @@ fn step_segment_costs(program: &JitFunction, is_leader: &[bool]) -> Vec<u32> {
     let n = program.code.len();
     let mut starts = is_leader.to_vec();
     for (i, instr) in program.code.iter().enumerate() {
-        if !step_batch_safe(instr) && i + 1 < n {
+        if !instr.descriptor().step_batch_safe && i + 1 < n {
             starts[i + 1] = true;
         }
     }
@@ -310,17 +284,17 @@ pub(crate) fn build_function(
         }
     };
     let vars: Vec<Variable> = (0..n_regs).map(|i| bcx.declare_var(var_ty(i))).collect();
-    #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+    #[cfg(feature = "readonly-licm")]
     let memo_count = program
         .code
         .iter()
         .filter(|instr| matches!(instr, JitInstr::MemoizedHostCall { .. }))
         .count();
-    #[cfg(not(any(feature = "memoization", feature = "readonly-licm")))]
+    #[cfg(not(feature = "readonly-licm"))]
     let memo_count = 0;
     #[allow(unused_mut)]
     let mut memo_value_tys = vec![types::I64; memo_count];
-    #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+    #[cfg(feature = "readonly-licm")]
     for instr in &program.code {
         if let JitInstr::MemoizedHostCall { dst, memo_slot, .. } = instr {
             memo_value_tys[*memo_slot as usize] = var_ty(*dst as usize);
@@ -1077,7 +1051,7 @@ pub(crate) fn build_function(
                 };
                 bcx.def_var(reg(*dst), stored);
             }
-            #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
+            #[cfg(feature = "readonly-licm")]
             JitInstr::MemoizedHostCall {
                 helper,
                 dst,

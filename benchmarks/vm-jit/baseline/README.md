@@ -9,6 +9,11 @@ provisioned, the release smoke enforces the scalar speedup and the weekly
 scorecard publishes diagnostic evidence without treating workstation timings as
 a product contract.
 
+Once the first controlled release exists, every later controlled run downloads
+the latest immutable `jit-baseline-*` release and runs
+`tools/compare-jit-baseline.py`. Runtime, compile-time, code-size, semantic,
+native-entry, bail, and previously accepted retention regressions fail the run.
+
 Collection is fail-closed and requires an explicit controlled-runner assertion:
 
 ```sh
@@ -31,7 +36,7 @@ generated-code time by successful native/OSR/continuation entries. It is a
 diagnostic proxy, not a warm benchmark; it excludes Cranelift compile time and
 must not be compared directly with the uninstrumented cold run.
 
-Every measured case also carries helper/BCE/LICM evidence,
-scalar-unroll/SIMD research-candidate counts, semantic parity, and the controlled
-15% retention-threshold verdict. A candidate count is not an active optimization
-and cannot make that verdict pass by itself.
+Every measured case also carries helper/BCE/LICM evidence, semantic parity, and
+the controlled 15% retention-threshold verdict. Scalar-unroll and SIMD candidate
+analysis is test-only until a real transform exists, so it does not expand the
+production telemetry or baseline schema.

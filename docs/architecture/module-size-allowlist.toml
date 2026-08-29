@@ -116,8 +116,8 @@ tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-vm/src/reg_vm/mod.rs"
-max_bytes = 282000
-reason = "Register VM root still owns registries and compatibility-free execution composition."
+max_bytes = 276000
+reason = "Register VM root still owns registries and execution composition; native text helpers have moved to a private module."
 owner = "@Haofei"
 target_bytes = 60000
 decision_by = "2026-12-31"
@@ -125,8 +125,8 @@ tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-vm/src/reg_vm/native/passes/region_optimization.rs"
-max_bytes = 154000
-reason = "Region optimization debt is feature-gated and constrained by JIT retention policy."
+max_bytes = 127000
+reason = "Region optimization debt is feature-gated; Bytes folding has moved to a private pass module."
 owner = "@Haofei"
 target_bytes = 60000
 decision_by = "2026-12-31"

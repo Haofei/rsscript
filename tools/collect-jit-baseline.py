@@ -84,10 +84,6 @@ def validate(document: dict) -> None:
         "readonly_licm_sites",
         "bounds_check_sites",
         "bounds_checks_elided",
-        "scalar_unroll_research_candidates",
-        "simd_research_candidates",
-        "scalar_unroll_research_gate",
-        "simd_research_gate",
     }
     for case in document["cases"]:
         missing_case = sorted(case_evidence - case.keys())
@@ -96,24 +92,6 @@ def validate(document: dict) -> None:
                 f"baseline case {case.get('case', '<unknown>')} is missing evidence: "
                 + ", ".join(missing_case)
             )
-        if case["scalar_unroll_research_gate"] == "promote":
-            raise SystemExit("scalar unroll cannot promote before a production transform exists")
-        if case["simd_research_gate"] == "promote":
-            raise SystemExit("SIMD cannot promote before typed lane/alias/range codegen exists")
-        expected_unroll_gate = (
-            "hold_no_transform"
-            if case["scalar_unroll_research_candidates"] > 0
-            else "no_candidate"
-        )
-        expected_simd_gate = (
-            "hold_no_transform"
-            if case["simd_research_candidates"] > 0
-            else "no_candidate"
-        )
-        if case["scalar_unroll_research_gate"] != expected_unroll_gate:
-            raise SystemExit("scalar-unroll gate disagrees with candidate evidence")
-        if case["simd_research_gate"] != expected_simd_gate:
-            raise SystemExit("SIMD gate disagrees with candidate evidence")
 
 
 def main() -> None:

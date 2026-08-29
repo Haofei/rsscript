@@ -460,11 +460,9 @@ fn native_jit_pass_scorecard() {
             readonly_licm_sites,
             bounds_check_sites,
             bounds_checks_elided,
-            scalar_unroll_candidates,
-            simd_candidates,
         ) = match diagnostic_native.telemetry.engine {
             ExecutionEngineTelemetry::Interpreter => {
-                (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+                (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
             }
             ExecutionEngineTelemetry::Native {
                 native_calls,
@@ -483,8 +481,6 @@ fn native_jit_pass_scorecard() {
                 readonly_licm_sites,
                 direct_list_bounds_check_sites,
                 direct_list_bounds_checks_elided,
-                scalar_unroll_research_candidates,
-                simd_research_candidates,
                 ..
             } => (
                 native_calls,
@@ -503,8 +499,6 @@ fn native_jit_pass_scorecard() {
                 readonly_licm_sites,
                 direct_list_bounds_check_sites,
                 direct_list_bounds_checks_elided,
-                scalar_unroll_research_candidates,
-                simd_research_candidates,
             ),
         };
         println!(
@@ -535,23 +529,11 @@ fn native_jit_pass_scorecard() {
                 "readonly_licm_sites": readonly_licm_sites,
                 "bounds_check_sites": bounds_check_sites,
                 "bounds_checks_elided": bounds_checks_elided,
-                "scalar_unroll_research_candidates": scalar_unroll_candidates,
-                "simd_research_candidates": simd_candidates,
                 "semantic_match": true,
                 "controlled": controlled,
                 "retention_threshold_met": controlled
                     && native_bails == 0
                     && interpreter.as_secs_f64() / native.as_secs_f64() >= 1.15,
-                "scalar_unroll_research_gate": if scalar_unroll_candidates > 0 {
-                    "hold_no_transform"
-                } else {
-                    "no_candidate"
-                },
-                "simd_research_gate": if simd_candidates > 0 {
-                    "hold_no_transform"
-                } else {
-                    "no_candidate"
-                },
             })
         );
         let entered = native_calls > 0 || osr_entries > 0 || continuation_entries > 0;

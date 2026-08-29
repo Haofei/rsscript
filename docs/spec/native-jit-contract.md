@@ -31,6 +31,13 @@ then returns to a VM-owned barrier which performs the next monotonic clock poll.
   typed `NativeJitOptions`; diagnostic front ends may translate their own flags.
 - Every VM-to-native entry crosses the versioned `JitCallFrame` ABI. The frame
   owns bail, safepoint, deoptimization, depth, limit, and host-context state.
+- The native engine is a 64-bit-only component. Compilation fails explicitly on
+  other pointer widths; opaque host-context and flat-buffer pointer bits must not
+  be truncated into the language's `i64` transport words.
+- Every official `extern "C"` Host Helper is a no-unwind trampoline. A Rust panic
+  is caught before it can cross generated code, marks the ordinary bail flag, and
+  returns the helper type's zero/default value; the VM then aborts the transaction
+  and resumes through the interpreter contract.
 - A native-to-native edge may use the private frame-free scalar ABI only when the
   callee is a bounded, non-recursive leaf over `Int`/`Bool`/`Float` and every
   reachable instruction is proven unable to deopt, allocate, call a helper,
@@ -142,8 +149,9 @@ The stable native path contains a deliberately narrow read-only LICM subset. Its
 lazy loop-activation memoization is emitted only when verifier-bound typed facts
 produce flow-sensitive ownership/alias evidence, every operand is invariant, and
 the existing heap-provenance scan proves that no overlapping write occurs. The
-lower-level engine `memoization` feature remains research-only and does not widen
-this production proof. OSR selection and helper-hoisting consume
+cache instruction is owned exclusively by this production proof; there is no
+separate compatibility feature or promotion surface. OSR selection and
+helper-hoisting consume
 one canonical loop-fact
 projection: unique preheader (when present), header condition, latches, exits, and
 a conservative affine induction variable. The existing backend range proof may

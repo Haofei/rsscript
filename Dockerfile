@@ -20,6 +20,7 @@ RUN apt-get update \
         cmake \
         git \
         curl \
+        gosu \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
@@ -64,13 +65,19 @@ RUN if ! getent group "${RSSCRIPT_GID}" >/dev/null; then \
         --gid "${RSSCRIPT_GID}" \
         --shell /bin/bash \
         rsscript \
-    && mkdir -p /work \
+    && mkdir -p \
+        /work/target \
+        "${CARGO_HOME:-/usr/local/cargo}/registry" \
+        "${CARGO_HOME:-/usr/local/cargo}/git" \
     && chown -R "${RSSCRIPT_UID}:${RSSCRIPT_GID}" /work "${CARGO_HOME:-/usr/local/cargo}"
+
+COPY tools/docker-entrypoint.sh /usr/local/bin/rsscript-entrypoint
+RUN chmod 0755 /usr/local/bin/rsscript-entrypoint
 
 WORKDIR /work
 
 # `rss` (and the test suite) compiles generated Rust packages at runtime, so the
 # container keeps the full toolchain available. Default to an interactive shell;
 # compose overrides the command for one-off runs.
-USER rsscript
+ENTRYPOINT ["/usr/local/bin/rsscript-entrypoint"]
 CMD ["bash"]

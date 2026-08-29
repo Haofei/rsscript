@@ -42,9 +42,11 @@ pub(in crate::reg_vm) struct SinkableClosures {
 ///   (already-live) capture register; a non-scalar (heap) capture is caught by the
 ///   downstream OSR type inference (Int/Bool/Float only — the same safety net the
 ///   other region passes rely on), so such a body simply fails to compile.
-/// An instruction that produces/consumes only scalar (Int/Bool/Float) values — no
-/// heap operand. A heap value can only be consumed by a NON-scalar instruction, so
-/// a register read exclusively by scalar-only instructions cannot hold a heap value.
+///
+/// An instruction that produces/consumes only scalar (Int/Bool/Float) values has
+/// no heap operand. A heap value can only be consumed by a non-scalar instruction,
+/// so a register read exclusively by scalar-only instructions cannot hold a heap
+/// value.
 #[cfg(feature = "native-jit")]
 fn native_instr_scalar_only(instr: &RegInstr) -> bool {
     matches!(

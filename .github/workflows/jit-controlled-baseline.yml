@@ -32,6 +32,22 @@ jobs:
             --cpu-governor "${RSS_JIT_CPU_GOVERNOR:?runner must declare governor}" \
             --samples 25 --warmup 3 \
             --output "canonical-$(uname -s | tr A-Z a-z)-$(uname -m).json"
+      - name: Compare with latest accepted baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PRIOR_TAG="$(gh release list --limit 100 --json tagName --jq '[.[] | select(.tagName | startswith("jit-baseline-"))][0].tagName // ""')"
+          if [ -z "$PRIOR_TAG" ]; then
+            echo "No accepted controlled baseline exists; this run establishes the bootstrap evidence."
+            exit 0
+          fi
+          mkdir -p previous-baseline
+          gh release download "$PRIOR_TAG" --pattern 'canonical-*.json' --dir previous-baseline
+          PRIOR="$(find previous-baseline -maxdepth 1 -name 'canonical-*.json' -print -quit)"
+          CURRENT="$(find . -maxdepth 1 -name 'canonical-*.json' -print -quit)"
+          test -n "$PRIOR"
+          test -n "$CURRENT"
+          python3 tools/compare-jit-baseline.py "$PRIOR" "$CURRENT"
       - name: Record immutable evidence identity
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -76,4 +92,4 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "JIT controlled baseline ${GITHUB_SHA::12} run ${GITHUB_RUN_ID}" \
             --notes "Attested controlled-hardware JIT evidence. This release is an immutable measurement record, not a product release." \
-            canonical-*.json
+            canonical-*.json canonical-evidence.json

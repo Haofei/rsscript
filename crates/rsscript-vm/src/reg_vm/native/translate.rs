@@ -1,12 +1,6 @@
 //! Native-JIT IR producers and OSR-loop detection.
-// Translation works over parallel register/IP maps whose indices are semantic;
-// the typed tuple results are the private handoff between lowering stages.
-#![allow(
-    unused_imports,
-    clippy::needless_range_loop,
-    clippy::too_many_arguments,
-    clippy::type_complexity
-)]
+// Translation works over register/IP maps whose indices are semantic; named
+// handoff structs keep the lowering stages type-safe.
 
 use super::super::*;
 use super::passes::*;
@@ -20,22 +14,8 @@ mod loop_regions;
 use jit_post::*;
 pub(in crate::reg_vm) use loop_regions::*;
 
-#[cfg(test)]
-pub(crate) use jit_post::{
-    native_field_load_slot_not_stored_in_loop, native_loop_preserves_field_slot_for_receiver,
-    native_loop_preserves_heap_projection,
-};
-
 #[cfg(all(test, feature = "native-jit"))]
 mod architecture_tests;
-
-#[cfg(feature = "native-jit")]
-#[derive(Clone)]
-pub(in crate::reg_vm) struct NativeCompiledCallee {
-    pub(in crate::reg_vm) id: vm_jit::CompiledId,
-    pub(in crate::reg_vm) ret_ty: NativeTy,
-    pub(in crate::reg_vm) param_tys: Vec<NativeTy>,
-}
 
 #[cfg(feature = "native-jit")]
 fn native_call_mut_args_supported(mut_args: &[usize], param_tys: &[NativeTy]) -> bool {
@@ -178,13 +158,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit(
     facts: &VerifiedFunctionFacts,
     profile: Option<&FunctionProfile>,
     call_count: u32,
-) -> Option<(
-    vm_jit::JitFunction,
-    NativeTy,
-    Vec<NativeTy>,
-    Vec<Rc<String>>,
-    bool,
-)> {
+) -> Option<NativeTranslation> {
     translate_to_native_jit_with_compiled_callees(
         unit,
         func,
@@ -203,13 +177,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_compiled_callees(
     profile: Option<&FunctionProfile>,
     call_count: u32,
     compiled_callees: &HashMap<usize, NativeCompiledCallee>,
-) -> Option<(
-    vm_jit::JitFunction,
-    NativeTy,
-    Vec<NativeTy>,
-    Vec<Rc<String>>,
-    bool,
-)> {
+) -> Option<NativeTranslation> {
     translate_to_native_jit_with_calls(
         unit,
         func,
@@ -231,6 +199,9 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_compiled_callees(
 /// (`precise_resume_safe` forced off), so a bail anywhere in the recursion unwinds
 /// to the interpreter.
 #[cfg(feature = "native-jit")]
+// The call-site maps are distinct proof inputs; grouping them would obscure their
+// recursion and already-compiled-callee invariants.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     unit: &RegUnit,
     func: &RegFunction,
@@ -240,13 +211,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     compiled_callees: &HashMap<usize, NativeCompiledCallee>,
     self_call_sites: &HashSet<usize>,
     group_call_sites: &HashMap<usize, u32>,
-) -> Option<(
-    vm_jit::JitFunction,
-    NativeTy,
-    Vec<NativeTy>,
-    Vec<Rc<String>>,
-    bool,
-)> {
+) -> Option<NativeTranslation> {
     use vm_jit::{JitCompare, JitInstr};
 
     if func.captures != 0 {
@@ -2180,13 +2145,13 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
         && origins
             .iter()
             .all(|origin| origin.source_ip < func.code.len() && origin.resume_ip < func.code.len());
-    Some((
+    Some(NativeTranslation {
         jit_fn,
-        ret_type,
-        param_types,
+        return_ty: ret_type,
+        param_tys: param_types,
         string_literals,
         precise_resume_safe,
-    ))
+    })
 }
 
 /// Convert a failed eligibility predicate into the translator's `None` decline.
@@ -2208,15 +2173,7 @@ pub(in crate::reg_vm) fn translate_osr_loop(
     n_params: usize,
     captures: usize,
     lp: OsrLoop,
-) -> Option<(
-    vm_jit::JitFunction,
-    Vec<NativeTy>,
-    Vec<OsrDerivedLiveIn>,
-    Vec<OsrScalarField>,
-    Vec<NativeTy>,
-    Vec<bool>,
-    Vec<Rc<String>>,
-)> {
+) -> Option<OsrTranslation> {
     translate_osr_loop_inner(
         code,
         n_regs,
@@ -2237,6 +2194,8 @@ pub(in crate::reg_vm) fn translate_osr_loop(
 }
 
 #[cfg(feature = "native-jit")]
+// OSR lowering takes explicit region, profile, type, and ownership proofs.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::reg_vm) fn translate_osr_loop_profiled(
     func: &RegFunction,
     facts: &VerifiedFunctionFacts,
@@ -2249,15 +2208,7 @@ pub(in crate::reg_vm) fn translate_osr_loop_profiled(
     ip_map: &[usize],
     param_native_types: &[Option<NativeTy>],
     immutable_leaf_params: &[bool],
-) -> Option<(
-    vm_jit::JitFunction,
-    Vec<NativeTy>,
-    Vec<OsrDerivedLiveIn>,
-    Vec<OsrScalarField>,
-    Vec<NativeTy>,
-    Vec<bool>,
-    Vec<Rc<String>>,
-)> {
+) -> Option<OsrTranslation> {
     // The direct verified-bytecode OSR path consumes the same bounded typed
     // block IR as continuations. Transformed/inlined streams retain their
     // existing proven facts until their origin map can project typed values
@@ -2308,6 +2259,9 @@ fn osr_uf_find(a: &mut [usize], mut x: usize) -> usize {
 }
 
 #[cfg(feature = "native-jit")]
+// OSR lowering coordinates bytecode, source maps, typed facts, and region policy;
+// source-IP loops intentionally index those parallel semantic tables.
+#[allow(clippy::needless_range_loop, clippy::too_many_arguments)]
 fn translate_osr_loop_inner(
     code: &[RegInstr],
     n_regs: usize,
@@ -2324,15 +2278,7 @@ fn translate_osr_loop_inner(
     source_ip_map: Option<&[usize]>,
     source_instruction_count: usize,
     enable_flat_buffers: bool,
-) -> Option<(
-    vm_jit::JitFunction,
-    Vec<NativeTy>,
-    Vec<OsrDerivedLiveIn>,
-    Vec<OsrScalarField>,
-    Vec<NativeTy>,
-    Vec<bool>,
-    Vec<Rc<String>>,
-)> {
+) -> Option<OsrTranslation> {
     use vm_jit::{JitCompare, JitInstr};
 
     if captures != 0 {
@@ -4088,13 +4034,13 @@ fn translate_osr_loop_inner(
         cold_blocks,
         resume_live_regs: Vec::new(),
     };
-    Some((
+    Some(OsrTranslation {
         jit_fn,
-        param_types,
-        derived_liveins,
+        param_tys: param_types,
+        derived_live_ins: derived_liveins,
         scalar_fields,
-        native_reg_types,
+        reg_tys: native_reg_types,
         written_regs,
         string_literals,
-    ))
+    })
 }

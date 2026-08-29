@@ -1304,6 +1304,8 @@ pub(in crate::reg_vm) fn cold_arm_pure_value_op(instr: &RegInstr) -> bool {
 /// not provably a clean pure tail is simply NOT marked cold (so it must be otherwise
 /// classifiable, else the inline is vetoed).
 #[cfg(feature = "native-jit")]
+// Cold-arm ranges are source-IP intervals shared with the cold bitset.
+#[allow(clippy::needless_range_loop)]
 pub(in crate::reg_vm) fn deopt_replaceable_cold_arms(
     code: &[RegInstr],
     reachable: &[bool],

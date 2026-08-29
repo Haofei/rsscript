@@ -1055,10 +1055,6 @@ fn jit_static_facts_and_missed_optimization_telemetry_stay_structured() {
         "runtime_helper_call_sites",
         "canonical_loops",
         "canonical_induction_variables",
-        "scalar_unroll_research_candidates",
-        "scalar_unroll_declines",
-        "simd_research_candidates",
-        "simd_declines",
     ] {
         assert!(
             vm.contains(field),
@@ -1136,6 +1132,7 @@ fn loop_optimizations_share_canonical_facts_and_keep_unrolling_research_only() {
     assert!(jit_post.contains("facts: &CanonicalLoopFacts"));
     assert!(jit_post.contains("fn native_readonly_licm_eligible("));
     assert!(jit_post.contains("helper.heap_reads()"));
+    assert!(loops.contains("#[cfg(all(test, feature = \"native-jit\"))]"));
     assert!(loops.contains("fn scalar_x2_unroll_research_decision("));
     assert!(loops.contains("fn simd_research_decision("));
     assert!(!loops.contains("fn native_unroll_scalar_loop_x2("));
@@ -1603,17 +1600,20 @@ fn cranelift_engine_keeps_research_features_and_raw_abi_out_of_the_stable_surfac
     let vm_manifest = read(&root.join("crates/rsscript-vm/Cargo.toml"));
 
     assert!(manifest.contains("publish = false"));
-    for feature in ["speculation = []", "recursion = []", "memoization = []"] {
+    for feature in ["speculation = []", "recursion = []"] {
         assert!(
             manifest.contains(feature),
             "Cranelift manifest is missing isolated research feature `{feature}`"
         );
     }
+    assert!(!manifest.contains("memoization = []"));
     assert!(!library.contains("pub use host_abi::*;"));
     assert!(!library.contains("pub use ir::*;"));
     assert!(!library.contains("pub use module::*;"));
     assert!(library.contains("JitCallFrame"));
     assert!(!library.contains("pub use host_abi::{\n    JitCallFrame"));
+    assert!(library.contains("cfg(not(target_pointer_width = \"64\"))"));
+    assert!(library.contains("native JIT currently requires a 64-bit target"));
 
     let native_jit = vm_manifest
         .lines()

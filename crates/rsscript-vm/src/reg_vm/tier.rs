@@ -249,7 +249,14 @@ fn native_compile_direct_scalar_callee(
         )
         .or_else(|| translate_to_native_jit(unit, callee, callee_facts, profile, call_count))
     };
-    let Some((jit_fn, ret, params, string_literals, precise_resume_safe)) = translated else {
+    let Some(NativeTranslation {
+        jit_fn,
+        return_ty: ret,
+        param_tys: params,
+        string_literals,
+        precise_resume_safe,
+    }) = translated
+    else {
         stack.remove(&callee_key);
         return None;
     };
@@ -762,7 +769,13 @@ impl RegVm {
                         })
                     };
                     let entry = match translated {
-                        Some((jit_fn, ret, params, string_literals, precise_resume_safe)) => {
+                        Some(NativeTranslation {
+                            jit_fn,
+                            return_ty: ret,
+                            param_tys: params,
+                            string_literals,
+                            precise_resume_safe,
+                        }) => {
                             if native.collect_stats {
                                 native.stats.translated += 1;
                             }
@@ -791,15 +804,9 @@ impl RegVm {
                                     .set_native_status(func, NATIVE_STATUS_NOT_ELIGIBLE);
                                 None
                             } else {
-                                // The default host policy already owns one
-                                // `opt_level=speed` module. Under an explicitly
-                                // tiered policy, a whole function with an
-                                // internal backedge may execute millions of
-                                // iterations in its first native activation;
-                                // static call-count promotion cannot observe
-                                // that work. Compile such bodies directly into
-                                // the optimized module instead of publishing a
-                                // baseline copy that can never accumulate true
+                                // Static call-count promotion cannot observe the
+                                // dynamic work of an internal backedge. Compile
+                                // such bodies directly into the optimized module.
                                 // backedge heat.
                                 let initial_tier =
                                     if has_backedge && native.optimized_module.is_some() {
@@ -1902,7 +1909,14 @@ impl RegVm {
                     &param_native_types,
                 )
                 .and_then(
-                    |(jit_fn, slots, n_live_in, exits, typed_summary, virtual_summary)| {
+                    |ContinuationTranslation {
+                         jit_fn,
+                         slots,
+                         live_in_count: n_live_in,
+                         exits,
+                         typed_summary,
+                         virtual_summary,
+                     }| {
                         let admission = begin_native_compile(native, 1, NativeCodeTier::Baseline)?;
                         match native.baseline_module.compile_osr(
                             &jit_fn,
@@ -1981,7 +1995,7 @@ impl RegVm {
                                     .entry(version_key.clone())
                                     .or_default()
                                     .compiled(false);
-                                // No controlled canonical baseline currently
+                                // No controlled canonical baseline
                                 // clears the optimized-continuation retention
                                 // gate. Keep the common controller state at
                                 // baseline instead of inventing an unmeasured
@@ -2500,15 +2514,15 @@ impl RegVm {
                             &immutable_leaf_params,
                         )
                         .and_then(
-                            |(
-                                jit_fn,
-                                params,
-                                derived_liveins,
-                                scalar_fields,
-                                reg_types,
-                                written_regs,
-                                string_literals,
-                            )| {
+                            |OsrTranslation {
+                                 jit_fn,
+                                 param_tys: params,
+                                 derived_live_ins: derived_liveins,
+                                 scalar_fields,
+                                 reg_tys: reg_types,
+                                 written_regs,
+                                 string_literals,
+                             }| {
                                 let n_jit_regs = jit_fn.n_regs as usize;
                                 // native limit accounting mem: a `ListPush*` flat-capacity growth now charges
                                 // `allocation_budget` in its host helper (the only native-subset op
@@ -2930,7 +2944,15 @@ impl RegVm {
                                 &param_native_types,
                                 &immutable_leaf_params,
                             )
-                                .and_then(|(jit_fn, params, derived_liveins, scalar_fields, reg_types, written_regs, string_literals)| {
+                                .and_then(|OsrTranslation {
+                                    jit_fn,
+                                    param_tys: params,
+                                    derived_live_ins: derived_liveins,
+                                    scalar_fields,
+                                    reg_tys: reg_types,
+                                    written_regs,
+                                    string_literals,
+                                }| {
                                     let n_jit_regs = jit_fn.n_regs as usize;
                                     // native limit accounting mem: `ListPush*` now charges `allocation_budget` in its
                                     // helper (the only native-subset billed op), so an

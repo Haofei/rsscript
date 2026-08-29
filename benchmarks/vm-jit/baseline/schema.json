@@ -60,10 +60,6 @@
           "readonly_licm_sites",
           "bounds_check_sites",
           "bounds_checks_elided",
-          "scalar_unroll_research_candidates",
-          "simd_research_candidates",
-          "scalar_unroll_research_gate",
-          "simd_research_gate",
           "semantic_match",
           "controlled",
           "retention_threshold_met"
@@ -90,14 +86,6 @@
           "readonly_licm_sites": { "type": "integer", "minimum": 0 },
           "bounds_check_sites": { "type": "integer", "minimum": 0 },
           "bounds_checks_elided": { "type": "integer", "minimum": 0 },
-          "scalar_unroll_research_candidates": { "type": "integer", "minimum": 0 },
-          "simd_research_candidates": { "type": "integer", "minimum": 0 },
-          "scalar_unroll_research_gate": {
-            "enum": ["no_candidate", "hold_no_transform"]
-          },
-          "simd_research_gate": {
-            "enum": ["no_candidate", "hold_no_transform"]
-          },
           "semantic_match": { "const": true },
           "controlled": { "const": true },
           "retention_threshold_met": { "type": "boolean" }

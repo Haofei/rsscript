@@ -24,6 +24,7 @@ use super::*;
 /// needs the extended deopt ABI (carrying Handle payloads) for the live-after case.
 /// Verified by probe 2026-06-28: same-typed arms OSR; `Result<Int,String>` declines.
 #[cfg(feature = "native-jit")]
+#[allow(clippy::needless_range_loop, clippy::type_complexity)]
 pub(super) fn native_scalar_replace_two_armed_results_in_region(
     code: &[RegInstr],
     n_regs: usize,
@@ -372,6 +373,7 @@ pub(super) fn native_scalar_replace_two_armed_results_in_region(
 /// `ip_map` discipline as the Option region pass (each rewritten op's fragments map to
 /// the original op's index; copy-through maps one-to-one).
 #[cfg(feature = "native-jit")]
+#[allow(clippy::needless_range_loop, clippy::type_complexity)]
 pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
     code: &[RegInstr],
     n_regs: usize,
@@ -498,6 +500,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
     // copies both halves), and therefore must agree on the arm-name→index map. Group
     // VAR registers into alias classes with a union-find over in-region `Move` edges.
     let mut parent: Vec<usize> = (0..n_regs).collect();
+    #[allow(clippy::needless_range_loop)]
     fn find(parent: &mut [usize], x: usize) -> usize {
         let mut r = x;
         while parent[r] != r {
@@ -1064,6 +1067,7 @@ pub(in crate::reg_vm) fn struct_shape_of_reg(
     feature = "native-jit",
     any(test, feature = "jit-struct-sr-experimental")
 ))]
+#[allow(clippy::needless_range_loop, clippy::type_complexity)]
 pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     code: &[RegInstr],
     n_regs: usize,
@@ -1280,7 +1284,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     // Because anchors are created lazily and keyed by a register's find-root, we resolve
     // them through a small interning map below.
     let mut parent: Vec<usize> = (0..n_regs).collect();
-    fn find(parent: &mut Vec<usize>, x: usize) -> usize {
+    fn find(parent: &mut [usize], x: usize) -> usize {
         let mut r = x;
         while parent[r] != r {
             r = parent[r];
@@ -1293,7 +1297,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
         }
         r
     }
-    fn union(parent: &mut Vec<usize>, a: usize, b: usize) {
+    fn union(parent: &mut [usize], a: usize, b: usize) {
         let (ra, rb) = (find(parent, a), find(parent, b));
         if ra != rb {
             parent[ra] = rb;
@@ -1473,9 +1477,10 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_struct_recipe_value(
         reg: usize,
-        parent: &mut Vec<usize>,
+        parent: &mut [usize],
         class_layout: &HashMap<usize, Rc<crate::vm_value::TypeLayout>>,
         nested_slots: &HashMap<Vec<Rc<str>>, std::collections::HashSet<usize>>,
         anchors: &HashMap<(usize, usize), usize>,
@@ -1682,6 +1687,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     feature = "native-jit",
     not(any(test, feature = "jit-struct-sr-experimental"))
 ))]
+#[allow(clippy::type_complexity)]
 pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     code: &[RegInstr],
     n_regs: usize,
@@ -1718,6 +1724,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
 ///   which the interpreter set to `Unit`, is preserved in case it is read);
 /// - in-loop self-`Move{p, p}` (the lowerer's redundant copy after each `SetFieldSlot`)
 ///   → nothing.
+///
 /// The leaf registers are loop-carried (live-in at the header, carried across the
 /// backedge, in the OSR window). Because `p` is DEAD after the loop, no heap struct is
 /// reconstructed at the OSR-exit; the scalar leaves simply flow out (each leaf is a
@@ -1743,6 +1750,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     feature = "native-jit",
     any(test, feature = "jit-struct-sr-experimental")
 ))]
+#[allow(clippy::needless_range_loop)]
 pub(in crate::reg_vm) fn native_loop_carried_struct_in_region(
     code: &[RegInstr],
     n_regs: usize,

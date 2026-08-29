@@ -149,7 +149,7 @@ pub(in crate::reg_vm) struct CanonicalInductionVariable {
 /// scalar unrolling. Production code never unrolls from this verdict: source
 /// step accounting, exact overflow/deopt points, and a controlled performance
 /// baseline must be proven before a transform is enabled.
-#[cfg(feature = "native-jit")]
+#[cfg(all(test, feature = "native-jit"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::reg_vm) enum ScalarUnrollResearchDecision {
     Candidate,
@@ -159,7 +159,7 @@ pub(in crate::reg_vm) enum ScalarUnrollResearchDecision {
 /// Structural SIMD research verdict. `Candidate` deliberately means only that
 /// the source loop is worth measuring once typed lane, alias, range, precise
 /// overflow/deopt, and target-vector proofs exist. It never enables codegen.
-#[cfg(feature = "native-jit")]
+#[cfg(all(test, feature = "native-jit"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::reg_vm) enum SimdResearchDecision {
     Candidate,
@@ -172,10 +172,6 @@ pub(in crate::reg_vm) struct LoopOptimizationEvidence {
     pub(in crate::reg_vm) canonical_loops: u64,
     pub(in crate::reg_vm) unique_preheaders: u64,
     pub(in crate::reg_vm) induction_variables: u64,
-    pub(in crate::reg_vm) unroll_research_candidates: u64,
-    pub(in crate::reg_vm) unroll_declines: BTreeMap<String, u64>,
-    pub(in crate::reg_vm) simd_research_candidates: u64,
-    pub(in crate::reg_vm) simd_declines: BTreeMap<String, u64>,
     /// The deliberately linear analysis budget was exhausted. Facts collected
     /// before exhaustion remain conservative, but telemetry must expose that it
     /// is a lower bound rather than silently presenting a partial scan as exact.
@@ -481,14 +477,7 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
     facts: &VerifiedFunctionFacts,
     region: &ContinuationRegion,
     param_native_types: &[Option<NativeTy>],
-) -> Option<(
-    vm_jit::JitFunction,
-    Box<[ContinuationSlot]>,
-    usize,
-    BTreeMap<usize, ContinuationExit>,
-    TypedRegionSummary,
-    VirtualObjectSummary,
-)> {
+) -> Option<ContinuationTranslation> {
     if region.entry >= func.code.len() || region.included.len() != func.code.len() {
         return None;
     }
@@ -537,15 +526,15 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
     let mut active_regs = region.active_regs.clone();
     active_regs.resize(func.regs, false);
     let immutable_leaf_params = vec![false; func.params];
-    let (
+    let OsrTranslation {
         mut jit_fn,
-        _params,
-        derived_liveins,
+        param_tys: _params,
+        derived_live_ins: derived_liveins,
         scalar_fields,
-        reg_types,
+        reg_tys: reg_types,
         written_regs,
         string_literals,
-    ) = translate_osr_loop_inner(
+    } = translate_osr_loop_inner(
         &synthetic,
         func.regs,
         func.params,
@@ -679,14 +668,14 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
         })
         .collect::<Option<BTreeMap<_, _>>>()?;
     classify_continuation_slots(&mut compact_slots, region.live_in_regs.len(), &exits)?;
-    Some((
+    Some(ContinuationTranslation {
         jit_fn,
-        compact_slots.into_boxed_slice(),
-        region.live_in_regs.len(),
+        slots: compact_slots.into_boxed_slice(),
+        live_in_count: region.live_in_regs.len(),
         exits,
         typed_summary,
         virtual_summary,
-    ))
+    })
 }
 
 #[cfg(all(test, feature = "native-jit"))]
@@ -1480,7 +1469,7 @@ pub(in crate::reg_vm) fn detect_natural_loops(code: &[RegInstr]) -> Vec<OsrLoop>
 /// preserve exact source-step charging, overflow/deopt resume points, and loop
 /// remainder semantics, and no controlled canonical workload has yet justified
 /// that additional correctness surface.
-#[cfg(feature = "native-jit")]
+#[cfg(all(test, feature = "native-jit"))]
 pub(in crate::reg_vm) fn scalar_x2_unroll_research_decision(
     code: &[RegInstr],
     facts: &CanonicalLoopFacts,
@@ -1515,7 +1504,7 @@ pub(in crate::reg_vm) fn scalar_x2_unroll_research_decision(
 /// changing its instruction stream. Static source bytecode does not yet carry
 /// the lane/alias/range proof required for vector codegen, so this function is
 /// evidence collection only and its result cannot authorize a transform.
-#[cfg(feature = "native-jit")]
+#[cfg(all(test, feature = "native-jit"))]
 pub(in crate::reg_vm) fn simd_research_decision(
     code: &[RegInstr],
     facts: &CanonicalLoopFacts,
@@ -1576,29 +1565,6 @@ pub(in crate::reg_vm) fn loop_optimization_evidence(code: &[RegInstr]) -> LoopOp
         evidence.induction_variables = evidence
             .induction_variables
             .saturating_add(u64::from(facts.induction.is_some()));
-        match scalar_x2_unroll_research_decision(code, &facts) {
-            ScalarUnrollResearchDecision::Candidate => {
-                evidence.unroll_research_candidates =
-                    evidence.unroll_research_candidates.saturating_add(1);
-            }
-            ScalarUnrollResearchDecision::Decline(reason) => {
-                let count = evidence
-                    .unroll_declines
-                    .entry(reason.to_owned())
-                    .or_default();
-                *count = count.saturating_add(1);
-            }
-        }
-        match simd_research_decision(code, &facts) {
-            SimdResearchDecision::Candidate => {
-                evidence.simd_research_candidates =
-                    evidence.simd_research_candidates.saturating_add(1);
-            }
-            SimdResearchDecision::Decline(reason) => {
-                let count = evidence.simd_declines.entry(reason.to_owned()).or_default();
-                *count = count.saturating_add(1);
-            }
-        }
     }
     evidence
 }
@@ -1619,24 +1585,10 @@ pub(in crate::reg_vm) fn unit_loop_optimization_evidence(
         combined.induction_variables = combined
             .induction_variables
             .saturating_add(evidence.induction_variables);
-        combined.unroll_research_candidates = combined
-            .unroll_research_candidates
-            .saturating_add(evidence.unroll_research_candidates);
-        combined.simd_research_candidates = combined
-            .simd_research_candidates
-            .saturating_add(evidence.simd_research_candidates);
         combined.analysis_limit_reached |= evidence.analysis_limit_reached;
         combined.analysis_work_units = combined
             .analysis_work_units
             .saturating_add(evidence.analysis_work_units);
-        for (reason, count) in evidence.unroll_declines {
-            let total = combined.unroll_declines.entry(reason).or_default();
-            *total = total.saturating_add(count);
-        }
-        for (reason, count) in evidence.simd_declines {
-            let total = combined.simd_declines.entry(reason).or_default();
-            *total = total.saturating_add(count);
-        }
     }
     combined
 }
@@ -1763,9 +1715,6 @@ mod canonical_loop_tests {
             scalar_x2_unroll_research_decision(&unit, &facts),
             ScalarUnrollResearchDecision::Candidate
         );
-        let evidence = loop_optimization_evidence(&unit);
-        assert_eq!(evidence.unroll_research_candidates, 1);
-
         let non_unit = counted_loop(2);
         let before = format!("{non_unit:?}");
         let facts = canonical_loop_at(&non_unit, 3).unwrap();
@@ -1787,8 +1736,6 @@ mod canonical_loop_tests {
             simd_research_decision(&scan, &facts),
             SimdResearchDecision::Candidate
         );
-        let evidence = loop_optimization_evidence(&scan);
-        assert_eq!(evidence.simd_research_candidates, 1);
         assert_eq!(format!("{scan:?}"), before);
 
         let mut mutating = scan;

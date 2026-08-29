@@ -39,6 +39,8 @@ pub(in crate::reg_vm) struct NativeHeapProvenanceFacts {
 }
 
 impl NativeHeapProvenanceFacts {
+    // IPs intentionally index several parallel semantic fact tables.
+    #[allow(clippy::needless_range_loop)]
     pub(in crate::reg_vm) fn compute(
         code: &[RegInstr],
         jit_code: &[vm_jit::JitInstr],
@@ -422,6 +424,8 @@ fn native_clear_defined_fact<T: Copy + Eq>(instr: &RegInstr, facts: &mut [Native
 }
 
 #[cfg(feature = "native-jit")]
+// The instruction index is also the fact-table coordinate.
+#[allow(clippy::needless_range_loop)]
 fn native_forward_reg_facts<T: Copy + Eq>(
     cfg: &NativeRegionCfg,
     code: &[RegInstr],
@@ -945,6 +949,8 @@ impl NativeRegionAnalysis {
         Some(())
     }
 
+    // Region IPs intentionally index bytecode and alias tables together.
+    #[allow(clippy::needless_range_loop)]
     pub(super) fn close_region_move_aliases(
         &self,
         code: &[RegInstr],
@@ -1309,6 +1315,8 @@ pub(in crate::reg_vm) fn native_region_has_readonly_full_list_slice_elision(
 /// source list. We also require the source list to remain unwritten in the region so
 /// the shallow copy's read-only behavior is indistinguishable from an alias.
 #[cfg(feature = "native-jit")]
+// Rewriting requires the original instruction index to update the origin map.
+#[allow(clippy::needless_range_loop)]
 pub(in crate::reg_vm) fn native_elide_readonly_full_list_slices_in_region(
     code: &[RegInstr],
     n_regs: usize,

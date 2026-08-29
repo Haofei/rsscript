@@ -982,12 +982,6 @@ pub enum ExecutionEngineTelemetry {
         readonly_licm_sites: u64,
         /// Runtime helper call sites remaining after native optimization.
         runtime_helper_call_sites: u64,
-        /// Strict scalar-x2 structural candidates. This is research evidence;
-        /// the stable engine does not perform the rewrite.
-        scalar_unroll_research_candidates: u64,
-        /// Strict read-only unit-stride list-loop candidates. This is research
-        /// evidence only; no SIMD machine code is emitted.
-        simd_research_candidates: u64,
         /// Machine code currently resident in the JIT modules. The current
         /// compile-once-publish policy makes this equal to published code.
         resident_code_bytes: u64,

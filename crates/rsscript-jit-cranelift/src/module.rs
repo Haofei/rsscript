@@ -92,69 +92,10 @@ fn native_scalar_leaf_callable(function: &JitFunction, osr: bool, _returns_handl
                 | JitValueType::FlatFloat
                 | JitValueType::FlatFloatMut
         )
-    }) && function.code.iter().all(|instr| {
-        let baseline = matches!(
-            instr,
-            JitInstr::Nop
-                | JitInstr::TailCallGuard { .. }
-                | JitInstr::LoadInt { .. }
-                | JitInstr::LoadFloat { .. }
-                | JitInstr::LoadBool { .. }
-                | JitInstr::Move { .. }
-                | JitInstr::Add { .. }
-                | JitInstr::Sub { .. }
-                | JitInstr::Mul { .. }
-                | JitInstr::Div { .. }
-                | JitInstr::Mod { .. }
-                | JitInstr::IntToFloat { .. }
-                | JitInstr::FloatToInt { .. }
-                | JitInstr::BitAnd { .. }
-                | JitInstr::BitOr { .. }
-                | JitInstr::BitXor { .. }
-                | JitInstr::Shl { .. }
-                | JitInstr::Shr { .. }
-                | JitInstr::Compare { .. }
-                | JitInstr::Equal { .. }
-                | JitInstr::NotEqual { .. }
-                | JitInstr::Jump { .. }
-                | JitInstr::JumpIfBool { .. }
-                | JitInstr::JumpIfIntCompare { .. }
-                | JitInstr::CallNative { .. }
-                | JitInstr::HostCall { .. }
-                | JitInstr::Return { .. }
-                | JitInstr::Bail // Flat-list direct ops via the canonical `is_flat_list_direct` set (single
-                                 // source of truth shared with the rsscript leaf/cost-model sites).
-        ) || instr.is_flat_list_direct();
-        #[cfg(feature = "speculation")]
-        let baseline = baseline
-            || matches!(
-                instr,
-                JitInstr::ProfiledJumpIfBool { .. }
-                    | JitInstr::ProfiledJumpIfIntCompare { .. }
-                    | JitInstr::GuardClosureId { .. }
-            );
-        #[cfg(feature = "recursion")]
-        let baseline = baseline
-            || matches!(
-                instr,
-                JitInstr::CallSelf { .. } | JitInstr::CallGroup { .. }
-            );
-        #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
-        let baseline = baseline || matches!(instr, JitInstr::MemoizedHostCall { .. });
-
-        let extends_handles = matches!(
-            instr,
-            JitInstr::HostCall { helper, .. } if helper.heap_effect().extends_input_handles()
-        );
-        #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
-        let extends_handles = extends_handles
-            || matches!(
-                instr,
-                JitInstr::MemoizedHostCall { helper, .. }
-                    if helper.heap_effect().extends_input_handles()
-            );
-        baseline && !extends_handles
-    })
+    }) && function
+        .code
+        .iter()
+        .all(|instr| instr.descriptor().native_leaf)
 }
 
 /// Whether a native callee can use the compact scalar child-frame path.
@@ -169,35 +110,17 @@ fn native_compact_scalar_frame_callable(
     osr: bool,
     returns_handle: bool,
 ) -> bool {
-    let compact = !osr
-        && !returns_handle
+    !osr && !returns_handle
         && function.reg_types.iter().all(|ty| {
             matches!(
                 ty,
                 JitValueType::Int | JitValueType::Bool | JitValueType::Float
             )
         })
-        && function.code.iter().all(|instr| {
-            !matches!(
-                instr,
-                JitInstr::HostCall { .. } | JitInstr::CallNative { .. }
-            ) && !instr.is_flat_list_direct()
-        });
-    #[cfg(any(feature = "memoization", feature = "readonly-licm"))]
-    let compact = compact
         && function
             .code
             .iter()
-            .all(|instr| !matches!(instr, JitInstr::MemoizedHostCall { .. }));
-    #[cfg(feature = "recursion")]
-    let compact = compact
-        && function.code.iter().all(|instr| {
-            !matches!(
-                instr,
-                JitInstr::CallSelf { .. } | JitInstr::CallGroup { .. }
-            )
-        });
-    compact
+            .all(|instr| instr.descriptor().compact_scalar_frame)
 }
 
 /// Whether a normal (non-OSR) function can participate in the scalar native-call
