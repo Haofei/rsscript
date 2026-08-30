@@ -149,12 +149,11 @@ impl RegVm {
         Ok(())
     }
 
-    /// Whether it is sound to dispatch Cranelift-native code right now: native code
-    /// polls neither the step budget nor the cancel flag and runs allocation off the
-    /// memory meter, so all three preemption/accounting limits must be unarmed (it
-    /// `tick()`s on the interpreter/tier-0 paths instead). The single source of truth
-    /// for both the native-tier gate (`try_native`) and the recursive native fast
-    /// paths (self-recursive + mutual-recursive); see the native limit fallback contract.
+    /// Whether it is sound to use legacy native call edges that do not carry the
+    /// generated region control cell. Whole-function, OSR, and continuation entry
+    /// use [`Self::native_preemption_controls_supported`] instead; recursive/direct
+    /// research paths remain fail-closed until their nested ABI propagates every
+    /// execution meter.
     pub(super) fn native_limits_unarmed(&self) -> bool {
         self.limits.step_budget.is_none()
             && self.limits.cancel.is_none()
@@ -167,6 +166,15 @@ impl RegVm {
             // silently unenforced once a function tiers up to native.
             && self.limits.intrinsic_call_budget.is_none()
             && self.limits.provider_call_budget.is_none()
+    }
+
+    /// Whole-function/region native code can enforce source steps, cancellation,
+    /// and monotonic deadlines. Memory controls are decided per translated region:
+    /// scalar/read-only regions are exact no-ops for those meters, while OSR has a
+    /// transactional `List.push` charge path. Intrinsic/provider call counts still
+    /// belong exclusively to interpreter/host dispatch.
+    pub(super) fn native_preemption_controls_supported(&self) -> bool {
+        self.limits.intrinsic_call_budget.is_none() && self.limits.provider_call_budget.is_none()
     }
 
     /// Charge one instruction against the step budget. Always increments the

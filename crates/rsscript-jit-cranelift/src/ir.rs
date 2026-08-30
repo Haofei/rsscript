@@ -461,6 +461,8 @@ pub struct JitInstrDescriptor {
     pub native_leaf: bool,
     pub compact_scalar_frame: bool,
     pub step_batch_safe: bool,
+    pub flat_list_direct: bool,
+    pub(crate) required_host_helper: Option<HostHelper>,
 }
 
 impl JitInstr {
@@ -468,6 +470,29 @@ impl JitInstr {
     /// native-call admission, and VM profitability accounting.
     pub fn descriptor(&self) -> JitInstrDescriptor {
         use JitInstrCostClass as Cost;
+
+        let flat_list_direct = matches!(
+            self,
+            Self::ListGetIntDirect { .. }
+                | Self::ListSetIntDirect { .. }
+                | Self::ListGetFloatDirect { .. }
+                | Self::ListSetFloatDirect { .. }
+                | Self::ListLenDirect { .. }
+                | Self::ListIsEmptyDirect { .. }
+        );
+
+        let required_host_helper = match self {
+            Self::HostCall { helper, .. } => Some(*helper),
+            #[cfg(feature = "readonly-licm")]
+            Self::MemoizedHostCall { helper, .. } => Some(*helper),
+            Self::MatchMapGetInt { .. } => Some(HostHelper::MapGetMatchInt),
+            Self::MatchMapGetFloat { .. } => Some(HostHelper::MapGetMatchFloat),
+            Self::MatchSortedMapGetInt { .. } => Some(HostHelper::SortedMapGetInt),
+            Self::MatchSortedMapGetFloat { .. } => Some(HostHelper::SortedMapGetFloat),
+            #[cfg(feature = "speculation")]
+            Self::GuardClosureId { .. } => Some(HostHelper::ClosureId),
+            _ => None,
+        };
 
         let native_leaf = matches!(
             self,
@@ -532,8 +557,8 @@ impl JitInstr {
                     if helper.heap_effect().extends_input_handles()
             );
 
-        let compact_scalar_frame = !matches!(self, Self::HostCall { .. } | Self::CallNative { .. })
-            && !self.is_flat_list_direct();
+        let compact_scalar_frame =
+            !matches!(self, Self::HostCall { .. } | Self::CallNative { .. }) && !flat_list_direct;
         #[cfg(feature = "readonly-licm")]
         let compact_scalar_frame =
             compact_scalar_frame && !matches!(self, Self::MemoizedHostCall { .. });
@@ -618,30 +643,13 @@ impl JitInstr {
         };
 
         JitInstrDescriptor {
-            effects: self.effects(),
+            effects: self.effect_facts(),
             cost_class,
             native_leaf,
             compact_scalar_frame,
             step_batch_safe,
-        }
-    }
-
-    /// Imported runtime helper required by this instruction, if any. Codegen uses
-    /// this single classification to declare only helpers reachable from the
-    /// validated function; scalar-only fuzzing therefore needs no fabricated FFI
-    /// function table.
-    pub(crate) fn required_host_helper(&self) -> Option<HostHelper> {
-        match self {
-            Self::HostCall { helper, .. } => Some(*helper),
-            #[cfg(feature = "readonly-licm")]
-            Self::MemoizedHostCall { helper, .. } => Some(*helper),
-            Self::MatchMapGetInt { .. } => Some(HostHelper::MapGetMatchInt),
-            Self::MatchMapGetFloat { .. } => Some(HostHelper::MapGetMatchFloat),
-            Self::MatchSortedMapGetInt { .. } => Some(HostHelper::SortedMapGetInt),
-            Self::MatchSortedMapGetFloat { .. } => Some(HostHelper::SortedMapGetFloat),
-            #[cfg(feature = "speculation")]
-            Self::GuardClosureId { .. } => Some(HostHelper::ClosureId),
-            _ => None,
+            flat_list_direct,
+            required_host_helper,
         }
     }
 
@@ -791,7 +799,7 @@ impl JitInstr {
     /// Canonical effect classification. The exhaustive match is a deliberate
     /// architecture guard: adding an opcode without deciding its deopt, heap, and
     /// OSR semantics is a compile error.
-    pub fn effects(&self) -> JitInstrEffects {
+    fn effect_facts(&self) -> JitInstrEffects {
         use JitControlFlow::{Conditional, Fallthrough, Jump, Split, Terminal};
         use JitHeapEffect::{None, Read, ReadWrite, Write};
 
@@ -896,6 +904,11 @@ impl JitInstr {
         }
     }
 
+    /// Canonical effect classification projected from the instruction descriptor.
+    pub fn effects(&self) -> JitInstrEffects {
+        self.descriptor().effects
+    }
+
     /// Canonical membership test for the TV2 flat-array *direct* ops (read the raw
     /// param buffer / its `lens` slot with no host call). This is the SINGLE source
     /// of truth so the several classification sites (native-leaf eligibility, the
@@ -904,15 +917,7 @@ impl JitInstr {
     /// hand-enumerated in each site and drifted: `ListSetFloatDirect`/`ListIsEmptyDirect`
     /// were missing from the native-leaf set.)
     pub fn is_flat_list_direct(&self) -> bool {
-        matches!(
-            self,
-            JitInstr::ListGetIntDirect { .. }
-                | JitInstr::ListSetIntDirect { .. }
-                | JitInstr::ListGetFloatDirect { .. }
-                | JitInstr::ListSetFloatDirect { .. }
-                | JitInstr::ListLenDirect { .. }
-                | JitInstr::ListIsEmptyDirect { .. }
-        )
+        self.descriptor().flat_list_direct
     }
 
     /// Visit registers whose heap handles must be available when entering this

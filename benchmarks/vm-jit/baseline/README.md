@@ -30,11 +30,20 @@ refuses fewer than 20 measured samples. Developer-machine scorecards remain CI
 artifacts and must not be copied into this directory as canonical evidence.
 
 `cold_e2e_native_ns` includes VM/JIT initialization, translation, compilation,
-and execution. `diagnostic_native_run_nanos` is gathered in a separate
-instrumented execution, and `instrumented_native_nanos_per_entry` divides that
-generated-code time by successful native/OSR/continuation entries. It is a
-diagnostic proxy, not a warm benchmark; it excludes Cranelift compile time and
-must not be compared directly with the uninstrumented cold run.
+and execution. Canonical records retain every alternating interpreter/native
+sample plus the median absolute deviation (`*_samples_ns` and `*_mad_ns`), so
+controlled evidence remains auditable instead of collapsing to one median.
+`warm_native_instrumented_ns` is gathered in a separate diagnostic execution
+after code publication, and `instrumented_native_nanos_per_entry` divides that
+generated-code time by successful native/OSR/continuation entries. It excludes
+Cranelift compile time but includes timing instrumentation; it is not evidence of
+a cross-evaluation code cache.
+
+Compilation evidence is split into `translation_nanos`, `validation_nanos`,
+`codegen_nanos`, and `finalize_nanos`. `compile_nanos` remains the outer admitted
+compile wall clock, so it may be larger than the phase sum because it also includes
+VM orchestration and cache publication. The comparator checks every phase instead
+of hiding a regression inside the total.
 
 Every measured case also carries helper/BCE/LICM evidence, semantic parity, and
 the controlled 15% retention-threshold verdict. Scalar-unroll and SIMD candidate

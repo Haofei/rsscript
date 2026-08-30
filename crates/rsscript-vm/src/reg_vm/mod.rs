@@ -182,9 +182,13 @@ struct IntrinsicDescriptor {
     /// a read-only query (e.g. `String.from_int`/`String.slice` feeding `String.len`).
     /// Also marks the pure heap value-builders a deopt cold arm may re-run.
     can_fold: bool,
-    /// Whether the intrinsic can be emitted directly in the native subset. The shape
-    /// check stays at the call site.
-    native_lowerable: bool,
+    /// Inline numeric lowering arity, when this operation never crosses the host ABI.
+    #[cfg(feature = "native-jit")]
+    native_inline_arity: Option<usize>,
+    /// Typed host-helper lowering. Type-argument-dependent cases remain an explicit
+    /// conservative exception in the registry projection.
+    #[cfg(feature = "native-jit")]
+    native_host: Option<NativeHostIntrinsic>,
     /// If `Some`, this intrinsic is one of the six expandable Option/Result
     /// combinators, with its concrete lowering kind. The combinator-expansion pass
     /// uses this for *recognition*; it keeps the per-kind match/construct emission.
@@ -227,7 +231,10 @@ impl Default for IntrinsicDescriptor {
         IntrinsicDescriptor {
             effect: IntrinsicEffect::Allocate,
             can_fold: false,
-            native_lowerable: false,
+            #[cfg(feature = "native-jit")]
+            native_inline_arity: None,
+            #[cfg(feature = "native-jit")]
+            native_host: None,
             combinator_kind: None,
             string_fold_role: None,
             bytes_fold_role: None,
@@ -246,13 +253,12 @@ impl Default for IntrinsicDescriptor {
 fn intrinsic_descriptor(intrinsic: RegIntrinsic) -> IntrinsicDescriptor {
     use IntrinsicEffect::*;
     let d = IntrinsicDescriptor::default;
-    match intrinsic {
+    let mut descriptor = match intrinsic {
         // --- native_subset_instruction: native-lowerable intrinsics ---
         // `Int.to_float` lowers to a native signed-int→f64 conversion (the single-Int
         // -arg shape check stays at the call site).
         RegIntrinsic::IntToFloat => IntrinsicDescriptor {
             effect: Pure,
-            native_lowerable: true,
             notes: "native i64→f64 conversion (single Int arg)",
             ..d()
         },
@@ -306,7 +312,6 @@ fn intrinsic_descriptor(intrinsic: RegIntrinsic) -> IntrinsicDescriptor {
         RegIntrinsic::StringLen => IntrinsicDescriptor {
             effect: Read,
             can_fold: true,
-            native_lowerable: true,
             string_fold_role: Some(StringFoldRole::LengthQuery),
             notes: "byte-length query (foldable to arithmetic)",
             ..d()
@@ -317,7 +322,6 @@ fn intrinsic_descriptor(intrinsic: RegIntrinsic) -> IntrinsicDescriptor {
         RegIntrinsic::StringFromInt => IntrinsicDescriptor {
             effect: Allocate,
             can_fold: true,
-            native_lowerable: true,
             string_fold_role: Some(StringFoldRole::ProducerFromInt),
             cold_arm_pure_builder: true,
             notes: "allocates ASCII decimal string; native-lowerable for final return",
@@ -328,7 +332,6 @@ fn intrinsic_descriptor(intrinsic: RegIntrinsic) -> IntrinsicDescriptor {
         RegIntrinsic::StringSlice => IntrinsicDescriptor {
             effect: Allocate,
             can_fold: true,
-            native_lowerable: true,
             string_fold_role: Some(StringFoldRole::ProducerSlice),
             cold_arm_pure_builder: true,
             notes: "allocates substring; native-lowerable and byte length foldable only when source is ASCII; pure builder (re-runnable after a cold-arm bail)",
@@ -336,20 +339,17 @@ fn intrinsic_descriptor(intrinsic: RegIntrinsic) -> IntrinsicDescriptor {
         },
         RegIntrinsic::StringPadLeft => IntrinsicDescriptor {
             effect: Allocate,
-            native_lowerable: true,
             cold_arm_pure_builder: true,
             notes: "allocates padded string; native-lowerable as a typed host helper; pure builder (re-runnable after a cold-arm bail)",
             ..d()
         },
         RegIntrinsic::StringSplit => IntrinsicDescriptor {
             effect: Allocate,
-            native_lowerable: true,
             notes: "allocates List<String>; native-lowerable and split+len elidable",
             ..d()
         },
         RegIntrinsic::StringStartsWith => IntrinsicDescriptor {
             effect: Read,
-            native_lowerable: true,
             cold_arm_pure_reader: true,
             notes: "string prefix query (Bool); native-lowerable; pure scalar reader (re-runnable after a cold-arm bail)",
             ..d()
@@ -403,7 +403,6 @@ fn intrinsic_descriptor(intrinsic: RegIntrinsic) -> IntrinsicDescriptor {
         RegIntrinsic::BytesLen => IntrinsicDescriptor {
             effect: Read,
             can_fold: true,
-            native_lowerable: true,
             bytes_fold_role: Some(BytesFoldRole::LengthQuery),
             notes: "raw byte-length query (foldable to arithmetic; native-lowerable as a typed host helper)",
             ..d()
@@ -424,7 +423,6 @@ fn intrinsic_descriptor(intrinsic: RegIntrinsic) -> IntrinsicDescriptor {
         RegIntrinsic::BytesSlice => IntrinsicDescriptor {
             effect: Allocate,
             can_fold: true,
-            native_lowerable: true,
             bytes_fold_role: Some(BytesFoldRole::ProducerSlice),
             cold_arm_pure_builder: true,
             notes: "allocates byte-index substring; native-lowerable and byte length foldable; pure builder (re-runnable after a cold-arm bail)",
@@ -452,7 +450,119 @@ fn intrinsic_descriptor(intrinsic: RegIntrinsic) -> IntrinsicDescriptor {
         // Everything else: conservative default (opaque allocator). Intentionally the
         // common case for the ~637 intrinsics; see the module note.
         _ => d(),
+    };
+
+    #[cfg(feature = "native-jit")]
+    {
+        descriptor.native_inline_arity = match intrinsic {
+            RegIntrinsic::IntToFloat | RegIntrinsic::MathFloor | RegIntrinsic::MathCeil => Some(1),
+            _ => None,
+        };
+        descriptor.native_host = match intrinsic {
+            RegIntrinsic::StringFromInt => Some(NativeHostIntrinsic {
+                helper: vm_jit::HostHelper::StringFromInt,
+                result_ty: NativeTy::Handle,
+            }),
+            RegIntrinsic::StringLen => Some(NativeHostIntrinsic {
+                helper: vm_jit::HostHelper::StringLen,
+                result_ty: NativeTy::Int,
+            }),
+            RegIntrinsic::StringSlice => Some(NativeHostIntrinsic {
+                helper: vm_jit::HostHelper::StringSlice,
+                result_ty: NativeTy::Handle,
+            }),
+            RegIntrinsic::StringPadLeft => Some(NativeHostIntrinsic {
+                helper: vm_jit::HostHelper::StringPadLeft,
+                result_ty: NativeTy::Handle,
+            }),
+            RegIntrinsic::StringSplit => Some(NativeHostIntrinsic {
+                helper: vm_jit::HostHelper::StringSplit,
+                result_ty: NativeTy::Handle,
+            }),
+            RegIntrinsic::StringStartsWith => Some(NativeHostIntrinsic {
+                helper: vm_jit::HostHelper::StringStartsWith,
+                result_ty: NativeTy::Bool,
+            }),
+            RegIntrinsic::ListIsEmpty => Some(NativeHostIntrinsic {
+                helper: vm_jit::HostHelper::ListIsEmpty,
+                result_ty: NativeTy::Bool,
+            }),
+            RegIntrinsic::JsonParseOk => Some(NativeHostIntrinsic {
+                helper: vm_jit::HostHelper::JsonParse,
+                result_ty: NativeTy::Handle,
+            }),
+            RegIntrinsic::JsonFieldOk => Some(NativeHostIntrinsic {
+                helper: vm_jit::HostHelper::JsonField,
+                result_ty: NativeTy::Handle,
+            }),
+            RegIntrinsic::JsonFieldIntOk => Some(NativeHostIntrinsic {
+                helper: vm_jit::HostHelper::JsonFieldInt,
+                result_ty: NativeTy::Int,
+            }),
+            RegIntrinsic::BytesLen => Some(NativeHostIntrinsic {
+                helper: vm_jit::HostHelper::BytesLen,
+                result_ty: NativeTy::Int,
+            }),
+            RegIntrinsic::BytesSlice => Some(NativeHostIntrinsic {
+                helper: vm_jit::HostHelper::BytesSlice,
+                result_ty: NativeTy::Handle,
+            }),
+            RegIntrinsic::SetContains => Some(NativeHostIntrinsic {
+                helper: vm_jit::HostHelper::MapContainsInt,
+                result_ty: NativeTy::Bool,
+            }),
+            RegIntrinsic::MapIsEmpty => Some(NativeHostIntrinsic {
+                helper: vm_jit::HostHelper::MapIsEmpty,
+                result_ty: NativeTy::Bool,
+            }),
+            RegIntrinsic::MapLen => Some(NativeHostIntrinsic {
+                helper: vm_jit::HostHelper::MapLen,
+                result_ty: NativeTy::Int,
+            }),
+            RegIntrinsic::SetIsEmpty => Some(NativeHostIntrinsic {
+                helper: vm_jit::HostHelper::SetIsEmpty,
+                result_ty: NativeTy::Bool,
+            }),
+            RegIntrinsic::SetLen => Some(NativeHostIntrinsic {
+                helper: vm_jit::HostHelper::SetLen,
+                result_ty: NativeTy::Int,
+            }),
+            RegIntrinsic::SortedSetContains => Some(NativeHostIntrinsic {
+                helper: vm_jit::HostHelper::SortedSetContainsInt,
+                result_ty: NativeTy::Bool,
+            }),
+            RegIntrinsic::SortedSetIsEmpty => Some(NativeHostIntrinsic {
+                helper: vm_jit::HostHelper::SortedSetIsEmpty,
+                result_ty: NativeTy::Bool,
+            }),
+            RegIntrinsic::SortedSetLen => Some(NativeHostIntrinsic {
+                helper: vm_jit::HostHelper::ListLen,
+                result_ty: NativeTy::Int,
+            }),
+            RegIntrinsic::SortedMapContainsKey => Some(NativeHostIntrinsic {
+                helper: vm_jit::HostHelper::SortedMapContainsKeyInt,
+                result_ty: NativeTy::Bool,
+            }),
+            RegIntrinsic::SortedMapIsEmpty => Some(NativeHostIntrinsic {
+                helper: vm_jit::HostHelper::SortedMapIsEmpty,
+                result_ty: NativeTy::Bool,
+            }),
+            RegIntrinsic::SortedMapLen => Some(NativeHostIntrinsic {
+                helper: vm_jit::HostHelper::SortedMapLen,
+                result_ty: NativeTy::Int,
+            }),
+            RegIntrinsic::DequeLen => Some(NativeHostIntrinsic {
+                helper: vm_jit::HostHelper::DequeLen,
+                result_ty: NativeTy::Int,
+            }),
+            RegIntrinsic::DequeIsEmpty => Some(NativeHostIntrinsic {
+                helper: vm_jit::HostHelper::DequeIsEmpty,
+                result_ty: NativeTy::Bool,
+            }),
+            _ => None,
+        };
     }
+    descriptor
 }
 
 // Not `native-jit`-gated: the intrinsic descriptor table (always compiled, for the
@@ -1296,6 +1406,10 @@ impl RegVmExecutable {
         if let Some(native) = &mut vm.native
             && native.collect_stats
         {
+            let phases = native.compile_phase_timings();
+            native.stats.validation_nanos = phases.validation_nanos;
+            native.stats.codegen_nanos = phases.codegen_nanos;
+            native.stats.finalize_nanos = phases.finalize_nanos;
             native.stats.add_profile_feedback(&self.unit, &vm.jit_state);
             let loop_evidence = self
                 .loop_optimization_evidence
@@ -1346,6 +1460,10 @@ impl RegVmExecutable {
                         published_code_bytes: native.admission.admitted_code_bytes,
                         rejected_resident_bytes: 0,
                         reserved_arena_bytes: native.executable_memory_budget.allocated(),
+                        translation_nanos: native.stats.translation_nanos,
+                        validation_nanos: native.stats.validation_nanos,
+                        codegen_nanos: native.stats.codegen_nanos,
+                        finalize_nanos: native.stats.finalize_nanos,
                         compile_nanos: native.stats.compile_nanos,
                         run_nanos: native.stats.run_nanos,
                     }
@@ -2095,6 +2213,13 @@ impl LazyNativeModule {
             }
         }
     }
+
+    fn compile_phase_timings(&self) -> vm_jit::CompilePhaseTimings {
+        self.module
+            .as_ref()
+            .map(vm_jit::NativeModule::compile_phase_timings)
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(feature = "native-jit")]
@@ -2261,6 +2386,10 @@ struct NativeState {
     scratch_osr_flat_slots: Vec<(usize, NativeTy)>,
     scratch_osr_flat_mut_slots: Vec<(usize, usize)>,
     scratch_osr_heap_input_slots: Vec<(usize, usize)>,
+    /// Per-evaluation call scratch. Machine code and immutable deopt metadata live
+    /// in `NativeModule`; activation payloads are reused here and never stored on
+    /// the executable-code owner.
+    call_session: vm_jit::NativeCallSession,
     /// Missed-optimization report armed by an explicit diagnostic plan. Read once
     /// at construction (mirrors `collect_stats`), so the hot path pays only
     /// a single hoisted bool read. When `false` the report machinery does nothing —
@@ -2279,6 +2408,42 @@ struct NativeState {
     /// dynamic uncommon trap. The auto-trigger uses this to back off and retry later
     /// instead of permanently marking the loop `GaveUp`.
     osr_dynamic_bail: bool,
+}
+
+#[cfg(feature = "native-jit")]
+impl NativeState {
+    fn measure_translation<T>(&mut self, translate: impl FnOnce() -> T) -> T {
+        if !self.collect_stats {
+            return translate();
+        }
+        let started = std::time::Instant::now();
+        let result = translate();
+        self.stats.translation_nanos = self
+            .stats
+            .translation_nanos
+            .saturating_add(started.elapsed().as_nanos());
+        result
+    }
+
+    fn compile_phase_timings(&self) -> vm_jit::CompilePhaseTimings {
+        let baseline = self.baseline_module.compile_phase_timings();
+        let optimized = self
+            .optimized_module
+            .as_ref()
+            .map(LazyNativeModule::compile_phase_timings)
+            .unwrap_or_default();
+        vm_jit::CompilePhaseTimings {
+            validation_nanos: baseline
+                .validation_nanos
+                .saturating_add(optimized.validation_nanos),
+            codegen_nanos: baseline
+                .codegen_nanos
+                .saturating_add(optimized.codegen_nanos),
+            finalize_nanos: baseline
+                .finalize_nanos
+                .saturating_add(optimized.finalize_nanos),
+        }
+    }
 }
 
 #[cfg(feature = "native-jit")]
@@ -2460,7 +2625,16 @@ pub struct NativeStats {
     pub native_child_bails: u64,
     /// Nested native callee bails reconstructed into an interpreter frame chain.
     pub native_child_resumes: u64,
-    /// Total nanoseconds spent in Cranelift compilation.
+    /// Total nanoseconds spent translating verified register bytecode into JIT IR.
+    pub translation_nanos: u128,
+    /// Total nanoseconds spent in the sealed JIT validator.
+    pub validation_nanos: u128,
+    /// Total nanoseconds spent lowering and defining Cranelift functions.
+    pub codegen_nanos: u128,
+    /// Total nanoseconds spent finalizing published machine code.
+    pub finalize_nanos: u128,
+    /// Total wall nanoseconds spent in admitted native compilation, including VM
+    /// orchestration around the separately reported phases.
     pub compile_nanos: u128,
     /// Total nanoseconds spent executing native code.
     pub run_nanos: u128,
@@ -2674,6 +2848,22 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} continuation_entries={} continuatio
             "unprofitable_declined_fns": &self.unprofitable_declined_fns,
         });
         let object = value.as_object_mut().expect("stats JSON is an object");
+        object.insert(
+            "translation_nanos".into(),
+            crate::serde_json::json!(self.translation_nanos),
+        );
+        object.insert(
+            "validation_nanos".into(),
+            crate::serde_json::json!(self.validation_nanos),
+        );
+        object.insert(
+            "codegen_nanos".into(),
+            crate::serde_json::json!(self.codegen_nanos),
+        );
+        object.insert(
+            "finalize_nanos".into(),
+            crate::serde_json::json!(self.finalize_nanos),
+        );
         object.insert(
             "direct_scalar_call_edges".into(),
             self.direct_scalar_call_edges.into(),
@@ -3272,6 +3462,7 @@ struct JitCallCtxState {
     heap_results: Vec<VmValue>,
     heap_result_roots: Vec<Option<usize>>,
     heap_writebacks: Vec<(usize, i64)>,
+    deadline: Option<rsscript_operation::MonotonicDeadline>,
 }
 
 #[cfg(feature = "native-jit")]
@@ -3285,6 +3476,7 @@ impl JitCallCtxState {
             heap_results: Vec::new(),
             heap_result_roots: Vec::new(),
             heap_writebacks: Vec::new(),
+            deadline: None,
         }
     }
 
@@ -3331,67 +3523,61 @@ thread_local! {
         const { RefCell::new(None) };
     static JIT_DEQUE_HANDLE_CACHE: RefCell<Option<JitDequeHandleCache>> =
         const { RefCell::new(None) };
-    /// native limit accounting limits cell: `[steps, step_budget, cancel_addr]`, read/written in place by
-    /// an armed OSR native variant through a raw pointer (the native limit ABI contract). `step_budget`
-    /// is `-1` when unarmed; `cancel_addr` is `0` when unarmed or the address of the
-    /// host `AtomicBool` otherwise. The host seeds it before the call and reads `steps`
-    /// back after, so one tick stream spans native and interpreter.
-    static JIT_LIMITS_CELL: std::cell::Cell<[i64; 3]> = const { std::cell::Cell::new([0, -1, 0]) };
-    /// native limit accounting mem cell: `[allocated_bytes, allocation_budget]`. Unlike the step cell this is charged by
+    /// Native allocation meter. Unlike the step cell this is charged by
     /// the `ListPush*` HOST HELPER (the only native-subset op the interpreter bills to
-    /// `allocation_budget`), not by generated code. `allocation_budget` is `-1` when unarmed (the helper
-    /// then charges nothing). The host seeds it before a native call and, on a CLEAN OSR
+    /// `allocation_budget`), not by generated code. `allocation_budget` is `None` when
+    /// unarmed (the helper then charges nothing). The host seeds it before a native call and, on a CLEAN OSR
     /// exit, reads `allocated_bytes` back to commit the charges; on a bail the OSR rolls back
     /// the list writes and reruns on the interpreter, which recharges authoritatively, so
     /// the native charges are simply discarded (exact `account_bytes` parity).
-    static JIT_MEM_CELL: std::cell::Cell<[i64; 2]> = const { std::cell::Cell::new([0, -1]) };
+    static JIT_MEM_CELL: std::cell::Cell<JitMemoryCell> = const {
+        std::cell::Cell::new(JitMemoryCell { allocated_bytes: 0, allocation_budget: None })
+    };
 }
 
-/// Seed the native limit accounting limits cell before an armed OSR native call. `steps` is the current
-/// interpreter step count, `step_budget` is the budget (or `-1`), `cancel_addr` is the
-/// `AtomicBool` address (or `0`).
 #[cfg(feature = "native-jit")]
-fn jit_set_limits_cell(steps: i64, step_budget: i64, cancel_addr: i64) {
-    JIT_LIMITS_CELL.with(|cell| cell.set([steps, step_budget, cancel_addr]));
-}
-
-/// Read the accumulated step count back out of the native limit accounting limits cell after an armed OSR
-/// native call (clean completion or deopt both write it back).
-#[cfg(feature = "native-jit")]
-fn jit_limits_cell_steps() -> i64 {
-    JIT_LIMITS_CELL.with(|cell| cell.get()[0])
+#[derive(Clone, Copy)]
+struct JitMemoryCell {
+    allocated_bytes: usize,
+    allocation_budget: Option<usize>,
 }
 
 /// Seed the native limit accounting mem cell before a native call. `allocated_bytes` is the interpreter's current
-/// accounted cumulative allocation total; `allocation_budget` is the budget (or `-1` to disarm — every non-mem-armed
-/// native call MUST seed `-1` so a stale armed budget never leaks into the `ListPush*`
-/// helper).
+/// accounted cumulative allocation total; `allocation_budget` is `None` when
+/// disarmed. Every native call seeds the full-width `usize` state so a stale armed
+/// budget cannot leak into a later `ListPush*` helper and large host budgets cannot
+/// truncate through the machine-value ABI.
 #[cfg(feature = "native-jit")]
-fn jit_set_mem_cell(allocated_bytes: i64, allocation_budget: i64) {
-    JIT_MEM_CELL.with(|cell| cell.set([allocated_bytes, allocation_budget]));
+fn jit_set_mem_cell(allocated_bytes: usize, allocation_budget: Option<usize>) {
+    JIT_MEM_CELL.with(|cell| {
+        cell.set(JitMemoryCell {
+            allocated_bytes,
+            allocation_budget,
+        })
+    });
 }
 
 /// Read the accumulated live-byte count back out of the mem cell after a CLEAN OSR exit
 /// (to commit the native `ListPush*` charges into the interpreter's `allocated_bytes`).
 #[cfg(feature = "native-jit")]
-fn jit_allocation_cell_allocated_bytes() -> i64 {
-    JIT_MEM_CELL.with(|cell| cell.get()[0])
+fn jit_allocation_cell_allocated_bytes() -> usize {
+    JIT_MEM_CELL.with(|cell| cell.get().allocated_bytes)
 }
 
 /// Charge `grew` bytes (a `ListPush*` flat-capacity growth) against the armed mem cell,
 /// mirroring the interpreter's `account_bytes`. Returns `false` if the budget is now
 /// exceeded — the caller signals a bail, the OSR rolls back + reruns on the interpreter,
-/// which recharges and errors at the exact push. Unarmed (`allocation_budget < 0`) ⇒ no charge.
+/// which recharges and errors at the exact push. An absent budget is a no-op.
 #[cfg(feature = "native-jit")]
-fn jit_mem_charge(grew: i64) -> bool {
+fn jit_mem_charge(grew: usize) -> bool {
     JIT_MEM_CELL.with(|cell| {
-        let [live, budget] = cell.get();
-        if budget < 0 {
+        let mut state = cell.get();
+        let Some(budget) = state.allocation_budget else {
             return true;
-        }
-        let live = live.saturating_add(grew);
-        cell.set([live, budget]);
-        live <= budget
+        };
+        state.allocated_bytes = state.allocated_bytes.saturating_add(grew);
+        cell.set(state);
+        state.allocated_bytes <= budget
     })
 }
 
@@ -3448,7 +3634,7 @@ struct JitCallCtx;
 
 #[cfg(feature = "native-jit")]
 impl JitCallCtx {
-    fn enter_frame() {
+    fn enter_frame(deadline: Option<rsscript_operation::MonotonicDeadline>) {
         JIT_CALL_CTX.with(|ctx| {
             let mut ctx = ctx.borrow_mut();
             if ctx.active_depth == 0 {
@@ -3456,6 +3642,7 @@ impl JitCallCtx {
                 ctx.clear_results();
                 ctx.clear_writebacks();
                 ctx.active_token = ctx.allocate_token();
+                ctx.deadline = deadline;
             }
             ctx.active_depth = ctx.active_depth.saturating_add(1);
         });
@@ -3477,6 +3664,7 @@ impl JitCallCtx {
                 ctx.clear_results();
                 ctx.clear_writebacks();
                 ctx.active_token = 0;
+                ctx.deadline = None;
                 true
             } else {
                 false
@@ -3510,6 +3698,16 @@ impl JitCallCtx {
                 let ctx = ctx.borrow();
                 ctx.active_depth > 0 && ctx.active_token == token
             })
+    }
+
+    fn deadline_expired() -> bool {
+        JIT_CALL_CTX.with(|ctx| {
+            let ctx = ctx.borrow();
+            ctx.active_depth > 0
+                && ctx
+                    .deadline
+                    .is_some_and(rsscript_operation::MonotonicDeadline::is_expired)
+        })
     }
 
     fn push_heap_arg(value: VmValue) -> usize {
@@ -3748,8 +3946,8 @@ struct JitCallCtxGuard;
 
 #[cfg(feature = "native-jit")]
 impl JitCallCtxGuard {
-    fn enter() -> Self {
-        JitCallCtx::enter_frame();
+    fn enter(deadline: Option<rsscript_operation::MonotonicDeadline>) -> Self {
+        JitCallCtx::enter_frame(deadline);
         Self
     }
 }
@@ -3771,8 +3969,8 @@ struct JitNativeCallFrame {
 
 #[cfg(feature = "native-jit")]
 impl JitNativeCallFrame {
-    fn begin() -> Self {
-        let ctx = JitCallCtxGuard::enter();
+    fn begin(deadline: Option<rsscript_operation::MonotonicDeadline>) -> Self {
+        let ctx = JitCallCtxGuard::enter(deadline);
         let heap_tx = JitHeapTransactionGuard::begin_after_context_clear();
         Self { heap_tx, _ctx: ctx }
     }
@@ -3879,7 +4077,7 @@ impl JitHeapTransactionGuard {
     fn begin() -> Self {
         let owns_ctx_frame = !JitCallCtx::is_active();
         if owns_ctx_frame {
-            JitCallCtx::enter_frame();
+            JitCallCtx::enter_frame(None);
         }
         JitCallCtx::clear_heap_results();
         JitCallCtx::clear_heap_writebacks();
@@ -4025,6 +4223,7 @@ fn jit_host_helpers() -> vm_jit::HostHelpers {
     // `rsscript` never hands it an untyped address. Keeps this crate's
     // `#![forbid(unsafe_code)]` honest without an unsound safe API on the boundary.
     vm_jit::HostHelpers {
+        deadline_expired: rss_jit_deadline_expired,
         field_int: rss_jit_field_int,
         field_set_int: rss_jit_field_set_int,
         field_set_handle: rss_jit_field_set_handle,
@@ -4770,6 +4969,18 @@ macro_rules! jit_host_boundary {
     };
 }
 
+#[cfg(feature = "native-jit")]
+jit_host_boundary! {
+    extern "C" fn rss_jit_deadline_expired(_ctx: vm_jit::HostCtx) -> i64 {
+        let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+            // A stale/malformed host context must fail closed. The caller will
+            // bail through the ordinary deadline check path.
+            return 1;
+        };
+        i64::from(JitCallCtx::deadline_expired())
+    }
+}
+
 #[cfg(all(test, feature = "native-jit"))]
 jit_host_boundary! {
     extern "C" fn rss_jit_panicking_helper_for_test(_ctx: vm_jit::HostCtx) -> i64 {
@@ -5222,7 +5433,7 @@ fn rss_jit_list_push_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value: i64) 
         list.checked_push_accounted(VmValue::Int(value)).ok()
     }) {
         Some(grew) => {
-            if jit_mem_charge(grew as i64) {
+            if jit_mem_charge(grew) {
                 0
             } else {
                 // Over budget: bail. The OSR rolls back this loop's list writes and
@@ -5269,7 +5480,7 @@ fn rss_jit_list_push_handle_with_ctx(ctx: JitHostCallCtx, handle: i64, value_han
     match ctx.with_journaled_list_write(handle, move |list| list.checked_push_accounted(value).ok())
     {
         Some(grew) => {
-            if !jit_mem_charge(grew as i64) {
+            if !jit_mem_charge(grew) {
                 ctx.signal_bail();
             }
             0
@@ -5302,7 +5513,7 @@ fn rss_jit_list_push_float_with_ctx(ctx: JitHostCallCtx, handle: i64, value: f64
         list.checked_push_accounted(VmValue::Float(value)).ok()
     }) {
         Some(grew) => {
-            if !jit_mem_charge(grew as i64) {
+            if !jit_mem_charge(grew) {
                 ctx.signal_bail();
             }
             0
@@ -6933,6 +7144,7 @@ impl NativeState {
             scratch_osr_flat_slots: Vec::new(),
             scratch_osr_flat_mut_slots: Vec::new(),
             scratch_osr_heap_input_slots: Vec::new(),
+            call_session: vm_jit::NativeCallSession::new(),
             report,
             report_native_ok: std::collections::HashSet::new(),
             report_osr_ok: std::collections::HashSet::new(),

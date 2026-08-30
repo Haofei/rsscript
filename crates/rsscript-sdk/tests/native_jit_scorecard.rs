@@ -298,9 +298,18 @@ fn assert_semantic_report_matches(
     }
 }
 
-fn median(mut samples: Vec<Duration>) -> Duration {
+fn median(samples: &[Duration]) -> Duration {
+    let mut samples = samples.to_vec();
     samples.sort_unstable();
     samples[samples.len() / 2]
+}
+
+fn median_absolute_deviation(samples: &[Duration], center: Duration) -> Duration {
+    let deviations = samples
+        .iter()
+        .map(|sample| sample.abs_diff(center))
+        .collect::<Vec<_>>();
+    median(&deviations)
 }
 
 fn validate_and_print_engine_matrix(record: serde_json::Value) {
@@ -435,8 +444,18 @@ fn native_jit_pass_scorecard() {
                 run_interpreter();
             }
         }
-        let interpreter = median(interpreter_samples);
-        let native = median(native_samples);
+        let interpreter = median(&interpreter_samples);
+        let native = median(&native_samples);
+        let interpreter_mad = median_absolute_deviation(&interpreter_samples, interpreter);
+        let native_mad = median_absolute_deviation(&native_samples, native);
+        let interpreter_samples_ns = interpreter_samples
+            .iter()
+            .map(Duration::as_nanos)
+            .collect::<Vec<_>>();
+        let native_samples_ns = native_samples
+            .iter()
+            .map(Duration::as_nanos)
+            .collect::<Vec<_>>();
         // Timed native samples intentionally use production defaults with
         // telemetry disabled. Collect structural evidence in a separate run so
         // `Instant::now()` and counter traffic are not part of the cold E2E timing.
@@ -452,6 +471,10 @@ fn native_jit_pass_scorecard() {
             continuation_full_probes,
             continuation_instance_key_builds,
             continuation_compiled_source_instructions,
+            translation_nanos,
+            validation_nanos,
+            codegen_nanos,
+            finalize_nanos,
             compile_nanos,
             diagnostic_native_run_nanos,
             resident_code_bytes,
@@ -462,7 +485,7 @@ fn native_jit_pass_scorecard() {
             bounds_checks_elided,
         ) = match diagnostic_native.telemetry.engine {
             ExecutionEngineTelemetry::Interpreter => {
-                (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+                (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
             }
             ExecutionEngineTelemetry::Native {
                 native_calls,
@@ -473,6 +496,10 @@ fn native_jit_pass_scorecard() {
                 continuation_full_probes,
                 continuation_instance_key_builds,
                 continuation_compiled_source_instructions,
+                translation_nanos,
+                validation_nanos,
+                codegen_nanos,
+                finalize_nanos,
                 compile_nanos,
                 run_nanos,
                 resident_code_bytes,
@@ -491,6 +518,10 @@ fn native_jit_pass_scorecard() {
                 continuation_full_probes,
                 continuation_instance_key_builds,
                 continuation_compiled_source_instructions,
+                translation_nanos,
+                validation_nanos,
+                codegen_nanos,
+                finalize_nanos,
                 compile_nanos,
                 run_nanos,
                 resident_code_bytes,
@@ -510,10 +541,18 @@ fn native_jit_pass_scorecard() {
                 "status": if native_calls > 0 || osr_entries > 0 || continuation_entries > 0 { "entered" } else { "declined" },
                 "interpreter_ns": interpreter.as_nanos(),
                 "cold_e2e_native_ns": native.as_nanos(),
-                "diagnostic_native_run_nanos": diagnostic_native_run_nanos,
+                "interpreter_samples_ns": interpreter_samples_ns,
+                "cold_e2e_native_samples_ns": native_samples_ns,
+                "interpreter_mad_ns": interpreter_mad.as_nanos(),
+                "cold_e2e_native_mad_ns": native_mad.as_nanos(),
+                "warm_native_instrumented_ns": diagnostic_native_run_nanos,
                 "instrumented_native_nanos_per_entry": diagnostic_native_run_nanos
                     / u128::from(native_calls.saturating_add(osr_entries).saturating_add(continuation_entries).max(1)),
                 "speedup": interpreter.as_secs_f64() / native.as_secs_f64(),
+                "translation_nanos": translation_nanos,
+                "validation_nanos": validation_nanos,
+                "codegen_nanos": codegen_nanos,
+                "finalize_nanos": finalize_nanos,
                 "compile_nanos": compile_nanos,
                 "resident_code_bytes": resident_code_bytes,
                 "reserved_arena_bytes": reserved_arena_bytes,

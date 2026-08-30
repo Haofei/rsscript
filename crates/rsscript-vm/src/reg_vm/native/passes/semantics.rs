@@ -585,6 +585,19 @@ mod lowering_class_tests {
         assert_eq!(native_lowering_class(&add), NativeLoweringClass::Direct);
         assert!(native_subset_instruction(&add));
     }
+
+    #[test]
+    fn intrinsic_lowering_projects_from_the_central_descriptor() {
+        assert_eq!(
+            native_inline_convert_intrinsic(RegIntrinsic::MathFloor),
+            Some(1)
+        );
+        let string_len = native_host_typed_intrinsic(RegIntrinsic::StringLen, None)
+            .expect("String.len has one canonical helper lowering");
+        assert_eq!(string_len.helper, vm_jit::HostHelper::StringLen);
+        assert_eq!(string_len.result_ty, NativeTy::Int);
+        assert!(native_host_typed_intrinsic(RegIntrinsic::OptionMap, None).is_none());
+    }
 }
 
 /// The register a native-subset instruction definitely writes (its `dst`), if any.

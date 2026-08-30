@@ -51,12 +51,9 @@ pub(in crate::reg_vm) fn continuation_tier_decision(
 pub(in crate::reg_vm) fn continuation_decision(
     region: &ContinuationRegion,
     cost_model: NativeCostModel,
-    step_armed: bool,
-    deadline_armed: bool,
+    _step_armed: bool,
+    _deadline_armed: bool,
 ) -> ContinuationDecision {
-    if region.has_backedge && (step_armed || deadline_armed) {
-        return ContinuationDecision::Ignore;
-    }
     if matches!(cost_model, NativeCostModel::Enforce)
         && !region.has_backedge
         && region.source_instructions < MIN_CONTINUATION_ADMISSION_WORK
@@ -800,7 +797,7 @@ mod continuation_tests {
     }
 
     #[test]
-    fn armed_backedge_regions_never_suppress_bounded_execution() {
+    fn armed_backedge_regions_use_generated_preemption_checks() {
         let region = ContinuationRegion {
             entry: 0,
             included: vec![true; MIN_CONTINUATION_ADMISSION_WORK],
@@ -815,11 +812,11 @@ mod continuation_tests {
         };
         assert_eq!(
             continuation_decision(&region, NativeCostModel::Enforce, true, false),
-            ContinuationDecision::Ignore
+            ContinuationDecision::Compile
         );
         assert_eq!(
             continuation_decision(&region, NativeCostModel::Enforce, false, true),
-            ContinuationDecision::Ignore
+            ContinuationDecision::Compile
         );
     }
 

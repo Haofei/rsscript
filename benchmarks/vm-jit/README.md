@@ -31,6 +31,10 @@ Wall-clock samples use production native options with telemetry disabled. After
 timing completes, the harness performs one separate diagnostic native execution
 to collect compile, code-size, transition, bail, helper, and optimization evidence.
 Diagnostic instrumentation is therefore never included in `cold_e2e_native_ns`.
+Controlled records retain all alternating samples and their median absolute
+deviation. The separate `warm_native_instrumented_ns` excludes compilation but
+includes diagnostic timing overhead; it measures published native entry, not a
+process-global or cross-evaluation cache.
 It also emits one `rsscript.aot_jit_matrix.v1` record, validated against
 `aot-jit-matrix.schema.json`. The matrix records semantic parity, execution and
 compile time, transition counts, and explicit `null` values for metrics the
@@ -58,7 +62,8 @@ controlled-hardware run rather than GitHub-hosted timing alone.
 `mixed-mode-continuation` is the canonical barrier workload: it repeatedly
 executes scalar regions around an interpreter-owned aggregate boundary and guards
 against admitting region transitions that do not beat the interpreter end to end.
-It records interpreter/native wall time, compile time, machine-code residency,
+It records interpreter/native wall time, translation/validation/codegen/finalize
+phase time, total compile time, machine-code residency,
 arena reservation, native calls, bails, and OSR entries. CI logs are the history;
 the repository does not retain ad-hoc developer snapshots.
 

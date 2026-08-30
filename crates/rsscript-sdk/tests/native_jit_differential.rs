@@ -512,6 +512,128 @@ fn bounded_step_accounting_matches_across_call_continuations() {
 }
 
 #[test]
+fn native_memory_controls_admit_proved_scalar_work_and_account_osr_growth() {
+    let scalar = Compiler
+        .compile(
+            "native-memory-scalar.rss",
+            "fn main() -> Int { let mut i = 0; let mut total = 0; while i < 20000 { total = total + i; i = i + 1 }; return total }",
+        )
+        .expect("scalar source compiles");
+    let scalar = ArtifactVerifier
+        .verify(scalar)
+        .expect("scalar artifact verifies")
+        .admit_trusted_input();
+    let scalar = Runtime::new(ProviderRegistry::default())
+        .link(&scalar)
+        .expect("scalar artifact links");
+    let scalar_limits = RunLimits::unbounded_for_trusted_host()
+        .with_allocation_budget(0)
+        .with_live_memory_limit(1024 * 1024);
+    let interpreter = scalar.execute(ExecutionRequest::default().limits(scalar_limits.clone()));
+    let native = scalar.execute(
+        ExecutionRequest::default()
+            .limits(scalar_limits)
+            .native_jit(NativeJitOptions {
+                collect_telemetry: true,
+                cost_model: NativeCostModel::Off,
+                enable_auto_osr: false,
+                ..NativeJitOptions::default()
+            }),
+    );
+    assert_eq!(native.outcome(), interpreter.outcome());
+    assert_eq!(native.usage.allocation_bytes_consumed, 0);
+    assert_eq!(
+        native.usage.live_memory_bytes_at_return,
+        interpreter.usage.live_memory_bytes_at_return
+    );
+    assert_eq!(
+        native.usage.peak_live_memory_bytes,
+        interpreter.usage.peak_live_memory_bytes
+    );
+    let ExecutionEngineTelemetry::Native { native_calls, .. } = native.telemetry.engine else {
+        panic!("memory-controlled scalar execution must report native telemetry");
+    };
+    assert!(
+        native_calls > 0,
+        "proved no-allocation scalar work should enter native"
+    );
+
+    let growing = Compiler
+        .compile(
+            "native-memory-osr.rss",
+            "fn main() -> Int { local values = List<Int>.new(); let mut i = 0; while i < 512 { List.push<Int>(list: mut values, value: i); i = i + 1 }; return List.len<Int>(list: values) }",
+        )
+        .expect("growing-list source compiles");
+    let growing = ArtifactVerifier
+        .verify(growing)
+        .expect("growing-list artifact verifies")
+        .admit_trusted_input();
+    let growing = Runtime::new(ProviderRegistry::default())
+        .link(&growing)
+        .expect("growing-list artifact links");
+    let reference = growing.execute(
+        ExecutionRequest::default().limits(
+            RunLimits::unbounded_for_trusted_host()
+                .with_allocation_budget(1024 * 1024)
+                .with_live_memory_limit(1024 * 1024),
+        ),
+    );
+    assert_eq!(reference.termination_reason(), TerminationReason::Completed);
+    let sufficient = RunLimits::unbounded_for_trusted_host()
+        .with_allocation_budget(reference.usage.allocation_bytes_consumed)
+        .with_live_memory_limit(reference.usage.peak_live_memory_bytes);
+    let native = growing.execute(
+        ExecutionRequest::default()
+            .limits(sufficient.clone())
+            .native_jit(NativeJitOptions {
+                collect_telemetry: true,
+                cost_model: NativeCostModel::Off,
+                eager_osr: true,
+                ..NativeJitOptions::default()
+            }),
+    );
+    let interpreter = growing.execute(ExecutionRequest::default().limits(sufficient));
+    assert_eq!(native.outcome(), interpreter.outcome());
+    assert_eq!(
+        native.usage.allocation_bytes_consumed,
+        interpreter.usage.allocation_bytes_consumed
+    );
+    assert_eq!(
+        native.usage.live_memory_bytes_at_return,
+        interpreter.usage.live_memory_bytes_at_return
+    );
+    assert_eq!(
+        native.usage.peak_live_memory_bytes,
+        interpreter.usage.peak_live_memory_bytes
+    );
+    let ExecutionEngineTelemetry::Native { osr_entries, .. } = native.telemetry.engine else {
+        panic!("memory-controlled OSR execution must report native telemetry");
+    };
+    assert!(osr_entries > 0, "accounted List.push loop should enter OSR");
+
+    let insufficient = RunLimits::unbounded_for_trusted_host()
+        .with_allocation_budget(reference.usage.allocation_bytes_consumed.saturating_sub(1))
+        .with_live_memory_limit(1024 * 1024);
+    let interpreter = growing.execute(ExecutionRequest::default().limits(insufficient.clone()));
+    let native = growing.execute(ExecutionRequest::default().limits(insufficient).native_jit(
+        NativeJitOptions {
+            collect_telemetry: true,
+            cost_model: NativeCostModel::Off,
+            eager_osr: true,
+            ..NativeJitOptions::default()
+        },
+    ));
+    assert_eq!(
+        native.termination_reason(),
+        interpreter.termination_reason()
+    );
+    assert_eq!(
+        native.usage.allocation_bytes_consumed,
+        interpreter.usage.allocation_bytes_consumed
+    );
+}
+
+#[test]
 fn continuation_controls_fail_before_codegen_and_match_every_step_boundary() {
     let source = "struct StepGate { value: Int } fn boundary(value: Int) -> Int { let boxed = StepGate(value: value); return boxed.value } fn main() -> Int { let a = 7; let b = a * 3; let c = b + 11; let p = c * 2; let q = p - 5; let r = q + 9; let s = r * 2; let d = boundary(value: s); let e = d * 5; let f = e - 9; let g = f + 2; let h = g * 3; let i = h - 4; let j = i + 6; let k = j * 2; return k }";
     let built = Compiler
@@ -594,7 +716,7 @@ fn continuation_controls_fail_before_codegen_and_match_every_step_boundary() {
 }
 
 #[test]
-fn cancellation_during_a_closed_native_continuation_is_observed() {
+fn cancellation_during_a_closed_native_region_is_observed() {
     let source = "fn main() -> Int { let mut i = 0; let mut total = 0; while i < 2000000000 { total = total + i; i = i + 1 }; return total }";
     let built = Compiler
         .compile("continuation-cancel-mid-region.rss", source)
@@ -621,13 +743,17 @@ fn cancellation_during_a_closed_native_continuation_is_observed() {
     canceller.join().expect("cancellation thread completes");
     assert_eq!(report.termination_reason(), TerminationReason::Cancelled);
     let ExecutionEngineTelemetry::Native {
+        compiled,
         continuation_compiled_source_instructions,
         ..
     } = report.telemetry.engine
     else {
         panic!("mid-region cancellation must report native telemetry");
     };
-    assert!(continuation_compiled_source_instructions > 0);
+    assert!(
+        compiled > 0 || continuation_compiled_source_instructions > 0,
+        "whole-function and continuation regions share the bounded native path"
+    );
 }
 
 #[test]

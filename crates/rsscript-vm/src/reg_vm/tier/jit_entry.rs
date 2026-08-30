@@ -182,7 +182,13 @@ impl RegVm {
                             &std::collections::HashMap::new(),
                         )
                         .and_then(
-                            |(jit_fn, ret, param_tys, _literals, _precise)| {
+                            |NativeTranslation {
+                                 jit_fn,
+                                 return_ty: ret,
+                                 param_tys,
+                                 string_literals: _literals,
+                                 precise_resume_safe: _precise,
+                             }| {
                                 // Scalar-only ABI: params and return must be i64/f64
                                 // scalars (Int/Bool/Float). Heap (Handle) params/returns
                                 // route through the fallback — their cross-call
@@ -246,7 +252,7 @@ impl RegVm {
             int_args.push(bits);
         }
         let lens = vec![0i64; int_args.len()];
-        let mut heap_tx = JitNativeCallFrame::begin();
+        let mut heap_tx = JitNativeCallFrame::begin(self.limits.deadline);
         let initial_depth = self.frames.len().saturating_add(1);
         let outcome = {
             let native = self.native.as_ref()?;
@@ -363,7 +369,13 @@ impl RegVm {
                                 _ => None,
                             })
                             .collect();
-                        let (jit_fn, ret, param_tys, _l, _pr) = translate_to_native_jit_with_calls(
+                        let NativeTranslation {
+                            jit_fn,
+                            return_ty: ret,
+                            param_tys,
+                            string_literals: _l,
+                            precise_resume_safe: _pr,
+                        } = translate_to_native_jit_with_calls(
                             unit,
                             mfunc,
                             verified_facts.function(member)?,
@@ -451,7 +463,7 @@ impl RegVm {
             int_args.push(bits);
         }
         let lens = vec![0i64; int_args.len()];
-        let mut heap_tx = JitNativeCallFrame::begin();
+        let mut heap_tx = JitNativeCallFrame::begin(self.limits.deadline);
         let initial_depth = self.frames.len().saturating_add(1);
         let outcome = {
             let native = self.native.as_ref()?;

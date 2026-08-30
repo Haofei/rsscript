@@ -679,16 +679,146 @@ fn region_exit_is_a_distinct_commit_capable_outcome() {
         ],
     );
     let id = module
-        .compile_osr(&function, 0, false, false)
+        .compile_osr_with_controls(
+            &function,
+            0,
+            RegionCompileControls {
+                step: true,
+                cancel: false,
+                deadline: false,
+            },
+        )
         .expect("compile continuation region");
-    let outcome = module.call(id, &[0], &[0]);
+    let mut window = [0];
+    let (outcome, _) = module.call_with_host_ctx_step_cancel(
+        id,
+        &mut window,
+        &[0],
+        RegionCallControls {
+            host_ctx: 0,
+            logical_depth: LogicalCallDepth {
+                current: 0,
+                limit: usize::MAX,
+            },
+            initial_steps: 0,
+            step_budget: None,
+            cancel: None,
+        },
+    );
     let NativeOutcome::Yield { exit_id } = outcome else {
         panic!("expected normal region yield");
     };
     assert_eq!(exit_id, 7);
-    let mut window = [0];
-    assert!(module.copy_yield_registers(id, &[0], &mut window));
     assert_eq!(window[0], 41);
+}
+
+static TEST_DEADLINE_EXPIRED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+extern "C" fn test_deadline_expired(_ctx: HostCtx) -> i64 {
+    i64::from(TEST_DEADLINE_EXPIRED.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+#[test]
+fn deadline_control_polls_before_native_source_work() {
+    let mut helpers = host_helpers();
+    helpers.deadline_expired = test_deadline_expired;
+    let mut module = NativeModule::new(helpers).expect("module");
+    let function = ft(
+        0,
+        vec![JitValueType::Int],
+        vec![
+            JitInstr::LoadInt { dst: 0, value: 7 },
+            JitInstr::Return { src: 0 },
+        ],
+    );
+    let id = module
+        .compile_with_controls(
+            &function,
+            RegionCompileControls {
+                step: true,
+                cancel: false,
+                deadline: true,
+            },
+        )
+        .expect("compile deadline-aware entry");
+
+    TEST_DEADLINE_EXPIRED.store(true, std::sync::atomic::Ordering::Relaxed);
+    let (expired, steps) = module.call_with_step_cancel(id, &[], &[], 0, Some(10), None);
+    assert!(matches!(expired, NativeOutcome::Deopt { .. }));
+    assert_eq!(steps, 0, "deadline bail must not pre-charge source work");
+
+    TEST_DEADLINE_EXPIRED.store(false, std::sync::atomic::Ordering::Relaxed);
+    let (completed, steps) = module.call_with_step_cancel(id, &[], &[], 0, Some(10), None);
+    assert_eq!(completed.completed(), Some(7));
+    assert_eq!(steps, 2);
+}
+
+#[test]
+fn call_sessions_isolate_planned_yield_payloads() {
+    let mut module = module();
+    let controls = RegionCompileControls {
+        step: true,
+        cancel: false,
+        deadline: false,
+    };
+    let make_region = |value| {
+        ft(
+            0,
+            vec![JitValueType::Int],
+            vec![
+                JitInstr::LoadInt { dst: 0, value },
+                JitInstr::RegionExit {
+                    exit_id: value as u32,
+                    live: vec![0],
+                },
+            ],
+        )
+    };
+    let first = module
+        .compile_osr_with_controls(&make_region(11), 0, controls)
+        .expect("first region");
+    let second = module
+        .compile_osr_with_controls(&make_region(29), 0, controls)
+        .expect("second region");
+    let mut first_session = NativeCallSession::new();
+    let mut second_session = NativeCallSession::new();
+    let call_controls = RegionCallControls {
+        host_ctx: 0,
+        logical_depth: LogicalCallDepth {
+            current: 0,
+            limit: usize::MAX,
+        },
+        initial_steps: 0,
+        step_budget: None,
+        cancel: None,
+    };
+    let mut first_window = [0];
+    let mut second_window = [0];
+    let (first_outcome, _) = module.call_with_host_ctx_step_cancel_in_session(
+        &mut first_session,
+        first,
+        &mut first_window,
+        &[0],
+        call_controls,
+    );
+    let (second_outcome, _) = module.call_with_host_ctx_step_cancel_in_session(
+        &mut second_session,
+        second,
+        &mut second_window,
+        &[0],
+        call_controls,
+    );
+    assert!(matches!(
+        first_outcome,
+        NativeOutcome::Yield { exit_id: 11 }
+    ));
+    assert!(matches!(
+        second_outcome,
+        NativeOutcome::Yield { exit_id: 29 }
+    ));
+    assert_eq!(first_window, [11]);
+    assert_eq!(second_window, [29]);
 }
 
 #[test]

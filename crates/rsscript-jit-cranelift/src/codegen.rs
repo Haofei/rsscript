@@ -121,7 +121,7 @@ pub(crate) fn native_recursion_depth_cap(program: &JitFunction) -> i64 {
 
 /// In-generated-code `VmLimits` enforcement requested for this compile. Each flag
 /// is set only when the corresponding limit is armed and the generated region can
-/// enforce it. Only the OSR loop tier sets either flag today.
+/// enforce it. Whole-function, OSR, and continuation entries share these controls.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct LimitChecks {
     /// Emit basic-block/guard-segment source-cost reservation and a steps write-back
@@ -133,6 +133,9 @@ pub(crate) struct LimitChecks {
     /// Emit a `cancel` poll (load the host `AtomicBool`) on every loop backedge and
     /// bail to the interpreter when set — the interpreter then re-polls and errors.
     pub(crate) cancel: bool,
+    /// Poll the embedding VM's monotonic clock callback at bounded control
+    /// segments and bail before the next source instruction when expired.
+    pub(crate) deadline: bool,
 }
 
 /// Precompute the source cost charged at each accounting-segment entry.
@@ -143,12 +146,29 @@ pub(crate) struct LimitChecks {
 /// same pre-dispatch tick boundary as the interpreter. If the whole segment does
 /// not fit, generated code leaves `steps` untouched and deopts at the segment entry.
 fn step_segment_costs(program: &JitFunction, is_leader: &[bool]) -> Vec<u32> {
+    const MAX_CONTROL_SEGMENT_SOURCE_COST: u32 = 512;
     let n = program.code.len();
     let mut starts = is_leader.to_vec();
     for (i, instr) in program.code.iter().enumerate() {
         if !instr.descriptor().step_batch_safe && i + 1 < n {
             starts[i + 1] = true;
         }
+    }
+    let mut accumulated = 0_u32;
+    // This loop may mark a later slot while inspecting the current slot, so an
+    // indexed `while` expresses the dependency more directly than an iterator.
+    let mut ip = 0;
+    while ip < n {
+        if starts[ip] {
+            accumulated = 0;
+        }
+        let cost = program.instruction_origin(ip).source_cost;
+        if accumulated != 0 && accumulated.saturating_add(cost) > MAX_CONTROL_SEGMENT_SOURCE_COST {
+            starts[ip] = true;
+            accumulated = 0;
+        }
+        accumulated = accumulated.saturating_add(cost);
+        ip += 1;
     }
     let mut costs = vec![0_u32; n];
     let mut start = 0;
@@ -169,7 +189,7 @@ fn step_segment_costs(program: &JitFunction, is_leader: &[bool]) -> Vec<u32> {
 
 impl LimitChecks {
     pub(crate) fn any(self) -> bool {
-        self.step || self.cancel
+        self.step || self.cancel || self.deadline
     }
 }
 
@@ -221,11 +241,14 @@ pub(crate) fn build_function(
     // callable FFI addresses it can never legally execute.
     let mut required_helpers = Vec::new();
     for instruction in &program.code {
-        if let Some(helper) = instruction.required_host_helper()
+        if let Some(helper) = instruction.descriptor().required_host_helper
             && !required_helpers.contains(&helper)
         {
             required_helpers.push(helper);
         }
+    }
+    if limit_checks.deadline && !required_helpers.contains(&HostHelper::DeadlineExpired) {
+        required_helpers.push(HostHelper::DeadlineExpired);
     }
     let helper_refs: Vec<_> = required_helpers
         .into_iter()
@@ -576,8 +599,8 @@ pub(crate) fn build_function(
     // Source-step cost is reserved once per conservative accounting segment. This
     // is computed from the same CFG leaders used for codegen and does not affect an
     // unarmed compile.
-    let step_cost_at = limit_checks
-        .step
+    let control_cost_at = limit_checks
+        .any()
         .then(|| step_segment_costs(program, &is_leader));
     for &cold_ip in &program.cold_blocks {
         if let Some(block) = block_for[cold_ip as usize] {
@@ -781,15 +804,55 @@ pub(crate) fn build_function(
             bcx.seal_block(body_block);
             bcx.def_var(memo_scope_backedges[scope_index], zero);
         }
+        // Poll before reserving the segment. A pre-cancelled/expired activation
+        // therefore resumes at the first unpaid source instruction, where the
+        // interpreter performs its canonical tick and reports the failure.
+        let poll_control = control_cost_at.as_ref().is_some_and(|costs| costs[i] != 0)
+            || (!backedge_target.is_empty() && backedge_target[i]);
+        if poll_control {
+            let mut trip: Option<Value> = None;
+            if let Some(cancel_addr_var) = cancel_addr_var {
+                let caddr = bcx.use_var(cancel_addr_var);
+                let flag = bcx.ins().atomic_load(types::I8, MemFlags::trusted(), caddr);
+                let zero = bcx.ins().iconst(types::I8, 0);
+                let cancelled = bcx.ins().icmp(IntCC::NotEqual, flag, zero);
+                trip = Some(cancelled);
+            }
+            if limit_checks.deadline {
+                let call = bcx
+                    .ins()
+                    .call(helper_ref(HostHelper::DeadlineExpired), &[host_ctx]);
+                let expired_word = bcx.inst_results(call)[0];
+                let zero = bcx.ins().iconst(types::I64, 0);
+                let expired = bcx.ins().icmp(IntCC::NotEqual, expired_word, zero);
+                trip = Some(match trip {
+                    Some(value) => bcx.ins().bor(value, expired),
+                    None => expired,
+                });
+            }
+            if let Some(trip) = trip {
+                let cont = bail_if(
+                    &mut bcx,
+                    trip,
+                    fallback,
+                    safepoint_ptr,
+                    payload_ptr,
+                    &vars,
+                    &mut next_id,
+                    deopt!(i),
+                );
+                bcx.switch_to_block(cont);
+            }
+        }
         // Reserve a whole no-deopt accounting segment before its first source
         // instruction. If it does not fit, leave `steps` unchanged and resume the
         // interpreter at this exact IP; the interpreter's next tick is therefore
         // the first unpaid source step. When it fits, one add replaces all of the
         // segment's per-instruction increments.
-        if let (Some(steps_var), Some(limit_var), Some(step_cost_at)) =
-            (steps_var, limit_var, step_cost_at.as_ref())
+        if let (Some(steps_var), Some(limit_var), Some(control_cost_at)) =
+            (steps_var, limit_var, control_cost_at.as_ref())
         {
-            let cost = step_cost_at[i];
+            let cost = control_cost_at[i];
             if cost != 0 {
                 let steps = bcx.use_var(steps_var);
                 let limit = bcx.use_var(limit_var);
@@ -809,34 +872,6 @@ pub(crate) fn build_function(
                 bcx.switch_to_block(cont);
                 let charged = bcx.ins().iadd(steps, required);
                 bcx.def_var(steps_var, charged);
-            }
-        }
-        // Cancellation remains a loop-header poll. Step limits were already
-        // reserved above at exact accounting-segment entries.
-        if !backedge_target.is_empty() && backedge_target[i] {
-            let mut trip: Option<Value> = None;
-            if let Some(cancel_addr_var) = cancel_addr_var {
-                let caddr = bcx.use_var(cancel_addr_var);
-                let flag = bcx.ins().atomic_load(types::I8, MemFlags::trusted(), caddr);
-                let zero = bcx.ins().iconst(types::I8, 0);
-                let cancelled = bcx.ins().icmp(IntCC::NotEqual, flag, zero);
-                trip = Some(match trip {
-                    Some(t) => bcx.ins().bor(t, cancelled),
-                    None => cancelled,
-                });
-            }
-            if let Some(trip) = trip {
-                let cont = bail_if(
-                    &mut bcx,
-                    trip,
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
-                    &vars,
-                    &mut next_id,
-                    deopt!(i),
-                );
-                bcx.switch_to_block(cont);
             }
         }
         match &program.code[i] {

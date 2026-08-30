@@ -1,6 +1,28 @@
 use super::*;
 
 #[test]
+fn compilation_phase_timings_separate_validation_codegen_and_finalize() {
+    let mut module = module();
+    let function = validation::two_param_add();
+    let proof = module.validate_region(&function).expect("IR validates");
+    let after_validation = module.compile_phase_timings();
+    assert!(after_validation.validation_nanos > 0);
+    assert_eq!(after_validation.codegen_nanos, 0);
+    assert_eq!(after_validation.finalize_nanos, 0);
+
+    module
+        .compile_validated(&proof)
+        .expect("validated IR compiles");
+    let published = module.compile_phase_timings();
+    assert_eq!(
+        published.validation_nanos,
+        after_validation.validation_nanos
+    );
+    assert!(published.codegen_nanos > 0);
+    assert!(published.finalize_nanos > 0);
+}
+
+#[test]
 fn map_match_effect_metadata_covers_int_and_float_symmetrically() {
     let instructions = [
         JitInstr::MatchMapGetInt {
@@ -33,6 +55,7 @@ fn map_match_effect_metadata_covers_int_and_float_symmetrically() {
         },
     ];
     for instruction in instructions {
+        let descriptor = instruction.descriptor();
         assert_eq!(instruction.defined_register(), Some(3));
         let mut uses = Vec::new();
         instruction.visit_used_registers(|reg| uses.push(reg));
@@ -52,7 +75,36 @@ fn map_match_effect_metadata_covers_int_and_float_symmetrically() {
         let mut heap_inputs = Vec::new();
         instruction.visit_osr_heap_inputs(|reg| heap_inputs.push(reg));
         assert_eq!(heap_inputs, [1]);
+        assert_eq!(descriptor.effects, instruction.effects());
+        assert!(descriptor.required_host_helper.is_some());
+        assert!(!descriptor.flat_list_direct);
     }
+}
+
+#[test]
+fn instruction_descriptor_owns_flat_and_helper_capabilities() {
+    let direct = JitInstr::ListGetIntDirect {
+        dst: 0,
+        base: 1,
+        index: 2,
+    };
+    let direct_descriptor = direct.descriptor();
+    assert!(direct_descriptor.flat_list_direct);
+    assert_eq!(direct_descriptor.cost_class, JitInstrCostClass::DirectList);
+    assert!(direct_descriptor.required_host_helper.is_none());
+
+    let host = JitInstr::HostCall {
+        dst: 0,
+        helper: HostHelper::StringLen,
+        args: vec![HostArg::Reg(1)],
+    };
+    let host_descriptor = host.descriptor();
+    assert_eq!(
+        host_descriptor.required_host_helper,
+        Some(HostHelper::StringLen)
+    );
+    assert_eq!(host_descriptor.cost_class, JitInstrCostClass::HostCall);
+    assert!(!host_descriptor.compact_scalar_frame);
 }
 #[cfg(feature = "recursion")]
 use crate::codegen::NATIVE_RECURSION_DEPTH_CAP_MAX;
@@ -491,9 +543,13 @@ extern "C" fn noop_deque_pop_back_float(_ctx: HostCtx, _deque: i64) -> f64 {
 extern "C" fn noop_deque_pop_back_int(_ctx: HostCtx, _deque: i64) -> i64 {
     0
 }
+extern "C" fn noop_deadline_expired(_ctx: HostCtx) -> i64 {
+    0
+}
 
 fn host_helpers() -> HostHelpers {
     HostHelpers {
+        deadline_expired: noop_deadline_expired,
         field_int: noop_field_int,
         field_set_int: noop_field_set_int,
         field_set_handle: noop_field_set_int,

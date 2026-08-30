@@ -29,7 +29,80 @@ pub(crate) use state::JitState;
 
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn osr_controls_unarmed_for_dispatch(limits: &VmLimits) -> bool {
-    osr_execution_controls_unarmed(limits)
+    osr_execution_controls_supported(limits)
+}
+
+/// Conservative pre-translation proof for whole-function memory controls. Stable
+/// native entry is allowed only when the source body cannot grow retained storage:
+/// scalar operations, shape-preserving field/list stores, and read-only helpers.
+/// Regions that need allocation accounting are handled by the OSR transaction path.
+#[cfg(feature = "native-jit")]
+fn whole_function_memory_controls_supported(func: &RegFunction, limits: &VmLimits) -> bool {
+    if limits.allocation_budget.is_none() && limits.live_memory_limit.is_none() {
+        return true;
+    }
+    func.code.iter().all(|instr| {
+        if native_instruction_has_heap_write(instr)
+            && !matches!(
+                instr,
+                RegInstr::SetFieldSlot { .. } | RegInstr::ListSet { .. }
+            )
+        {
+            return false;
+        }
+        match instr {
+            RegInstr::CallIntrinsic {
+                intrinsic, args, ..
+            } => native_host_typed_intrinsic(*intrinsic, None).is_none_or(|spec| {
+                args.len() == spec.arg_tys().len()
+                    && spec.helper.heap_effect() == vm_jit::HostHeapEffect::ReadOnly
+            }),
+            RegInstr::CallTypedIntrinsic {
+                intrinsic,
+                type_arg,
+                args,
+                ..
+            } => native_host_typed_intrinsic(*intrinsic, Some(type_arg.as_str())).is_none_or(
+                |spec| {
+                    args.len() == spec.arg_tys().len()
+                        && spec.helper.heap_effect() == vm_jit::HostHeapEffect::ReadOnly
+                },
+            ),
+            RegInstr::CallKnown { .. }
+            | RegInstr::CallDynamic { .. }
+            | RegInstr::CallClosure { .. }
+            | RegInstr::CallExternal { .. } => false,
+            _ => true,
+        }
+    })
+}
+
+/// Post-translation memory proof used by OSR. Direct flat-buffer writes and
+/// shape-preserving list stores do not allocate. `List.push` is the sole growing
+/// helper admitted here because its exact capacity delta is charged through the
+/// transaction-local memory cell and committed only on a clean OSR exit.
+#[cfg(feature = "native-jit")]
+fn osr_memory_controls_supported(function: &vm_jit::JitFunction, memory_armed: bool) -> bool {
+    if !memory_armed {
+        return true;
+    }
+    function.code.iter().all(|instr| match instr {
+        vm_jit::JitInstr::HostCall { helper, .. } => {
+            helper.heap_effect() == vm_jit::HostHeapEffect::ReadOnly
+                || matches!(
+                    helper,
+                    vm_jit::HostHelper::ListSetInt
+                        | vm_jit::HostHelper::ListSetFloat
+                        | vm_jit::HostHelper::ListPushInt
+                        | vm_jit::HostHelper::ListPushFloat
+                )
+        }
+        vm_jit::JitInstr::MemoizedHostCall { helper, .. } => {
+            helper.heap_effect() == vm_jit::HostHeapEffect::ReadOnly
+        }
+        vm_jit::JitInstr::CallNative { .. } => false,
+        _ => true,
+    })
 }
 
 /// Step 1 cost model. Consult the profitability gate for a region that already
@@ -634,9 +707,29 @@ impl RegVm {
         // `allocation_budget`, so a function could grow the accounted cumulative allocation total past the
         // limit without erroring. Refusing native while `allocation_budget` is armed keeps
         // the limit exact (Model A; matches the tier-0 self-recursive gate).
-        if !self.native_limits_unarmed() {
+        if !self.native_preemption_controls_supported()
+            || !whole_function_memory_controls_supported(func, &self.limits)
+        {
             return NativeAttempt::Fallback;
         }
+        if self.limits.live_memory_limit.is_some() {
+            // The interpreter normally observes the freshly installed frame on
+            // its first tick. Whole-function native entry skips that tick, so take
+            // the same exact root snapshot before machine code can complete and
+            // pop the frame. A failure falls back; the interpreter then reports
+            // the authoritative typed execution error.
+            self.live_memory_dirty = true;
+            if self.refresh_live_memory_usage().is_err() {
+                return NativeAttempt::Fallback;
+            }
+        }
+        let compile_controls = vm_jit::RegionCompileControls {
+            step: self.limits.step_budget.is_some()
+                || self.limits.cancel.is_some()
+                || self.limits.deadline.is_some(),
+            cancel: self.limits.cancel.is_some(),
+            deadline: self.limits.deadline.is_some(),
+        };
         // Cheap negative path: a function known not native-eligible never compiles,
         // so skip all per-call tiering/cache/name-hash work and fall straight back
         // to the interpreter (keeps `jit-native` from being slower than the VM on
@@ -700,6 +793,10 @@ impl RegVm {
             let Some(native) = self.native.as_mut() else {
                 return NativeAttempt::Fallback;
             };
+            if compile_controls != vm_jit::RegionCompileControls::default() && !native.precise_deopt
+            {
+                return NativeAttempt::Fallback;
+            }
             if native.force_bail {
                 // Deopt stress mode: pretend the native code bailed at its first
                 // guard, so the interpreter handles the function.
@@ -747,18 +844,8 @@ impl RegVm {
                         func,
                         native_key,
                     );
-                    let translated = if compiled_call_sites.is_empty() {
-                        translate_to_native_jit(&unit, func, function_facts, profile, call_count)
-                    } else {
-                        translate_to_native_jit_with_compiled_callees(
-                            &unit,
-                            func,
-                            function_facts,
-                            profile,
-                            call_count,
-                            &compiled_call_sites,
-                        )
-                        .or_else(|| {
+                    let translated = native.measure_translation(|| {
+                        if compiled_call_sites.is_empty() {
                             translate_to_native_jit(
                                 &unit,
                                 func,
@@ -766,20 +853,53 @@ impl RegVm {
                                 profile,
                                 call_count,
                             )
-                        })
-                    };
+                        } else {
+                            translate_to_native_jit_with_compiled_callees(
+                                &unit,
+                                func,
+                                function_facts,
+                                profile,
+                                call_count,
+                                &compiled_call_sites,
+                            )
+                            .or_else(|| {
+                                translate_to_native_jit(
+                                    &unit,
+                                    func,
+                                    function_facts,
+                                    profile,
+                                    call_count,
+                                )
+                            })
+                        }
+                    });
                     let entry = match translated {
-                        Some(NativeTranslation {
-                            jit_fn,
-                            return_ty: ret,
-                            param_tys: params,
-                            string_literals,
-                            precise_resume_safe,
-                        }) => {
+                        Some(translation) => {
+                            let Some(analyzed) = NativeRegion::whole(translation).analyze() else {
+                                return NativeAttempt::Fallback;
+                            };
+                            let NativeRegionMetadata::Whole {
+                                return_ty: ret,
+                                param_tys: params,
+                                precise_resume_safe,
+                            } = analyzed.metadata()
+                            else {
+                                unreachable!("whole-function lowering changed region kind")
+                            };
+                            let ret = *ret;
+                            let params = params.clone();
+                            let precise_resume_safe = *precise_resume_safe;
+                            let string_literals = analyzed.string_literals().to_vec();
+                            let jit_fn = analyzed.jit_fn();
+                            if compile_controls != vm_jit::RegionCompileControls::default()
+                                && !precise_resume_safe
+                            {
+                                return NativeAttempt::Fallback;
+                            }
                             if native.collect_stats {
                                 native.stats.translated += 1;
                             }
-                            let scalar_leaf_callable = vm_jit::is_native_callable_leaf(&jit_fn);
+                            let scalar_leaf_callable = vm_jit::is_native_callable_leaf(jit_fn);
                             // Step 1 cost model (eligibility already proven by `translate`):
                             // in `enforce` mode, decline an unprofitable region and keep the
                             // function on the interpreter (cached below as not-native). `off`
@@ -787,7 +907,7 @@ impl RegVm {
                             let has_backedge = jit_function_has_loop(&func.code);
                             if consult_profitability(
                                 native,
-                                &jit_fn,
+                                jit_fn,
                                 has_backedge,
                                 "whole-fn",
                                 &func.name,
@@ -822,15 +942,36 @@ impl RegVm {
                                 let compiled = match initial_tier {
                                     NativeCodeTier::Baseline => {
                                         if native.force_all_safepoints {
-                                            native
-                                                .baseline_module
-                                                .compile_forcing_all_bails(&jit_fn)
+                                            native.baseline_module.compile_forcing_all_bails(jit_fn)
                                         } else {
                                             match native.forced_safepoint {
                                                 Some(site) => native
                                                     .baseline_module
-                                                    .compile_forcing_bail(&jit_fn, site),
-                                                None => native.baseline_module.compile(&jit_fn),
+                                                    .compile_forcing_bail(jit_fn, site),
+                                                None if compile_controls
+                                                    != vm_jit::RegionCompileControls::default() =>
+                                                {
+                                                    analyzed
+                                                        .validate(&native.baseline_module)
+                                                        .and_then(|validated| {
+                                                            validated
+                                                                .publish(
+                                                                    &mut native.baseline_module,
+                                                                    compile_controls,
+                                                                )
+                                                                .map(|published| published.id)
+                                                        })
+                                                }
+                                                None => analyzed
+                                                    .validate(&native.baseline_module)
+                                                    .and_then(|validated| {
+                                                        validated
+                                                            .publish(
+                                                                &mut native.baseline_module,
+                                                                compile_controls,
+                                                            )
+                                                            .map(|published| published.id)
+                                                    }),
                                             }
                                         }
                                     }
@@ -840,13 +981,30 @@ impl RegVm {
                                             .as_mut()
                                             .expect("optimized initial tier requires module");
                                         if native.force_all_safepoints {
-                                            module.compile_forcing_all_bails(&jit_fn)
+                                            module.compile_forcing_all_bails(jit_fn)
                                         } else {
                                             match native.forced_safepoint {
                                                 Some(site) => {
-                                                    module.compile_forcing_bail(&jit_fn, site)
+                                                    module.compile_forcing_bail(jit_fn, site)
                                                 }
-                                                None => module.compile(&jit_fn),
+                                                None if compile_controls
+                                                    != vm_jit::RegionCompileControls::default() =>
+                                                {
+                                                    analyzed.validate(module).and_then(
+                                                        |validated| {
+                                                            validated
+                                                                .publish(module, compile_controls)
+                                                                .map(|published| published.id)
+                                                        },
+                                                    )
+                                                }
+                                                None => analyzed.validate(module).and_then(
+                                                    |validated| {
+                                                        validated
+                                                            .publish(module, compile_controls)
+                                                            .map(|published| published.id)
+                                                    },
+                                                ),
                                             }
                                         }
                                     }
@@ -870,7 +1028,7 @@ impl RegVm {
                                                     jit_verify_compiled_native(
                                                         &native.baseline_module,
                                                         id,
-                                                        &jit_fn,
+                                                        jit_fn,
                                                         native.forced_safepoint,
                                                     )
                                                 }
@@ -880,7 +1038,7 @@ impl RegVm {
                                                             "optimized initial tier module",
                                                         ),
                                                         id,
-                                                        &jit_fn,
+                                                        jit_fn,
                                                         native.forced_safepoint,
                                                     )
                                                 }
@@ -897,12 +1055,12 @@ impl RegVm {
                                         record_native_compile_stats(
                                             native,
                                             id,
-                                            &jit_fn,
+                                            jit_fn,
                                             initial_tier,
                                         );
                                         if matches!(initial_tier, NativeCodeTier::Baseline)
                                             && native.optimized_module.is_some()
-                                            && native_region_is_promotion_eligible(&jit_fn)
+                                            && native_region_is_promotion_eligible(jit_fn)
                                         {
                                             native
                                                 .optimization_sources
@@ -1023,6 +1181,15 @@ impl RegVm {
                                 .as_mut()
                                 .expect("optimized module")
                                 .compile_forcing_bail(&jit_fn, site),
+                            None if compile_controls
+                                != vm_jit::RegionCompileControls::default() =>
+                            {
+                                native
+                                    .optimized_module
+                                    .as_mut()
+                                    .expect("optimized module")
+                                    .compile_with_controls(&jit_fn, compile_controls)
+                            }
                             None => native
                                 .optimized_module
                                 .as_mut()
@@ -1141,7 +1308,7 @@ impl RegVm {
         // per-call scratch table. The values are committed only after a clean native
         // completion; every fallback/deopt path aborts, so speculative heap writes
         // stay invisible to the interpreter re-run.
-        let mut heap_tx = JitNativeCallFrame::begin();
+        let mut heap_tx = JitNativeCallFrame::begin(self.limits.deadline);
         // `args[i]` and `lens[i]` are parallel per-param words (TV2 ABI). A scalar
         // unboxes into `args[i]` (with `lens[i] = 0`); a `Handle` is a heap-table
         // index; a `FlatInt`/`FlatFloat` puts the raw buffer pointer in `args[i]`
@@ -1365,8 +1532,8 @@ impl RegVm {
         // `flat_guards` (the pinned shared borrows of the flat list args) drops
         // immediately after, before the scratch buffers are returned to the pool.
         let initial_depth = self.frames.len();
-        let (result, elapsed) = {
-            let Some(native_ref) = self.native.as_ref() else {
+        let (result, elapsed, native_steps) = {
+            let Some(native_ref) = self.native.as_mut() else {
                 heap_tx.abort();
                 drop(flat_guards);
                 drop(flat_mut_guards);
@@ -1383,20 +1550,52 @@ impl RegVm {
                     .as_ref()
                     .expect("optimized dispatch requires optimized module"),
             };
-            let result = module.call_with_indexed_flat_args_at_depth(
-                id,
-                &scratch.args,
-                &scratch.lens,
-                heap_tx.host_ctx(),
-                &mut flat_args,
-                vm_jit::LogicalCallDepth {
-                    current: initial_depth,
-                    limit: self.limits.max_depth,
-                },
-            );
+            let armed = compile_controls != vm_jit::RegionCompileControls::default();
+            let initial_steps = i64::try_from(self.steps).unwrap_or(i64::MAX);
+            let step_budget = self
+                .limits
+                .step_budget
+                .and_then(|budget| i64::try_from(budget).ok());
+            let (result, native_steps) = if armed {
+                module.call_with_indexed_flat_args_and_controls_in_session_at_depth(
+                    &mut native_ref.call_session,
+                    id,
+                    &scratch.args,
+                    &scratch.lens,
+                    &mut flat_args,
+                    vm_jit::RegionCallControls {
+                        host_ctx: heap_tx.host_ctx(),
+                        logical_depth: vm_jit::LogicalCallDepth {
+                            current: initial_depth,
+                            limit: self.limits.max_depth,
+                        },
+                        initial_steps,
+                        step_budget,
+                        cancel: self.limits.cancel.as_ref().map(|token| token.as_atomic()),
+                    },
+                )
+            } else {
+                (
+                    module.call_with_indexed_flat_args_at_depth(
+                        id,
+                        &scratch.args,
+                        &scratch.lens,
+                        heap_tx.host_ctx(),
+                        &mut flat_args,
+                        vm_jit::LogicalCallDepth {
+                            current: initial_depth,
+                            limit: self.limits.max_depth,
+                        },
+                    ),
+                    initial_steps,
+                )
+            };
             let elapsed = started.map(|started| started.elapsed().as_nanos());
-            (result, elapsed)
+            (result, elapsed, native_steps)
         };
+        if compile_controls.step {
+            self.steps = native_steps.max(0) as u64;
+        }
         drop(flat_guards);
         drop(flat_mut_guards);
         // The pooled scratch buffers stay available through result handling because
@@ -1902,124 +2101,143 @@ impl RegVm {
                     }
                     return false;
                 }
-                let compiled = translate_scalar_continuation_region(
-                    func,
-                    function_facts,
-                    &region,
-                    &param_native_types,
-                )
-                .and_then(
-                    |ContinuationTranslation {
-                         jit_fn,
-                         slots,
-                         live_in_count: n_live_in,
-                         exits,
-                         typed_summary,
-                         virtual_summary,
-                     }| {
-                        let admission = begin_native_compile(native, 1, NativeCodeTier::Baseline)?;
-                        match native.baseline_module.compile_osr(
-                            &jit_fn,
-                            u32::try_from(region.entry).ok()?,
-                            true,
-                            cancel_armed,
-                        ) {
-                            Ok(id) => {
-                                if !finish_native_compile(
-                                    native,
-                                    admission,
-                                    &[id],
-                                    NativeCodeTier::Baseline,
-                                ) {
-                                    return None;
-                                }
-                                record_native_compile_stats(
-                                    native,
-                                    id,
-                                    &jit_fn,
-                                    NativeCodeTier::Baseline,
-                                );
-                                if native.collect_stats {
-                                    native.stats.shape_versions += 1;
-                                    if version_key.instance.type_arguments.is_known()
-                                        && !native.has_continuation_instance(
-                                            &version_key.instance,
-                                            version_key.entry,
-                                        )
-                                    {
-                                        native.stats.static_type_instances += 1;
-                                    }
-                                    native.stats.continuation_compiled_source_instructions = native
-                                        .stats
-                                        .continuation_compiled_source_instructions
-                                        .saturating_add(region.source_instructions as u64);
-                                    native.stats.typed_region_compiles =
-                                        native.stats.typed_region_compiles.saturating_add(1);
-                                    native.stats.typed_region_blocks = native
-                                        .stats
-                                        .typed_region_blocks
-                                        .saturating_add(typed_summary.blocks as u64);
-                                    native.stats.typed_region_values = native
-                                        .stats
-                                        .typed_region_values
-                                        .saturating_add(typed_summary.values as u64);
-                                    native.stats.typed_region_work_units = native
-                                        .stats
-                                        .typed_region_work_units
-                                        .saturating_add(typed_summary.work_units as u64);
-                                    native.stats.virtual_objects_observed =
-                                        native.stats.virtual_objects_observed.saturating_add(
-                                            virtual_summary
-                                                .options
-                                                .saturating_add(virtual_summary.results)
-                                                .saturating_add(virtual_summary.variants)
-                                                .saturating_add(virtual_summary.structs)
-                                                .saturating_add(virtual_summary.closures)
-                                                as u64,
-                                        );
-                                    native.stats.virtual_objects_no_escape = native
-                                        .stats
-                                        .virtual_objects_no_escape
-                                        .saturating_add(virtual_summary.no_escape as u64);
-                                    native.stats.virtual_objects_exit_only = native
-                                        .stats
-                                        .virtual_objects_exit_only
-                                        .saturating_add(virtual_summary.exit_only as u64);
-                                    native.stats.virtual_objects_declined = native
-                                        .stats
-                                        .virtual_objects_declined
-                                        .saturating_add(virtual_summary.declined as u64);
-                                }
-                                native
-                                    .continuation_controllers
-                                    .entry(version_key.clone())
-                                    .or_default()
-                                    .compiled(false);
-                                // No controlled canonical baseline
-                                // clears the optimized-continuation retention
-                                // gate. Keep the common controller state at
-                                // baseline instead of inventing an unmeasured
-                                // promotion path.
-                                debug_assert_eq!(
-                                    continuation_tier_decision(None),
-                                    ContinuationTierDecision::BaselineOnly
-                                );
-                                Some(Rc::new(ContinuationEntry {
-                                    id,
-                                    entry: region.entry,
-                                    exits,
-                                    n_jit_regs: jit_fn.n_regs as usize,
-                                    n_live_in,
-                                    slots,
-                                }))
+                let translation = native.measure_translation(|| {
+                    translate_scalar_continuation_region(
+                        func,
+                        function_facts,
+                        &region,
+                        &param_native_types,
+                    )
+                });
+                let compiled = translation.and_then(|translation| {
+                    let analyzed =
+                        NativeRegion::continuation(u32::try_from(region.entry).ok()?, translation)
+                            .analyze()?;
+                    let admission = begin_native_compile(native, 1, NativeCodeTier::Baseline)?;
+                    let controls = vm_jit::RegionCompileControls {
+                        step: true,
+                        cancel: cancel_armed,
+                        deadline: self.limits.deadline.is_some(),
+                    };
+                    let published =
+                        analyzed
+                            .validate(&native.baseline_module)
+                            .and_then(|validated| {
+                                validated.publish(&mut native.baseline_module, controls)
+                            });
+                    match published {
+                        Ok(published) => {
+                            let id = published.id;
+                            debug_assert!(matches!(
+                                published.entry,
+                                NativeRegionEntry::Continuation { .. }
+                            ));
+                            let source_work = analyzed.source_work();
+                            let (jit_fn, metadata, _) = analyzed.into_parts();
+                            let NativeRegionMetadata::Continuation {
+                                slots,
+                                live_in_count: n_live_in,
+                                exits,
+                                typed_summary,
+                                virtual_summary,
+                            } = metadata
+                            else {
+                                unreachable!("continuation lowering changed region kind")
+                            };
+                            if !finish_native_compile(
+                                native,
+                                admission,
+                                &[id],
+                                NativeCodeTier::Baseline,
+                            ) {
+                                return None;
                             }
-                            Err(_) => {
-                                finish_native_compile_failure(native, admission);
-                                None
+                            record_native_compile_stats(
+                                native,
+                                id,
+                                &jit_fn,
+                                NativeCodeTier::Baseline,
+                            );
+                            if native.collect_stats {
+                                native.stats.shape_versions += 1;
+                                if version_key.instance.type_arguments.is_known()
+                                    && !native.has_continuation_instance(
+                                        &version_key.instance,
+                                        version_key.entry,
+                                    )
+                                {
+                                    native.stats.static_type_instances += 1;
+                                }
+                                native.stats.continuation_compiled_source_instructions = native
+                                    .stats
+                                    .continuation_compiled_source_instructions
+                                    .saturating_add(source_work);
+                                native.stats.typed_region_compiles =
+                                    native.stats.typed_region_compiles.saturating_add(1);
+                                native.stats.typed_region_blocks = native
+                                    .stats
+                                    .typed_region_blocks
+                                    .saturating_add(typed_summary.blocks as u64);
+                                native.stats.typed_region_values = native
+                                    .stats
+                                    .typed_region_values
+                                    .saturating_add(typed_summary.values as u64);
+                                native.stats.typed_region_work_units = native
+                                    .stats
+                                    .typed_region_work_units
+                                    .saturating_add(typed_summary.work_units as u64);
+                                native.stats.virtual_objects_observed =
+                                    native.stats.virtual_objects_observed.saturating_add(
+                                        virtual_summary
+                                            .options
+                                            .saturating_add(virtual_summary.results)
+                                            .saturating_add(virtual_summary.variants)
+                                            .saturating_add(virtual_summary.structs)
+                                            .saturating_add(virtual_summary.closures)
+                                            as u64,
+                                    );
+                                native.stats.virtual_objects_no_escape = native
+                                    .stats
+                                    .virtual_objects_no_escape
+                                    .saturating_add(virtual_summary.no_escape as u64);
+                                native.stats.virtual_objects_exit_only = native
+                                    .stats
+                                    .virtual_objects_exit_only
+                                    .saturating_add(virtual_summary.exit_only as u64);
+                                native.stats.virtual_objects_declined = native
+                                    .stats
+                                    .virtual_objects_declined
+                                    .saturating_add(virtual_summary.declined as u64);
                             }
+                            native
+                                .continuation_controllers
+                                .entry(version_key.clone())
+                                .or_default()
+                                .compiled(false);
+                            // No controlled canonical baseline
+                            // clears the optimized-continuation retention
+                            // gate. Keep the common controller state at
+                            // baseline instead of inventing an unmeasured
+                            // promotion path.
+                            debug_assert_eq!(
+                                continuation_tier_decision(None),
+                                ContinuationTierDecision::BaselineOnly
+                            );
+                            Some(Rc::new(ContinuationEntry {
+                                id,
+                                entry: region.entry,
+                                exits,
+                                n_jit_regs: jit_fn.n_regs as usize,
+                                n_live_in,
+                                slots,
+                            }))
                         }
-                    },
-                );
+                        Err(_) => {
+                            finish_native_compile_failure(native, admission);
+                            None
+                        }
+                    }
+                });
                 native
                     .continuation_cache
                     .insert(version_key.clone(), compiled);
@@ -2043,7 +2261,7 @@ impl RegVm {
             Some(native) => take_osr_native_call_scratch(native, entry.n_jit_regs),
             None => return false,
         };
-        let mut native_frame = JitNativeCallFrame::begin();
+        let mut native_frame = JitNativeCallFrame::begin(self.limits.deadline);
         macro_rules! decline_continuation {
             () => {{
                 native_frame.abort();
@@ -2096,22 +2314,27 @@ impl RegVm {
         let physical_depth = self.frames.len();
         let prior_tail_calls = self.frames.last().map_or(0, |frame| frame.tail_calls);
         let initial_depth = osr_initial_logical_depth(physical_depth, prior_tail_calls);
-        let result = self.native.as_ref().map(|native| {
-            let (outcome, steps) = native.baseline_module.call_with_host_ctx_step_cancel(
-                entry.id,
-                &scratch.window,
-                &scratch.lens,
-                vm_jit::RegionCallControls {
-                    host_ctx: native_frame.host_ctx(),
-                    logical_depth: vm_jit::LogicalCallDepth {
-                        current: initial_depth,
-                        limit: self.limits.max_depth,
+        let native_result = self.native.as_mut().map(|native| {
+            native
+                .baseline_module
+                .call_with_host_ctx_step_cancel_in_session(
+                    &mut native.call_session,
+                    entry.id,
+                    &mut scratch.window,
+                    &scratch.lens,
+                    vm_jit::RegionCallControls {
+                        host_ctx: native_frame.host_ctx(),
+                        logical_depth: vm_jit::LogicalCallDepth {
+                            current: initial_depth,
+                            limit: self.limits.max_depth,
+                        },
+                        initial_steps,
+                        step_budget: native_step_budget,
+                        cancel: self.limits.cancel.as_ref().map(|token| token.as_atomic()),
                     },
-                    initial_steps,
-                    step_budget: native_step_budget,
-                    cancel: self.limits.cancel.as_ref().map(|token| token.as_atomic()),
-                },
-            );
+                )
+        });
+        let result = native_result.map(|(outcome, steps)| {
             self.steps = steps.max(0) as u64;
             outcome
         });
@@ -2167,18 +2390,6 @@ impl RegVm {
             }
             return false;
         };
-        let copied = self.native.as_ref().is_some_and(|native| {
-            native.baseline_module.copy_yield_registers(
-                entry.id,
-                &exit_meta.live_slots,
-                &mut scratch.window,
-            )
-        });
-        if !copied {
-            native_frame.abort();
-            scratch.restore(self.native.as_mut());
-            return false;
-        }
         if native_frame.commit_scalar_with_writebacks(&[]).is_none() {
             scratch.restore(self.native.as_mut());
             return false;
@@ -2288,15 +2499,20 @@ impl RegVm {
         // allocation costs, no armed resource mode is allowed through OSR. The
         // interpreter remains the semantic authority. Cancellation also stays on
         // that path even though vm-jit's raw cancel load is now atomic.
-        if !osr_execution_controls_unarmed(&self.limits) {
+        if !osr_execution_controls_supported(&self.limits) {
             return false;
         }
         // These values remain false after the gate above. Keeping the compile-time
         // plumbing intact allows a future source-cost implementation to re-enable
         // proven limit-aware OSR without changing the cache shape again.
-        let emit_step = self.limits.step_budget.is_some();
+        let emit_step = self.limits.step_budget.is_some()
+            || self.limits.cancel.is_some()
+            || self.limits.deadline.is_some();
         let emit_cancel = self.limits.cancel.is_some();
+        let emit_deadline = self.limits.deadline.is_some();
         let allocation_armed = self.limits.allocation_budget.is_some();
+        let live_memory_armed = self.limits.live_memory_limit.is_some();
+        let memory_armed = allocation_armed || live_memory_armed;
         if let Some(native) = self.native.as_mut() {
             native.osr_dynamic_bail = false;
         }
@@ -2500,7 +2716,9 @@ impl RegVm {
                     })
                     .and_then(|lp| {
                         let identity_ip_map: Vec<usize> = (0..func.code.len()).collect();
-                        translate_osr_loop_profiled(
+                        let translation_started =
+                            native.collect_stats.then(std::time::Instant::now);
+                        let translation = translate_osr_loop_profiled(
                             func,
                             function_facts,
                             profile,
@@ -2512,111 +2730,133 @@ impl RegVm {
                             &identity_ip_map,
                             &param_native_types,
                             &immutable_leaf_params,
-                        )
-                        .and_then(
-                            |OsrTranslation {
-                                 jit_fn,
-                                 param_tys: params,
-                                 derived_live_ins: derived_liveins,
-                                 scalar_fields,
-                                 reg_tys: reg_types,
-                                 written_regs,
-                                 string_literals,
-                             }| {
-                                let n_jit_regs = jit_fn.n_regs as usize;
-                                // native limit accounting mem: a `ListPush*` flat-capacity growth now charges
-                                // `allocation_budget` in its host helper (the only native-subset op
-                                // the interpreter bills), so an allocating loop runs natively
-                                // under an armed budget and bails to the interpreter at the
-                                // exact over-budget push — no blanket decline needed.
-                                // Step 1 cost model: an OSR loop is always a back-edge region;
-                                // in `enforce` mode decline an unprofitable loop and resume on
-                                // the interpreter (correctness-safe).
-                                if consult_profitability(native, &jit_fn, true, "osr", &func.name) {
-                                    return None;
-                                }
-                                let heap_input_regs = osr_heap_input_regs(&jit_fn);
-                                let admission =
-                                    begin_native_compile(native, 1, NativeCodeTier::Baseline)?;
-                                match native.baseline_module.compile_osr(
-                                    &jit_fn,
-                                    lp.header as u32,
-                                    emit_step,
-                                    emit_cancel,
-                                ) {
-                                    Ok(id) => {
-                                        if !finish_native_compile(
-                                            native,
-                                            admission,
-                                            &[id],
-                                            NativeCodeTier::Baseline,
-                                        ) {
+                        );
+                        if let Some(started) = translation_started {
+                            native.stats.translation_nanos = native
+                                .stats
+                                .translation_nanos
+                                .saturating_add(started.elapsed().as_nanos());
+                        }
+                        translation.and_then(|translation| {
+                            let analyzed =
+                                NativeRegion::osr(lp.header as u32, translation).analyze()?;
+                            let NativeRegionMetadata::Osr {
+                                param_tys: params,
+                                derived_live_ins: derived_liveins,
+                                scalar_fields,
+                                reg_tys: reg_types,
+                                written_regs,
+                            } = analyzed.metadata()
+                            else {
+                                unreachable!("OSR lowering changed region kind")
+                            };
+                            let params = params.clone();
+                            let derived_liveins = derived_liveins.clone();
+                            let scalar_fields = scalar_fields.clone();
+                            let reg_types = reg_types.clone();
+                            let written_regs = written_regs.clone();
+                            let string_literals = analyzed.string_literals().to_vec();
+                            let jit_fn = analyzed.jit_fn();
+                            if !osr_memory_controls_supported(jit_fn, memory_armed) {
+                                return None;
+                            }
+                            let n_jit_regs = jit_fn.n_regs as usize;
+                            // native limit accounting mem: a `ListPush*` flat-capacity growth now charges
+                            // `allocation_budget` in its host helper (the only native-subset op
+                            // the interpreter bills), so an allocating loop runs natively
+                            // under an armed budget and bails to the interpreter at the
+                            // exact over-budget push — no blanket decline needed.
+                            // Step 1 cost model: an OSR loop is always a back-edge region;
+                            // in `enforce` mode decline an unprofitable loop and resume on
+                            // the interpreter (correctness-safe).
+                            if consult_profitability(native, jit_fn, true, "osr", &func.name) {
+                                return None;
+                            }
+                            let heap_input_regs = osr_heap_input_regs(jit_fn);
+                            let admission =
+                                begin_native_compile(native, 1, NativeCodeTier::Baseline)?;
+                            let controls = vm_jit::RegionCompileControls {
+                                step: emit_step,
+                                cancel: emit_cancel,
+                                deadline: emit_deadline,
+                            };
+                            let published =
+                                analyzed
+                                    .validate(&native.baseline_module)
+                                    .and_then(|validated| {
+                                        validated.publish(&mut native.baseline_module, controls)
+                                    });
+                            match published {
+                                Ok(published) => {
+                                    let id = published.id;
+                                    if !finish_native_compile(
+                                        native,
+                                        admission,
+                                        &[id],
+                                        NativeCodeTier::Baseline,
+                                    ) {
+                                        return None;
+                                    }
+                                    let verify_native =
+                                        cfg!(debug_assertions) || jit_native_verify_is_strict();
+                                    if verify_native
+                                        && let Err(err) = jit_verify_compiled_osr(
+                                            &native.baseline_module,
+                                            id,
+                                            jit_fn,
+                                            jit_fn
+                                                .instruction_origins
+                                                .get(lp.exit)
+                                                .map_or(lp.exit, |origin| {
+                                                    origin.resume_ip as usize
+                                                }),
+                                        )
+                                    {
+                                        debug_assert!(false, "native OSR verifier failed: {err}");
+                                        if jit_native_verify_is_strict() {
                                             return None;
                                         }
-                                        let verify_native =
-                                            cfg!(debug_assertions) || jit_native_verify_is_strict();
-                                        if verify_native
-                                            && let Err(err) = jit_verify_compiled_osr(
-                                                &native.baseline_module,
-                                                id,
-                                                &jit_fn,
-                                                jit_fn
-                                                    .instruction_origins
-                                                    .get(lp.exit)
-                                                    .map_or(lp.exit, |origin| {
-                                                        origin.resume_ip as usize
-                                                    }),
-                                            )
-                                        {
-                                            debug_assert!(
-                                                false,
-                                                "native OSR verifier failed: {err}"
-                                            );
-                                            if jit_native_verify_is_strict() {
-                                                return None;
-                                            }
-                                        }
-                                        record_native_compile_stats(
-                                            native,
-                                            id,
-                                            &jit_fn,
-                                            NativeCodeTier::Baseline,
+                                    }
+                                    record_native_compile_stats(
+                                        native,
+                                        id,
+                                        jit_fn,
+                                        NativeCodeTier::Baseline,
+                                    );
+                                    if native.optimized_module.is_some()
+                                        && native_region_is_promotion_eligible(jit_fn)
+                                    {
+                                        native.osr_optimization_sources.insert(
+                                            osr_version_key.clone(),
+                                            OsrOptimizationSource {
+                                                jit_fn: jit_fn.clone(),
+                                                header: lp.header as u32,
+                                                exit: lp.exit,
+                                            },
                                         );
-                                        if native.optimized_module.is_some()
-                                            && native_region_is_promotion_eligible(&jit_fn)
-                                        {
-                                            native.osr_optimization_sources.insert(
-                                                osr_version_key.clone(),
-                                                OsrOptimizationSource {
-                                                    jit_fn: jit_fn.clone(),
-                                                    header: lp.header as u32,
-                                                    exit: lp.exit,
-                                                },
-                                            );
-                                        }
-                                        Some(OsrEntry {
-                                            id,
-                                            orig_header: lp.header,
-                                            trans_exit: lp.exit,
-                                            orig_exit: lp.exit,
-                                            n_jit_regs,
-                                            param_types: params,
-                                            derived_liveins,
-                                            scalar_fields,
-                                            heap_input_regs,
-                                            reg_types,
-                                            written_regs,
-                                            string_literals,
-                                            materialize_recipes: Vec::new(),
-                                        })
                                     }
-                                    Err(_) => {
-                                        finish_native_compile_failure(native, admission);
-                                        None
-                                    }
+                                    Some(OsrEntry {
+                                        id,
+                                        orig_header: lp.header,
+                                        trans_exit: lp.exit,
+                                        orig_exit: lp.exit,
+                                        n_jit_regs,
+                                        param_types: params,
+                                        derived_liveins,
+                                        scalar_fields,
+                                        heap_input_regs,
+                                        reg_types,
+                                        written_regs,
+                                        string_literals,
+                                        materialize_recipes: Vec::new(),
+                                    })
                                 }
-                            },
-                        )
+                                Err(_) => {
+                                    finish_native_compile_failure(native, admission);
+                                    None
+                                }
+                            }
+                        })
                     });
                 let entry = direct_entry.or_else(|| {
                 let expanded = detect_natural_loop_at(&func.code, header_ip).and_then(|lp_pre| {
@@ -2931,7 +3171,9 @@ impl RegVm {
                                     real_ip_map.push(to_real(eff_ip).unwrap_or(usize::MAX));
                                 }
                             }
-                            translate_osr_loop_profiled(
+                            let translation_started =
+                                native.collect_stats.then(std::time::Instant::now);
+                            let translation = translate_osr_loop_profiled(
                                 func,
                                 function_facts,
                                 profile,
@@ -2943,16 +3185,39 @@ impl RegVm {
                                 &real_ip_map,
                                 &param_native_types,
                                 &immutable_leaf_params,
-                            )
-                                .and_then(|OsrTranslation {
-                                    jit_fn,
-                                    param_tys: params,
-                                    derived_live_ins: derived_liveins,
-                                    scalar_fields,
-                                    reg_tys: reg_types,
-                                    written_regs,
-                                    string_literals,
-                                }| {
+                            );
+                            if let Some(started) = translation_started {
+                                native.stats.translation_nanos = native
+                                    .stats
+                                    .translation_nanos
+                                    .saturating_add(started.elapsed().as_nanos());
+                            }
+                            translation.and_then(|translation| {
+                                    let analyzed = NativeRegion::osr(
+                                        lp.header as u32,
+                                        translation,
+                                    )
+                                    .analyze()?;
+                                    let NativeRegionMetadata::Osr {
+                                        param_tys: params,
+                                        derived_live_ins: derived_liveins,
+                                        scalar_fields,
+                                        reg_tys: reg_types,
+                                        written_regs,
+                                    } = analyzed.metadata()
+                                    else {
+                                        unreachable!("OSR lowering changed region kind")
+                                    };
+                                    let params = params.clone();
+                                    let derived_liveins = derived_liveins.clone();
+                                    let scalar_fields = scalar_fields.clone();
+                                    let reg_types = reg_types.clone();
+                                    let written_regs = written_regs.clone();
+                                    let string_literals = analyzed.string_literals().to_vec();
+                                    let jit_fn = analyzed.jit_fn();
+                                    if !osr_memory_controls_supported(jit_fn, memory_armed) {
+                                        return None;
+                                    }
                                     let n_jit_regs = jit_fn.n_regs as usize;
                                     // native limit accounting mem: `ListPush*` now charges `allocation_budget` in its
                                     // helper (the only native-subset billed op), so an
@@ -2961,17 +3226,31 @@ impl RegVm {
                                     // Step 1 cost model: an OSR loop is always a back-edge
                                     // region; in `enforce` mode decline an unprofitable loop
                                     // and resume on the interpreter (correctness-safe).
-                                    if consult_profitability(native, &jit_fn, true, "osr", &func.name) {
+                                    if consult_profitability(native, jit_fn, true, "osr", &func.name) {
                                         return None;
                                     }
-                                    let heap_input_regs = osr_heap_input_regs(&jit_fn);
+                                    let heap_input_regs = osr_heap_input_regs(jit_fn);
                                     let admission = begin_native_compile(
                                         native,
                                         1,
                                         NativeCodeTier::Baseline,
                                     )?;
-                                    match native.baseline_module.compile_osr(&jit_fn, lp.header as u32, emit_step, emit_cancel) {
-                                        Ok(id) => {
+                                    let controls = vm_jit::RegionCompileControls {
+                                            step: emit_step,
+                                            cancel: emit_cancel,
+                                            deadline: emit_deadline,
+                                        };
+                                    let published = analyzed
+                                        .validate(&native.baseline_module)
+                                        .and_then(|validated| {
+                                            validated.publish(
+                                                &mut native.baseline_module,
+                                                controls,
+                                            )
+                                        });
+                                    match published {
+                                        Ok(published) => {
+                                            let id = published.id;
                                             if !finish_native_compile(
                                                 native,
                                                 admission,
@@ -2986,7 +3265,7 @@ impl RegVm {
                                                 && let Err(err) = jit_verify_compiled_osr(
                                                     &native.baseline_module,
                                                     id,
-                                                    &jit_fn,
+                                                    jit_fn,
                                                     orig_exit,
                                                 ) {
                                                     debug_assert!(false, "native OSR verifier failed: {err}");
@@ -2997,11 +3276,11 @@ impl RegVm {
                                             record_native_compile_stats(
                                                 native,
                                                 id,
-                                                &jit_fn,
+                                                jit_fn,
                                                 NativeCodeTier::Baseline,
                                             );
                                             if native.optimized_module.is_some()
-                                                && native_region_is_promotion_eligible(&jit_fn)
+                                                && native_region_is_promotion_eligible(jit_fn)
                                             {
                                                 native.osr_optimization_sources.insert(
                                                     osr_version_key.clone(),
@@ -3188,7 +3467,15 @@ impl RegVm {
                         .optimized_module
                         .as_mut()
                         .expect("optimized module")
-                        .compile_osr(&source.jit_fn, source.header, emit_step, emit_cancel);
+                        .compile_osr_with_controls(
+                            &source.jit_fn,
+                            source.header,
+                            vm_jit::RegionCompileControls {
+                                step: emit_step,
+                                cancel: emit_cancel,
+                                deadline: emit_deadline,
+                            },
+                        );
                     match compiled {
                         Ok(optimized_id) => {
                             if finish_native_compile(
@@ -3291,7 +3578,7 @@ impl RegVm {
         // an interpreter value, and the scalar replacement-added slots stay 0 — the loop body assigns
         // them (LoadBool tag, Move payload) before any read, so their live-in value
         // is irrelevant. A drop guard clears the heap table on every exit path.
-        let mut heap_tx = JitNativeCallFrame::begin();
+        let mut heap_tx = JitNativeCallFrame::begin(self.limits.deadline);
         let n_regs = func.regs;
         let mut scratch = match self.native.as_mut() {
             Some(native) => take_osr_native_call_scratch(native, n_jit_regs),
@@ -3598,25 +3885,13 @@ impl RegVm {
         // were fixed at the top of this call from `self.limits`; the compiled variant
         // matches (same eval-constant limits), so a non-null cell is required exactly
         // when armed. `steps` flows in here and back out below into `self.steps`.
-        let armed = emit_step || emit_cancel;
-        if armed {
-            let step_budget = self.limits.step_budget.map_or(-1, |b| b as i64);
-            let cancel_addr = self
-                .limits
-                .cancel
-                .as_ref()
-                .map_or(0, |flag| flag.as_atomic() as *const _ as i64);
-            jit_set_limits_cell(self.steps as i64, step_budget, cancel_addr);
-        }
-        // native limit accounting mem: seed the mem cell before EVERY OSR call (armed budget or `-1` to
-        // disarm). The `ListPush*` helper charges flat-capacity growth against it; on a
+        let armed = emit_step || emit_cancel || emit_deadline;
+        // native limit accounting mem: seed the mem cell before EVERY OSR call (with
+        // an optional full-width budget). The `ListPush*` helper charges flat-capacity growth against it; on a
         // clean exit we read `allocated_bytes` back to commit, on a bail the rollback+rerun
         // discards it. Independent of the step `limits_ptr` (helper-side).
-        {
-            let allocation_budget = self.limits.allocation_budget.map_or(-1, |b| b as i64);
-            jit_set_mem_cell(self.allocated_bytes as i64, allocation_budget);
-        }
-        let Some(native_ref) = self.native.as_ref() else {
+        jit_set_mem_cell(self.allocated_bytes, self.limits.allocation_budget);
+        let Some(native_ref) = self.native.as_mut() else {
             heap_tx.abort();
             drop(flat_guards);
             drop(flat_mut_guards);
@@ -3626,7 +3901,6 @@ impl RegVm {
         let collect_stats = native_ref.collect_stats;
         let started = collect_stats.then(std::time::Instant::now);
         let _literal_guard = jit_install_string_literals(&string_literals);
-        debug_assert!(!armed, "armed OSR is rejected before compilation/dispatch");
         let physical_depth = self.frames.len();
         let prior_tail_calls = self.frames.last().map_or(0, |frame| frame.tail_calls);
         let initial_depth = osr_initial_logical_depth(physical_depth, prior_tail_calls);
@@ -3638,17 +3912,45 @@ impl RegVm {
                 .expect("optimized OSR dispatch requires optimized module"),
         };
         flat_args.sort_unstable_by_key(|proof| proof.index);
-        let result = module.call_with_indexed_flat_args_at_depth(
-            id,
-            &scratch.window,
-            &scratch.lens,
-            heap_tx.host_ctx(),
-            &mut flat_args,
-            vm_jit::LogicalCallDepth {
-                current: initial_depth,
-                limit: self.limits.max_depth,
-            },
-        );
+        let initial_steps = i64::try_from(self.steps).unwrap_or(i64::MAX);
+        let step_budget = self
+            .limits
+            .step_budget
+            .and_then(|budget| i64::try_from(budget).ok());
+        let (result, native_steps) = if armed {
+            module.call_with_indexed_flat_args_and_controls_in_session_at_depth(
+                &mut native_ref.call_session,
+                id,
+                &scratch.window,
+                &scratch.lens,
+                &mut flat_args,
+                vm_jit::RegionCallControls {
+                    host_ctx: heap_tx.host_ctx(),
+                    logical_depth: vm_jit::LogicalCallDepth {
+                        current: initial_depth,
+                        limit: self.limits.max_depth,
+                    },
+                    initial_steps,
+                    step_budget,
+                    cancel: self.limits.cancel.as_ref().map(|token| token.as_atomic()),
+                },
+            )
+        } else {
+            (
+                module.call_with_indexed_flat_args_at_depth(
+                    id,
+                    &scratch.window,
+                    &scratch.lens,
+                    heap_tx.host_ctx(),
+                    &mut flat_args,
+                    vm_jit::LogicalCallDepth {
+                        current: initial_depth,
+                        limit: self.limits.max_depth,
+                    },
+                ),
+                initial_steps,
+            )
+        };
         let elapsed = started.map(|started| started.elapsed().as_nanos());
         // The pinned borrows are no longer needed once the native call returns.
         drop(flat_guards);
@@ -3657,7 +3959,7 @@ impl RegVm {
         // back) into the interpreter's counter, so resuming the interpreter continues
         // the single tick stream with no double-/under-count.
         if emit_step {
-            self.steps = jit_limits_cell_steps() as u64;
+            self.steps = native_steps.max(0) as u64;
         }
         if let Some(native) = self.native.as_mut()
             && let Some(elapsed) = elapsed
@@ -3746,9 +4048,37 @@ impl RegVm {
                     };
                     aggregate_liveouts.push((base + recipe.dst_reg, value));
                 }
+                // Native helpers mutate journaled VM-owned containers in place.
+                // Under a live-memory limit, measure that exact tentative graph
+                // before committing the journal. An over-limit result aborts and
+                // lets the interpreter replay the source operation; restore the
+                // diagnostic counters so the failed native attempt is invisible.
+                let live_memory_snapshot = live_memory_armed.then_some((
+                    self.live_memory_bytes,
+                    self.peak_live_memory_bytes,
+                    self.live_memory_dirty,
+                ));
+                if live_memory_armed {
+                    self.live_memory_dirty = true;
+                    if self.refresh_live_memory_usage().is_err() {
+                        if let Some((live, peak, dirty)) = live_memory_snapshot {
+                            self.live_memory_bytes = live;
+                            self.peak_live_memory_bytes = peak;
+                            self.live_memory_dirty = dirty;
+                        }
+                        heap_tx.abort();
+                        scratch.restore(self.native.as_mut());
+                        return false;
+                    }
+                }
                 let Some(writebacks) =
                     heap_tx.commit_scalar_with_writebacks(&scratch.heap_input_slots)
                 else {
+                    if let Some((live, peak, dirty)) = live_memory_snapshot {
+                        self.live_memory_bytes = live;
+                        self.peak_live_memory_bytes = peak;
+                        self.live_memory_dirty = dirty;
+                    }
                     heap_tx.abort();
                     scratch.restore(self.native.as_mut());
                     return false;
@@ -3767,7 +4097,7 @@ impl RegVm {
                 // interpreter's cumulative allocation total. (A bail takes the `_` arm below, which aborts the
                 // heap tx and reruns on the interpreter — discarding the native charges.)
                 if allocation_armed {
-                    self.allocated_bytes = jit_allocation_cell_allocated_bytes().max(0) as usize;
+                    self.allocated_bytes = jit_allocation_cell_allocated_bytes();
                 }
                 let mut scalar_writebacks: Vec<(usize, Vec<(usize, i64)>)> = Vec::new();
                 for field in scalar_fields.iter().filter(|field| field.writeback) {

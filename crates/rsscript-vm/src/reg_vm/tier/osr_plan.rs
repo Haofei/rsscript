@@ -17,14 +17,8 @@ pub(super) fn osr_committed_tail_calls(final_logical_depth: usize, physical_dept
 /// account for. In particular, a deadline-only request must not enter a native
 /// loop that has no generated deadline poll.
 #[cfg(feature = "native-jit")]
-pub(super) fn osr_execution_controls_unarmed(limits: &VmLimits) -> bool {
-    limits.step_budget.is_none()
-        && limits.cancel.is_none()
-        && limits.deadline.is_none()
-        && limits.allocation_budget.is_none()
-        && limits.live_memory_limit.is_none()
-        && limits.intrinsic_call_budget.is_none()
-        && limits.provider_call_budget.is_none()
+pub(super) fn osr_execution_controls_supported(limits: &VmLimits) -> bool {
+    limits.intrinsic_call_budget.is_none() && limits.provider_call_budget.is_none()
 }
 
 #[cfg(feature = "native-jit")]
@@ -288,13 +282,13 @@ mod tests {
     }
 
     #[test]
-    fn deadline_only_execution_cannot_enter_osr() {
+    fn generated_deadline_poll_allows_osr_dispatch() {
         let mut limits = VmLimits::unbounded_for_trusted_host();
-        assert!(osr_execution_controls_unarmed(&limits));
+        assert!(osr_execution_controls_supported(&limits));
 
         limits.deadline = Some(rsscript_operation::MonotonicDeadline::after(
             Duration::from_secs(1),
         ));
-        assert!(!osr_execution_controls_unarmed(&limits));
+        assert!(osr_execution_controls_supported(&limits));
     }
 }

@@ -56,6 +56,7 @@ def validate(document: dict) -> None:
         "controlled",
         "cpu_affinity",
         "cpu_governor",
+        "sample_order",
         "cases",
     }
     missing = sorted(required - document.keys())
@@ -65,6 +66,8 @@ def validate(document: dict) -> None:
         raise SystemExit("unexpected baseline schema")
     if not document["controlled"] or document["samples"] < 20:
         raise SystemExit("canonical baselines require controlled=true and at least 20 samples")
+    if document["sample_order"] != "alternating":
+        raise SystemExit("canonical baselines require alternating sample order")
     if len(document["commit"]) != 40 or any(c not in "0123456789abcdef" for c in document["commit"]):
         raise SystemExit("commit must be a full lowercase SHA")
     case_evidence = {
@@ -73,7 +76,16 @@ def validate(document: dict) -> None:
         "status",
         "interpreter_ns",
         "cold_e2e_native_ns",
+        "interpreter_samples_ns",
+        "cold_e2e_native_samples_ns",
+        "interpreter_mad_ns",
+        "cold_e2e_native_mad_ns",
+        "warm_native_instrumented_ns",
         "speedup",
+        "translation_nanos",
+        "validation_nanos",
+        "codegen_nanos",
+        "finalize_nanos",
         "compile_nanos",
         "resident_code_bytes",
         "native_calls",
@@ -92,6 +104,21 @@ def validate(document: dict) -> None:
                 f"baseline case {case.get('case', '<unknown>')} is missing evidence: "
                 + ", ".join(missing_case)
             )
+        for field in ("interpreter_samples_ns", "cold_e2e_native_samples_ns"):
+            samples = case[field]
+            if not isinstance(samples, list) or len(samples) != document["samples"]:
+                raise SystemExit(
+                    f"baseline case {case['case']} has {len(samples) if isinstance(samples, list) else 'invalid'} "
+                    f"{field} samples; expected {document['samples']}"
+                )
+            if any(not isinstance(sample, int) or sample < 0 for sample in samples):
+                raise SystemExit(
+                    f"baseline case {case['case']} contains invalid {field} values"
+                )
+        if sorted(case["interpreter_samples_ns"])[document["samples"] // 2] != case["interpreter_ns"]:
+            raise SystemExit(f"baseline case {case['case']} interpreter median does not match samples")
+        if sorted(case["cold_e2e_native_samples_ns"])[document["samples"] // 2] != case["cold_e2e_native_ns"]:
+            raise SystemExit(f"baseline case {case['case']} native median does not match samples")
 
 
 def main() -> None:

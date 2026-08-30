@@ -992,6 +992,14 @@ pub enum ExecutionEngineTelemetry {
         rejected_resident_bytes: u64,
         /// Executable address space reserved by all JIT arenas for this run.
         reserved_arena_bytes: u64,
+        /// Verified bytecode to in-process JIT IR translation time.
+        translation_nanos: u128,
+        /// Sealed JIT IR validation and bounded analysis time.
+        validation_nanos: u128,
+        /// Cranelift lowering and function-definition time.
+        codegen_nanos: u128,
+        /// Cranelift machine-code publication/finalization time.
+        finalize_nanos: u128,
         compile_nanos: u128,
         run_nanos: u128,
     },

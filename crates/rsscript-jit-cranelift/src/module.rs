@@ -206,6 +206,7 @@ struct CompiledFunc {
     /// Whether generated code reads and writes the non-null limits cell passed to
     /// the raw entry ABI. Ordinary safe calls must never enter such a function.
     requires_limits: bool,
+    limit_checks: LimitChecks,
     /// OSR-entry (OSR): when `true`, the function was compiled with
     /// [`compile_osr`](NativeModule::compile_osr). Its `args_ptr` is the
     /// interpreter's full `n_regs`-wide register *window* (indexed by register),
@@ -294,6 +295,18 @@ fn flat_proof_matches(
     compatible && expected_ptr == Some(&ptr) && expected_len == Some(&len)
 }
 
+fn copy_session_yield_registers(
+    function: &CompiledFunc,
+    session: &NativeCallSession,
+    window: &mut [i64],
+) -> bool {
+    if window.len() != function.n_regs || session.deopt_payload.len() < function.n_regs {
+        return false;
+    }
+    window.copy_from_slice(&session.deopt_payload[..function.n_regs]);
+    true
+}
+
 /// Owns the JIT-compiled machine code. Compiled functions live as long as the
 /// module, so callers keep this alive and invoke by [`CompiledId`].
 pub struct NativeModule {
@@ -308,10 +321,61 @@ pub struct NativeModule {
     /// Declared host-helper imports (see [`HostHelpers`]).
     imports: HostFuncs,
     limits: JitLimits,
-    call_active: std::cell::Cell<bool>,
-    deopt_payload: std::cell::RefCell<Vec<i64>>,
+    /// Cumulative successful compilation-phase timings. Validation is recorded by
+    /// the sealed validation entries; code generation excludes final publication.
+    phase_timings: std::cell::Cell<CompilePhaseTimings>,
     /// Keeps the shared hard-budget reservation alive for the arena's lifetime.
     _memory_reservation: ExecutableMemoryReservation,
+}
+
+/// Backend phase timings kept separate from VM-side bytecode translation. These
+/// counters are diagnostic only and are updated only at compile boundaries, never
+/// on a native execution hot path.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CompilePhaseTimings {
+    pub validation_nanos: u128,
+    pub codegen_nanos: u128,
+    pub finalize_nanos: u128,
+}
+
+impl CompilePhaseTimings {
+    fn add_validation(&mut self, nanos: u128) {
+        self.validation_nanos = self.validation_nanos.saturating_add(nanos);
+    }
+
+    fn add_codegen(&mut self, nanos: u128) {
+        self.codegen_nanos = self.codegen_nanos.saturating_add(nanos);
+    }
+
+    fn add_finalize(&mut self, nanos: u128) {
+        self.finalize_nanos = self.finalize_nanos.saturating_add(nanos);
+    }
+}
+
+/// Per-activation scratch owned by the caller rather than the executable-code
+/// container. A session may be reused for sequential calls; it never retains VM
+/// values, host contexts, or generated pointers after a call returns.
+///
+/// Keeping deopt/yield payloads here makes published machine code and its metadata
+/// independent from mutable execution state. It also lets a normal region yield
+/// copy its live-out words before the session is reused, without consulting
+/// "the most recent call" state on [`NativeModule`].
+#[derive(Default)]
+pub struct NativeCallSession {
+    deopt_payload: Vec<i64>,
+}
+
+impl NativeCallSession {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn ensure_payload(&mut self, words: usize) -> *mut i64 {
+        if self.deopt_payload.len() < words {
+            self.deopt_payload.resize(words, 0);
+        }
+        self.deopt_payload.as_mut_ptr()
+    }
 }
 
 /// Borrow-checked arguments for one native call.
@@ -341,6 +405,34 @@ pub struct RegionCallControls<'a> {
     pub initial_steps: i64,
     pub step_budget: Option<i64>,
     pub cancel: Option<&'a std::sync::atomic::AtomicBool>,
+}
+
+struct NativeCallInvocation<'a> {
+    args: &'a [i64],
+    lens: &'a [i64],
+    host_ctx: HostCtx,
+    logical_depth: LogicalCallDepth,
+    limits_ptr: *const i64,
+}
+
+/// Generated-code controls selected when a whole function or mixed-mode region
+/// is compiled. These booleans are part of the compiled version key: a caller
+/// must use a limits-aware entry exactly when any control is enabled.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct RegionCompileControls {
+    pub step: bool,
+    pub cancel: bool,
+    pub deadline: bool,
+}
+
+impl From<RegionCompileControls> for LimitChecks {
+    fn from(value: RegionCompileControls) -> Self {
+        Self {
+            step: value.step,
+            cancel: value.cancel,
+            deadline: value.deadline,
+        }
+    }
 }
 
 impl<'module, 'buffers> PreparedCall<'module, 'buffers> {
@@ -521,6 +613,35 @@ impl ForcedDeopt {
 }
 
 impl NativeModule {
+    /// Validate normal-entry IR against this module's structural work limits.
+    pub fn validate_region<'a>(
+        &self,
+        function: &'a JitFunction,
+    ) -> Result<ValidatedJitFunction<'a>, JitError> {
+        let started = std::time::Instant::now();
+        let result = ValidatedJitFunction::with_limits(function, &self.limits);
+        let mut timings = self.phase_timings.get();
+        timings.add_validation(started.elapsed().as_nanos());
+        self.phase_timings.set(timings);
+        result
+    }
+
+    /// Validate window-entry IR against this module's structural work limits.
+    pub fn validate_osr_region<'a>(
+        &self,
+        function: &'a JitFunction,
+    ) -> Result<ValidatedJitFunction<'a>, JitError> {
+        let started = std::time::Instant::now();
+        let result = ValidatedJitFunction::for_osr_with_limits(function, &self.limits);
+        let mut timings = self.phase_timings.get();
+        timings.add_validation(started.elapsed().as_nanos());
+        self.phase_timings.set(timings);
+        result
+    }
+
+    pub fn compile_phase_timings(&self) -> CompilePhaseTimings {
+        self.phase_timings.get()
+    }
     #[cfg(test)]
     pub(crate) fn compiled_function_count(&self) -> usize {
         self.funcs.len()
@@ -696,15 +817,14 @@ impl NativeModule {
             id: NEXT_MODULE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             imports,
             limits,
-            call_active: std::cell::Cell::new(false),
-            deopt_payload: std::cell::RefCell::new(Vec::new()),
+            phase_timings: std::cell::Cell::new(CompilePhaseTimings::default()),
             _memory_reservation: memory_reservation,
         })
     }
 
     /// Compile `function` to native code and return a handle to call it.
     pub fn compile(&mut self, function: &JitFunction) -> Result<CompiledId, JitError> {
-        let validated = ValidatedJitFunction::with_limits(function, &self.limits)?;
+        let validated = self.validate_region(function)?;
         self.compile_validated(&validated)
     }
 
@@ -725,6 +845,30 @@ impl NativeModule {
         self.compile_inner(function, None, None, LimitChecks::default(), false)
     }
 
+    /// Compile a normal-entry region with generated source-step, cancellation,
+    /// and/or monotonic-deadline checks.
+    pub fn compile_with_controls(
+        &mut self,
+        function: &JitFunction,
+        controls: RegionCompileControls,
+    ) -> Result<CompiledId, JitError> {
+        let validated = self.validate_region(function)?;
+        self.compile_inner(&validated, None, None, controls.into(), false)
+    }
+
+    pub fn compile_validated_with_controls(
+        &mut self,
+        function: &ValidatedJitFunction<'_>,
+        controls: RegionCompileControls,
+    ) -> Result<CompiledId, JitError> {
+        if function.mode() != validated::ValidationMode::Standard {
+            return Err(JitError::invalid_ir(
+                "OSR-validated IR cannot use the normal compile entry",
+            ));
+        }
+        self.compile_inner(function, None, None, controls.into(), false)
+    }
+
     /// Compile a function that may become the target of a native-to-native call.
     /// Eligible infallible scalar leaves use one frame-free canonical body plus a
     /// small stable-frame adapter, avoiding a second full function lowering.
@@ -732,7 +876,7 @@ impl NativeModule {
         &mut self,
         function: &JitFunction,
     ) -> Result<CompiledId, JitError> {
-        let validated = ValidatedJitFunction::with_limits(function, &self.limits)?;
+        let validated = self.validate_region(function)?;
         self.compile_inner(&validated, None, None, LimitChecks::default(), true)
     }
 
@@ -751,7 +895,7 @@ impl NativeModule {
         function: &JitFunction,
         force_site: u32,
     ) -> Result<CompiledId, JitError> {
-        let validated = ValidatedJitFunction::with_limits(function, &self.limits)?;
+        let validated = self.validate_region(function)?;
         self.compile_inner(
             &validated,
             Some(ForcedDeopt::Site(force_site)),
@@ -770,7 +914,7 @@ impl NativeModule {
         &mut self,
         function: &JitFunction,
     ) -> Result<CompiledId, JitError> {
-        let validated = ValidatedJitFunction::with_limits(function, &self.limits)?;
+        let validated = self.validate_region(function)?;
         self.compile_inner(
             &validated,
             Some(ForcedDeopt::All),
@@ -812,7 +956,7 @@ impl NativeModule {
         step_limit: bool,
         cancel_armed: bool,
     ) -> Result<CompiledId, JitError> {
-        let validated = ValidatedJitFunction::for_osr_with_limits(function, &self.limits)?;
+        let validated = self.validate_osr_region(function)?;
         self.compile_inner(
             &validated,
             None,
@@ -820,9 +964,36 @@ impl NativeModule {
             LimitChecks {
                 step: step_limit,
                 cancel: cancel_armed,
+                deadline: false,
             },
             false,
         )
+    }
+
+    /// Limits-aware OSR/continuation compile entry. The legacy `compile_osr`
+    /// remains as a compatibility wrapper for existing callers.
+    pub fn compile_osr_with_controls(
+        &mut self,
+        function: &JitFunction,
+        header_ip: u32,
+        controls: RegionCompileControls,
+    ) -> Result<CompiledId, JitError> {
+        let validated = self.validate_osr_region(function)?;
+        self.compile_inner(&validated, None, Some(header_ip), controls.into(), false)
+    }
+
+    pub fn compile_validated_osr_with_controls(
+        &mut self,
+        function: &ValidatedJitFunction<'_>,
+        header_ip: u32,
+        controls: RegionCompileControls,
+    ) -> Result<CompiledId, JitError> {
+        if function.mode() != validated::ValidationMode::Osr {
+            return Err(JitError::invalid_ir(
+                "normal-entry validated IR cannot use the OSR compile entry",
+            ));
+        }
+        self.compile_inner(function, None, Some(header_ip), controls.into(), false)
     }
 
     fn compile_inner(
@@ -833,6 +1004,7 @@ impl NativeModule {
         limit_checks: LimitChecks,
         emit_direct_scalar_entry: bool,
     ) -> Result<CompiledId, JitError> {
+        let codegen_started = std::time::Instant::now();
         let function = validated.function();
         debug_assert_eq!(
             validated.mode() == validated::ValidationMode::Osr,
@@ -999,9 +1171,16 @@ impl NativeModule {
                     codegen.direct_list_bounds_checks_elided,
                 )
             };
+        let mut timings = self.phase_timings.get();
+        timings.add_codegen(codegen_started.elapsed().as_nanos());
+        self.phase_timings.set(timings);
+        let finalize_started = std::time::Instant::now();
         self.module
             .finalize_definitions()
             .map_err(|e| err("finalize", e))?;
+        let mut timings = self.phase_timings.get();
+        timings.add_finalize(finalize_started.elapsed().as_nanos());
+        self.phase_timings.set(timings);
         let code = self.module.get_finalized_function(id);
         // SAFETY: `code` points at the machine code we just emitted with exactly
         // the `CompiledAbi` signature declared above.
@@ -1022,6 +1201,7 @@ impl NativeModule {
             deopt_map,
             direct_list_bounds_checks_elided: bounds_checks_elided,
             requires_limits: limit_checks.any(),
+            limit_checks,
             osr: osr_header.is_some(),
             returns_handle,
             param_types: function.reg_types[..function.n_params as usize].to_vec(),
@@ -1233,6 +1413,7 @@ impl NativeModule {
                 n_regs: function.n_regs as usize,
                 deopt_map: std::mem::take(&mut deopt_maps[i]),
                 requires_limits: false,
+                limit_checks: LimitChecks::default(),
                 osr: false,
                 returns_handle: false,
                 param_types: function.reg_types[..function.n_params as usize].to_vec(),
@@ -1432,21 +1613,31 @@ impl NativeModule {
         step_budget: Option<i64>,
         cancel: Option<&std::sync::atomic::AtomicBool>,
     ) -> (NativeOutcome, i64) {
+        let Some(func) = self.funcs.get(id.index).filter(|_| id.module_id == self.id) else {
+            return (anonymous_deopt(), initial_steps);
+        };
+        if func.limit_checks.cancel && cancel.is_none() {
+            return (anonymous_deopt(), initial_steps);
+        }
+        let mut session = NativeCallSession::new();
         let mut limits = [
             initial_steps,
             step_budget.unwrap_or(i64::MAX),
             cancel.map_or(0, |flag| flag as *const _ as i64),
         ];
         let outcome = self.call_inner(
+            &mut session,
             id,
-            args,
-            lens,
-            0,
-            LogicalCallDepth {
-                current: 0,
-                limit: usize::MAX,
+            NativeCallInvocation {
+                args,
+                lens,
+                host_ctx: 0,
+                logical_depth: LogicalCallDepth {
+                    current: 0,
+                    limit: usize::MAX,
+                },
+                limits_ptr: limits.as_mut_ptr(),
             },
-            limits.as_mut_ptr(),
         );
         (outcome, limits[0])
     }
@@ -1457,7 +1648,24 @@ impl NativeModule {
     pub fn call_with_host_ctx_step_cancel(
         &self,
         id: CompiledId,
-        args: &[i64],
+        args: &mut [i64],
+        lens: &[i64],
+        controls: RegionCallControls<'_>,
+    ) -> (NativeOutcome, i64) {
+        self.call_with_host_ctx_step_cancel_in_session(
+            &mut NativeCallSession::new(),
+            id,
+            args,
+            lens,
+            controls,
+        )
+    }
+
+    pub fn call_with_host_ctx_step_cancel_in_session(
+        &self,
+        session: &mut NativeCallSession,
+        id: CompiledId,
+        args: &mut [i64],
         lens: &[i64],
         controls: RegionCallControls<'_>,
     ) -> (NativeOutcome, i64) {
@@ -1467,19 +1675,30 @@ impl NativeModule {
         if func.reg_types.iter().any(|ty| is_flat_type(*ty)) {
             return (anonymous_deopt(), controls.initial_steps);
         }
+        if func.limit_checks.cancel && controls.cancel.is_none() {
+            return (anonymous_deopt(), controls.initial_steps);
+        }
         let mut limits = [
             controls.initial_steps,
             controls.step_budget.unwrap_or(i64::MAX),
             controls.cancel.map_or(0, |flag| flag as *const _ as i64),
         ];
         let outcome = self.call_inner(
+            session,
             id,
-            args,
-            lens,
-            controls.host_ctx,
-            controls.logical_depth,
-            limits.as_mut_ptr(),
+            NativeCallInvocation {
+                args,
+                lens,
+                host_ctx: controls.host_ctx,
+                logical_depth: controls.logical_depth,
+                limits_ptr: limits.as_mut_ptr(),
+            },
         );
+        if matches!(outcome, NativeOutcome::Yield { .. })
+            && !copy_session_yield_registers(func, session, args)
+        {
+            return (anonymous_deopt(), limits[0]);
+        }
         (outcome, limits[0])
     }
 
@@ -1504,15 +1723,18 @@ impl NativeModule {
         limits_ptr: *const i64,
     ) -> NativeOutcome {
         self.call_inner(
+            &mut NativeCallSession::new(),
             id,
-            args,
-            lens,
-            host_ctx,
-            LogicalCallDepth {
-                current: 0,
-                limit: usize::MAX,
+            NativeCallInvocation {
+                args,
+                lens,
+                host_ctx,
+                logical_depth: LogicalCallDepth {
+                    current: 0,
+                    limit: usize::MAX,
+                },
+                limits_ptr,
             },
-            limits_ptr,
         )
     }
 
@@ -1685,7 +1907,17 @@ impl NativeModule {
                 mutable_proofs_used[proof_index] = true;
             }
         }
-        self.call_inner(id, args, lens, host_ctx, logical_depth, std::ptr::null())
+        self.call_inner(
+            &mut NativeCallSession::new(),
+            id,
+            NativeCallInvocation {
+                args,
+                lens,
+                host_ctx,
+                logical_depth,
+                limits_ptr: std::ptr::null(),
+            },
+        )
     }
 
     /// Linear-time safe flat-buffer entry used by the VM's audited marshaller.
@@ -1730,18 +1962,113 @@ impl NativeModule {
         if proof_cursor != flat_args.len() {
             return anonymous_deopt();
         }
-        self.call_inner(id, args, lens, host_ctx, logical_depth, std::ptr::null())
+        self.call_inner(
+            &mut NativeCallSession::new(),
+            id,
+            NativeCallInvocation {
+                args,
+                lens,
+                host_ctx,
+                logical_depth,
+                limits_ptr: std::ptr::null(),
+            },
+        )
     }
 
-    fn call_inner(
+    /// Limits-aware counterpart of [`call_with_indexed_flat_args_at_depth`]. The
+    /// indexed borrow proof remains linear-time; source steps and preemption state
+    /// are carried by a call-owned limits cell.
+    pub fn call_with_indexed_flat_args_and_controls_at_depth(
         &self,
         id: CompiledId,
         args: &[i64],
         lens: &[i64],
-        host_ctx: HostCtx,
-        logical_depth: LogicalCallDepth,
-        limits_ptr: *const i64,
+        flat_args: &mut [IndexedFlatBufferArg<'_>],
+        controls: RegionCallControls<'_>,
+    ) -> (NativeOutcome, i64) {
+        self.call_with_indexed_flat_args_and_controls_in_session_at_depth(
+            &mut NativeCallSession::new(),
+            id,
+            args,
+            lens,
+            flat_args,
+            controls,
+        )
+    }
+
+    pub fn call_with_indexed_flat_args_and_controls_in_session_at_depth(
+        &self,
+        session: &mut NativeCallSession,
+        id: CompiledId,
+        args: &[i64],
+        lens: &[i64],
+        flat_args: &mut [IndexedFlatBufferArg<'_>],
+        controls: RegionCallControls<'_>,
+    ) -> (NativeOutcome, i64) {
+        let Some(func) = self.funcs.get(id.index).filter(|_| id.module_id == self.id) else {
+            return (anonymous_deopt(), controls.initial_steps);
+        };
+        if !func.requires_limits {
+            return (anonymous_deopt(), controls.initial_steps);
+        }
+        if func.limit_checks.cancel && controls.cancel.is_none() {
+            return (anonymous_deopt(), controls.initial_steps);
+        }
+        let entry_types = if func.osr {
+            &func.reg_types
+        } else {
+            &func.param_types
+        };
+        let mut proof_cursor = 0usize;
+        for (index, ty) in entry_types.iter().copied().enumerate() {
+            if !is_flat_type(ty) {
+                continue;
+            }
+            let Some(proof) = flat_args.get_mut(proof_cursor) else {
+                return (anonymous_deopt(), controls.initial_steps);
+            };
+            if proof.index != index
+                || !flat_proof_matches(&mut proof.value, ty, args.get(index), lens.get(index))
+            {
+                return (anonymous_deopt(), controls.initial_steps);
+            }
+            proof_cursor += 1;
+        }
+        if proof_cursor != flat_args.len() {
+            return (anonymous_deopt(), controls.initial_steps);
+        }
+        let mut limits = [
+            controls.initial_steps,
+            controls.step_budget.unwrap_or(i64::MAX),
+            controls.cancel.map_or(0, |flag| flag as *const _ as i64),
+        ];
+        let outcome = self.call_inner(
+            session,
+            id,
+            NativeCallInvocation {
+                args,
+                lens,
+                host_ctx: controls.host_ctx,
+                logical_depth: controls.logical_depth,
+                limits_ptr: limits.as_mut_ptr(),
+            },
+        );
+        (outcome, limits[0])
+    }
+
+    fn call_inner(
+        &self,
+        session: &mut NativeCallSession,
+        id: CompiledId,
+        invocation: NativeCallInvocation<'_>,
     ) -> NativeOutcome {
+        let NativeCallInvocation {
+            args,
+            lens,
+            host_ctx,
+            logical_depth,
+            limits_ptr,
+        } = invocation;
         // Reject an id from a different module and an out-of-range index: either
         // would invoke the wrong (or no) function. Falling back is always safe.
         if id.module_id != self.id {
@@ -1789,7 +2116,7 @@ impl NativeModule {
                 decline: None,
             };
         }
-        let Some(_call_guard) = TopLevelCallGuard::enter(&self.call_active) else {
+        let Some(_call_guard) = TopLevelCallGuard::enter() else {
             return reentrant_decline();
         };
         let f = func.f;
@@ -1799,123 +2126,92 @@ impl NativeModule {
         let mut bail = 0_u8;
         let mut safepoint = 0_i64;
         {
-            let payload = &self.deopt_payload;
-            {
-                // Reused per-thread scratch buffer for the deopt payload: a valid
-                // pointer for every call, but only written on a bail edge. Grow-only
-                // (no per-call zeroing): the success hot path neither allocates nor
-                // memsets, and a bail only ever reads slots the generated code just
-                // wrote (the live-register set), so stale words in other slots are
-                // never observed.
-                let mut buf = payload.borrow_mut();
-                if buf.len() < deopt_map.payload_words {
-                    buf.resize(deopt_map.payload_words, 0);
-                }
-                let payload_ptr = buf.as_mut_ptr();
-                let mut helper_context = HostCallContext {
-                    user: host_ctx,
-                    bail: &mut bail,
-                };
-                // SAFETY: `f` was produced by `compile` with the `CompiledAbi`
-                // signature; it reads `args.len()` i64s from `args.as_ptr()` and
-                // `lens.as_ptr()`, writes one i64 to `&mut out`, and only ever loads
-                // (never stores) the `u8` at `bail_ptr` — this thread's `BAIL_FLAG`
-                // cell, valid for the call. It only ever *stores* to the `i64` at
-                // `safepoint_ptr` (the symmetric write-direction-opposite of
-                // `bail_ptr`) — this thread's `SAFEPOINT_ID` cell, also valid for the
-                // call, and only on a bail edge (the hot path never touches it).
-                // `payload_ptr` addresses this thread's `DEOPT_PAYLOAD` buffer, sized
-                // to `deopt_map.payload_words` above and held borrowed (so it stays
-                // valid and immovable) for the whole call; the generated code only
-                // ever *stores* live register words and copied child-frame payloads
-                // into it, and only on a bail edge (the hot path never touches it).
-                // Any flat-array data pointer in `args` is read in-bounds (against
-                // the matching `lens` entry) per the caller's borrow-protocol
-                // obligation documented above. The generated code never retains any
-                // of the pointers.
-                let mut frame = JitCallFrame {
-                    abi_version: JIT_CALL_ABI_VERSION,
-                    frame_size: CALL_FRAME_SIZE,
-                    flags: 0,
-                    args: args.as_ptr(),
-                    lens: lens.as_ptr(),
-                    arg_count: args.len(),
-                    host_ctx: (&mut helper_context as *mut HostCallContext) as HostCtx,
-                    limits: limits_ptr,
-                    result: &mut out,
-                    bail: &mut bail,
-                    safepoint: &mut safepoint,
-                    deopt: payload_ptr,
-                    native_depth: 0,
-                    logical_depth: logical_depth.current,
-                    logical_depth_limit: logical_depth.limit,
-                };
-                // SAFETY: `f` was finalized from the one-pointer `CompiledAbi`
-                // signature and every pointer in `frame` remains live for the call.
-                let completed = unsafe { f(&mut frame) };
-                if completed == JitStatus::AbiMismatch {
-                    abi_mismatch_decline()
-                } else if completed == JitStatus::Completed && bail == 0 {
-                    // Success: leave the payload buffer untouched, build no Vec.
-                    // Heap-result return ABI: a Handle-returning function's
-                    // `out` is an output-table handle, signalled distinctly so the
-                    // host materializes a heap value from it. The scalar path is
-                    // byte-for-byte unchanged. the transactional fallback contract: this branch runs ONLY on a
-                    // clean completion (`completed != 0 && bail.get() == 0`); any
-                    // bail takes the `else` (`Deopt`) arm, so no heap result is
-                    // ever reported on a bailed attempt.
-                    if returns_handle {
-                        NativeOutcome::CompletedHandle(out)
-                    } else {
-                        NativeOutcome::Completed(out)
-                    }
-                } else if completed == JitStatus::Yielded && bail == 0 {
-                    NativeOutcome::Yield {
-                        exit_id: u32::try_from(out).unwrap_or(u32::MAX),
-                    }
+            // Reused per-thread scratch buffer for the deopt payload: a valid
+            // pointer for every call, but only written on a bail edge. Grow-only
+            // (no per-call zeroing): the success hot path neither allocates nor
+            // memsets, and a bail only ever reads slots the generated code just
+            // wrote (the live-register set), so stale words in other slots are
+            // never observed.
+            let payload_ptr = session.ensure_payload(deopt_map.payload_words);
+            let mut helper_context = HostCallContext {
+                user: host_ctx,
+                bail: &mut bail,
+            };
+            // SAFETY: `f` was produced by `compile` with the `CompiledAbi`
+            // signature; it reads `args.len()` i64s from `args.as_ptr()` and
+            // `lens.as_ptr()`, writes one i64 to `&mut out`, and only ever loads
+            // (never stores) the `u8` at `bail_ptr` — this thread's `BAIL_FLAG`
+            // cell, valid for the call. It only ever *stores* to the `i64` at
+            // `safepoint_ptr` (the symmetric write-direction-opposite of
+            // `bail_ptr`) — this thread's `SAFEPOINT_ID` cell, also valid for the
+            // call, and only on a bail edge (the hot path never touches it).
+            // `payload_ptr` addresses this thread's `DEOPT_PAYLOAD` buffer, sized
+            // to `deopt_map.payload_words` above and held borrowed (so it stays
+            // valid and immovable) for the whole call; the generated code only
+            // ever *stores* live register words and copied child-frame payloads
+            // into it, and only on a bail edge (the hot path never touches it).
+            // Any flat-array data pointer in `args` is read in-bounds (against
+            // the matching `lens` entry) per the caller's borrow-protocol
+            // obligation documented above. The generated code never retains any
+            // of the pointers.
+            let mut frame = JitCallFrame {
+                abi_version: JIT_CALL_ABI_VERSION,
+                frame_size: CALL_FRAME_SIZE,
+                flags: 0,
+                args: args.as_ptr(),
+                lens: lens.as_ptr(),
+                arg_count: args.len(),
+                host_ctx: (&mut helper_context as *mut HostCallContext) as HostCtx,
+                limits: limits_ptr,
+                result: &mut out,
+                bail: &mut bail,
+                safepoint: &mut safepoint,
+                deopt: payload_ptr,
+                native_depth: 0,
+                logical_depth: logical_depth.current,
+                logical_depth_limit: logical_depth.limit,
+            };
+            // SAFETY: `f` was finalized from the one-pointer `CompiledAbi`
+            // signature and every pointer in `frame` remains live for the call.
+            let completed = unsafe { f(&mut frame) };
+            if completed == JitStatus::AbiMismatch {
+                abi_mismatch_decline()
+            } else if completed == JitStatus::Completed && bail == 0 {
+                // Success: leave the payload buffer untouched, build no Vec.
+                // Heap-result return ABI: a Handle-returning function's
+                // `out` is an output-table handle, signalled distinctly so the
+                // host materializes a heap value from it. The scalar path is
+                // byte-for-byte unchanged. the transactional fallback contract: this branch runs ONLY on a
+                // clean completion (`completed != 0 && bail.get() == 0`); any
+                // bail takes the `else` (`Deopt`) arm, so no heap result is
+                // ever reported on a bailed attempt.
+                if returns_handle {
+                    NativeOutcome::CompletedHandle(out)
                 } else {
-                    let safepoint_id = SafepointId(safepoint as u32);
-                    // Decode the captured live registers via the deopt state-map state-map.
-                    // A real bail site (id >= 1) names a `sites[id - 1]` entry; an
-                    // anonymous bail (id 0, e.g. fell off the end) has no site, so
-                    // `live` is empty.
-                    let frame = self.decode_deopt_frame(id, safepoint_id, 0, &buf);
-                    NativeOutcome::Deopt {
-                        safepoint_id,
-                        live: frame
-                            .as_ref()
-                            .map_or_else(Vec::new, |frame| frame.live.clone()),
-                        child: frame.and_then(|frame| frame.child),
-                        logical_depth: func.osr.then_some(out.max(0) as usize),
-                        decline: None,
-                    }
+                    NativeOutcome::Completed(out)
+                }
+            } else if completed == JitStatus::Yielded && bail == 0 {
+                NativeOutcome::Yield {
+                    exit_id: u32::try_from(out).unwrap_or(u32::MAX),
+                }
+            } else {
+                let safepoint_id = SafepointId(safepoint as u32);
+                // Decode the captured live registers via the deopt state-map state-map.
+                // A real bail site (id >= 1) names a `sites[id - 1]` entry; an
+                // anonymous bail (id 0, e.g. fell off the end) has no site, so
+                // `live` is empty.
+                let frame = self.decode_deopt_frame(id, safepoint_id, 0, &session.deopt_payload);
+                NativeOutcome::Deopt {
+                    safepoint_id,
+                    live: frame
+                        .as_ref()
+                        .map_or_else(Vec::new, |frame| frame.live.clone()),
+                    child: frame.and_then(|frame| frame.child),
+                    logical_depth: func.osr.then_some(out.max(0) as usize),
+                    decline: None,
                 }
             }
         }
-    }
-
-    /// Copy statically-declared live-out slots from the most recent planned
-    /// region yield into its compact call window without allocating a deopt frame.
-    pub fn copy_yield_registers(
-        &self,
-        id: CompiledId,
-        live_regs: &[u32],
-        window: &mut [i64],
-    ) -> bool {
-        let Some(func) = self.funcs.get(id.index).filter(|_| id.module_id == self.id) else {
-            return false;
-        };
-        if window.len() != func.n_regs || live_regs.iter().any(|reg| *reg as usize >= func.n_regs) {
-            return false;
-        }
-        let payload = self.deopt_payload.borrow();
-        if payload.len() < func.n_regs {
-            return false;
-        }
-        for &reg in live_regs {
-            window[reg as usize] = payload[reg as usize];
-        }
-        true
     }
 
     /// The per-function [`DeoptMap`] computed at compile time, or `None` if `id`
@@ -1940,17 +2236,24 @@ impl NativeModule {
     }
 }
 
-struct TopLevelCallGuard<'a>(&'a std::cell::Cell<bool>);
+thread_local! {
+    /// Re-entry is a property of the current activation, not of the code
+    /// container. Keep the guard thread-local so [`NativeModule`] owns no mutable
+    /// call state and nested calls through a host helper still decline cleanly.
+    static NATIVE_CALL_ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
-impl<'a> TopLevelCallGuard<'a> {
-    fn enter(active: &'a std::cell::Cell<bool>) -> Option<Self> {
-        (!active.replace(true)).then_some(Self(active))
+struct TopLevelCallGuard;
+
+impl TopLevelCallGuard {
+    fn enter() -> Option<Self> {
+        NATIVE_CALL_ACTIVE.with(|active| (!active.replace(true)).then_some(Self))
     }
 }
 
-impl Drop for TopLevelCallGuard<'_> {
+impl Drop for TopLevelCallGuard {
     fn drop(&mut self) {
-        self.0.set(false);
+        NATIVE_CALL_ACTIVE.with(|active| active.set(false));
     }
 }
 

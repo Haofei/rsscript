@@ -78,6 +78,11 @@ def compare(
                 "cold_e2e_native_ns",
                 runtime_regression_percent,
             ),
+            ("warm_native_instrumented_ns", runtime_regression_percent),
+            ("translation_nanos", compile_regression_percent),
+            ("validation_nanos", compile_regression_percent),
+            ("codegen_nanos", compile_regression_percent),
+            ("finalize_nanos", compile_regression_percent),
             ("compile_nanos", compile_regression_percent),
             ("resident_code_bytes", code_regression_percent),
         )

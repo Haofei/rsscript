@@ -2,6 +2,11 @@
 /// just forwards it from [`NativeModule::call`] to every imported host helper.
 pub type HostCtx = i64;
 
+/// Call-scoped monotonic deadline poll supplied by the embedding VM. Returning a
+/// non-zero value requests a normal native bail so the interpreter can produce
+/// its canonical deadline error.
+pub type DeadlineExpiredFn = extern "C" fn(HostCtx) -> i64;
+
 pub const JIT_CALL_ABI_VERSION: u32 = 3;
 
 /// Single versioned argument passed to generated functions. Keeping the machine
@@ -326,6 +331,7 @@ pub type DequePopBackFloatFn = extern "C" fn(HostCtx, i64) -> f64;
 /// that Cranelift's symbol table wants happens in [`NativeModule::new`].
 #[derive(Clone, Copy)]
 pub struct HostHelpers {
+    pub deadline_expired: DeadlineExpiredFn,
     pub field_int: FieldIntFn,
     pub field_set_int: FieldSetIntFn,
     pub field_set_handle: FieldSetHandleFn,
@@ -643,6 +649,13 @@ macro_rules! host_helpers {
 }
 
 host_helpers! {
+    DeadlineExpired => {
+        field: deadline_expired,
+        symbol: "rss_jit_deadline_expired",
+        args: [],
+        result: HostResult::Exact(JitValueType::Bool),
+        failure: HostFailureMode::CannotFail,
+    },
     FieldInt => {
         field: field_int,
         symbol: "rss_jit_field_int",

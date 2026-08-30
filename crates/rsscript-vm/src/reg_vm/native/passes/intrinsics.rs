@@ -47,7 +47,7 @@ impl NativeTy {
 }
 
 #[cfg(feature = "native-jit")]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(in crate::reg_vm) struct NativeHostIntrinsic {
     pub(in crate::reg_vm) helper: vm_jit::HostHelper,
     pub(in crate::reg_vm) result_ty: NativeTy,
@@ -99,10 +99,7 @@ pub(in crate::reg_vm) fn native_host_intrinsic(
 /// type inference, and lowering in agreement from one source of truth.
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn native_inline_convert_intrinsic(intrinsic: RegIntrinsic) -> Option<usize> {
-    match intrinsic {
-        RegIntrinsic::IntToFloat | RegIntrinsic::MathFloor | RegIntrinsic::MathCeil => Some(1),
-        _ => None,
-    }
+    intrinsic_descriptor(intrinsic).native_inline_arity
 }
 
 #[cfg(feature = "native-jit")]
@@ -110,113 +107,13 @@ pub(in crate::reg_vm) fn native_host_typed_intrinsic(
     intrinsic: RegIntrinsic,
     type_arg: Option<&str>,
 ) -> Option<NativeHostIntrinsic> {
-    match intrinsic {
-        RegIntrinsic::ListNew if type_arg == Some("Int") => Some(NativeHostIntrinsic {
+    if matches!(intrinsic, RegIntrinsic::ListNew) && type_arg == Some("Int") {
+        return Some(NativeHostIntrinsic {
             helper: vm_jit::HostHelper::ListNewInt,
             result_ty: NativeTy::Handle,
-        }),
-        RegIntrinsic::StringFromInt => Some(NativeHostIntrinsic {
-            helper: vm_jit::HostHelper::StringFromInt,
-            result_ty: NativeTy::Handle,
-        }),
-        RegIntrinsic::StringLen => Some(NativeHostIntrinsic {
-            helper: vm_jit::HostHelper::StringLen,
-            result_ty: NativeTy::Int,
-        }),
-        RegIntrinsic::StringSlice => Some(NativeHostIntrinsic {
-            helper: vm_jit::HostHelper::StringSlice,
-            result_ty: NativeTy::Handle,
-        }),
-        RegIntrinsic::StringPadLeft => Some(NativeHostIntrinsic {
-            helper: vm_jit::HostHelper::StringPadLeft,
-            result_ty: NativeTy::Handle,
-        }),
-        RegIntrinsic::StringSplit => Some(NativeHostIntrinsic {
-            helper: vm_jit::HostHelper::StringSplit,
-            result_ty: NativeTy::Handle,
-        }),
-        RegIntrinsic::StringStartsWith => Some(NativeHostIntrinsic {
-            helper: vm_jit::HostHelper::StringStartsWith,
-            result_ty: NativeTy::Bool,
-        }),
-        RegIntrinsic::ListIsEmpty => Some(NativeHostIntrinsic {
-            helper: vm_jit::HostHelper::ListIsEmpty,
-            result_ty: NativeTy::Bool,
-        }),
-        RegIntrinsic::JsonParseOk => Some(NativeHostIntrinsic {
-            helper: vm_jit::HostHelper::JsonParse,
-            result_ty: NativeTy::Handle,
-        }),
-        RegIntrinsic::JsonFieldOk => Some(NativeHostIntrinsic {
-            helper: vm_jit::HostHelper::JsonField,
-            result_ty: NativeTy::Handle,
-        }),
-        RegIntrinsic::JsonFieldIntOk => Some(NativeHostIntrinsic {
-            helper: vm_jit::HostHelper::JsonFieldInt,
-            result_ty: NativeTy::Int,
-        }),
-        RegIntrinsic::BytesLen => Some(NativeHostIntrinsic {
-            helper: vm_jit::HostHelper::BytesLen,
-            result_ty: NativeTy::Int,
-        }),
-        RegIntrinsic::BytesSlice => Some(NativeHostIntrinsic {
-            helper: vm_jit::HostHelper::BytesSlice,
-            result_ty: NativeTy::Handle,
-        }),
-        RegIntrinsic::SetContains => Some(NativeHostIntrinsic {
-            helper: vm_jit::HostHelper::MapContainsInt,
-            result_ty: NativeTy::Bool,
-        }),
-        RegIntrinsic::MapIsEmpty => Some(NativeHostIntrinsic {
-            helper: vm_jit::HostHelper::MapIsEmpty,
-            result_ty: NativeTy::Bool,
-        }),
-        RegIntrinsic::MapLen => Some(NativeHostIntrinsic {
-            helper: vm_jit::HostHelper::MapLen,
-            result_ty: NativeTy::Int,
-        }),
-        RegIntrinsic::SetIsEmpty => Some(NativeHostIntrinsic {
-            helper: vm_jit::HostHelper::SetIsEmpty,
-            result_ty: NativeTy::Bool,
-        }),
-        RegIntrinsic::SetLen => Some(NativeHostIntrinsic {
-            helper: vm_jit::HostHelper::SetLen,
-            result_ty: NativeTy::Int,
-        }),
-        RegIntrinsic::SortedSetContains => Some(NativeHostIntrinsic {
-            helper: vm_jit::HostHelper::SortedSetContainsInt,
-            result_ty: NativeTy::Bool,
-        }),
-        RegIntrinsic::SortedSetIsEmpty => Some(NativeHostIntrinsic {
-            helper: vm_jit::HostHelper::SortedSetIsEmpty,
-            result_ty: NativeTy::Bool,
-        }),
-        RegIntrinsic::SortedSetLen => Some(NativeHostIntrinsic {
-            helper: vm_jit::HostHelper::ListLen,
-            result_ty: NativeTy::Int,
-        }),
-        RegIntrinsic::SortedMapContainsKey => Some(NativeHostIntrinsic {
-            helper: vm_jit::HostHelper::SortedMapContainsKeyInt,
-            result_ty: NativeTy::Bool,
-        }),
-        RegIntrinsic::SortedMapIsEmpty => Some(NativeHostIntrinsic {
-            helper: vm_jit::HostHelper::SortedMapIsEmpty,
-            result_ty: NativeTy::Bool,
-        }),
-        RegIntrinsic::SortedMapLen => Some(NativeHostIntrinsic {
-            helper: vm_jit::HostHelper::SortedMapLen,
-            result_ty: NativeTy::Int,
-        }),
-        RegIntrinsic::DequeLen => Some(NativeHostIntrinsic {
-            helper: vm_jit::HostHelper::DequeLen,
-            result_ty: NativeTy::Int,
-        }),
-        RegIntrinsic::DequeIsEmpty => Some(NativeHostIntrinsic {
-            helper: vm_jit::HostHelper::DequeIsEmpty,
-            result_ty: NativeTy::Bool,
-        }),
-        _ => None,
+        });
     }
+    intrinsic_descriptor(intrinsic).native_host
 }
 
 #[cfg(feature = "native-jit")]

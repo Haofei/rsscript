@@ -4,23 +4,34 @@ The native JIT is an optional accelerator for trusted, in-process execution. It
 does not add an isolation boundary and never changes Provider authority.
 
 The supported `native-jit` feature is intentionally a bounded feature surface.
-Whole-function and transformed OSR entry still decline when execution controls
-whose source costs they cannot reproduce are armed. Scalar continuation regions,
-however, have a one-to-one source instruction map: acyclic regions account steps
-exactly and poll host cancellation. Closed native loops are admitted for trusted
-unbounded execution but remain on the interpreter when step or deadline limits are
-armed. Because these regions cannot allocate or call
-intrinsics/Providers, the surrounding VM barriers continue to own those budgets,
-allowing the default bounded profile to accelerate scalar work safely. Armed step
-budgets conservatively keep loop regions in the interpreter. Deadline-armed
-execution likewise admits only acyclic regions (at most 2,048 source instructions),
-then returns to a VM-owned barrier which performs the next monotonic clock poll.
+Whole-function, transformed OSR, and continuation entries consume the same
+explicit source-origin/cost records. When step, cancellation, or deadline controls
+are armed, generated code reserves exact source cost by bounded control segment
+and polls cancellation plus the VM's typed monotonic-deadline helper at most every
+512 source steps (and at loop backedges). A preemption poll runs before reserving
+the next segment, so deopt resumes at the first unpaid source instruction.
+Allocation and live-memory controls are admitted only with a per-region proof.
+Scalar/read-only whole functions and continuations cannot grow storage. OSR may
+also execute shape-preserving stores and `List.push`: the helper charges the exact
+capacity delta into a transaction-local allocation cell, live memory is measured
+from the tentative VM root graph, and both are committed only with the heap
+transaction. Every other allocating/replacing helper and native-call edge fails
+closed. Intrinsic-call and Provider-call meters remain interpreter/host owned;
+Provider and async operations remain continuation barriers rather than being
+hidden in machine code.
 
 ## Stable invariants
 
 - The interpreter is the semantic oracle. Unsupported operations and guarded
   failures fall back without committing partial VM or mutable-buffer state.
 - Only validated JIT functions reach code generation.
+- Diagnostic compile telemetry separates VM translation, sealed validation,
+  Cranelift code generation, and finalization. The total compile timer remains the
+  admission wall clock and can therefore include orchestration between phases.
+- Whole-function, OSR, and continuation lowering converge on
+  `NativeRegion<Lowered> -> NativeRegion<Analyzed> -> ValidatedNativeRegion ->
+  PublishedNativeRegion`. The sealed validation proof borrows immutable IR, so a
+  caller cannot mutate a region between validation and publication.
 - Executable memory is reserved from a shared hard budget before code generation.
 - Finalized functions follow compile-once-publish: a completed function is made
   reachable, and crossing a soft admission limit closes later compilation.
@@ -31,6 +42,9 @@ then returns to a VM-owned barrier which performs the next monotonic clock poll.
   typed `NativeJitOptions`; diagnostic front ends may translate their own flags.
 - Every VM-to-native entry crosses the versioned `JitCallFrame` ABI. The frame
   owns bail, safepoint, deoptimization, depth, limit, and host-context state.
+- `NativeModule` owns generated code and immutable deopt metadata only. Mutable
+  payload scratch is owned by a reusable `NativeCallSession` in the evaluation;
+  two sessions cannot observe each other's normal-yield or deopt payload.
 - The native engine is a 64-bit-only component. Compilation fails explicitly on
   other pointer widths; opaque host-context and flat-buffer pointer bits must not
   be truncated into the language's `i64` transport words.
@@ -93,12 +107,11 @@ then returns to a VM-owned barrier which performs the next monotonic clock poll.
   once, preserves Provider traces and scheduler semantics, then probes the next
   scalar continuation. Generated code never re-enters the interpreter or spans a
   suspension.
-- Continuations always meter their one-to-one source instructions, including in
-  trusted/unbounded mode. Straight-line execution reports therefore preserve
-  interpreter step accounting; scheduler-owned async bookkeeping remains outside
-  the native source map. A missing step ceiling is represented as `i64::MAX` in
-  the private call cell; it disables rejection without disabling usage
-  accounting.
+- Limit-aware regions meter their one-to-one source instructions. A missing step
+  ceiling is represented as `i64::MAX` in the call-owned limits cell; it disables
+  rejection without disabling usage accounting when cancellation/deadline still
+  require a shared source-step stream. Scheduler-owned async bookkeeping remains
+  outside the native source map.
 - Region formation requires at least sixteen direct source instructions. Under the
   enforcing cost model, acyclic dispatch requires at least 512 instructions to
   amortize the trampoline; diagnostic/off modes can still exercise smaller
