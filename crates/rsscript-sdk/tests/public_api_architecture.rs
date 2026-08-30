@@ -18,8 +18,15 @@ const REMOVED_ROOT_ALIASES: &[&str] = &[
 ];
 
 fn library_source() -> String {
-    fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"))
-        .expect("rsscript library source should be readable")
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    ["lib.rs", "execution.rs"]
+        .into_iter()
+        .map(|file| {
+            fs::read_to_string(root.join(file))
+                .unwrap_or_else(|error| panic!("read SDK source `{file}`: {error}"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn inventory() -> String {
@@ -323,7 +330,7 @@ fn reviewed_execution_report_excludes_legacy_native_value() {
         .find("pub struct ExecutionReport")
         .expect("ExecutionReport must remain a reviewed report type");
     let report = source[report_start..]
-        .split("#[cfg(feature = \"execution\")]\nimpl ExecutionReport")
+        .split("impl ExecutionReport")
         .next()
         .expect("execution-report fields must precede its implementation");
     assert!(
@@ -412,8 +419,8 @@ fn reviewed_artifact_phases_have_private_non_optional_state_and_one_way_transiti
 #[test]
 fn reviewed_execution_conveniences_cannot_bypass_the_phase_or_report_boundary() {
     let source = library_source();
-    let runtime = item_body(&source, "impl Runtime");
-    let linked = item_body(&source, "impl LinkedArtifact<'_>");
+    let runtime = item_body(&source, "impl Runtime {");
+    let linked = item_body(&source, "impl LinkedArtifact<'_> {");
 
     assert!(
         runtime.contains(

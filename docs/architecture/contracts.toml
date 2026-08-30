@@ -39,7 +39,7 @@ symbol = "SEMANTIC_DIFF_SCHEMA"
 [[contract]]
 id = "execution-report"
 value = "rsscript.execution_report.v2"
-source = "crates/rsscript-sdk/src/lib.rs"
+source = "crates/rsscript-sdk/src/execution.rs"
 symbol = "EXECUTION_REPORT_SCHEMA"
 
 [[contract]]

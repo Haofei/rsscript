@@ -233,6 +233,7 @@ impl NativeExecutionPlan {
 
 #[cfg(feature = "native-jit")]
 impl NativeAdmissionPolicy {
+    #[cfg(any(test, feature = "jit-diagnostics"))]
     pub(super) fn bounded(tier_up_threshold: u32) -> Self {
         Self {
             max_code_bytes: 16 * 1024 * 1024,

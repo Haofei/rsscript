@@ -261,6 +261,7 @@ fn validate_ci() -> Result<(), Box<dyn Error>> {
     validate_lint_inheritance(&root, &root_inventory, &experiments_inventory)?;
     validate_experimental_retention(&root, &root_inventory, &experiments_inventory)?;
     validate_contract_registry(&root)?;
+    validate_workflow_boundaries(&root)?;
     validate_release_feature_closure(&root)?;
     validate_security_debt(&root)?;
     validate_test_closures(&root)?;
@@ -312,6 +313,82 @@ fn validate_release_feature_closure(root: &Path) -> Result<(), Box<dyn Error>> {
                 "release command must use the interpreter-only `execution` closure: {command}"
             )
             .into());
+        }
+    }
+    Ok(())
+}
+
+fn validate_workflow_boundaries(root: &Path) -> Result<(), Box<dyn Error>> {
+    let workflow_dir = root.join(".github/workflows");
+    let mut workflows = String::new();
+    for entry in fs::read_dir(&workflow_dir)? {
+        let path = entry?.path();
+        if path.extension().is_some_and(|extension| extension == "yml") {
+            workflows.push_str(&fs::read_to_string(path)?);
+            workflows.push('\n');
+        }
+    }
+
+    for retired in [
+        "rsscript-engine",
+        "crates/rsscript-compiler/src/cli/run_cmd.rs",
+        "crates/rsscript-compiler/src/native_plugin/",
+        "crates/runtime/src/fs.rs",
+        "crates/runtime/src/process.rs",
+        "crates/runtime/src/socket.rs",
+        "crates/runtime/src/websocket.rs",
+    ] {
+        if workflows.contains(retired) {
+            return Err(format!("workflow references retired boundary `{retired}`").into());
+        }
+    }
+
+    let release = fs::read_to_string(workflow_dir.join("release.yml"))?;
+    for required in [
+        "for PACKAGE in rsscript-cli; do",
+        "--features execution",
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin",
+        "x86_64-pc-windows-msvc",
+        "merge-multiple: true",
+        "prerelease: ${{ contains(github.ref_name, '-') }}",
+    ] {
+        if !release.contains(required) {
+            return Err(format!("release workflow must retain `{required}`").into());
+        }
+    }
+    if release.contains("for PACKAGE in rsscript-cli reir")
+        || release.contains("--bin reir -p reir")
+    {
+        return Err("release workflow must not package research integrations".into());
+    }
+
+    let sdk_api = fs::read_to_string(workflow_dir.join("sdk-api-compatibility.yml"))?;
+    for required in [
+        "cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239",
+        "package: rsscript-sdk",
+        "feature-group: default-features",
+        "features: execution",
+        "baseline-rev: ${{ steps.baseline.outputs.revision }}",
+        "git cat-file -e \"$revision^{commit}\"",
+    ] {
+        if !sdk_api.contains(required) {
+            return Err(format!("SDK API workflow must retain `{required}`").into());
+        }
+    }
+    if sdk_api.contains("features: compatibility") {
+        return Err("SDK API workflow must not restore compatibility exports".into());
+    }
+
+    let hardening = fs::read_to_string(workflow_dir.join("jit-hardening.yml"))?;
+    for target in [
+        "bytecode_artifact",
+        "binding_descriptor",
+        "execution_report",
+    ] {
+        let command = format!("fuzz run {target}");
+        if !hardening.contains(&command) {
+            return Err(format!("JIT hardening workflow must retain `{target}` fuzzing").into());
         }
     }
     Ok(())

@@ -125,7 +125,7 @@ codegen-units = 1
 panic = "unwind"
 
 # Test builds are used as a fast feedback loop, not for debugger sessions. Full
-# debuginfo for the monolithic `rsscript` crate makes test compiles/linking much
+# Full debuginfo across this multi-crate workspace makes test compiles/linking much
 # slower and bloats rustc incremental state, so keep test artifacts lean.
 [profile.test]
 debug = 0

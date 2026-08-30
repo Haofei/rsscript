@@ -79,17 +79,8 @@ decision_by = "2026-12-31"
 tracking = "module-partition-backlog"
 
 [[allow]]
-path = "crates/rsscript-sdk/src/lib.rs"
-max_bytes = 124000
-reason = "Stable façade is intentionally single-surface while implementation modules are extracted."
-owner = "@Haofei"
-target_bytes = 60000
-decision_by = "2026-12-31"
-tracking = "module-partition-backlog"
-
-[[allow]]
 path = "crates/rsscript-sdk/tests/architecture.rs"
-max_bytes = 206000
+max_bytes = 204000
 reason = "Historical architecture checks will move into xtask as repository invariants are generalized."
 owner = "@Haofei"
 target_bytes = 60000
@@ -116,8 +107,8 @@ tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-vm/src/reg_vm/mod.rs"
-max_bytes = 276000
-reason = "Register VM root still owns registries and execution composition; native text helpers have moved to a private module."
+max_bytes = 250000
+reason = "Register VM root still owns execution composition; intrinsic metadata and native text helpers have moved to private modules."
 owner = "@Haofei"
 target_bytes = 60000
 decision_by = "2026-12-31"

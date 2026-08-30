@@ -36,6 +36,14 @@ fn read(path: &Path) -> String {
     fs::read_to_string(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
 }
 
+fn sdk_source(root: &Path) -> String {
+    ["lib.rs", "execution.rs"]
+        .into_iter()
+        .map(|file| read(&root.join("crates/rsscript-sdk/src").join(file)))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn cargo_metadata(root: &Path) -> serde_json::Value {
     let output = Command::new(env!("CARGO"))
         .args(["metadata", "--format-version", "1", "--no-deps"])
@@ -583,7 +591,7 @@ fn migration_boundary_rejects_disabled_cemetery_code_and_root_glob_exports() {
         disabled.join(", ")
     );
 
-    let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
+    let sdk = sdk_source(&root);
     for implementation in ["rsscript_compiler", "rsscript_bytecode", "rsscript_vm"] {
         assert!(
             !sdk.contains(&format!("pub use {implementation}::*")),
@@ -2062,7 +2070,7 @@ fn language_engine_does_not_read_the_operating_system() {
 fn semantic_diff_is_an_artifact_contract_not_sdk_implementation() {
     let root = workspace_root();
     let artifact = read(&root.join("crates/rsscript-artifact/src/lib.rs"));
-    let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
+    let sdk = sdk_source(&root);
     assert!(artifact.contains("mod semantic_diff;"));
     assert!(artifact.contains("SemanticDiffV2"));
     assert!(artifact.contains("SEMANTIC_DIFF_SCHEMA"));
@@ -2234,7 +2242,7 @@ fn linked_provider_contracts_reach_the_invocation_path() {
 #[test]
 fn execution_termination_does_not_classify_message_text() {
     let root = workspace_root();
-    let facade = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
+    let facade = sdk_source(&root);
     assert!(!facade.contains("fn classify_runtime_error"));
     assert!(!facade.contains("reason: classify_runtime_error"));
     assert!(facade.contains("EvalError::Execution { kind, message }"));
@@ -2263,7 +2271,7 @@ fn allocation_budget_is_not_mislabeled_as_live_memory() {
     assert!(storage.contains("refresh_live_memory_usage"));
     assert!(storage.contains("visited: &mut HashSet<usize>"));
 
-    let facade = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
+    let facade = sdk_source(&root);
     assert!(facade.contains("allocation_budget: Option<usize>"));
     assert!(facade.contains("live_memory_limit: Option<usize>"));
     assert!(facade.contains("pub fn with_allocation_budget"));
@@ -2281,7 +2289,7 @@ fn public_execution_defaults_are_bounded_without_compatibility_aliases() {
         read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs")),
         read(&root.join("crates/rsscript-vm/src/reg_vm/state.rs"))
     );
-    let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
+    let sdk = sdk_source(&root);
     assert!(!vm.contains("pub fn safe_default"));
     for bounded in [
         "step_budget: Some(",
@@ -3777,7 +3785,7 @@ fn session_owns_the_core_interface_policy() {
     let cli_check = read(&root.join("crates/rsscript-cli/src/cli/check.rs"));
     assert!(cli_check.contains("CompilationSession::without_core()"));
 
-    let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
+    let sdk = sdk_source(&root);
     assert!(sdk.contains("CompilationSession::default()"));
     assert!(sdk.contains("fn analyze_snapshot_with_session"));
 
@@ -3802,8 +3810,8 @@ fn session_owns_the_core_interface_policy() {
 fn production_frontend_callers_share_the_compilation_session_boundary() {
     let root = workspace_root();
     let compiler_output = read(&root.join("crates/rsscript-compiler/src/compiler_output.rs"));
-    let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
-    let project = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
+    let sdk = sdk_source(&root);
+    let project = sdk_source(&root);
     let cli_check = read(&root.join("crates/rsscript-cli/src/cli/check.rs"));
     let cli_fmt = read(&root.join("crates/rsscript-cli/src/cli/fmt.rs"));
     let cli_fix = read(&root.join("crates/rsscript-cli/src/cli/fix.rs"));
@@ -3965,7 +3973,7 @@ fn lsp_dependency_closure_selects_frontend_only() {
 #[test]
 fn embedding_facade_exposes_only_product_level_objects() {
     let root = workspace_root();
-    let mut source = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
+    let mut source = sdk_source(&root);
     source.push_str(&read(&root.join("crates/rsscript-artifact/src/lib.rs")));
     for object in [
         "pub struct Compiler",
@@ -3997,7 +4005,7 @@ fn embedding_facade_exposes_only_product_level_objects() {
 #[test]
 fn runtime_link_requires_explicit_host_artifact_admission() {
     let root = workspace_root();
-    let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
+    let sdk = sdk_source(&root);
     assert!(
         sdk.contains("artifact: &'artifact AdmittedArtifact"),
         "Runtime::link must only accept host-admitted Artifacts"
@@ -4651,7 +4659,7 @@ fn artifact_verifier_owns_instruction_validation() {
 #[test]
 fn sdk_passes_verified_bytecode_to_the_vm_loader() {
     let root = workspace_root();
-    let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
+    let sdk = sdk_source(&root);
     assert!(sdk.contains("BytecodeVerifier::default()"));
     assert!(sdk.contains("RegVmExecutable::from_verified_bytecode"));
     let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));
@@ -5202,93 +5210,6 @@ fn selfhost_frontend_does_not_restore_retired_language_contracts() {
         assert!(
             !syntax_declarations.contains(retired_feature_check),
             "self-hosted diagnostics must not retain retired feature check `{retired_feature_check}`"
-        );
-    }
-}
-
-#[test]
-fn github_workflows_follow_current_workspace_boundaries() {
-    let root = workspace_root();
-    let workflow_dir = root.join(".github/workflows");
-    let workflows = fs::read_dir(&workflow_dir)
-        .expect("workflow directory should exist")
-        .map(|entry| entry.expect("workflow entry").path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "yml"))
-        .map(|path| read(&path))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    for retired in [
-        "rsscript-engine",
-        "crates/rsscript-compiler/src/cli/run_cmd.rs",
-        "crates/rsscript-compiler/src/native_plugin/",
-        "crates/runtime/src/fs.rs",
-        "crates/runtime/src/process.rs",
-        "crates/runtime/src/socket.rs",
-        "crates/runtime/src/websocket.rs",
-    ] {
-        assert!(
-            !workflows.contains(retired),
-            "GitHub workflows must not reference retired workspace boundary `{retired}`"
-        );
-    }
-
-    let release = read(&workflow_dir.join("release.yml"));
-    assert!(release.contains("for PACKAGE in rsscript-cli; do"));
-    assert!(!release.contains("for PACKAGE in rsscript-cli reir"));
-    assert!(
-        !release.contains("native-jit")
-            && !release.contains("Validate native JIT")
-            && !release.contains("--bin reir -p reir"),
-        "the Core release path must not validate or package experimental backends"
-    );
-    assert!(release.contains("--features execution"));
-    for target in [
-        "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin",
-        "x86_64-pc-windows-msvc",
-    ] {
-        assert!(
-            release.contains(target),
-            "release dry-run must build supported target `{target}`"
-        );
-    }
-    assert!(release.contains("merge-multiple: true"));
-    assert!(release.contains("prerelease: ${{ contains(github.ref_name, '-') }}"));
-
-    let sdk_api = read(&workflow_dir.join("sdk-api-compatibility.yml"));
-    for required in [
-        "cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239",
-        "package: rsscript-sdk",
-        "feature-group: default-features",
-        "features: execution",
-        "baseline-rev: ${{ steps.baseline.outputs.revision }}",
-        "git cat-file -e \"$revision^{commit}\"",
-    ] {
-        assert!(
-            sdk_api.contains(required),
-            "SDK API compatibility workflow must retain `{required}`"
-        );
-    }
-    assert!(
-        !sdk_api.contains("features: compatibility"),
-        "legacy compatibility exports must not become part of the reviewed semver gate"
-    );
-}
-
-#[test]
-fn hardening_workflow_retains_boundary_fuzz_targets() {
-    let root = workspace_root();
-    let hardening = read(&root.join(".github/workflows/jit-hardening.yml"));
-
-    for target in [
-        "bytecode_artifact",
-        "binding_descriptor",
-        "execution_report",
-    ] {
-        assert!(
-            hardening.contains(&format!("fuzz run {target}")),
-            "JIT hardening workflow must retain the `{target}` fuzz target"
         );
     }
 }

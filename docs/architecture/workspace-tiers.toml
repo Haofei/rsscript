@@ -57,8 +57,9 @@ integrations = [
   "rsscript-review-source",
 ]
 
-experimental = [
-]
+# Intentionally explicit: the validator treats every tier as part of the schema,
+# even when no root-workspace package currently belongs to it.
+experimental = []
 
 # Experimental-preview, explicit opt-in execution engines. These are root workspace
 # members so Core never depends on an `experiments/` path, but they are not
@@ -67,8 +68,7 @@ optional_engines = [
   "rsscript-jit-cranelift",
 ]
 
-research = [
-]
+research = []
 
 tooling = [
   "rsscript-build-support",
