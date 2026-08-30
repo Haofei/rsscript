@@ -12,6 +12,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+mod canonical_cbor;
 mod typed_facts;
 mod verification_metadata;
 
@@ -531,38 +532,14 @@ impl Default for BytecodeVerifier {
 /// sorted before serialization, so equivalent wire values have one byte form.
 pub fn encode_executable_payload<T: Serialize>(value: &T) -> Result<Vec<u8>, BytecodeError> {
     let value = serde_json::to_value(value).map_err(BytecodeError::Encode)?;
-    serde_cbor::to_vec(&canonical_cbor(value)).map_err(BytecodeError::Cbor)
+    canonical_cbor::encode(&value).map_err(|error| BytecodeError::Cbor(error.to_string()))
 }
 
 /// Decode the executable section owned by this crate.
 pub fn decode_executable_payload<T: DeserializeOwned>(payload: &[u8]) -> Result<T, BytecodeError> {
-    serde_cbor::from_slice(payload).map_err(BytecodeError::Cbor)
-}
-
-fn canonical_cbor(value: serde_json::Value) -> serde_cbor::Value {
-    match value {
-        serde_json::Value::Null => serde_cbor::Value::Null,
-        serde_json::Value::Bool(value) => serde_cbor::Value::Bool(value),
-        serde_json::Value::Number(value) => {
-            if let Some(value) = value.as_i64() {
-                serde_cbor::Value::Integer(value.into())
-            } else if let Some(value) = value.as_u64() {
-                serde_cbor::Value::Integer(value.into())
-            } else {
-                serde_cbor::Value::Float(value.as_f64().expect("JSON number"))
-            }
-        }
-        serde_json::Value::String(value) => serde_cbor::Value::Text(value),
-        serde_json::Value::Array(values) => {
-            serde_cbor::Value::Array(values.into_iter().map(canonical_cbor).collect())
-        }
-        serde_json::Value::Object(values) => serde_cbor::Value::Map(
-            values
-                .into_iter()
-                .map(|(key, value)| (serde_cbor::Value::Text(key), canonical_cbor(value)))
-                .collect::<BTreeMap<_, _>>(),
-        ),
-    }
+    let value =
+        canonical_cbor::decode(payload).map_err(|error| BytecodeError::Cbor(error.to_string()))?;
+    serde_json::from_value(value).map_err(|error| BytecodeError::Cbor(error.to_string()))
 }
 
 /// Validate the executable instruction payload without linking the compiler or
@@ -1863,7 +1840,7 @@ pub enum BytecodeError {
     MalformedChecksum,
     TrailingBytes,
     Encode(serde_json::Error),
-    Cbor(serde_cbor::Error),
+    Cbor(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

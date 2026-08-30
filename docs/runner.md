@@ -36,3 +36,10 @@ limits where the platform supports them. This is defense in depth, not a
 security-sandbox claim. Production isolation for untrusted input still requires
 deployment-specific filesystem, network, identity, namespace, container, or
 syscall controls.
+
+The exact per-target control status is published in
+[`architecture/runner-platforms.toml`](architecture/runner-platforms.toml).
+`required` means the reference runner fails closed if the control cannot be
+installed, `conditional` means the host must opt into and provision it,
+`best_effort` is an availability control rather than an isolation guarantee,
+and `unsupported` means the runner makes no claim for that control.

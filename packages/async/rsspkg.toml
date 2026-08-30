@@ -5,7 +5,3 @@ edition = "2026"
 
 [interfaces]
 paths = ["interface"]
-
-[virtual]
-has_default = false
-provider = "async"

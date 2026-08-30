@@ -21,6 +21,22 @@ evidence_sha256 = ""
 removal_rule = "Remove or merge into the interpreter if controlled fallback workloads do not show a repeatable 10-15% gain."
 
 [[surface]]
+id = "jit-cranelift-engine"
+workspace = "root"
+kind = "cargo_package"
+package = "rsscript-jit-cranelift"
+owner = "@Haofei"
+status = "pending"
+maturity = "experimental"
+last_measured_at = "2026-08-28"
+decision_by = "2026-11-30"
+workloads = ["native-scalar", "native-call", "native-read-heap"]
+minimum_end_to_end_gain_percent = 15
+evidence_uri = ""
+evidence_sha256 = ""
+removal_rule = "Keep as a preview-only engine until controlled workloads justify a supported optional release surface."
+
+[[surface]]
 id = "jit-speculation"
 workspace = "root"
 kind = "cargo_feature"
@@ -86,6 +102,86 @@ minimum_end_to_end_gain_percent = 15
 evidence_uri = ""
 evidence_sha256 = ""
 removal_rule = "Freeze as a benchmark harness or remove the runtime if no product consumer and report differential evidence exist."
+
+[[surface]]
+id = "aot-model"
+workspace = "experiments"
+kind = "cargo_package"
+package = "rsscript-aot-model"
+owner = "@Haofei"
+status = "pending"
+maturity = "experimental"
+last_measured_at = "2026-08-28"
+decision_by = "2026-12-31"
+workloads = ["source_map_contract_round_trips"]
+minimum_end_to_end_gain_percent = 0
+evidence_uri = ""
+evidence_sha256 = ""
+removal_rule = "Merge into the AOT backend if it does not remain an independently consumed versioned model."
+
+[[surface]]
+id = "aot-runtime"
+workspace = "experiments"
+kind = "cargo_package"
+package = "rsscript-aot-runtime"
+owner = "@Haofei"
+status = "pending"
+maturity = "experimental"
+last_measured_at = "2026-08-28"
+decision_by = "2026-12-31"
+workloads = ["runtime_services_execute_and_shutdown_independently_in_parallel"]
+minimum_end_to_end_gain_percent = 15
+evidence_uri = ""
+evidence_sha256 = ""
+removal_rule = "Remove the standalone runtime when no product consumer or interpreter-level differential evidence exists."
+
+[[surface]]
+id = "artifact-store-integration"
+workspace = "experiments"
+kind = "cargo_package"
+package = "rsscript-artifact-store"
+owner = "@Haofei"
+status = "pending"
+maturity = "integration"
+last_measured_at = "2026-08-28"
+decision_by = "2026-12-31"
+workloads = ["bounded_read_rejects_oversized_artifact"]
+minimum_end_to_end_gain_percent = 0
+evidence_uri = ""
+evidence_sha256 = ""
+removal_rule = "Remove if no supported project or CLI path consumes persisted artifacts."
+
+[[surface]]
+id = "reir-model"
+workspace = "experiments"
+kind = "cargo_package"
+package = "reir"
+owner = "@Haofei"
+status = "pending"
+maturity = "integration"
+last_measured_at = "2026-08-28"
+decision_by = "2026-12-31"
+workloads = ["reir_tests"]
+minimum_end_to_end_gain_percent = 0
+evidence_uri = ""
+evidence_sha256 = ""
+removal_rule = "Retain only while it has an external review consumer or independent conformance value."
+
+[[surface]]
+id = "selfhost-parity"
+workspace = "experiments"
+kind = "cargo_package"
+package = "rsscript-selfhost-parity"
+owner = "@Haofei"
+status = "pending"
+maturity = "research"
+last_measured_at = "2026-08-28"
+decision_by = "2026-12-31"
+workloads = ["parser_parity_tiny_sample"]
+minimum_end_to_end_gain_percent = 0
+evidence_uri = ""
+evidence_sha256 = ""
+removal_rule = "Remove if the harness no longer detects regressions beyond the canonical Rust frontend corpus."
 
 [[surface]]
 id = "reir-review-integration"

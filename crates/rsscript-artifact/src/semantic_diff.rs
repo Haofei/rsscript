@@ -139,7 +139,7 @@ pub struct CountChangeV1 {
 /// It intentionally contains no risk score and makes no allow/deny decision.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SemanticDiffV1 {
+pub struct SemanticDiffV2 {
     pub schema: String,
     pub old: ArtifactIdentityV1,
     pub new: ArtifactIdentityV1,
@@ -157,7 +157,7 @@ pub struct SemanticDiffV1 {
     pub summary: BTreeMap<String, CountChangeV1>,
 }
 
-impl SemanticDiffV1 {
+impl SemanticDiffV2 {
     pub fn between(old: &ArtifactBundle, new: &ArtifactBundle) -> Self {
         Self {
             schema: SEMANTIC_DIFF_SCHEMA.to_string(),

@@ -2064,7 +2064,7 @@ fn semantic_diff_is_an_artifact_contract_not_sdk_implementation() {
     let artifact = read(&root.join("crates/rsscript-artifact/src/lib.rs"));
     let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
     assert!(artifact.contains("mod semantic_diff;"));
-    assert!(artifact.contains("SemanticDiffV1"));
+    assert!(artifact.contains("SemanticDiffV2"));
     assert!(artifact.contains("SEMANTIC_DIFF_SCHEMA"));
     assert!(
         !root
@@ -2073,7 +2073,7 @@ fn semantic_diff_is_an_artifact_contract_not_sdk_implementation() {
         "SDK must compose the semantic-diff contract rather than own it"
     );
     assert!(sdk.contains("pub use rsscript_artifact"));
-    assert!(sdk.contains("SemanticDiffV1"));
+    assert!(sdk.contains("SemanticDiffV2"));
 }
 
 #[test]
@@ -5237,9 +5237,12 @@ fn github_workflows_follow_current_workspace_boundaries() {
     assert!(release.contains("for PACKAGE in rsscript-cli; do"));
     assert!(!release.contains("for PACKAGE in rsscript-cli reir"));
     assert!(
-        !release.contains("Validate native JIT") && !release.contains("--bin reir -p reir"),
+        !release.contains("native-jit")
+            && !release.contains("Validate native JIT")
+            && !release.contains("--bin reir -p reir"),
         "the Core release path must not validate or package experimental backends"
     );
+    assert!(release.contains("--features execution"));
     for target in [
         "x86_64-unknown-linux-gnu",
         "aarch64-apple-darwin",

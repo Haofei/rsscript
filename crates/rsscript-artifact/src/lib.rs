@@ -21,7 +21,7 @@ pub use semantic_diff::{
     ArtifactIdentityV1, AwaitFactV1, CallEdgeFactV1, ChangedFactV1, CountChangeV1,
     DiagnosticFactV1, ExportFactV1, ExternalCallFactV1, ExternalContractFactV1, FactSetDiffV1,
     FunctionParameterFactV1, ResourceLifetimeFactV1, ResourceTransferFactV1, SEMANTIC_DIFF_SCHEMA,
-    SemanticDiffV1, TaskGroupFactV1,
+    SemanticDiffV2, TaskGroupFactV1,
 };
 
 pub const ARTIFACT_BUNDLE_SCHEMA: &str = "rsscript.artifact_bundle.v1";

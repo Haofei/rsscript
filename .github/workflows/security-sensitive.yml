@@ -3,8 +3,46 @@ name: Security-sensitive paths
 on:
   pull_request:
     branches: [main]
+    paths:
+      - ".github/workflows/security-sensitive.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/lsp/**"
+      - "crates/process-guard/**"
+      - "crates/rsscript-bytecode/**"
+      - "crates/rsscript-jit-cranelift/**"
+      - "crates/rsscript-package-review/**"
+      - "crates/rsscript-provider-api/**"
+      - "crates/rsscript-provider-bindgen/**"
+      - "crates/rsscript-provider-conformance/**"
+      - "crates/rsscript-review-core/**"
+      - "crates/rsscript-review-source/**"
+      - "crates/rsscript-runner-protocol/**"
+      - "crates/rsscript-sdk/**"
+      - "crates/rsscript-vm/**"
+      - "experiments/**"
+      - "providers/**"
   push:
     branches: [main]
+    paths:
+      - ".github/workflows/security-sensitive.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/lsp/**"
+      - "crates/process-guard/**"
+      - "crates/rsscript-bytecode/**"
+      - "crates/rsscript-jit-cranelift/**"
+      - "crates/rsscript-package-review/**"
+      - "crates/rsscript-provider-api/**"
+      - "crates/rsscript-provider-bindgen/**"
+      - "crates/rsscript-provider-conformance/**"
+      - "crates/rsscript-review-core/**"
+      - "crates/rsscript-review-source/**"
+      - "crates/rsscript-runner-protocol/**"
+      - "crates/rsscript-sdk/**"
+      - "crates/rsscript-vm/**"
+      - "experiments/**"
+      - "providers/**"
   workflow_dispatch:
 
 permissions:

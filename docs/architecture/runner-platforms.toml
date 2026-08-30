@@ -1,0 +1,56 @@
+schema = 1
+
+# This inventory describes the reference runner, not every deployment wrapper.
+# Controls marked conditional are not silently promoted to security guarantees.
+
+[[target]]
+triple = "x86_64-unknown-linux-gnu"
+child_process = "required"
+process_tree_cleanup = "required"
+address_space_limit = "required"
+user_mount_namespace = "required"
+network_namespace = "required"
+no_new_privs = "required"
+seccomp = "required"
+filesystem_isolation = "conditional"
+cgroup_v2 = "conditional"
+notes = "The hardened Linux x86-64 profile is the reference isolation profile; Landlock and cgroup v2 depend on host kernel support and delegation."
+
+[[target]]
+triple = "aarch64-unknown-linux-gnu"
+child_process = "required"
+process_tree_cleanup = "required"
+address_space_limit = "required"
+user_mount_namespace = "required"
+network_namespace = "required"
+no_new_privs = "required"
+seccomp = "unsupported"
+filesystem_isolation = "conditional"
+cgroup_v2 = "conditional"
+notes = "The current syscall filter is not claimed on Linux ARM64; hosts requiring it must supply an independent sandbox."
+
+[[target]]
+triple = "aarch64-apple-darwin"
+child_process = "required"
+process_tree_cleanup = "required"
+address_space_limit = "best_effort"
+user_mount_namespace = "unsupported"
+network_namespace = "unsupported"
+no_new_privs = "unsupported"
+seccomp = "unsupported"
+filesystem_isolation = "unsupported"
+cgroup_v2 = "unsupported"
+notes = "macOS execution is process-isolated but is not the hardened Linux profile."
+
+[[target]]
+triple = "x86_64-pc-windows-msvc"
+child_process = "required"
+process_tree_cleanup = "required"
+address_space_limit = "required"
+user_mount_namespace = "unsupported"
+network_namespace = "unsupported"
+no_new_privs = "unsupported"
+seccomp = "unsupported"
+filesystem_isolation = "unsupported"
+cgroup_v2 = "unsupported"
+notes = "Process-tree and memory controls use a Job Object; no filesystem or network sandbox is claimed."

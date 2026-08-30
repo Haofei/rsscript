@@ -20,17 +20,15 @@ async queue, semaphore, and broader IO
 abstractions without exposing backend `Future`/`Poll` details to RSScript
 programs.
 
-Executable packages should depend on both the interface and a reviewed backend
-provider:
+Structured async execution is owned by the language and reference runtime. It
+does not use an ordinary Provider implementation package because these
+operations do not cross the Provider ABI and cannot be replaced independently
+of the VM. Executable packages depend only on the interface package:
 
 ```toml
 [dependencies]
 rss-async = { path = "../async" }
-rss-async-runtime = { path = "../async-runtime" }
-
-[providers]
-async = "rss-async-runtime"
 ```
 
 Single-file scripts keep a prelude-visible async surface for quick iteration,
-but package review and lowering require the explicit dependency/provider graph.
+while package review and lowering require the explicit interface dependency.

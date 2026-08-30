@@ -898,6 +898,20 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::load_package;
+
+    fn unexpected_native_review(
+        _: &Path,
+        _: &crate::Manifest,
+        _: &[PackageSource],
+        _: &ManifestNativeRust,
+    ) -> Result<rsscript_package_model::PackageNativeRustReview, String> {
+        Err("the interface-only async package must not request native review".to_string())
+    }
+
+    fn unexpected_native_path(_: &Path, _: &str) -> Result<PathBuf, String> {
+        Err("the interface-only async package must not resolve native code".to_string())
+    }
 
     fn test_dir(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -1096,5 +1110,34 @@ mod tests {
 
         assert!(error.contains("exceeded byte limit"), "{error}");
         fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn checked_in_async_package_lock_matches_the_current_package() {
+        let package_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/async");
+        let package = load_package(&package_dir).expect("checked-in async package loads");
+        let lock = read_package_lock(&package_dir.join("rsspkg.lock"))
+            .expect("checked-in async package lock loads");
+        let root = lock
+            .packages
+            .iter()
+            .find(|entry| entry.name == package.manifest.package.name)
+            .expect("async package is represented in its lock");
+        let expected = lock_package_entry(
+            &package_dir,
+            &package,
+            root.features.clone(),
+            unexpected_native_review,
+            unexpected_native_path,
+        )
+        .expect("async package lock entry can be reproduced");
+
+        assert_eq!(root.name, expected.name);
+        assert_eq!(root.version, expected.version);
+        assert_eq!(root.checksum, expected.checksum);
+        assert_eq!(root.interface_hash, expected.interface_hash);
+        assert_eq!(root.review_hash, expected.review_hash);
+        assert_eq!(root.native_hash, expected.native_hash);
+        assert_eq!(root.features, expected.features);
     }
 }

@@ -60,8 +60,8 @@ jobs:
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked --all-targets
           cargo test --locked -p rsscript-sdk --features execution
-          cargo test --locked -p rsscript-sdk --features native-jit --test native_jit_smoke
-          cargo test --locked -p rsscript-sdk --features native-jit --test native_jit_differential
+          cargo test --locked -p embedded-report-pipeline
+          cargo test --locked -p structured-async-pipeline
           cargo run --locked -p rsscript-xtask -- test-tier providers
           cargo run --locked -p rsscript-xtask -- test-tier integrations
           cargo run --locked -p rsscript-xtask -- test-tier runner
@@ -102,8 +102,8 @@ jobs:
           SUFFIX: ${{ matrix.suffix }}
         run: |
           cargo install cargo-cyclonedx --locked --version 0.5.9
-          cargo build --locked --frozen --release --target "$TARGET" --bin rss -p rsscript-cli --features native-jit
-          cargo cyclonedx --manifest-path crates/rsscript-cli/Cargo.toml --format json --describe binaries --features native-jit --target "$TARGET"
+          cargo build --locked --frozen --release --target "$TARGET" --bin rss -p rsscript-cli --features execution
+          cargo cyclonedx --manifest-path crates/rsscript-cli/Cargo.toml --format json --describe binaries --features execution --target "$TARGET"
           mkdir -p dist
           cp "target/$TARGET/release/rss$SUFFIX" "dist/rss-$TARGET$SUFFIX"
           cp "crates/rsscript-cli/rss_bin.cdx.json" "dist/rss-$TARGET.cdx.json"

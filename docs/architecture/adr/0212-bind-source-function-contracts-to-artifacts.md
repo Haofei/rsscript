@@ -5,7 +5,7 @@
 
 ## Problem
 
-`SemanticDiffV1` already understands function parameters, `read`/`mut`/`take`,
+`SemanticDiffV2` already understands function parameters, `read`/`mut`/`take`,
 return contracts, and `retains(...)`. Those facts were available from package
 analysis, but ordinary direct source builds only carried call facts. Consumers
 therefore had to opt into the legacy package path to diff a checked function's
@@ -37,4 +37,4 @@ facts remain separate extensions of their corresponding semantic evidence.
 Artifact unit tests retain strict typed source-analysis decoding. SDK tests
 compile two direct source Artifacts whose function changes from `mut` to
 `read` plus `retains(value)`, then prove both typed evidence and
-`SemanticDiffV1` report the contract change.
+`SemanticDiffV2` report the contract change.

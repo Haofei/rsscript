@@ -1,8 +1,10 @@
 # Security policy
 
-RSScript accepts security reports through GitHub private vulnerability
-reporting for this repository. If that channel is unavailable, open a minimal
-issue requesting a private contact without including exploit details.
+RSScript accepts security reports through
+[GitHub private vulnerability reporting](https://github.com/Haofei/rsscript/security/advisories/new).
+Do not publish exploit details in an issue or discussion. If GitHub does not
+offer that private form, wait for the private channel to be restored rather
+than disclosing the report through a public repository surface.
 
 Only the current `main` branch is supported before the first tagged release.
 Reports should identify the affected Artifact, Provider, VM, runner protocol,

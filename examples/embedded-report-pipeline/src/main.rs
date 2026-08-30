@@ -9,7 +9,7 @@ use rsscript_compiler::provider_api::{
     WireValue,
 };
 use rsscript_compiler::{
-    analysis::SemanticDiffV1,
+    analysis::SemanticDiffV2,
     artifact::ArtifactVerifier,
     compile::{Compiler, FrontendInputSnapshot},
     provider_api::ProviderRegistry,
@@ -121,7 +121,7 @@ fn run_demo(filesystem_log: ProviderFunctions) -> Result<DemoOutcome, Box<dyn st
             .concat()
         )
     );
-    let unchanged = SemanticDiffV1::between(package.bundle(), package.bundle());
+    let unchanged = SemanticDiffV2::between(package.bundle(), package.bundle());
     assert!(
         unchanged.summary.is_empty()
             && unchanged.imports.added.is_empty()

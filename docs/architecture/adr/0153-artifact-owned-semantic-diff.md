@@ -5,7 +5,7 @@
 
 ## Problem
 
-`SemanticDiffV1` compared two provider-neutral Artifact Bundles, yet its
+`SemanticDiffV2` compares two provider-neutral Artifact Bundles, yet its
 schema, fact types, and construction code lived in `rsscript-sdk`. That made
 artifact inspection and review integrations depend on the embedding façade
 instead of the persisted Artifact contract they consume.
@@ -13,7 +13,7 @@ instead of the persisted Artifact contract they consume.
 ## Decision
 
 `rsscript-artifact` owns `rsscript.semantic_diff.v2`, all semantic-diff wire
-types, and `SemanticDiffV1::between`. The SDK retains explicit re-exports from
+types, and `SemanticDiffV2::between`. The SDK retains explicit re-exports from
 its reviewed `analysis` module, so embedding callers keep a stable path while
 CLI, runner, and integrations can consume Artifact facts without depending on
 SDK implementation code.

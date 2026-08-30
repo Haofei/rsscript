@@ -27,7 +27,8 @@ execution = [
     "dep:rsscript-provider-log",
 ]
 native-jit = ["execution", "rsscript-sdk/native-jit"]
-# Shipped host tools use the adaptive native tier with interpreter fallback.
+# Preview builds may opt into the adaptive native tier with interpreter fallback;
+# the release workflow deliberately selects `execution` without this feature.
 grammar-tools = ["dep:rsscript-compiler"]
 
 [dependencies]

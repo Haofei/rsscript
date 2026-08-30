@@ -21,15 +21,15 @@ When documents disagree, use this order:
 | [threat-model.md](threat-model.md) | Trust, isolation, provider, and untrusted-input boundaries |
 | [feature-matrix.md](feature-matrix.md) | Core, Experimental, Integration, and Research maturity |
 | [support.md](support.md) | Supported and unsupported execution surfaces |
-| [status.md](status.md) | Current closure state, accepted limitations, and open engineering debt |
 | [roadmap.md](roadmap.md) | Prioritized future work and explicit freezes |
 | [releasing.md](releasing.md) | Multi-platform binaries, dry-run, provenance, and SDK distribution |
 | [package.md](package.md) | Implemented package artifacts, commands, review model, and trust boundary |
 | [architecture/ARCHITECTURE.md](architecture/ARCHITECTURE.md) | Module ownership and dependency rules |
 | [architecture/workspace-tiers.toml](architecture/workspace-tiers.toml) | Machine-checked package maturity and CI ownership |
+| [architecture/contracts.toml](architecture/contracts.toml) | Machine-checked public contract identifiers and owning constants |
+| [architecture/runner-platforms.toml](architecture/runner-platforms.toml) | Machine-readable isolation controls and platform limitations |
 | [architecture/experimental-retention.toml](architecture/experimental-retention.toml) | Time-bounded evidence and removal rules for research surfaces |
 | [architecture/module-size-allowlist.toml](architecture/module-size-allowlist.toml) | Enforced module-size debt ceilings |
-| [archive/migration-baseline.md](archive/migration-baseline.md) | Archived migration evidence and retained regression fixtures |
 | [development/DEVELOPMENT.md](development/DEVELOPMENT.md) | Local development and verification |
 | [development/DOCKER.md](development/DOCKER.md) | Containerized development |
 | [self-hosting.md](self-hosting.md) | Experimental self-hosting goal, current coverage, and validation contract |
@@ -48,7 +48,8 @@ Do not rename them without updating those tests.
 ## Maintenance Rules
 
 - Do not add dated status reports, completion ledgers, or a second roadmap.
-- Update `status.md` when a boundary closes or a limitation changes.
+- Update the authoritative contract, maturity, support, or roadmap document when
+  a boundary closes or a limitation changes; do not create a second status ledger.
 - Keep product claims consistent with `product.md` and `threat-model.md`.
 - Update `roadmap.md` only for work that remains relevant to the current support
   policy.

@@ -9,7 +9,7 @@ pub use rsscript_artifact::{
     CallEdgeFactV1, ChangedFactV1, CountChangeV1, DiagnosticFactV1, ExportFactV1,
     ExternalCallFactV1, ExternalContractFactV1, FactSetDiffV1, FunctionParameterFactV1,
     InterfaceRequirementV1, PACKAGE_ANALYSIS_SCHEMA, PackageAnalysisV1, ResourceLifetimeFactV1,
-    ResourceTransferFactV1, SEMANTIC_DIFF_SCHEMA, SOURCE_ANALYSIS_SCHEMA, SemanticDiffV1,
+    ResourceTransferFactV1, SEMANTIC_DIFF_SCHEMA, SOURCE_ANALYSIS_SCHEMA, SemanticDiffV2,
     SourceAnalysisV1, TaskGroupFactV1,
 };
 #[cfg(feature = "execution")]
@@ -254,7 +254,7 @@ pub mod report {
 pub mod analysis {
     pub use super::{
         CallEdgeFactV1, ExternalContractFactV1, FunctionParameterFactV1, ResourceLifetimeFactV1,
-        ResourceTransferFactV1, SEMANTIC_DIFF_SCHEMA, SemanticDiffV1, TaskGroupFactV1,
+        ResourceTransferFactV1, SEMANTIC_DIFF_SCHEMA, SemanticDiffV2, TaskGroupFactV1,
     };
 }
 #[allow(unused_imports)]
@@ -2665,7 +2665,7 @@ mod tests {
         assert_eq!(analysis.external_calls[0].function, "helper");
         assert_eq!(analysis.external_calls[0].symbol, "Host.value");
 
-        let diff = SemanticDiffV1::between(old.bundle(), new.bundle());
+        let diff = SemanticDiffV2::between(old.bundle(), new.bundle());
         assert!(
             diff.call_edges
                 .added
@@ -2722,7 +2722,7 @@ fn main() -> Unit { return Unit }
                 .any(|fact| fact == "retains(value)")
         );
 
-        let diff = SemanticDiffV1::between(old.bundle(), new.bundle());
+        let diff = SemanticDiffV2::between(old.bundle(), new.bundle());
         let changed = diff
             .exports
             .changed

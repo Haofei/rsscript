@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use rsscript_sdk::{
-    analysis::SemanticDiffV1,
+    analysis::SemanticDiffV2,
     artifact::{
         ARTIFACT_BUNDLE_MAGIC, ArtifactBundle, ArtifactVerifier, BYTECODE_MAGIC, BuiltArtifact,
         BytecodeArtifact, BytecodeVerifier,
@@ -125,7 +125,7 @@ pub(crate) fn run_diff(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let diff = SemanticDiffV1::between(&old, &new);
+    let diff = SemanticDiffV2::between(&old, &new);
     match format {
         DiffFormat::Json => println!(
             "{}",

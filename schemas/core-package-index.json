@@ -737,23 +737,6 @@
       ],
       "source_files": [],
       "native_rust": null,
-      "virtual_package": {
-        "has_default": false,
-        "provider": "async"
-      },
-      "dependencies": [],
-      "dev_dependencies": []
-    },
-    {
-      "kind": "package",
-      "name": "rss-async-runtime",
-      "version": "0.1.0",
-      "path": "packages/async-runtime",
-      "interface_files": [],
-      "source_files": [
-        "src/lib.rss"
-      ],
-      "native_rust": null,
       "virtual_package": null,
       "dependencies": [],
       "dev_dependencies": []

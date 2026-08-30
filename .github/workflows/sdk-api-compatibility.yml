@@ -45,6 +45,10 @@ jobs:
       # The default façade is intentionally tiny. It receives an independent
       # check so enabling `execution` cannot hide a default-surface break.
       - name: Check default SDK API compatibility
+        # Before the first published tag this is an API-drift report, not a
+        # compatibility promise. Make it blocking against the latest release
+        # tag when the first SDK contract is published.
+        continue-on-error: true
         uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2
         with:
           package: rsscript-sdk
@@ -56,6 +60,7 @@ jobs:
       # `execution` is the reviewed embedding path. Compatibility and native
       # JIT APIs intentionally remain outside this feature closure.
       - name: Check execution SDK API compatibility
+        continue-on-error: true
         uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2
         with:
           package: rsscript-sdk

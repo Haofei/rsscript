@@ -121,7 +121,7 @@ fn semantic_diff_schema_accepts_live_policy_neutral_output() {
     let new = compiler
         .compile("new.rss", "fn main() -> Int { return 2 }")
         .expect("new build");
-    let diff = rsscript_sdk::SemanticDiffV1::between(old.bundle(), new.bundle());
+    let diff = rsscript_sdk::SemanticDiffV2::between(old.bundle(), new.bundle());
     let value = serde_json::to_value(diff).expect("serialize semantic diff");
     let errors = validator
         .iter_errors(&value)
@@ -143,7 +143,7 @@ fn semantic_diff_json_and_markdown_goldens_remain_policy_neutral() {
     let json_path = root.join("schemas/fixtures/semantic-diff/structural-evidence.v2.json");
     let markdown_path = root.join("schemas/fixtures/semantic-diff/structural-evidence.v2.md");
     let json = fs::read_to_string(&json_path).expect("read semantic diff JSON golden");
-    let diff: rsscript_sdk::SemanticDiffV1 =
+    let diff: rsscript_sdk::SemanticDiffV2 =
         serde_json::from_str(&json).expect("deserialize semantic diff JSON golden");
     let normalized = serde_json::to_value(&diff).expect("serialize semantic diff golden");
     let expected = load_json(&json_path);

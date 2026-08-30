@@ -9,6 +9,9 @@ same change.
 
 The stable façade is exposed through the explicit `compile`, `artifact`,
 `provider_api`, `runtime`, `report`, `analysis`, and `operation` modules.
+The analysis façade exposes the current `SemanticDiffV2` contract name only;
+the obsolete pre-release Rust spelling was removed because it encoded the wrong
+schema generation in the public type name.
 New embedding documentation and first-party applications use these modules.
 The historical root-level compatibility feature has been retired. New embeds
 use only the explicit reviewed modules, which are the complete default and
@@ -95,5 +98,6 @@ spurious public-API change. CI rejects additions, removals, and reexports that
 are not accompanied by an intentional inventory and snapshot update. CI runs that suite for the default
 product path and for `execution`. `sdk-api-compatibility.yml` additionally runs pinned
 `cargo-semver-checks` against the target-branch commit for both reviewed
-feature closures. This branch baseline provides a generated API-diff gate
-before a crates.io release exists.
+feature closures. Before the first published tag this is a non-blocking API
+drift report. After publication it becomes a blocking comparison against the
+latest released SDK contract rather than the immediately previous commit.

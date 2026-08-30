@@ -1,0 +1,55 @@
+schema = 1
+
+[[contract]]
+id = "language-semantics"
+value = "0.1.0"
+source = "crates/rsscript-abi-model/src/lib.rs"
+symbol = "LANGUAGE_SEMANTICS_VERSION"
+
+[[contract]]
+id = "bytecode"
+value = "rsscript.bytecode.v1"
+source = "crates/rsscript-bytecode/src/lib.rs"
+symbol = "BYTECODE_SCHEMA"
+
+[[contract]]
+id = "artifact-bundle"
+value = "rsscript.artifact_bundle.v1"
+source = "crates/rsscript-artifact/src/lib.rs"
+symbol = "ARTIFACT_BUNDLE_SCHEMA"
+
+[[contract]]
+id = "runtime-abi"
+value = "2"
+source = "crates/rsscript-abi-model/src/lib.rs"
+symbol = "RUNTIME_ABI_VERSION"
+
+[[contract]]
+id = "core-library-abi"
+value = "1"
+source = "crates/rsscript-abi-model/src/lib.rs"
+symbol = "CORE_LIBRARY_ABI_VERSION"
+
+[[contract]]
+id = "semantic-diff"
+value = "rsscript.semantic_diff.v2"
+source = "crates/rsscript-artifact/src/semantic_diff.rs"
+symbol = "SEMANTIC_DIFF_SCHEMA"
+
+[[contract]]
+id = "execution-report"
+value = "rsscript.execution_report.v2"
+source = "crates/rsscript-sdk/src/lib.rs"
+symbol = "EXECUTION_REPORT_SCHEMA"
+
+[[contract]]
+id = "runner-request"
+value = "rsscript.runner_request.v1"
+source = "crates/rsscript-runner-protocol/src/lib.rs"
+symbol = "RUNNER_REQUEST_SCHEMA"
+
+[[contract]]
+id = "runner-response"
+value = "rsscript.runner_response.v1"
+source = "crates/rsscript-runner-protocol/src/lib.rs"
+symbol = "RUNNER_RESPONSE_SCHEMA"

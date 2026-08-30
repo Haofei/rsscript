@@ -4,7 +4,7 @@
 - Date: 2026-08-14
 
 `SourceAnalysisV1` originally identified only the source files in a direct
-SDK build. That made `SemanticDiffV1` depend on the legacy package-analysis
+SDK build. That made `SemanticDiffV2` depend on the legacy package-analysis
 path to report call-graph evidence, even though the normal compiler had
 already checked those calls.
 

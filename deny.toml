@@ -7,11 +7,6 @@ targets = [
 all-features = true
 
 [advisories]
-# Bytecode v1 uses serde_cbor as part of its persisted encoding contract.
-# Replacing it requires a versioned bytecode migration rather than a dependency
-# swap. The decoder remains bounded and verifier-gated; track the format change
-# separately and keep every other advisory blocking.
-ignore = ["RUSTSEC-2021-0127"]
 
 [bans]
 multiple-versions = "warn"

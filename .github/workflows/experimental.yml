@@ -70,7 +70,7 @@ jobs:
         run: |
           cargo install cargo-audit --locked --version 0.21.2
           cargo install cargo-deny --locked --version 0.20.2
-          cargo audit --file experiments/Cargo.lock --ignore RUSTSEC-2021-0127
+          cargo audit --file experiments/Cargo.lock
           cargo deny --manifest-path experiments/Cargo.toml check
           cargo clippy --locked --manifest-path experiments/Cargo.toml --workspace --all-targets --all-features -- -D warnings
           cargo test --locked --manifest-path experiments/Cargo.toml --workspace --all-features

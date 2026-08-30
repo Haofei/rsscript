@@ -260,6 +260,8 @@ fn validate_ci() -> Result<(), Box<dyn Error>> {
     validate_security_workflow_coverage(&root, &root_inventory)?;
     validate_lint_inheritance(&root, &root_inventory, &experiments_inventory)?;
     validate_experimental_retention(&root, &root_inventory, &experiments_inventory)?;
+    validate_contract_registry(&root)?;
+    validate_release_feature_closure(&root)?;
     validate_security_debt(&root)?;
     validate_test_closures(&root)?;
     validate_module_sizes(&root)?;
@@ -293,12 +295,82 @@ fn validate_ci() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn validate_release_feature_closure(root: &Path) -> Result<(), Box<dyn Error>> {
+    let release = fs::read_to_string(root.join(".github/workflows/release.yml"))?;
+    if release.contains("native-jit")
+        || release.contains("jit-speculation")
+        || release.contains("jit-recursion-experimental")
+    {
+        return Err("release workflow must not compile or validate preview native engines".into());
+    }
+    for command in release
+        .lines()
+        .filter(|line| line.contains("cargo build") || line.contains("cargo cyclonedx"))
+    {
+        if command.contains("rsscript-cli") && !command.contains("--features execution") {
+            return Err(format!(
+                "release command must use the interpreter-only `execution` closure: {command}"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn validate_contract_registry(root: &Path) -> Result<(), Box<dyn Error>> {
+    let document: toml::Value = toml::from_str(&fs::read_to_string(
+        root.join("docs/architecture/contracts.toml"),
+    )?)?;
+    if document["schema"].as_integer() != Some(1) {
+        return Err("contract registry must use schema 1".into());
+    }
+    let contracts = document["contract"]
+        .as_array()
+        .ok_or("contract registry needs [[contract]] entries")?;
+    let compatibility = fs::read_to_string(root.join("docs/compatibility.md"))?;
+    let mut ids = BTreeSet::new();
+    for contract in contracts {
+        let id = contract["id"].as_str().ok_or("contract needs id")?;
+        let value = contract["value"].as_str().ok_or("contract needs value")?;
+        let source_path = contract["source"].as_str().ok_or("contract needs source")?;
+        let symbol = contract["symbol"].as_str().ok_or("contract needs symbol")?;
+        if !ids.insert(id) {
+            return Err(format!("contract registry id `{id}` is duplicated").into());
+        }
+        let source = fs::read_to_string(root.join(source_path))?;
+        if !source.contains(&format!("pub const {symbol}")) {
+            return Err(format!("contract `{id}` owner does not define `{symbol}`").into());
+        }
+        let string_value = format!("\"{value}\"");
+        let numeric_value = format!("= {value};");
+        if !source.contains(&string_value) && !source.contains(&numeric_value) {
+            return Err(format!("contract `{id}` owner does not contain value `{value}`").into());
+        }
+        if !compatibility.contains(value) {
+            return Err(
+                format!("compatibility table omits contract `{id}` value `{value}`").into(),
+            );
+        }
+    }
+    Ok(())
+}
+
 fn parse_civil_day(value: &str) -> Result<i64, Box<dyn Error>> {
     let parts = value
         .split('-')
         .map(str::parse::<i64>)
         .collect::<Result<Vec<_>, _>>()?;
-    if parts.len() != 3 || !(1..=12).contains(&parts[1]) || !(1..=31).contains(&parts[2]) {
+    if parts.len() != 3 || !(1..=12).contains(&parts[1]) {
+        return Err(format!("invalid calendar date `{value}`").into());
+    }
+    let leap = parts[0] % 4 == 0 && (parts[0] % 100 != 0 || parts[0] % 400 == 0);
+    let days_in_month = match parts[1] {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    if !(1..=days_in_month).contains(&parts[2]) {
         return Err(format!("invalid calendar date `{value}`").into());
     }
     let mut year = parts[0];
@@ -449,6 +521,35 @@ fn validate_experimental_retention(
     if surfaces.is_empty() {
         return Err("experimental retention inventory must not be empty".into());
     }
+    let retained_packages = surfaces
+        .iter()
+        .filter_map(toml::Value::as_table)
+        .filter(|surface| surface["kind"].as_str() == Some("cargo_package"))
+        .filter_map(|surface| surface["package"].as_str())
+        .collect::<BTreeSet<_>>();
+    for package in experiments_inventory.keys() {
+        if !retained_packages.contains(package.as_str()) {
+            return Err(format!(
+                "experimental package `{package}` has no time-bounded retention entry"
+            )
+            .into());
+        }
+    }
+    let root_tiers: toml::Value = toml::from_str(&fs::read_to_string(
+        root.join("docs/architecture/workspace-tiers.toml"),
+    )?)?;
+    for package in root_tiers["optional_engines"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(toml::Value::as_str)
+    {
+        if !retained_packages.contains(package) {
+            return Err(
+                format!("preview engine `{package}` has no time-bounded retention entry").into(),
+            );
+        }
+    }
     let cases = fs::read_to_string(root.join("benchmarks/vm-jit/cases.tsv"))?;
     let case_ids = cases
         .lines()
@@ -484,10 +585,12 @@ fn validate_security_debt(root: &Path) -> Result<(), Box<dyn Error>> {
     if document["schema"].as_integer() != Some(1) {
         return Err("security debt inventory must use schema 1".into());
     }
-    for exception in document["exception"]
-        .as_array()
-        .ok_or("security debt inventory needs [[exception]] entries")?
-    {
+    let exceptions = document
+        .get("exception")
+        .and_then(toml::Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    for exception in exceptions {
         let id = exception["id"].as_str().ok_or("security debt needs id")?;
         for field in [
             "owner",
@@ -721,6 +824,10 @@ fn validate_experiments_tiers(
     }
     let workflow = fs::read_to_string(root.join(".github/workflows/security-sensitive.yml"))?;
     let filters_paths = workflow.lines().any(|line| line.trim() == "paths:");
+    let path_prefixes = workflow
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("- \"")?.strip_suffix("/**\""))
+        .collect::<Vec<_>>();
     for boundary in document["security_boundaries"]
         .as_array()
         .ok_or("experiments tier inventory needs security_boundaries")?
@@ -736,7 +843,11 @@ fn validate_experiments_tiers(
             .strip_prefix(root)?
             .to_string_lossy()
             .replace('\\', "/");
-        if filters_paths && !workflow.contains(&format!("\"{directory}/**\"")) {
+        if filters_paths
+            && !path_prefixes
+                .iter()
+                .any(|prefix| directory == *prefix || directory.starts_with(&format!("{prefix}/")))
+        {
             return Err(format!(
                 "experimental security boundary `{package}` lacks `{directory}/**` workflow coverage"
             )
@@ -1552,6 +1663,14 @@ mod tests {
         let samples = (1..=20).map(f64::from).collect::<Vec<_>>();
         assert_eq!(percentile(&samples, 0.50), 11.0);
         assert_eq!(percentile(&samples, 0.95), 20.0);
+    }
+
+    #[test]
+    fn civil_day_parser_rejects_impossible_calendar_dates() {
+        assert!(parse_civil_day("2024-02-29").is_ok());
+        assert!(parse_civil_day("2026-02-29").is_err());
+        assert!(parse_civil_day("2026-02-31").is_err());
+        assert!(parse_civil_day("2026-04-31").is_err());
     }
 
     #[test]
