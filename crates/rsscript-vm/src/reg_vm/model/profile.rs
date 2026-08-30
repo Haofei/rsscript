@@ -37,7 +37,6 @@ pub(crate) const PROFILE_MAX_CALLEES: usize = 4;
 /// computed value and never alters control flow or results (determinism).
 // Read by the bounded profile collection tests and profile-guided native inliner; not consumed by
 // production interpreter dispatch, which only *writes* feedback.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MonoState {
     /// Exactly one distinct callee observed so far — inlinable.
@@ -53,7 +52,6 @@ pub(crate) enum MonoState {
 /// Only `TakenHot` and `FallthroughHot` are actionable for speculative native
 /// transforms. The other states are still useful in reports and tests, but should
 /// not drive codegen decisions.
-#[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BranchBias {
     NoSamples,
@@ -63,7 +61,6 @@ pub(crate) enum BranchBias {
     Mixed,
 }
 
-#[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
 impl BranchBias {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
@@ -78,7 +75,6 @@ impl BranchBias {
     /// Returns the hot dynamic edge when this bias is strong enough for
     /// speculative native codegen. `true` means the explicit jump target is hot;
     /// `false` means the fallthrough edge is hot.
-    #[allow(dead_code)]
     pub(crate) fn hot_edge(self) -> Option<bool> {
         match self {
             BranchBias::TakenHot => Some(true),
@@ -142,7 +138,6 @@ impl CallSiteFeedback {
 
     /// Monomorphism state derived from the distinct-callee count. Read by the bounded profile collection
     /// tests and the forthcoming profile-guided inlining inliner.
-    #[allow(dead_code)]
     pub(crate) fn state(&self) -> MonoState {
         if self.overflowed || self.observed.len() > PROFILE_MAX_CALLEES {
             MonoState::Megamorphic
@@ -157,14 +152,12 @@ impl CallSiteFeedback {
 /// Dynamic branch feedback for one conditional branch site. `taken` means the
 /// branch jumped to its explicit target; `fallthrough` means execution continued
 /// at the next instruction.
-#[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
 #[derive(Debug, Clone, Default)]
 pub(crate) struct BranchFeedback {
     pub(crate) taken: u32,
     pub(crate) fallthrough: u32,
 }
 
-#[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
 impl BranchFeedback {
     #[cfg(feature = "jit-speculation")]
     pub(crate) fn record(&mut self, taken: bool) {
@@ -211,7 +204,6 @@ impl BranchFeedback {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn hot_edge(&self) -> Option<bool> {
         self.bias().hot_edge()
     }
@@ -227,7 +219,6 @@ impl BranchFeedback {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct FunctionProfile {
     pub(crate) call_sites: HashMap<usize, CallSiteFeedback>,
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
     pub(crate) branch_sites: HashMap<usize, BranchFeedback>,
 }
 
@@ -250,19 +241,16 @@ impl FunctionProfile {
             .record(taken);
     }
 
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
     pub(crate) fn branch_feedback(&self, instr_idx: usize) -> Option<&BranchFeedback> {
         self.branch_sites.get(&instr_idx)
     }
 
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
     pub(crate) fn branch_bias(&self, instr_idx: usize) -> BranchBias {
         self.branch_feedback(instr_idx)
             .map(BranchFeedback::bias)
             .unwrap_or(BranchBias::NoSamples)
     }
 
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
     pub(crate) fn branch_feedback_sites(&self) -> impl Iterator<Item = (usize, &BranchFeedback)> {
         self.branch_sites
             .iter()

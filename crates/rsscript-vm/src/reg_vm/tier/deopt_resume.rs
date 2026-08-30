@@ -1,5 +1,16 @@
 use super::*;
 
+#[cfg(feature = "native-jit")]
+pub(super) struct NativeChildDeoptResume<'a> {
+    pub(super) unit: &'a RegUnit,
+    pub(super) function: &'a RegFunction,
+    pub(super) base: usize,
+    pub(super) resume_ip: usize,
+    pub(super) live: &'a [vm_jit::DeoptReg],
+    pub(super) child: &'a vm_jit::DeoptFrame,
+    pub(super) host_ctx: vm_jit::HostCtx,
+}
+
 impl RegVm {
     fn native_deopt_resume_ip(
         &self,
@@ -144,17 +155,19 @@ impl RegVm {
     }
 
     #[cfg(feature = "native-jit")]
-    #[allow(clippy::too_many_arguments)] // Explicit deopt-frame reconstruction state.
     pub(super) fn try_resume_native_child_deopt_chain(
         &mut self,
-        unit: &RegUnit,
-        func: &RegFunction,
-        base: usize,
-        resume_ip: usize,
-        live: &[vm_jit::DeoptReg],
-        child: &vm_jit::DeoptFrame,
-        host_ctx: vm_jit::HostCtx,
+        resume: NativeChildDeoptResume<'_>,
     ) -> bool {
+        let NativeChildDeoptResume {
+            unit,
+            function: func,
+            base,
+            resume_ip,
+            live,
+            child,
+            host_ctx,
+        } = resume;
         let original_len = self.frames.len();
         let original_ip = self.frames.last().map(|frame| frame.ip).unwrap_or_default();
         if !self.restore_native_deopt_live_regs(base, func.regs, live, host_ctx) {

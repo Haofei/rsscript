@@ -192,17 +192,17 @@ impl NativeExecutionPlan {
     }
 
     #[cfg(any(test, feature = "jit-diagnostics"))]
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn for_diagnostics(
-        tier_up_threshold: u32,
-        force_bail: bool,
-        collect_stats: bool,
-        precise_deopt_override: bool,
-        osr_override: bool,
-        report_override: bool,
-        forced_safepoint: Option<u32>,
-        force_all_safepoints_override: bool,
-    ) -> Self {
+    pub(super) fn for_diagnostics(options: NativeDiagnosticOptions) -> Self {
+        let NativeDiagnosticOptions {
+            tier_up_threshold,
+            force_bail,
+            collect_stats,
+            precise_deopt: precise_deopt_override,
+            eager_osr: osr_override,
+            report: report_override,
+            forced_safepoint,
+            force_all_safepoints: force_all_safepoints_override,
+        } = options;
         let baseline = false;
         let auto_osr_enabled = false;
         let eager_osr = osr_override;
@@ -227,6 +227,35 @@ impl NativeExecutionPlan {
             cost_model: NativeCostModel::Off,
             osr_work_threshold: 1_000,
             admission: NativeAdmissionPolicy::bounded(tier_up_threshold),
+        }
+    }
+}
+
+#[cfg(all(feature = "native-jit", any(test, feature = "jit-diagnostics")))]
+#[derive(Debug, Clone, Copy)]
+pub(super) struct NativeDiagnosticOptions {
+    pub(super) tier_up_threshold: u32,
+    pub(super) force_bail: bool,
+    pub(super) collect_stats: bool,
+    pub(super) precise_deopt: bool,
+    pub(super) eager_osr: bool,
+    pub(super) report: bool,
+    pub(super) forced_safepoint: Option<u32>,
+    pub(super) force_all_safepoints: bool,
+}
+
+#[cfg(all(feature = "native-jit", any(test, feature = "jit-diagnostics")))]
+impl Default for NativeDiagnosticOptions {
+    fn default() -> Self {
+        Self {
+            tier_up_threshold: 0,
+            force_bail: false,
+            collect_stats: false,
+            precise_deopt: true,
+            eager_osr: false,
+            report: false,
+            forced_safepoint: None,
+            force_all_safepoints: false,
         }
     }
 }

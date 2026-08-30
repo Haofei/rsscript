@@ -175,11 +175,13 @@ impl RegVm {
                             unit,
                             func,
                             function_facts,
-                            profile,
-                            call_count,
-                            &std::collections::HashMap::new(),
-                            &self_call_sites,
-                            &std::collections::HashMap::new(),
+                            NativeCallTranslationContext {
+                                profile,
+                                call_count,
+                                compiled_callees: &std::collections::HashMap::new(),
+                                self_call_sites: &self_call_sites,
+                                group_call_sites: &std::collections::HashMap::new(),
+                            },
                         )
                         .and_then(
                             |NativeTranslation {
@@ -379,11 +381,13 @@ impl RegVm {
                             unit,
                             mfunc,
                             verified_facts.function(member)?,
-                            self.jit_state.profile(mfunc),
-                            self.jit_state.call_count(mfunc),
-                            &std::collections::HashMap::new(),
-                            &std::collections::HashSet::new(),
-                            &group_call_sites,
+                            NativeCallTranslationContext {
+                                profile: self.jit_state.profile(mfunc),
+                                call_count: self.jit_state.call_count(mfunc),
+                                compiled_callees: &std::collections::HashMap::new(),
+                                self_call_sites: &std::collections::HashSet::new(),
+                                group_call_sites: &group_call_sites,
+                            },
                         )?;
                         // Scalar-only ABI: params and return must be Int/Bool/Float
                         // (each wraps to/from an i64 slot). Heap params/returns decline.

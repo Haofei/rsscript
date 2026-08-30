@@ -515,6 +515,7 @@ mod tests {
     fn cancellation_unit() -> Rc<RegUnit> {
         let main = RegFunction {
             ordinal: 0,
+            #[cfg(feature = "native-jit")]
             name: "main".to_string(),
             params: 0,
             captures: 0,
@@ -533,6 +534,7 @@ mod tests {
         };
         let worker = RegFunction {
             ordinal: 1,
+            #[cfg(feature = "native-jit")]
             name: "worker".to_string(),
             params: 0,
             captures: 0,

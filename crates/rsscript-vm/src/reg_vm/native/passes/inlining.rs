@@ -391,6 +391,17 @@ fn native_inline_leaf_calls_inner(
         cmap: Vec<usize>,
     }
 
+    struct SpliceContext<'a> {
+        unit: &'a RegUnit,
+        j3: bool,
+        new_code: &'a mut Vec<RegInstr>,
+        ip_map: &'a mut Vec<usize>,
+        fixups: &'a mut Vec<(usize, Fix)>,
+        splices: &'a mut Vec<Splice>,
+        joins: &'a mut Vec<usize>,
+        next_reg: &'a mut usize,
+    }
+
     let mut new_code: Vec<RegInstr> = Vec::new();
     // `ip_map[transformed_ip] = original_ip`, grown in lockstep with `new_code`.
     let mut ip_map: Vec<usize> = Vec::new();
@@ -407,22 +418,22 @@ fn native_inline_leaf_calls_inner(
     /// shared `join_slot`. Returns the splice id (registered in `splices` for
     /// `Fix::Callee` resolution). Args must already be moved into the `base` window.
     /// `None` if any callee instruction can't be offset into the native subset.
-    #[allow(clippy::too_many_arguments)]
     fn splice_callee(
-        unit: &RegUnit,
+        context: &mut SpliceContext<'_>,
         callee: &RegFunction,
         dst: usize,
         base: usize,
         join_slot: usize,
         origin: usize,
-        j3: bool,
-        new_code: &mut Vec<RegInstr>,
-        ip_map: &mut Vec<usize>,
-        fixups: &mut Vec<(usize, Fix)>,
-        splices: &mut Vec<Splice>,
-        joins: &mut Vec<usize>,
-        next_reg: &mut usize,
     ) -> Option<()> {
+        let unit = context.unit;
+        let j3 = context.j3;
+        let new_code = &mut *context.new_code;
+        let ip_map = &mut *context.ip_map;
+        let fixups = &mut *context.fixups;
+        let splices = &mut *context.splices;
+        let joins = &mut *context.joins;
+        let next_reg = &mut *context.next_reg;
         let id = splices.len();
         let reachable = native_reachable_instructions(&callee.code);
         // Deopt-before-heap: a COLD arm (`cold[ci]`) is replaced by a single native
@@ -481,19 +492,21 @@ fn native_inline_leaf_calls_inner(
                     let spawned_join_slot = joins.len();
                     joins.push(0);
                     splice_callee(
-                        unit,
+                        &mut SpliceContext {
+                            unit,
+                            j3,
+                            new_code,
+                            ip_map,
+                            fixups,
+                            splices,
+                            joins,
+                            next_reg,
+                        },
                         spawned,
                         base + spawn_dst,
                         spawn_base,
                         spawned_join_slot,
                         origin,
-                        j3,
-                        new_code,
-                        ip_map,
-                        fixups,
-                        splices,
-                        joins,
-                        next_reg,
                     )?;
                     joins[spawned_join_slot] = new_code.len();
                     if *spawn_dst < direct_spawn_results.len() {
@@ -820,19 +833,21 @@ fn native_inline_leaf_calls_inner(
                 let join_slot = joins.len();
                 joins.push(0);
                 splice_callee(
-                    unit,
+                    &mut SpliceContext {
+                        unit,
+                        j3,
+                        new_code: &mut new_code,
+                        ip_map: &mut ip_map,
+                        fixups: &mut fixups,
+                        splices: &mut splices,
+                        joins: &mut joins,
+                        next_reg: &mut next_reg,
+                    },
                     callee,
                     *dst,
                     base,
                     join_slot,
                     i,
-                    j3,
-                    &mut new_code,
-                    &mut ip_map,
-                    &mut fixups,
-                    &mut splices,
-                    &mut joins,
-                    &mut next_reg,
                 )?;
                 joins[join_slot] = new_code.len();
             }
@@ -883,19 +898,21 @@ fn native_inline_leaf_calls_inner(
                 let join_slot = joins.len();
                 joins.push(0);
                 splice_callee(
-                    unit,
+                    &mut SpliceContext {
+                        unit,
+                        j3,
+                        new_code: &mut new_code,
+                        ip_map: &mut ip_map,
+                        fixups: &mut fixups,
+                        splices: &mut splices,
+                        joins: &mut joins,
+                        next_reg: &mut next_reg,
+                    },
                     callee,
                     *dst,
                     base,
                     join_slot,
                     i,
-                    j3,
-                    &mut new_code,
-                    &mut ip_map,
-                    &mut fixups,
-                    &mut splices,
-                    &mut joins,
-                    &mut next_reg,
                 )?;
                 joins[join_slot] = new_code.len();
                 for &pos in mut_args {
@@ -927,19 +944,21 @@ fn native_inline_leaf_calls_inner(
                 let join_slot = joins.len();
                 joins.push(0);
                 splice_callee(
-                    unit,
+                    &mut SpliceContext {
+                        unit,
+                        j3,
+                        new_code: &mut new_code,
+                        ip_map: &mut ip_map,
+                        fixups: &mut fixups,
+                        splices: &mut splices,
+                        joins: &mut joins,
+                        next_reg: &mut next_reg,
+                    },
                     callee,
                     *dst,
                     base,
                     join_slot,
                     i,
-                    j3,
-                    &mut new_code,
-                    &mut ip_map,
-                    &mut fixups,
-                    &mut splices,
-                    &mut joins,
-                    &mut next_reg,
                 )?;
                 joins[join_slot] = new_code.len();
             }
@@ -1006,19 +1025,21 @@ fn native_inline_leaf_calls_inner(
                 let join_slot = joins.len();
                 joins.push(0);
                 splice_callee(
-                    unit,
+                    &mut SpliceContext {
+                        unit,
+                        j3,
+                        new_code: &mut new_code,
+                        ip_map: &mut ip_map,
+                        fixups: &mut fixups,
+                        splices: &mut splices,
+                        joins: &mut joins,
+                        next_reg: &mut next_reg,
+                    },
                     callee,
                     *dst,
                     base,
                     join_slot,
                     i,
-                    j3,
-                    &mut new_code,
-                    &mut ip_map,
-                    &mut fixups,
-                    &mut splices,
-                    &mut joins,
-                    &mut next_reg,
                 )?;
                 joins[join_slot] = new_code.len();
             }
@@ -1123,19 +1144,21 @@ fn native_inline_leaf_calls_inner(
                         ip_map.push(i);
                     }
                     splice_callee(
-                        unit,
+                        &mut SpliceContext {
+                            unit,
+                            j3,
+                            new_code: &mut new_code,
+                            ip_map: &mut ip_map,
+                            fixups: &mut fixups,
+                            splices: &mut splices,
+                            joins: &mut joins,
+                            next_reg: &mut next_reg,
+                        },
                         callee,
                         *dst,
                         base,
                         join_slot,
                         i,
-                        j3,
-                        &mut new_code,
-                        &mut ip_map,
-                        &mut fixups,
-                        &mut splices,
-                        &mut joins,
-                        &mut next_reg,
                     )?;
                 }
                 // Shared join lands just past the final arm.

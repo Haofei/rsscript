@@ -182,12 +182,23 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_compiled_callees(
         unit,
         func,
         facts,
-        profile,
-        call_count,
-        compiled_callees,
-        &HashSet::new(),
-        &HashMap::new(),
+        NativeCallTranslationContext {
+            profile,
+            call_count,
+            compiled_callees,
+            self_call_sites: &HashSet::new(),
+            group_call_sites: &HashMap::new(),
+        },
     )
+}
+
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) struct NativeCallTranslationContext<'a> {
+    pub(in crate::reg_vm) profile: Option<&'a FunctionProfile>,
+    pub(in crate::reg_vm) call_count: u32,
+    pub(in crate::reg_vm) compiled_callees: &'a HashMap<usize, NativeCompiledCallee>,
+    pub(in crate::reg_vm) self_call_sites: &'a HashSet<usize>,
+    pub(in crate::reg_vm) group_call_sites: &'a HashMap<usize, u32>,
 }
 
 /// Like [`translate_to_native_jit_with_compiled_callees`], but `self_call_sites`
@@ -199,20 +210,21 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_compiled_callees(
 /// (`precise_resume_safe` forced off), so a bail anywhere in the recursion unwinds
 /// to the interpreter.
 #[cfg(feature = "native-jit")]
-// The call-site maps are distinct proof inputs; grouping them would obscure their
-// recursion and already-compiled-callee invariants.
-#[allow(clippy::too_many_arguments)]
 pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     unit: &RegUnit,
     func: &RegFunction,
     facts: &VerifiedFunctionFacts,
-    profile: Option<&FunctionProfile>,
-    call_count: u32,
-    compiled_callees: &HashMap<usize, NativeCompiledCallee>,
-    self_call_sites: &HashSet<usize>,
-    group_call_sites: &HashMap<usize, u32>,
+    context: NativeCallTranslationContext<'_>,
 ) -> Option<NativeTranslation> {
     use vm_jit::{JitCompare, JitInstr};
+
+    let NativeCallTranslationContext {
+        profile,
+        call_count,
+        compiled_callees,
+        self_call_sites,
+        group_call_sites,
+    } = context;
 
     if func.captures != 0 {
         return None;
@@ -2161,21 +2173,37 @@ pub(in crate::reg_vm) fn require(condition: bool) -> Option<()> {
 }
 
 #[cfg(feature = "native-jit")]
-// OSR lowering takes explicit region, profile, type, and ownership proofs.
-#[allow(clippy::too_many_arguments)]
+pub(in crate::reg_vm) struct OsrTranslationRequest<'a> {
+    pub(in crate::reg_vm) function: &'a RegFunction,
+    pub(in crate::reg_vm) facts: &'a VerifiedFunctionFacts,
+    pub(in crate::reg_vm) profile: Option<&'a FunctionProfile>,
+    pub(in crate::reg_vm) code: &'a [RegInstr],
+    pub(in crate::reg_vm) register_count: usize,
+    pub(in crate::reg_vm) parameter_count: usize,
+    pub(in crate::reg_vm) capture_count: usize,
+    pub(in crate::reg_vm) region: OsrLoop,
+    pub(in crate::reg_vm) ip_map: &'a [usize],
+    pub(in crate::reg_vm) parameter_types: &'a [Option<NativeTy>],
+    pub(in crate::reg_vm) immutable_leaf_params: &'a [bool],
+}
+
+#[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn translate_osr_loop_profiled(
-    func: &RegFunction,
-    facts: &VerifiedFunctionFacts,
-    profile: Option<&FunctionProfile>,
-    code: &[RegInstr],
-    n_regs: usize,
-    n_params: usize,
-    captures: usize,
-    lp: OsrLoop,
-    ip_map: &[usize],
-    param_native_types: &[Option<NativeTy>],
-    immutable_leaf_params: &[bool],
+    request: OsrTranslationRequest<'_>,
 ) -> Option<OsrTranslation> {
+    let OsrTranslationRequest {
+        function: func,
+        facts,
+        profile,
+        code,
+        register_count: n_regs,
+        parameter_count: n_params,
+        capture_count: captures,
+        region: lp,
+        ip_map,
+        parameter_types: param_native_types,
+        immutable_leaf_params,
+    } = request;
     // The direct verified-bytecode OSR path consumes the same bounded typed
     // block IR as continuations. Transformed/inlined streams retain their
     // existing proven facts until their origin map can project typed values
@@ -2193,22 +2221,22 @@ pub(in crate::reg_vm) fn translate_osr_loop_profiled(
         code
     };
     let profile_guidance = native_osr_profile_guidance(profile, code, n_regs, lp, ip_map);
-    translate_osr_loop_inner(
+    translate_osr_loop_inner(OsrLoweringRequest {
         code,
-        n_regs,
-        n_params,
-        captures,
-        lp,
-        profile_guidance.cold_blocks,
-        profile_guidance.hot_branch_edges,
-        param_native_types,
+        register_count: n_regs,
+        parameter_count: n_params,
+        capture_count: captures,
+        region: lp,
+        cold_blocks: profile_guidance.cold_blocks,
+        profile_hot_branch_edges: profile_guidance.hot_branch_edges,
+        parameter_types: param_native_types,
         immutable_leaf_params,
-        Some(facts),
-        typed_ir.as_ref(),
-        Some(ip_map),
-        func.code.len(),
-        true,
-    )
+        verified_facts: Some(facts),
+        typed_ir: typed_ir.as_ref(),
+        source_ip_map: Some(ip_map),
+        source_instruction_count: func.code.len(),
+        enable_flat_buffers: true,
+    })
 }
 
 /// Union-find `find` with path-halving, used by the OSR translator's Handle-`Move`
@@ -2226,27 +2254,46 @@ fn osr_uf_find(a: &mut [usize], mut x: usize) -> usize {
 }
 
 #[cfg(feature = "native-jit")]
-// OSR lowering coordinates bytecode, source maps, typed facts, and region policy;
-// source-IP loops intentionally index those parallel semantic tables.
-#[allow(clippy::needless_range_loop, clippy::too_many_arguments)]
-fn translate_osr_loop_inner(
-    code: &[RegInstr],
-    n_regs: usize,
-    n_params: usize,
-    captures: usize,
-    lp: OsrLoop,
+struct OsrLoweringRequest<'a> {
+    code: &'a [RegInstr],
+    register_count: usize,
+    parameter_count: usize,
+    capture_count: usize,
+    region: OsrLoop,
     cold_blocks: Vec<u32>,
-    #[cfg_attr(not(feature = "jit-speculation"), allow(unused_variables))]
     profile_hot_branch_edges: HashMap<usize, bool>,
-    param_native_types: &[Option<NativeTy>],
-    immutable_leaf_params: &[bool],
-    verified_facts: Option<&VerifiedFunctionFacts>,
-    typed_ir: Option<&TypedRegionIr>,
-    source_ip_map: Option<&[usize]>,
+    parameter_types: &'a [Option<NativeTy>],
+    immutable_leaf_params: &'a [bool],
+    verified_facts: Option<&'a VerifiedFunctionFacts>,
+    typed_ir: Option<&'a TypedRegionIr>,
+    source_ip_map: Option<&'a [usize]>,
     source_instruction_count: usize,
     enable_flat_buffers: bool,
-) -> Option<OsrTranslation> {
+}
+
+#[cfg(feature = "native-jit")]
+#[allow(clippy::needless_range_loop)]
+fn translate_osr_loop_inner(request: OsrLoweringRequest<'_>) -> Option<OsrTranslation> {
     use vm_jit::{JitCompare, JitInstr};
+
+    let OsrLoweringRequest {
+        code,
+        register_count: n_regs,
+        parameter_count: n_params,
+        capture_count: captures,
+        region: lp,
+        cold_blocks,
+        profile_hot_branch_edges,
+        parameter_types: param_native_types,
+        immutable_leaf_params,
+        verified_facts,
+        typed_ir,
+        source_ip_map,
+        source_instruction_count,
+        enable_flat_buffers,
+    } = request;
+    #[cfg(not(feature = "jit-speculation"))]
+    let _ = &profile_hot_branch_edges;
 
     if captures != 0 {
         return None;

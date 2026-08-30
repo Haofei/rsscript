@@ -1351,7 +1351,7 @@ impl RegVm {
                 // functions already known not native-eligible (just a `Cell` read).
                 && self.jit_state.native_status(&func) != NATIVE_STATUS_NOT_ELIGIBLE
             {
-                match self.try_native(&func, base) {
+                match self.attempt_native(&func, base) {
                     NativeAttempt::Completed(value) => {
                         let frame = self.frames.pop().expect("active frame");
                         self.apply_mut_writeback(&frame);

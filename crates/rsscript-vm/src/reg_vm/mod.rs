@@ -82,6 +82,8 @@ mod tier;
 mod value_access;
 mod value_convert;
 mod value_ops;
+#[cfg(all(feature = "native-jit", any(test, feature = "jit-diagnostics")))]
+use execution_plan::NativeDiagnosticOptions;
 #[cfg(feature = "native-jit")]
 use execution_plan::NativeExecutionPlan;
 use execution_plan::{ExecutionPlan, StdoutMode, TierPlan};
@@ -389,17 +391,10 @@ impl RegVmExecutable {
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<EvalOutput, EvalError> {
-        self.eval_main_with_args_native_inner(
-            args, 0, false, false,
-            // heap-aware deopt: precise resume is the production DEFAULT. A native guard bail
-            // reconstructs the live interpreter window (heap-aware: scalars restored,
-            // heap/flat regs left to the frame) and resumes at the safepoint. It is
-            // byte-identical to re-run-from-top (validated corpus-wide), which remains
-            // the fallback when a heap write disables precise resume and is kept under
-            // differential coverage by the force-deopt backend.
-            true, false, None, false,
-        )
-        .map(|(output, _stats)| output)
+        // Heap-aware precise resume is the diagnostic default. The force-deopt
+        // entry point below explicitly opts out to cover replay-from-entry.
+        self.eval_main_with_args_native_inner(args, NativeDiagnosticOptions::default())
+            .map(|(output, _stats)| output)
     }
 
     /// Like [`Self::eval_main_with_args_native`] but also returns the native-tier
@@ -410,10 +405,11 @@ impl RegVmExecutable {
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<(EvalOutput, NativeStats), EvalError> {
         self.eval_main_with_args_native_inner(
-            args, 0, false, true,
-            // heap-aware deopt: precise resume is the production default (see
-            // `eval_main_with_args_native`).
-            true, false, None, false,
+            args,
+            NativeDiagnosticOptions {
+                collect_stats: true,
+                ..NativeDiagnosticOptions::default()
+            },
         )
     }
 
@@ -429,13 +425,10 @@ impl RegVmExecutable {
     ) -> Result<EvalOutput, EvalError> {
         self.eval_main_with_args_native_inner(
             args,
-            tier_up_threshold,
-            false,
-            false,
-            true,
-            false,
-            None,
-            false,
+            NativeDiagnosticOptions {
+                tier_up_threshold,
+                ..NativeDiagnosticOptions::default()
+            },
         )
         .map(|(output, _stats)| output)
     }
@@ -450,13 +443,11 @@ impl RegVmExecutable {
     ) -> Result<(EvalOutput, NativeStats), EvalError> {
         self.eval_main_with_args_native_inner(
             args,
-            tier_up_threshold,
-            false,
-            true,
-            true,
-            false,
-            None,
-            false,
+            NativeDiagnosticOptions {
+                tier_up_threshold,
+                collect_stats: true,
+                ..NativeDiagnosticOptions::default()
+            },
         )
     }
 
@@ -467,7 +458,14 @@ impl RegVmExecutable {
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<(EvalOutput, NativeStats), EvalError> {
-        self.eval_main_with_args_native_inner(args, 0, false, true, true, true, None, false)
+        self.eval_main_with_args_native_inner(
+            args,
+            NativeDiagnosticOptions {
+                collect_stats: true,
+                eager_osr: true,
+                ..NativeDiagnosticOptions::default()
+            },
+        )
     }
 
     /// Run `main` with the native tier AND OSR forced on (deterministically,
@@ -481,9 +479,11 @@ impl RegVmExecutable {
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<EvalOutput, EvalError> {
         self.eval_main_with_args_native_inner(
-            args, 0, false, false,
-            // OSR-exit resumes via the precise-deopt path, so OSR implies precise.
-            true, true, None, false,
+            args,
+            NativeDiagnosticOptions {
+                eager_osr: true,
+                ..NativeDiagnosticOptions::default()
+            },
         )
         .map(|(output, _stats)| output)
     }
@@ -500,7 +500,7 @@ impl RegVmExecutable {
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<EvalOutput, EvalError> {
-        self.eval_main_with_args_native_inner(args, 0, false, false, true, false, None, false)
+        self.eval_main_with_args_native_inner(args, NativeDiagnosticOptions::default())
             .map(|(output, _stats)| output)
     }
 
@@ -513,8 +513,15 @@ impl RegVmExecutable {
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<EvalOutput, EvalError> {
-        self.eval_main_with_args_native_inner(args, 0, true, false, false, false, None, false)
-            .map(|(output, _stats)| output)
+        self.eval_main_with_args_native_inner(
+            args,
+            NativeDiagnosticOptions {
+                force_bail: true,
+                precise_deopt: false,
+                ..NativeDiagnosticOptions::default()
+            },
+        )
+        .map(|(output, _stats)| output)
     }
 
     /// Run `main` while forcing the selected native safepoint to deopt. Unlike
@@ -529,13 +536,10 @@ impl RegVmExecutable {
     ) -> Result<EvalOutput, EvalError> {
         self.eval_main_with_args_native_inner(
             args,
-            0,
-            false,
-            false,
-            true,
-            false,
-            Some(safepoint),
-            false,
+            NativeDiagnosticOptions {
+                forced_safepoint: Some(safepoint),
+                ..NativeDiagnosticOptions::default()
+            },
         )
         .map(|(output, _stats)| output)
     }
@@ -548,8 +552,14 @@ impl RegVmExecutable {
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<EvalOutput, EvalError> {
-        self.eval_main_with_args_native_inner(args, 0, false, false, true, false, None, true)
-            .map(|(output, _stats)| output)
+        self.eval_main_with_args_native_inner(
+            args,
+            NativeDiagnosticOptions {
+                force_all_safepoints: true,
+                ..NativeDiagnosticOptions::default()
+            },
+        )
+        .map(|(output, _stats)| output)
     }
 
     /// Test/validation entry point for the lever-2 missed-optimization report. Runs
@@ -569,43 +579,27 @@ impl RegVmExecutable {
         // which keeps execution on the interpreter while limits are armed.
         self.eval_main_with_args_native_inner_reported(
             args,
-            0,
-            false,
-            true,
-            true,
-            true,
-            true,
-            None,
-            false,
+            NativeDiagnosticOptions {
+                collect_stats: true,
+                eager_osr: true,
+                report: true,
+                ..NativeDiagnosticOptions::default()
+            },
             VmLimits::unbounded_for_trusted_host(),
         )
     }
 
     #[cfg(all(feature = "native-jit", any(test, feature = "jit-diagnostics")))]
-    #[allow(clippy::too_many_arguments)] // Diagnostic-only compatibility helper.
     fn eval_main_with_args_native_inner(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
-        tier_up_threshold: u32,
-        force_bail: bool,
-        collect_stats: bool,
-        precise_deopt_override: bool,
-        osr_override: bool,
-        forced_safepoint: Option<u32>,
-        force_all_safepoints_override: bool,
+        diagnostics: NativeDiagnosticOptions,
     ) -> Result<(EvalOutput, NativeStats), EvalError> {
         // Native code does not yet poll or account interpreter budgets. Keep this
         // opt-in experimental API explicit about its trusted-host execution model.
         self.eval_main_with_args_native_inner_reported(
             args,
-            tier_up_threshold,
-            force_bail,
-            collect_stats,
-            precise_deopt_override,
-            osr_override,
-            false,
-            forced_safepoint,
-            force_all_safepoints_override,
+            diagnostics,
             VmLimits::unbounded_for_trusted_host(),
         )
         .map(|(output, stats, _lines)| (output, stats))
@@ -622,7 +616,12 @@ impl RegVmExecutable {
         limits: VmLimits,
     ) -> Result<(EvalOutput, NativeStats), EvalError> {
         self.eval_main_with_args_native_inner_reported(
-            args, 0, false, true, true, false, false, None, false, limits,
+            args,
+            NativeDiagnosticOptions {
+                collect_stats: true,
+                ..NativeDiagnosticOptions::default()
+            },
+            limits,
         )
         .map(|(output, stats, _lines)| (output, stats))
     }
@@ -639,36 +638,25 @@ impl RegVmExecutable {
         limits: VmLimits,
     ) -> Result<(EvalOutput, NativeStats), EvalError> {
         self.eval_main_with_args_native_inner_reported(
-            args, 0, false, true, true, true, false, None, false, limits,
+            args,
+            NativeDiagnosticOptions {
+                collect_stats: true,
+                eager_osr: true,
+                ..NativeDiagnosticOptions::default()
+            },
+            limits,
         )
         .map(|(output, stats, _lines)| (output, stats))
     }
 
     #[cfg(all(feature = "native-jit", any(test, feature = "jit-diagnostics")))]
-    #[allow(clippy::too_many_arguments)]
     fn eval_main_with_args_native_inner_reported(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
-        tier_up_threshold: u32,
-        force_bail: bool,
-        collect_stats: bool,
-        precise_deopt_override: bool,
-        osr_override: bool,
-        report_override: bool,
-        forced_safepoint: Option<u32>,
-        force_all_safepoints_override: bool,
+        diagnostics: NativeDiagnosticOptions,
         limits: VmLimits,
     ) -> Result<(EvalOutput, NativeStats, Vec<String>), EvalError> {
-        let native_plan = NativeExecutionPlan::for_diagnostics(
-            tier_up_threshold,
-            force_bail,
-            collect_stats,
-            precise_deopt_override,
-            osr_override,
-            report_override,
-            forced_safepoint,
-            force_all_safepoints_override,
-        );
+        let native_plan = NativeExecutionPlan::for_diagnostics(diagnostics);
         let plan = ExecutionPlan::native(limits, native_plan);
         let mut vm = self.prepare_vm(
             args.into_iter().map(Into::into).collect(),
@@ -1710,8 +1698,7 @@ struct NativeState {
     osr_triggers: HashMap<RegionKey, OsrTrigger>,
     /// OSR compile cache keyed by function, original loop header, and runtime
     /// shape. `Some(entry)` is compiled; `None` is a stable per-version decline.
-    #[allow(clippy::type_complexity)]
-    osr_cache: HashMap<OsrVersionKey, Option<OsrEntry>>,
+    osr_cache: OsrCache,
     /// Optimized OSR entries and their bounded baseline recompile sources.
     optimized_osr_cache: HashMap<OsrVersionKey, OsrEntry>,
     osr_optimization_sources: HashMap<OsrVersionKey, OsrOptimizationSource>,
@@ -1784,6 +1771,9 @@ struct NativeState {
     /// instead of permanently marking the loop `GaveUp`.
     osr_dynamic_bail: bool,
 }
+
+#[cfg(feature = "native-jit")]
+type OsrCache = HashMap<OsrVersionKey, Option<OsrEntry>>;
 
 #[cfg(feature = "native-jit")]
 impl NativeState {

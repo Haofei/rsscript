@@ -15,7 +15,6 @@ pub(crate) struct RegUnit {
     /// bytecode remains untyped, but native lowering can use this as a conservative
     /// seed for scalar/handle ABI inference when a function body is otherwise
     /// polymorphic (for example `Float` parameters used only in arithmetic).
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
     pub(crate) native_signatures: HashMap<String, RegNativeSignature>,
     /// Whether the program can ever *observe closure identity* — i.e. whether any
     /// user-source `==`/`!=` could compare operands whose static type is, or
@@ -91,13 +90,11 @@ pub(crate) struct RegFunction {
     /// general program identity used by frames and side tables; it is not JIT
     /// feedback and never changes during execution.
     pub(crate) ordinal: usize,
-    // `params`/`captures` are metadata read only by the native JIT (translation);
-    // `name` is retained as diagnostic/debug metadata.
-    #[allow(dead_code)]
+    // `params`/`captures` are runtime call-window metadata. The function name is
+    // retained only by the optional native engine for diagnostics and cache evidence.
+    #[cfg(feature = "native-jit")]
     pub(crate) name: String,
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
     pub(crate) params: usize,
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
     pub(crate) captures: usize,
     pub(crate) regs: usize,
     pub(crate) local_regs: HashMap<String, Reg>,
@@ -279,10 +276,11 @@ impl RegionController {
 
 impl RegFunction {
     #[cfg(test)]
-    pub(crate) fn placeholder(name: String) -> Self {
+    pub(crate) fn placeholder(_name: String) -> Self {
         Self {
             ordinal: 0,
-            name,
+            #[cfg(feature = "native-jit")]
+            name: _name,
             params: 0,
             captures: 0,
             regs: 0,
@@ -646,7 +644,6 @@ pub(crate) enum RegInstr {
     /// reads `closure`'s underlying function id and, if it differs from `expected`,
     /// bails to the interpreter (the existing re-run-from-top fallback). Guards an
     /// inlined monomorphic `CallClosure` so a mispredicted callee never runs native.
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
     NativeGuardClosureId {
         closure: Reg,
         expected: usize,
@@ -659,7 +656,6 @@ pub(crate) enum RegInstr {
     /// which the dispatcher then compares against each speculated callee key with
     /// ordinary integer compare/branch instructions (the no-match arm bails via the
     /// existing re-run-from-top fallback). `closure` is a parameter handle.
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
     NativeClosureId {
         dst: Reg,
         closure: Reg,
@@ -674,7 +670,6 @@ pub(crate) enum RegInstr {
     /// capture register `base + index`). A
     /// non-scalar/out-of-range capture bails out-of-band (defensive — the inline
     /// gate only fires for profiled-scalar captures).
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
     NativeClosureCapture {
         dst: Reg,
         closure: Reg,
@@ -690,7 +685,6 @@ pub(crate) enum RegInstr {
     ///
     /// but avoids materializing the intermediate heap handle when `tmp` is only used
     /// for closure metadata reads.
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
     NativeFieldClosureId {
         dst: Reg,
         base: Reg,
@@ -698,7 +692,6 @@ pub(crate) enum RegInstr {
     },
     /// Synthetic, native-JIT-only fused closure-capture read from a heap
     /// struct/variant field. See [`RegInstr::NativeFieldClosureId`].
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
     NativeFieldClosureCapture {
         dst: Reg,
         base: Reg,

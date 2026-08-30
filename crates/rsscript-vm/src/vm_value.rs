@@ -282,7 +282,7 @@ impl TypedVec {
     /// native tier to index directly. `None` for any other kind. The pointer is
     /// only valid while the backing `Vec` is borrowed and not mutated (the caller's
     /// borrow protocol — see `try_native`).
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    #[cfg(feature = "native-jit")]
     pub(crate) fn as_ints_slice(&self) -> Option<&[i64]> {
         match self {
             TypedVec::Ints(v) => Some(v.as_slice()),
@@ -293,7 +293,7 @@ impl TypedVec {
     /// TV2 write path: mutable `i64` buffer of an `Ints` list. Native marshalling
     /// converts this slice to a raw pointer while holding the mutable borrow and
     /// protecting the write with the heap transaction rollback guard.
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    #[cfg(feature = "native-jit")]
     pub(crate) fn as_ints_mut_slice(&mut self) -> Option<&mut [i64]> {
         match self {
             TypedVec::Ints(v) => Some(v.as_mut_slice()),
@@ -303,7 +303,7 @@ impl TypedVec {
 
     /// TV2: the raw flat `f64` buffer of a `Floats` list as `(ptr, len)`. `None`
     /// for any other kind.
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    #[cfg(feature = "native-jit")]
     pub(crate) fn as_floats_slice(&self) -> Option<&[f64]> {
         match self {
             TypedVec::Floats(v) => Some(v.as_slice()),
@@ -315,7 +315,7 @@ impl TypedVec {
     /// mirror of [`as_ints_mut_slice`](Self::as_ints_mut_slice). Native marshalling
     /// converts this slice to a raw pointer while holding the mutable borrow and
     /// protecting the write with the heap transaction rollback guard.
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    #[cfg(feature = "native-jit")]
     pub(crate) fn as_floats_mut_slice(&mut self) -> Option<&mut [f64]> {
         match self {
             TypedVec::Floats(v) => Some(v.as_mut_slice()),

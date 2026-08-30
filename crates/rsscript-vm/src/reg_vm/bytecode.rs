@@ -60,6 +60,7 @@ impl WireUnit {
             .enumerate()
             .map(|(ordinal, function)| RegFunction {
                 ordinal,
+                #[cfg(feature = "native-jit")]
                 name: function.name,
                 params: function.params,
                 captures: function.captures,

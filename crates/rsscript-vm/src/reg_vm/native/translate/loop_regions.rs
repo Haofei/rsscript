@@ -529,25 +529,25 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
         reg_tys: reg_types,
         written_regs,
         string_literals,
-    } = translate_osr_loop_inner(
-        &synthetic,
-        func.regs,
-        func.params,
-        func.captures,
-        OsrLoop {
+    } = translate_osr_loop_inner(OsrLoweringRequest {
+        code: &synthetic,
+        register_count: func.regs,
+        parameter_count: func.params,
+        capture_count: func.captures,
+        region: OsrLoop {
             header: region.entry,
             exit: synthetic.len(),
         },
-        Vec::new(),
-        HashMap::new(),
-        param_native_types,
-        &immutable_leaf_params,
-        Some(facts),
-        Some(&typed_ir),
-        None,
-        func.code.len(),
-        false,
-    )?;
+        cold_blocks: Vec::new(),
+        profile_hot_branch_edges: HashMap::new(),
+        parameter_types: param_native_types,
+        immutable_leaf_params: &immutable_leaf_params,
+        verified_facts: Some(facts),
+        typed_ir: Some(&typed_ir),
+        source_ip_map: None,
+        source_instruction_count: func.code.len(),
+        enable_flat_buffers: false,
+    })?;
     if !derived_liveins.is_empty()
         || !scalar_fields.is_empty()
         || !string_literals.is_empty()

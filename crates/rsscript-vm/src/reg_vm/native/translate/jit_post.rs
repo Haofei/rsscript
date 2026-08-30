@@ -584,13 +584,15 @@ pub(super) fn native_memoize_loop_invariant_runtime_helper_calls(
             if !native_readonly_licm_eligible(
                 helper,
                 &args,
-                &invariants,
-                jit_code,
-                heap_provenance.as_ref(),
-                lp.header,
-                lp.exit,
-                ip,
-                typed_ir,
+                ReadonlyLicmContext {
+                    invariants: &invariants,
+                    jit_code,
+                    provenance: heap_provenance.as_ref(),
+                    header: lp.header,
+                    exit: lp.exit,
+                    helper_ip: ip,
+                    typed_ir,
+                },
             ) {
                 continue;
             }
@@ -645,18 +647,31 @@ fn native_memoizable_runtime_helper_call(
 /// value is an immutable RSScript scalar/leaf object covered by the established
 /// compatibility whitelist.
 #[cfg(feature = "native-jit")]
-#[allow(clippy::too_many_arguments)]
-fn native_readonly_licm_eligible(
-    helper: vm_jit::HostHelper,
-    args: &[vm_jit::HostArg],
-    invariants: &NativeLoopInvariants,
-    jit_code: &[vm_jit::JitInstr],
-    provenance: Option<&NativeHeapProvenanceFacts>,
+struct ReadonlyLicmContext<'a> {
+    invariants: &'a NativeLoopInvariants,
+    jit_code: &'a [vm_jit::JitInstr],
+    provenance: Option<&'a NativeHeapProvenanceFacts>,
     header: usize,
     exit: usize,
     helper_ip: usize,
-    typed_ir: Option<&TypedRegionIr>,
+    typed_ir: Option<&'a TypedRegionIr>,
+}
+
+#[cfg(feature = "native-jit")]
+fn native_readonly_licm_eligible(
+    helper: vm_jit::HostHelper,
+    args: &[vm_jit::HostArg],
+    context: ReadonlyLicmContext<'_>,
 ) -> bool {
+    let ReadonlyLicmContext {
+        invariants,
+        jit_code,
+        provenance,
+        header,
+        exit,
+        helper_ip,
+        typed_ir,
+    } = context;
     if helper.heap_effect() != vm_jit::HostHeapEffect::ReadOnly
         || !native_runtime_helper_args_loop_invariant(args, invariants, helper_ip)
     {
@@ -1154,13 +1169,15 @@ mod readonly_licm_tests {
         assert!(!native_readonly_licm_eligible(
             vm_jit::HostHelper::ListGetInt,
             &args,
-            &invariants(3),
-            &code,
-            None,
-            0,
-            code.len(),
-            1,
-            None,
+            ReadonlyLicmContext {
+                invariants: &invariants(3),
+                jit_code: &code,
+                provenance: None,
+                header: 0,
+                exit: code.len(),
+                helper_ip: 1,
+                typed_ir: None,
+            },
         ));
     }
 
@@ -1187,13 +1204,15 @@ mod readonly_licm_tests {
         assert!(!native_readonly_licm_eligible(
             vm_jit::HostHelper::ListGetInt,
             &args,
-            &invariants(4),
-            &code,
-            None,
-            0,
-            code.len(),
-            0,
-            None,
+            ReadonlyLicmContext {
+                invariants: &invariants(4),
+                jit_code: &code,
+                provenance: None,
+                header: 0,
+                exit: code.len(),
+                helper_ip: 0,
+                typed_ir: None,
+            },
         ));
     }
 }
@@ -1291,8 +1310,14 @@ mod direct_store_forwarding_tests {
 
     #[test]
     fn calls_and_unknown_heap_effects_kill_available_store() {
-        #[allow(unused_mut)]
+        #[cfg(any(feature = "jit-recursion-experimental", feature = "jit-speculation"))]
         let mut barriers = vec![vm_jit::JitInstr::HostCall {
+            helper: vm_jit::HostHelper::StringLen,
+            dst: 19,
+            args: vec![vm_jit::HostArg::Reg(18)],
+        }];
+        #[cfg(not(any(feature = "jit-recursion-experimental", feature = "jit-speculation")))]
+        let barriers = vec![vm_jit::JitInstr::HostCall {
             helper: vm_jit::HostHelper::StringLen,
             dst: 19,
             args: vec![vm_jit::HostArg::Reg(18)],

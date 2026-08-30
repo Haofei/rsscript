@@ -1477,45 +1477,44 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    struct StructRecipeContext<'a> {
+        class_layout: &'a HashMap<usize, Rc<crate::vm_value::TypeLayout>>,
+        nested_slots: &'a HashMap<Vec<Rc<str>>, std::collections::HashSet<usize>>,
+        anchors: &'a HashMap<(usize, usize), usize>,
+        class_slot_reg: &'a HashMap<(usize, usize), usize>,
+        nodes: usize,
+    }
+
     fn build_struct_recipe_value(
         reg: usize,
         parent: &mut [usize],
-        class_layout: &HashMap<usize, Rc<crate::vm_value::TypeLayout>>,
-        nested_slots: &HashMap<Vec<Rc<str>>, std::collections::HashSet<usize>>,
-        anchors: &HashMap<(usize, usize), usize>,
-        class_slot_reg: &HashMap<(usize, usize), usize>,
         depth: usize,
-        nodes: &mut usize,
+        context: &mut StructRecipeContext<'_>,
     ) -> Option<OsrMaterializeValue> {
-        if depth >= MAX_OSR_MATERIALIZE_DEPTH || *nodes >= MAX_OSR_MATERIALIZE_NODES {
+        if depth >= MAX_OSR_MATERIALIZE_DEPTH || context.nodes >= MAX_OSR_MATERIALIZE_NODES {
             return None;
         }
-        *nodes += 1;
+        context.nodes += 1;
         let root = find(parent, reg);
-        let layout = Rc::clone(class_layout.get(&root)?);
-        let nested = nested_slots.get(&layout.field_names);
+        let layout = Rc::clone(context.class_layout.get(&root)?);
+        let nested = context.nested_slots.get(&layout.field_names);
         let mut fields = Vec::with_capacity(layout.field_names.len());
         for slot in 0..layout.field_names.len() {
-            if *nodes >= MAX_OSR_MATERIALIZE_NODES {
+            if context.nodes >= MAX_OSR_MATERIALIZE_NODES {
                 return None;
             }
             if nested.is_some_and(|slots| slots.contains(&slot)) {
-                let anchor = *anchors.get(&(root, slot))?;
+                let anchor = *context.anchors.get(&(root, slot))?;
                 fields.push(build_struct_recipe_value(
                     anchor,
                     parent,
-                    class_layout,
-                    nested_slots,
-                    anchors,
-                    class_slot_reg,
                     depth + 1,
-                    nodes,
+                    context,
                 )?);
             } else {
-                *nodes += 1;
+                context.nodes += 1;
                 fields.push(OsrMaterializeValue::Register(
-                    *class_slot_reg.get(&(root, slot))?,
+                    *context.class_slot_reg.get(&(root, slot))?,
                 ));
             }
         }
@@ -1525,19 +1524,16 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     let mut recipes = Vec::new();
     for (reg, &needs) in reconstruct.iter().enumerate() {
         if needs {
-            let mut nodes = 0;
+            let mut context = StructRecipeContext {
+                class_layout: &class_layout,
+                nested_slots: &nested_slots,
+                anchors: &anchors,
+                class_slot_reg: &class_slot_reg,
+                nodes: 0,
+            };
             recipes.push(OsrMaterializeRecipe {
                 dst_reg: reg,
-                value: build_struct_recipe_value(
-                    reg,
-                    &mut parent,
-                    &class_layout,
-                    &nested_slots,
-                    &anchors,
-                    &class_slot_reg,
-                    0,
-                    &mut nodes,
-                )?,
+                value: build_struct_recipe_value(reg, &mut parent, 0, &mut context)?,
             });
         }
     }

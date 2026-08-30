@@ -79,15 +79,6 @@ decision_by = "2026-12-31"
 tracking = "module-partition-backlog"
 
 [[allow]]
-path = "crates/rsscript-sdk/tests/architecture.rs"
-max_bytes = 194000
-reason = "Historical architecture checks will move into xtask as repository invariants are generalized."
-owner = "@Haofei"
-target_bytes = 60000
-decision_by = "2026-12-31"
-tracking = "module-partition-backlog"
-
-[[allow]]
 path = "crates/rsscript-semantics/src/database.rs"
 max_bytes = 136000
 reason = "CompilationSession storage/query partitioning must preserve revision and invalidation behavior."

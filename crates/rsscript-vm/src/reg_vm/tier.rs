@@ -17,12 +17,12 @@ mod recursion;
 mod state;
 
 #[cfg(feature = "native-jit")]
+use deopt_resume::NativeChildDeoptResume;
+
+#[cfg(feature = "native-jit")]
 use admission::*;
 #[cfg(feature = "native-jit")]
 use call_scratch::*;
-#[cfg(all(test, feature = "native-jit"))]
-#[allow(unused_imports)]
-pub(in crate::reg_vm) use compile_result::NativeCompileTelemetry;
 #[cfg(feature = "native-jit")]
 use compile_result::{native_region_is_promotion_eligible, record_native_compile_stats};
 #[cfg(feature = "native-jit")]
@@ -676,8 +676,7 @@ impl RegVm {
     /// exact value or error. Safe because native-eligible functions are leaf and
     /// side-effect-free, so re-running them is observationally identical.
     #[cfg(feature = "native-jit")]
-    #[allow(clippy::wrong_self_convention)]
-    pub(super) fn try_native(&mut self, func: &RegFunction, base: usize) -> NativeAttempt {
+    pub(super) fn attempt_native(&mut self, func: &RegFunction, base: usize) -> NativeAttempt {
         // Host helpers may re-enter the VM, but the native heap tables, transaction,
         // literals, and deopt state are one top-level frame rather than a frame stack.
         // Preserve the outer call by interpreting the nested invocation.
@@ -1758,15 +1757,15 @@ impl RegVm {
                         .map(|site| site.resume_ip);
                     if let Some(resume_ip) = resume_ip {
                         if let Some(child) = child.as_deref() {
-                            if self.try_resume_native_child_deopt_chain(
-                                &unit,
-                                func,
+                            if self.try_resume_native_child_deopt_chain(NativeChildDeoptResume {
+                                unit: &unit,
+                                function: func,
                                 base,
-                                resume_ip as usize,
-                                &live,
+                                resume_ip: resume_ip as usize,
+                                live: &live,
                                 child,
-                                heap_tx.host_ctx(),
-                            ) {
+                                host_ctx: heap_tx.host_ctx(),
+                            }) {
                                 if let Some(native) = self.native.as_mut()
                                     && native.collect_stats
                                 {
@@ -2062,19 +2061,19 @@ impl RegVm {
                         let identity_ip_map: Vec<usize> = (0..func.code.len()).collect();
                         let translation_started =
                             native.collect_stats.then(std::time::Instant::now);
-                        let translation = translate_osr_loop_profiled(
-                            func,
-                            function_facts,
+                        let translation = translate_osr_loop_profiled(OsrTranslationRequest {
+                            function: func,
+                            facts: function_facts,
                             profile,
-                            &func.code,
-                            func.regs,
-                            func.params,
-                            func.captures,
-                            lp,
-                            &identity_ip_map,
-                            &param_native_types,
-                            &immutable_leaf_params,
-                        );
+                            code: &func.code,
+                            register_count: func.regs,
+                            parameter_count: func.params,
+                            capture_count: func.captures,
+                            region: lp,
+                            ip_map: &identity_ip_map,
+                            parameter_types: &param_native_types,
+                            immutable_leaf_params: &immutable_leaf_params,
+                        });
                         if let Some(started) = translation_started {
                             native.stats.translation_nanos = native
                                 .stats
@@ -2517,19 +2516,19 @@ impl RegVm {
                             }
                             let translation_started =
                                 native.collect_stats.then(std::time::Instant::now);
-                            let translation = translate_osr_loop_profiled(
-                                func,
-                                function_facts,
+                            let translation = translate_osr_loop_profiled(OsrTranslationRequest {
+                                function: func,
+                                facts: function_facts,
                                 profile,
-                                &code,
-                                n_regs,
-                                eff_func.params,
-                                eff_func.captures,
-                                lp,
-                                &real_ip_map,
-                                &param_native_types,
-                                &immutable_leaf_params,
-                            );
+                                code: &code,
+                                register_count: n_regs,
+                                parameter_count: eff_func.params,
+                                capture_count: eff_func.captures,
+                                region: lp,
+                                ip_map: &real_ip_map,
+                                parameter_types: &param_native_types,
+                                immutable_leaf_params: &immutable_leaf_params,
+                            });
                             if let Some(started) = translation_started {
                                 native.stats.translation_nanos = native
                                     .stats
