@@ -1166,84 +1166,68 @@ fn validate_allow_debt(root: &Path) -> Result<(), Box<dyn Error>> {
     let document: toml::Value = toml::from_str(&fs::read_to_string(
         root.join("docs/architecture/allow-debt.toml"),
     )?)?;
-    if document["schema"].as_integer() != Some(1) {
-        return Err("allow debt inventory must use schema 1".into());
+    if document["schema"].as_integer() != Some(2) {
+        return Err("allow policy must use schema 2".into());
     }
-    let policy = document["vm"]
+    let policy = document["repository"]
         .as_table()
-        .ok_or("allow debt inventory must contain [vm]")?;
-    let source_root = policy["root"]
-        .as_str()
-        .ok_or("VM allow debt requires root")?;
-    let owner = policy["owner"]
-        .as_str()
-        .ok_or("VM allow debt requires owner")?;
-    if !owner.starts_with('@') {
-        return Err("VM allow debt requires an @owner".into());
-    }
-    let decision_by = policy["decision_by"]
-        .as_str()
-        .ok_or("VM allow debt requires decision_by")?;
-    if parse_civil_day(decision_by)? < current_unix_day()? {
-        return Err(format!("VM allow debt expired on `{decision_by}`").into());
+        .ok_or("allow policy must contain [repository]")?;
+    if policy["total"].as_integer() != Some(0) {
+        return Err("repository allow policy must remain at zero".into());
     }
 
-    let mut total = 0i64;
-    let mut dead_code = 0i64;
-    let mut too_many_arguments = 0i64;
-    let mut module_level_paths = BTreeSet::new();
-    for path in rust_files_below(&root.join(source_root))? {
+    let mut violations = Vec::new();
+    for path in rust_files_below(root)? {
         let source = fs::read_to_string(&path)?;
-        for line in source.lines() {
-            if !line.contains("allow(") {
-                continue;
-            }
-            total += 1;
-            dead_code += i64::from(line.contains("dead_code"));
-            too_many_arguments += i64::from(line.contains("too_many_arguments"));
-            if line.trim_start().starts_with("#![allow(") {
-                module_level_paths.insert(
-                    path.strip_prefix(root)
-                        .unwrap_or(&path)
-                        .to_string_lossy()
-                        .replace('\\', "/"),
-                );
-            }
+        for line in allow_attribute_lines(&source) {
+            let relative = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            violations.push(format!("{relative}:{line}"));
         }
     }
-    for (field, actual) in [
-        ("total", total),
-        ("dead_code", dead_code),
-        ("too_many_arguments", too_many_arguments),
-    ] {
-        let expected = policy[field]
-            .as_integer()
-            .ok_or_else(|| format!("VM allow debt requires `{field}`"))?;
-        if actual != expected {
-            return Err(format!(
-                "VM allow debt `{field}` changed from {expected} to {actual}; update the exact ratchet"
-            )
-            .into());
-        }
-    }
-    let expected_module_paths = policy["module_level_paths"]
-        .as_array()
-        .ok_or("VM allow debt requires module_level_paths")?
-        .iter()
-        .map(|value| {
-            value
-                .as_str()
-                .map(str::to_owned)
-                .ok_or("module-level allow path must be a string")
-        })
-        .collect::<Result<BTreeSet<_>, _>>()?;
-    if module_level_paths != expected_module_paths {
+    if !violations.is_empty() {
         return Err(format!(
-            "VM module-level allow set changed; expected={expected_module_paths:?}, actual={module_level_paths:?}"
+            "Rust lint suppression is forbidden; replace these `allow` attributes with structural fixes:\n{}",
+            violations.join("\n")
         )
         .into());
     }
     Ok(())
+}
+
+fn allow_attribute_lines(source: &str) -> Vec<usize> {
+    let mut violations = Vec::new();
+    let mut attribute = String::new();
+    let mut attribute_line = 0;
+    for (index, line) in source.lines().enumerate() {
+        let trimmed = line.trim_start();
+        if attribute.is_empty() {
+            if !trimmed.starts_with("#[") && !trimmed.starts_with("#![") {
+                continue;
+            }
+            attribute_line = index + 1;
+        }
+        attribute.push_str(trimmed);
+        if !trimmed.ends_with(']') {
+            continue;
+        }
+        let compact = attribute
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>();
+        if compact.starts_with("#[allow(")
+            || compact.starts_with("#![allow(")
+            || ((compact.starts_with("#[cfg_attr(") || compact.starts_with("#![cfg_attr("))
+                && compact.contains("allow("))
+        {
+            violations.push(attribute_line);
+        }
+        attribute.clear();
+    }
+    violations
 }
 
 fn rust_files_below(root: &Path) -> Result<Vec<PathBuf>, Box<dyn Error>> {
@@ -1253,7 +1237,10 @@ fn rust_files_below(root: &Path) -> Result<Vec<PathBuf>, Box<dyn Error>> {
         for entry in fs::read_dir(directory)? {
             let path = entry?.path();
             if path.is_dir() {
-                if path.file_name().is_none_or(|name| name != "target") {
+                if path
+                    .file_name()
+                    .is_none_or(|name| name != "target" && !name.to_string_lossy().starts_with('.'))
+                {
                     pending.push(path);
                 }
             } else if path.extension().is_some_and(|extension| extension == "rs") {

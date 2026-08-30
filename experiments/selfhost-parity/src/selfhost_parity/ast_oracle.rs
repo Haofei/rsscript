@@ -338,19 +338,26 @@ fn dump_block(out: &mut String, depth: usize, b: &ast::Block) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn dump_match(
-    out: &mut String,
-    depth: usize,
-    value: &ast::Expr,
-    eff: Option<ast::DataEffect>,
-    arms: &[ast::MatchArm],
+struct MatchDump<'a> {
+    value: &'a ast::Expr,
+    effect: Option<ast::DataEffect>,
+    arms: &'a [ast::MatchArm],
     malformed_arms: usize,
-    tag: &str,
-    head_span: &crate::diagnostic::Span,
-) {
+    tag: &'a str,
+    head_span: &'a crate::diagnostic::Span,
+}
+
+fn dump_match(out: &mut String, depth: usize, match_dump: MatchDump<'_>) {
+    let MatchDump {
+        value,
+        effect,
+        arms,
+        malformed_arms,
+        tag,
+        head_span,
+    } = match_dump;
     let mut line = String::from(tag);
-    if let Some(e) = eff {
+    if let Some(e) = effect {
         line.push_str(&format!(" effect={}", e.as_str()));
     }
     push_node(out, depth, &line, head_span);
@@ -446,12 +453,14 @@ fn dump_stmt(out: &mut String, depth: usize, s: &ast::Stmt) {
         ast::Stmt::Match(m) => dump_match(
             out,
             depth,
-            &m.value,
-            m.scrutinee_effect,
-            &m.arms,
-            m.malformed_arm_spans.len(),
-            "match",
-            &m.span,
+            MatchDump {
+                value: &m.value,
+                effect: m.scrutinee_effect,
+                arms: &m.arms,
+                malformed_arms: m.malformed_arm_spans.len(),
+                tag: "match",
+                head_span: &m.span,
+            },
         ),
         ast::Stmt::MalformedMatch(s) => push_node(out, depth, "malformed-match", s),
         ast::Stmt::TaskGroup(t) => {
@@ -714,16 +723,18 @@ fn dump_expr(out: &mut String, depth: usize, e: &ast::Expr) {
         } => dump_match(
             out,
             depth,
-            value,
-            *scrutinee_effect,
-            arms,
-            malformed_arm_spans.len(),
-            if *from_if_expression {
-                "if-expr"
-            } else {
-                "match-expr"
+            MatchDump {
+                value,
+                effect: *scrutinee_effect,
+                arms,
+                malformed_arms: malformed_arm_spans.len(),
+                tag: if *from_if_expression {
+                    "if-expr"
+                } else {
+                    "match-expr"
+                },
+                head_span: span,
             },
-            span,
         ),
         ast::Expr::Unknown(_) => push_node(out, depth, "unknown-expr", es),
     }

@@ -1642,11 +1642,8 @@ mod tests {
             ProviderErrorCode::Internal
         );
 
-        let asynchronous = AsyncWireInterpreterFn::new(|_, _| async {
-            panic!("provider future bug");
-            #[allow(unreachable_code)]
-            Ok(WireValue::Unit)
-        });
+        let asynchronous =
+            AsyncWireInterpreterFn::new(|_, _| async { panic!("provider future bug") });
         let mut future = asynchronous.call(async_context(), Vec::new());
         let Poll::Ready(result) = poll_wire_future(&mut future) else {
             panic!("panic containment must complete immediately")
@@ -1659,12 +1656,7 @@ mod tests {
         );
 
         let async_mutation = AsyncWireMutationInterpreterFn::new(|_, _| async {
-            panic!("provider mutation future bug");
-            #[allow(unreachable_code)]
-            Ok(WireMutationResult {
-                result: WireValue::Unit,
-                mutated: Vec::new(),
-            })
+            panic!("provider mutation future bug")
         });
         let mut future = async_mutation.call(async_context(), Vec::new());
         let waker = Waker::noop();

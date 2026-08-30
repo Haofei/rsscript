@@ -581,10 +581,10 @@ impl RustLowerer<'_> {
             return None;
         }
         for item in &self.program.items {
-            if let Item::SumType(sum) = item {
-                if sum.variants.iter().any(|v| v.name == variant_name) {
-                    return Some(sum.name.clone());
-                }
+            if let Item::SumType(sum) = item
+                && sum.variants.iter().any(|v| v.name == variant_name)
+            {
+                return Some(sum.name.clone());
             }
         }
         None

@@ -84,10 +84,8 @@ mod text_util {
 mod value_properties;
 mod weak_fields;
 mod semantic {
-    #[allow(unused_imports)]
     pub(crate) use crate::{
-        AnalysisResult, FrontendCompletion, FrontendInputSnapshot, FrontendStopReason,
-        ResolvedType, SemanticDatabase, SourceFileSnapshot, SourceSnapshot, ValidatedProgram,
+        AnalysisResult, FrontendInputSnapshot, SemanticDatabase, SourceSnapshot, ValidatedProgram,
     };
 }
 pub use analyzer::{

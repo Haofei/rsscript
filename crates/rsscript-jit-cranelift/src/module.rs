@@ -252,7 +252,7 @@ pub(crate) struct NativeCallee {
 /// (re-run-from-top deopt), so only the callee's shape is needed to marshal the
 /// call and size a (discarded-on-bail) payload slot.
 #[derive(Clone)]
-#[cfg_attr(not(feature = "recursion"), allow(dead_code))]
+#[cfg(feature = "recursion")]
 pub(crate) struct NativeGroupMember {
     pub(crate) func_id: FuncId,
     pub(crate) n_params: usize,
@@ -260,6 +260,10 @@ pub(crate) struct NativeGroupMember {
     pub(crate) deopt_payload_words: usize,
     pub(crate) return_type: JitValueType,
 }
+
+#[derive(Clone)]
+#[cfg(not(feature = "recursion"))]
+pub(crate) struct NativeGroupMember;
 
 /// Process-wide source of per-module identities, so a [`CompiledId`] minted by one
 /// [`NativeModule`] is rejected by another (it would otherwise index a different
@@ -1144,17 +1148,19 @@ impl NativeModule {
                     &mut self.ctx.func,
                     &mut self.fbctx,
                     &mut self.module,
-                    self.imports.clone(),
-                    function,
-                    forced,
-                    osr_header,
-                    &native_callees,
-                    id,
-                    &[],
-                    limit_checks,
-                    native_call_depth,
-                    validated.assigned_in(),
-                    validated.deopt_in(),
+                    FunctionCodegenInput {
+                        imports: self.imports.clone(),
+                        program: function,
+                        forced,
+                        osr_header,
+                        native_callees: &native_callees,
+                        self_func_id: id,
+                        group: &[],
+                        limit_checks,
+                        native_static_call_depth: native_call_depth,
+                        assigned_in: validated.assigned_in(),
+                        deopt_in: validated.deopt_in(),
+                    },
                 )?;
 
                 self.module
@@ -1364,17 +1370,19 @@ impl NativeModule {
                 &mut self.ctx.func,
                 &mut self.fbctx,
                 &mut self.module,
-                self.imports.clone(),
-                function,
-                None,
-                None,
-                &native_callees,
-                func_ids[i],
-                &group,
-                LimitChecks::default(),
-                0,
-                &validation_facts[i].assigned_in,
-                &validation_facts[i].deopt_in,
+                FunctionCodegenInput {
+                    imports: self.imports.clone(),
+                    program: function,
+                    forced: None,
+                    osr_header: None,
+                    native_callees: &native_callees,
+                    self_func_id: func_ids[i],
+                    group: &group,
+                    limit_checks: LimitChecks::default(),
+                    native_static_call_depth: 0,
+                    assigned_in: &validation_facts[i].assigned_in,
+                    deopt_in: &validation_facts[i].deopt_in,
+                },
             )?;
             self.module
                 .define_function(func_ids[i], &mut self.ctx)

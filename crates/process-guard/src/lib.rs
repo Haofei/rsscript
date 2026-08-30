@@ -92,18 +92,25 @@ pub enum MemoryLimitKind {
 pub const fn memory_limit_kind() -> MemoryLimitKind {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
-        return MemoryLimitKind::AddressSpace;
+        MemoryLimitKind::AddressSpace
     }
     #[cfg(target_os = "macos")]
     {
-        return MemoryLimitKind::DataSegmentBestEffort;
+        MemoryLimitKind::DataSegmentBestEffort
     }
     #[cfg(windows)]
     {
-        return MemoryLimitKind::WindowsJob;
+        MemoryLimitKind::WindowsJob
     }
-    #[allow(unreachable_code)]
-    MemoryLimitKind::DataSegmentBestEffort
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        windows
+    )))]
+    {
+        MemoryLimitKind::DataSegmentBestEffort
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -778,27 +785,27 @@ impl AppliedProcessLimits {
 pub const fn platform_limit_support() -> AppliedProcessLimits {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
-        return AppliedProcessLimits {
+        AppliedProcessLimits {
             cpu: LimitSupport::Enforced,
             address_space: LimitSupport::Enforced,
             open_files: LimitSupport::Enforced,
             file_size: LimitSupport::Enforced,
             atomic_process_tree_containment: LimitSupport::Enforced,
-        };
+        }
     }
     #[cfg(target_os = "macos")]
     {
-        return AppliedProcessLimits {
+        AppliedProcessLimits {
             cpu: LimitSupport::Enforced,
             address_space: LimitSupport::BestEffort,
             open_files: LimitSupport::Enforced,
             file_size: LimitSupport::Enforced,
             atomic_process_tree_containment: LimitSupport::Enforced,
-        };
+        }
     }
     #[cfg(windows)]
     {
-        return AppliedProcessLimits {
+        AppliedProcessLimits {
             cpu: LimitSupport::Unsupported,
             address_space: LimitSupport::Enforced,
             open_files: LimitSupport::Unsupported,
@@ -806,15 +813,22 @@ pub const fn platform_limit_support() -> AppliedProcessLimits {
             // std::process cannot create suspended and assign a Job Object
             // before user code starts. Refuse strict guarded execution.
             atomic_process_tree_containment: LimitSupport::Unsupported,
-        };
+        }
     }
-    #[allow(unreachable_code)]
-    AppliedProcessLimits {
-        cpu: LimitSupport::Unsupported,
-        address_space: LimitSupport::Unsupported,
-        open_files: LimitSupport::Unsupported,
-        file_size: LimitSupport::Unsupported,
-        atomic_process_tree_containment: LimitSupport::Unsupported,
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        windows
+    )))]
+    {
+        AppliedProcessLimits {
+            cpu: LimitSupport::Unsupported,
+            address_space: LimitSupport::Unsupported,
+            open_files: LimitSupport::Unsupported,
+            file_size: LimitSupport::Unsupported,
+            atomic_process_tree_containment: LimitSupport::Unsupported,
+        }
     }
 }
 

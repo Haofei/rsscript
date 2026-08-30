@@ -210,9 +210,7 @@ pub(in crate::rust_lower) fn match_binding_type_ref(
         return None;
     };
     // Option/Result carry a single positional payload.
-    let Some(binding) = bindings.first() else {
-        return None;
-    };
+    let binding = bindings.first()?;
     let value_type = value_type?;
     match name.as_str() {
         "Some" if value_type.name == "Option" => value_type

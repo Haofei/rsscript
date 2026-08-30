@@ -943,45 +943,53 @@ impl RegVmExecutable {
             vm.native
                 .as_ref()
                 .map_or(crate::ExecutionEngineTelemetry::Interpreter, |native| {
-                    crate::ExecutionEngineTelemetry::Native {
-                        considered: native.stats.considered,
-                        compiled: native.stats.compiled,
-                        baseline_compiles: native.stats.baseline_compiles,
-                        optimized_compiles: native.stats.optimized_compiles,
-                        baseline_calls: native.stats.baseline_calls,
-                        optimized_calls: native.stats.optimized_calls,
-                        native_calls: native.stats.native_calls,
-                        native_bails: native.stats.native_bails,
-                        osr_entries: native.stats.osr_entries,
-                        continuation_entries: native.stats.continuation_entries,
-                        continuation_candidate_checks: native.stats.continuation_candidate_checks,
-                        continuation_full_probes: native.stats.continuation_full_probes,
-                        continuation_instance_key_builds: native
-                            .stats
-                            .continuation_instance_key_builds,
-                        continuation_yields: native.stats.continuation_yields,
-                        continuation_compiled_source_instructions: native
-                            .stats
-                            .continuation_compiled_source_instructions,
-                        interpreted_native_work: native.stats.interpreted_native_work,
-                        native_barrier_counts: Box::new(native.stats.native_barrier_counts.clone()),
-                        direct_list_bounds_check_sites: native.stats.direct_list_bounds_check_sites,
-                        direct_list_bounds_checks_elided: native
-                            .stats
-                            .direct_list_bounds_checks_elided,
-                        readonly_licm_sites: native.stats.memoized_runtime_helper_call_sites,
-                        runtime_helper_call_sites: native.stats.runtime_helper_call_sites,
-                        resident_code_bytes: native.stats.compiled_code_bytes,
-                        published_code_bytes: native.admission.admitted_code_bytes,
-                        rejected_resident_bytes: 0,
-                        reserved_arena_bytes: native.executable_memory_budget.allocated(),
-                        translation_nanos: native.stats.translation_nanos,
-                        validation_nanos: native.stats.validation_nanos,
-                        codegen_nanos: native.stats.codegen_nanos,
-                        finalize_nanos: native.stats.finalize_nanos,
-                        compile_nanos: native.stats.compile_nanos,
-                        run_nanos: native.stats.run_nanos,
-                    }
+                    crate::ExecutionEngineTelemetry::Native(Box::new(
+                        crate::NativeExecutionEngineTelemetry {
+                            considered: native.stats.considered,
+                            compiled: native.stats.compiled,
+                            baseline_compiles: native.stats.baseline_compiles,
+                            optimized_compiles: native.stats.optimized_compiles,
+                            baseline_calls: native.stats.baseline_calls,
+                            optimized_calls: native.stats.optimized_calls,
+                            native_calls: native.stats.native_calls,
+                            native_bails: native.stats.native_bails,
+                            osr_entries: native.stats.osr_entries,
+                            continuation_entries: native.stats.continuation_entries,
+                            continuation_candidate_checks: native
+                                .stats
+                                .continuation_candidate_checks,
+                            continuation_full_probes: native.stats.continuation_full_probes,
+                            continuation_instance_key_builds: native
+                                .stats
+                                .continuation_instance_key_builds,
+                            continuation_yields: native.stats.continuation_yields,
+                            continuation_compiled_source_instructions: native
+                                .stats
+                                .continuation_compiled_source_instructions,
+                            interpreted_native_work: native.stats.interpreted_native_work,
+                            native_barrier_counts: Box::new(
+                                native.stats.native_barrier_counts.clone(),
+                            ),
+                            direct_list_bounds_check_sites: native
+                                .stats
+                                .direct_list_bounds_check_sites,
+                            direct_list_bounds_checks_elided: native
+                                .stats
+                                .direct_list_bounds_checks_elided,
+                            readonly_licm_sites: native.stats.memoized_runtime_helper_call_sites,
+                            runtime_helper_call_sites: native.stats.runtime_helper_call_sites,
+                            resident_code_bytes: native.stats.compiled_code_bytes,
+                            published_code_bytes: native.admission.admitted_code_bytes,
+                            rejected_resident_bytes: 0,
+                            reserved_arena_bytes: native.executable_memory_budget.allocated(),
+                            translation_nanos: native.stats.translation_nanos,
+                            validation_nanos: native.stats.validation_nanos,
+                            codegen_nanos: native.stats.codegen_nanos,
+                            finalize_nanos: native.stats.finalize_nanos,
+                            compile_nanos: native.stats.compile_nanos,
+                            run_nanos: native.stats.run_nanos,
+                        },
+                    ))
                 });
         #[cfg(not(feature = "native-jit"))]
         let engine = crate::ExecutionEngineTelemetry::Interpreter;
@@ -4786,7 +4794,6 @@ jit_host_boundary! {
 }
 
 #[cfg(feature = "native-jit")]
-#[allow(clippy::collapsible_match)] // Guarded `Some` arms are not exhaustive.
 fn rss_jit_list_push_handle_with_ctx(ctx: JitHostCallCtx, handle: i64, value_handle: i64) -> i64 {
     // Resolve the heap value (clone it out of its table) before the journaled write.
     let Some(value) = ctx.heap_read_handle(value_handle, |value| Some(value.clone())) else {
@@ -4823,7 +4830,6 @@ jit_host_boundary! {
 /// `rss_jit_list_get_float`. A non-Float list / invalid handle bails out-of-band,
 /// so a mis-typed lowering falls back to the interpreter.
 #[cfg(feature = "native-jit")]
-#[allow(clippy::collapsible_match)] // Guarded `Some` arms are not exhaustive.
 fn rss_jit_list_push_float_with_ctx(ctx: JitHostCallCtx, handle: i64, value: f64) -> i64 {
     match ctx.with_journaled_list_write(handle, |list| {
         list.checked_push_accounted(VmValue::Float(value)).ok()

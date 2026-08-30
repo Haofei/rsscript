@@ -31,7 +31,6 @@ use super::*;
 /// ordinary helpers.
 #[cfg(feature = "native-jit")]
 // The Bytes rewrite coordinates code, origin maps, and fact tables by source IP.
-#[allow(clippy::needless_range_loop)]
 pub(in crate::reg_vm) fn native_bytes_length_fold_in_region(
     code: &[RegInstr],
     n_regs: usize,
@@ -87,7 +86,6 @@ pub(in crate::reg_vm) fn native_bytes_length_fold_in_region(
     // unique def. Depth bound guards against any pathological chain; immutability is
     // guaranteed by `analysis.global_def_count(r) == 1` at each hop.
     // The analysis intentionally scans a bytecode interval by stable source IP.
-    #[allow(clippy::needless_range_loop)]
     fn const_byte_len(
         r: usize,
         depth: usize,
@@ -136,7 +134,7 @@ pub(in crate::reg_vm) fn native_bytes_length_fold_in_region(
         }
     }
     let mut const_len: Vec<Option<i64>> = vec![None; n_regs];
-    for r in 0..n_regs {
+    for r in parallel_indices(0..n_regs) {
         const_len[r] = const_byte_len(r, 32, code, n_regs, &analysis, &int_const);
     }
 
@@ -157,7 +155,7 @@ pub(in crate::reg_vm) fn native_bytes_length_fold_in_region(
     }
     let mut producer: Vec<Option<BProducer>> = vec![None; n_regs];
     let mut multiply_defined = vec![false; n_regs];
-    for i in header..exit {
+    for i in parallel_indices(header..exit) {
         let dst_prod: Option<(usize, BProducer)> = match &code[i] {
             RegInstr::CallIntrinsic {
                 dst,
@@ -215,7 +213,7 @@ pub(in crate::reg_vm) fn native_bytes_length_fold_in_region(
     // single-producer in-region Bytes value (its out-of-region def may differ). Drop
     // it — but it can still serve as a CONSTANT-length source via `const_len`.
     analysis.mark_external_writes(code, &mut multiply_defined)?;
-    for r in 0..n_regs {
+    for r in parallel_indices(0..n_regs) {
         if multiply_defined[r] {
             producer[r] = None;
         }
@@ -255,7 +253,7 @@ pub(in crate::reg_vm) fn native_bytes_length_fold_in_region(
     let mut changed = true;
     while changed {
         changed = false;
-        for r in 0..n_regs {
+        for r in parallel_indices(0..n_regs) {
             if foldable[r] {
                 continue;
             }
@@ -287,7 +285,7 @@ pub(in crate::reg_vm) fn native_bytes_length_fold_in_region(
             }
         };
         analysis.mark_external_reads_touching(code, &foldable, &mut escaped)?;
-        for i in header..exit {
+        for i in parallel_indices(header..exit) {
             match &code[i] {
                 RegInstr::CallIntrinsic {
                     dst,
@@ -332,7 +330,7 @@ pub(in crate::reg_vm) fn native_bytes_length_fold_in_region(
         if !escaped.iter().any(|&e| e) {
             break;
         }
-        for r in 0..n_regs {
+        for r in parallel_indices(0..n_regs) {
             if escaped[r] {
                 foldable[r] = false;
             }
@@ -340,7 +338,7 @@ pub(in crate::reg_vm) fn native_bytes_length_fold_in_region(
         let mut c2 = true;
         while c2 {
             c2 = false;
-            for r in 0..n_regs {
+            for r in parallel_indices(0..n_regs) {
                 if !foldable[r] {
                     continue;
                 }
@@ -372,7 +370,7 @@ pub(in crate::reg_vm) fn native_bytes_length_fold_in_region(
     let mut len_reg = vec![0usize; n_regs];
     let mut next_reg = n_regs;
     let mut const_sources: Vec<usize> = Vec::new();
-    for r in 0..n_regs {
+    for r in parallel_indices(0..n_regs) {
         if needs_len(r, &foldable) {
             len_reg[r] = next_reg;
             next_reg += 1;
@@ -434,7 +432,6 @@ pub(in crate::reg_vm) fn native_bytes_length_fold_in_region(
     // This form cannot overflow for `len == i64::MAX`, unlike computing `sc + len`,
     // and matches the runtime's saturating `usize` addition.
     // The emitter updates an origin entry for each synthesized instruction.
-    #[allow(clippy::needless_range_loop)]
     fn emit_slice_len_b(
         out_code: &mut Vec<RegInstr>,
         out: usize,
@@ -692,14 +689,14 @@ pub(in crate::reg_vm) fn native_bytes_length_fold_in_region(
         }
     }
     let mut ip_map = vec![0usize; new_code.len()];
-    for i in 0..code.len() {
+    for i in parallel_indices(0..code.len()) {
         let start = index_map[i];
         let end = if i + 1 < code.len() {
             index_map[i + 1]
         } else {
             new_code.len()
         };
-        for t in start..end {
+        for t in parallel_indices(start..end) {
             ip_map[t] = i;
         }
     }

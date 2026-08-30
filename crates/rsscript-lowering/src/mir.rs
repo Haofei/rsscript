@@ -220,13 +220,15 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<VerifiedMir, MirLo
             })
             .collect();
         let output = CheckedHirLowerer::new(
-            FunctionId::new(index as u32),
-            *name,
-            block,
-            mir_signature,
-            parameter_places,
-            Vec::new(),
-            targets.clone(),
+            CheckedHirLowererInput {
+                id: FunctionId::new(index as u32),
+                function_name: (*name).to_owned(),
+                body: block,
+                mir_signature,
+                initial_places: parameter_places,
+                captures: Vec::new(),
+                targets: targets.clone(),
+            },
             &mut types,
             &mut closures,
         )
@@ -1040,25 +1042,34 @@ struct CheckedHirLowerer<'source, 'types, 'closures> {
     resource_scopes: Vec<PlaceId>,
 }
 
+struct CheckedHirLowererInput<'source> {
+    id: FunctionId,
+    function_name: String,
+    body: &'source checked::HirBlock,
+    mir_signature: MirFunctionSignature,
+    initial_places: Vec<(String, TypeId)>,
+    captures: Vec<rsscript_mir::MirClosureCapture>,
+    targets: CallTargets,
+}
+
 impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the lowerer constructor makes every owned input and mutable identity table explicit"
-    )]
     fn new(
-        id: FunctionId,
-        function_name: impl Into<String>,
-        body: &'source checked::HirBlock,
-        mir_signature: MirFunctionSignature,
-        initial_places: Vec<(String, TypeId)>,
-        captures: Vec<rsscript_mir::MirClosureCapture>,
-        targets: CallTargets,
+        input: CheckedHirLowererInput<'source>,
         types: &'types mut TypeTable,
         closure_registry: &'closures mut ClosureRegistry,
     ) -> Self {
+        let CheckedHirLowererInput {
+            id,
+            function_name,
+            body,
+            mir_signature,
+            initial_places,
+            captures,
+            targets,
+        } = input;
         let mut lowerer = Self {
             id,
-            function_name: function_name.into(),
+            function_name,
             body,
             mir_signature,
             captures,
@@ -1516,13 +1527,15 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
         let id = self.closure_registry.allocate();
         let closure_name = format!("{}::<closure:{}>", self.function_name, id.index());
         let output = CheckedHirLowerer::new(
-            id,
-            closure_name,
-            body,
-            signature,
-            initial_places,
-            mir_captures,
-            self.targets.clone(),
+            CheckedHirLowererInput {
+                id,
+                function_name: closure_name,
+                body,
+                mir_signature: signature,
+                initial_places,
+                captures: mir_captures,
+                targets: self.targets.clone(),
+            },
             self.types,
             self.closure_registry,
         )

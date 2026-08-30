@@ -13,13 +13,10 @@ pub use rsscript_artifact::{
     SourceAnalysisV1, TaskGroupFactV1,
 };
 #[cfg(feature = "execution")]
-#[allow(unused_imports)]
 use rsscript_bytecode::*;
-#[allow(unused_imports)]
 use rsscript_compiler::*;
 use rsscript_semantics::CompilationSession;
 #[cfg(feature = "execution")]
-#[allow(unused_imports)]
 use rsscript_vm::*;
 #[cfg(feature = "execution")]
 use sha2::{Digest, Sha256};
@@ -263,7 +260,6 @@ pub mod analysis {
         ResourceTransferFactV1, SEMANTIC_DIFF_SCHEMA, SemanticDiffV2, TaskGroupFactV1,
     };
 }
-#[allow(unused_imports)]
 use rsscript_operation::*;
 #[cfg(feature = "execution")]
 use rsscript_provider_api as provider;

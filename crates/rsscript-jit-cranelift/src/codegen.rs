@@ -13,111 +13,14 @@ pub(crate) fn push_compiled_abi_signature(
     func.signature.params.push(AbiParam::new(ptr_ty)); // JitCallFrame ptr
     func.signature.returns.push(AbiParam::new(types::I8));
 }
-
-#[allow(clippy::too_many_arguments)]
-fn build_child_call_frame(
-    bcx: &mut FunctionBuilder<'_>,
-    ptr_ty: cranelift_codegen::ir::Type,
-    args: Value,
-    lens: Value,
-    arg_count: Value,
-    host_ctx: Value,
-    limits: Value,
-    result: Value,
-    bail: Value,
-    safepoint: Value,
-    deopt: Value,
-    native_depth: Value,
-    logical_depth: Value,
-    logical_depth_limit: Value,
-) -> Value {
-    let slot = bcx.create_sized_stack_slot(StackSlotData::new(
-        StackSlotKind::ExplicitSlot,
-        CALL_FRAME_SIZE,
-        3,
-    ));
-    let abi = bcx
-        .ins()
-        .iconst(types::I32, i64::from(JIT_CALL_ABI_VERSION));
-    let frame_size = bcx.ins().iconst(types::I32, i64::from(CALL_FRAME_SIZE));
-    let flags = bcx.ins().iconst(types::I64, 0);
-    bcx.ins().stack_store(abi, slot, FRAME_ABI_VERSION);
-    bcx.ins().stack_store(frame_size, slot, FRAME_SIZE);
-    bcx.ins().stack_store(flags, slot, FRAME_FLAGS);
-    for (value, offset) in [
-        (args, FRAME_ARGS),
-        (lens, FRAME_LENS),
-        (arg_count, FRAME_ARG_COUNT),
-        (host_ctx, FRAME_HOST_CTX),
-        (limits, FRAME_LIMITS),
-        (result, FRAME_RESULT),
-        (bail, FRAME_BAIL),
-        (safepoint, FRAME_SAFEPOINT),
-        (deopt, FRAME_DEOPT),
-        (native_depth, FRAME_NATIVE_DEPTH),
-        (logical_depth, FRAME_LOGICAL_DEPTH),
-        (logical_depth_limit, FRAME_LOGICAL_DEPTH_LIMIT),
-    ] {
-        bcx.ins().stack_store(value, slot, offset);
-    }
-    bcx.ins().stack_addr(ptr_ty, slot, 0)
-}
-
-/// Heuristic host stack budget used to decline native recursive call chains before
-/// the entry guard bails to the interpreter. Native `CallSelf`/`CallGroup` recurse
-/// on the host C stack, so the safe call depth is `stack_budget / native_frame_size`
-/// — frame-size-dependent, NOT a fixed count. This estimate is not a hard stack
-/// boundary: it cannot observe the live stack pointer, caller depth, or final
-/// target-specific spill layout. Non-tail native recursion therefore remains
-/// research-only and disabled in the stable SDK.
-pub(crate) const NATIVE_RECURSION_STACK_BUDGET_BYTES: i64 = 1 << 20; // 1 MiB
-
-/// Ceiling on the derived cap. Small scalar recursive frames (a few hundred bytes)
-/// derive a cap far above any reasonable host-stack-safe depth, so we clamp to this
-/// historically-validated value — which also keeps small-frame behaviour identical
-/// to the previous fixed cap. Recursion deeper than the derived cap bails to the
-/// interpreter (which enforces its own `max_depth`), so deep recursion is always
-/// correct and crash-free, just not native past the cap.
-pub(crate) const NATIVE_RECURSION_DEPTH_CAP_MAX: i64 = 250;
-
-/// Over-estimate the per-call native frame size in bytes. Conservative on purpose:
-/// every virtual register may spill to an 8-byte stack slot, the deopt payload
-/// reserves a parallel slot per register, and a fixed overhead covers the prologue,
-/// callee-saved registers, alignment padding, and call scratch. Over-estimating the
-/// frame yields a *smaller* (safer) cap, which is the correct direction for a guard
-/// whose whole job is to bail before the stack overflows.
-pub(crate) fn native_recursion_frame_bytes_estimate(program: &JitFunction) -> i64 {
-    const SLOT_BYTES: i64 = 8;
-    const FIXED_OVERHEAD_BYTES: i64 = 4096;
-    let regs = program.n_regs as i64;
-    let explicit_slots = program.code.iter().fold(0_i64, |total, instr| {
-        let words: i64 = match instr {
-            #[cfg(feature = "recursion")]
-            JitInstr::CallSelf { args, .. } => {
-                (args.len() as i64).saturating_mul(2).saturating_add(1)
-            }
-            #[cfg(feature = "recursion")]
-            JitInstr::CallGroup { args, .. } => (args.len() as i64)
-                .saturating_mul(2)
-                .saturating_add(regs)
-                .saturating_add(3),
-            _ => 0,
-        };
-        total.saturating_add(words.saturating_mul(SLOT_BYTES))
-    });
-    FIXED_OVERHEAD_BYTES
-        .saturating_add(SLOT_BYTES.saturating_mul(regs).saturating_mul(4))
-        .saturating_add(explicit_slots)
-}
-
-/// Derive the native recursion depth cap from a per-call frame estimate and the
-/// fixed stack budget, clamped to `[0, MAX]`. Frame-size-aware so a wide-frame
-/// recursive function bails sooner than a scalar one instead of sharing one
-/// frame-blind constant.
-pub(crate) fn native_recursion_depth_cap(program: &JitFunction) -> i64 {
-    let frame = native_recursion_frame_bytes_estimate(program).max(1);
-    (NATIVE_RECURSION_STACK_BUDGET_BYTES / frame).min(NATIVE_RECURSION_DEPTH_CAP_MAX)
-}
+#[cfg(test)]
+pub(crate) use crate::codegen_call::NATIVE_RECURSION_DEPTH_CAP_MAX;
+pub(crate) use crate::codegen_call::native_recursion_depth_cap;
+use crate::codegen_call::{ChildCallFrameValues, build_child_call_frame};
+#[cfg(feature = "recursion")]
+pub(crate) use crate::codegen_call::{
+    NATIVE_RECURSION_STACK_BUDGET_BYTES, native_recursion_frame_bytes_estimate,
+};
 
 /// In-generated-code `VmLimits` enforcement requested for this compile. Each flag
 /// is set only when the corresponding limit is armed and the generated region can
@@ -198,23 +101,39 @@ pub(crate) struct CodegenMetadata {
     pub(crate) direct_list_bounds_checks_elided: u64,
 }
 
-#[allow(clippy::too_many_arguments)]
+pub(crate) struct FunctionCodegenInput<'a> {
+    pub(crate) imports: HostFuncs,
+    pub(crate) program: &'a JitFunction,
+    pub(crate) forced: Option<ForcedDeopt>,
+    pub(crate) osr_header: Option<u32>,
+    pub(crate) native_callees: &'a [NativeCallee],
+    pub(crate) self_func_id: FuncId,
+    pub(crate) group: &'a [NativeGroupMember],
+    pub(crate) limit_checks: LimitChecks,
+    pub(crate) native_static_call_depth: u32,
+    pub(crate) assigned_in: &'a [Vec<bool>],
+    pub(crate) deopt_in: &'a [Vec<bool>],
+}
+
 pub(crate) fn build_function(
     func: &mut cranelift_codegen::ir::Function,
     fbctx: &mut FunctionBuilderContext,
     module: &mut JITModule,
-    imports: HostFuncs,
-    program: &JitFunction,
-    forced: Option<ForcedDeopt>,
-    osr_header: Option<u32>,
-    native_callees: &[NativeCallee],
-    self_func_id: FuncId,
-    group: &[NativeGroupMember],
-    limit_checks: LimitChecks,
-    native_static_call_depth: u32,
-    assigned_in: &[Vec<bool>],
-    deopt_in: &[Vec<bool>],
+    input: FunctionCodegenInput<'_>,
 ) -> Result<CodegenMetadata, JitError> {
+    let FunctionCodegenInput {
+        imports,
+        program,
+        forced,
+        osr_header,
+        native_callees,
+        self_func_id,
+        group,
+        limit_checks,
+        native_static_call_depth,
+        assigned_in,
+        deopt_in,
+    } = input;
     #[cfg(not(feature = "recursion"))]
     let _ = (self_func_id, group, native_static_call_depth);
     // Definite-assignment facts were computed by validation and are reused here;
@@ -315,14 +234,18 @@ pub(crate) fn build_function(
         .count();
     #[cfg(not(feature = "readonly-licm"))]
     let memo_count = 0;
-    #[allow(unused_mut)]
-    let mut memo_value_tys = vec![types::I64; memo_count];
     #[cfg(feature = "readonly-licm")]
-    for instr in &program.code {
-        if let JitInstr::MemoizedHostCall { dst, memo_slot, .. } = instr {
-            memo_value_tys[*memo_slot as usize] = var_ty(*dst as usize);
+    let memo_value_tys = {
+        let mut value_types = vec![types::I64; memo_count];
+        for instr in &program.code {
+            if let JitInstr::MemoizedHostCall { dst, memo_slot, .. } = instr {
+                value_types[*memo_slot as usize] = var_ty(*dst as usize);
+            }
         }
-    }
+        value_types
+    };
+    #[cfg(not(feature = "readonly-licm"))]
+    let memo_value_tys = vec![types::I64; memo_count];
     let memo_values: Vec<Variable> = memo_value_tys
         .iter()
         .map(|&ty| bcx.declare_var(ty))
@@ -834,9 +757,11 @@ pub(crate) fn build_function(
                 let cont = bail_if(
                     &mut bcx,
                     trip,
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
+                    DeoptBuffers {
+                        fallback,
+                        safepoint_ptr,
+                        payload_ptr,
+                    },
                     &vars,
                     &mut next_id,
                     deopt!(i),
@@ -862,9 +787,11 @@ pub(crate) fn build_function(
                 let cont = bail_if(
                     &mut bcx,
                     insufficient,
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
+                    DeoptBuffers {
+                        fallback,
+                        safepoint_ptr,
+                        payload_ptr,
+                    },
                     &vars,
                     &mut next_id,
                     deopt!(i),
@@ -928,9 +855,11 @@ pub(crate) fn build_function(
                     let cont = bail_if(
                         &mut bcx,
                         of,
-                        fallback,
-                        safepoint_ptr,
-                        payload_ptr,
+                        DeoptBuffers {
+                            fallback,
+                            safepoint_ptr,
+                            payload_ptr,
+                        },
                         &vars,
                         &mut next_id,
                         deopt!(i),
@@ -953,9 +882,11 @@ pub(crate) fn build_function(
                     let cont = bail_if(
                         &mut bcx,
                         of,
-                        fallback,
-                        safepoint_ptr,
-                        payload_ptr,
+                        DeoptBuffers {
+                            fallback,
+                            safepoint_ptr,
+                            payload_ptr,
+                        },
                         &vars,
                         &mut next_id,
                         deopt!(i),
@@ -978,9 +909,11 @@ pub(crate) fn build_function(
                     let cont = bail_if(
                         &mut bcx,
                         of,
-                        fallback,
-                        safepoint_ptr,
-                        payload_ptr,
+                        DeoptBuffers {
+                            fallback,
+                            safepoint_ptr,
+                            payload_ptr,
+                        },
                         &vars,
                         &mut next_id,
                         deopt!(i),
@@ -1000,15 +933,19 @@ pub(crate) fn build_function(
                 } else {
                     let res = emit_checked_divrem(
                         &mut bcx,
-                        reg(*lhs),
-                        reg(*rhs),
-                        fallback,
-                        safepoint_ptr,
-                        payload_ptr,
+                        CheckedDivRem {
+                            lhs: reg(*lhs),
+                            rhs: reg(*rhs),
+                            is_rem: false,
+                        },
+                        DeoptBuffers {
+                            fallback,
+                            safepoint_ptr,
+                            payload_ptr,
+                        },
                         &vars,
                         &mut next_id,
                         deopt!(i),
-                        false,
                     );
                     bcx.def_var(reg(*dst), res);
                 }
@@ -1018,15 +955,19 @@ pub(crate) fn build_function(
                 // registers reach here (eligibility rejects float `%`).
                 let res = emit_checked_divrem(
                     &mut bcx,
-                    reg(*lhs),
-                    reg(*rhs),
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
+                    CheckedDivRem {
+                        lhs: reg(*lhs),
+                        rhs: reg(*rhs),
+                        is_rem: true,
+                    },
+                    DeoptBuffers {
+                        fallback,
+                        safepoint_ptr,
+                        payload_ptr,
+                    },
                     &vars,
                     &mut next_id,
                     deopt!(i),
-                    true,
                 );
                 bcx.def_var(reg(*dst), res);
             }
@@ -1067,9 +1008,11 @@ pub(crate) fn build_function(
                         let cont = bail_if_helper_failed(
                             &mut bcx,
                             bail_ptr,
-                            fallback,
-                            safepoint_ptr,
-                            payload_ptr,
+                            DeoptBuffers {
+                                fallback,
+                                safepoint_ptr,
+                                payload_ptr,
+                            },
                             &vars,
                             &mut next_id,
                             deopt!(i),
@@ -1124,9 +1067,11 @@ pub(crate) fn build_function(
                         let cont = bail_if_helper_failed(
                             &mut bcx,
                             bail_ptr,
-                            fallback,
-                            safepoint_ptr,
-                            payload_ptr,
+                            DeoptBuffers {
+                                fallback,
+                                safepoint_ptr,
+                                payload_ptr,
+                            },
                             &vars,
                             &mut next_id,
                             deopt!(i),
@@ -1240,18 +1185,20 @@ pub(crate) fn build_function(
                     let child_frame = build_child_call_frame(
                         &mut bcx,
                         ptr_ty,
-                        args_ptr_v,
-                        lens_ptr_v,
-                        nargs_v,
-                        host_ctx,
-                        limits_ptr,
-                        out_ptr_v,
-                        bail_ptr,
-                        safepoint_ptr_v,
-                        payload_ptr_v,
-                        child_depth,
-                        child_logical_depth,
-                        logical_depth_limit,
+                        ChildCallFrameValues {
+                            args: args_ptr_v,
+                            lens: lens_ptr_v,
+                            arg_count: nargs_v,
+                            host_ctx,
+                            limits: limits_ptr,
+                            result: out_ptr_v,
+                            bail: bail_ptr,
+                            safepoint: safepoint_ptr_v,
+                            deopt: payload_ptr_v,
+                            native_depth: child_depth,
+                            logical_depth: child_logical_depth,
+                            logical_depth_limit,
+                        },
                     );
                     let call = bcx.ins().call(native_ref(*callee), &[child_frame]);
                     let completed = bcx.inst_results(call)[0];
@@ -1273,12 +1220,16 @@ pub(crate) fn build_function(
                     let cont = bail_if_child_native_failed(
                         &mut bcx,
                         failed,
-                        fallback,
-                        safepoint_ptr,
-                        payload_ptr,
-                        safepoint_ptr_v,
-                        payload_ptr_v,
-                        meta,
+                        DeoptBuffers {
+                            fallback,
+                            safepoint_ptr,
+                            payload_ptr,
+                        },
+                        ChildDeoptSource {
+                            safepoint_ptr: safepoint_ptr_v,
+                            payload_ptr: payload_ptr_v,
+                            metadata: meta,
+                        },
                         &vars,
                         &mut next_id,
                         deopt!(i),
@@ -1340,18 +1291,20 @@ pub(crate) fn build_function(
                 let child_frame = build_child_call_frame(
                     &mut bcx,
                     ptr_ty,
-                    args_ptr_v,
-                    lens_ptr_v,
-                    nargs_v,
-                    host_ctx,
-                    limits_ptr,
-                    out_ptr_v,
-                    bail_ptr,
-                    safepoint_ptr,
-                    payload_ptr,
-                    child_depth,
-                    child_logical_depth,
-                    logical_depth_limit,
+                    ChildCallFrameValues {
+                        args: args_ptr_v,
+                        lens: lens_ptr_v,
+                        arg_count: nargs_v,
+                        host_ctx,
+                        limits: limits_ptr,
+                        result: out_ptr_v,
+                        bail: bail_ptr,
+                        safepoint: safepoint_ptr,
+                        deopt: payload_ptr,
+                        native_depth: child_depth,
+                        logical_depth: child_logical_depth,
+                        logical_depth_limit,
+                    },
                 );
                 let call = bcx.ins().call(self_ref, &[child_frame]);
                 // A child guard-bail returns completed=0 WITHOUT setting the shared
@@ -1363,9 +1316,11 @@ pub(crate) fn build_function(
                 let cont = bail_if(
                     &mut bcx,
                     not_completed,
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
+                    DeoptBuffers {
+                        fallback,
+                        safepoint_ptr,
+                        payload_ptr,
+                    },
                     &vars,
                     &mut next_id,
                     deopt!(i),
@@ -1458,18 +1413,20 @@ pub(crate) fn build_function(
                 let child_frame = build_child_call_frame(
                     &mut bcx,
                     ptr_ty,
-                    args_ptr_v,
-                    lens_ptr_v,
-                    nargs_v,
-                    host_ctx,
-                    limits_ptr,
-                    out_ptr_v,
-                    bail_ptr,
-                    safepoint_ptr_v,
-                    payload_ptr_v,
-                    child_depth,
-                    child_logical_depth,
-                    logical_depth_limit,
+                    ChildCallFrameValues {
+                        args: args_ptr_v,
+                        lens: lens_ptr_v,
+                        arg_count: nargs_v,
+                        host_ctx,
+                        limits: limits_ptr,
+                        result: out_ptr_v,
+                        bail: bail_ptr,
+                        safepoint: safepoint_ptr_v,
+                        deopt: payload_ptr_v,
+                        native_depth: child_depth,
+                        logical_depth: child_logical_depth,
+                        logical_depth_limit,
+                    },
                 );
                 let call = bcx.ins().call(member_ref, &[child_frame]);
                 // Non-chaining: a child bail uses its own safepoint/payload but the
@@ -1484,9 +1441,11 @@ pub(crate) fn build_function(
                 let cont = bail_if(
                     &mut bcx,
                     failed,
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
+                    DeoptBuffers {
+                        fallback,
+                        safepoint_ptr,
+                        payload_ptr,
+                    },
                     &vars,
                     &mut next_id,
                     deopt!(i),
@@ -1524,9 +1483,11 @@ pub(crate) fn build_function(
                 let cont = bail_if_helper_failed(
                     &mut bcx,
                     bail_ptr,
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
+                    DeoptBuffers {
+                        fallback,
+                        safepoint_ptr,
+                        payload_ptr,
+                    },
                     &vars,
                     &mut next_id,
                     deopt!(i),
@@ -1569,9 +1530,11 @@ pub(crate) fn build_function(
                 let cont = bail_if_helper_failed(
                     &mut bcx,
                     bail_ptr,
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
+                    DeoptBuffers {
+                        fallback,
+                        safepoint_ptr,
+                        payload_ptr,
+                    },
                     &vars,
                     &mut next_id,
                     deopt!(i),
@@ -1610,9 +1573,11 @@ pub(crate) fn build_function(
                 let cont = bail_if_helper_failed(
                     &mut bcx,
                     bail_ptr,
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
+                    DeoptBuffers {
+                        fallback,
+                        safepoint_ptr,
+                        payload_ptr,
+                    },
                     &vars,
                     &mut next_id,
                     deopt!(i),
@@ -1652,9 +1617,11 @@ pub(crate) fn build_function(
                 let cont = bail_if_helper_failed(
                     &mut bcx,
                     bail_ptr,
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
+                    DeoptBuffers {
+                        fallback,
+                        safepoint_ptr,
+                        payload_ptr,
+                    },
                     &vars,
                     &mut next_id,
                     deopt!(i),
@@ -1689,30 +1656,38 @@ pub(crate) fn build_function(
             JitInstr::Shl { dst, lhs, rhs } => {
                 let res = emit_checked_shift(
                     &mut bcx,
-                    reg(*lhs),
-                    reg(*rhs),
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
+                    CheckedShift {
+                        lhs: reg(*lhs),
+                        rhs: reg(*rhs),
+                        is_right: false,
+                    },
+                    DeoptBuffers {
+                        fallback,
+                        safepoint_ptr,
+                        payload_ptr,
+                    },
                     &vars,
                     &mut next_id,
                     deopt!(i),
-                    false,
                 );
                 bcx.def_var(reg(*dst), res);
             }
             JitInstr::Shr { dst, lhs, rhs } => {
                 let res = emit_checked_shift(
                     &mut bcx,
-                    reg(*lhs),
-                    reg(*rhs),
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
+                    CheckedShift {
+                        lhs: reg(*lhs),
+                        rhs: reg(*rhs),
+                        is_right: true,
+                    },
+                    DeoptBuffers {
+                        fallback,
+                        safepoint_ptr,
+                        payload_ptr,
+                    },
                     &vars,
                     &mut next_id,
                     deopt!(i),
-                    true,
                 );
                 bcx.def_var(reg(*dst), res);
             }
@@ -1796,9 +1771,11 @@ pub(crate) fn build_function(
                 let cont = bail_if(
                     &mut bcx,
                     cold,
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
+                    DeoptBuffers {
+                        fallback,
+                        safepoint_ptr,
+                        payload_ptr,
+                    },
                     &vars,
                     &mut next_id,
                     deopt!(i),
@@ -1865,9 +1842,11 @@ pub(crate) fn build_function(
                 let cont = bail_if(
                     &mut bcx,
                     cold,
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
+                    DeoptBuffers {
+                        fallback,
+                        safepoint_ptr,
+                        payload_ptr,
+                    },
                     &vars,
                     &mut next_id,
                     deopt!(i),
@@ -1914,9 +1893,11 @@ pub(crate) fn build_function(
                 let cont = bail_if(
                     &mut bcx,
                     always,
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
+                    DeoptBuffers {
+                        fallback,
+                        safepoint_ptr,
+                        payload_ptr,
+                    },
                     &vars,
                     &mut next_id,
                     deopt!(i, unconditional),
@@ -1947,17 +1928,21 @@ pub(crate) fn build_function(
                 let result = emit_direct_get(
                     &mut bcx,
                     lens_ptr,
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
+                    DeoptBuffers {
+                        fallback,
+                        safepoint_ptr,
+                        payload_ptr,
+                    },
                     &vars,
                     &mut next_id,
                     deopt!(i),
-                    reg(*base),
-                    reg(*index),
-                    *base,
-                    types::I64,
-                    !list_bounds.unchecked_ips.contains(&i),
+                    DirectGet {
+                        base: reg(*base),
+                        index: reg(*index),
+                        base_param: *base,
+                        element_type: types::I64,
+                        checked: !list_bounds.unchecked_ips.contains(&i),
+                    },
                 );
                 bcx.def_var(reg(*dst), result);
             }
@@ -1970,17 +1955,21 @@ pub(crate) fn build_function(
                 emit_direct_set_int(
                     &mut bcx,
                     lens_ptr,
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
+                    DeoptBuffers {
+                        fallback,
+                        safepoint_ptr,
+                        payload_ptr,
+                    },
                     &vars,
                     &mut next_id,
                     deopt!(i),
-                    reg(*base),
-                    reg(*index),
-                    reg(*value),
-                    *base,
-                    !list_bounds.unchecked_ips.contains(&i),
+                    DirectSet {
+                        base: reg(*base),
+                        index: reg(*index),
+                        value: reg(*value),
+                        base_param: *base,
+                        checked: !list_bounds.unchecked_ips.contains(&i),
+                    },
                 );
                 let zero = bcx.ins().iconst(types::I64, 0);
                 bcx.def_var(reg(*dst), zero);
@@ -1989,17 +1978,21 @@ pub(crate) fn build_function(
                 let result = emit_direct_get(
                     &mut bcx,
                     lens_ptr,
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
+                    DeoptBuffers {
+                        fallback,
+                        safepoint_ptr,
+                        payload_ptr,
+                    },
                     &vars,
                     &mut next_id,
                     deopt!(i),
-                    reg(*base),
-                    reg(*index),
-                    *base,
-                    types::F64,
-                    !list_bounds.unchecked_ips.contains(&i),
+                    DirectGet {
+                        base: reg(*base),
+                        index: reg(*index),
+                        base_param: *base,
+                        element_type: types::F64,
+                        checked: !list_bounds.unchecked_ips.contains(&i),
+                    },
                 );
                 bcx.def_var(reg(*dst), result);
             }
@@ -2014,17 +2007,21 @@ pub(crate) fn build_function(
                 emit_direct_set_int(
                     &mut bcx,
                     lens_ptr,
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
+                    DeoptBuffers {
+                        fallback,
+                        safepoint_ptr,
+                        payload_ptr,
+                    },
                     &vars,
                     &mut next_id,
                     deopt!(i),
-                    reg(*base),
-                    reg(*index),
-                    reg(*value),
-                    *base,
-                    !list_bounds.unchecked_ips.contains(&i),
+                    DirectSet {
+                        base: reg(*base),
+                        index: reg(*index),
+                        value: reg(*value),
+                        base_param: *base,
+                        checked: !list_bounds.unchecked_ips.contains(&i),
+                    },
                 );
                 let zero = bcx.ins().iconst(types::I64, 0);
                 bcx.def_var(reg(*dst), zero);
@@ -2073,9 +2070,11 @@ pub(crate) fn build_function(
                 let cont = bail_if(
                     &mut bcx,
                     mismatch,
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
+                    DeoptBuffers {
+                        fallback,
+                        safepoint_ptr,
+                        payload_ptr,
+                    },
                     &vars,
                     &mut next_id,
                     deopt!(i),
@@ -2101,8 +2100,8 @@ pub(crate) fn build_function(
         let s = bcx.use_var(steps_var);
         bcx.ins().store(MemFlags::trusted(), s, limits_ptr, 0);
     }
-    let zero8 = bcx.ins().iconst(types::I8, 0);
-    bcx.ins().return_(&[zero8]);
+    let deopt_status = bcx.ins().iconst(types::I8, JitStatus::Deopt as i64);
+    bcx.ins().return_(&[deopt_status]);
 
     bcx.switch_to_block(yielded);
     if let Some(steps_var) = steps_var {
@@ -2136,94 +2135,79 @@ pub(crate) fn build_function(
 /// `NativeModule::call` borrow protocol guarantees point at a live, immovable,
 /// unmutated buffer of `len` elements for the call's duration. So every in-bounds
 /// element address is valid and the read cannot alias a concurrent mutation.
-#[allow(clippy::too_many_arguments)]
+struct DirectGet {
+    base: Variable,
+    index: Variable,
+    base_param: u32,
+    element_type: types::Type,
+    checked: bool,
+}
+
 fn emit_direct_get(
     bcx: &mut FunctionBuilder,
     lens_ptr: Value,
-    fallback: Block,
-    safepoint_ptr: Value,
-    payload_ptr: Value,
+    buffers: DeoptBuffers,
     vars: &[Variable],
     next_id: &mut i64,
     deopt: &mut DeoptCtx,
-    base_var: Variable,
-    index_var: Variable,
-    base_param: u32,
-    elem_ty: types::Type,
-    checked: bool,
+    access: DirectGet,
 ) -> Value {
-    let index = bcx.use_var(index_var);
-    if checked {
+    let index = bcx.use_var(access.index);
+    if access.checked {
         let len = bcx.ins().load(
             types::I64,
             MemFlags::trusted(),
             lens_ptr,
-            (base_param as i32) * 8,
+            (access.base_param as i32) * 8,
         );
         // Single unsigned compare folds "index < 0" (huge unsigned) and
         // "index >= len" into one OOB test.
         let oob = bcx
             .ins()
             .icmp(IntCC::UnsignedGreaterThanOrEqual, index, len);
-        let cont = bail_if(
-            bcx,
-            oob,
-            fallback,
-            safepoint_ptr,
-            payload_ptr,
-            vars,
-            next_id,
-            deopt,
-        );
+        let cont = bail_if(bcx, oob, buffers, vars, next_id, deopt);
         bcx.switch_to_block(cont);
     }
-    let base_ptr = bcx.use_var(base_var);
+    let base_ptr = bcx.use_var(access.base);
     let offset = bcx.ins().imul_imm(index, 8);
     let addr = bcx.ins().iadd(base_ptr, offset);
-    bcx.ins().load(elem_ty, MemFlags::trusted(), addr, 0)
+    bcx.ins()
+        .load(access.element_type, MemFlags::trusted(), addr, 0)
 }
 
-#[allow(clippy::too_many_arguments)]
+struct DirectSet {
+    base: Variable,
+    index: Variable,
+    value: Variable,
+    base_param: u32,
+    checked: bool,
+}
+
 fn emit_direct_set_int(
     bcx: &mut FunctionBuilder,
     lens_ptr: Value,
-    fallback: Block,
-    safepoint_ptr: Value,
-    payload_ptr: Value,
+    buffers: DeoptBuffers,
     vars: &[Variable],
     next_id: &mut i64,
     deopt: &mut DeoptCtx,
-    base_var: Variable,
-    index_var: Variable,
-    value_var: Variable,
-    base_param: u32,
-    checked: bool,
+    access: DirectSet,
 ) {
-    let index = bcx.use_var(index_var);
-    if checked {
+    let index = bcx.use_var(access.index);
+    if access.checked {
         let len = bcx.ins().load(
             types::I64,
             MemFlags::trusted(),
             lens_ptr,
-            (base_param as i32) * 8,
+            (access.base_param as i32) * 8,
         );
         let oob = bcx
             .ins()
             .icmp(IntCC::UnsignedGreaterThanOrEqual, index, len);
-        let cont = bail_if(
-            bcx,
-            oob,
-            fallback,
-            safepoint_ptr,
-            payload_ptr,
-            vars,
-            next_id,
-            deopt,
-        );
+        let cont = bail_if(bcx, oob, buffers, vars, next_id, deopt);
         bcx.switch_to_block(cont);
     }
-    let base_ptr = bcx.use_var(base_var);
-    let value = bcx.use_var(value_var);
+    let base_ptr = bcx.use_var(access.base);
+    let value = bcx.use_var(access.value);
     let offset = bcx.ins().imul_imm(index, 8);
     let addr = bcx.ins().iadd(base_ptr, offset);
     bcx.ins().store(MemFlags::trusted(), value, addr, 0);
@@ -2337,17 +2321,26 @@ impl DeoptCtx<'_> {
 /// *stored* into `payload_ptr[reg]` (`vars[reg]` is its Cranelift variable; an f64
 /// var stores its 8-byte bit pattern into the slot). The hot `cont` path emits no
 /// capture store, so non-bailing iterations are unaffected.
-#[allow(clippy::too_many_arguments)]
-fn bail_if(
-    bcx: &mut FunctionBuilder,
-    cond: Value,
+#[derive(Clone, Copy)]
+struct DeoptBuffers {
     fallback: Block,
     safepoint_ptr: Value,
     payload_ptr: Value,
+}
+
+fn bail_if(
+    bcx: &mut FunctionBuilder,
+    cond: Value,
+    buffers: DeoptBuffers,
     vars: &[Variable],
     next_id: &mut i64,
     deopt: &mut DeoptCtx,
 ) -> Block {
+    let DeoptBuffers {
+        fallback,
+        safepoint_ptr,
+        payload_ptr,
+    } = buffers;
     let site_id = *next_id;
     *next_id += 1;
     let forced = deopt.forced.is_some_and(|forced| forced.forces(site_id)) || deopt.unconditional;
@@ -2381,24 +2374,30 @@ fn bail_if(
     cont
 }
 
-#[allow(clippy::too_many_arguments)]
+struct ChildDeoptSource<'a> {
+    safepoint_ptr: Value,
+    payload_ptr: Value,
+    metadata: &'a NativeCallee,
+}
+
 fn bail_if_child_native_failed(
     bcx: &mut FunctionBuilder,
     cond: Value,
-    fallback: Block,
-    safepoint_ptr: Value,
-    payload_ptr: Value,
-    child_safepoint_ptr: Value,
-    child_payload_ptr: Value,
-    child_meta: &NativeCallee,
+    buffers: DeoptBuffers,
+    child: ChildDeoptSource<'_>,
     vars: &[Variable],
     next_id: &mut i64,
     deopt: &mut DeoptCtx,
 ) -> Block {
+    let DeoptBuffers {
+        fallback,
+        safepoint_ptr,
+        payload_ptr,
+    } = buffers;
     let site_id = *next_id;
     *next_id += 1;
     let forced = deopt.forced.is_some_and(|forced| forced.forces(site_id)) || deopt.unconditional;
-    let (live, child) = deopt.record_child(child_meta);
+    let (live, child_site) = deopt.record_child(child.metadata);
     let site_block = bcx.create_block();
     let cont = bcx.create_block();
     if forced {
@@ -2418,25 +2417,25 @@ fn bail_if_child_native_failed(
 
     let child_safepoint = bcx
         .ins()
-        .load(types::I64, MemFlags::trusted(), child_safepoint_ptr, 0);
+        .load(types::I64, MemFlags::trusted(), child.safepoint_ptr, 0);
     bcx.ins().store(
         MemFlags::trusted(),
         child_safepoint,
         payload_ptr,
-        (child.safepoint_slot as i32) * 8,
+        (child_site.safepoint_slot as i32) * 8,
     );
-    for slot in 0..child.payload_words {
+    for slot in 0..child_site.payload_words {
         let bits = bcx.ins().load(
             types::I64,
             MemFlags::trusted(),
-            child_payload_ptr,
+            child.payload_ptr,
             (slot as i32) * 8,
         );
         bcx.ins().store(
             MemFlags::trusted(),
             bits,
             payload_ptr,
-            ((child.payload_slot + slot) as i32) * 8,
+            ((child_site.payload_slot + slot) as i32) * 8,
         );
     }
     bcx.ins().jump(fallback, &[]);
@@ -2447,77 +2446,48 @@ fn bail_if_child_native_failed(
 /// Load the host-helper bail flag and branch to `fallback` if a preceding heap
 /// read flagged failure — checked immediately after each helper call so a bad
 /// read never keeps executing. Returns the continuation block.
-#[allow(clippy::too_many_arguments)]
 fn bail_if_helper_failed(
     bcx: &mut FunctionBuilder,
     bail_ptr: Value,
-    fallback: Block,
-    safepoint_ptr: Value,
-    payload_ptr: Value,
+    buffers: DeoptBuffers,
     vars: &[Variable],
     next_id: &mut i64,
     deopt: &mut DeoptCtx,
 ) -> Block {
     let flag = bcx.ins().load(types::I8, MemFlags::trusted(), bail_ptr, 0);
-    bail_if(
-        bcx,
-        flag,
-        fallback,
-        safepoint_ptr,
-        payload_ptr,
-        vars,
-        next_id,
-        deopt,
-    )
+    bail_if(bcx, flag, buffers, vars, next_id, deopt)
 }
 
 /// Checked division / remainder matching the interpreter: bail on divide-by-zero
 /// and on `i64::MIN / -1` (the only signed-division overflow).
-#[allow(clippy::too_many_arguments)]
-fn emit_checked_divrem(
-    bcx: &mut FunctionBuilder,
+struct CheckedDivRem {
     lhs: Variable,
     rhs: Variable,
-    fallback: Block,
-    safepoint_ptr: Value,
-    payload_ptr: Value,
+    is_rem: bool,
+}
+
+fn emit_checked_divrem(
+    bcx: &mut FunctionBuilder,
+    operation: CheckedDivRem,
+    buffers: DeoptBuffers,
     vars: &[Variable],
     next_id: &mut i64,
     deopt: &mut DeoptCtx,
-    is_rem: bool,
 ) -> Value {
-    let a = bcx.use_var(lhs);
-    let b = bcx.use_var(rhs);
+    let a = bcx.use_var(operation.lhs);
+    let b = bcx.use_var(operation.rhs);
     let zero = bcx.ins().iconst(types::I64, 0);
     let is_zero = bcx.ins().icmp(IntCC::Equal, b, zero);
-    let cont1 = bail_if(
-        bcx,
-        is_zero,
-        fallback,
-        safepoint_ptr,
-        payload_ptr,
-        vars,
-        next_id,
-        deopt,
-    );
+    let cont1 = bail_if(bcx, is_zero, buffers, vars, next_id, deopt);
     bcx.switch_to_block(cont1);
     let imin = bcx.ins().iconst(types::I64, i64::MIN);
     let neg1 = bcx.ins().iconst(types::I64, -1);
     let a_is_min = bcx.ins().icmp(IntCC::Equal, a, imin);
     let b_is_neg1 = bcx.ins().icmp(IntCC::Equal, b, neg1);
     let overflow = bcx.ins().band(a_is_min, b_is_neg1);
-    let cont2 = bail_if(
-        bcx,
-        overflow,
-        fallback,
-        safepoint_ptr,
-        payload_ptr,
-        vars,
-        next_id,
-        deopt,
-    );
+    let cont2 = bail_if(bcx, overflow, buffers, vars, next_id, deopt);
     bcx.switch_to_block(cont2);
-    if is_rem {
+    if operation.is_rem {
         bcx.ins().srem(a, b)
     } else {
         bcx.ins().sdiv(a, b)
@@ -2526,38 +2496,30 @@ fn emit_checked_divrem(
 
 /// Checked shift: bail when the shift amount is negative or `>= 64` (so the
 /// in-range case matches `wrapping_shl`/`wrapping_shr` exactly).
-#[allow(clippy::too_many_arguments)]
-fn emit_checked_shift(
-    bcx: &mut FunctionBuilder,
+struct CheckedShift {
     lhs: Variable,
     rhs: Variable,
-    fallback: Block,
-    safepoint_ptr: Value,
-    payload_ptr: Value,
+    is_right: bool,
+}
+
+fn emit_checked_shift(
+    bcx: &mut FunctionBuilder,
+    operation: CheckedShift,
+    buffers: DeoptBuffers,
     vars: &[Variable],
     next_id: &mut i64,
     deopt: &mut DeoptCtx,
-    is_right: bool,
 ) -> Value {
-    let a = bcx.use_var(lhs);
-    let amt = bcx.use_var(rhs);
+    let a = bcx.use_var(operation.lhs);
+    let amt = bcx.use_var(operation.rhs);
     let limit = bcx.ins().iconst(types::I64, 64);
     // Unsigned compare folds "negative" (huge unsigned) and ">= 64" into one test.
     let oob = bcx
         .ins()
         .icmp(IntCC::UnsignedGreaterThanOrEqual, amt, limit);
-    let cont = bail_if(
-        bcx,
-        oob,
-        fallback,
-        safepoint_ptr,
-        payload_ptr,
-        vars,
-        next_id,
-        deopt,
-    );
+    let cont = bail_if(bcx, oob, buffers, vars, next_id, deopt);
     bcx.switch_to_block(cont);
-    if is_right {
+    if operation.is_right {
         bcx.ins().sshr(a, amt)
     } else {
         bcx.ins().ishl(a, amt)

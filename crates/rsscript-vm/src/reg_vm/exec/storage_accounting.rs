@@ -154,13 +154,11 @@ impl RegVm {
         Ok(VmValue::List(Rc::new(RefCell::new(values))))
     }
 
-    #[allow(clippy::mutable_key_type)]
     pub(in crate::reg_vm) fn fresh_map(&mut self, values: ValueMap) -> Result<VmValue, EvalError> {
         self.account_bytes(values.capacity().saturating_mul(MAP_ENTRY_BYTES))?;
         Ok(VmValue::Map(Rc::new(RefCell::new(values))))
     }
 
-    #[allow(clippy::mutable_key_type)]
     pub(in crate::reg_vm) fn reserve_map_entry_accounted(
         &mut self,
         map: &mut ValueMap,

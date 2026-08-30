@@ -1,6 +1,6 @@
 use super::*;
+use crate::ResolvedType;
 use crate::hir::{CallResolution, HirBlock, HirExpr, HirStmt};
-use crate::semantic::ResolvedType;
 use crate::syntax::ast::Callee;
 
 fn span(line: usize) -> Span {

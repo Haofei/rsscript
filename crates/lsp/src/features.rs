@@ -26,47 +26,43 @@ pub(crate) fn unresolved_reference_matches_lookup(
         && reference.is_type == lookup.is_type
 }
 
-#[allow(deprecated)]
 pub(crate) fn to_lsp_symbol_information(
     uri: &Url,
     source: &str,
     definition: &Definition,
 ) -> SymbolInformation {
-    SymbolInformation {
-        name: definition.name.clone(),
-        kind: to_lsp_symbol_kind(definition.kind),
-        tags: None,
-        deprecated: None,
-        location: Location {
+    serde_json::from_value(serde_json::json!({
+        "name": definition.name,
+        "kind": to_lsp_symbol_kind(definition.kind),
+        "location": Location {
             uri: uri.clone(),
             range: span_to_range(source, &definition.span),
-        },
-        container_name: None,
-    }
+        }
+    }))
+    .expect("canonical SymbolInformation wire object")
 }
 
-#[allow(deprecated)]
 pub(crate) fn to_lsp_document_symbol(source: &str, symbol: RssDocumentSymbol) -> DocumentSymbol {
-    DocumentSymbol {
-        name: symbol.name,
-        detail: symbol.detail,
-        kind: to_lsp_symbol_kind(symbol.kind),
-        tags: None,
-        deprecated: None,
-        range: span_to_range(source, &symbol.span),
-        selection_range: span_to_range(source, &symbol.selection_span),
-        children: if symbol.children.is_empty() {
-            None
-        } else {
-            Some(
-                symbol
-                    .children
-                    .into_iter()
-                    .map(|child| to_lsp_document_symbol(source, child))
-                    .collect(),
-            )
-        },
-    }
+    let children: Option<Vec<DocumentSymbol>> = if symbol.children.is_empty() {
+        None
+    } else {
+        Some(
+            symbol
+                .children
+                .into_iter()
+                .map(|child| to_lsp_document_symbol(source, child))
+                .collect(),
+        )
+    };
+    serde_json::from_value(serde_json::json!({
+        "name": symbol.name,
+        "detail": symbol.detail,
+        "kind": to_lsp_symbol_kind(symbol.kind),
+        "range": span_to_range(source, &symbol.span),
+        "selectionRange": span_to_range(source, &symbol.selection_span),
+        "children": children,
+    }))
+    .expect("canonical DocumentSymbol wire object")
 }
 
 pub(crate) const TOKEN_FUNCTION: u32 = 0;

@@ -1,6 +1,8 @@
 use super::*;
 
-/// Two-armed scalar `Result` dissolution (heap-aware deopt #7 follow-up). Companion to
+type RegionRewrite<Recipe> = (Vec<RegInstr>, usize, Vec<usize>, Vec<Recipe>);
+
+/// Two-armed scalar `Result` dissolution.
 /// [`native_scalar_replace_results_in_region`]'s always-`Ok` path: handles a Result
 /// constructed as EITHER `Ok(scalar)` or `Err(scalar)` in-region and consumed (matched)
 /// in-region. Each RES register becomes a boolean `tag` (true = `Ok`) plus one shared
@@ -24,20 +26,19 @@ use super::*;
 /// needs the extended deopt ABI (carrying Handle payloads) for the live-after case.
 /// Verified by probe 2026-06-28: same-typed arms OSR; `Result<Int,String>` declines.
 #[cfg(feature = "native-jit")]
-#[allow(clippy::needless_range_loop, clippy::type_complexity)]
 pub(super) fn native_scalar_replace_two_armed_results_in_region(
     code: &[RegInstr],
     n_regs: usize,
     header: usize,
     exit: usize,
     res: &[bool],
-) -> Option<(Vec<RegInstr>, usize, Vec<usize>, Vec<ResultRecipe>)> {
+) -> Option<RegionRewrite<ResultRecipe>> {
     let in_region = |i: usize| i >= header && i < exit;
 
     // Validate every in-region def/use of a RES register: defs are `Ok`/`Err`
     // constructors with one scalar (non-RES) field, or a `Move` from another RES; uses
     // are `MatchResult`/`UnwrapVariantValue`. `?` (`TryResult`) and any other touch bail.
-    for i in header..exit {
+    for i in parallel_indices(header..exit) {
         match &code[i] {
             RegInstr::MakeVariant {
                 dst,
@@ -87,7 +88,7 @@ pub(super) fn native_scalar_replace_two_armed_results_in_region(
     // before it (live-in) is out of scope ⇒ bail. A RES register READ after the region is
     // live-after ⇒ mark it for OSR-exit reconstruction.
     let mut reconstruct = vec![false; n_regs];
-    for i in 0..code.len() {
+    for i in parallel_indices(0..code.len()) {
         if in_region(i) {
             continue;
         }
@@ -318,14 +319,14 @@ pub(super) fn native_scalar_replace_two_armed_results_in_region(
         }
     }
     let mut ip_map = vec![0usize; new_code.len()];
-    for i in 0..code.len() {
+    for i in parallel_indices(0..code.len()) {
         let start = index_map[i];
         let end = if i + 1 < code.len() {
             index_map[i + 1]
         } else {
             new_code.len()
         };
-        for t in start..end {
+        for t in parallel_indices(start..end) {
             ip_map[t] = i;
         }
     }
@@ -373,13 +374,12 @@ pub(super) fn native_scalar_replace_two_armed_results_in_region(
 /// `ip_map` discipline as the Option region pass (each rewritten op's fragments map to
 /// the original op's index; copy-through maps one-to-one).
 #[cfg(feature = "native-jit")]
-#[allow(clippy::needless_range_loop, clippy::type_complexity)]
 pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
     code: &[RegInstr],
     n_regs: usize,
     header: usize,
     exit: usize,
-) -> Option<(Vec<RegInstr>, usize, Vec<usize>, Vec<OsrMaterializeRecipe>)> {
+) -> Option<RegionRewrite<OsrMaterializeRecipe>> {
     if header >= exit || exit > code.len() {
         return None;
     }
@@ -396,7 +396,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
     // VAR = registers carrying a (replaceable) variant value: seed from in-region
     // `MakeVariant` dsts, close under in-region `Move` aliasing.
     let mut var = vec![false; n_regs];
-    for i in header..exit {
+    for i in parallel_indices(header..exit) {
         if let RegInstr::MakeVariant { dst, .. } = &code[i] {
             var[*dst] = true;
         }
@@ -409,7 +409,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
     // non-VAR base is a heap struct read this pass can't lower ⇒ bail.
     let is_var_getfield =
         |i: usize| -> bool { matches!(&code[i], RegInstr::GetField { base, .. } if var[*base]) };
-    for i in header..exit {
+    for i in parallel_indices(header..exit) {
         if !native_subset_instruction(&code[i]) && !is_variant_op(&code[i]) && !is_var_getfield(i) {
             return None;
         }
@@ -419,7 +419,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
     // only scalar fields (no field may itself be a VAR register — that would be a
     // nested variant, out of scope ⇒ bail). Anything else touching a VAR register that
     // is not a recognized consumer ⇒ bail.
-    for i in header..exit {
+    for i in parallel_indices(header..exit) {
         match &code[i] {
             RegInstr::MakeVariant { dst, fields, .. } if var[*dst] => {
                 if fields.iter().any(|(_, field_reg)| var[*field_reg]) {
@@ -469,7 +469,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
     // its tag and selected arm leaves. Pre-loop reads and post-loop writes remain
     // unsupported and conservatively decline OSR.
     let mut reconstruct = vec![false; n_regs];
-    for i in 0..code.len() {
+    for i in parallel_indices(0..code.len()) {
         if in_region(i) {
             continue;
         }
@@ -500,7 +500,6 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
     // copies both halves), and therefore must agree on the arm-name→index map. Group
     // VAR registers into alias classes with a union-find over in-region `Move` edges.
     let mut parent: Vec<usize> = (0..n_regs).collect();
-    #[allow(clippy::needless_range_loop)]
     fn find(parent: &mut [usize], x: usize) -> usize {
         let mut r = x;
         while parent[r] != r {
@@ -514,7 +513,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
         }
         r
     }
-    for i in header..exit {
+    for i in parallel_indices(header..exit) {
         if let RegInstr::Move { dst, src } = &code[i]
             && var[*dst]
             && var[*src]
@@ -531,7 +530,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
     // the register's class root; assign each distinct name a stable index in sorted-
     // name order (deterministic, and identical across all registers in the class).
     let mut class_names: HashMap<usize, BTreeSet<String>> = HashMap::new();
-    for i in header..exit {
+    for i in parallel_indices(header..exit) {
         match &code[i] {
             RegInstr::MakeVariant { dst, layout, .. } if var[*dst] => {
                 let root = find(&mut parent, *dst);
@@ -576,7 +575,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
     let mut class_arm_fields: HashMap<(usize, String), Vec<Rc<str>>> = HashMap::new();
     let mut class_arm_layout: HashMap<(usize, String), Rc<crate::vm_value::TypeLayout>> =
         HashMap::new();
-    for i in header..exit {
+    for i in parallel_indices(header..exit) {
         if let RegInstr::MakeVariant { dst, layout, .. } = &code[i]
             && var[*dst]
         {
@@ -656,13 +655,13 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
                 .unwrap_or(i64::MAX)
         });
         for (arm, fields) in arms {
-            for slot in 0..fields.len() {
+            for slot in parallel_indices(0..fields.len()) {
                 leaf_reg.insert((*root, arm.clone(), slot), next_reg);
                 next_reg += 1;
             }
         }
     }
-    for reg in 0..n_regs {
+    for reg in parallel_indices(0..n_regs) {
         if var[reg] {
             let root = find(&mut parent, reg);
             tag_reg[reg] = class_tag[&root];
@@ -730,7 +729,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
     // `GetField` whose name has no owning arm / unresolvable slot, or an
     // `UnwrapVariantValue` on an arm with no in-region `MakeVariant` (hence no leaf),
     // is rejected here so the rewrite below can rely on the lookups succeeding.
-    for i in header..exit {
+    for i in parallel_indices(header..exit) {
         match &code[i] {
             RegInstr::GetField { base, name, .. } if var[*base] => {
                 let (arm, slot) = getfield_arm_slot(*base, &mut parent, name)?;
@@ -913,14 +912,14 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
     }
     // Inverse ip-map (see `native_scalar_replace_options`).
     let mut ip_map = vec![0usize; new_code.len()];
-    for i in 0..code.len() {
+    for i in parallel_indices(0..code.len()) {
         let start = index_map[i];
         let end = if i + 1 < code.len() {
             index_map[i + 1]
         } else {
             new_code.len()
         };
-        for t in start..end {
+        for t in parallel_indices(start..end) {
             ip_map[t] = i;
         }
     }
@@ -955,7 +954,7 @@ pub(in crate::reg_vm) fn struct_shape_of_reg(
             return None;
         }
         let mut found: Option<Vec<Rc<str>>> = None;
-        for i in header..exit {
+        for i in parallel_indices(header..exit) {
             match &code[i] {
                 RegInstr::MakeStruct { dst, layout, .. } if *dst == reg => {
                     let shape = layout.field_names.clone();
@@ -1013,7 +1012,7 @@ pub(in crate::reg_vm) fn struct_shape_of_reg(
             return vec![];
         }
         let mut out = Vec::new();
-        for i in header..exit {
+        for i in parallel_indices(header..exit) {
             match &code[i] {
                 RegInstr::MakeStruct { dst, fields, .. } if *dst == base => {
                     if let Some((_, fsrc)) = fields.iter().find(|(n, _)| **n == **name) {
@@ -1067,13 +1066,12 @@ pub(in crate::reg_vm) fn struct_shape_of_reg(
     feature = "native-jit",
     any(test, feature = "jit-struct-sr-experimental")
 ))]
-#[allow(clippy::needless_range_loop, clippy::type_complexity)]
 pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     code: &[RegInstr],
     n_regs: usize,
     header: usize,
     exit: usize,
-) -> Option<(Vec<RegInstr>, usize, Vec<usize>, Vec<OsrMaterializeRecipe>)> {
+) -> Option<RegionRewrite<OsrMaterializeRecipe>> {
     if header >= exit || exit > code.len() {
         return None;
     }
@@ -1087,7 +1085,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     }
 
     // Every in-region instruction must be native-subset or a `MakeStruct`.
-    for i in header..exit {
+    for i in parallel_indices(header..exit) {
         if !native_subset_instruction(&code[i]) && !is_make_struct_op(&code[i]) {
             return None;
         }
@@ -1106,7 +1104,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     // The slot-kind map (per layout shape, by field name) records whether a slot is
     // scalar or struct-typed; we discover it incrementally as STR membership grows.
     let mut strv = vec![false; n_regs];
-    for i in header..exit {
+    for i in parallel_indices(header..exit) {
         if let RegInstr::MakeStruct { dst, .. } = &code[i] {
             strv[*dst] = true;
         }
@@ -1118,7 +1116,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     let mut changed = true;
     while changed {
         changed = false;
-        for i in header..exit {
+        for i in parallel_indices(header..exit) {
             match &code[i] {
                 RegInstr::Move { dst, src } => {
                     if strv[*src] && !strv[*dst] {
@@ -1170,7 +1168,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     // - `Move{dst,src}` writing an STR reg: `src` must be STR (alias copy).
     // - `GetFieldSlot{dst, base:R}`: `dst` is STR exactly when the slot is nested.
     // - Any OTHER read of an STR reg as a value operand ⇒ escape ⇒ bail.
-    for i in header..exit {
+    for i in parallel_indices(header..exit) {
         match &code[i] {
             RegInstr::MakeStruct {
                 dst,
@@ -1217,7 +1215,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     // post-loop writes, and imprecise register footprints.
     let analysis = NativeRegionAnalysis::compute_prefix(code, n_regs, header, exit)?;
     let mut reconstruct = vec![false; n_regs];
-    for i in 0..code.len() {
+    for i in parallel_indices(0..code.len()) {
         if in_region(i) {
             continue;
         }
@@ -1322,7 +1320,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     }
     let mut anchors: HashMap<(usize, usize), usize> = HashMap::new();
     // (a) plain Move aliases.
-    for i in header..exit {
+    for i in parallel_indices(header..exit) {
         if let RegInstr::Move { dst, src } = &code[i]
             && strv[*dst]
             && strv[*src]
@@ -1335,7 +1333,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     let mut changed = true;
     while changed {
         changed = false;
-        for i in header..exit {
+        for i in parallel_indices(header..exit) {
             match &code[i] {
                 RegInstr::MakeStruct {
                     dst,
@@ -1371,7 +1369,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     // `MakeStruct` defs. All defs in a class must agree on the shape.
     let mut class_shape: HashMap<usize, Vec<Rc<str>>> = HashMap::new();
     let mut class_layout: HashMap<usize, Rc<crate::vm_value::TypeLayout>> = HashMap::new();
-    for i in header..exit {
+    for i in parallel_indices(header..exit) {
         if let RegInstr::MakeStruct { dst, layout, .. } = &code[i]
             && strv[*dst]
         {
@@ -1408,7 +1406,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     for root in roots {
         let shape = class_shape.get(&root).cloned().expect("root has shape");
         let nested = nested_slots.get(&shape).cloned().unwrap_or_default();
-        for slot in 0..shape.len() {
+        for slot in parallel_indices(0..shape.len()) {
             if !nested.contains(&slot) {
                 let r = next_reg;
                 next_reg += 1;
@@ -1442,7 +1440,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     // Pre-flight: every struct op the rewrite will touch must resolve (every STR class
     // has a shape; every SCALAR slot it reads/writes has an allocated leaf register).
     // Bail rather than panic on any unresolved case — conservative REJECT.
-    for i in header..exit {
+    for i in parallel_indices(header..exit) {
         match &code[i] {
             RegInstr::MakeStruct {
                 dst,
@@ -1499,7 +1497,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
         let layout = Rc::clone(context.class_layout.get(&root)?);
         let nested = context.nested_slots.get(&layout.field_names);
         let mut fields = Vec::with_capacity(layout.field_names.len());
-        for slot in 0..layout.field_names.len() {
+        for slot in parallel_indices(0..layout.field_names.len()) {
             if context.nodes >= MAX_OSR_MATERIALIZE_NODES {
                 return None;
             }
@@ -1663,14 +1661,14 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     }
     // Inverse ip-map (see `native_scalar_replace_options`).
     let mut ip_map = vec![0usize; new_code.len()];
-    for i in 0..code.len() {
+    for i in parallel_indices(0..code.len()) {
         let start = index_map[i];
         let end = if i + 1 < code.len() {
             index_map[i + 1]
         } else {
             new_code.len()
         };
-        for t in start..end {
+        for t in parallel_indices(start..end) {
             ip_map[t] = i;
         }
     }
@@ -1683,13 +1681,12 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     feature = "native-jit",
     not(any(test, feature = "jit-struct-sr-experimental"))
 ))]
-#[allow(clippy::type_complexity)]
 pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     code: &[RegInstr],
     n_regs: usize,
     header: usize,
     exit: usize,
-) -> Option<(Vec<RegInstr>, usize, Vec<usize>, Vec<OsrMaterializeRecipe>)> {
+) -> Option<RegionRewrite<OsrMaterializeRecipe>> {
     if header >= exit || exit > code.len() {
         return None;
     }
@@ -1746,7 +1743,6 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     feature = "native-jit",
     any(test, feature = "jit-struct-sr-experimental")
 ))]
-#[allow(clippy::needless_range_loop)]
 pub(in crate::reg_vm) fn native_loop_carried_struct_in_region(
     code: &[RegInstr],
     n_regs: usize,
@@ -1776,7 +1772,7 @@ pub(in crate::reg_vm) fn native_loop_carried_struct_in_region(
     // in-place mutation back through that one register (`SetFieldSlot` rewrites its
     // `base` slot, and the self-`Move{p,p}` keeps it that register).
     let mut base_regs: Vec<usize> = Vec::new();
-    for i in header..exit {
+    for i in parallel_indices(header..exit) {
         match &code[i] {
             RegInstr::GetFieldSlot { base, .. } | RegInstr::SetFieldSlot { base, .. }
                 if !base_regs.contains(base) =>
@@ -1883,7 +1879,7 @@ pub(in crate::reg_vm) fn native_loop_carried_struct_in_region(
     // does not model `p` as a written reg (its `dst` is the unused result). Any OTHER
     // writer of `p` (e.g. a second struct construction on another path) ⇒
     // aliasing/polymorphism ⇒ bail.
-    for i in 0..code.len() {
+    for i in parallel_indices(0..code.len()) {
         if i == p_def {
             continue;
         }
@@ -1958,7 +1954,7 @@ pub(in crate::reg_vm) fn native_loop_carried_struct_in_region(
     // `dst` to be DEAD (never read anywhere in the function) so dropping its `Unit`
     // write is observationally invisible; a read of it would need a `LoadUnit` (not in
     // the native subset) ⇒ bail instead.
-    for i in header..exit {
+    for i in parallel_indices(header..exit) {
         if let RegInstr::SetFieldSlot { dst, base, .. } = &code[i] {
             if *base != p {
                 continue;
@@ -2099,14 +2095,14 @@ pub(in crate::reg_vm) fn native_loop_carried_struct_in_region(
     // (header/exit) is in-region/post-region control flow, never a deleted pre-header
     // index, so the boundary mapping stays unambiguous.
     let mut ip_map = vec![0usize; new_code.len()];
-    for i in 0..code.len() {
+    for i in parallel_indices(0..code.len()) {
         let start = index_map[i];
         let end = if i + 1 < code.len() {
             index_map[i + 1]
         } else {
             new_code.len()
         };
-        for t in start..end {
+        for t in parallel_indices(start..end) {
             ip_map[t] = i;
         }
     }

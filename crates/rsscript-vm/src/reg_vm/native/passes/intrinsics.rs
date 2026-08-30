@@ -178,7 +178,7 @@ fn native_checked_payload_pairs_in_region(
     }
 
     let mut pairs = Vec::new();
-    for i in header..exit {
+    for i in parallel_indices(header..exit) {
         let RegInstr::CallIntrinsic {
             dst: result_reg,
             intrinsic,

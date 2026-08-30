@@ -18,6 +18,14 @@ use rsscript_sdk::{
     report::{ExecutionEngineTelemetry, ExecutionReport, TerminationReason},
     runtime::{ExecutionRequest, RunLimits, Runtime, TracePolicy},
 };
+use rsscript_vm::NativeExecutionEngineTelemetry;
+
+fn native_telemetry(report: &ExecutionReport) -> &NativeExecutionEngineTelemetry {
+    let ExecutionEngineTelemetry::Native(telemetry) = &report.telemetry.engine else {
+        panic!("execution must report native telemetry");
+    };
+    telemetry
+}
 
 fn stable_provider_traces(report: &ExecutionReport) -> Vec<serde_json::Value> {
     report
@@ -165,7 +173,7 @@ fn native_engine_matches_the_verified_interpreter_corpus() {
             native.usage.resource_cleanup_failures, interpreter.usage.resource_cleanup_failures,
             "resource cleanup: {file}"
         );
-        let ExecutionEngineTelemetry::Native {
+        let &NativeExecutionEngineTelemetry {
             native_calls,
             osr_entries,
             continuation_entries,
@@ -175,13 +183,10 @@ fn native_engine_matches_the_verified_interpreter_corpus() {
             continuation_yields,
             continuation_compiled_source_instructions,
             interpreted_native_work,
-            native_barrier_counts,
+            ref native_barrier_counts,
             rejected_resident_bytes,
             ..
-        } = native.telemetry.engine
-        else {
-            panic!("native telemetry: {file}");
-        };
+        } = native_telemetry(&native);
         assert_eq!(rejected_resident_bytes, 0, "resident rejection: {file}");
         assert!(
             continuation_full_probes <= continuation_candidate_checks,
@@ -299,16 +304,13 @@ fn tiered_whole_function_with_backedge_starts_optimized() {
             }),
     );
     assert_eq!(native.outcome(), interpreter.outcome());
-    let ExecutionEngineTelemetry::Native {
+    let &NativeExecutionEngineTelemetry {
         baseline_compiles,
         optimized_compiles,
         baseline_calls,
         optimized_calls,
         ..
-    } = native.telemetry.engine
-    else {
-        panic!("tiered native execution must return engine telemetry");
-    };
+    } = native_telemetry(&native);
     assert_eq!(
         baseline_compiles, 0,
         "backedge body must skip baseline codegen"
@@ -352,13 +354,10 @@ fn automatic_osr_waits_enters_at_threshold_and_respects_disable() {
                 ..NativeJitOptions::default()
             }),
     );
-    let ExecutionEngineTelemetry::Native {
+    let &NativeExecutionEngineTelemetry {
         osr_entries: below_entries,
         ..
-    } = below_threshold.telemetry.engine
-    else {
-        panic!("below-threshold OSR execution must return native telemetry");
-    };
+    } = native_telemetry(&below_threshold);
     assert_eq!(below_entries, 0, "automatic OSR must wait below threshold");
 
     let disabled = linked.execute(
@@ -372,13 +371,10 @@ fn automatic_osr_waits_enters_at_threshold_and_respects_disable() {
                 ..NativeJitOptions::default()
             }),
     );
-    let ExecutionEngineTelemetry::Native {
+    let &NativeExecutionEngineTelemetry {
         osr_entries: disabled_entries,
         ..
-    } = disabled.telemetry.engine
-    else {
-        panic!("disabled OSR execution must return native telemetry");
-    };
+    } = native_telemetry(&disabled);
     assert_eq!(disabled_entries, 0, "disabled OSR must never enter");
 
     let native = linked.execute(
@@ -393,14 +389,11 @@ fn automatic_osr_waits_enters_at_threshold_and_respects_disable() {
                 ..NativeJitOptions::default()
             }),
     );
-    let ExecutionEngineTelemetry::Native {
+    let &NativeExecutionEngineTelemetry {
         osr_entries,
         continuation_entries,
         ..
-    } = native.telemetry.engine
-    else {
-        panic!("automatic OSR execution must return native telemetry");
-    };
+    } = native_telemetry(&native);
     assert!(
         osr_entries > 0,
         "threshold-driven OSR must enter a transform-only loop; continuation_entries={continuation_entries}"
@@ -434,13 +427,10 @@ fn bounded_step_accounting_matches_across_call_continuations() {
         native.usage.steps_consumed,
         interpreter.usage.steps_consumed
     );
-    let ExecutionEngineTelemetry::Native {
+    let &NativeExecutionEngineTelemetry {
         continuation_entries,
         ..
-    } = native.telemetry.engine
-    else {
-        panic!("bounded native execution must report native telemetry");
-    };
+    } = native_telemetry(&native);
     assert!(continuation_entries >= 2);
 
     let bounded_interpreter =
@@ -459,13 +449,10 @@ fn bounded_step_accounting_matches_across_call_continuations() {
         bounded_native.usage.steps_consumed,
         bounded_interpreter.usage.steps_consumed
     );
-    let ExecutionEngineTelemetry::Native {
+    let &NativeExecutionEngineTelemetry {
         continuation_entries,
         ..
-    } = bounded_native.telemetry.engine
-    else {
-        panic!("default bounded execution must report native telemetry");
-    };
+    } = native_telemetry(&bounded_native);
     assert!(continuation_entries >= 2);
 
     let deadline_native = linked.execute(
@@ -481,13 +468,10 @@ fn bounded_step_accounting_matches_across_call_continuations() {
             }),
     );
     assert_eq!(deadline_native.outcome(), interpreter.outcome());
-    let ExecutionEngineTelemetry::Native {
+    let &NativeExecutionEngineTelemetry {
         continuation_entries,
         ..
-    } = deadline_native.telemetry.engine
-    else {
-        panic!("deadline-armed execution must report native telemetry");
-    };
+    } = native_telemetry(&deadline_native);
     assert!(continuation_entries >= 2);
 
     let cancel = CancellationToken::new();
@@ -501,13 +485,10 @@ fn bounded_step_accounting_matches_across_call_continuations() {
             }),
     );
     assert_eq!(cancel_armed.outcome(), interpreter.outcome());
-    let ExecutionEngineTelemetry::Native {
+    let &NativeExecutionEngineTelemetry {
         continuation_entries,
         ..
-    } = cancel_armed.telemetry.engine
-    else {
-        panic!("cancel-armed native execution must report native telemetry");
-    };
+    } = native_telemetry(&cancel_armed);
     assert!(continuation_entries >= 2);
 }
 
@@ -550,9 +531,7 @@ fn native_memory_controls_admit_proved_scalar_work_and_account_osr_growth() {
         native.usage.peak_live_memory_bytes,
         interpreter.usage.peak_live_memory_bytes
     );
-    let ExecutionEngineTelemetry::Native { native_calls, .. } = native.telemetry.engine else {
-        panic!("memory-controlled scalar execution must report native telemetry");
-    };
+    let native_calls = native_telemetry(&native).native_calls;
     assert!(
         native_calls > 0,
         "proved no-allocation scalar work should enter native"
@@ -606,9 +585,7 @@ fn native_memory_controls_admit_proved_scalar_work_and_account_osr_growth() {
         native.usage.peak_live_memory_bytes,
         interpreter.usage.peak_live_memory_bytes
     );
-    let ExecutionEngineTelemetry::Native { osr_entries, .. } = native.telemetry.engine else {
-        panic!("memory-controlled OSR execution must report native telemetry");
-    };
+    let osr_entries = native_telemetry(&native).osr_entries;
     assert!(osr_entries > 0, "accounted List.push loop should enter OSR");
 
     let insufficient = RunLimits::unbounded_for_trusted_host()
@@ -680,13 +657,10 @@ fn continuation_controls_fail_before_codegen_and_match_every_step_boundary() {
             }),
     );
     assert_eq!(report.termination_reason(), TerminationReason::Cancelled);
-    let ExecutionEngineTelemetry::Native {
+    let &NativeExecutionEngineTelemetry {
         continuation_compiled_source_instructions,
         ..
-    } = report.telemetry.engine
-    else {
-        panic!("cancelled native execution must report native telemetry");
-    };
+    } = native_telemetry(&report);
     assert_eq!(continuation_compiled_source_instructions, 0);
 
     let report =
@@ -705,13 +679,10 @@ fn continuation_controls_fail_before_codegen_and_match_every_step_boundary() {
         report.termination_reason(),
         TerminationReason::DeadlineExceeded
     );
-    let ExecutionEngineTelemetry::Native {
+    let &NativeExecutionEngineTelemetry {
         continuation_compiled_source_instructions,
         ..
-    } = report.telemetry.engine
-    else {
-        panic!("expired native execution must report native telemetry");
-    };
+    } = native_telemetry(&report);
     assert_eq!(continuation_compiled_source_instructions, 0);
 }
 
@@ -742,14 +713,11 @@ fn cancellation_during_a_closed_native_region_is_observed() {
     );
     canceller.join().expect("cancellation thread completes");
     assert_eq!(report.termination_reason(), TerminationReason::Cancelled);
-    let ExecutionEngineTelemetry::Native {
+    let &NativeExecutionEngineTelemetry {
         compiled,
         continuation_compiled_source_instructions,
         ..
-    } = report.telemetry.engine
-    else {
-        panic!("mid-region cancellation must report native telemetry");
-    };
+    } = native_telemetry(&report);
     assert!(
         compiled > 0 || continuation_compiled_source_instructions > 0,
         "whole-function and continuation regions share the bounded native path"
@@ -855,15 +823,12 @@ fn provider_barrier_executes_once_and_reenters_native() {
         stable_provider_traces(&interpreter),
         "mixed-mode execution must preserve every stable Provider trace field; only call_id and elapsed are run-local"
     );
-    let ExecutionEngineTelemetry::Native {
+    let &NativeExecutionEngineTelemetry {
         continuation_entries,
         continuation_yields,
-        native_barrier_counts,
+        ref native_barrier_counts,
         ..
-    } = native.telemetry.engine
-    else {
-        panic!("Provider continuation must report native telemetry");
-    };
+    } = native_telemetry(&native);
     assert!(continuation_entries >= 2);
     assert!(continuation_yields >= 2);
     assert!(

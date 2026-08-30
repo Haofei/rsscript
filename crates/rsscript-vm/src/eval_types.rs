@@ -472,7 +472,6 @@ impl ExternalFunction {
     /// its arguments or result through `NativeValue`. This is intentionally a
     /// separate scheduler entry point: the legacy async dispatcher remains
     /// available only for compatibility callables and mutation envelopes.
-    #[allow(unreachable_patterns)] // Legacy Provider variants are feature-gated upstream.
     pub(crate) fn start_wire_async(
         &self,
         mut context: AsyncProviderCallContext,
@@ -610,7 +609,6 @@ impl ExternalFunction {
     /// Start an asynchronous canonical wire mutation Provider. The scheduler
     /// receives explicit wire write-backs and only the register VM's legacy
     /// boundary later materializes its temporary mutation envelope.
-    #[allow(unreachable_patterns)] // Legacy Provider variants are feature-gated upstream.
     pub(crate) fn start_wire_mut_async(
         &self,
         mut context: AsyncProviderCallContext,
@@ -939,70 +937,64 @@ pub struct EvalExecutionReport {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-// The native fields intentionally stay on the tagged variant: this is a
-// versioned, machine-readable report schema, and boxing them would change its
-// JSON shape. Reports are produced once per evaluation, never on the VM/JIT
-// dispatch hot path.
-#[allow(clippy::large_enum_variant)]
 pub enum ExecutionEngineTelemetry {
     #[default]
     Interpreter,
-    Native {
-        considered: u64,
-        compiled: u64,
-        baseline_compiles: u64,
-        optimized_compiles: u64,
-        baseline_calls: u64,
-        optimized_calls: u64,
-        native_calls: u64,
-        native_bails: u64,
-        osr_entries: u64,
-        continuation_entries: u64,
-        /// Interpreter positions tested against the continuation candidate bitset.
-        continuation_candidate_checks: u64,
-        /// Candidate positions that performed full native preparation.
-        continuation_full_probes: u64,
-        /// Static continuation instance keys constructed after candidate gating.
-        continuation_instance_key_builds: u64,
-        continuation_yields: u64,
-        /// Direct source instructions represented by admitted continuation code.
-        continuation_compiled_source_instructions: u64,
-        /// Weighted native-lowerable work that remained interpreted.
-        interpreted_native_work: u64,
-        /// Dynamic normal-boundary observations grouped by stable reason.
-        native_barrier_counts: Box<std::collections::BTreeMap<String, u64>>,
-        /// Direct flat-list access sites emitted by compiled regions before
-        /// backend range proofs are applied.
-        direct_list_bounds_check_sites: u64,
-        /// Direct flat-list checks removed by sound modulo or canonical
-        /// induction-variable proofs.
-        direct_list_bounds_checks_elided: u64,
-        /// Read-only loop-invariant runtime calls represented by one lazy LICM
-        /// memo slot per loop activation (research feature only).
-        readonly_licm_sites: u64,
-        /// Runtime helper call sites remaining after native optimization.
-        runtime_helper_call_sites: u64,
-        /// Machine code currently resident in the JIT modules. The current
-        /// compile-once-publish policy makes this equal to published code.
-        resident_code_bytes: u64,
-        /// Machine code reachable through a VM dispatch cache.
-        published_code_bytes: u64,
-        /// Resident machine code rejected after finalization. This remains zero
-        /// under compile-once-publish and guards future admission changes.
-        rejected_resident_bytes: u64,
-        /// Executable address space reserved by all JIT arenas for this run.
-        reserved_arena_bytes: u64,
-        /// Verified bytecode to in-process JIT IR translation time.
-        translation_nanos: u128,
-        /// Sealed JIT IR validation and bounded analysis time.
-        validation_nanos: u128,
-        /// Cranelift lowering and function-definition time.
-        codegen_nanos: u128,
-        /// Cranelift machine-code publication/finalization time.
-        finalize_nanos: u128,
-        compile_nanos: u128,
-        run_nanos: u128,
-    },
+    /// Boxed because diagnostic counters are cold report data, not VM dispatch
+    /// state. Serde transparently flattens this newtype struct into the tagged
+    /// `native` object, preserving the execution-report JSON contract.
+    Native(Box<NativeExecutionEngineTelemetry>),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct NativeExecutionEngineTelemetry {
+    pub considered: u64,
+    pub compiled: u64,
+    pub baseline_compiles: u64,
+    pub optimized_compiles: u64,
+    pub baseline_calls: u64,
+    pub optimized_calls: u64,
+    pub native_calls: u64,
+    pub native_bails: u64,
+    pub osr_entries: u64,
+    pub continuation_entries: u64,
+    /// Interpreter positions tested against the continuation candidate bitset.
+    pub continuation_candidate_checks: u64,
+    /// Candidate positions that performed full native preparation.
+    pub continuation_full_probes: u64,
+    /// Static continuation instance keys constructed after candidate gating.
+    pub continuation_instance_key_builds: u64,
+    pub continuation_yields: u64,
+    /// Direct source instructions represented by admitted continuation code.
+    pub continuation_compiled_source_instructions: u64,
+    /// Weighted native-lowerable work that remained interpreted.
+    pub interpreted_native_work: u64,
+    /// Dynamic normal-boundary observations grouped by stable reason.
+    pub native_barrier_counts: Box<std::collections::BTreeMap<String, u64>>,
+    /// Direct flat-list access sites emitted by compiled regions before backend
+    /// range proofs are applied.
+    pub direct_list_bounds_check_sites: u64,
+    /// Direct flat-list checks removed by sound modulo or canonical induction proofs.
+    pub direct_list_bounds_checks_elided: u64,
+    /// Read-only loop-invariant runtime calls represented by one lazy LICM memo
+    /// slot per loop activation (research feature only).
+    pub readonly_licm_sites: u64,
+    /// Runtime helper call sites remaining after native optimization.
+    pub runtime_helper_call_sites: u64,
+    /// Machine code currently resident in the JIT modules.
+    pub resident_code_bytes: u64,
+    /// Machine code reachable through a VM dispatch cache.
+    pub published_code_bytes: u64,
+    /// Resident code rejected after finalization.
+    pub rejected_resident_bytes: u64,
+    /// Executable address space reserved by all JIT arenas for this run.
+    pub reserved_arena_bytes: u64,
+    pub translation_nanos: u128,
+    pub validation_nanos: u128,
+    pub codegen_nanos: u128,
+    pub finalize_nanos: u128,
+    pub compile_nanos: u128,
+    pub run_nanos: u128,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]

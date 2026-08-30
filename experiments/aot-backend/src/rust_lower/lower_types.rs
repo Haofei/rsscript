@@ -474,25 +474,25 @@ impl RustLowerer<'_> {
             .fn_return
             .as_deref()
             .map(|return_type| Box::new(self.canonical_type_ref_inner(return_type, visiting)));
-        if let Some((parameters, target)) = self.type_aliases.get(&normalized.name) {
-            if parameters.len() == normalized.args.len() {
-                if !visiting.insert(normalized.name.clone()) {
-                    return normalized;
-                }
-                let substitutions = parameters
-                    .iter()
-                    .cloned()
-                    .zip(normalized.args.iter().cloned())
-                    .collect::<std::collections::BTreeMap<_, _>>();
-                let substituted = substitute_type_ref(target, &substitutions);
-                let mut canonical = self.canonical_type_ref_inner(&substituted, visiting);
-                canonical.is_fresh |= normalized.is_fresh;
-                canonical.is_noescape |= normalized.is_noescape;
-                canonical.is_owned |= normalized.is_owned;
-                canonical.span = normalized.span.clone();
-                visiting.remove(&normalized.name);
-                return canonical;
+        if let Some((parameters, target)) = self.type_aliases.get(&normalized.name)
+            && parameters.len() == normalized.args.len()
+        {
+            if !visiting.insert(normalized.name.clone()) {
+                return normalized;
             }
+            let substitutions = parameters
+                .iter()
+                .cloned()
+                .zip(normalized.args.iter().cloned())
+                .collect::<std::collections::BTreeMap<_, _>>();
+            let substituted = substitute_type_ref(target, &substitutions);
+            let mut canonical = self.canonical_type_ref_inner(&substituted, visiting);
+            canonical.is_fresh |= normalized.is_fresh;
+            canonical.is_noescape |= normalized.is_noescape;
+            canonical.is_owned |= normalized.is_owned;
+            canonical.span = normalized.span.clone();
+            visiting.remove(&normalized.name);
+            return canonical;
         }
         normalized
     }

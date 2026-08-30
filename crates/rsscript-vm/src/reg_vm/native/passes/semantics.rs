@@ -765,7 +765,7 @@ fn native_reg_proven_immutable_leaf(
     let mut changed = true;
     while changed {
         changed = false;
-        for r in 0..n_regs {
+        for r in parallel_indices(0..n_regs) {
             if proven[r] && !move_srcs[r].iter().all(|&s| s < n_regs && proven[s]) {
                 proven[r] = false;
                 changed = true;
@@ -1318,7 +1318,6 @@ pub(in crate::reg_vm) fn cold_arm_pure_value_op(instr: &RegInstr) -> bool {
 /// classifiable, else the inline is vetoed).
 #[cfg(feature = "native-jit")]
 // Cold-arm ranges are source-IP intervals shared with the cold bitset.
-#[allow(clippy::needless_range_loop)]
 pub(in crate::reg_vm) fn deopt_replaceable_cold_arms(
     code: &[RegInstr],
     reachable: &[bool],
@@ -1331,7 +1330,7 @@ pub(in crate::reg_vm) fn deopt_replaceable_cold_arms(
     // straight-line prefix. A candidate arm `[s..=e]` is only ACCEPTED after the
     // entry + isolation checks below; failure leaves it unmarked (the inline gate
     // then decides whether the leaf is still classifiable some other way).
-    for e in 0..n {
+    for e in parallel_indices(0..n) {
         if !reachable[e] || !matches!(code[e], RegInstr::Return { .. }) {
             continue;
         }
@@ -1416,7 +1415,7 @@ pub(in crate::reg_vm) fn deopt_replaceable_cold_arms(
         // defensive and reject if it ever appears.
         if ok {
             let mut written: Vec<usize> = Vec::new();
-            for j in s..=e {
+            for j in parallel_indices(s..=e) {
                 match instr_written_reg(&code[j]) {
                     RegFootprint::Some(ws) => written.extend(ws),
                     RegFootprint::All => {
@@ -1467,7 +1466,7 @@ pub(in crate::reg_vm) fn deopt_replaceable_cold_arms(
         // differential/soak suites stay green. (Register isolation above still applies to
         // the arm's REGISTER writes.)
         if ok {
-            for j in s..=e {
+            for j in parallel_indices(s..=e) {
                 cold[j] = true;
             }
             arm_start[s] = true;

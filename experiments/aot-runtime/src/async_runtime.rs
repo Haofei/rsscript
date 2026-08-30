@@ -366,7 +366,6 @@ enum ThenState<P, F, Q> {
 /// without short-circuiting).
 pub struct ThenPending<P, F, Q, T, U> {
     state: ThenState<P, F, Q>,
-    #[allow(clippy::type_complexity)]
     marker: std::marker::PhantomData<fn() -> (T, U)>,
 }
 
@@ -428,10 +427,11 @@ enum TryState<P, F, Q> {
 /// (it moves the captured locals of the async continuation) and is stored in an
 /// `Option`, taken once when the first pending completes. The phantom carries
 /// the success/error types that are otherwise only in the bounds.
+type TryPendingMarker<T, E, U> = fn() -> (T, E, U);
+
 pub struct TryPending<P, F, Q, T, E, U> {
     state: TryState<P, F, Q>,
-    #[allow(clippy::type_complexity)]
-    marker: std::marker::PhantomData<fn() -> (T, E, U)>,
+    marker: std::marker::PhantomData<TryPendingMarker<T, E, U>>,
 }
 
 pub fn pending_try<T, E, U, P, F, Q>(pending: P, then: F) -> TryPending<P, F, Q, T, E, U>

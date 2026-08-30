@@ -26,7 +26,6 @@ mod url;
 impl RegVm {
     // See `try_exec_pure`: interior-mutable `VmMapKey` is safe because
     // `retains(key)` forbids mutating a key while it is in a map.
-    #[allow(clippy::mutable_key_type)]
     pub(super) fn call_intrinsic(
         &mut self,
         unit: &RegUnit,

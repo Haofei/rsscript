@@ -1,5 +1,4 @@
 // Generated native bindings pass mutable RSScript lists as Vec references.
-#[allow(clippy::ptr_arg)]
 pub fn sort_int(values: &mut Vec<i64>) {
     values.sort_unstable();
 }

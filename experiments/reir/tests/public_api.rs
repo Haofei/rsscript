@@ -7,13 +7,37 @@ use reir::api::v1::{
 
 #[test]
 fn crate_root_preserves_rsscript_compatibility_names() {
-    #[allow(unused_imports)]
     use reir::{
         AcquisitionMode, Bundle, Capability, CapabilityCategory, Confidence, ConfidenceLevel,
         Evidence, EvidenceKind, Fact, FactKind, FactRole, FactValue, GatePolicy, Precision,
         ReconciliationKind, Subject, SubjectKind, compute_diff, decide_gate,
         format_pr_review_comment, reconcile_capabilities_for_target,
     };
+
+    let exported_types = [
+        std::any::type_name::<AcquisitionMode>(),
+        std::any::type_name::<Bundle>(),
+        std::any::type_name::<Capability>(),
+        std::any::type_name::<CapabilityCategory>(),
+        std::any::type_name::<Confidence>(),
+        std::any::type_name::<ConfidenceLevel>(),
+        std::any::type_name::<Evidence>(),
+        std::any::type_name::<EvidenceKind>(),
+        std::any::type_name::<Fact>(),
+        std::any::type_name::<FactKind>(),
+        std::any::type_name::<FactRole>(),
+        std::any::type_name::<FactValue>(),
+        std::any::type_name::<GatePolicy>(),
+        std::any::type_name::<Precision>(),
+        std::any::type_name::<ReconciliationKind>(),
+        std::any::type_name::<Subject>(),
+        std::any::type_name::<SubjectKind>(),
+    ];
+    assert!(exported_types.iter().all(|name| name.starts_with("reir::")));
+    let _ = compute_diff;
+    let _ = decide_gate;
+    let _ = format_pr_review_comment;
+    let _ = reconcile_capabilities_for_target;
 }
 
 #[test]

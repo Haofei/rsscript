@@ -389,8 +389,14 @@ pub fn write_reg_vm_runtime_intrinsics() -> Result<(), String> {
         .map(|intrinsic| format!("    {},", intrinsic.id))
         .collect::<Vec<_>>()
         .join("\n");
+    let enum_values = catalog
+        .intrinsic
+        .iter()
+        .map(|intrinsic| format!("    RegIntrinsic::{},", intrinsic.id))
+        .collect::<Vec<_>>()
+        .join("\n");
     let generated_enum = format!(
-        "#[allow(dead_code)]\n#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]\npub(crate) enum RegIntrinsic {{\n{enum_variants}\n}}\n"
+        "#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]\npub(crate) enum RegIntrinsic {{\n{enum_variants}\n}}\n\nconst _: &[RegIntrinsic] = &[\n{enum_values}\n];\n"
     );
     let direct_arms = catalog
         .binding

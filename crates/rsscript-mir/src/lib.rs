@@ -1658,12 +1658,14 @@ fn verify_function(
             verify_instruction(
                 function,
                 instruction,
-                &mut defined,
-                &mut used,
-                &mut block_moved_places,
-                type_count,
-                functions,
-                external_imports,
+                InstructionVerification {
+                    defined: &mut defined,
+                    used: &mut used,
+                    moved_places: &mut block_moved_places,
+                    type_count,
+                    functions,
+                    external_imports,
+                },
             )?;
         }
         verify_terminator(function, block.terminator(), &mut used)?;
@@ -2153,20 +2155,28 @@ fn transfer_move_state(
     }
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the MIR verifier keeps each independent identity/state table explicit at this trust boundary"
-)]
+struct InstructionVerification<'a> {
+    defined: &'a mut BTreeSet<ValueId>,
+    used: &'a mut Vec<ValueId>,
+    moved_places: &'a mut BTreeSet<PlaceId>,
+    type_count: usize,
+    functions: &'a [MirFunction],
+    external_imports: &'a [MirExternalImport],
+}
+
 fn verify_instruction(
     function: &MirFunction,
     instruction: &MirInstruction,
-    defined: &mut BTreeSet<ValueId>,
-    used: &mut Vec<ValueId>,
-    moved_places: &mut BTreeSet<PlaceId>,
-    type_count: usize,
-    functions: &[MirFunction],
-    external_imports: &[MirExternalImport],
+    verification: InstructionVerification<'_>,
 ) -> Result<(), MirValidationError> {
+    let InstructionVerification {
+        defined,
+        used,
+        moved_places,
+        type_count,
+        functions,
+        external_imports,
+    } = verification;
     let define = |value: ValueId, defined: &mut BTreeSet<ValueId>| {
         if value.index() >= function.value_count as usize || !defined.insert(value) {
             Err(MirValidationError::InvalidValueDefinition {

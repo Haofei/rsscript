@@ -85,11 +85,12 @@ fn terraform_policy_jsons(block: &str) -> Vec<String> {
                 index += 1;
             }
             policies.push(json);
-        } else if line.starts_with("policy") && line.contains("jsonencode(") {
-            if let Some(json) = extract_jsonencode_object(&lines, index) {
-                policies.push(json.0);
-                index = json.1;
-            }
+        } else if line.starts_with("policy")
+            && line.contains("jsonencode(")
+            && let Some(json) = extract_jsonencode_object(&lines, index)
+        {
+            policies.push(json.0);
+            index = json.1;
         }
         index += 1;
     }

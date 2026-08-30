@@ -6,7 +6,6 @@ use crate::reg_vm::value_ops::*;
 use crate::serde_json;
 
 impl RegVm {
-    #[allow(clippy::mutable_key_type)]
     pub(super) fn exec_json_intrinsics(
         &mut self,
         unit: &RegUnit,

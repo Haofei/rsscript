@@ -284,25 +284,18 @@ fn emits_measured_aot_jit_interpreter_matrix() {
 
         let (compile_nanos, transitions, helper_calls, bounds_checks, jit_status, jit_reason) =
             match latest_native.telemetry.engine {
-                ExecutionEngineTelemetry::Native {
-                    compile_nanos,
-                    native_calls,
-                    osr_entries,
-                    continuation_entries,
-                    runtime_helper_call_sites,
-                    direct_list_bounds_check_sites,
-                    direct_list_bounds_checks_elided,
-                    ..
-                } => {
-                    let transitions = native_calls
-                        .saturating_add(osr_entries)
-                        .saturating_add(continuation_entries);
+                ExecutionEngineTelemetry::Native(engine) => {
+                    let transitions = engine
+                        .native_calls
+                        .saturating_add(engine.osr_entries)
+                        .saturating_add(engine.continuation_entries);
                     (
-                        compile_nanos,
+                        engine.compile_nanos,
                         transitions,
-                        runtime_helper_call_sites,
-                        direct_list_bounds_check_sites
-                            .saturating_sub(direct_list_bounds_checks_elided),
+                        engine.runtime_helper_call_sites,
+                        engine
+                            .direct_list_bounds_check_sites
+                            .saturating_sub(engine.direct_list_bounds_checks_elided),
                         if transitions > 0 {
                             "measured"
                         } else {

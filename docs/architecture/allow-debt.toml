@@ -1,13 +1,7 @@
-schema = 1
+schema = 2
 
-# Exact ratchet: any added allowance fails, and removing one requires lowering
-# the recorded count in the same change. Legitimate local exceptions remain
-# visible while blanket and dead-code debt cannot silently grow.
-[vm]
-root = "crates/rsscript-vm/src"
-owner = "@Haofei"
-decision_by = "2026-12-31"
-total = 47
-dead_code = 0
-too_many_arguments = 0
-module_level_paths = []
+# Zero-tolerance invariant. `cargo xtask validate-ci` scans every Rust source
+# in the root and nested workspaces. New lint suppressions must be replaced by
+# a structural fix instead of being recorded as debt.
+[repository]
+total = 0

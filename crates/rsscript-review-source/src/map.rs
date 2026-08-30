@@ -214,7 +214,7 @@ pub(super) fn review_map_file_region_drafts(
             Item::Function(function) => Some(review_map_region_draft(
                 &source.file,
                 function,
-                &hir,
+                hir,
                 &function_lines,
                 source.total_lines,
             )),
@@ -666,9 +666,7 @@ pub(super) fn review_map_match_binding_type(
         return None;
     };
     // Option/Result carry a single positional payload.
-    let Some(binding) = bindings.first() else {
-        return None;
-    };
+    let binding = bindings.first()?;
     let value_type = value_type?;
     let args = type_arg_names(value_type)?;
     match name.as_str() {

@@ -24,34 +24,47 @@ fn policy_grant_facts(block: &TerraformResourceBlock, policy: &Value) -> Vec<Fac
         let resources = string_or_array(statement.get("Resource"));
         for action in actions {
             for resource in &resources {
-                facts.push(capability_grant_fact(
+                facts.push(capability_grant_fact(CapabilityGrant {
                     block,
-                    subject.clone(),
+                    subject: subject.clone(),
                     statement_index,
-                    &action,
+                    action: &action,
                     resource,
                     effect,
-                    principal.as_deref(),
+                    principal: principal.as_deref(),
                     condition,
                     conclusive,
-                ));
+                }));
             }
         }
     }
     facts
 }
 
-fn capability_grant_fact(
-    block: &TerraformResourceBlock,
+struct CapabilityGrant<'a> {
+    block: &'a TerraformResourceBlock,
     subject: Subject,
     statement_index: usize,
-    action: &str,
-    resource: &str,
-    effect: &str,
-    principal: Option<&str>,
-    condition: Option<&Value>,
+    action: &'a str,
+    resource: &'a str,
+    effect: &'a str,
+    principal: Option<&'a str>,
+    condition: Option<&'a Value>,
     conclusive: bool,
-) -> Fact {
+}
+
+fn capability_grant_fact(grant: CapabilityGrant<'_>) -> Fact {
+    let CapabilityGrant {
+        block,
+        subject,
+        statement_index,
+        action,
+        resource,
+        effect,
+        principal,
+        condition,
+        conclusive,
+    } = grant;
     let denied = effect.eq_ignore_ascii_case("Deny");
     let mut constraints = HashMap::new();
     if let Some(condition) = condition {
@@ -356,17 +369,17 @@ fn policy_grant_facts_with_address(
                     name: Some(format!("{}.{}", block.resource_type, block.name)),
                     package: Some("terraform".to_owned()),
                 };
-                let mut fact = capability_grant_fact(
+                let mut fact = capability_grant_fact(CapabilityGrant {
                     block,
                     subject,
                     statement_index,
                     action,
                     resource,
                     effect,
-                    principal.as_deref(),
+                    principal: principal.as_deref(),
                     condition,
                     conclusive,
-                );
+                });
                 fact.id = format!(
                     "{}::{}::statement::{}::{}",
                     subject_id,

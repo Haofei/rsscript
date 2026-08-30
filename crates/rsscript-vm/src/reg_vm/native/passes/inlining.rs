@@ -1007,7 +1007,7 @@ fn native_inline_leaf_calls_inner(
                 // call args ABOVE the captures at `base + captures + param`. For a
                 // non-capturing callee (`captures == 0`) this is exactly the shipped
                 // path: no `NativeClosureCapture`, args at `base + param`.
-                for k_cap in 0..callee.captures {
+                for k_cap in parallel_indices(0..callee.captures) {
                     new_code.push(RegInstr::NativeClosureCapture {
                         dst: base + k_cap,
                         closure: *closure,
@@ -1128,7 +1128,7 @@ fn native_inline_leaf_calls_inner(
                     // `base + captures + param`. For a non-capturing callee
                     // (`captures == 0`) this is exactly the shipped path (args at
                     // `base + param`).
-                    for k_cap in 0..callee.captures {
+                    for k_cap in parallel_indices(0..callee.captures) {
                         new_code.push(RegInstr::NativeClosureCapture {
                             dst: base + k_cap,
                             closure: *closure,

@@ -45,6 +45,7 @@ compile_error!("rsscript native JIT currently requires a 64-bit target");
 
 mod analysis;
 mod codegen;
+mod codegen_call;
 mod deopt;
 mod direct_codegen;
 mod executable_memory;
@@ -107,7 +108,8 @@ use host_abi::*;
 use ir::*;
 
 pub(crate) use codegen::{
-    LimitChecks, build_function, native_recursion_depth_cap, push_compiled_abi_signature,
+    FunctionCodegenInput, LimitChecks, build_function, native_recursion_depth_cap,
+    push_compiled_abi_signature,
 };
 #[cfg(feature = "recursion")]
 pub(crate) use codegen::{

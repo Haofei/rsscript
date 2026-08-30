@@ -589,417 +589,6 @@ pub fn validate_sources_with_interfaces_without_core(
     analyze_sources_with_interfaces_without_core_result(sources, interfaces).into_validated()
 }
 
-#[cfg(test)]
-// These entrypoint tests intentionally sit next to the public entrypoint family
-// they cover; keep this exception scoped to the test module instead of the crate.
-#[allow(clippy::items_after_test_module)]
-mod entrypoint_tests {
-    use super::{
-        AnalysisFlavor, AnalysisInput, AnalysisSources, PreparedAnalysis, analyze_input_result,
-        analyze_input_with_budget, analyze_source_with_interfaces,
-        analyze_source_with_interfaces_result, analyze_source_with_interfaces_without_core,
-        analyze_sources_with_interfaces, analyze_sources_with_interfaces_without_core,
-        prepare_analysis, render_type_ref,
-    };
-    use crate::checks::budget::{FrontendBudget, FrontendBudgetLimits};
-    use crate::diagnostic::code;
-    use crate::semantic::{FrontendCompletion, FrontendStopReason};
-    use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationContext};
-
-    const SOURCE: &str = "fn helper(value: read Int) -> Int { return value }\n\
-        fn main() -> Int { return helper(value: 1) }\n";
-    const ALIAS_SOURCE: &str = "type SourceAlias = CallerAlias<Int>\n\
-        type Callback = owned Fn(Int) -> String\n\
-        fn main() -> Unit { return Unit }\n";
-    const CALLER_INTERFACE: &str = "type CallerAlias<T> = Result<T, String>\n\
-        pub fn Caller.make<T>(value: T) -> CallerAlias<T>\n";
-
-    fn prepare(
-        flavor: AnalysisFlavor,
-        source: &'static str,
-        interfaces: &'static [(&'static str, &'static str)],
-    ) -> PreparedAnalysis {
-        let input = AnalysisInput {
-            sources: AnalysisSources::Single {
-                file: "main.rss",
-                source,
-            },
-            interfaces,
-            flavor,
-        };
-        let budget = FrontendBudget::new(FrontendBudgetLimits::default(), input.start_span());
-        prepare_analysis(input, budget)
-    }
-
-    #[test]
-    fn single_and_merged_entrypoints_agree_for_each_interface_policy() {
-        let sources = [("main.rss", SOURCE)];
-        let interfaces = [];
-
-        assert_eq!(
-            analyze_source_with_interfaces("main.rss", SOURCE, &interfaces),
-            analyze_sources_with_interfaces(&sources, &interfaces),
-        );
-        assert_eq!(
-            analyze_source_with_interfaces_without_core("main.rss", SOURCE, &interfaces),
-            analyze_sources_with_interfaces_without_core(&sources, &interfaces),
-        );
-    }
-
-    #[test]
-    fn semantic_database_derives_provider_descriptors_from_its_interface_snapshot() {
-        let result = analyze_source_with_interfaces_result(
-            "main.rss",
-            "fn main() -> Unit { return Unit }",
-            &[(
-                "host.rssi",
-                "module host.log\npub resource Stream\npub fn emit(value: read String) -> Unit\n",
-            )],
-        );
-        let descriptors = result
-            .database()
-            .interface_descriptors()
-            .expect("interface descriptor");
-        let direct = rsscript_semantics::InterfaceDescriptorV1::from_interface_source(
-            "host.rssi",
-            "module host.log\npub resource Stream\npub fn emit(value: read String) -> Unit\n",
-        )
-        .expect("direct descriptor");
-        assert_eq!(descriptors[0], direct);
-        assert_eq!(descriptors[0].functions[0].symbol.as_str(), "host.log.emit");
-        assert_eq!(descriptors[0].resources[0].name, "host.log.Stream");
-    }
-
-    #[test]
-    fn cyclic_generic_aliases_in_interfaces_report_rs0039() {
-        let interfaces = [(
-            "cycle.rssi",
-            "type A<T> = B<List<T>>\ntype B<T> = A<List<T>>\n",
-        )];
-        let diagnostics =
-            analyze_source_with_interfaces_without_core("main.rss", SOURCE, &interfaces);
-
-        assert_eq!(
-            diagnostics
-                .iter()
-                .filter(|diagnostic| diagnostic.code == "RS0039")
-                .count(),
-            2,
-            "{diagnostics:?}"
-        );
-    }
-
-    #[test]
-    fn preparation_preserves_analyzer_interface_program_policy() {
-        static CALLER_INTERFACES: &[(&str, &str)] = &[("caller.rssi", CALLER_INTERFACE)];
-
-        let standard = prepare(AnalysisFlavor::FullWithStandardPackages, SOURCE, &[]);
-        assert_eq!(
-            standard.interface_programs.len(),
-            crate::interfaces::default_interfaces().count(),
-        );
-        assert!(
-            standard
-                .hir
-                .resolve_function(Some("List"), "new")
-                .is_some_and(|signature| signature.is_builtin),
-        );
-
-        let with_builtins = prepare(
-            AnalysisFlavor::FullWithBuiltinInterfaces,
-            SOURCE,
-            CALLER_INTERFACES,
-        );
-        assert_eq!(with_builtins.interface_programs.len(), 1);
-        assert!(
-            with_builtins
-                .hir
-                .resolve_function(Some("List"), "new")
-                .is_some_and(|signature| signature.is_builtin),
-        );
-        assert!(
-            with_builtins
-                .hir
-                .resolve_function(Some("Caller"), "make")
-                .is_some_and(|signature| !signature.is_builtin),
-        );
-
-        let without_builtins = prepare(
-            AnalysisFlavor::FullWithoutBuiltinInterfaces,
-            SOURCE,
-            CALLER_INTERFACES,
-        );
-        assert_eq!(without_builtins.interface_programs.len(), 1);
-        assert!(
-            without_builtins
-                .hir
-                .resolve_function(Some("List"), "new")
-                .is_none(),
-        );
-        assert!(
-            without_builtins
-                .hir
-                .resolve_function(Some("Caller"), "make")
-                .is_some_and(|signature| !signature.is_builtin),
-        );
-
-        let syntax_only = prepare(AnalysisFlavor::SyntaxOnly, SOURCE, &[]);
-        assert!(syntax_only.interface_programs.is_empty());
-        assert!(syntax_only.type_aliases.is_empty());
-    }
-
-    #[test]
-    fn preparation_builds_alias_metadata_from_prepared_programs() {
-        static CALLER_INTERFACES: &[(&str, &str)] = &[("caller.rssi", CALLER_INTERFACE)];
-        let prepared = prepare(
-            AnalysisFlavor::FullWithoutBuiltinInterfaces,
-            ALIAS_SOURCE,
-            CALLER_INTERFACES,
-        );
-
-        assert_eq!(
-            render_type_ref(&prepared.type_aliases["CallerAlias"].target),
-            "Result<T, String>"
-        );
-        assert_eq!(prepared.type_aliases["CallerAlias"].parameters, vec!["T"]);
-        assert_eq!(
-            render_type_ref(&prepared.type_aliases["SourceAlias"].target),
-            "CallerAlias<Int>"
-        );
-        assert_eq!(
-            render_type_ref(&prepared.type_aliases["Callback"].target),
-            "owned Fn(Int) -> String"
-        );
-    }
-
-    #[test]
-    fn wide_program_reports_incomplete_analysis_when_node_budget_is_exhausted() {
-        let source = (0..200)
-            .map(|index| format!("fn f{index}() -> Unit {{ return Unit }}\n"))
-            .collect::<String>();
-        let input = AnalysisInput {
-            sources: AnalysisSources::Single {
-                file: "wide.rss",
-                source: &source,
-            },
-            interfaces: &[],
-            flavor: AnalysisFlavor::FullWithoutBuiltinInterfaces,
-        };
-        let token_count = crate::lexer::lex("wide.rss", &source).len();
-
-        let diagnostics = analyze_input_with_budget(
-            input,
-            FrontendBudgetLimits {
-                nodes: token_count * 2,
-                ..FrontendBudgetLimits::default()
-            },
-            None,
-        );
-
-        let incomplete = diagnostics
-            .iter()
-            .find(|diagnostic| diagnostic.code == code::ANALYSIS_INCOMPLETE)
-            .expect("wide analysis should stop at the shared node budget");
-        assert!(
-            incomplete
-                .causes
-                .iter()
-                .any(|cause| cause.contains("nodes"))
-        );
-    }
-
-    fn assert_incomplete_cause(diagnostics: &[crate::diagnostic::Diagnostic], expected: &str) {
-        let incomplete = diagnostics
-            .iter()
-            .find(|diagnostic| diagnostic.code == code::ANALYSIS_INCOMPLETE)
-            .expect("frontend should report incomplete analysis");
-        assert!(
-            incomplete
-                .causes
-                .iter()
-                .any(|cause| cause.contains(expected)),
-            "expected {expected:?} exhaustion, got {incomplete:?}",
-        );
-    }
-
-    #[test]
-    fn deeply_nested_expression_stops_at_parse_depth_budget() {
-        let source = format!(
-            "fn main() -> Unit {{ return {}Unit }}\n",
-            "await ".repeat(2_000),
-        );
-        let diagnostics = analyze_input_with_budget(
-            AnalysisInput {
-                sources: AnalysisSources::Single {
-                    file: "deep.rss",
-                    source: &source,
-                },
-                interfaces: &[],
-                flavor: AnalysisFlavor::SyntaxOnly,
-            },
-            FrontendBudgetLimits {
-                parse_depth: 32,
-                ..FrontendBudgetLimits::default()
-            },
-            None,
-        );
-
-        assert_incomplete_cause(&diagnostics, "parse depth");
-    }
-
-    #[test]
-    fn token_storm_stops_during_lexing() {
-        let source = "? ".repeat(10_000);
-        let diagnostics = analyze_input_with_budget(
-            AnalysisInput {
-                sources: AnalysisSources::Single {
-                    file: "tokens.rss",
-                    source: &source,
-                },
-                interfaces: &[],
-                flavor: AnalysisFlavor::SyntaxOnly,
-            },
-            FrontendBudgetLimits {
-                tokens: 64,
-                ..FrontendBudgetLimits::default()
-            },
-            None,
-        );
-
-        assert_incomplete_cause(&diagnostics, "tokens");
-    }
-
-    #[test]
-    fn wide_syntax_tree_stops_at_ast_node_budget() {
-        let source = (0..100)
-            .map(|index| format!("fn f{index}() -> Unit {{ return Unit }}\n"))
-            .collect::<String>();
-        let diagnostics = analyze_input_with_budget(
-            AnalysisInput {
-                sources: AnalysisSources::Single {
-                    file: "ast-nodes.rss",
-                    source: &source,
-                },
-                interfaces: &[],
-                flavor: AnalysisFlavor::SyntaxOnly,
-            },
-            FrontendBudgetLimits {
-                ast_nodes: 16,
-                ..FrontendBudgetLimits::default()
-            },
-            None,
-        );
-
-        assert_incomplete_cause(&diagnostics, "AST nodes");
-    }
-
-    #[test]
-    fn oversized_source_stops_before_lexing() {
-        let source = " ".repeat(4_096);
-        let diagnostics = analyze_input_with_budget(
-            AnalysisInput {
-                sources: AnalysisSources::Single {
-                    file: "large.rss",
-                    source: &source,
-                },
-                interfaces: &[],
-                flavor: AnalysisFlavor::SyntaxOnly,
-            },
-            FrontendBudgetLimits {
-                source_bytes: 128,
-                ..FrontendBudgetLimits::default()
-            },
-            None,
-        );
-
-        assert_incomplete_cause(&diagnostics, "source bytes");
-    }
-
-    #[test]
-    fn cancellation_stops_frontend_work() {
-        let cancel = CancellationToken::new();
-        cancel.cancel();
-        let operation = OperationContext {
-            cancellation: Some(cancel),
-            ..OperationContext::default()
-        };
-        let result = analyze_input_result(
-            AnalysisInput {
-                sources: AnalysisSources::Single {
-                    file: "cancelled.rss",
-                    source: SOURCE,
-                },
-                interfaces: &[],
-                flavor: AnalysisFlavor::SyntaxOnly,
-            },
-            FrontendBudgetLimits::default(),
-            Some(&operation),
-        );
-
-        assert_eq!(
-            result.completion(),
-            FrontendCompletion::Incomplete(FrontendStopReason::Cancelled)
-        );
-        assert_incomplete_cause(result.diagnostics(), "cancellation");
-        assert!(result.into_validated().is_err());
-    }
-
-    #[test]
-    fn deadline_stops_frontend_work() {
-        let operation = OperationContext {
-            deadline: Some(MonotonicDeadline::at(
-                std::time::Instant::now() - std::time::Duration::from_millis(1),
-            )),
-            ..OperationContext::default()
-        };
-        let result = analyze_input_result(
-            AnalysisInput {
-                sources: AnalysisSources::Single {
-                    file: "expired.rss",
-                    source: SOURCE,
-                },
-                interfaces: &[],
-                flavor: AnalysisFlavor::SyntaxOnly,
-            },
-            FrontendBudgetLimits::default(),
-            Some(&operation),
-        );
-
-        assert_eq!(
-            result.completion(),
-            FrontendCompletion::Incomplete(FrontendStopReason::DeadlineExceeded)
-        );
-        assert_incomplete_cause(result.diagnostics(), "deadline");
-    }
-
-    #[test]
-    fn parser_consumes_the_tokens_lexed_by_preparation() {
-        let token_count = crate::lexer::lex("single-lex.rss", SOURCE).len() - 1;
-        let diagnostics = analyze_input_with_budget(
-            AnalysisInput {
-                sources: AnalysisSources::Single {
-                    file: "single-lex.rss",
-                    source: SOURCE,
-                },
-                interfaces: &[],
-                flavor: AnalysisFlavor::SyntaxOnly,
-            },
-            FrontendBudgetLimits {
-                tokens: token_count,
-                ..FrontendBudgetLimits::default()
-            },
-            None,
-        );
-
-        assert!(
-            diagnostics
-                .iter()
-                .all(|diagnostic| diagnostic.code != code::ANALYSIS_INCOMPLETE),
-            "{diagnostics:?}",
-        );
-    }
-}
-
 fn analyze_program(prepared: PreparedAnalysis) -> AnalysisResult {
     let PreparedAnalysis {
         tokens,
@@ -1633,4 +1222,414 @@ pub(crate) fn is_valid_rust_identifier(name: &str) -> bool {
     (first.is_ascii_alphabetic() || first == '_')
         && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
         && !crate::text_util::is_rust_keyword(name)
+}
+
+#[cfg(test)]
+// These entrypoint tests intentionally sit next to the public entrypoint family
+// they cover; keep this exception scoped to the test module instead of the crate.
+mod entrypoint_tests {
+    use super::{
+        AnalysisFlavor, AnalysisInput, AnalysisSources, PreparedAnalysis, analyze_input_result,
+        analyze_input_with_budget, analyze_source_with_interfaces,
+        analyze_source_with_interfaces_result, analyze_source_with_interfaces_without_core,
+        analyze_sources_with_interfaces, analyze_sources_with_interfaces_without_core,
+        prepare_analysis, render_type_ref,
+    };
+    use crate::checks::budget::{FrontendBudget, FrontendBudgetLimits};
+    use crate::diagnostic::code;
+    use crate::{FrontendCompletion, FrontendStopReason};
+    use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationContext};
+
+    const SOURCE: &str = "fn helper(value: read Int) -> Int { return value }\n\
+        fn main() -> Int { return helper(value: 1) }\n";
+    const ALIAS_SOURCE: &str = "type SourceAlias = CallerAlias<Int>\n\
+        type Callback = owned Fn(Int) -> String\n\
+        fn main() -> Unit { return Unit }\n";
+    const CALLER_INTERFACE: &str = "type CallerAlias<T> = Result<T, String>\n\
+        pub fn Caller.make<T>(value: T) -> CallerAlias<T>\n";
+
+    fn prepare(
+        flavor: AnalysisFlavor,
+        source: &'static str,
+        interfaces: &'static [(&'static str, &'static str)],
+    ) -> PreparedAnalysis {
+        let input = AnalysisInput {
+            sources: AnalysisSources::Single {
+                file: "main.rss",
+                source,
+            },
+            interfaces,
+            flavor,
+        };
+        let budget = FrontendBudget::new(FrontendBudgetLimits::default(), input.start_span());
+        prepare_analysis(input, budget)
+    }
+
+    #[test]
+    fn single_and_merged_entrypoints_agree_for_each_interface_policy() {
+        let sources = [("main.rss", SOURCE)];
+        let interfaces = [];
+
+        assert_eq!(
+            analyze_source_with_interfaces("main.rss", SOURCE, &interfaces),
+            analyze_sources_with_interfaces(&sources, &interfaces),
+        );
+        assert_eq!(
+            analyze_source_with_interfaces_without_core("main.rss", SOURCE, &interfaces),
+            analyze_sources_with_interfaces_without_core(&sources, &interfaces),
+        );
+    }
+
+    #[test]
+    fn semantic_database_derives_provider_descriptors_from_its_interface_snapshot() {
+        let result = analyze_source_with_interfaces_result(
+            "main.rss",
+            "fn main() -> Unit { return Unit }",
+            &[(
+                "host.rssi",
+                "module host.log\npub resource Stream\npub fn emit(value: read String) -> Unit\n",
+            )],
+        );
+        let descriptors = result
+            .database()
+            .interface_descriptors()
+            .expect("interface descriptor");
+        let direct = rsscript_semantics::InterfaceDescriptorV1::from_interface_source(
+            "host.rssi",
+            "module host.log\npub resource Stream\npub fn emit(value: read String) -> Unit\n",
+        )
+        .expect("direct descriptor");
+        assert_eq!(descriptors[0], direct);
+        assert_eq!(descriptors[0].functions[0].symbol.as_str(), "host.log.emit");
+        assert_eq!(descriptors[0].resources[0].name, "host.log.Stream");
+    }
+
+    #[test]
+    fn cyclic_generic_aliases_in_interfaces_report_rs0039() {
+        let interfaces = [(
+            "cycle.rssi",
+            "type A<T> = B<List<T>>\ntype B<T> = A<List<T>>\n",
+        )];
+        let diagnostics =
+            analyze_source_with_interfaces_without_core("main.rss", SOURCE, &interfaces);
+
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.code == "RS0039")
+                .count(),
+            2,
+            "{diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn preparation_preserves_analyzer_interface_program_policy() {
+        static CALLER_INTERFACES: &[(&str, &str)] = &[("caller.rssi", CALLER_INTERFACE)];
+
+        let standard = prepare(AnalysisFlavor::FullWithStandardPackages, SOURCE, &[]);
+        assert_eq!(
+            standard.interface_programs.len(),
+            crate::interfaces::default_interfaces().count(),
+        );
+        assert!(
+            standard
+                .hir
+                .resolve_function(Some("List"), "new")
+                .is_some_and(|signature| signature.is_builtin),
+        );
+
+        let with_builtins = prepare(
+            AnalysisFlavor::FullWithBuiltinInterfaces,
+            SOURCE,
+            CALLER_INTERFACES,
+        );
+        assert_eq!(with_builtins.interface_programs.len(), 1);
+        assert!(
+            with_builtins
+                .hir
+                .resolve_function(Some("List"), "new")
+                .is_some_and(|signature| signature.is_builtin),
+        );
+        assert!(
+            with_builtins
+                .hir
+                .resolve_function(Some("Caller"), "make")
+                .is_some_and(|signature| !signature.is_builtin),
+        );
+
+        let without_builtins = prepare(
+            AnalysisFlavor::FullWithoutBuiltinInterfaces,
+            SOURCE,
+            CALLER_INTERFACES,
+        );
+        assert_eq!(without_builtins.interface_programs.len(), 1);
+        assert!(
+            without_builtins
+                .hir
+                .resolve_function(Some("List"), "new")
+                .is_none(),
+        );
+        assert!(
+            without_builtins
+                .hir
+                .resolve_function(Some("Caller"), "make")
+                .is_some_and(|signature| !signature.is_builtin),
+        );
+
+        let syntax_only = prepare(AnalysisFlavor::SyntaxOnly, SOURCE, &[]);
+        assert!(syntax_only.interface_programs.is_empty());
+        assert!(syntax_only.type_aliases.is_empty());
+    }
+
+    #[test]
+    fn preparation_builds_alias_metadata_from_prepared_programs() {
+        static CALLER_INTERFACES: &[(&str, &str)] = &[("caller.rssi", CALLER_INTERFACE)];
+        let prepared = prepare(
+            AnalysisFlavor::FullWithoutBuiltinInterfaces,
+            ALIAS_SOURCE,
+            CALLER_INTERFACES,
+        );
+
+        assert_eq!(
+            render_type_ref(&prepared.type_aliases["CallerAlias"].target),
+            "Result<T, String>"
+        );
+        assert_eq!(prepared.type_aliases["CallerAlias"].parameters, vec!["T"]);
+        assert_eq!(
+            render_type_ref(&prepared.type_aliases["SourceAlias"].target),
+            "CallerAlias<Int>"
+        );
+        assert_eq!(
+            render_type_ref(&prepared.type_aliases["Callback"].target),
+            "owned Fn(Int) -> String"
+        );
+    }
+
+    #[test]
+    fn wide_program_reports_incomplete_analysis_when_node_budget_is_exhausted() {
+        let source = (0..200)
+            .map(|index| format!("fn f{index}() -> Unit {{ return Unit }}\n"))
+            .collect::<String>();
+        let input = AnalysisInput {
+            sources: AnalysisSources::Single {
+                file: "wide.rss",
+                source: &source,
+            },
+            interfaces: &[],
+            flavor: AnalysisFlavor::FullWithoutBuiltinInterfaces,
+        };
+        let token_count = crate::lexer::lex("wide.rss", &source).len();
+
+        let diagnostics = analyze_input_with_budget(
+            input,
+            FrontendBudgetLimits {
+                nodes: token_count * 2,
+                ..FrontendBudgetLimits::default()
+            },
+            None,
+        );
+
+        let incomplete = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == code::ANALYSIS_INCOMPLETE)
+            .expect("wide analysis should stop at the shared node budget");
+        assert!(
+            incomplete
+                .causes
+                .iter()
+                .any(|cause| cause.contains("nodes"))
+        );
+    }
+
+    fn assert_incomplete_cause(diagnostics: &[crate::diagnostic::Diagnostic], expected: &str) {
+        let incomplete = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == code::ANALYSIS_INCOMPLETE)
+            .expect("frontend should report incomplete analysis");
+        assert!(
+            incomplete
+                .causes
+                .iter()
+                .any(|cause| cause.contains(expected)),
+            "expected {expected:?} exhaustion, got {incomplete:?}",
+        );
+    }
+
+    #[test]
+    fn deeply_nested_expression_stops_at_parse_depth_budget() {
+        let source = format!(
+            "fn main() -> Unit {{ return {}Unit }}\n",
+            "await ".repeat(2_000),
+        );
+        let diagnostics = analyze_input_with_budget(
+            AnalysisInput {
+                sources: AnalysisSources::Single {
+                    file: "deep.rss",
+                    source: &source,
+                },
+                interfaces: &[],
+                flavor: AnalysisFlavor::SyntaxOnly,
+            },
+            FrontendBudgetLimits {
+                parse_depth: 32,
+                ..FrontendBudgetLimits::default()
+            },
+            None,
+        );
+
+        assert_incomplete_cause(&diagnostics, "parse depth");
+    }
+
+    #[test]
+    fn token_storm_stops_during_lexing() {
+        let source = "? ".repeat(10_000);
+        let diagnostics = analyze_input_with_budget(
+            AnalysisInput {
+                sources: AnalysisSources::Single {
+                    file: "tokens.rss",
+                    source: &source,
+                },
+                interfaces: &[],
+                flavor: AnalysisFlavor::SyntaxOnly,
+            },
+            FrontendBudgetLimits {
+                tokens: 64,
+                ..FrontendBudgetLimits::default()
+            },
+            None,
+        );
+
+        assert_incomplete_cause(&diagnostics, "tokens");
+    }
+
+    #[test]
+    fn wide_syntax_tree_stops_at_ast_node_budget() {
+        let source = (0..100)
+            .map(|index| format!("fn f{index}() -> Unit {{ return Unit }}\n"))
+            .collect::<String>();
+        let diagnostics = analyze_input_with_budget(
+            AnalysisInput {
+                sources: AnalysisSources::Single {
+                    file: "ast-nodes.rss",
+                    source: &source,
+                },
+                interfaces: &[],
+                flavor: AnalysisFlavor::SyntaxOnly,
+            },
+            FrontendBudgetLimits {
+                ast_nodes: 16,
+                ..FrontendBudgetLimits::default()
+            },
+            None,
+        );
+
+        assert_incomplete_cause(&diagnostics, "AST nodes");
+    }
+
+    #[test]
+    fn oversized_source_stops_before_lexing() {
+        let source = " ".repeat(4_096);
+        let diagnostics = analyze_input_with_budget(
+            AnalysisInput {
+                sources: AnalysisSources::Single {
+                    file: "large.rss",
+                    source: &source,
+                },
+                interfaces: &[],
+                flavor: AnalysisFlavor::SyntaxOnly,
+            },
+            FrontendBudgetLimits {
+                source_bytes: 128,
+                ..FrontendBudgetLimits::default()
+            },
+            None,
+        );
+
+        assert_incomplete_cause(&diagnostics, "source bytes");
+    }
+
+    #[test]
+    fn cancellation_stops_frontend_work() {
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let operation = OperationContext {
+            cancellation: Some(cancel),
+            ..OperationContext::default()
+        };
+        let result = analyze_input_result(
+            AnalysisInput {
+                sources: AnalysisSources::Single {
+                    file: "cancelled.rss",
+                    source: SOURCE,
+                },
+                interfaces: &[],
+                flavor: AnalysisFlavor::SyntaxOnly,
+            },
+            FrontendBudgetLimits::default(),
+            Some(&operation),
+        );
+
+        assert_eq!(
+            result.completion(),
+            FrontendCompletion::Incomplete(FrontendStopReason::Cancelled)
+        );
+        assert_incomplete_cause(result.diagnostics(), "cancellation");
+        assert!(result.into_validated().is_err());
+    }
+
+    #[test]
+    fn deadline_stops_frontend_work() {
+        let operation = OperationContext {
+            deadline: Some(MonotonicDeadline::at(
+                std::time::Instant::now() - std::time::Duration::from_millis(1),
+            )),
+            ..OperationContext::default()
+        };
+        let result = analyze_input_result(
+            AnalysisInput {
+                sources: AnalysisSources::Single {
+                    file: "expired.rss",
+                    source: SOURCE,
+                },
+                interfaces: &[],
+                flavor: AnalysisFlavor::SyntaxOnly,
+            },
+            FrontendBudgetLimits::default(),
+            Some(&operation),
+        );
+
+        assert_eq!(
+            result.completion(),
+            FrontendCompletion::Incomplete(FrontendStopReason::DeadlineExceeded)
+        );
+        assert_incomplete_cause(result.diagnostics(), "deadline");
+    }
+
+    #[test]
+    fn parser_consumes_the_tokens_lexed_by_preparation() {
+        let token_count = crate::lexer::lex("single-lex.rss", SOURCE).len() - 1;
+        let diagnostics = analyze_input_with_budget(
+            AnalysisInput {
+                sources: AnalysisSources::Single {
+                    file: "single-lex.rss",
+                    source: SOURCE,
+                },
+                interfaces: &[],
+                flavor: AnalysisFlavor::SyntaxOnly,
+            },
+            FrontendBudgetLimits {
+                tokens: token_count,
+                ..FrontendBudgetLimits::default()
+            },
+            None,
+        );
+
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.code != code::ANALYSIS_INCOMPLETE),
+            "{diagnostics:?}",
+        );
+    }
 }

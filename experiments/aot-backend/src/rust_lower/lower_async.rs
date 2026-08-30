@@ -391,9 +391,9 @@ impl RustLowerer<'_> {
         out.push_str(&format!("{pad}}}\n"));
     }
 
-    pub(super) fn extract_task_group_await<'b>(
+    pub(super) fn extract_task_group_await(
         &self,
-        expr: &'b Expr,
+        expr: &Expr,
         async_let_names: &[String],
     ) -> Option<String> {
         match expr {
@@ -401,10 +401,10 @@ impl RustLowerer<'_> {
                 Expr::Ident(name, _) if async_let_names.contains(name) => Some(rust_ident(name)),
                 Expr::Effect { value, .. } => {
                     // await read x / await take x
-                    if let Expr::Ident(name, _) = value.as_ref() {
-                        if async_let_names.contains(name) {
-                            return Some(rust_ident(name));
-                        }
+                    if let Expr::Ident(name, _) = value.as_ref()
+                        && async_let_names.contains(name)
+                    {
+                        return Some(rust_ident(name));
                     }
                     None
                 }

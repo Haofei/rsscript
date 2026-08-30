@@ -130,7 +130,6 @@ macro_rules! runtime_abi_exports {
             json_to_string_at, json_to_string_at_or, json_value, json_value_at, json_values,
             yaml_parse,
         };
-        #[allow(deprecated)]
         pub use crate::managed::{
             Managed, ManagedRead, ManagedWrite, WeakManaged, manage, manage_at, unwrap_runtime,
             unwrap_runtime_or_panic, weak,

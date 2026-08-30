@@ -382,7 +382,6 @@ impl RegVm {
     // `VmMapKey` is interior-mutable (List/struct keys hold `Rc<RefCell<…>>`),
     // but `Map.insert`'s `retains(key)` effect makes mutating a live key
     // unreachable in well-typed RSScript, so the lint's hazard cannot occur.
-    #[allow(clippy::mutable_key_type)]
     // perf-plan §1.1 (interpreter dispatch — inline the match, minimal form):
     // force this single-instruction executor to expand into BOTH callers
     // (`drive`'s hot loop and `run_jit`), so VM state (ip/base/register ptr)

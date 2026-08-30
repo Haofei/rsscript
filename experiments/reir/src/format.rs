@@ -768,23 +768,23 @@ pub fn format_reconciliation_report(
         }
         writeln!(output).unwrap();
 
-        if let Some(subject_chain) = subject_chain {
-            if subject_chain.nodes.len() > 1 || !subject_chain.evidence.is_empty() {
-                writeln!(output, "deployment chain:").unwrap();
-                for node in subject_chain.nodes.iter().skip(1) {
-                    writeln!(
-                        output,
-                        "  {}: {}",
-                        subject_chain_node_label(node),
-                        format_subject_label(node)
-                    )
-                    .unwrap();
-                }
-                if !subject_chain.evidence.is_empty() {
-                    write_evidence_block(&mut output, "  ", &subject_chain.evidence);
-                }
-                writeln!(output).unwrap();
+        if let Some(subject_chain) = subject_chain
+            && (subject_chain.nodes.len() > 1 || !subject_chain.evidence.is_empty())
+        {
+            writeln!(output, "deployment chain:").unwrap();
+            for node in subject_chain.nodes.iter().skip(1) {
+                writeln!(
+                    output,
+                    "  {}: {}",
+                    subject_chain_node_label(node),
+                    format_subject_label(node)
+                )
+                .unwrap();
             }
+            if !subject_chain.evidence.is_empty() {
+                write_evidence_block(&mut output, "  ", &subject_chain.evidence);
+            }
+            writeln!(output).unwrap();
         }
 
         writeln!(output, "reason:").unwrap();

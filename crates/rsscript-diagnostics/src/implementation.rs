@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 
 pub use rsscript_source_model::Span;
 
-#[cfg_attr(not(feature = "execution"), allow(dead_code))]
 pub mod code {
     pub const RESERVED_DIAGNOSTIC_RS0001: &str = "RS0001";
     pub const MISSING_RETURN_TYPE: &str = "RS0002";

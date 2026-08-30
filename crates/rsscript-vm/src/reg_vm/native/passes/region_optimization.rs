@@ -1,5 +1,8 @@
 use super::*;
 
+type WholeOptionRewrite = (Vec<RegInstr>, usize, Vec<usize>, Vec<usize>);
+type RegionRewrite<Recipe> = (Vec<RegInstr>, usize, Vec<usize>, Vec<Recipe>);
+
 /// Like [`native_callee_inlinable`] but permits a **capturing** closure callee
 /// (OSR × profile-guided inlining): every capture must be materialized as a scalar at the inline site
 /// (the gate enforces scalarity via the profile's `captures_all_scalar` bit), so
@@ -516,11 +519,10 @@ pub(in crate::reg_vm) fn is_make_struct_op(instr: &RegInstr) -> bool {
 /// non-scalar ⇒ escaping.
 #[cfg(feature = "native-jit")]
 // Rewrites coordinate code, origins, and register facts by source index.
-#[allow(clippy::needless_range_loop, clippy::type_complexity)]
 pub(in crate::reg_vm) fn native_scalar_replace_options(
     code: &[RegInstr],
     n_regs: usize,
-) -> Option<(Vec<RegInstr>, usize, Vec<usize>, Vec<usize>)> {
+) -> Option<WholeOptionRewrite> {
     let reachable = native_reachable_instructions(code);
 
     // Fast path: no Option ops at all — nothing to do, no payload regs to verify.
@@ -751,14 +753,14 @@ pub(in crate::reg_vm) fn native_scalar_replace_options(
     // thus maps every fragment to the original op's index; copy-through
     // instructions map one-to-one.
     let mut ip_map = vec![0usize; new_code.len()];
-    for i in 0..code.len() {
+    for i in parallel_indices(0..code.len()) {
         let start = index_map[i];
         let end = if i + 1 < code.len() {
             index_map[i + 1]
         } else {
             new_code.len()
         };
-        for t in start..end {
+        for t in parallel_indices(start..end) {
             ip_map[t] = i;
         }
     }
@@ -848,7 +850,6 @@ impl CombinatorKind {
 /// original `ip_map` discipline as the sibling region passes.
 #[cfg(feature = "native-jit")]
 // Rewrites coordinate code and source-IP maps by the original instruction index.
-#[allow(clippy::needless_range_loop)]
 pub(in crate::reg_vm) fn native_expand_option_result_combinators_in_region(
     unit: &RegUnit,
     _func: &RegFunction,
@@ -916,7 +917,7 @@ pub(in crate::reg_vm) fn native_expand_option_result_combinators_in_region(
 
     // Validate every in-region combinator up front; bail the whole pass on the first
     // one we cannot expand. Collect the (operand, mapper/default) regs for the rewrite.
-    for i in header..exit {
+    for i in parallel_indices(header..exit) {
         let (intrinsic, args) = match &code[i] {
             RegInstr::CallIntrinsic {
                 intrinsic, args, ..
@@ -1237,14 +1238,14 @@ pub(in crate::reg_vm) fn native_expand_option_result_combinators_in_region(
     // to `i` (a deopt inside the expanded fragment resumes by re-running the original
     // combinator on the interpreter); copy-through maps one-to-one.
     let mut ip_map = vec![0usize; new_code.len()];
-    for i in 0..code.len() {
+    for i in parallel_indices(0..code.len()) {
         let start = index_map[i];
         let end = if i + 1 < code.len() {
             index_map[i + 1]
         } else {
             new_code.len()
         };
-        for t in start..end {
+        for t in parallel_indices(start..end) {
             ip_map[t] = i;
         }
     }
@@ -1290,7 +1291,6 @@ pub(in crate::reg_vm) fn native_expand_option_result_combinators_in_region(
 /// foldable `String.len`) ⇒ code unchanged with an identity ip-map.
 #[cfg(feature = "native-jit")]
 // Rewrites coordinate code and source-IP maps by the original instruction index.
-#[allow(clippy::needless_range_loop)]
 pub(in crate::reg_vm) fn native_string_length_fold_in_region(
     code: &[RegInstr],
     n_regs: usize,
@@ -1358,7 +1358,7 @@ pub(in crate::reg_vm) fn native_string_length_fold_in_region(
             None
         }
     };
-    for i in header..exit {
+    for i in parallel_indices(header..exit) {
         let dst_prod: Option<(usize, Producer)> = match &code[i] {
             RegInstr::LoadString { dst, value } => Some((
                 *dst,
@@ -1426,7 +1426,7 @@ pub(in crate::reg_vm) fn native_string_length_fold_in_region(
     // be a sound single-producer string ⇒ drop it from the candidate set. (Out-of-
     // region defs would change the value the loop observes.)
     analysis.mark_external_writes(code, &mut multiply_defined)?;
-    for r in 0..n_regs {
+    for r in parallel_indices(0..n_regs) {
         if multiply_defined[r] {
             producer[r] = None;
         }
@@ -1441,7 +1441,7 @@ pub(in crate::reg_vm) fn native_string_length_fold_in_region(
     let mut changed = true;
     while changed {
         changed = false;
-        for r in 0..n_regs {
+        for r in parallel_indices(0..n_regs) {
             if foldable[r] {
                 continue;
             }
@@ -1497,7 +1497,7 @@ pub(in crate::reg_vm) fn native_string_length_fold_in_region(
         analysis.mark_external_reads_touching(code, &foldable, &mut escaped)?;
         // In-region uses: each read of a foldable register must be a sanctioned
         // string consumer.
-        for i in header..exit {
+        for i in parallel_indices(header..exit) {
             match &code[i] {
                 // Sanctioned: foldable producers consuming foldable string operands.
                 RegInstr::StringConcat { dst, left, right } if foldable[*dst] => {
@@ -1546,7 +1546,7 @@ pub(in crate::reg_vm) fn native_string_length_fold_in_region(
         }
         // Drop escaped registers and re-resolve foldability (a dropped operand can
         // un-fold its consumers).
-        for r in 0..n_regs {
+        for r in parallel_indices(0..n_regs) {
             if escaped[r] {
                 foldable[r] = false;
                 ascii[r] = false;
@@ -1555,7 +1555,7 @@ pub(in crate::reg_vm) fn native_string_length_fold_in_region(
         let mut changed2 = true;
         while changed2 {
             changed2 = false;
-            for r in 0..n_regs {
+            for r in parallel_indices(0..n_regs) {
                 if !foldable[r] {
                     continue;
                 }
@@ -1595,7 +1595,7 @@ pub(in crate::reg_vm) fn native_string_length_fold_in_region(
     // registers for its digit-count ladder; reserve them lazily.
     let mut len_reg = vec![0usize; n_regs];
     let mut next_reg = n_regs;
-    for r in 0..n_regs {
+    for r in parallel_indices(0..n_regs) {
         if foldable[r] {
             len_reg[r] = next_reg;
             next_reg += 1;
@@ -1661,7 +1661,7 @@ pub(in crate::reg_vm) fn native_string_length_fold_in_region(
         // --- positive (and zero) ladder: emit largest threshold first ---
         // For d in 19..=2: if k >= 10^(d-1) -> out = d; Jump merge.
         let mut to_merge: Vec<usize> = Vec::new();
-        for d in (2..=19usize).rev() {
+        for d in parallel_indices((2..=19usize).rev()) {
             let t = POW10[d - 2];
             out_code.push(RegInstr::LoadInt { dst: thr, value: t });
             // if k >= t -> set out=d, jump merge
@@ -1697,7 +1697,7 @@ pub(in crate::reg_vm) fn native_string_length_fold_in_region(
         // out (magnitude digits) then +1 for sign. For d in 19..=2: if k <= -10^(d-1)
         // -> magnitude d. Final else -> magnitude 1.
         let mut neg_to_add: Vec<usize> = Vec::new();
-        for d in (2..=19usize).rev() {
+        for d in parallel_indices((2..=19usize).rev()) {
             let t = -POW10[d - 2];
             out_code.push(RegInstr::LoadInt { dst: thr, value: t });
             let skip_patch = out_code.len();
@@ -1819,7 +1819,6 @@ pub(in crate::reg_vm) fn native_string_length_fold_in_region(
 
     // out = min(a, b): if a <= b -> out=a else out=b.
     // The emitter updates an origin entry for each synthesized instruction.
-    #[allow(clippy::needless_range_loop)]
     fn emit_min(
         out_code: &mut Vec<RegInstr>,
         out: usize,
@@ -2065,14 +2064,14 @@ pub(in crate::reg_vm) fn native_string_length_fold_in_region(
     // Inverse ip-map: every fragment instruction maps back to the producer's
     // original index (`String.len` → its own index; copy-through 1:1).
     let mut ip_map = vec![0usize; new_code.len()];
-    for i in 0..code.len() {
+    for i in parallel_indices(0..code.len()) {
         let start = index_map[i];
         let end = if i + 1 < code.len() {
             index_map[i + 1]
         } else {
             new_code.len()
         };
-        for t in start..end {
+        for t in parallel_indices(start..end) {
             ip_map[t] = i;
         }
     }
@@ -2101,13 +2100,12 @@ pub(in crate::reg_vm) fn native_string_length_fold_in_region(
 /// preserved exactly.
 #[cfg(feature = "native-jit")]
 // The region rewrite coordinates code, recipes, and source maps by IP.
-#[allow(clippy::needless_range_loop, clippy::type_complexity)]
 pub(in crate::reg_vm) fn native_scalar_replace_options_in_region(
     code: &[RegInstr],
     n_regs: usize,
     header: usize,
     exit: usize,
-) -> Option<(Vec<RegInstr>, usize, Vec<usize>, Vec<OsrMaterializeRecipe>)> {
+) -> Option<RegionRewrite<OsrMaterializeRecipe>> {
     if header >= exit || exit > code.len() {
         return None;
     }
@@ -2121,7 +2119,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_options_in_region(
 
     // Every in-region instruction must be native-subset or one of the four Option
     // ops; otherwise the loop body cannot become a native loop anyway — bail.
-    for i in header..exit {
+    for i in parallel_indices(header..exit) {
         if !native_subset_instruction(&code[i])
             && !is_option_op(&code[i])
             && !matches!(&code[i], RegInstr::TryResult { .. })
@@ -2135,7 +2133,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_options_in_region(
     // OPT = registers carrying an Option value: seed from in-region
     // `MakeSome`/`LoadNone` dsts, close under in-region `Move` aliasing.
     let mut opt = vec![false; n_regs];
-    for i in header..exit {
+    for i in parallel_indices(header..exit) {
         match &code[i] {
             RegInstr::MakeSome { dst, .. }
             | RegInstr::LoadNone { dst }
@@ -2148,7 +2146,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_options_in_region(
 
     // Validate in-region uses/defs of OPT registers (identical recognition rules to
     // the whole-function pass), and require a SCALAR payload.
-    for i in header..exit {
+    for i in parallel_indices(header..exit) {
         match &code[i] {
             RegInstr::LoadNone { dst } if opt[*dst] => {}
             RegInstr::MakeSome { dst, value } if opt[*dst] => {
@@ -2228,7 +2226,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_options_in_region(
     // `RegFootprint::All`, which bails. The scalar-payload-TYPE check is deferred to the
     // OsrEntry build site.)
     let mut reconstruct = vec![false; n_regs];
-    for i in 0..code.len() {
+    for i in parallel_indices(0..code.len()) {
         if i >= header && i < exit {
             continue;
         }
@@ -2271,7 +2269,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_options_in_region(
             return None;
         }
         let def_ip = in_region_defs[0];
-        for i in header..def_ip {
+        for i in parallel_indices(header..def_ip) {
             match &code[i] {
                 RegInstr::JumpIfBool { target, .. } | RegInstr::JumpIfIntCompare { target, .. }
                     if *target >= exit => {}
@@ -2462,14 +2460,14 @@ pub(in crate::reg_vm) fn native_scalar_replace_options_in_region(
     }
     // Inverse ip-map (see `native_scalar_replace_options`).
     let mut ip_map = vec![0usize; new_code.len()];
-    for i in 0..code.len() {
+    for i in parallel_indices(0..code.len()) {
         let start = index_map[i];
         let end = if i + 1 < code.len() {
             index_map[i + 1]
         } else {
             new_code.len()
         };
-        for t in start..end {
+        for t in parallel_indices(start..end) {
             ip_map[t] = i;
         }
     }
@@ -2526,13 +2524,12 @@ pub(in crate::reg_vm) fn is_result_ctor_name(name: &str) -> bool {
 /// reconstruction, so the other (possibly stale) payload is never observed.
 #[cfg(feature = "native-jit")]
 // The region rewrite coordinates code, recipes, and source maps by IP.
-#[allow(clippy::needless_range_loop, clippy::type_complexity)]
 pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
     code: &[RegInstr],
     n_regs: usize,
     header: usize,
     exit: usize,
-) -> Option<(Vec<RegInstr>, usize, Vec<usize>, Vec<ResultRecipe>)> {
+) -> Option<RegionRewrite<ResultRecipe>> {
     if header >= exit || exit > code.len() {
         return None;
     }
@@ -2554,7 +2551,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
     // RES = registers carrying a (replaceable) Result value: seed from in-region
     // `MakeVariant{Ok|Err}` dsts, close under in-region `Move` aliasing.
     let mut res = vec![false; n_regs];
-    for i in header..exit {
+    for i in parallel_indices(header..exit) {
         if let RegInstr::MakeVariant { dst, layout, .. } = &code[i]
             && is_result_ctor_name(&layout.name)
         {
@@ -2567,7 +2564,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
     // Result param) ⇒ this pass cannot dissolve it. Bail so the loop stays on the
     // interpreter (the boundary/escape gates below would also catch it, but bailing
     // early is clearer and conservative).
-    for i in header..exit {
+    for i in parallel_indices(header..exit) {
         if let RegInstr::MatchResult { src, .. } = &code[i]
             && !res[*src]
         {
@@ -2596,7 +2593,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
     // `MatchResult{src:R}`, `UnwrapVariantValue{src:R}` (Ok scalar payload, or the dead
     // Err-arm unwrap which the rewrite drops), `TryResult{src:R}` (the `?` success
     // projection), and `Move` aliases. Anything else that touches a RES register ⇒ bail.
-    for i in header..exit {
+    for i in parallel_indices(header..exit) {
         match &code[i] {
             RegInstr::MakeVariant {
                 dst,
@@ -2676,7 +2673,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
     // The scalar-payload-TYPE check is deferred to the OsrEntry build site (where
     // native register types are known); a non-scalar `Ok` payload declines OSR there.
     let mut reconstruct = vec![false; n_regs];
-    for i in 0..code.len() {
+    for i in parallel_indices(0..code.len()) {
         if in_region(i) {
             continue;
         }
@@ -2717,7 +2714,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
             return None;
         }
         let def_ip = in_region_defs[0];
-        for i in header..def_ip {
+        for i in parallel_indices(header..def_ip) {
             match &code[i] {
                 // The header's loop-exit condition (target outside the loop) is fine.
                 RegInstr::JumpIfBool { target, .. } | RegInstr::JumpIfIntCompare { target, .. }
@@ -2915,14 +2912,14 @@ pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
     }
     // Inverse ip-map (see `native_scalar_replace_options`).
     let mut ip_map = vec![0usize; new_code.len()];
-    for i in 0..code.len() {
+    for i in parallel_indices(0..code.len()) {
         let start = index_map[i];
         let end = if i + 1 < code.len() {
             index_map[i + 1]
         } else {
             new_code.len()
         };
-        for t in start..end {
+        for t in parallel_indices(start..end) {
             ip_map[t] = i;
         }
     }

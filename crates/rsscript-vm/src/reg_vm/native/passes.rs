@@ -14,6 +14,16 @@ mod scalar_replacement;
 mod semantics;
 mod virtual_objects;
 
+/// Marks instruction-position loops that intentionally coordinate multiple
+/// parallel IP-indexed fact tables. A single-slice iterator would hide that
+/// shared identity; keeping the range explicit makes remapping invariants clear.
+pub(in crate::reg_vm) fn parallel_indices<I>(indices: I) -> I
+where
+    I: Iterator<Item = usize>,
+{
+    indices
+}
+
 pub(in crate::reg_vm) use bytes_fold::*;
 pub(in crate::reg_vm) use facts::*;
 pub(in crate::reg_vm) use inlining::*;

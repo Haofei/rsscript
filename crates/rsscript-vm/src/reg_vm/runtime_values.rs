@@ -267,7 +267,6 @@ pub(super) fn json_decode_struct_value(
 // while it sits in a map — cannot occur in well-typed RSScript: `Map.insert`
 // declares `retains(key)`, so the move checker forbids mutating a key after
 // insertion. The hash projection reads the (immutable-by-contract) contents.
-#[allow(clippy::mutable_key_type)]
 pub(super) fn json_decode_field_value(
     unit: &RegUnit,
     type_name: &str,

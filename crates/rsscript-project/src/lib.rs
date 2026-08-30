@@ -498,6 +498,62 @@ pub struct ProjectRegularFile {
     pub bytes: u64,
 }
 
+struct ProjectTreeWalk<'a, Skip> {
+    root: &'a Path,
+    limits: ProjectTreeLimits,
+    operation: &'a str,
+    skip: &'a Skip,
+}
+
+impl<Skip> ProjectTreeWalk<'_, Skip>
+where
+    Skip: Fn(&Path, &str) -> bool,
+{
+    fn visit(
+        &self,
+        path: &Path,
+        depth: usize,
+        budget: &mut ProjectTreeBudget,
+        files: &mut Vec<ProjectRegularFile>,
+    ) -> Result<(), String> {
+        budget.check_depth(self.limits, depth, self.operation, path)?;
+        let metadata = project_path_metadata(path, self.operation)?;
+        ensure_project_path_within_root(self.root, path, self.operation)?;
+        if metadata.is_file() {
+            let (_file, opened_metadata) =
+                open_project_regular_file_within_root(self.root, path, self.operation)?;
+            budget.add_file(self.limits, opened_metadata.len(), self.operation, path)?;
+            files.push(ProjectRegularFile {
+                path: path.to_path_buf(),
+                bytes: opened_metadata.len(),
+            });
+            return Ok(());
+        }
+        if !metadata.is_dir() {
+            return Err(format!(
+                "{} only accepts regular files or directories: {}",
+                self.operation,
+                path.display()
+            ));
+        }
+        let mut entries = fs::read_dir(path)
+            .map_err(|error| format!("failed to read {}: {error}", path.display()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("failed to read entry in {}: {error}", path.display()))?;
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let entry_path = entry.path();
+            budget.add_entry(self.limits, self.operation, &entry_path)?;
+            let name = entry.file_name();
+            if (self.skip)(path, &name.to_string_lossy()) {
+                continue;
+            }
+            self.visit(&entry_path, depth + 1, budget, files)?;
+        }
+        Ok(())
+    }
+}
+
 /// Collect regular files under a non-link project root with deterministic,
 /// bounded traversal.
 ///
@@ -510,77 +566,15 @@ pub fn collect_project_regular_files(
     operation: &str,
     skip: impl Fn(&Path, &str) -> bool,
 ) -> Result<Vec<ProjectRegularFile>, String> {
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "bounded traversal keeps the root, current path, limits, operation, cycle set, budget, and output explicit"
-    )]
-    fn visit(
-        root: &Path,
-        path: &Path,
-        depth: usize,
-        limits: ProjectTreeLimits,
-        operation: &str,
-        skip: &impl Fn(&Path, &str) -> bool,
-        budget: &mut ProjectTreeBudget,
-        files: &mut Vec<ProjectRegularFile>,
-    ) -> Result<(), String> {
-        budget.check_depth(limits, depth, operation, path)?;
-        let metadata = project_path_metadata(path, operation)?;
-        ensure_project_path_within_root(root, path, operation)?;
-        if metadata.is_file() {
-            let (_file, opened_metadata) =
-                open_project_regular_file_within_root(root, path, operation)?;
-            budget.add_file(limits, opened_metadata.len(), operation, path)?;
-            files.push(ProjectRegularFile {
-                path: path.to_path_buf(),
-                bytes: opened_metadata.len(),
-            });
-            return Ok(());
-        }
-        if !metadata.is_dir() {
-            return Err(format!(
-                "{operation} only accepts regular files or directories: {}",
-                path.display()
-            ));
-        }
-        let mut entries = fs::read_dir(path)
-            .map_err(|error| format!("failed to read {}: {error}", path.display()))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| format!("failed to read entry in {}: {error}", path.display()))?;
-        entries.sort_by_key(|entry| entry.file_name());
-        for entry in entries {
-            let entry_path = entry.path();
-            budget.add_entry(limits, operation, &entry_path)?;
-            let name = entry.file_name();
-            if skip(path, &name.to_string_lossy()) {
-                continue;
-            }
-            visit(
-                root,
-                &entry_path,
-                depth + 1,
-                limits,
-                operation,
-                skip,
-                budget,
-                files,
-            )?;
-        }
-        Ok(())
-    }
-
     let root = canonical_project_tree_root(path, operation)?;
     let mut files = Vec::new();
-    visit(
-        &root,
-        path,
-        0,
+    ProjectTreeWalk {
+        root: &root,
         limits,
         operation,
-        &skip,
-        &mut ProjectTreeBudget::default(),
-        &mut files,
-    )?;
+        skip: &skip,
+    }
+    .visit(path, 0, &mut ProjectTreeBudget::default(), &mut files)?;
     Ok(files)
 }
 

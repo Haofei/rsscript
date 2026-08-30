@@ -33,7 +33,6 @@ pub fn merge_programs(programs: impl IntoIterator<Item = Program>) -> Program {
     }
 }
 
-#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
     Module(ModuleDecl),

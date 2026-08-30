@@ -309,7 +309,6 @@ fn wire_value_from_vm_value_inner(
     result
 }
 
-#[allow(clippy::mutable_key_type)] // ValueMap validates/hash-freezes keys at construction.
 pub(super) fn vm_value_from_wire_value(
     value: WireValue,
     expected: &WireType,
@@ -926,7 +925,6 @@ fn write_struct_field_in_place(
 // See the note in `runtime_values::json_decode_field_value`: a `VmMapKey` is
 // interior-mutable but the `retains(key)` effect makes mutating a live key
 // unreachable in well-typed programs.
-#[allow(clippy::mutable_key_type)]
 pub(super) fn deep_copy_value(value: &VmValue) -> VmValue {
     match value {
         VmValue::List(items) => {

@@ -1,29 +1,3 @@
-#![allow(
-    clippy::collapsible_if,
-    clippy::collapsible_match,
-    clippy::derivable_impls,
-    clippy::doc_lazy_continuation,
-    clippy::if_same_then_else,
-    clippy::items_after_test_module,
-    clippy::let_and_return,
-    clippy::manual_contains,
-    clippy::manual_slice_fill,
-    clippy::mutable_key_type,
-    clippy::needless_borrow,
-    clippy::needless_lifetimes,
-    clippy::needless_range_loop,
-    clippy::nonminimal_bool,
-    clippy::op_ref,
-    clippy::ptr_arg,
-    clippy::question_mark,
-    clippy::redundant_closure,
-    clippy::too_many_arguments,
-    clippy::type_complexity,
-    clippy::unnecessary_lazy_evaluations,
-    clippy::useless_conversion
-)]
-// Experimental Rust AOT lowering keeps its lint debt local to this backend.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::AotLoweringInput;
@@ -190,7 +164,7 @@ pub fn lower_source_to_rust_with_map(
     let validated = validated_session_sources(&[(file.to_string(), source.to_string())], &[])?;
     let database = validated.database();
     let program = database.program();
-    let lowering_diagnostics = validate_executable_declarations(&program, &BTreeMap::new());
+    let lowering_diagnostics = validate_executable_declarations(program, &BTreeMap::new());
     if !lowering_diagnostics.is_empty() {
         return Err(lowering_diagnostics);
     }
@@ -274,7 +248,7 @@ pub fn lower_aot_input(input: &AotLoweringInput) -> Result<GeneratedRustPackage,
         .flat_map(|dependency| dependency.bindings.iter())
         .map(|(symbol, target)| (symbol.clone(), target.clone()))
         .collect::<BTreeMap<_, _>>();
-    let lowering_diagnostics = validate_executable_declarations(&program, &external_bindings);
+    let lowering_diagnostics = validate_executable_declarations(program, &external_bindings);
     if !lowering_diagnostics.is_empty() {
         return Err(lowering_diagnostics);
     }
@@ -306,7 +280,7 @@ pub fn lower_aot_input(input: &AotLoweringInput) -> Result<GeneratedRustPackage,
             )
         })
         .collect::<String>();
-    let serde_dependency_toml = if program_uses_serde_derives(&program) {
+    let serde_dependency_toml = if program_uses_serde_derives(program) {
         "serde = { version = \"1\", features = [\"derive\"] }\n"
     } else {
         ""
@@ -319,7 +293,7 @@ pub fn lower_aot_input(input: &AotLoweringInput) -> Result<GeneratedRustPackage,
         "[package]\nname = \"{package_name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n\n[profile.release]\noverflow-checks = true\ncodegen-units = 256\nlto = false\nincremental = true\n\n[profile.dev]\nopt-level = 1\nincremental = true\ncodegen-units = 256\n\n[dependencies]\nrsscript-runtime = {{ package = \"rsscript-aot-runtime\", path = \"{}\" }}\n{serde_dependency_toml}{native_dependency_toml}",
         toml_string(&input.runtime_path),
     );
-    let main_rs = rust_package_main(&program, &package_name);
+    let main_rs = rust_package_main(program, &package_name);
     let source_map_json =
         serde_json::to_string_pretty(&lowered.source_map).expect("source map should serialize");
 
@@ -537,9 +511,12 @@ fn main(args: read List<String>) -> Int {
         let mut permissions = fs::metadata(&lib_rs)
             .expect("lib.rs metadata should exist")
             .permissions();
-        // Restore writability only so the temp dir can be removed; the broad
-        // permissions clippy warns about are irrelevant for a throwaway file.
-        #[allow(clippy::permissions_set_readonly_false)]
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            permissions.set_mode(permissions.mode() | 0o200);
+        }
+        #[cfg(windows)]
         permissions.set_readonly(false);
         fs::set_permissions(&lib_rs, permissions).expect("lib.rs should become writable");
         fs::remove_dir_all(out_dir).expect("temp generated package should clean up");

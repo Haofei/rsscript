@@ -13,7 +13,7 @@ macro_rules! string_enum {
     ) => {
         $(#[$enum_meta])*
         #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-        #[serde(into = "String", try_from = "String")]
+        #[serde(into = "String", from = "String")]
         pub enum $name {
             $(
                 $(#[$variant_meta])*
@@ -33,16 +33,14 @@ macro_rules! string_enum {
             }
         }
 
-        impl TryFrom<String> for $name {
-            type Error = std::convert::Infallible;
-
-            fn try_from(value: String) -> Result<Self, Self::Error> {
-                Ok(match value.as_str() {
+        impl From<String> for $name {
+            fn from(value: String) -> Self {
+                match value.as_str() {
                     $(
                         $value => Self::$variant,
                     )*
                     _ => Self::Extension(value),
-                })
+                }
             }
         }
     };

@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, hash_map::RandomState};
 use std::rc::Rc;
 
 use crate::fnv::FnvHasher;
@@ -7,10 +7,45 @@ use crate::serde_json;
 
 /// VM `Map` value (key -> value), keyed with Rust's per-process randomized
 /// hasher so adversarial scripts cannot precompute one global collision set.
-pub(crate) type ValueMap = HashMap<VmMapKey, VmValue>;
+/// Hash table wrapper that keeps the frozen-key representation behind one
+/// audited constructor boundary. `VmMapKey` snapshots all interior-mutable
+/// values before insertion, so callers never operate on a mutable key type.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ValueMap(HashMap<VmMapKey, VmValue>);
+
+impl ValueMap {
+    pub(crate) fn with_capacity_and_hasher(capacity: usize, hasher: RandomState) -> Self {
+        Self(HashMap::with_capacity_and_hasher(capacity, hasher))
+    }
+}
+
+impl std::ops::Deref for ValueMap {
+    type Target = HashMap<VmMapKey, VmValue>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for ValueMap {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl From<HashMap<VmMapKey, VmValue>> for ValueMap {
+    fn from(values: HashMap<VmMapKey, VmValue>) -> Self {
+        Self(values)
+    }
+}
+
+impl FromIterator<(VmMapKey, VmValue)> for ValueMap {
+    fn from_iter<T: IntoIterator<Item = (VmMapKey, VmValue)>>(values: T) -> Self {
+        Self(values.into_iter().collect())
+    }
+}
 
 #[cfg(any(feature = "native-jit", test))]
-#[allow(clippy::mutable_key_type)] // VmMapKey owns an unreachable deep snapshot.
 pub(crate) fn clone_value_map_preserving_capacity(map: &ValueMap) -> ValueMap {
     let mut cloned = ValueMap::with_capacity_and_hasher(map.capacity(), map.hasher().clone());
     cloned.extend(map.iter().map(|(key, value)| (key.clone(), value.clone())));
@@ -1525,7 +1560,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::mutable_key_type)]
     fn randomized_map_preserves_mixed_key_lookup() {
         // Iteration order is intentionally unspecified. This exercises the mixed
         // key representations through lookup instead of pinning a weak deterministic
@@ -1739,7 +1773,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::mutable_key_type)]
     fn map_transaction_snapshot_preserves_spare_capacity() {
         let mut map = ValueMap::with_capacity_and_hasher(128, Default::default());
         map.insert(VmMapKey::new(VmValue::Int(1)), VmValue::Int(2));
@@ -1816,7 +1849,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::mutable_key_type)]
     fn typed_and_boxed_list_keys_share_hash_and_equality() {
         // `List<Int>` is a hashable map key. Iteration order is unspecified; the
         // semantic contract is that typed and boxed representations resolve the

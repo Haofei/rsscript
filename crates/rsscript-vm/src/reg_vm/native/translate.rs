@@ -1,6 +1,4 @@
 //! Native-JIT IR producers and OSR-loop detection.
-// Translation works over register/IP maps whose indices are semantic; named
-// handoff structs keep the lowering stages type-safe.
 
 use super::super::*;
 use super::passes::*;
@@ -795,7 +793,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
             })
             .collect()
     };
-    for reg in 0..func.params {
+    for reg in parallel_indices(0..func.params) {
         if let Some(kind) = flat_param_kind[reg] {
             ty[reg] = Some(kind);
         }
@@ -2272,7 +2270,6 @@ struct OsrLoweringRequest<'a> {
 }
 
 #[cfg(feature = "native-jit")]
-#[allow(clippy::needless_range_loop)]
 fn translate_osr_loop_inner(request: OsrLoweringRequest<'_>) -> Option<OsrTranslation> {
     use vm_jit::{JitCompare, JitInstr};
 
@@ -2309,7 +2306,7 @@ fn translate_osr_loop_inner(request: OsrLoweringRequest<'_>) -> Option<OsrTransl
 
     // Every loop-region instruction must be a native-subset instruction. (The exit
     // and everything outside the region may be anything — they don't run natively.)
-    for i in lp.header..lp.exit {
+    for i in parallel_indices(lp.header..lp.exit) {
         if !native_subset_instruction(&code[i]) {
             return None;
         }
@@ -2382,7 +2379,7 @@ fn translate_osr_loop_inner(request: OsrLoweringRequest<'_>) -> Option<OsrTransl
     let mut changed = true;
     while changed {
         changed = false;
-        for i in lp.header..lp.exit {
+        for i in parallel_indices(lp.header..lp.exit) {
             let instr = &code[i];
             let ty = &mut ty;
             let c = &mut changed;
@@ -2733,7 +2730,7 @@ fn translate_osr_loop_inner(request: OsrLoweringRequest<'_>) -> Option<OsrTransl
             // and the downstream only compares class representatives for EQUALITY, so the
             // grouping (hence behavior) is identical to the old converging cases.
             let mut handle_alias: Vec<usize> = (0..n_regs).collect();
-            for i in lp.header..lp.exit {
+            for i in parallel_indices(lp.header..lp.exit) {
                 if let RegInstr::Move { dst, src } = &code[i]
                     && *dst < n_regs
                     && *src < n_regs
@@ -2748,14 +2745,14 @@ fn translate_osr_loop_inner(request: OsrLoweringRequest<'_>) -> Option<OsrTransl
                     }
                 }
             }
-            for r in 0..n_regs {
+            for r in parallel_indices(0..n_regs) {
                 handle_alias[r] = osr_uf_find(&mut handle_alias, r);
             }
             // A register written by ANY in-loop instruction is not loop-invariant.
             let mut written_in_loop = vec![false; n_regs];
             let mut field_reads: Vec<Option<FieldRead>> = vec![None; n_regs];
             let mut field_read_disq = vec![false; n_regs];
-            for i in lp.header..lp.exit {
+            for i in parallel_indices(lp.header..lp.exit) {
                 if let Some(dst) = native_subset_dst(&code[i])
                     && dst < n_regs
                 {
@@ -2779,7 +2776,7 @@ fn translate_osr_loop_inner(request: OsrLoweringRequest<'_>) -> Option<OsrTransl
             let is_handle_reg = |reg: usize| ty[reg] == Some(NativeTy::Handle);
             let mut st = vec![S::Unseen; n_regs];
             let mut field_slot_written = Vec::<FieldRead>::new();
-            for i in lp.header..lp.exit {
+            for i in parallel_indices(lp.header..lp.exit) {
                 match &code[i] {
                     // A struct read disqualifies the base (it is not a flat list).
                     RegInstr::GetFieldSlot { base, .. } if is_handle_reg(*base) => {
@@ -2864,7 +2861,7 @@ fn translate_osr_loop_inner(request: OsrLoweringRequest<'_>) -> Option<OsrTransl
             }
             let field_is_stable = |read: FieldRead| !field_slot_written.contains(&read);
             let mut field_kinds: Vec<(FieldRead, NativeTy)> = Vec::new();
-            for reg in 0..n_regs {
+            for reg in parallel_indices(0..n_regs) {
                 let Some(read) = field_reads[reg] else {
                     continue;
                 };
@@ -2954,7 +2951,7 @@ fn translate_osr_loop_inner(request: OsrLoweringRequest<'_>) -> Option<OsrTransl
                 .collect();
             (flat, derived)
         };
-    for reg in 0..n_regs {
+    for reg in parallel_indices(0..n_regs) {
         if let Some(kind) = flat_osr_kind[reg] {
             ty[reg] = Some(kind);
         }
@@ -2969,7 +2966,7 @@ fn translate_osr_loop_inner(request: OsrLoweringRequest<'_>) -> Option<OsrTransl
         // oscillate forever otherwise — see the matching note on the `handle_alias`
         // computation above. Same class grouping, but guaranteed to converge.
         let mut alias: Vec<usize> = (0..n_regs).collect();
-        for i in lp.header..lp.exit {
+        for i in parallel_indices(lp.header..lp.exit) {
             if let RegInstr::Move { dst, src } = &code[i]
                 && *dst < n_regs
                 && *src < n_regs
@@ -2984,14 +2981,14 @@ fn translate_osr_loop_inner(request: OsrLoweringRequest<'_>) -> Option<OsrTransl
                 }
             }
         }
-        for r in 0..n_regs {
+        for r in parallel_indices(0..n_regs) {
             alias[r] = osr_uf_find(&mut alias, r);
         }
         alias
     };
     let mut scalar_keys: Vec<(ScalarFieldKey, bool)> = Vec::new();
     let mut scalar_disq: Vec<ScalarFieldKey> = Vec::new();
-    for i in lp.header..lp.exit {
+    for i in parallel_indices(lp.header..lp.exit) {
         match &code[i] {
             RegInstr::GetFieldSlot { dst, base, slot }
                 if *dst < n_regs

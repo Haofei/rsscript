@@ -40,7 +40,6 @@ pub(in crate::reg_vm) struct NativeHeapProvenanceFacts {
 
 impl NativeHeapProvenanceFacts {
     // IPs intentionally index several parallel semantic fact tables.
-    #[allow(clippy::needless_range_loop)]
     pub(in crate::reg_vm) fn compute(
         code: &[RegInstr],
         jit_code: &[vm_jit::JitInstr],
@@ -69,7 +68,7 @@ impl NativeHeapProvenanceFacts {
         let mut changed = true;
         while changed {
             changed = false;
-            for ip in cfg.entry..cfg.exit {
+            for ip in parallel_indices(cfg.entry..cfg.exit) {
                 let slot = ip - cfg.entry;
                 if before[slot].iter().all(|fact| fact.is_unreached()) {
                     continue;
@@ -329,7 +328,7 @@ impl NativeRegionCfg {
             return None;
         }
         let mut successors = vec![Vec::new(); exit - entry];
-        for ip in entry..exit {
+        for ip in parallel_indices(entry..exit) {
             native_instr_successors(&code[ip], ip, code.len(), |target| {
                 if target >= entry && target < exit {
                     successors[ip - entry].push(target);
@@ -365,7 +364,7 @@ impl NativeRegionCfg {
     #[cfg(any(test, feature = "jit-diagnostics"))]
     pub(in crate::reg_vm) fn backedges(&self) -> Vec<(usize, usize)> {
         let mut backedges = Vec::new();
-        for ip in self.entry..self.exit {
+        for ip in parallel_indices(self.entry..self.exit) {
             let Some(successors) = self.successors(ip) else {
                 continue;
             };
@@ -425,7 +424,6 @@ fn native_clear_defined_fact<T: Copy + Eq>(instr: &RegInstr, facts: &mut [Native
 
 #[cfg(feature = "native-jit")]
 // The instruction index is also the fact-table coordinate.
-#[allow(clippy::needless_range_loop)]
 fn native_forward_reg_facts<T: Copy + Eq>(
     cfg: &NativeRegionCfg,
     code: &[RegInstr],
@@ -438,7 +436,7 @@ fn native_forward_reg_facts<T: Copy + Eq>(
     let mut changed = true;
     while changed {
         changed = false;
-        for ip in cfg.entry..cfg.exit {
+        for ip in parallel_indices(cfg.entry..cfg.exit) {
             let slot = ip - cfg.entry;
             if input[slot].iter().all(|fact| fact.is_unreached()) {
                 continue;
@@ -534,7 +532,7 @@ impl NativeRegionLiveness {
         let mut changed = true;
         while changed {
             changed = false;
-            for ip in (cfg.entry..cfg.exit).rev() {
+            for ip in parallel_indices((cfg.entry..cfg.exit).rev()) {
                 let slot = ip - cfg.entry;
 
                 let mut next_out = vec![false; n_regs];
@@ -950,7 +948,6 @@ impl NativeRegionAnalysis {
     }
 
     // Region IPs intentionally index bytecode and alias tables together.
-    #[allow(clippy::needless_range_loop)]
     pub(super) fn close_region_move_aliases(
         &self,
         code: &[RegInstr],
@@ -962,7 +959,7 @@ impl NativeRegionAnalysis {
         let mut changed = true;
         while changed {
             changed = false;
-            for i in self.header..self.exit {
+            for i in parallel_indices(self.header..self.exit) {
                 match &code[i] {
                     RegInstr::Move { dst, src } if *dst < self.n_regs && *src < self.n_regs => {
                         if mask[*src] && !mask[*dst] {
@@ -1316,7 +1313,6 @@ pub(in crate::reg_vm) fn native_region_has_readonly_full_list_slice_elision(
 /// the shallow copy's read-only behavior is indistinguishable from an alias.
 #[cfg(feature = "native-jit")]
 // Rewriting requires the original instruction index to update the origin map.
-#[allow(clippy::needless_range_loop)]
 pub(in crate::reg_vm) fn native_elide_readonly_full_list_slices_in_region(
     code: &[RegInstr],
     n_regs: usize,
@@ -1330,7 +1326,7 @@ pub(in crate::reg_vm) fn native_elide_readonly_full_list_slices_in_region(
     let mut out = code.to_vec();
     let mut changed = false;
     let analysis = NativeRegionAnalysis::compute_prefix(code, n_regs, header, exit)?;
-    for i in header..exit {
+    for i in parallel_indices(header..exit) {
         let Some((dst, list)) =
             native_full_list_slice_elision_candidate(code, header, exit, i, &analysis)
         else {

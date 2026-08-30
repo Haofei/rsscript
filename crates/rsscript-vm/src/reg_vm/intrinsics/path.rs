@@ -4,7 +4,6 @@ use crate::reg_vm::value_convert::*;
 use crate::reg_vm::value_ops::*;
 
 impl RegVm {
-    #[allow(clippy::mutable_key_type)]
     pub(super) fn exec_path_intrinsics(
         &mut self,
         unit: &RegUnit,

@@ -14,11 +14,6 @@ impl<'a> RustLowerer<'a> {
         out.push_str(
             "// Runtime hooks are intentionally explicit while Rust lowering is stabilizing.\n",
         );
-        // Module-isolated symbols carry a lowercase module prefix (`device__Device`,
-        // `helpers__count`), so the camel/snake/upper-case lints don't apply.
-        out.push_str(
-            "#![allow(dead_code, non_snake_case, non_camel_case_types, non_upper_case_globals, unused_parens)]\n",
-        );
         out.push('\n');
 
         for item in &self.program.items {

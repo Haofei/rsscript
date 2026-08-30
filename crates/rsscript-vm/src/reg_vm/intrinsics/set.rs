@@ -2,7 +2,6 @@ use super::super::*;
 use crate::reg_vm::value_ops::*;
 
 impl RegVm {
-    #[allow(clippy::mutable_key_type)]
     pub(super) fn exec_set_intrinsics(
         &mut self,
         unit: &RegUnit,
@@ -23,14 +22,12 @@ impl RegVm {
             RegIntrinsic::SetDifference => {
                 let left = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let right = expect_map_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let result = core_map_difference(&left.borrow(), &right.borrow());
-                self.fresh_map(result)
+                self.fresh_map(core_map_difference(&left.borrow(), &right.borrow()).into())
             }
             RegIntrinsic::SetIntersection => {
                 let left = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let right = expect_map_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let result = core_map_intersection(&left.borrow(), &right.borrow());
-                self.fresh_map(result)
+                self.fresh_map(core_map_intersection(&left.borrow(), &right.borrow()).into())
             }
             RegIntrinsic::SetIsEmpty => {
                 let set = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -60,8 +57,7 @@ impl RegVm {
             RegIntrinsic::SetUnion => {
                 let left = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let right = expect_map_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let result = core_map_union(&left.borrow(), &right.borrow());
-                self.fresh_map(result)
+                self.fresh_map(core_map_union(&left.borrow(), &right.borrow()).into())
             }
             RegIntrinsic::SortedSetContains => {
                 let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;

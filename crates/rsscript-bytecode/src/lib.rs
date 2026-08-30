@@ -394,13 +394,15 @@ impl BytecodeVerifier {
         let artifact = BytecodeArtifact::from_bytes(bytes)?;
         verify_artifact_contract(
             &artifact,
-            self.limits,
-            &self.compatibility.language,
-            BYTECODE_SCHEMA,
-            self.compatibility.bytecode_isa_version,
-            self.compatibility.core_library_abi_version,
-            self.compatibility.runtime_abi_version,
-            context,
+            ArtifactContract {
+                limits: self.limits,
+                language_compatibility: &self.compatibility.language,
+                schema: BYTECODE_SCHEMA,
+                bytecode_isa_version: self.compatibility.bytecode_isa_version,
+                core_library_abi_version: self.compatibility.core_library_abi_version,
+                runtime_abi_version: self.compatibility.runtime_abi_version,
+                context,
+            },
         )?;
         verify_executable_payload(&artifact.payload, &artifact.imports, self.limits, context)?;
         let typed_executable_facts = artifact
@@ -419,17 +421,29 @@ impl BytecodeVerifier {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn verify_artifact_contract(
-    artifact: &BytecodeArtifact,
+pub(crate) struct ArtifactContract<'a> {
     limits: BytecodeLimits,
-    language_compatibility: &VersionReq,
-    schema: &str,
+    language_compatibility: &'a VersionReq,
+    schema: &'a str,
     bytecode_isa_version: u32,
     core_library_abi_version: u32,
     runtime_abi_version: u32,
-    context: VerificationContext<'_>,
+    context: VerificationContext<'a>,
+}
+
+pub(crate) fn verify_artifact_contract(
+    artifact: &BytecodeArtifact,
+    contract: ArtifactContract<'_>,
 ) -> Result<(), BytecodeError> {
+    let ArtifactContract {
+        limits,
+        language_compatibility,
+        schema,
+        bytecode_isa_version,
+        core_library_abi_version,
+        runtime_abi_version,
+        context,
+    } = contract;
     context.check()?;
     if artifact.header.schema != schema {
         return Err(BytecodeError::UnsupportedSchema(
@@ -637,11 +651,13 @@ fn verify_executable_payload(
                 context.check()?;
             }
             verify_wire_instruction(
-                function_id,
-                ip,
-                registers,
-                code.len(),
-                functions.len(),
+                WireInstructionContext {
+                    function_id,
+                    ip,
+                    register_count: registers,
+                    code_len: code.len(),
+                    function_count: functions.len(),
+                },
                 instruction,
                 &mut called_imports,
             )?;
@@ -1354,16 +1370,27 @@ fn verify_function_map(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn verify_wire_instruction(
+#[derive(Clone, Copy)]
+struct WireInstructionContext {
     function_id: usize,
     ip: usize,
     register_count: usize,
     code_len: usize,
     function_count: usize,
+}
+
+fn verify_wire_instruction(
+    context: WireInstructionContext,
     instruction: &serde_json::Value,
     called_imports: &mut BTreeSet<String>,
 ) -> Result<(), BytecodeError> {
+    let WireInstructionContext {
+        function_id,
+        ip,
+        register_count,
+        code_len,
+        function_count,
+    } = context;
     if let Some(opcode) = instruction.as_str() {
         if opcode == "TailCallGuard" {
             return Ok(());
