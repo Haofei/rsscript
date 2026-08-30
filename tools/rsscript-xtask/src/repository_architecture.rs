@@ -7,13 +7,36 @@ const UNSAFE_BOUNDARIES: &[(&str, &str, &str)] = &[
     ("rss-process-guard", "rss_process_guard", "process-guard"),
     ("rsscript-jit-cranelift", "vm_jit", "rsscript-jit-cranelift"),
 ];
+const MAX_ARCHITECTURE_TEST_MODULE_BYTES: u64 = 45_000;
 
 pub(super) fn validate(root: &Path) -> Result<(), Box<dyn Error>> {
+    validate_architecture_test_module_sizes(root)?;
     validate_root_workspace_ownership(root)?;
     validate_compiler_manifest(root)?;
     validate_aot_runtime_boundary(root)?;
     validate_unsafe_crate_boundaries(root)?;
     validate_backend_dependency_direction(root)?;
+    Ok(())
+}
+
+fn validate_architecture_test_module_sizes(root: &Path) -> Result<(), Box<dyn Error>> {
+    let tests = root.join("crates/rsscript-sdk/tests");
+    let mut paths = rust_files_below(&tests.join("architecture"))?;
+    paths.extend([
+        tests.join("architecture.rs"),
+        tests.join("public_api_architecture.rs"),
+    ]);
+
+    for path in paths {
+        let size = fs::metadata(&path)?.len();
+        if size > MAX_ARCHITECTURE_TEST_MODULE_BYTES {
+            return Err(format!(
+                "architecture audit module {} is {size} bytes; split audit responsibilities below the {MAX_ARCHITECTURE_TEST_MODULE_BYTES}-byte limit",
+                path.strip_prefix(root).unwrap_or(&path).display()
+            )
+            .into());
+        }
+    }
     Ok(())
 }
 
