@@ -8,7 +8,7 @@ hard_bytes = 80000
 
 [[allow]]
 path = "crates/rsscript-bytecode/src/lib.rs"
-max_bytes = 148000
+max_bytes = 131000
 reason = "Versioned codec and verifier remain one audited wire boundary pending internal partitioning."
 owner = "@Haofei"
 target_bytes = 60000
