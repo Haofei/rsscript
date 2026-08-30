@@ -1,0 +1,13 @@
+schema = 1
+
+# Exact ratchet: any added allowance fails, and removing one requires lowering
+# the recorded count in the same change. Legitimate local exceptions remain
+# visible while blanket and dead-code debt cannot silently grow.
+[vm]
+root = "crates/rsscript-vm/src"
+owner = "@Haofei"
+decision_by = "2026-12-31"
+total = 86
+dead_code = 25
+too_many_arguments = 10
+module_level_paths = []

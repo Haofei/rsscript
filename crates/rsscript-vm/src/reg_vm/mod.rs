@@ -82,9 +82,9 @@ mod tier;
 mod value_access;
 mod value_convert;
 mod value_ops;
-use execution_plan::{ExecutionPlan, StdoutMode, TierPlan};
 #[cfg(feature = "native-jit")]
-use execution_plan::{NativeAdmissionPolicy, NativeExecutionPlan};
+use execution_plan::NativeExecutionPlan;
+use execution_plan::{ExecutionPlan, StdoutMode, TierPlan};
 #[cfg(feature = "native-jit")]
 pub use execution_plan::{NativeCostModel, NativeJitOptions};
 #[cfg(feature = "native-jit")]
@@ -6273,53 +6273,18 @@ use native_text_helpers::*;
 #[cfg(feature = "native-jit")]
 impl NativeState {
     fn new_with_plan(plan: &NativeExecutionPlan) -> Result<Self, EvalError> {
-        Self::new_with_opt_and_forced_safepoint(
-            plan.tier_up_threshold,
-            plan.force_bail,
-            plan.collect_stats,
-            plan.baseline,
-            plan.precise_deopt,
-            plan.auto_osr_enabled,
-            plan.eager_osr,
-            plan.report,
-            plan.forced_safepoint,
-            plan.force_all_safepoints,
-            plan.allow_recursive_calls,
-            plan.cost_model,
-            plan.osr_work_threshold,
-            plan.admission,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)] // Test-only diagnostic constructor; production uses a plan.
-    fn new_with_opt_and_forced_safepoint(
-        tier_up_threshold: u32,
-        force_bail: bool,
-        collect_stats: bool,
-        baseline: bool,
-        precise_deopt: bool,
-        auto_osr_enabled: bool,
-        eager_osr: bool,
-        report: bool,
-        forced_safepoint: Option<u32>,
-        force_all_safepoints: bool,
-        allow_recursive_calls: bool,
-        cost_model: NativeCostModel,
-        osr_work_threshold: u32,
-        admission_policy: NativeAdmissionPolicy,
-    ) -> Result<Self, EvalError> {
         #[cfg(not(feature = "jit-recursion-experimental"))]
-        let _ = allow_recursive_calls;
-        let max_code_bytes = admission_policy.max_code_bytes;
-        let max_compile_millis = admission_policy.max_compile_millis;
-        let optimize_work_threshold = admission_policy.optimize_work_threshold;
+        let _ = plan.allow_recursive_calls;
+        let max_code_bytes = plan.admission.max_code_bytes;
+        let max_compile_millis = plan.admission.max_compile_millis;
+        let optimize_work_threshold = plan.admission.optimize_work_threshold;
         // A zero threshold is the explicit eager/benchmark mode. Preserve the
         // pre-ladder contract by compiling its only tier at `speed`; compiling
         // baseline and optimized copies on every fresh evaluation doubles cold
         // compile cost and can make helper-heavy kernels run in baseline code.
-        let eager_optimized = tier_up_threshold == 0 && !baseline;
+        let eager_optimized = plan.tier_up_threshold == 0 && !plan.baseline;
         let executable_memory_budget = vm_jit::ExecutableMemoryBudget::new(max_code_bytes);
-        let has_optimized_module = !baseline && !eager_optimized;
+        let has_optimized_module = !plan.baseline && !eager_optimized;
         let baseline_arena_bytes = if has_optimized_module {
             max_code_bytes / 2
         } else {
@@ -6334,7 +6299,7 @@ impl NativeState {
                 executable_memory_budget.clone(),
                 baseline_arena_bytes,
             ),
-            optimized_module: if baseline || eager_optimized {
+            optimized_module: if plan.baseline || eager_optimized {
                 None
             } else {
                 Some(LazyNativeModule::new(
@@ -6359,19 +6324,19 @@ impl NativeState {
             whole_controllers: HashMap::new(),
             optimize_work_threshold,
             noamortize_counts: HashMap::new(),
-            tier_up_threshold,
-            force_bail,
-            forced_safepoint,
-            force_all_safepoints,
+            tier_up_threshold: plan.tier_up_threshold,
+            force_bail: plan.force_bail,
+            forced_safepoint: plan.forced_safepoint,
+            force_all_safepoints: plan.force_all_safepoints,
             #[cfg(feature = "jit-recursion-experimental")]
-            allow_recursive_calls,
-            cost_model,
-            osr_work_threshold,
+            allow_recursive_calls: plan.allow_recursive_calls,
+            cost_model: plan.cost_model,
+            osr_work_threshold: plan.osr_work_threshold,
             stats: NativeStats::default(),
-            collect_stats,
-            precise_deopt,
-            auto_osr_enabled,
-            eager_osr,
+            collect_stats: plan.collect_stats,
+            precise_deopt: plan.precise_deopt,
+            auto_osr_enabled: plan.auto_osr_enabled,
+            eager_osr: plan.eager_osr,
             osr_candidates: HashMap::new(),
             osr_triggers: HashMap::new(),
             osr_cache: HashMap::new(),
@@ -6400,7 +6365,7 @@ impl NativeState {
             scratch_osr_flat_mut_slots: Vec::new(),
             scratch_osr_heap_input_slots: Vec::new(),
             call_session: vm_jit::NativeCallSession::new(),
-            report,
+            report: plan.report,
             report_native_ok: std::collections::HashSet::new(),
             report_osr_ok: std::collections::HashSet::new(),
             osr_dynamic_bail: false,

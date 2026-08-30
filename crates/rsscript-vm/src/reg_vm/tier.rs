@@ -663,15 +663,6 @@ pub(in crate::reg_vm) fn select_osr_candidate_loops(
     candidates
 }
 
-#[cfg(feature = "native-jit")]
-#[allow(dead_code)]
-pub(in crate::reg_vm) fn select_osr_candidate_loop(
-    unit: &RegUnit,
-    func: &RegFunction,
-) -> Option<OsrLoop> {
-    select_osr_candidate_loops(unit, func).into_iter().next()
-}
-
 impl RegVm {
     #[cfg(feature = "native-jit")]
     /// Try to run `func` on the native (Cranelift) tier. Returns

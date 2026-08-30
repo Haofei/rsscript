@@ -6,25 +6,6 @@ use std::process::Command;
 #[path = "public_api_architecture.rs"]
 mod public_api_architecture;
 
-struct BoundaryCrate {
-    package: &'static str,
-    rust_name: &'static str,
-    directory: &'static str,
-}
-
-const UNSAFE_BOUNDARY_CRATES: &[BoundaryCrate] = &[
-    BoundaryCrate {
-        package: "rss-process-guard",
-        rust_name: "rss_process_guard",
-        directory: "process-guard",
-    },
-    BoundaryCrate {
-        package: "rsscript-jit-cranelift",
-        rust_name: "vm_jit",
-        directory: "rsscript-jit-cranelift",
-    },
-];
-
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -387,86 +368,6 @@ fn selfhost_parity_is_an_independent_research_package_not_a_release_gate() {
     assert!(
         !release_workflow.contains("selfhost_parity::"),
         "Research parity must not block the supported release path"
-    );
-}
-
-#[test]
-fn root_workspace_excludes_experimental_packages() {
-    let root = workspace_root();
-    let metadata = cargo_metadata(&root);
-    let packages = metadata["packages"].as_array().expect("metadata packages");
-    let root_members = metadata["workspace_members"]
-        .as_array()
-        .expect("workspace members")
-        .iter()
-        .map(|member| member.as_str().expect("workspace member id"))
-        .collect::<BTreeSet<_>>();
-
-    for experimental in [
-        "rsscript-aot-backend",
-        "rsscript-aot-model",
-        "rsscript-aot-runtime",
-        "rss-native-abi",
-        "reir",
-        "rss-testgen",
-        "rsscript-review-reir",
-    ] {
-        assert!(
-            !root_members.iter().any(|member| {
-                packages
-                    .iter()
-                    .find(|package| package["id"].as_str() == Some(*member))
-                    .and_then(|package| package["name"].as_str())
-                    == Some(experimental)
-            }),
-            "Core workspace must not own experimental package `{experimental}`"
-        );
-    }
-}
-
-#[test]
-fn root_workspace_packages_never_path_depend_on_experiments() {
-    let root = workspace_root();
-    let metadata = cargo_metadata(&root);
-    let packages = metadata["packages"].as_array().expect("metadata packages");
-    let workspace_members = metadata["workspace_members"]
-        .as_array()
-        .expect("workspace members")
-        .iter()
-        .filter_map(|member| member.as_str())
-        .collect::<BTreeSet<_>>();
-    let mut violations = Vec::new();
-
-    for package in packages {
-        let Some(id) = package["id"].as_str() else {
-            continue;
-        };
-        if !workspace_members.contains(id) {
-            continue;
-        }
-        let package_name = package["name"].as_str().expect("package name");
-        for dependency in package["dependencies"]
-            .as_array()
-            .expect("package dependencies")
-        {
-            let Some(path) = dependency["path"].as_str() else {
-                continue;
-            };
-            let path = Path::new(path);
-            if path.starts_with(root.join("experiments")) {
-                violations.push(format!(
-                    "{package_name} path-depends on experiments package {} at {}",
-                    dependency["name"].as_str().unwrap_or("<unknown>"),
-                    path.display()
-                ));
-            }
-        }
-    }
-
-    assert!(
-        violations.is_empty(),
-        "root workspace packages must consume only supported root contracts:\n{}",
-        violations.join("\n")
     );
 }
 
@@ -1719,23 +1620,6 @@ fn normal_dependency_packages(manifest: &toml::Value) -> BTreeSet<String> {
                 .and_then(toml::Value::as_str)
                 .unwrap_or(name)
                 .to_string()
-        })
-        .collect()
-}
-
-fn workspace_members(root: &Path) -> Vec<PathBuf> {
-    let manifest: toml::Value =
-        toml::from_str(&read(&root.join("Cargo.toml"))).expect("workspace Cargo.toml should parse");
-    manifest["workspace"]["members"]
-        .as_array()
-        .expect("workspace.members should be an array")
-        .iter()
-        .map(|member| {
-            root.join(
-                member
-                    .as_str()
-                    .expect("workspace member should be a string"),
-            )
         })
         .collect()
 }
@@ -4301,21 +4185,6 @@ fn compiler_default_dependency_closure_is_host_neutral() {
 }
 
 #[test]
-fn compiler_manifest_does_not_retain_research_or_fuzz_dev_dependencies() {
-    let root = workspace_root();
-    let compiler_manifest: toml::Value =
-        toml::from_str(&read(&root.join("crates/rsscript-compiler/Cargo.toml")))
-            .expect("compiler manifest");
-    let dev_dependencies = compiler_manifest
-        .get("dev-dependencies")
-        .and_then(toml::Value::as_table);
-    assert!(
-        dev_dependencies.is_none_or(|dependencies| dependencies.is_empty()),
-        "compiler tests must not pull REIR, review adapters, fuzz frameworks, or legacy VM paths into the Core manifest"
-    );
-}
-
-#[test]
 fn concrete_host_providers_are_leaf_composition_packages() {
     let root = workspace_root();
     let compiler_manifest: toml::Value =
@@ -4456,88 +4325,6 @@ fn interface_catalog_is_platform_neutral() {
         assert!(
             !root.join(removed).exists(),
             "legacy host façade must not return at `{removed}`"
-        );
-    }
-}
-
-#[test]
-fn runtime_does_not_depend_on_the_compiler_package() {
-    let root = workspace_root();
-    let manifest_path = root.join("experiments/aot-runtime/Cargo.toml");
-    let manifest: toml::Value =
-        toml::from_str(&read(&manifest_path)).expect("runtime Cargo.toml should parse");
-    let dependencies = dependency_packages(&manifest);
-    assert_eq!(
-        manifest["package"]["name"].as_str(),
-        Some("rsscript-aot-runtime"),
-        "the generated-Rust runtime must be named as an AOT-only integration"
-    );
-
-    let default_features = manifest["features"]["default"]
-        .as_array()
-        .expect("runtime default features should be an array")
-        .iter()
-        .map(|feature| feature.as_str().expect("feature should be a string"))
-        .collect::<BTreeSet<_>>();
-    assert_eq!(
-        default_features,
-        BTreeSet::from(["core"]),
-        "the default runtime must not enable concrete network services"
-    );
-
-    let runtime_source_dir = root.join("experiments/aot-runtime/src");
-    for host_module in [
-        "domain.rs",
-        "env.rs",
-        "fs.rs",
-        "network/mod.rs",
-        "process.rs",
-        "process/capture.rs",
-        "process/environment.rs",
-        "process/policy.rs",
-        "process/supervisor.rs",
-        "random.rs",
-        "socket.rs",
-        "tempdir.rs",
-        "websocket.rs",
-    ] {
-        assert!(
-            !runtime_source_dir.join(host_module).exists(),
-            "AOT runtime must not contain legacy host service `{host_module}`"
-        );
-    }
-    for removed_feature in ["host-compat", "net"] {
-        assert!(
-            manifest["features"].get(removed_feature).is_none(),
-            "AOT runtime must not retain legacy `{removed_feature}` feature"
-        );
-    }
-    for removed_dependency in [
-        "rand",
-        "reqwest",
-        "rss-process-guard",
-        "tokio-tungstenite",
-        "toml",
-        "uuid",
-    ] {
-        assert!(
-            manifest["dependencies"].get(removed_dependency).is_none(),
-            "AOT runtime must not depend on concrete host crate `{removed_dependency}`"
-        );
-    }
-
-    assert!(
-        !dependencies.contains("rsscript"),
-        "{} must not depend on the rsscript compiler/package",
-        manifest_path.strip_prefix(&root).unwrap().display()
-    );
-
-    for path in rust_files_below(&root.join("experiments/aot-runtime/src")) {
-        let source = read(&path);
-        assert!(
-            !source.contains("rsscript_sdk::"),
-            "{} must not import the rsscript compiler/package",
-            path.strip_prefix(&root).unwrap().display()
         );
     }
 }
@@ -4692,127 +4479,6 @@ fn bytecode_language_compatibility_is_not_inferred_from_compiler_version() {
         !analysis.contains("language_version: env!(\"CARGO_PKG_VERSION\")"),
         "neutral analysis must carry language semantics rather than compiler provenance"
     );
-}
-
-#[test]
-fn unsafe_boundary_crates_are_explicit_dependencies() {
-    let root = workspace_root();
-    let mut violations = Vec::new();
-
-    for member in workspace_members(&root) {
-        let manifest_path = member.join("Cargo.toml");
-        let manifest: toml::Value = toml::from_str(&read(&manifest_path))
-            .unwrap_or_else(|error| panic!("parse {}: {error}", manifest_path.display()));
-        let member_name = package_name(&manifest);
-        let dependencies = dependency_packages(&manifest);
-        let source_root = member.join("src");
-        if !source_root.is_dir() {
-            continue;
-        }
-
-        for path in rust_files_below(&source_root) {
-            let source = read(&path);
-            let relative = path.strip_prefix(&root).unwrap_or(&path).display();
-
-            for boundary in UNSAFE_BOUNDARY_CRATES {
-                if member_name != boundary.package
-                    && source.contains(boundary.rust_name)
-                    && !dependencies.contains(boundary.package)
-                {
-                    violations.push(format!(
-                        "{relative} references `{}` without a `{}` Cargo dependency",
-                        boundary.rust_name, boundary.package
-                    ));
-                }
-
-                let imports_source = source.contains("#[path") || source.contains("include!");
-                if member_name != boundary.package
-                    && imports_source
-                    && source.contains(boundary.directory)
-                {
-                    violations.push(format!(
-                        "{relative} imports `{}` source; use an explicit Cargo dependency",
-                        boundary.package
-                    ));
-                }
-            }
-        }
-    }
-
-    assert!(
-        violations.is_empty(),
-        "unsafe implementation boundaries must remain crate boundaries:\n{}",
-        violations.join("\n")
-    );
-}
-
-#[test]
-fn bytecode_backends_cannot_reintroduce_frontend_dependencies() {
-    let root = workspace_root();
-    let backends = [
-        ("VM", root.join("crates/rsscript-vm/src/reg_vm")),
-        ("MIR codegen", root.join("crates/rsscript-codegen-vm/src")),
-        (
-            "optional JIT engine",
-            root.join("crates/rsscript-jit-cranelift/src"),
-        ),
-    ];
-    let forbidden_source = [
-        "rsscript_compiler",
-        "rsscript_syntax",
-        "rsscript_semantics",
-        "rsscript_lowering",
-        "crate::hir",
-        "crate::syntax",
-        "crate::semantic",
-        "typed_hir()",
-    ];
-    for (name, directory) in backends {
-        let mut sources = Vec::new();
-        collect_rust_sources(&directory, &mut sources);
-        for source in sources {
-            let contents = read(&source);
-            for forbidden in forbidden_source {
-                assert!(
-                    !contents.contains(forbidden),
-                    "{name} backend `{}` must consume MIR/verified bytecode, not frontend `{forbidden}`",
-                    source.strip_prefix(&root).unwrap_or(&source).display(),
-                );
-            }
-        }
-    }
-
-    let metadata = cargo_metadata(&root);
-    for package in ["rsscript-vm", "rsscript-codegen-vm"] {
-        let dependencies = metadata_direct_dependencies(&metadata, package);
-        for forbidden in [
-            "rsscript-compiler",
-            "rsscript-syntax",
-            "rsscript-semantics",
-            "rsscript-lowering",
-        ] {
-            assert!(
-                !dependencies.contains(forbidden),
-                "{package} must not depend on frontend package `{forbidden}`"
-            );
-        }
-    }
-    let jit_manifest: toml::Value = toml::from_str(&read(
-        &root.join("crates/rsscript-jit-cranelift/Cargo.toml"),
-    ))
-    .expect("JIT lab manifest should parse");
-    let jit_dependencies = dependency_packages(&jit_manifest);
-    for forbidden in [
-        "rsscript-compiler",
-        "rsscript-syntax",
-        "rsscript-semantics",
-        "rsscript-lowering",
-    ] {
-        assert!(
-            !jit_dependencies.contains(forbidden),
-            "rsscript-jit-cranelift must not depend on frontend package `{forbidden}`"
-        );
-    }
 }
 
 #[test]

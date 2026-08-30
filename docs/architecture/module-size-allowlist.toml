@@ -80,7 +80,7 @@ tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-sdk/tests/architecture.rs"
-max_bytes = 204000
+max_bytes = 194000
 reason = "Historical architecture checks will move into xtask as repository invariants are generalized."
 owner = "@Haofei"
 target_bytes = 60000

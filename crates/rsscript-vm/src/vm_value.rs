@@ -251,8 +251,7 @@ impl TypedVec {
     /// per-element cost, but an empty list that will *specialize* to a scalar kind
     /// on push charges the scalar (8 B) cost, and an empty `Boxed` taking a heap
     /// value charges the `VmValue` cost.
-    #[allow(dead_code)] // unfused reference form; superseded on the hot path by
-    // `checked_push_accounted` (TV2.1), retained for the accounting-semantics tests
+    #[cfg(test)]
     pub(crate) fn push_cost(&self, value: &VmValue) -> usize {
         match (self, value) {
             (TypedVec::Ints(_), _) | (TypedVec::Floats(_), _) => self.elem_bytes(),
@@ -389,8 +388,7 @@ impl TypedVec {
     /// into a runtime `EvalError`, never a silent promote. In practice this never
     /// fires; it is the defensive total-function tail (plan §4.2 kind-mismatch rule).
     /// An empty `Boxed` list still specializes on its first scalar (parity-neutral).
-    #[allow(dead_code)] // unfused reference form; the hot path uses
-    // `checked_push_accounted` (TV2.1). Retained for the kind-mismatch tests.
+    #[cfg(test)]
     pub(crate) fn checked_push(&mut self, value: VmValue) -> Result<(), VmValue> {
         match (&mut *self, &value) {
             (TypedVec::Ints(v), VmValue::Int(i)) => {
@@ -477,7 +475,7 @@ impl TypedVec {
         }
     }
 
-    /// Checked overwrite for the `ListSet` opcode (see [`TypedVec::checked_push`]).
+    /// Checked overwrite for the `ListSet` opcode, mirroring the checked-push contract.
     /// Caller bounds-checks `index < len`. Returns `Err(value)` on kind mismatch.
     pub(crate) fn checked_set(&mut self, index: usize, value: VmValue) -> Result<(), VmValue> {
         match (&mut *self, &value) {
@@ -502,26 +500,6 @@ impl TypedVec {
             TypedVec::Boxed(v) => v.pop(),
             TypedVec::Ints(v) => v.pop().map(VmValue::Int),
             TypedVec::Floats(v) => v.pop().map(VmValue::Float),
-        }
-    }
-
-    #[allow(dead_code)] // part of the kind-agnostic accessor API (plan §4.2); kept for the full surface
-    pub(crate) fn insert(&mut self, index: usize, value: VmValue) {
-        match (&mut *self, &value) {
-            (TypedVec::Ints(v), VmValue::Int(i)) => v.insert(index, *i),
-            (TypedVec::Floats(v), VmValue::Float(f)) => v.insert(index, *f),
-            (TypedVec::Boxed(v), _) if !v.is_empty() => v.insert(index, value),
-            (TypedVec::Boxed(v), _) if v.is_empty() => match value {
-                VmValue::Int(i) => *self = TypedVec::Ints(vec![i]),
-                VmValue::Float(f) => *self = TypedVec::Floats(vec![f]),
-                other => v.insert(index, other),
-            },
-            _ => {
-                self.promote_to_boxed();
-                if let TypedVec::Boxed(v) = self {
-                    v.insert(index, value);
-                }
-            }
         }
     }
 
@@ -582,13 +560,6 @@ impl TypedVec {
         let before = self.allocated_bytes();
         self.extend(values);
         self.allocated_bytes().saturating_sub(before)
-    }
-
-    /// Replace the entire contents with a fresh vector of logical values,
-    /// re-picking the canonical kind. Mirrors `*borrowed = new_vec`.
-    #[allow(dead_code)] // part of the kind-agnostic accessor API (plan §4.2)
-    pub(crate) fn replace_all(&mut self, values: Vec<VmValue>) {
-        *self = TypedVec::from_values(values);
     }
 
     /// Materialize every element as a `Vec<VmValue>` (the logical view). Used by
@@ -1118,23 +1089,6 @@ pub(crate) fn vm_value_node_id(value: &VmValue) -> Option<usize> {
 impl VmValue {
     pub(crate) fn string(value: impl Into<String>) -> Self {
         Self::String(Rc::new(value.into()))
-    }
-
-    /// Build a `List` from a vector of logical values, picking the canonical
-    /// [`TypedVec`] kind (`Ints`/`Floats` for a homogeneous scalar run, else
-    /// `Boxed`). The single dynamic-specialization construction path for list
-    /// values whose static element type the lowerer does not pin down (the many
-    /// list-*producing* ops: `map`/`filter`/`fold`/`split`/collect/sort/…).
-    #[allow(dead_code)] // convenience constructor mirroring `from_values`; producers wrap inline
-    pub(crate) fn list(values: Vec<VmValue>) -> Self {
-        Self::List(Rc::new(RefCell::new(TypedVec::from_values(values))))
-    }
-
-    /// Build an empty `List` (a `Boxed` `TypedVec`; the first scalar `push`
-    /// specializes it).
-    #[allow(dead_code)] // convenience constructor; empty-list producers wrap inline / via ElemKind
-    pub(crate) fn empty_list() -> Self {
-        Self::List(Rc::new(RefCell::new(TypedVec::new())))
     }
 
     /// The **single canonical constructor** for `Some(value)` (V1.1). It is the

@@ -47,13 +47,6 @@ impl RegVm {
         candidates
     }
 
-    #[cfg(feature = "native-jit")]
-    #[allow(dead_code)]
-    pub(in crate::reg_vm) fn resolve_osr_candidate(&mut self, func: &RegFunction) -> Option<usize> {
-        let function = func.ordinal;
-        self.resolve_osr_candidates(function, func).first_header()
-    }
-
     /// Run one conservative scalar continuation region beginning at the current
     /// interpreter IP. The region commits only register-local scalar work and
     /// yields before the VM-owned barrier (`CallKnown` or `Return`).

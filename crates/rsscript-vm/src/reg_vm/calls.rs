@@ -1329,31 +1329,6 @@ impl RegVm {
         })
     }
 
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub(super) fn try_call_captureless_pure_closure(
-        &self,
-        unit: &RegUnit,
-        closure: &VmClosure,
-        args: &[VmValue],
-    ) -> Option<Result<VmValue, EvalError>> {
-        let plan = Self::compile_captureless_pure_closure(unit, closure, args.len())?;
-        let mut regs = Vec::new();
-        Some(Self::eval_captureless_pure_closure(&plan, args, &mut regs))
-    }
-
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub(super) fn try_fold_int_list_with_struct_plan_for_test(
-        unit: &RegUnit,
-        list: &Rc<RefCell<TypedVec>>,
-        state: &VmValue,
-        folder: &VmClosure,
-    ) -> Option<Result<VmValue, EvalError>> {
-        let plan = Self::compile_captureless_pure_closure(unit, folder, 2)?;
-        Self::try_fold_int_list_with_struct_plan(list, state, &plan)
-    }
-
     fn eval_captureless_pure_int_closure(
         plan: &PureClosurePlan,
         arg: i64,

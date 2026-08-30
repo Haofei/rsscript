@@ -1,8 +1,5 @@
 //! Post-lowering analyses and rewrites for native JIT instruction streams.
 
-// These analyses intentionally keep instruction indices aligned across rewrites.
-#![allow(clippy::needless_range_loop, clippy::too_many_arguments)]
-
 use super::*;
 
 #[cfg(feature = "native-jit")]
@@ -688,14 +685,7 @@ fn native_readonly_licm_eligible(
 
     if native_memoizable_field_load_helper(helper) {
         return native_field_load_args_loop_stable(
-            args,
-            invariants,
-            jit_code,
-            provenance,
-            header,
-            exit,
-            helper_ip,
-            invariants.written.len(),
+            args, invariants, jit_code, provenance, header, exit, helper_ip,
         );
     }
 
@@ -896,7 +886,6 @@ fn native_field_load_args_loop_stable(
     header: usize,
     exit: usize,
     helper_ip: usize,
-    _n_regs: usize,
 ) -> bool {
     let Some(vm_jit::HostArg::Reg(base)) = args.first().copied() else {
         return false;
@@ -999,11 +988,11 @@ fn native_loop_invariant_regs(
     let mut constant_ok = vec![true; n_regs];
     let mut first_write_ip = vec![None; n_regs];
     let mut write_count = vec![0_u32; n_regs];
-    for ip in header..exit {
+    for (ip, instr) in code.iter().enumerate().take(exit).skip(header) {
         if !reachable.get(ip).copied().unwrap_or(false) {
             continue;
         }
-        let writes = match instr_written_reg(&code[ip]) {
+        let writes = match instr_written_reg(instr) {
             RegFootprint::Some(writes) => writes,
             RegFootprint::All => return None,
         };
@@ -1012,7 +1001,7 @@ fn native_loop_invariant_regs(
                 continue;
             }
             if matches!(
-                &code[ip],
+                instr,
                 RegInstr::Move { dst, src } if *dst == written_reg && dst == src
             ) {
                 continue;
@@ -1022,7 +1011,7 @@ fn native_loop_invariant_regs(
             if first_write_ip[written_reg].is_none() {
                 first_write_ip[written_reg] = Some(ip);
             }
-            match &code[ip] {
+            match instr {
                 RegInstr::LoadInt { dst, value } if *dst == written_reg => {
                     match constant_int[written_reg] {
                         Some(existing) if existing != *value => constant_ok[written_reg] = false,

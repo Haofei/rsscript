@@ -2160,39 +2160,6 @@ pub(in crate::reg_vm) fn require(condition: bool) -> Option<()> {
     condition.then_some(())
 }
 
-/// Build an OSR function for a native-subset loop. CFG indices stay local to the
-/// possibly transformed stream; the origin map independently retains source and
-/// resume identity. Non-loop instructions preserve alignment but cannot execute,
-/// and the loop exits through `OsrExit` with its live-out window. Returns `None`
-/// when the loop or its types cannot be represented safely.
-#[cfg(feature = "native-jit")]
-#[allow(dead_code)]
-pub(in crate::reg_vm) fn translate_osr_loop(
-    code: &[RegInstr],
-    n_regs: usize,
-    n_params: usize,
-    captures: usize,
-    lp: OsrLoop,
-) -> Option<OsrTranslation> {
-    translate_osr_loop_inner(
-        code,
-        n_regs,
-        n_params,
-        captures,
-        lp,
-        Vec::new(),
-        HashMap::new(),
-        &[],
-        // Bare test entry has no immutable-leaf proof.
-        &[],
-        None,
-        None,
-        None,
-        code.len(),
-        true,
-    )
-}
-
 #[cfg(feature = "native-jit")]
 // OSR lowering takes explicit region, profile, type, and ownership proofs.
 #[allow(clippy::too_many_arguments)]

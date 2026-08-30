@@ -1,7 +1,5 @@
 //! Natural-loop discovery and OSR region metadata.
 
-#![allow(clippy::doc_lazy_continuation, clippy::needless_range_loop)]
-
 use super::*;
 
 #[cfg(feature = "native-jit")]
@@ -1002,9 +1000,11 @@ mod continuation_tests {
 ///     single exit.
 ///   - `orig_exit`: the ORIGINAL-code post-loop ip the interpreter resumes at —
 ///     `ip_map[trans_exit]`. Set the frame ip to this after an OSR-exit.
-/// Loop-carried (live-in/out) registers keep their original indices (scalar replacement only adds
-/// fresh tag/payload regs used strictly inside the loop and dead at both
-/// boundaries), so the marshalling window and live-out restore are unchanged.
+///
+/// Loop-carried (live-in/out) registers keep their original indices. Scalar
+/// replacement only adds fresh tag/payload registers used strictly inside the
+/// loop and dead at both boundaries, so the marshalling window and live-out
+/// restore are unchanged.
 #[cfg(feature = "native-jit")]
 #[derive(Debug, Clone)]
 pub(in crate::reg_vm) struct OsrEntry {
@@ -1908,9 +1908,9 @@ pub(in crate::reg_vm) fn detect_single_natural_loop(code: &[RegInstr]) -> Option
     // `[header, exit)` except the header's own exit edge. (Any other escape would
     // mean multiple exits / an irreducible shape.) Internal forward branches and
     // backedges to `header` stay in-region, so they pass the same `in_region` test.
-    for i in header..=body_end {
+    for (i, instr) in code.iter().enumerate().take(body_end + 1).skip(header) {
         let in_region = |t: usize| t >= header && t < exit;
-        match &code[i] {
+        match instr {
             RegInstr::Jump { target } => {
                 if !in_region(*target) && Some(i) != exit_trampoline {
                     return None;

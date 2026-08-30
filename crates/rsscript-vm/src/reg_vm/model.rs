@@ -137,12 +137,6 @@ impl OsrCandidates {
         self.entries.into_iter().flatten()
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
-    #[allow(dead_code)]
-    pub(crate) fn first_header(self) -> Option<usize> {
-        self.iter().next().map(|candidate| candidate.header_ip)
-    }
-
     pub(crate) fn is_empty(self) -> bool {
         self.entries[0].is_none()
     }
@@ -284,7 +278,7 @@ impl RegionController {
 }
 
 impl RegFunction {
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn placeholder(name: String) -> Self {
         Self {
             ordinal: 0,
