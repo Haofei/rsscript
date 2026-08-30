@@ -44,7 +44,7 @@ tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-jit-cranelift/src/module.rs"
-max_bytes = 88000
+max_bytes = 87000
 reason = "Native module lifecycle debt guarded by JIT differential and hardening tests."
 owner = "@Haofei"
 target_bytes = 60000
@@ -152,7 +152,7 @@ tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-vm/src/reg_vm/tier.rs"
-max_bytes = 201000
+max_bytes = 194000
 reason = "Whole/OSR/continuation controller debt remains behind the opt-in native engine."
 owner = "@Haofei"
 target_bytes = 60000

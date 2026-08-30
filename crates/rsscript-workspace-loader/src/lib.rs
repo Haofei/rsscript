@@ -3,7 +3,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
-use std::fs;
+#[cfg(not(unix))]
+use std::fs::OpenOptions;
+use std::fs::{self, File};
+use std::io::Read;
+#[cfg(unix)]
+use std::path::Component;
 use std::path::{Path, PathBuf};
 
 use rsscript_operation::{OperationAbort, OperationContext};
@@ -345,6 +350,13 @@ impl WorkspaceLoader {
                 "package root is not a directory",
             ));
         }
+        let traversal_root = root.canonicalize().map_err(|error| {
+            WorkspaceLoadError::at(
+                WorkspaceLoadErrorCode::ResolveRoot,
+                &root,
+                format!("cannot resolve package root: {error}"),
+            )
+        })?;
         let mut files = Vec::new();
         let mut scan = ScanState {
             limits: self,
@@ -353,12 +365,24 @@ impl WorkspaceLoader {
             total_bytes: 0,
         };
         let mut root_files = Vec::new();
-        scan_source_tree(&root, &root, false, &mut scan, &mut root_files)?;
+        scan_source_tree(
+            &traversal_root,
+            &traversal_root,
+            false,
+            &mut scan,
+            &mut root_files,
+        )?;
+        for file in &mut root_files {
+            file.path = root
+                .join(&file.relative_path)
+                .to_string_lossy()
+                .into_owned();
+        }
         assign_logical_paths("root", &mut root_files);
         files.extend(root_files);
 
         let mut visited = BTreeSet::new();
-        let mut pending_dependencies = dependency_paths(&root, operation)?;
+        let mut pending_dependencies = dependency_paths(&traversal_root, operation)?;
         while let Some(dependency) = pending_dependencies.pop() {
             check_operation(operation)?;
             let dependency = dependency.canonicalize().map_err(|error| {
@@ -529,35 +553,26 @@ fn scan_source_tree(
                     "workspace source file count exceeds loader limit",
                 ));
             }
-            let metadata = entry.metadata().map_err(|error| {
-                WorkspaceLoadError::at(
-                    WorkspaceLoadErrorCode::InspectEntry,
-                    &path,
-                    format!("cannot inspect source: {error}"),
-                )
-            })?;
+            let remaining = scan
+                .limits
+                .max_source_bytes
+                .checked_sub(scan.total_bytes)
+                .ok_or_else(|| {
+                    WorkspaceLoadError::global(
+                        WorkspaceLoadErrorCode::SourceBytesLimitExceeded,
+                        "workspace source bytes exceed loader limit",
+                    )
+                })?;
+            let contents = read_source_utf8_bounded(display_root, &path, remaining)?;
             scan.total_bytes = scan
                 .total_bytes
-                .checked_add(metadata.len())
+                .checked_add(contents.len() as u64)
                 .ok_or_else(|| {
                     WorkspaceLoadError::global(
                         WorkspaceLoadErrorCode::SourceBytesOverflow,
                         "workspace source byte count overflow",
                     )
                 })?;
-            if scan.total_bytes > scan.limits.max_source_bytes {
-                return Err(WorkspaceLoadError::global(
-                    WorkspaceLoadErrorCode::SourceBytesLimitExceeded,
-                    "workspace source bytes exceed loader limit",
-                ));
-            }
-            let contents = fs::read_to_string(&path).map_err(|error| {
-                WorkspaceLoadError::at(
-                    WorkspaceLoadErrorCode::ReadSource,
-                    &path,
-                    format!("cannot read source: {error}"),
-                )
-            })?;
             let relative_path = path
                 .strip_prefix(display_root)
                 .unwrap_or(&path)
@@ -574,6 +589,150 @@ fn scan_source_tree(
         }
     }
     Ok(())
+}
+
+/// Open a source exactly once, reject link-like leaf entries, inspect the
+/// opened descriptor, and read no more than the workspace's remaining byte
+/// budget. This closes the metadata/open and size-growth races that would
+/// otherwise let a concurrently replaced file escape capture policy.
+fn read_source_utf8_bounded(
+    root: &Path,
+    path: &Path,
+    max_bytes: u64,
+) -> Result<String, WorkspaceLoadError> {
+    #[cfg(not(unix))]
+    let _ = root;
+    #[cfg(unix)]
+    let file = {
+        use rustix::fs::{Mode, OFlags};
+
+        let relative = path.strip_prefix(root).map_err(|_| {
+            WorkspaceLoadError::at(
+                WorkspaceLoadErrorCode::ReadSource,
+                path,
+                "workspace source is outside its capture root",
+            )
+        })?;
+        let root_descriptor = rustix::fs::open(
+            root,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|error| {
+            WorkspaceLoadError::at(
+                WorkspaceLoadErrorCode::ReadSource,
+                root,
+                format!("cannot open workspace root without following links: {error}"),
+            )
+        })?;
+        let mut current = File::from(root_descriptor);
+        let mut components = relative.components().peekable();
+        while let Some(component) = components.next() {
+            let Component::Normal(component) = component else {
+                return Err(WorkspaceLoadError::at(
+                    WorkspaceLoadErrorCode::ReadSource,
+                    path,
+                    "workspace source path is not confined",
+                ));
+            };
+            let flags = if components.peek().is_some() {
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC
+            } else {
+                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC
+            };
+            let descriptor = rustix::fs::openat(&current, component, flags, Mode::empty())
+                .map_err(|error| {
+                    WorkspaceLoadError::at(
+                        WorkspaceLoadErrorCode::ReadSource,
+                        path,
+                        format!("cannot open confined source without following links: {error}"),
+                    )
+                })?;
+            current = File::from(descriptor);
+        }
+        current
+    };
+    #[cfg(not(unix))]
+    let file = {
+        let metadata = fs::symlink_metadata(path).map_err(|error| {
+            WorkspaceLoadError::at(
+                WorkspaceLoadErrorCode::InspectEntry,
+                path,
+                format!("cannot inspect source: {error}"),
+            )
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(WorkspaceLoadError::at(
+                WorkspaceLoadErrorCode::InspectEntry,
+                path,
+                "workspace source must not be a symlink or reparse point",
+            ));
+        }
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+            options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        }
+        options.open(path).map_err(|error| {
+            WorkspaceLoadError::at(
+                WorkspaceLoadErrorCode::ReadSource,
+                path,
+                format!("cannot open source without following links: {error}"),
+            )
+        })?
+    };
+    let metadata = file.metadata().map_err(|error| {
+        WorkspaceLoadError::at(
+            WorkspaceLoadErrorCode::InspectEntry,
+            path,
+            format!("cannot inspect opened source: {error}"),
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(WorkspaceLoadError::at(
+            WorkspaceLoadErrorCode::InspectEntry,
+            path,
+            "workspace source must be a regular file",
+        ));
+    }
+    if metadata.len() > max_bytes {
+        return Err(WorkspaceLoadError::global(
+            WorkspaceLoadErrorCode::SourceBytesLimitExceeded,
+            "workspace source bytes exceed loader limit",
+        ));
+    }
+    let capacity = usize::try_from(metadata.len()).map_err(|_| {
+        WorkspaceLoadError::global(
+            WorkspaceLoadErrorCode::SourceBytesOverflow,
+            "workspace source file is too large for this platform",
+        )
+    })?;
+    let mut bytes = Vec::with_capacity(capacity);
+    Read::take(file, max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| {
+            WorkspaceLoadError::at(
+                WorkspaceLoadErrorCode::ReadSource,
+                path,
+                format!("cannot read source: {error}"),
+            )
+        })?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(WorkspaceLoadError::global(
+            WorkspaceLoadErrorCode::SourceBytesLimitExceeded,
+            "workspace source bytes exceed loader limit",
+        ));
+    }
+    String::from_utf8(bytes).map_err(|error| {
+        WorkspaceLoadError::at(
+            WorkspaceLoadErrorCode::ReadSource,
+            path,
+            format!("source is not valid UTF-8: {error}"),
+        )
+    })
 }
 
 fn dependency_paths(
@@ -625,6 +784,7 @@ fn check_operation(operation: Option<&OperationContext>) -> Result<(), Workspace
 mod tests {
     use super::*;
     use rsscript_operation::{CancellationToken, MonotonicDeadline};
+    use std::io::Write;
     use std::time::{Duration, Instant};
 
     #[test]
@@ -683,6 +843,65 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.code, WorkspaceLoadErrorCode::RootNotDirectory);
         assert!(error.path.is_some());
+    }
+
+    #[test]
+    fn bounded_source_reader_uses_the_open_descriptor_and_actual_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("main.rss");
+        let mut file = File::create(&path).unwrap();
+        file.write_all(b"12345").unwrap();
+        file.flush().unwrap();
+
+        assert_eq!(
+            read_source_utf8_bounded(directory.path(), &path, 5).unwrap(),
+            "12345"
+        );
+        let error = read_source_utf8_bounded(directory.path(), &path, 4).unwrap_err();
+        assert_eq!(error.code, WorkspaceLoadErrorCode::SourceBytesLimitExceeded);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_source_reader_never_follows_a_symlink_leaf() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("outside.rss");
+        fs::write(&target, "secret").unwrap();
+        let link = directory.path().join("main.rss");
+        symlink(&target, &link).unwrap();
+
+        let error = read_source_utf8_bounded(directory.path(), &link, 1024).unwrap_err();
+        assert_eq!(error.code, WorkspaceLoadErrorCode::ReadSource);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn capture_resolves_an_explicit_symlink_root_once() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let package = directory.path().join("package");
+        fs::create_dir(&package).unwrap();
+        fs::write(
+            package.join("main.rss"),
+            "fn main() -> Unit { return Unit }",
+        )
+        .unwrap();
+        let root = directory.path().join("root");
+        symlink(&package, &root).unwrap();
+
+        let snapshot = WorkspaceLoader::default()
+            .snapshot_from(directory.path(), Path::new("root"))
+            .unwrap();
+        assert_eq!(snapshot.root(), root);
+        assert_eq!(snapshot.files().len(), 1);
+        assert_eq!(
+            snapshot.files()[0].path,
+            root.join("main.rss").display().to_string()
+        );
+        assert_eq!(snapshot.files()[0].relative_path, "main.rss");
     }
 
     #[test]

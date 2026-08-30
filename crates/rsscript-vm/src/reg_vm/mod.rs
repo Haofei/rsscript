@@ -75,6 +75,7 @@ mod resources;
 mod runtime_resources;
 mod runtime_values;
 mod scheduler;
+mod state;
 mod tier;
 mod value_access;
 mod value_convert;
@@ -92,15 +93,15 @@ use planning::*;
 use resources::*;
 use runtime_resources::*;
 use runtime_values::*;
+#[cfg(feature = "native-jit")]
+use state::DEFAULT_MAX_DEPTH;
+pub use state::VmLimits;
+use state::{CANCEL_POLL_INTERVAL, Frame, MAP_ENTRY_BYTES, MAX_INTRINSIC_OUTPUT_BYTES};
 use tier::JitState;
 use value_access::*;
 use value_convert::*;
 use value_ops::*;
 
-// ============================================================================
-// Central intrinsic/effect registry (JIT descriptor table)
-// ============================================================================
-//
 // One `IntrinsicDescriptor` per `RegIntrinsic`, re-encoding the per-intrinsic
 // facts the JIT's three hand-coded classification sites need. The table is the
 // single source of truth for *which* intrinsics each site admits/expands/folds;
@@ -253,7 +254,7 @@ impl Default for IntrinsicDescriptor {
 fn intrinsic_descriptor(intrinsic: RegIntrinsic) -> IntrinsicDescriptor {
     use IntrinsicEffect::*;
     let d = IntrinsicDescriptor::default;
-    let mut descriptor = match intrinsic {
+    let descriptor = match intrinsic {
         // --- native_subset_instruction: native-lowerable intrinsics ---
         // `Int.to_float` lowers to a native signed-int→f64 conversion (the single-Int
         // -arg shape check stays at the call site).
@@ -453,7 +454,8 @@ fn intrinsic_descriptor(intrinsic: RegIntrinsic) -> IntrinsicDescriptor {
     };
 
     #[cfg(feature = "native-jit")]
-    {
+    let descriptor = {
+        let mut descriptor = descriptor;
         descriptor.native_inline_arity = match intrinsic {
             RegIntrinsic::IntToFloat | RegIntrinsic::MathFloor | RegIntrinsic::MathCeil => Some(1),
             _ => None,
@@ -561,7 +563,8 @@ fn intrinsic_descriptor(intrinsic: RegIntrinsic) -> IntrinsicDescriptor {
             }),
             _ => None,
         };
-    }
+        descriptor
+    };
     descriptor
 }
 
@@ -1538,35 +1541,6 @@ impl RegVmExecutable {
     }
 }
 
-/// One activation record on the explicit call stack. The interpreter is
-/// stackless: instead of `run_frame` recursing into itself for each RSScript
-/// call, it pushes a `Frame` and keeps looping, so a task's whole call chain
-/// lives in `RegVm::frames` and can be suspended/resumed (the foundation for
-/// the cooperative async scheduler). Synchronous closure callbacks
-/// (`List.map`/`sort_with`/…) still nest via `run_frame`, which is fine because
-/// they can never `await`.
-struct Frame {
-    func: Rc<RegFunction>,
-    /// Stable ordinal in the verified register unit. Native dispatch side tables
-    /// are dense by this identity, so resolving it once at frame construction
-    /// keeps pointer-to-ordinal hashing out of the interpreter instruction loop.
-    #[cfg(feature = "native-jit")]
-    function_ordinal: usize,
-    ip: usize,
-    base: usize,
-    /// Absolute register in the caller that receives this frame's return value.
-    /// `usize::MAX` marks a driver root (its value is returned out of `run_frame`).
-    ret_dst: usize,
-    /// `mut`-argument write-backs to perform when this frame completes:
-    /// `(caller_abs_reg, this_frame_abs_reg)` pairs. The caller register receives
-    /// the parameter's final (possibly mutated) value, so `mut` params propagate.
-    /// Empty for the overwhelmingly common no-`mut`-arg call (then a no-op).
-    mut_writeback: Vec<(usize, usize)>,
-    /// Number of self-tail calls elided by TCO in this activation. Combined with
-    /// the physical frame depth to preserve `VmLimits::max_depth` observability.
-    tail_calls: usize,
-}
-
 /// Result of driving a task's call stack one slice at a time.
 enum Outcome {
     /// The frame at `floor` returned this value (the task or sync call finished).
@@ -1643,129 +1617,6 @@ struct TaskSlot {
     wait: Option<Wait>,
     /// Register (in the task's own stack) that receives the op result on wake.
     resume_dst: usize,
-}
-
-/// Resource limits for one reg-VM execution.
-///
-/// These limits are resilience controls, not an isolation boundary. Public
-/// defaults are deliberately finite so an accidentally non-terminating or
-/// excessively allocating script fails with a recoverable error. Trusted hosts
-/// that intentionally need an unlimited run must opt in through
-/// [`VmLimits::unbounded_for_trusted_host`].
-/// Note: not `Copy` — it carries an optional shared cancellation token. All
-/// fields are public and `Clone`/struct-update (`..VmLimits::default()`) keep
-/// callers ergonomic; the scalar budget fields are read by value as before.
-#[derive(Debug, Clone)]
-pub struct VmLimits {
-    /// Maximum simultaneous call frames (recursion depth). Default-on and
-    /// generous; checked before every frame push. `usize::MAX` effectively
-    /// disables the cap.
-    pub max_depth: usize,
-    /// Maximum number of executed instructions over the whole run. `None` means
-    /// unlimited. When `Some(limit)`, a run that executes more than
-    /// `limit` instructions fails with a "step budget exceeded" error — this is
-    /// what stops `while true {}`.
-    pub step_budget: Option<u64>,
-    /// Best-effort cumulative quota for VM-owned allocation and container
-    /// capacity growth. `None` disables accounting (near-zero overhead).
-    /// This is not a live-memory measurement or an operating-system sandbox.
-    pub allocation_budget: Option<usize>,
-    /// Maximum reachable RSScript value storage at an instruction boundary.
-    /// Unlike `allocation_budget`, this counter subtracts unreachable values and
-    /// deduplicates shared `Rc` nodes. The metric is a deterministic VM storage
-    /// model, not allocator RSS and not memory owned inside Provider futures.
-    pub live_memory_limit: Option<usize>,
-    /// Host-level preemption hook. `None` means no polling (the off path is
-    /// near-free: `tick()` never touches the atomic). When `Some`, the host can
-    /// set the flag to `true` from anywhere (e.g. a watchdog thread on timeout or
-    /// an abort signal) and the running evaluation is preempted at the next
-    /// throttled step check — even inside a tight `while true {}` loop that never
-    /// awaits or checks the cooperative RSS `CancellationToken`. The eval then
-    /// returns a structured `ExecutionFailureKind::Cancelled`. This stops the *whole*
-    /// eval; see the note in `tick()` on per-task preemption.
-    pub cancel: Option<rsscript_operation::CancellationToken>,
-    /// Monotonic execution deadline shared with Provider calls.
-    pub deadline: Option<rsscript_operation::MonotonicDeadline>,
-    /// Maximum output bytes exposed to an external Provider call.
-    pub stdout_budget: Option<usize>,
-    /// Maximum number of deterministic stdlib/runtime intrinsic calls — every
-    /// `Type.method` dispatch out of VM bytecode into the built-in runtime
-    /// implementation. External host effects are counted separately by
-    /// `provider_call_budget`.
-    /// `None` means uncounted. When `Some(limit)`, the call that would exceed
-    /// `limit` fails with an "intrinsic call budget exceeded" error. This caps the volume
-    /// of runtime-library calls independently of raw instruction count (a single
-    /// intrinsic can do unbounded I/O), so an agent program can be limited to N
-    /// operation even if it is individually cheap in `step_budget`
-    /// terms.
-    pub intrinsic_call_budget: Option<u64>,
-    /// Maximum number of calls through an explicitly linked external Provider
-    /// symbol. This counter does not include VM/runtime intrinsics.
-    pub provider_call_budget: Option<u64>,
-    /// Maximum simultaneously live Provider-owned resources.
-    pub resource_limit: Option<usize>,
-    /// Whether the synchronous interpreter may invoke a Provider function that
-    /// declares `MayBlock`. Disabled by default so embedding hosts must choose
-    /// an execution lane deliberately before admitting blocking host work.
-    pub allow_blocking_provider_calls: bool,
-}
-
-/// Default recursion-depth cap: generous enough never to trip real code (deep
-/// but finite recursion, the ML framework's call chains) yet finite, so an
-/// unbounded self-recursive program is caught long before it can overflow the
-/// native stack.
-const DEFAULT_MAX_DEPTH: usize = 16_384;
-
-/// How often `tick()` polls the ambient cancel flag (once every this many
-/// instructions). A power of two so the modulo lowers to a mask. Small enough
-/// that a watchdog preempts a tight loop within microseconds, large enough that
-/// the relaxed atomic load is negligible amortized over real work.
-const CANCEL_POLL_INTERVAL: u64 = 1024;
-
-/// Estimated bytes charged per map entry: a key plus a `VmValue`, with hashmap
-/// bookkeeping folded into the key term as a rough fudge factor.
-const MAP_ENTRY_BYTES: usize = std::mem::size_of::<VmValue>() * 2;
-const MAX_INTRINSIC_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
-
-impl Default for VmLimits {
-    fn default() -> Self {
-        Self {
-            max_depth: 4_096,
-            step_budget: Some(50_000_000),
-            allocation_budget: Some(256 * 1024 * 1024),
-            live_memory_limit: Some(128 * 1024 * 1024),
-            cancel: None,
-            deadline: None,
-            stdout_budget: Some(4 * 1024 * 1024),
-            intrinsic_call_budget: Some(1_000_000),
-            provider_call_budget: Some(100_000),
-            resource_limit: Some(4_096),
-            allow_blocking_provider_calls: false,
-        }
-    }
-}
-
-impl VmLimits {
-    /// Disable accounting limits for a host-controlled, trusted workload.
-    ///
-    /// This is intentionally verbose: process isolation and provider authority
-    /// remain the host's responsibility, and ordinary callers should use
-    /// [`Default`] instead.
-    pub fn unbounded_for_trusted_host() -> Self {
-        Self {
-            max_depth: DEFAULT_MAX_DEPTH,
-            step_budget: None,
-            allocation_budget: None,
-            live_memory_limit: None,
-            cancel: None,
-            deadline: None,
-            stdout_budget: None,
-            intrinsic_call_budget: None,
-            provider_call_budget: None,
-            resource_limit: None,
-            allow_blocking_provider_calls: true,
-        }
-    }
 }
 
 struct RegVm {

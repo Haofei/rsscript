@@ -137,7 +137,11 @@ impl HttpProvider {
             .collect::<Result<Vec<_>, _>>()?;
         for (url, addresses) in &parsed_origins {
             let host = url.host_str().expect("validated origin has a host");
-            client = client.resolve_to_addrs(host, addresses);
+            let resolve_host = host
+                .strip_prefix('[')
+                .and_then(|host| host.strip_suffix(']'))
+                .unwrap_or(host);
+            client = client.resolve_to_addrs(resolve_host, addresses);
         }
         let allowed_origins = parsed_origins
             .into_iter()
@@ -370,10 +374,20 @@ fn parse_allowed_origin(
     let port = url
         .port_or_known_default()
         .ok_or_else(|| ProviderError::invalid_argument("HTTP origin has no resolvable port"))?;
-    let addresses = (host, port)
-        .to_socket_addrs()
-        .map_err(|error| ProviderError::unavailable(format!("resolve HTTP origin: {error}")))?
-        .collect::<Vec<_>>();
+    // URL serializers bracket IPv6 literals. Resolve names through DNS, but
+    // construct literal addresses directly so `[2001:db8::1]` is not handed
+    // to `ToSocketAddrs` as an invalid hostname.
+    let literal_host = host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host);
+    let addresses = match literal_host.parse::<IpAddr>() {
+        Ok(address) => vec![std::net::SocketAddr::new(address, port)],
+        Err(_) => (host, port)
+            .to_socket_addrs()
+            .map_err(|error| ProviderError::unavailable(format!("resolve HTTP origin: {error}")))?
+            .collect::<Vec<_>>(),
+    };
     if addresses.is_empty() {
         return Err(ProviderError::unavailable(
             "HTTP origin resolved to no addresses",
@@ -394,23 +408,48 @@ fn parse_allowed_origin(
 
 fn is_private_or_special(address: IpAddr) -> bool {
     match address {
-        IpAddr::V4(address) => {
-            address.is_private()
-                || address.is_loopback()
-                || address.is_link_local()
-                || address.is_unspecified()
-                || address.is_multicast()
-                || address.is_broadcast()
-                || address.octets()[0] == 0
-        }
+        IpAddr::V4(address) => is_private_or_special_v4(address),
         IpAddr::V6(address) => {
+            if let Some(mapped) = address.to_ipv4_mapped() {
+                return is_private_or_special_v4(mapped);
+            }
+            let segments = address.segments();
             address.is_loopback()
                 || address.is_unspecified()
                 || address.is_multicast()
-                || (address.segments()[0] & 0xfe00) == 0xfc00
-                || (address.segments()[0] & 0xffc0) == 0xfe80
+                || segments[0..6] == [0, 0, 0, 0, 0, 0] // deprecated IPv4-compatible
+                || segments[0..6] == [0x0064, 0xff9b, 0, 0, 0, 0] // NAT64 well-known
+                || segments[0..3] == [0x0064, 0xff9b, 0x0001] // NAT64 local-use
+                || segments[0..4] == [0x0100, 0, 0, 0] // discard-only
+                || (segments[0] & 0xfe00) == 0xfc00 // unique-local
+                || (segments[0] & 0xffc0) == 0xfe80 // link-local
+                || (segments[0] & 0xffc0) == 0xfec0 // deprecated site-local
+                || (segments[0] == 0x2001 && segments[1] <= 0x01ff) // IETF assignments
+                || segments[0..2] == [0x2001, 0x0db8] // documentation
+                || segments[0] == 0x2002 // 6to4
+                || (segments[0] & 0xfff0) == 0x3ff0 // documentation
+                || segments[0] == 0x5f00 // segment-routing SIDs
         }
     }
+}
+
+fn is_private_or_special_v4(address: std::net::Ipv4Addr) -> bool {
+    let [a, b, c, _] = address.octets();
+    address.is_private()
+        || address.is_loopback()
+        || address.is_link_local()
+        || address.is_unspecified()
+        || address.is_multicast()
+        || address.is_broadcast()
+        || a == 0
+        || (a == 100 && (64..=127).contains(&b)) // shared address space
+        || (a == 192 && b == 0 && c == 0) // IETF protocol assignments
+        || (a == 192 && b == 0 && c == 2) // TEST-NET-1
+        || (a == 192 && b == 88 && c == 99) // deprecated 6to4 relay anycast
+        || (a == 198 && (b == 18 || b == 19)) // benchmark networks
+        || (a == 198 && b == 51 && c == 100) // TEST-NET-2
+        || (a == 203 && b == 0 && c == 113) // TEST-NET-3
+        || a >= 240 // reserved/future use
 }
 
 fn read_response_bounded(response: &mut impl Read, limit: usize) -> Result<String, ProviderError> {
@@ -449,6 +488,52 @@ mod tests {
         );
         drop(permit);
         slots.try_acquire("request").expect("released slot");
+    }
+
+    #[test]
+    fn ipv6_literals_are_parsed_without_dns_hostname_resolution() {
+        let (url, addresses) = parse_allowed_origin(
+            "https://[2606:4700:4700::1111]",
+            HttpNetworkPolicy::production(),
+        )
+        .expect("public IPv6 literal");
+        assert_eq!(url.host_str(), Some("[2606:4700:4700::1111]"));
+        assert_eq!(
+            addresses[0].ip(),
+            "2606:4700:4700::1111".parse::<IpAddr>().unwrap()
+        );
+    }
+
+    #[test]
+    fn special_use_and_ipv4_mapped_addresses_are_rejected() {
+        for address in [
+            "100.64.0.1",
+            "192.0.2.1",
+            "198.18.0.1",
+            "198.51.100.1",
+            "203.0.113.1",
+            "::ffff:127.0.0.1",
+            "64:ff9b::808:808",
+            "64:ff9b:1::1",
+            "100::1",
+            "fec0::1",
+            "2001:2::1",
+            "2001:db8::1",
+            "2002:0808:0808::1",
+            "3fff::1",
+            "5f00::1",
+        ] {
+            assert!(
+                is_private_or_special(address.parse().unwrap()),
+                "{address} must be denied by production policy"
+            );
+        }
+        for address in ["8.8.8.8", "2606:4700:4700::1111"] {
+            assert!(
+                !is_private_or_special(address.parse().unwrap()),
+                "{address} must remain available to production policy"
+            );
+        }
     }
 
     #[test]

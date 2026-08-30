@@ -129,6 +129,19 @@ impl RegVm {
         Ok(())
     }
 
+    /// Preflight a list of newly allocated strings before any amplified host
+    /// allocation occurs. The final retained charge is still recorded by the
+    /// string payload and `fresh_list`; this check covers their combined peak.
+    pub(in crate::reg_vm) fn ensure_string_list_available(
+        &self,
+        count: usize,
+        payload_bytes: usize,
+    ) -> Result<(), EvalError> {
+        self.ensure_memory_available(
+            payload_bytes.saturating_add(count.saturating_mul(std::mem::size_of::<VmValue>())),
+        )
+    }
+
     pub(in crate::reg_vm) fn account_list_storage(
         &mut self,
         values: &TypedVec,

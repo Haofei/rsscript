@@ -67,8 +67,14 @@ impl RegVm {
             RegIntrinsic::RegexSplit => {
                 let regex = expect_regex_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let (count, payload_bytes) = regex.split_stats(value);
+                // Account for the temporary `Vec<String>` and final boxed VM
+                // list together before regex splitting allocates either one.
+                self.ensure_memory_available(payload_bytes.saturating_add(count.saturating_mul(
+                    std::mem::size_of::<String>() + std::mem::size_of::<VmValue>(),
+                )))?;
                 let parts = regex.split(value);
-                self.account_bytes(parts.iter().map(String::len).sum())?;
+                self.account_bytes(payload_bytes)?;
                 self.fresh_list(TypedVec::from_values(
                     parts.into_iter().map(VmValue::string).collect(),
                 ))

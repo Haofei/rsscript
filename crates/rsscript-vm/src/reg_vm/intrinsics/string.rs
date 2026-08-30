@@ -111,11 +111,13 @@ impl RegVm {
             }
             RegIntrinsic::StringLines => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let lines = value.lines().map(str::to_string).collect::<Vec<_>>();
-                self.account_bytes(lines.iter().map(String::len).sum())?;
-                self.fresh_list(TypedVec::from_values(
-                    lines.into_iter().map(VmValue::string).collect(),
-                ))
+                let count = value.lines().count();
+                let payload_bytes = value.lines().map(str::len).sum();
+                self.ensure_string_list_available(count, payload_bytes)?;
+                let mut lines = Vec::with_capacity(count);
+                lines.extend(value.lines().map(|line| VmValue::string(line.to_owned())));
+                self.account_bytes(payload_bytes)?;
+                self.fresh_list(TypedVec::from_values(lines))
             }
             RegIntrinsic::StringLen => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -205,14 +207,17 @@ impl RegVm {
             RegIntrinsic::StringSplit => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let delimiter = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let parts = value
-                    .split(delimiter)
-                    .map(str::to_string)
-                    .collect::<Vec<_>>();
-                self.account_bytes(parts.iter().map(String::len).sum())?;
-                self.fresh_list(TypedVec::from_values(
-                    parts.into_iter().map(VmValue::string).collect(),
-                ))
+                let count = value.split(delimiter).count();
+                let payload_bytes = value.split(delimiter).map(str::len).sum();
+                self.ensure_string_list_available(count, payload_bytes)?;
+                let mut parts = Vec::with_capacity(count);
+                parts.extend(
+                    value
+                        .split(delimiter)
+                        .map(|part| VmValue::string(part.to_owned())),
+                );
+                self.account_bytes(payload_bytes)?;
+                self.fresh_list(TypedVec::from_values(parts))
             }
             RegIntrinsic::StringStartsWith => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;

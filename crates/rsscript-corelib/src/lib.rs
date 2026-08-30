@@ -184,6 +184,15 @@ pub mod regex {
         pub fn split(&self, value: &str) -> Vec<String> {
             self.0.split(value).map(str::to_owned).collect()
         }
+
+        /// Return the exact number and UTF-8 payload bytes of split results
+        /// without allocating them. Runtimes use this to enforce memory policy
+        /// before materializing an amplified result.
+        pub fn split_stats(&self, value: &str) -> (usize, usize) {
+            self.0.split(value).fold((0, 0), |(count, bytes), part| {
+                (count.saturating_add(1), bytes.saturating_add(part.len()))
+            })
+        }
     }
 }
 

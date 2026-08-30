@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 pub const RUNNER_REQUEST_SCHEMA: &str = "rsscript.runner_request.v1";
 pub const RUNNER_RESPONSE_SCHEMA: &str = "rsscript.runner_response.v1";
+pub const EXECUTION_REPORT_SCHEMA_V2: &str = "rsscript.execution_report.v2";
 const REQUEST_MAGIC: &[u8; 8] = b"RSSRUNQ1";
 const RESPONSE_MAGIC: &[u8; 8] = b"RSSRUNS1";
 pub const MAX_HEADER_BYTES: usize = 1024 * 1024;
@@ -426,6 +427,28 @@ pub fn validate_response_profile(
     }
 }
 
+/// Bind a completed child response to the exact executable module submitted
+/// by the parent. A decoded runner frame is untrusted until both its report
+/// contract and Artifact identity have been checked.
+pub fn validate_response_artifact(
+    response: &RunnerResponseV1,
+    expected_module_digest: &str,
+) -> Result<(), ProtocolError> {
+    let Some(VersionedExecutionReport::V2(report)) = response.report.as_ref() else {
+        return Ok(());
+    };
+    if report.schema != EXECUTION_REPORT_SCHEMA_V2 {
+        return Err(ProtocolError::Schema(report.schema.clone()));
+    }
+    if report.artifact_digest != expected_module_digest {
+        return Err(ProtocolError::ArtifactMismatch {
+            expected: expected_module_digest.to_string(),
+            actual: report.artifact_digest.clone(),
+        });
+    }
+    Ok(())
+}
+
 pub fn write_request(
     mut output: impl Write,
     request: &RunnerRequestV1,
@@ -535,6 +558,14 @@ fn validate_response(response: &RunnerResponseV1) -> Result<(), ProtocolError> {
     }
     match response.runner_termination {
         RunnerTerminationV1::Completed if response.report.is_some() && response.error.is_none() => {
+            let Some(VersionedExecutionReport::V2(report)) = response.report.as_ref() else {
+                return Err(ProtocolError::Invalid(
+                    "completed runner response has no v2 report",
+                ));
+            };
+            if report.schema != EXECUTION_REPORT_SCHEMA_V2 {
+                return Err(ProtocolError::Schema(report.schema.clone()));
+            }
             Ok(())
         }
         RunnerTerminationV1::Completed => Err(ProtocolError::Invalid(
@@ -609,6 +640,10 @@ pub enum ProtocolError {
         expected: RunnerProfileIdentityV1,
         actual: RunnerProfileIdentityV1,
     },
+    ArtifactMismatch {
+        expected: String,
+        actual: String,
+    },
     TrailingBytes,
 }
 
@@ -630,6 +665,10 @@ impl std::fmt::Display for ProtocolError {
                 actual.id,
                 actual.version,
                 actual.descriptor_digest,
+            ),
+            Self::ArtifactMismatch { expected, actual } => write!(
+                formatter,
+                "runner report Artifact mismatch: expected {expected}, received {actual}",
             ),
             Self::TrailingBytes => {
                 formatter.write_str("runner protocol frame contains trailing bytes")
@@ -690,6 +729,26 @@ mod tests {
             read_response(bytes.as_slice()).expect("decode response"),
             response
         );
+    }
+
+    #[test]
+    fn completed_report_must_match_the_submitted_artifact() {
+        let expected = format!("sha256:{}", "0".repeat(64));
+        let response = RunnerResponseV1::report(RunnerProfileV1::NoProviders, test_report());
+        validate_response_artifact(&response, &expected).expect("matching report");
+
+        let error = validate_response_artifact(&response, &format!("sha256:{}", "1".repeat(64)))
+            .expect_err("forged digest must fail");
+        assert!(matches!(error, ProtocolError::ArtifactMismatch { .. }));
+    }
+
+    #[test]
+    fn response_contract_rejects_a_forged_execution_report_schema() {
+        let mut report = test_report();
+        report.schema = "rsscript.execution_report.v999".to_string();
+        let response = RunnerResponseV1::report(RunnerProfileV1::NoProviders, report);
+        let error = validate_response(&response).expect_err("schema must fail closed");
+        assert!(matches!(error, ProtocolError::Schema(_)));
     }
 
     #[test]

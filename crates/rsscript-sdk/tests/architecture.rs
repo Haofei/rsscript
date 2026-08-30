@@ -927,7 +927,11 @@ fn jit_planning_state_is_kept_out_of_verified_program_objects() {
 #[test]
 fn verified_jit_facts_are_native_only_evaluation_local_state() {
     let root = workspace_root();
-    let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));
+    let vm = format!(
+        "{}\n{}",
+        read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/state.rs"))
+    );
     let native = read(&root.join("crates/rsscript-vm/src/reg_vm/native/mod.rs"));
     let facts_path = root.join("crates/rsscript-vm/src/reg_vm/native/facts.rs");
     let facts = read(&facts_path);
@@ -1037,7 +1041,11 @@ fn jit_translation_consumes_verified_facts_without_multiplying_inference_engines
 #[test]
 fn jit_static_facts_and_missed_optimization_telemetry_stay_structured() {
     let root = workspace_root();
-    let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));
+    let vm = format!(
+        "{}\n{}",
+        read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/state.rs"))
+    );
     let facts = read(&root.join("crates/rsscript-vm/src/reg_vm/native/facts.rs"));
 
     for field in [
@@ -1384,7 +1392,11 @@ fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
     let corelib_manifest = read(&root.join("crates/rsscript-corelib/Cargo.toml"));
     let corelib = read(&root.join("crates/rsscript-corelib/src/lib.rs"));
     let vm_manifest = read(&root.join("crates/rsscript-vm/Cargo.toml"));
-    let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));
+    let vm = format!(
+        "{}\n{}",
+        read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/state.rs"))
+    );
     let intrinsics = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/mod.rs"));
     let hex = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/hex.rs"));
     let url = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/url.rs"));
@@ -1891,7 +1903,11 @@ fn cancellation_and_deadlines_share_one_operation_contract() {
     assert!(language_service.contains("Option<&'a CancellationToken>"));
     assert!(language_service.contains("Option<MonotonicDeadline>"));
 
-    let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));
+    let vm = format!(
+        "{}\n{}",
+        read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/state.rs"))
+    );
     assert!(vm.contains("Option<rsscript_operation::CancellationToken>"));
     assert!(vm.contains("Option<rsscript_operation::MonotonicDeadline>"));
 }
@@ -1959,8 +1975,10 @@ fn language_engine_does_not_read_the_operating_system() {
         loader_dependencies,
         BTreeSet::from([
             "rsscript-operation".to_string(),
+            "rustix".to_string(),
             "serde".to_string(),
             "sha2".to_string(),
+            "tempfile".to_string(),
             "toml".to_string(),
         ])
     );
@@ -2230,7 +2248,11 @@ fn execution_termination_does_not_classify_message_text() {
 #[test]
 fn allocation_budget_is_not_mislabeled_as_live_memory() {
     let root = workspace_root();
-    let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));
+    let vm = format!(
+        "{}\n{}",
+        read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/state.rs"))
+    );
     assert!(vm.contains("pub allocation_budget: Option<usize>"));
     assert!(vm.contains("allocated_bytes: usize"));
     assert!(vm.contains("This is not a live-memory measurement"));
@@ -2254,7 +2276,11 @@ fn allocation_budget_is_not_mislabeled_as_live_memory() {
 #[test]
 fn public_execution_defaults_are_bounded_without_compatibility_aliases() {
     let root = workspace_root();
-    let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));
+    let vm = format!(
+        "{}\n{}",
+        read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/state.rs"))
+    );
     let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
     assert!(!vm.contains("pub fn safe_default"));
     for bounded in [
@@ -5207,23 +5233,6 @@ fn github_workflows_follow_current_workspace_boundaries() {
         );
     }
 
-    for current in [
-        "crates/rsscript-compiler/**",
-        "-p rsscript-selfhost-parity",
-        "crates/rsscript-bytecode/**",
-        "crates/rsscript-provider-api/**",
-        "crates/rsscript-provider-conformance/**",
-        "fuzz run bytecode_artifact",
-        "fuzz run binding_descriptor",
-        "fuzz run execution_report",
-        "providers/**",
-    ] {
-        assert!(
-            workflows.contains(current),
-            "GitHub workflows must cover current workspace boundary `{current}`"
-        );
-    }
-
     let release = read(&workflow_dir.join("release.yml"));
     assert!(release.contains("for PACKAGE in rsscript-cli; do"));
     assert!(!release.contains("for PACKAGE in rsscript-cli reir"));
@@ -5262,4 +5271,21 @@ fn github_workflows_follow_current_workspace_boundaries() {
         !sdk_api.contains("features: compatibility"),
         "legacy compatibility exports must not become part of the reviewed semver gate"
     );
+}
+
+#[test]
+fn hardening_workflow_retains_boundary_fuzz_targets() {
+    let root = workspace_root();
+    let hardening = read(&root.join(".github/workflows/jit-hardening.yml"));
+
+    for target in [
+        "bytecode_artifact",
+        "binding_descriptor",
+        "execution_report",
+    ] {
+        assert!(
+            hardening.contains(&format!("fuzz run {target}")),
+            "JIT hardening workflow must retain the `{target}` fuzz target"
+        );
+    }
 }

@@ -168,11 +168,9 @@ impl RegVm {
             && self.limits.provider_call_budget.is_none()
     }
 
-    /// Whole-function/region native code can enforce source steps, cancellation,
-    /// and monotonic deadlines. Memory controls are decided per translated region:
-    /// scalar/read-only regions are exact no-ops for those meters, while OSR has a
-    /// transactional `List.push` charge path. Intrinsic/provider call counts still
-    /// belong exclusively to interpreter/host dispatch.
+    /// Native regions enforce preemption; intrinsic/provider budgets remain on
+    /// interpreter or host dispatch boundaries.
+    #[cfg(feature = "native-jit")]
     pub(super) fn native_preemption_controls_supported(&self) -> bool {
         self.limits.intrinsic_call_budget.is_none() && self.limits.provider_call_budget.is_none()
     }

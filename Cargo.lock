@@ -2162,8 +2162,10 @@ name = "rsscript-workspace-loader"
 version = "0.1.0"
 dependencies = [
  "rsscript-operation",
+ "rustix",
  "serde",
  "sha2",
+ "tempfile",
  "toml",
 ]
 

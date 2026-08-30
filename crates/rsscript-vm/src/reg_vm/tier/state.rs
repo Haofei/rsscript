@@ -214,7 +214,7 @@ impl JitState {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(feature = "native-jit", feature = "jit-speculation")))]
 mod tests {
     use super::*;
 

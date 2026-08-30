@@ -16,7 +16,8 @@ use rss_process_guard::{
 use rsscript_runner_protocol::{
     ExecutionOutcomeV2, ExecutionReportV2, MAX_RESPONSE_BYTES, RunnerLimitsV1, RunnerProfileV1,
     RunnerRequestV1, RunnerResponseV1, RunnerTerminationV1, VersionedExecutionReport, read_request,
-    read_response, validate_response_profile, write_request, write_response,
+    read_response, validate_response_artifact, validate_response_profile, write_request,
+    write_response,
 };
 #[cfg(feature = "native-jit")]
 use rsscript_sdk::experimental::native_jit::NativeJitOptions;
@@ -67,6 +68,7 @@ pub(crate) fn run_isolated(
             return ExitCode::from(2);
         }
     };
+    let expected_module_digest = bundle.provenance().module_digest.clone();
     let response = match invoke_runner(&request, &bundle) {
         Ok(response) => response,
         Err(error) => {
@@ -74,7 +76,7 @@ pub(crate) fn run_isolated(
             return ExitCode::from(2);
         }
     };
-    finish_response(response, json)
+    finish_response(response, &expected_module_digest, json)
 }
 
 pub(crate) fn run_trusted_in_process(
@@ -125,7 +127,7 @@ pub(crate) fn run_trusted_in_process(
     let report = serde_json::to_value(report)
         .and_then(serde_json::from_value::<ExecutionReportV2>)
         .expect("execution report matches the runner's typed v2 contract");
-    finish_report(report, json)
+    finish_report(report, admitted.module_digest(), json)
 }
 
 fn build_bundle(path: &str) -> Result<ArtifactBundle, String> {
@@ -641,12 +643,20 @@ fn profiled_registry(profile: RunnerProfileV1) -> Result<ProviderRegistry, Strin
     }
 }
 
-fn finish_response(response: RunnerResponseV1, json: bool) -> ExitCode {
+fn finish_response(
+    response: RunnerResponseV1,
+    expected_module_digest: &str,
+    json: bool,
+) -> ExitCode {
+    if let Err(error) = validate_response_artifact(&response, expected_module_digest) {
+        eprintln!("invalid runner response: {error}");
+        return ExitCode::from(1);
+    }
     match response.report {
         Some(VersionedExecutionReport::V2(report))
             if response.runner_termination == RunnerTerminationV1::Completed =>
         {
-            finish_report(report, json)
+            finish_report(report, expected_module_digest, json)
         }
         _ => {
             eprintln!(
@@ -659,7 +669,13 @@ fn finish_response(response: RunnerResponseV1, json: bool) -> ExitCode {
     }
 }
 
-fn finish_report(report: ExecutionReportV2, json: bool) -> ExitCode {
+fn finish_report(report: ExecutionReportV2, expected_module_digest: &str, json: bool) -> ExitCode {
+    if report.schema != rsscript_runner_protocol::EXECUTION_REPORT_SCHEMA_V2
+        || report.artifact_digest != expected_module_digest
+    {
+        eprintln!("execution report does not match the submitted Artifact");
+        return ExitCode::from(1);
+    }
     if json {
         println!(
             "{}",
@@ -673,9 +689,7 @@ fn finish_report(report: ExecutionReportV2, json: bool) -> ExitCode {
             ExecutionOutcomeV2::Failed { message, .. } => eprintln!("{message}"),
         }
     }
-    if report.schema == "rsscript.execution_report.v2"
-        && matches!(report.outcome, ExecutionOutcomeV2::Completed { .. })
-    {
+    if matches!(report.outcome, ExecutionOutcomeV2::Completed { .. }) {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)

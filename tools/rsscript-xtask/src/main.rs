@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![recursion_limit = "256"]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -1650,7 +1651,16 @@ mod tests {
                 "status": "entered",
                 "interpreter_ns": 100,
                 "cold_e2e_native_ns": 50,
+                "interpreter_samples_ns": [100, 101, 99, 100, 102, 98, 100, 101, 99, 100, 102, 98, 100, 101, 99, 100, 102, 98, 100, 101],
+                "cold_e2e_native_samples_ns": [50, 51, 49, 50, 52, 48, 50, 51, 49, 50, 52, 48, 50, 51, 49, 50, 52, 48, 50, 51],
+                "interpreter_mad_ns": 1,
+                "cold_e2e_native_mad_ns": 1,
+                "warm_native_instrumented_ns": 40,
                 "speedup": 2.0,
+                "translation_nanos": 2,
+                "validation_nanos": 2,
+                "codegen_nanos": 4,
+                "finalize_nanos": 2,
                 "compile_nanos": 10,
                 "resident_code_bytes": 128,
                 "native_calls": 1,

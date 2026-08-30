@@ -63,11 +63,12 @@ impl RegVm {
             }
             RegIntrinsic::BytesToUints => {
                 let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let values = value
-                    .iter()
-                    .map(|byte| VmValue::Int(i64::from(*byte)))
-                    .collect();
-                self.fresh_list(values)
+                self.ensure_memory_available(
+                    value.len().saturating_mul(std::mem::size_of::<i64>()),
+                )?;
+                self.fresh_list(TypedVec::Ints(
+                    value.iter().map(|byte| i64::from(*byte)).collect(),
+                ))
             }
             RegIntrinsic::BytesViewStartsWith => {
                 let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
