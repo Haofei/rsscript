@@ -169,9 +169,23 @@ evidence except `jit-tier0`, whose deadline is extended by ADR to 2027-02-28.
 
 ## Deadline 2 — experiments workspace (2026-12-31)
 
-Six surfaces (`aot-backend`, `aot-model`, `aot-runtime`, `artifact-store`,
-`reir-model`, `selfhost-parity`, `reir-review`). These are out of the immediate
-month but share the same procedure; they are addressed after the JIT wall.
+Seven surfaces (`aot-backend`, `aot-model`, `aot-runtime`,
+`artifact-store-integration`, `reir-model`, `selfhost-parity`,
+`reir-review-integration`). These share the same procedure.
+
+**DONE (2026-08-31) — all seven resolved Prove/retain (ADR 0231).** Ran each
+surface's named retention workload (`cargo test --workspace` in `experiments/`,
+`dev` container); all pass. None is dead code — every `removal_rule` protects a
+condition (differential evidence, an independently consumed model, conformance
+value, an integration boundary, or a regression-detecting research corpus) that
+is demonstrably still met, so no cut condition holds. `status` flipped
+`pending` → `proven` for all seven, evidence attached as
+`experiments/retention-evidence.json` (sha256-pinned). aot-backend is retained as
+the differential harness that feeds the SDK `native_jit_scorecard`;
+selfhost-parity (168 parity tests) still detects regressions. The two
+consumer-less surfaces (`artifact-store-integration`, `reir-review-integration`)
+are retained on their passing boundary/integration tests and flagged first to
+revisit if no consumer emerges by the next review — not cut on one measurement.
 
 ## Convergence with the module-partition backlog
 

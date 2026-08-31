@@ -154,14 +154,20 @@ const CASES: &[ScorecardCase] = &[
     ScorecardCase {
         name: "mailbox-ring",
         pass: "tier0/mailbox-ring",
-        workload: "mailbox",
+        // `struct` is the closest aot-jit-matrix.schema.json workload bucket for
+        // this struct/List/Option ring; the kernel is currently
+        // unsupported_by_canonical_compiler, but keep the value schema-valid so
+        // the matrix does not reject it if the lowering gap (ADR 0230) is closed.
+        workload: "struct",
         size: "60000",
         source: include_str!("../../../benchmarks/vm-jit/kernels/mailbox_ring_only.rss"),
     },
     ScorecardCase {
         name: "closure-dynamic",
         pass: "tier0/closure-dynamic",
-        workload: "closure_dynamic",
+        // `closure` is the matching schema workload bucket; see the mailbox-ring
+        // note above on why the value must stay in the schema enum.
+        workload: "closure",
         size: "200000",
         source: include_str!("../../../benchmarks/vm-jit/kernels/dynamic_closure_call.rss"),
     },

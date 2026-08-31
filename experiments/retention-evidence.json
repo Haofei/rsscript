@@ -1,0 +1,74 @@
+{
+  "schema": "rsscript.experiment_retention_evidence.v1",
+  "commit": "9db57648b4e7314c0deb999a50a01a9ffaa0e021",
+  "collected_at": "2026-08-31",
+  "workspace": "experiments",
+  "profile": "debug",
+  "runner": "cargo test --workspace (experiments), dev container linux/aarch64",
+  "note": "Retention evidence for the experiments-workspace surfaces (decision_by 2026-12-31). These are 0%-threshold conformance/integration/differential surfaces, not speed surfaces; the evidence is that each surface's named retention workload runs and passes, demonstrating the conformance/differential/integration value its removal_rule protects. No surface's cut condition (no consumer AND no demonstrable value) holds.",
+  "surfaces": [
+    {
+      "id": "aot-backend",
+      "package": "rsscript-aot-backend",
+      "workload": "aot_jit_matrix",
+      "verdict": "proven",
+      "value": "differential",
+      "result": "lib unit tests pass (12); the aot_jit_matrix harness emits the rsscript.aot_jit_matrix.v1 differential records consumed by the SDK native_jit_scorecard (interpreter/jit/aot parity). Retained as the benchmark/differential harness per removal_rule.",
+      "test_pass_count": 12
+    },
+    {
+      "id": "aot-model",
+      "package": "rsscript-aot-model",
+      "workload": "source_map_contract_round_trips",
+      "verdict": "proven",
+      "value": "versioned-model",
+      "result": "source_map_contract_round_trips passes; the model is independently consumed by rsscript-aot-backend and rsscript-aot-runtime, so it remains an independently consumed versioned model rather than being merged.",
+      "test_pass_count": 5
+    },
+    {
+      "id": "aot-runtime",
+      "package": "rsscript-aot-runtime",
+      "workload": "runtime_services_execute_and_shutdown_independently_in_parallel",
+      "verdict": "proven",
+      "value": "differential",
+      "result": "runtime_services_execute_and_shutdown_independently_in_parallel passes; standalone-runtime parallel execute/shutdown semantics are exercised (76 unit tests pass).",
+      "test_pass_count": 76
+    },
+    {
+      "id": "artifact-store-integration",
+      "package": "rsscript-artifact-store",
+      "workload": "bounded_read_rejects_oversized_artifact",
+      "verdict": "proven",
+      "value": "integration-boundary",
+      "result": "bounded_read_rejects_oversized_artifact passes (12 unit tests); the bounded-read security boundary over persisted artifacts is exercised. No supported project/CLI consumer yet; retained on the passing boundary test, to be revisited if no consumer emerges by the next review.",
+      "test_pass_count": 12
+    },
+    {
+      "id": "reir-model",
+      "package": "reir",
+      "workload": "reir_tests",
+      "verdict": "proven",
+      "value": "conformance",
+      "result": "reir_tests passes (28), plus lib (62), bin (19), adapter_invariants (6), public_api (3), report_pr_cli (1). Independent conformance value demonstrated.",
+      "test_pass_count": 28
+    },
+    {
+      "id": "selfhost-parity",
+      "package": "rsscript-selfhost-parity",
+      "workload": "parser_parity_tiny_sample",
+      "verdict": "proven",
+      "value": "research-differential",
+      "result": "parser_parity_tiny_sample passes; the self-hosted checker corpus runs 168 passing parity tests (6 ignored). It still detects regressions beyond the canonical Rust frontend, so its removal_rule cut condition does not hold. Governed by ADR 0133/0135 as an explicit Research feature.",
+      "test_pass_count": 168
+    },
+    {
+      "id": "reir-review-integration",
+      "package": "rsscript-review-reir",
+      "workload": "reir_tests",
+      "verdict": "proven",
+      "value": "integration",
+      "result": "public review-integration facade passes (2 unit tests); isolated from compilation validity. No external consumer yet; retained on the passing integration test, to be revisited if no consumer emerges by the next review.",
+      "test_pass_count": 2
+    }
+  ]
+}
