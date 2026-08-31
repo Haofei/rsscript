@@ -11,6 +11,7 @@ mod inlining;
 mod intrinsics;
 mod region_optimization;
 mod scalar_replacement;
+mod scalar_replacement_struct;
 mod semantics;
 mod virtual_objects;
 
@@ -30,6 +31,7 @@ pub(in crate::reg_vm) use inlining::*;
 pub(in crate::reg_vm) use intrinsics::*;
 pub(in crate::reg_vm) use region_optimization::*;
 pub(in crate::reg_vm) use scalar_replacement::*;
+pub(in crate::reg_vm) use scalar_replacement_struct::*;
 pub(in crate::reg_vm) use semantics::*;
 pub(in crate::reg_vm) use virtual_objects::*;
 
