@@ -16,15 +16,6 @@ decision_by = "2026-12-31"
 tracking = "module-partition-backlog"
 
 [[allow]]
-path = "crates/rsscript-lowering/src/mir.rs"
-max_bytes = 159000
-reason = "Typed HIR-to-MIR lowering must be split while preserving diagnostic and source mappings."
-owner = "@Haofei"
-target_bytes = 60000
-decision_by = "2026-12-31"
-tracking = "module-partition-backlog"
-
-[[allow]]
 path = "crates/rsscript-mir/src/lib.rs"
 max_bytes = 147000
 reason = "MIR model and verifier are a single versioned contract pending private-module extraction."
