@@ -7,15 +7,6 @@ hard_bytes = 80000
 # partitioning proceeds. Generated files are not scanned.
 
 [[allow]]
-path = "crates/rsscript-bytecode/src/lib.rs"
-max_bytes = 131000
-reason = "Versioned codec and verifier remain one audited wire boundary pending internal partitioning."
-owner = "@Haofei"
-target_bytes = 60000
-decision_by = "2026-12-31"
-tracking = "module-partition-backlog"
-
-[[allow]]
 path = "crates/rsscript-codegen-vm/src/lib.rs"
 max_bytes = 114000
 reason = "VM code generation is being partitioned without changing emitted Artifact bytes."
