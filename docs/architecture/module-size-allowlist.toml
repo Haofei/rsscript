@@ -7,15 +7,6 @@ hard_bytes = 80000
 # partitioning proceeds. Generated files are not scanned.
 
 [[allow]]
-path = "crates/rsscript-codegen-vm/src/lib.rs"
-max_bytes = 114000
-reason = "VM code generation is being partitioned without changing emitted Artifact bytes."
-owner = "@Haofei"
-target_bytes = 60000
-decision_by = "2026-12-31"
-tracking = "module-partition-backlog"
-
-[[allow]]
 path = "experiments/selfhost-parity/src/selfhost_parity/checker.rs"
 max_bytes = 82000
 reason = "Research-only self-host checker corpus is isolated in the experiments workspace pending partitioning."
