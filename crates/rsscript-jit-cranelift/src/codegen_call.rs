@@ -79,15 +79,6 @@ pub(crate) fn native_recursion_frame_bytes_estimate(program: &JitFunction) -> i6
     let regs = program.n_regs as i64;
     let explicit_slots = program.code.iter().fold(0_i64, |total, instr| {
         let words: i64 = match instr {
-            #[cfg(feature = "recursion")]
-            JitInstr::CallSelf { args, .. } => {
-                (args.len() as i64).saturating_mul(2).saturating_add(1)
-            }
-            #[cfg(feature = "recursion")]
-            JitInstr::CallGroup { args, .. } => (args.len() as i64)
-                .saturating_mul(2)
-                .saturating_add(regs)
-                .saturating_add(3),
             _ => 0,
         };
         total.saturating_add(words.saturating_mul(SLOT_BYTES))

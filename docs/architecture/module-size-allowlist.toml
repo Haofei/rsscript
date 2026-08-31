@@ -35,17 +35,8 @@ tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-jit-cranelift/src/codegen.rs"
-max_bytes = 108000
+max_bytes = 90000
 reason = "Cranelift lowering debt; executable-memory and ABI review remains centralized."
-owner = "@Haofei"
-target_bytes = 60000
-decision_by = "2026-12-31"
-tracking = "module-partition-backlog"
-
-[[allow]]
-path = "crates/rsscript-jit-cranelift/src/module.rs"
-max_bytes = 87000
-reason = "Native module lifecycle debt guarded by JIT differential and hardening tests."
 owner = "@Haofei"
 target_bytes = 60000
 decision_by = "2026-12-31"
@@ -98,7 +89,7 @@ tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-vm/src/reg_vm/mod.rs"
-max_bytes = 250000
+max_bytes = 246000
 reason = "Register VM root still owns execution composition; intrinsic metadata and native text helpers have moved to private modules."
 owner = "@Haofei"
 target_bytes = 60000
@@ -107,7 +98,7 @@ tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-vm/src/reg_vm/native/passes/region_optimization.rs"
-max_bytes = 127000
+max_bytes = 116000
 reason = "Region optimization debt is feature-gated; Bytes folding has moved to a private pass module."
 owner = "@Haofei"
 target_bytes = 60000
@@ -125,7 +116,7 @@ tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-vm/src/reg_vm/native/translate.rs"
-max_bytes = 178000
+max_bytes = 172000
 reason = "Native translation pipeline extraction must preserve origin/resume/source-cost contracts."
 owner = "@Haofei"
 target_bytes = 60000
@@ -134,7 +125,7 @@ tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-vm/src/reg_vm/tier.rs"
-max_bytes = 194000
+max_bytes = 187000
 reason = "Whole/OSR/continuation controller debt remains behind the opt-in native engine."
 owner = "@Haofei"
 target_bytes = 60000

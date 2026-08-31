@@ -21,8 +21,6 @@ impl RegVm {
         let mut ip = 0usize;
         while let Some(instr) = func.code.get(ip) {
             self.tick()?;
-            #[cfg(feature = "jit-speculation")]
-            let instr_ip = ip;
             ip += 1;
             // Cross-function call: eligibility proved the callee cannot suspend and
             // the call graph is acyclic, so drive it to completion on a fresh frame
@@ -66,9 +64,6 @@ impl RegVm {
                 instr,
                 base,
                 &mut ip,
-                #[cfg(feature = "jit-speculation")]
-                Some((func, instr_ip)),
-                #[cfg(not(feature = "jit-speculation"))]
                 None,
             )? {
                 PureStep::Next => {}
@@ -90,16 +85,11 @@ impl RegVm {
         let mut ip = 0usize;
         while let Some(instr) = func.code.get(ip) {
             self.tick()?;
-            #[cfg(feature = "jit-speculation")]
-            let instr_ip = ip;
             ip += 1;
             match self.try_exec_pure(
                 instr,
                 base,
                 &mut ip,
-                #[cfg(feature = "jit-speculation")]
-                Some((func, instr_ip)),
-                #[cfg(not(feature = "jit-speculation"))]
                 None,
             )? {
                 PureStep::Next => {}
@@ -114,185 +104,8 @@ impl RegVm {
         Ok(VmValue::Unit)
     }
 
-    /// Native self-recursion (native-call-ABI slice 3; generalized in Phase 2):
-    /// compile `func` with `CallSelf` via the *general* native subset and run it
-    /// natively for SCALAR args (Int/Bool/Float). Marshalling/wrapping is driven by
-    /// the compiled parameter/return `NativeTy`s, so a Float (or match/heap-read-bodied)
-    /// self-recursive function runs natively — not just the Int-arith whitelist.
-    /// Returns the wrapped result on a clean completion, or `None` to fall back
-    /// (compile failure, non-scalar param/return, deopt incl. the entry depth-cap
-    /// bail that keeps deep recursion off the host stack). Compiled once and cached.
-    #[cfg(feature = "jit-recursion-experimental")]
-    fn try_native_self_recursive(
-        &mut self,
-        unit: &RegUnit,
-        function_id: usize,
-        func: &RegFunction,
-        caller_base: usize,
-        args: &[usize],
-    ) -> Option<VmValue> {
-        if !self.native_limits_unarmed() || self.limits.max_depth != DEFAULT_MAX_DEPTH {
-            return None;
-        }
-        let key = func.ordinal;
-        let profile = self.jit_state.profile(func);
-        let call_count = self.jit_state.call_count(func);
-        let verified_facts = Rc::clone(self.native.as_ref()?.verified_facts.as_ref()?);
-        let function_facts = verified_facts.function(function_id)?;
-        let (id, param_tys, ret) = {
-            let native = self.native.as_mut()?;
-            if !native.allow_recursive_calls {
-                return None;
-            }
-            // Deopt-stress / forced-bail modes run the scalar/interpreter path so the
-            // differential stress backends exercise the always-correct fallback.
-            if native.force_bail || native.forced_safepoint.is_some() || native.force_all_safepoints
-            {
-                return None;
-            }
-            match native.self_recursive_native.get(&key) {
-                Some(cached) => cached.clone()?,
-                None => {
-                    let self_call_sites: std::collections::HashSet<usize> = func
-                        .code
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(ip, instr)| {
-                            matches!(
-                                instr,
-                                RegInstr::CallKnown { function, mut_args, .. }
-                                    if *function == function_id && mut_args.is_empty()
-                            )
-                            .then_some(ip)
-                        })
-                        .collect();
-                    // Not self-recursive ⇒ this path doesn't apply (cheap negative
-                    // cache; avoids attempting the heavy translate on ordinary calls).
-                    let compiled = if self_call_sites.is_empty() {
-                        None
-                    } else {
-                        translate_to_native_jit_with_calls(
-                            unit,
-                            func,
-                            function_facts,
-                            NativeCallTranslationContext {
-                                profile,
-                                call_count,
-                                compiled_callees: &std::collections::HashMap::new(),
-                                self_call_sites: &self_call_sites,
-                                group_call_sites: &std::collections::HashMap::new(),
-                            },
-                        )
-                        .and_then(
-                            |NativeTranslation {
-                                 jit_fn,
-                                 return_ty: ret,
-                                 param_tys,
-                                 string_literals: _literals,
-                                 precise_resume_safe: _precise,
-                             }| {
-                                // Scalar-only ABI: params and return must be i64/f64
-                                // scalars (Int/Bool/Float). Heap (Handle) params/returns
-                                // route through the fallback — their cross-call
-                                // marshalling/reconstruction is out of scope here.
-                                let is_scalar = |t: &NativeTy| {
-                                    matches!(t, NativeTy::Int | NativeTy::Bool | NativeTy::Float)
-                                };
-                                if !is_scalar(&ret) || !param_tys.iter().all(is_scalar) {
-                                    return None;
-                                }
-                                let admission =
-                                    begin_native_compile(native, 1, NativeCodeTier::Baseline)?;
-                                match native.baseline_module.compile(&jit_fn) {
-                                    Ok(id) => {
-                                        if finish_native_compile(
-                                            native,
-                                            admission,
-                                            &[id],
-                                            NativeCodeTier::Baseline,
-                                        ) {
-                                            record_native_compile_stats(
-                                                native,
-                                                id,
-                                                &jit_fn,
-                                                NativeCodeTier::Baseline,
-                                            );
-                                            Some((id, param_tys, ret))
-                                        } else {
-                                            None
-                                        }
-                                    }
-                                    Err(_) => {
-                                        finish_native_compile_failure(native, admission);
-                                        None
-                                    }
-                                }
-                            },
-                        )
-                    };
-                    native.self_recursive_native.insert(key, compiled.clone());
-                    compiled?
-                }
-            }
-        };
-        if param_tys.len() != args.len() {
-            return None;
-        }
-        // Marshal scalar args to i64 slots, driven by the compiled parameter type
-        // (Float reinterpreted via `to_bits`; an Int value for a Float param is
-        // converted first) — identical to the general native call marshalling.
-        let mut int_args = Vec::with_capacity(args.len());
-        for (&arg, pty) in args.iter().zip(param_tys.iter()) {
-            let bits = match (pty, self.reg(caller_base + arg)) {
-                (NativeTy::Float, VmValue::Float(f)) => f.to_bits() as i64,
-                (NativeTy::Float, VmValue::Int(i)) => (*i as f64).to_bits() as i64,
-                (_, VmValue::Int(i)) => *i,
-                (_, VmValue::Bool(b)) => i64::from(*b),
-                (_, VmValue::Float(f)) => f.to_bits() as i64,
-                _ => return None,
-            };
-            int_args.push(bits);
-        }
-        let lens = vec![0i64; int_args.len()];
-        let mut heap_tx = JitNativeCallFrame::begin(self.limits.deadline);
-        let initial_depth = self.frames.len().saturating_add(1);
-        let outcome = {
-            let native = self.native.as_ref()?;
-            native.baseline_module.call_with_host_ctx_at_depth(
-                id,
-                &int_args,
-                &lens,
-                heap_tx.host_ctx(),
-                &mut [],
-                vm_jit::LogicalCallDepth {
-                    current: initial_depth,
-                    limit: self.limits.max_depth,
-                },
-            )
-        };
-        match outcome {
-            vm_jit::NativeOutcome::Completed(bits) => {
-                heap_tx.commit_scalar_with_writebacks(&[]);
-                if let Some(native) = self.native.as_mut()
-                    && native.collect_stats
-                {
-                    native.stats.native_calls += 1;
-                    native.stats.baseline_calls += 1;
-                }
-                Some(match ret {
-                    NativeTy::Float => VmValue::Float(f64::from_bits(bits as u64)),
-                    NativeTy::Bool => VmValue::Bool(bits != 0),
-                    _ => VmValue::Int(bits),
-                })
-            }
-            _ => {
-                heap_tx.abort();
-                None
-            }
-        }
-    }
 
-    #[cfg(all(feature = "native-jit", not(feature = "jit-recursion-experimental")))]
+    #[cfg(feature = "native-jit")]
     fn try_native_self_recursive(
         &mut self,
         _unit: &RegUnit,
@@ -304,208 +117,8 @@ impl RegVm {
         None
     }
 
-    /// Native mutual recursion (native-call-ABI slice 4; generalized to scalar Float):
-    /// if `function_id` is part of a mutually-recursive cycle of scalar functions,
-    /// compile the whole group together (declare the cycle, then define each) and
-    /// dispatch the called member natively. Arg/return marshalling follows each
-    /// member's compiled scalar parameter/return `NativeTy`s (Int/Bool/Float — Float
-    /// via `to_bits`/`from_bits`), exactly like `try_native_self_recursive`. Returns
-    /// the result on a clean completion, or `None` to fall back to the interpreter
-    /// (not eligible, non-scalar param/return, or a deopt incl. the depth-cap bail).
-    /// The group is compiled once and every member cached.
-    #[cfg(feature = "jit-recursion-experimental")]
-    pub(in crate::reg_vm) fn try_native_mutual_recursive_int(
-        &mut self,
-        unit: &RegUnit,
-        function_id: usize,
-        caller_base: usize,
-        args: &[usize],
-    ) -> Option<VmValue> {
-        if !self.native_limits_unarmed() || self.limits.max_depth != DEFAULT_MAX_DEPTH {
-            return None;
-        }
-        let func = unit.functions.get(function_id)?;
-        if args.len() != func.params {
-            return None;
-        }
-        let key = func.ordinal;
-        let verified_facts = Rc::clone(self.native.as_ref()?.verified_facts.as_ref()?);
-        // Resolve the called member's native id, its parameter types (to marshal each
-        // scalar arg) and its return type (to wrap the i64 result). Cached per member;
-        // compiling any member compiles the whole group.
-        let (id, param_tys, ret) = {
-            let native = self.native.as_mut()?;
-            if !native.allow_recursive_calls {
-                return None;
-            }
-            if native.force_bail || native.forced_safepoint.is_some() || native.force_all_safepoints
-            {
-                return None;
-            }
-            if let Some(cached) = native.mutual_recursive_native.get(&key) {
-                cached.clone()?
-            } else {
-                let group = native_recursive_group(unit, function_id);
-                let is_scalar =
-                    |t: &NativeTy| matches!(t, NativeTy::Int | NativeTy::Bool | NativeTy::Float);
-                let compiled = group.as_ref().and_then(|scc| {
-                    let index_of: std::collections::HashMap<usize, u32> = scc
-                        .iter()
-                        .enumerate()
-                        .map(|(i, &fid)| (fid, i as u32))
-                        .collect();
-                    let mut jit_funcs = Vec::with_capacity(scc.len());
-                    let mut member_sigs = Vec::with_capacity(scc.len());
-                    for &member in scc {
-                        let mfunc = unit.functions.get(member)?;
-                        let group_call_sites: std::collections::HashMap<usize, u32> = mfunc
-                            .code
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(ip, instr)| match instr {
-                                RegInstr::CallKnown {
-                                    function, mut_args, ..
-                                } if mut_args.is_empty() && index_of.contains_key(function) => {
-                                    Some((ip, index_of[function]))
-                                }
-                                _ => None,
-                            })
-                            .collect();
-                        let NativeTranslation {
-                            jit_fn,
-                            return_ty: ret,
-                            param_tys,
-                            string_literals: _l,
-                            precise_resume_safe: _pr,
-                        } = translate_to_native_jit_with_calls(
-                            unit,
-                            mfunc,
-                            verified_facts.function(member)?,
-                            NativeCallTranslationContext {
-                                profile: self.jit_state.profile(mfunc),
-                                call_count: self.jit_state.call_count(mfunc),
-                                compiled_callees: &std::collections::HashMap::new(),
-                                self_call_sites: &std::collections::HashSet::new(),
-                                group_call_sites: &group_call_sites,
-                            },
-                        )?;
-                        // Scalar-only ABI: params and return must be Int/Bool/Float
-                        // (each wraps to/from an i64 slot). Heap params/returns decline.
-                        if !is_scalar(&ret) || !param_tys.iter().all(is_scalar) {
-                            return None;
-                        }
-                        member_sigs.push((param_tys, ret));
-                        jit_funcs.push(jit_fn);
-                    }
-                    let admission =
-                        begin_native_compile(native, jit_funcs.len(), NativeCodeTier::Baseline)?;
-                    let ids = match native.baseline_module.compile_recursive_group(&jit_funcs) {
-                        Ok(ids) => ids,
-                        Err(_) => {
-                            finish_native_compile_failure(native, admission);
-                            return None;
-                        }
-                    };
-                    if !finish_native_compile(native, admission, &ids, NativeCodeTier::Baseline) {
-                        return None;
-                    }
-                    for (&id, jit_fn) in ids.iter().zip(&jit_funcs) {
-                        record_native_compile_stats(native, id, jit_fn, NativeCodeTier::Baseline);
-                    }
-                    Some((ids, member_sigs))
-                });
-                match (group, compiled) {
-                    (Some(scc), Some((ids, member_sigs))) if ids.len() == scc.len() => {
-                        let mut mine = None;
-                        for (i, &member) in scc.iter().enumerate() {
-                            let mkey = unit.functions[member].ordinal;
-                            let (param_tys, ret) = member_sigs[i].clone();
-                            let entry = (ids[i], param_tys, ret);
-                            native
-                                .mutual_recursive_native
-                                .insert(mkey, Some(entry.clone()));
-                            if member == function_id {
-                                mine = Some(entry);
-                            }
-                        }
-                        mine?
-                    }
-                    (group, _) => {
-                        // Cache ineligibility (for the whole detected group, or this key).
-                        match group {
-                            Some(scc) => {
-                                for member in scc {
-                                    let mkey = unit.functions[member].ordinal;
-                                    native.mutual_recursive_native.insert(mkey, None);
-                                }
-                            }
-                            None => {
-                                native.mutual_recursive_native.insert(key, None);
-                            }
-                        }
-                        return None;
-                    }
-                }
-            }
-        };
-        if param_tys.len() != args.len() {
-            return None;
-        }
-        let mut int_args = Vec::with_capacity(args.len());
-        for (&arg, pty) in args.iter().zip(param_tys.iter()) {
-            // Scalar value args marshal to an i64 slot, driven by the compiled
-            // parameter type (Float reinterpreted via `to_bits`; an Int value for a
-            // Float param converted first) — identical to the self-recursion path.
-            let bits = match (pty, self.reg(caller_base + arg)) {
-                (NativeTy::Float, VmValue::Float(f)) => f.to_bits() as i64,
-                (NativeTy::Float, VmValue::Int(i)) => (*i as f64).to_bits() as i64,
-                (_, VmValue::Int(i)) => *i,
-                (_, VmValue::Bool(b)) => i64::from(*b),
-                (_, VmValue::Float(f)) => f.to_bits() as i64,
-                _ => return None,
-            };
-            int_args.push(bits);
-        }
-        let lens = vec![0i64; int_args.len()];
-        let mut heap_tx = JitNativeCallFrame::begin(self.limits.deadline);
-        let initial_depth = self.frames.len().saturating_add(1);
-        let outcome = {
-            let native = self.native.as_ref()?;
-            native.baseline_module.call_with_host_ctx_at_depth(
-                id,
-                &int_args,
-                &lens,
-                heap_tx.host_ctx(),
-                &mut [],
-                vm_jit::LogicalCallDepth {
-                    current: initial_depth,
-                    limit: self.limits.max_depth,
-                },
-            )
-        };
-        match outcome {
-            vm_jit::NativeOutcome::Completed(bits) => {
-                heap_tx.commit_scalar_with_writebacks(&[]);
-                if let Some(native) = self.native.as_mut()
-                    && native.collect_stats
-                {
-                    native.stats.native_calls += 1;
-                    native.stats.baseline_calls += 1;
-                }
-                Some(match ret {
-                    NativeTy::Float => VmValue::Float(f64::from_bits(bits as u64)),
-                    NativeTy::Bool => VmValue::Bool(bits != 0),
-                    _ => VmValue::Int(bits),
-                })
-            }
-            _ => {
-                heap_tx.abort();
-                None
-            }
-        }
-    }
 
-    #[cfg(all(feature = "native-jit", not(feature = "jit-recursion-experimental")))]
+    #[cfg(feature = "native-jit")]
     pub(in crate::reg_vm) fn try_native_mutual_recursive_int(
         &mut self,
         _unit: &RegUnit,
@@ -697,11 +310,6 @@ impl RegVm {
                     target,
                 } => {
                     let taken = (stack[base + *cond] != 0) == *expected;
-                    #[cfg(feature = "jit-speculation")]
-                    if self.native.is_some() {
-                        self.jit_state
-                            .record_branch_site(&func, frame.ip - 1, taken);
-                    }
                     if taken {
                         frames.last_mut().expect("active scalar frame").ip = *target;
                     }
@@ -715,11 +323,6 @@ impl RegVm {
                 } => {
                     let taken =
                         eval_int_compare(*op, stack[base + *lhs], stack[base + *rhs]) == *expected;
-                    #[cfg(feature = "jit-speculation")]
-                    if self.native.is_some() {
-                        self.jit_state
-                            .record_branch_site(&func, frame.ip - 1, taken);
-                    }
                     if taken {
                         frames.last_mut().expect("active scalar frame").ip = *target;
                     }

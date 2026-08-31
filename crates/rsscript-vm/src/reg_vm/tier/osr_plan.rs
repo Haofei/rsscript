@@ -40,7 +40,7 @@ pub(super) fn osr_materialize_recipe_is_supported(
         OsrMaterializeValue::OptionSome(payload) => {
             osr_materialize_recipe_is_supported(payload, reg_types, depth + 1, nodes)
         }
-        #[cfg(any(test, feature = "jit-struct-sr-experimental"))]
+        #[cfg(test)]
         OsrMaterializeValue::Struct { fields, .. } => fields
             .iter()
             .all(|field| osr_materialize_recipe_is_supported(field, reg_types, depth + 1, nodes)),
@@ -91,7 +91,7 @@ pub(super) fn osr_materialize_value(
             depth + 1,
             nodes,
         )?)),
-        #[cfg(any(test, feature = "jit-struct-sr-experimental"))]
+        #[cfg(test)]
         OsrMaterializeValue::Struct { layout, fields } => {
             let fields = fields
                 .iter()

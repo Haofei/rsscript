@@ -35,7 +35,8 @@ hidden in machine code.
 - Executable memory is reserved from a shared hard budget before code generation.
 - Finalized functions follow compile-once-publish: a completed function is made
   reachable, and crossing a soft admission limit closes later compilation.
-- Non-tail native recursion is disabled unless the trusted host opts in explicitly.
+- Non-tail native recursion is not supported; recursive call graphs run on the
+  interpreter.
 - Mutable flat-buffer arguments require one unique proof per ABI entry. A mutable
   proof cannot authorize a read-only or second mutable entry.
 - Process environment variables do not configure library behavior. Hosts pass
@@ -77,11 +78,10 @@ hidden in machine code.
   production execution defaults detailed telemetry off, and the default enforcing
   cost model does not pay that per-instruction cost. `NativeJitOptions::diagnostic`
   or `with_telemetry` is the explicit opt-in for timings and counters.
-- Branch and dynamic-call feedback exists only under the VM-only
-  `jit-speculation` research feature. The stable `native-jit` build contains no
-  profile maps or profile counters and performs no feedback write on interpreted
-  branches or calls. Research feedback records the branch decision already
-  computed by the interpreter; it may not evaluate the condition a second time.
+- Branch and dynamic-call feedback is not collected. The profile-guided
+  speculation surface was removed after its controlled workloads failed the
+  retention threshold, so the engine holds no profile maps or counters and
+  performs no feedback write on interpreted branches or calls.
 - Production OSR distinguishes threshold-driven automatic triggering from eager
   first-header triggering. Automatic OSR is enabled by default; eager OSR is off
   by default and reserved for explicit differential or diagnostic execution.
@@ -151,9 +151,9 @@ Optimization passes may not change observable outcomes, output, Provider calls,
 heap-visible mutations, cleanup, budget accounting, or deoptimization resume
 state. Differential tests against the interpreter enforce these invariants.
 
-Profile-guided closure PIC and branch-side-exit speculation are excluded from the
-stable SDK path. They remain behind the VM-only `jit-speculation` research feature
-until a canonical compiler workload demonstrates a repeatable end-to-end benefit.
+Profile-guided closure PIC and branch-side-exit speculation were removed after
+their controlled workloads failed to demonstrate a repeatable end-to-end benefit
+under the retention rule; they are no longer part of the engine.
 The evaluation-local function-state table owns the program identity once and uses
 stable ordinals to index a dense function-state vector; program digests are not
 cloned into per-function lookup keys.
@@ -206,17 +206,14 @@ twenty controlled samples, and a repeatable 15% end-to-end gain. The scorecard
 prints both scalar-unroll and SIMD candidate counts so a missing implementation
 or missing workload is visible rather than reported as a speedup.
 
-Closure speculation remains a runnable research implementation behind
-`jit-speculation`, with all-feature differential tests and dedicated scorecard
-cases. It is not compiled into the ordinary SDK `native-jit` feature. Promotion
-requires controlled-hardware end-to-end evidence in addition to differential
-correctness; a microbenchmark-only improvement is insufficient.
+Closure speculation was removed after its controlled scorecard workloads
+(`profile-closure-pic`, `profile-branch-cold`) failed to clear the retention
+threshold; it is no longer a runnable surface.
 
-Nested and loop-carried struct scalar replacement is retained for research behind
-the VM-only `jit-struct-sr-experimental` feature. The ordinary SDK `native-jit`
-path leaves those aggregates unchanged and fails closed to the verified
-interpreter. Re-entry into the supported baseline requires canonical workload
-evidence under the benchmark retention rule.
+Nested and loop-carried struct scalar replacement was likewise removed: the
+canonical `native-struct-sr` workload ran net-negative against the interpreter,
+and the native path already left those aggregates unchanged and fell closed to
+the verified interpreter.
 
 The Cranelift engine crate is not independently published. Its public root exposes
 only the VM-facing engine, validated IR, typed options/outcomes, host-helper
@@ -236,12 +233,12 @@ deopt maps expose the explicit source/resume positions to the VM.
 
 ## Native recursion
 
-Tail recursion may be lowered to a loop. Non-tail self or group recursion uses the
-host stack and therefore requires both the VM-only
-`jit-recursion-experimental` feature and explicit trusted-host opt-in; it is not
-available through the stable SDK. It remains experimental until implemented with
-an explicit frame stack, a trampoline, or a target-backed live stack-limit check.
-Static frame estimates are admission heuristics, not a hard safety proof.
+Tail recursion may be lowered to a loop. Non-tail self or group recursion would
+use the host stack and is not supported: the native-recursion surface was removed
+because its only stack boundary was a static frame estimate (an admission
+heuristic, not a hard safety proof). Recursive call graphs run on the interpreter.
+Re-introduction would require an explicit frame stack, a trampoline, or a
+target-backed live stack-limit check.
 
 ## Telemetry
 
@@ -260,8 +257,8 @@ code; guard pages and canary/boundary fixtures cover direct native memory access
 
 The stable retention set is baseline scalar/flat-data execution, native leaf-call
 chains, transactional helpers, precise deopt, and the Option/Result/Variant scalar
-replacement paths that enter on the canonical scorecard. Speculation and non-tail
-native recursion remain research features; only the alias-gated read-only LICM
-subset is retained in production. A local scorecard
+replacement paths that enter on the canonical scorecard. Speculation, non-tail
+native recursion, and struct scalar replacement were removed after failing the
+retention rule; the alias-gated read-only LICM subset is retained in production. A local scorecard
 run is diagnostic only; timings become a compatibility or release signal only
 after a controlled-hardware baseline is checked in with machine/toolchain metadata.

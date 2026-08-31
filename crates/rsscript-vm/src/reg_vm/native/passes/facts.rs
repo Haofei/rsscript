@@ -192,10 +192,6 @@ fn native_heap_provenance_transfer(
         vm_jit::JitInstr::CallNative { dst, .. } => {
             set(facts, *dst, NativeFact::Unknown);
         }
-        #[cfg(feature = "jit-recursion-experimental")]
-        vm_jit::JitInstr::CallSelf { dst, .. } | vm_jit::JitInstr::CallGroup { dst, .. } => {
-            set(facts, *dst, NativeFact::Unknown);
-        }
         _ => {
             if let Some(dst) = native_jit_heap_fact_dst(instr) {
                 set(facts, dst, NativeFact::Unknown);
@@ -780,60 +776,7 @@ impl NativeRegionAnalysis {
         self.liveness.live_out(ip, reg)
     }
 
-    #[cfg(feature = "jit-speculation")]
-    pub(in crate::reg_vm) fn profile_guidance(
-        &self,
-        code: &[RegInstr],
-        profile: &FunctionProfile,
-        ip_map: &[usize],
-    ) -> NativeProfileGuidance {
-        let mut cold_blocks = std::collections::BTreeSet::new();
-        let mut hot_branch_edges = std::collections::HashMap::new();
-        for ip in self.liveness.cfg.reachable_ips() {
-            let Some(&original_ip) = ip_map.get(ip) else {
-                continue;
-            };
-            let Some(hot_target) = profile
-                .branch_feedback(original_ip)
-                .and_then(BranchFeedback::hot_edge)
-            else {
-                continue;
-            };
-            let (target, hot_ip) = match code.get(ip) {
-                Some(RegInstr::JumpIfBool { target, .. })
-                | Some(RegInstr::JumpIfIntCompare { target, .. }) => {
-                    if hot_target {
-                        (*target, *target)
-                    } else {
-                        (*target, ip + 1)
-                    }
-                }
-                _ => continue,
-            };
-            let cold_ip = if hot_target { ip + 1 } else { target };
-            let Some(successors) = self.liveness.cfg.successors(ip) else {
-                continue;
-            };
-            if successors.contains(&hot_ip) && successors.contains(&cold_ip) {
-                hot_branch_edges.insert(ip, hot_target);
-                cold_blocks.insert(cold_ip as u32);
-            }
-        }
-        NativeProfileGuidance {
-            cold_blocks: cold_blocks.into_iter().collect(),
-            hot_branch_edges,
-        }
-    }
 
-    #[cfg(feature = "jit-speculation")]
-    pub(in crate::reg_vm) fn has_reachable_conditional_branch(&self, code: &[RegInstr]) -> bool {
-        self.liveness.cfg.reachable_ips().into_iter().any(|ip| {
-            matches!(
-                code.get(ip),
-                Some(RegInstr::JumpIfBool { .. } | RegInstr::JumpIfIntCompare { .. })
-            )
-        })
-    }
 
     pub(in crate::reg_vm) fn reachable_mask(&self) -> Vec<bool> {
         self.liveness.cfg.reachable_mask()
@@ -1003,59 +946,9 @@ impl NativeRegionAnalysis {
         Some(())
     }
 
-    #[cfg(feature = "jit-speculation")]
-    fn reachable_defs_closed_under_moves(
-        &self,
-        code: &[RegInstr],
-        mut seed_dst: impl FnMut(&RegInstr) -> Option<usize>,
-    ) -> Option<Vec<bool>> {
-        let mut mask = vec![false; self.n_regs];
-        for ip in self.values.cfg.reachable_ips() {
-            if let Some(dst) = seed_dst(&code[ip]) {
-                if dst >= self.n_regs {
-                    return None;
-                }
-                mask[dst] = true;
-            }
-        }
-        self.close_reachable_move_aliases(code, &mut mask)?;
-        Some(mask)
-    }
 
-    #[cfg(feature = "jit-speculation")]
-    pub(super) fn reachable_heap_read_defs_closed_under_moves(
-        &self,
-        code: &[RegInstr],
-    ) -> Option<Vec<bool>> {
-        self.reachable_defs_closed_under_moves(code, |instr| match instr {
-            RegInstr::GetFieldSlot { dst, .. } | RegInstr::ListGet { dst, .. } => Some(*dst),
-            _ => None,
-        })
-    }
 
-    #[cfg(feature = "jit-speculation")]
-    fn reachable_make_closure_defs_closed_under_moves(
-        &self,
-        code: &[RegInstr],
-    ) -> Option<Vec<bool>> {
-        self.reachable_defs_closed_under_moves(code, |instr| match instr {
-            RegInstr::MakeClosure { dst, .. } => Some(*dst),
-            _ => None,
-        })
-    }
 
-    #[cfg(feature = "jit-speculation")]
-    pub(super) fn native_readable_or_sinkable_closure_operands(
-        &self,
-        code: &[RegInstr],
-    ) -> Option<Vec<bool>> {
-        let mut heap_reads = self.reachable_heap_read_defs_closed_under_moves(code)?;
-        let make_closures = self.reachable_make_closure_defs_closed_under_moves(code)?;
-        for (dst, src) in heap_reads.iter_mut().zip(make_closures) {
-            *dst |= src;
-        }
-        Some(heap_reads)
-    }
 
     pub(super) fn forward_definite_regs(
         &self,

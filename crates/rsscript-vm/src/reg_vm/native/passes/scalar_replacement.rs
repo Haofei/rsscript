@@ -935,7 +935,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
 /// the shape is ambiguous or not statically resolvable (⇒ the caller bails OSR).
 #[cfg(all(
     feature = "native-jit",
-    any(test, feature = "jit-struct-sr-experimental")
+    test
 ))]
 pub(in crate::reg_vm) fn struct_shape_of_reg(
     code: &[RegInstr],
@@ -1064,7 +1064,7 @@ pub(in crate::reg_vm) fn struct_shape_of_reg(
 /// `ip_map` discipline as the other two region passes.
 #[cfg(all(
     feature = "native-jit",
-    any(test, feature = "jit-struct-sr-experimental")
+    test
 ))]
 pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     code: &[RegInstr],
@@ -1679,7 +1679,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
 /// interpreter until this transform meets the canonical retention threshold.
 #[cfg(all(
     feature = "native-jit",
-    not(any(test, feature = "jit-struct-sr-experimental"))
+    not(test)
 ))]
 pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     code: &[RegInstr],
@@ -1741,7 +1741,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
 /// regs — leaves reuse the init sources).
 #[cfg(all(
     feature = "native-jit",
-    any(test, feature = "jit-struct-sr-experimental")
+    test
 ))]
 pub(in crate::reg_vm) fn native_loop_carried_struct_in_region(
     code: &[RegInstr],
@@ -2113,7 +2113,7 @@ pub(in crate::reg_vm) fn native_loop_carried_struct_in_region(
 /// eligibility fails closed and the verified interpreter remains authoritative.
 #[cfg(all(
     feature = "native-jit",
-    not(any(test, feature = "jit-struct-sr-experimental"))
+    not(test)
 ))]
 pub(in crate::reg_vm) fn native_loop_carried_struct_in_region(
     code: &[RegInstr],

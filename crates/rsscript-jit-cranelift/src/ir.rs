@@ -158,34 +158,6 @@ pub enum JitInstr {
         dst: u32,
         args: Vec<u32>,
     },
-    /// A self-recursive native call: invoke THIS same function (the one being
-    /// compiled). Used because a `CallNative` callee id is not minted until `compile`
-    /// returns, so a self-call cannot name its own id; `CallSelf` resolves to the
-    /// function's own (declared-before-defined) `FuncId`. Semantically a
-    /// `CallNative` to self, but its deopt is **non-chaining**: a self-recursive
-    /// function is compiled with re-run-from-top deopt (its own `precise` is off), so a
-    /// bail anywhere in the recursion unwinds to the interpreter and re-runs from the
-    /// top — avoiding an unbounded deopt payload chain. An **entry depth guard** bails
-    /// before the host C stack can overflow.
-    #[cfg(feature = "recursion")]
-    CallSelf {
-        dst: u32,
-        args: Vec<u32>,
-    },
-    /// A mutually-recursive native call to another member of the same
-    /// co-compiled group (native-call-ABI slice 4): invoke group member
-    /// `group_index` (an index into the `funcs` slice passed to
-    /// [`NativeModule::compile_recursive_group`]). Like `CallSelf`, the callee's
-    /// id is not minted until the whole cycle is declared, so the call names a
-    /// group index rather than a `CompiledId`. Non-chaining (re-run-from-top deopt),
-    /// and every group member carries the entry depth guard so a mutual-recursion
-    /// cycle cannot overflow the host C stack.
-    #[cfg(feature = "recursion")]
-    CallGroup {
-        group_index: u32,
-        dst: u32,
-        args: Vec<u32>,
-    },
     /// `Map.get` fused with an Option match for Int-keyed maps. The helper first
     /// tests membership; on `Some`, it loads the Int payload into `value_dst` and
     /// jumps to `some_ip`, otherwise it jumps to `none_ip`.
@@ -273,34 +245,12 @@ pub enum JitInstr {
         expected: bool,
         target: u32,
     },
-    /// Profile-guided conditional branch. The branch follows only the edge that
-    /// was hot in interpreter feedback; the opposite edge deopts to the
-    /// interpreter. `hot_target == true` means the explicit `target` edge is hot,
-    /// otherwise the fallthrough edge is hot.
-    #[cfg(feature = "speculation")]
-    ProfiledJumpIfBool {
-        cond: u32,
-        expected: bool,
-        target: u32,
-        hot_target: bool,
-    },
     JumpIfIntCompare {
         lhs: u32,
         rhs: u32,
         op: JitCompare,
         expected: bool,
         target: u32,
-    },
-    /// Profile-guided integer/float compare branch. See
-    /// [`JitInstr::ProfiledJumpIfBool`] for the hot/cold edge contract.
-    #[cfg(feature = "speculation")]
-    ProfiledJumpIfIntCompare {
-        lhs: u32,
-        rhs: u32,
-        op: JitCompare,
-        expected: bool,
-        target: u32,
-        hot_target: bool,
     },
     Return {
         src: u32,
@@ -365,18 +315,6 @@ pub enum JitInstr {
     ListIsEmptyDirect {
         dst: u32,
         base: u32,
-    },
-    /// Profile-guided monomorphic inlining guard (profile-guided inlining). `base` is a `Handle`
-    /// register holding a closure handle; reads its underlying function id via
-    /// [`HostHelpers::closure_id`] and, if it differs from `expected`, **bails** to
-    /// the interpreter (the existing re-run-from-top fallback). Emitted just before
-    /// the inlined body of the profiled-monomorphic callee, so a different callee
-    /// than the one speculated never runs native code. Writes no register; the
-    /// matching (hot) path falls through with zero extra work beyond the compare.
-    #[cfg(feature = "speculation")]
-    GuardClosureId {
-        base: u32,
-        expected: i64,
     },
     /// OSR-exit (OSR). Marks the post-loop instruction at the loop's exit edge: a
     /// function compiled with an OSR-entry (see [`NativeModule::compile_osr`]) runs
@@ -489,8 +427,6 @@ impl JitInstr {
             Self::MatchMapGetFloat { .. } => Some(HostHelper::MapGetMatchFloat),
             Self::MatchSortedMapGetInt { .. } => Some(HostHelper::SortedMapGetInt),
             Self::MatchSortedMapGetFloat { .. } => Some(HostHelper::SortedMapGetFloat),
-            #[cfg(feature = "speculation")]
-            Self::GuardClosureId { .. } => Some(HostHelper::ClosureId),
             _ => None,
         };
 
@@ -531,17 +467,6 @@ impl JitInstr {
                 | Self::ListLenDirect { .. }
                 | Self::ListIsEmptyDirect { .. }
         );
-        #[cfg(feature = "speculation")]
-        let native_leaf = native_leaf
-            || matches!(
-                self,
-                Self::ProfiledJumpIfBool { .. }
-                    | Self::ProfiledJumpIfIntCompare { .. }
-                    | Self::GuardClosureId { .. }
-            );
-        #[cfg(feature = "recursion")]
-        let native_leaf =
-            native_leaf || matches!(self, Self::CallSelf { .. } | Self::CallGroup { .. });
         #[cfg(feature = "readonly-licm")]
         let native_leaf = native_leaf || matches!(self, Self::MemoizedHostCall { .. });
         let native_leaf = native_leaf
@@ -562,9 +487,6 @@ impl JitInstr {
         #[cfg(feature = "readonly-licm")]
         let compact_scalar_frame =
             compact_scalar_frame && !matches!(self, Self::MemoizedHostCall { .. });
-        #[cfg(feature = "recursion")]
-        let compact_scalar_frame =
-            compact_scalar_frame && !matches!(self, Self::CallSelf { .. } | Self::CallGroup { .. });
 
         let step_batch_safe = matches!(
             self,
@@ -608,10 +530,6 @@ impl JitInstr {
             Self::Jump { .. } | Self::JumpIfBool { .. } | Self::JumpIfIntCompare { .. } => {
                 Cost::Branch
             }
-            #[cfg(feature = "speculation")]
-            Self::ProfiledJumpIfBool { .. } | Self::ProfiledJumpIfIntCompare { .. } => {
-                Cost::ProfiledBranch
-            }
             Self::ListGetIntDirect { .. }
             | Self::ListSetIntDirect { .. }
             | Self::ListGetFloatDirect { .. }
@@ -629,11 +547,7 @@ impl JitInstr {
                 ..
             } => Cost::ClosureIdentityHostCall,
             Self::HostCall { .. } => Cost::HostCall,
-            #[cfg(feature = "speculation")]
-            Self::GuardClosureId { .. } => Cost::ClosureGuard,
             Self::CallNative { .. } => Cost::NativeCall,
-            #[cfg(feature = "recursion")]
-            Self::CallSelf { .. } | Self::CallGroup { .. } => Cost::NativeCall,
             Self::Nop
             | Self::TailCallGuard { .. }
             | Self::Return { .. }
@@ -689,8 +603,6 @@ impl JitInstr {
             | Self::ListIsEmptyDirect { dst, .. } => Some(*dst),
             #[cfg(feature = "readonly-licm")]
             Self::MemoizedHostCall { dst, .. } => Some(*dst),
-            #[cfg(feature = "recursion")]
-            Self::CallSelf { dst, .. } | Self::CallGroup { dst, .. } => Some(*dst),
             Self::Nop
             | Self::TailCallGuard { .. }
             | Self::Jump { .. }
@@ -700,10 +612,6 @@ impl JitInstr {
             | Self::OsrExit
             | Self::RegionExit { .. }
             | Self::Bail => None,
-            #[cfg(feature = "speculation")]
-            Self::ProfiledJumpIfBool { .. }
-            | Self::ProfiledJumpIfIntCompare { .. }
-            | Self::GuardClosureId { .. } => None,
         }
     }
 
@@ -740,11 +648,6 @@ impl JitInstr {
                 visit(*lhs);
                 visit(*rhs);
             }
-            #[cfg(feature = "speculation")]
-            Self::ProfiledJumpIfIntCompare { lhs, rhs, .. } => {
-                visit(*lhs);
-                visit(*rhs);
-            }
             Self::HostCall { args, .. } => {
                 for arg in args {
                     if let HostArg::Reg(reg) = arg {
@@ -761,10 +664,6 @@ impl JitInstr {
                 }
             }
             Self::CallNative { args, .. } => args.iter().copied().for_each(visit),
-            #[cfg(feature = "recursion")]
-            Self::CallSelf { args, .. } | Self::CallGroup { args, .. } => {
-                args.iter().copied().for_each(visit)
-            }
             Self::MatchMapGetInt { map, key, .. }
             | Self::MatchMapGetFloat { map, key, .. }
             | Self::MatchSortedMapGetInt { map, key, .. }
@@ -773,8 +672,6 @@ impl JitInstr {
                 visit(*key);
             }
             Self::JumpIfBool { cond, .. } => visit(*cond),
-            #[cfg(feature = "speculation")]
-            Self::ProfiledJumpIfBool { cond, .. } => visit(*cond),
             Self::ListGetIntDirect { base, index, .. }
             | Self::ListGetFloatDirect { base, index, .. } => {
                 visit(*base);
@@ -791,8 +688,6 @@ impl JitInstr {
                 visit(*value);
             }
             Self::ListLenDirect { base, .. } | Self::ListIsEmptyDirect { base, .. } => visit(*base),
-            #[cfg(feature = "speculation")]
-            Self::GuardClosureId { base, .. } => visit(*base),
         }
     }
 
@@ -808,9 +703,6 @@ impl JitInstr {
             Self::JumpIfBool { target, .. } | Self::JumpIfIntCompare { target, .. } => {
                 Conditional(*target)
             }
-            #[cfg(feature = "speculation")]
-            Self::ProfiledJumpIfBool { target, .. }
-            | Self::ProfiledJumpIfIntCompare { target, .. } => Conditional(*target),
             Self::MatchMapGetInt {
                 some_ip, none_ip, ..
             }
@@ -842,8 +734,6 @@ impl JitInstr {
                 HostHeapEffect::MutatesInput | HostHeapEffect::ReplacesInput => ReadWrite,
             },
             Self::CallNative { .. } => ReadWrite,
-            #[cfg(feature = "recursion")]
-            Self::CallSelf { .. } | Self::CallGroup { .. } => ReadWrite,
             Self::MatchMapGetInt { .. }
             | Self::MatchMapGetFloat { .. }
             | Self::MatchSortedMapGetInt { .. }
@@ -852,8 +742,6 @@ impl JitInstr {
             | Self::ListGetFloatDirect { .. }
             | Self::ListLenDirect { .. }
             | Self::ListIsEmptyDirect { .. } => Read,
-            #[cfg(feature = "speculation")]
-            Self::GuardClosureId { .. } => Read,
             Self::ListSetIntDirect { .. } | Self::ListSetFloatDirect { .. } => Write,
             _ => None,
         };
@@ -882,19 +770,6 @@ impl JitInstr {
         );
         #[cfg(feature = "readonly-licm")]
         let may_deopt = may_deopt || matches!(self, Self::MemoizedHostCall { .. });
-        #[cfg(feature = "recursion")]
-        let may_deopt = may_deopt || matches!(self, Self::CallSelf { .. } | Self::CallGroup { .. });
-        #[cfg(feature = "speculation")]
-        let may_deopt = may_deopt
-            || matches!(
-                self,
-                Self::ProfiledJumpIfBool { .. }
-                    | Self::ProfiledJumpIfIntCompare { .. }
-                    | Self::GuardClosureId { .. }
-            );
-        #[cfg(feature = "recursion")]
-        let osr_supported = !matches!(self, Self::CallSelf { .. } | Self::CallGroup { .. });
-        #[cfg(not(feature = "recursion"))]
         let osr_supported = true;
         JitInstrEffects {
             control_flow,
@@ -950,8 +825,6 @@ impl JitInstr {
             | JitInstr::MatchMapGetFloat { map, .. }
             | JitInstr::MatchSortedMapGetInt { map, .. }
             | JitInstr::MatchSortedMapGetFloat { map, .. } => visit(*map),
-            #[cfg(feature = "speculation")]
-            JitInstr::GuardClosureId { base: map, .. } => visit(*map),
             _ => {}
         }
     }
@@ -1204,11 +1077,6 @@ impl JitInstr {
                 map(dst, old_to_new)?;
                 map_all(args, old_to_new)?;
             }
-            #[cfg(feature = "recursion")]
-            Self::CallSelf { dst, args } | Self::CallGroup { dst, args, .. } => {
-                map(dst, old_to_new)?;
-                map_all(args, old_to_new)?;
-            }
             Self::MatchMapGetInt {
                 map: base,
                 key,
@@ -1238,14 +1106,7 @@ impl JitInstr {
                 map(value_dst, old_to_new)?;
             }
             Self::JumpIfBool { cond, .. } => map(cond, old_to_new)?,
-            #[cfg(feature = "speculation")]
-            Self::ProfiledJumpIfBool { cond, .. } => map(cond, old_to_new)?,
             Self::JumpIfIntCompare { lhs, rhs, .. } => {
-                map(lhs, old_to_new)?;
-                map(rhs, old_to_new)?;
-            }
-            #[cfg(feature = "speculation")]
-            Self::ProfiledJumpIfIntCompare { lhs, rhs, .. } => {
                 map(lhs, old_to_new)?;
                 map(rhs, old_to_new)?;
             }
@@ -1277,8 +1138,6 @@ impl JitInstr {
                 map(dst, old_to_new)?;
                 map(base, old_to_new)?;
             }
-            #[cfg(feature = "speculation")]
-            Self::GuardClosureId { base, .. } => map(base, old_to_new)?,
             Self::RegionExit { live, .. } => map_all(live, old_to_new)?,
         }
         Some(())

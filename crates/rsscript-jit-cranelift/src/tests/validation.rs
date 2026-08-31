@@ -34,27 +34,6 @@ fn rejects_out_of_range_cold_block_hint() {
     );
 }
 
-#[cfg(feature = "speculation")]
-#[test]
-fn compiles_valid_cold_block_hint() {
-    let mut m = module();
-    let mut prog = ft(
-        1,
-        vec![JitValueType::Bool],
-        vec![
-            JitInstr::JumpIfBool {
-                cond: 0,
-                expected: true,
-                target: 2,
-            },
-            JitInstr::Return { src: 0 },
-            JitInstr::Return { src: 0 },
-        ],
-    );
-    prog.cold_blocks.push(2);
-    m.compile(&prog)
-        .expect("cold block metadata must be a layout-only hint");
-}
 
 #[test]
 fn rejects_conditional_branch_without_fallthrough() {
@@ -207,48 +186,7 @@ fn rejects_inconsistent_return_types() {
     );
 }
 
-#[cfg(feature = "recursion")]
-#[test]
-fn rejects_callself_result_type_mismatch() {
-    use JitValueType::{Float, Int};
-    let err = validate(&ft(
-        1,
-        vec![Int, Int, Float],
-        vec![
-            JitInstr::LoadInt { dst: 1, value: 0 },
-            JitInstr::CallSelf {
-                dst: 2,
-                args: vec![1],
-            },
-            JitInstr::Return { src: 1 },
-        ],
-    ))
-    .expect_err("CallSelf destination must match the function return type");
-    assert!(err.message.contains("CallSelf result"), "{}", err.message);
-}
 
-#[cfg(feature = "recursion")]
-#[test]
-fn rejects_callself_flat_parameters_until_lengths_are_supported() {
-    use JitValueType::{FlatInt, Int};
-    let err = validate(&ft(
-        1,
-        vec![FlatInt, Int],
-        vec![
-            JitInstr::CallSelf {
-                dst: 1,
-                args: vec![0],
-            },
-            JitInstr::Return { src: 1 },
-        ],
-    ))
-    .expect_err("CallSelf must not silently discard flat lengths");
-    assert!(
-        err.message.contains("flat-array parameters"),
-        "{}",
-        err.message
-    );
-}
 
 #[test]
 fn rejects_reachable_use_before_definition() {
@@ -471,23 +409,6 @@ fn rejects_bool_arithmetic_and_accepts_float_compare_branches() {
     ))
     .expect("comparison branches accept same-class Float operands");
 
-    #[cfg(feature = "speculation")]
-    validate(&ft(
-        2,
-        vec![Float, Float],
-        vec![
-            JitInstr::ProfiledJumpIfIntCompare {
-                op: JitCompare::Lt,
-                lhs: 0,
-                rhs: 1,
-                expected: true,
-                target: 1,
-                hot_target: true,
-            },
-            JitInstr::Return { src: 0 },
-        ],
-    ))
-    .expect("profiled comparison branches accept same-class Float operands");
 
     let err = validate(&ft(
         2,
@@ -507,70 +428,7 @@ fn rejects_bool_arithmetic_and_accepts_float_compare_branches() {
     assert!(err.message.contains("classes differ"), "{}", err.message);
 }
 
-#[cfg(feature = "recursion")]
-#[test]
-fn canonical_leaf_classifier_covers_recursive_and_float_conversion_ops() {
-    use JitValueType::{Float, Int};
 
-    let float_to_int = ft(
-        1,
-        vec![Float, Int],
-        vec![
-            JitInstr::FloatToInt {
-                dst: 1,
-                src: 0,
-                rounding: FloatRounding::Floor,
-            },
-            JitInstr::Return { src: 1 },
-        ],
-    );
-    assert!(is_native_callable_leaf(&float_to_int));
-
-    let guarded = f(
-        1,
-        1,
-        vec![
-            JitInstr::TailCallGuard { max_depth: 32 },
-            JitInstr::Return { src: 0 },
-        ],
-    );
-    assert!(is_native_callable_leaf(&guarded));
-
-    let grouped = f(
-        1,
-        2,
-        vec![
-            JitInstr::CallGroup {
-                group_index: 0,
-                dst: 1,
-                args: vec![0],
-            },
-            JitInstr::Return { src: 1 },
-        ],
-    );
-    assert!(is_native_callable_leaf(&grouped));
-}
-
-#[cfg(feature = "recursion")]
-#[test]
-fn recursive_stack_cap_never_exceeds_estimated_budget() {
-    let args = (0..4096).collect::<Vec<_>>();
-    let program = f(
-        4096,
-        4097,
-        vec![
-            JitInstr::CallSelf { dst: 4096, args },
-            JitInstr::Return { src: 4096 },
-        ],
-    );
-    let frame = native_recursion_frame_bytes_estimate(&program);
-    let cap = native_recursion_depth_cap(&program);
-    assert!(cap >= 0);
-    assert!(
-        frame.saturating_mul(cap) <= NATIVE_RECURSION_STACK_BUDGET_BYTES,
-        "frame={frame} cap={cap}"
-    );
-}
 
 #[test]
 fn rejects_mutable_flat_returns() {
@@ -1230,37 +1088,6 @@ fn precise_deopt_preserves_bool_logical_type() {
     );
 }
 
-#[cfg(feature = "recursion")]
-#[test]
-fn recursive_group_rejects_external_native_call_before_declaration() {
-    use JitValueType::Int;
-    let mut m = module();
-    let leaf = m
-        .compile(&ft(1, vec![Int], vec![JitInstr::Return { src: 0 }]))
-        .unwrap();
-    let member = ft(
-        1,
-        vec![Int, Int],
-        vec![
-            JitInstr::CallNative {
-                callee: leaf,
-                dst: 1,
-                args: vec![0],
-            },
-            JitInstr::Return { src: 1 },
-        ],
-    );
-    let err = m.compile_recursive_group(&[member]).unwrap_err();
-    assert!(
-        err.message.contains("unsupported CallNative"),
-        "{}",
-        err.message
-    );
-    let after = m
-        .compile(&ft(1, vec![Int], vec![JitInstr::Return { src: 0 }]))
-        .expect("preflight rejection must not poison the module");
-    assert_eq!(m.call(after, &[9], &[0]).completed(), Some(9));
-}
 
 #[test]
 fn deep_acyclic_native_call_chain_deopts_at_cap() {

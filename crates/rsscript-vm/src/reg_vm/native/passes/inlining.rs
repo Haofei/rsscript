@@ -333,12 +333,6 @@ fn native_inline_leaf_calls_inner(
         RegInstr::SpawnTask { .. } => in_region(i),
         RegInstr::CallClosure { closure, .. } => {
             let sinkable_call = sinkable.sink_calls.contains_key(closure);
-            #[cfg(feature = "jit-speculation")]
-            let speculative_call =
-                monomorphic_closure_inline_target(unit, func, profile, call_count, i).is_some()
-                    || polymorphic_closure_inline_targets(unit, func, profile, call_count, i)
-                        .is_some();
-            #[cfg(not(feature = "jit-speculation"))]
             let speculative_call = false;
             in_region(i) && (sinkable_call || speculative_call)
         }
@@ -791,66 +785,6 @@ fn native_inline_leaf_calls_inner(
             // splice the body. This is the sibling of the profile-guided inlining monomorphic path with the
             // guard removed and the captures sourced from the alloc site instead of a
             // heap closure handle.
-            #[cfg(feature = "jit-speculation")]
-            RegInstr::CallClosure {
-                dst,
-                closure,
-                args,
-                mut_args,
-            } if in_region(i) && sinkable.sink_calls.contains_key(closure) => {
-                debug_assert!(mut_args.is_empty());
-                let k = sinkable.sink_calls[closure];
-                let callee = unit.functions.get(k)?;
-                // Read the unique sunk `MakeClosure`'s capture registers for THIS
-                // closure operand. Keying by operand avoids confusing two sinkable
-                // closures that share the same callee but capture different values.
-                let captures = sinkable.capture_regs.get(closure)?.clone();
-                if captures.len() != callee.captures {
-                    return None;
-                }
-                let base = next_reg;
-                next_reg += callee.regs;
-                // Capture layout matches the profile-guided inlining inline path: capture regs `0..captures`
-                // live BELOW the params. Materialize each capture by MOVING the alloc
-                // site's (already-live) capture register into `base + k_cap` — no heap
-                // closure ever exists, so there is no `NativeClosureCapture` read. A
-                // non-scalar capture is caught by the downstream OSR type inference
-                // (Int/Bool/Float only), so the body simply fails to compile.
-                for (k_cap, &cap_reg) in captures.iter().enumerate() {
-                    new_code.push(RegInstr::Move {
-                        dst: base + k_cap,
-                        src: cap_reg,
-                    });
-                    ip_map.push(i);
-                }
-                for (param, arg) in args.iter().enumerate() {
-                    new_code.push(RegInstr::Move {
-                        dst: base + callee.captures + param,
-                        src: *arg,
-                    });
-                    ip_map.push(i);
-                }
-                let join_slot = joins.len();
-                joins.push(0);
-                splice_callee(
-                    &mut SpliceContext {
-                        unit,
-                        j3,
-                        new_code: &mut new_code,
-                        ip_map: &mut ip_map,
-                        fixups: &mut fixups,
-                        splices: &mut splices,
-                        joins: &mut joins,
-                        next_reg: &mut next_reg,
-                    },
-                    callee,
-                    *dst,
-                    base,
-                    join_slot,
-                    i,
-                )?;
-                joins[join_slot] = new_code.len();
-            }
             RegInstr::CallKnown {
                 dst,
                 function,
@@ -970,78 +904,6 @@ fn native_inline_leaf_calls_inner(
                     src: *src,
                 });
                 ip_map.push(i);
-            }
-            #[cfg(feature = "jit-speculation")]
-            RegInstr::CallClosure {
-                dst,
-                closure,
-                args,
-                mut_args,
-            } if in_region(i)
-                && monomorphic_closure_inline_target(unit, func, profile, call_count, i)
-                    .is_some() =>
-            {
-                // profile-guided monomorphic inlining: bounded type profiled this site as
-                // calling exactly one callee `k` (non-capturing, native-inlinable).
-                // Guard the closure's identity, then inline `k`'s body. On a callee
-                // mismatch the guard bails (re-run-from-top fallback), so the
-                // interpreter handles the unexpected closure — sound because the
-                // inlined subset is side-effect-free. `mut_args` is always empty for
-                // an inlinable (side-effect-free) callee; the target check enforces it.
-                debug_assert!(mut_args.is_empty());
-                let k = monomorphic_closure_inline_target(unit, func, profile, call_count, i)?;
-                let callee = unit.functions.get(k)?;
-                // Identity guard up front: bail before any inlined work if the
-                // observed closure isn't the speculated callee `k`.
-                new_code.push(RegInstr::NativeGuardClosureId {
-                    closure: *closure,
-                    expected: k,
-                });
-                ip_map.push(i);
-                let base = next_reg;
-                next_reg += callee.regs;
-                // Capturing-closure inlining (OSR × profile-guided inlining): a closure callee lays out
-                // its capture registers `0..captures` BELOW its params, so the
-                // splice window is `[captures.. params.. locals]`. Materialize each
-                // scalar capture into `base + k` via the host helper, then bind the
-                // call args ABOVE the captures at `base + captures + param`. For a
-                // non-capturing callee (`captures == 0`) this is exactly the shipped
-                // path: no `NativeClosureCapture`, args at `base + param`.
-                for k_cap in parallel_indices(0..callee.captures) {
-                    new_code.push(RegInstr::NativeClosureCapture {
-                        dst: base + k_cap,
-                        closure: *closure,
-                        index: k_cap,
-                    });
-                    ip_map.push(i);
-                }
-                for (param, arg) in args.iter().enumerate() {
-                    new_code.push(RegInstr::Move {
-                        dst: base + callee.captures + param,
-                        src: *arg,
-                    });
-                    ip_map.push(i);
-                }
-                let join_slot = joins.len();
-                joins.push(0);
-                splice_callee(
-                    &mut SpliceContext {
-                        unit,
-                        j3,
-                        new_code: &mut new_code,
-                        ip_map: &mut ip_map,
-                        fixups: &mut fixups,
-                        splices: &mut splices,
-                        joins: &mut joins,
-                        next_reg: &mut next_reg,
-                    },
-                    callee,
-                    *dst,
-                    base,
-                    join_slot,
-                    i,
-                )?;
-                joins[join_slot] = new_code.len();
             }
             RegInstr::CallClosure {
                 dst,
@@ -1313,8 +1175,6 @@ fn native_inline_leaf_calls_inner(
 /// JIT side-table native-status value: the function is known not native-eligible.
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) const NATIVE_STATUS_NOT_ELIGIBLE: u8 = 1;
-#[cfg(feature = "jit-speculation")]
-pub(in crate::reg_vm) const NATIVE_STATUS_PROFILE_PENDING: u8 = 2;
 
 /// Consecutive runtime-bail count at which the native tier gives up on a
 /// structurally-eligible function (predict-and-skip, like a JSC/V8 deopt count).

@@ -1,20 +1,5 @@
 use super::super::*;
-/// Call count at which a function becomes "warm" and starts collecting a
-/// [`FunctionProfile`] (bounded profile collection). Below this threshold an evaluation allocates and
-/// records nothing — cold code pays only a single saturating counter increment
-/// in its `JitState`. Tuned high enough that one-shot/setup functions
-/// never profile, low enough that a genuinely hot dispatcher is observed within
-/// the first handful of native-tier warm-ups.
-#[cfg(feature = "jit-speculation")]
-pub(crate) const PROFILE_WARMUP: u32 = 50;
 
-/// Per-function dynamic-call count at which bounded profile collection stops sampling: once a function's
-/// `call_count` reaches this, `JitState::record_call_site` freezes (a single
-/// read + compare, then return) so a dynamic call driven by a hot loop has an
-/// essentially-free steady state. The window `PROFILE_WARMUP..PROFILE_RECORD_LIMIT`
-/// is more than enough samples to settle every site's mono/poly/mega state.
-#[cfg(feature = "jit-speculation")]
-pub(crate) const PROFILE_RECORD_LIMIT: u32 = PROFILE_WARMUP + 256;
 
 /// Minimum branch samples before branch feedback is strong enough to guide profile-guided inlining
 /// speculation. Reporting can show smaller samples, but codegen should not treat
@@ -118,23 +103,6 @@ impl Default for CallSiteFeedback {
 }
 
 impl CallSiteFeedback {
-    /// Record one observation of `callee_key` (saturating). Pure bookkeeping:
-    /// has no effect on the call dispatch decision or any value.
-    #[cfg(feature = "jit-speculation")]
-    pub(crate) fn record(&mut self, callee_key: u64, captures_scalar: bool) {
-        // Monotone AND: one heap-capture observation disqualifies the site forever.
-        self.captures_all_scalar &= captures_scalar;
-        if let Some(entry) = self.observed.iter_mut().find(|(key, _)| *key == callee_key) {
-            entry.1 = entry.1.saturating_add(1);
-            return;
-        }
-        if self.observed.len() >= PROFILE_MAX_CALLEES {
-            // Bounded memory: stop growing and remember we saw more than the cap.
-            self.overflowed = true;
-            return;
-        }
-        self.observed.push((callee_key, 1));
-    }
 
     /// Monomorphism state derived from the distinct-callee count. Read by the bounded profile collection
     /// tests and the forthcoming profile-guided inlining inliner.
@@ -159,14 +127,6 @@ pub(crate) struct BranchFeedback {
 }
 
 impl BranchFeedback {
-    #[cfg(feature = "jit-speculation")]
-    pub(crate) fn record(&mut self, taken: bool) {
-        if taken {
-            self.taken = self.taken.saturating_add(1);
-        } else {
-            self.fallthrough = self.fallthrough.saturating_add(1);
-        }
-    }
 
     pub(crate) fn total(&self) -> u32 {
         self.taken.saturating_add(self.fallthrough)
@@ -223,23 +183,7 @@ pub(crate) struct FunctionProfile {
 }
 
 impl FunctionProfile {
-    /// Record `callee_key` at the dynamic call site whose instruction index is
-    /// `instr_idx`. Observation only — never affects dispatch or values.
-    #[cfg(feature = "jit-speculation")]
-    pub(crate) fn record_call(&mut self, instr_idx: usize, callee_key: u64, captures_scalar: bool) {
-        self.call_sites
-            .entry(instr_idx)
-            .or_default()
-            .record(callee_key, captures_scalar);
-    }
 
-    #[cfg(feature = "jit-speculation")]
-    pub(crate) fn record_branch(&mut self, instr_idx: usize, taken: bool) {
-        self.branch_sites
-            .entry(instr_idx)
-            .or_default()
-            .record(taken);
-    }
 
     pub(crate) fn branch_feedback(&self, instr_idx: usize) -> Option<&BranchFeedback> {
         self.branch_sites.get(&instr_idx)
@@ -258,20 +202,3 @@ impl FunctionProfile {
     }
 }
 
-/// Whether every capture of `closure` is a scalar (`Int`/`Float`/`Bool`) — the
-/// precondition for materializing captures into an inlined native body via the
-/// `closure_capture` host helper. A non-scalar (heap) capture makes the
-/// capturing-closure inline ineligible; a `Managed` wrapper is unwrapped first.
-#[cfg(feature = "jit-speculation")]
-pub(crate) fn closure_captures_all_scalar(closure: &VmClosure) -> bool {
-    closure.captures.iter().all(|c| {
-        fn scalar(v: &VmValue) -> bool {
-            match v {
-                VmValue::Int(_) | VmValue::Float(_) | VmValue::Bool(_) => true,
-                VmValue::Managed(inner) => scalar(&inner.borrow()),
-                _ => false,
-            }
-        }
-        scalar(c)
-    })
-}

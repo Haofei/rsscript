@@ -396,7 +396,6 @@ impl RegVm {
         ip: &mut usize,
         branch_feedback: Option<(&RegFunction, usize)>,
     ) -> Result<PureStep, EvalError> {
-        #[cfg(not(feature = "jit-speculation"))]
         let _ = branch_feedback;
         match instr {
             RegInstr::LoadUnit { dst } => self.set_reg(base + *dst, VmValue::Unit),
@@ -708,12 +707,6 @@ impl RegVm {
                 target,
             } => {
                 let taken = expect_bool_ref(self.reg(base + *cond))? == *expected;
-                #[cfg(feature = "jit-speculation")]
-                if self.native.is_some()
-                    && let Some((func, instr_ip)) = branch_feedback
-                {
-                    self.jit_state.record_branch_site(func, instr_ip, taken);
-                }
                 if taken {
                     *ip = *target;
                 }
@@ -728,12 +721,6 @@ impl RegVm {
                 let l = self.reg(base + *lhs);
                 let r = self.reg(base + *rhs);
                 let taken = eval_numeric_compare(*op, l, r)? == *expected;
-                #[cfg(feature = "jit-speculation")]
-                if self.native.is_some()
-                    && let Some((func, instr_ip)) = branch_feedback
-                {
-                    self.jit_state.record_branch_site(func, instr_ip, taken);
-                }
                 if taken {
                     *ip = *target;
                 }
@@ -1683,8 +1670,6 @@ impl RegVm {
                         NativeLoweringClass::Reject => {}
                     }
                 }
-                #[cfg(feature = "jit-speculation")]
-                let instr_ip = ip;
                 ip += 1;
                 // Pure instructions (loads, arithmetic, jumps, matches, heap
                 // construction, …) run through the shared `try_exec_pure`, the one
@@ -1695,9 +1680,6 @@ impl RegVm {
                     instr,
                     base,
                     &mut ip,
-                    #[cfg(feature = "jit-speculation")]
-                    Some((&func, instr_ip)),
-                    #[cfg(not(feature = "jit-speculation"))]
                     None,
                 )? {
                     PureStep::Next => {}
@@ -1838,15 +1820,6 @@ impl RegVm {
                             // unchanged — we only observe it. `ip` was already
                             // advanced past this instruction, so its index is
                             // `ip - 1`.
-                            #[cfg(feature = "jit-speculation")]
-                            if self.native.is_some() && self.jit_state.should_record_call(&func) {
-                                self.jit_state.record_call_site(
-                                    &func,
-                                    ip - 1,
-                                    callee_id as u64,
-                                    true,
-                                );
-                            }
                             let callee = Rc::clone(&unit.functions[callee_id]);
                             self.prepare_frame(next_base, callee.regs)?;
                             for (index, reg) in args.iter().enumerate() {
@@ -2033,15 +2006,6 @@ impl RegVm {
                             // does not change which closure runs; `ip` already
                             // points past this instruction, so its index is
                             // `ip - 1`.
-                            #[cfg(feature = "jit-speculation")]
-                            if self.native.is_some() && self.jit_state.should_record_call(&func) {
-                                self.jit_state.record_call_site(
-                                    &func,
-                                    ip - 1,
-                                    closure.function as u64,
-                                    closure_captures_all_scalar(&closure),
-                                );
-                            }
                             let result = self.call_closure_from_regs(
                                 unit, &closure, args, mut_args, base, next_base,
                             )?;

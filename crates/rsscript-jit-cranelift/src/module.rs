@@ -246,23 +246,8 @@ pub(crate) struct NativeCallee {
     pub(crate) direct_scalar_func_id: Option<FuncId>,
 }
 
-/// Metadata for one member of a co-compiled mutually-recursive group
-/// (native-call-ABI slice 4). A `CallGroup { group_index }` lowers to a call of
-/// `group[group_index]` by its declared-but-not-yet-defined `FuncId`. Non-chaining
-/// (re-run-from-top deopt), so only the callee's shape is needed to marshal the
-/// call and size a (discarded-on-bail) payload slot.
-#[derive(Clone)]
-#[cfg(feature = "recursion")]
-pub(crate) struct NativeGroupMember {
-    pub(crate) func_id: FuncId,
-    pub(crate) n_params: usize,
-    pub(crate) param_types: Vec<JitValueType>,
-    pub(crate) deopt_payload_words: usize,
-    pub(crate) return_type: JitValueType,
-}
 
 #[derive(Clone)]
-#[cfg(not(feature = "recursion"))]
 pub(crate) struct NativeGroupMember;
 
 /// Process-wide source of per-module identities, so a [`CompiledId`] minted by one
@@ -1080,11 +1065,8 @@ impl NativeModule {
         self.module.clear_context(&mut self.ctx);
         push_compiled_abi_signature(&mut self.ctx.func, ptr_ty);
 
-        // Declare BEFORE defining (native-call-ABI slice 2): a `CallSelf` must
-        // reference this function's own `FuncId`, which only exists once the function
-        // is declared. So mint the id now, hand it to `build_function` for self-call
-        // lowering, then define the body against it. (Harmless for non-recursive
-        // functions, which simply never use the id.)
+        // Declare before defining: mint this function's `FuncId` before lowering
+        // its body so the module holds a stable id for it during codegen.
         let name = format!("rss_jit_{}", self.counter);
         self.counter += 1;
         let id = self
@@ -1225,221 +1207,6 @@ impl NativeModule {
         Ok(handle)
     }
 
-    /// Compile a mutually-recursive group together (native-call-ABI slice 4):
-    /// **declare every member's `FuncId` first, then build+define each** so a member's
-    /// `CallGroup { group_index }` can call a sibling whose body isn't defined yet,
-    /// then finalize once. Returns one [`CompiledId`] per member (same order as
-    /// `funcs`). Members are scalar, non-OSR, re-run-from-top on deopt, and each
-    /// carries the entry depth guard so the cycle cannot overflow the host C stack.
-    #[cfg(feature = "recursion")]
-    pub fn compile_recursive_group(
-        &mut self,
-        funcs: &[JitFunction],
-    ) -> Result<Vec<CompiledId>, JitError> {
-        if funcs.is_empty() {
-            return Ok(Vec::new());
-        }
-        if funcs.len() > self.limits.max_group_members {
-            return Err(JitError::new(
-                JitErrorKind::AdmissionRejected,
-                format!(
-                    "native recursive group has {} members, exceeding the limit {}",
-                    funcs.len(),
-                    self.limits.max_group_members
-                ),
-            ));
-        }
-        let validation_facts: Vec<ValidationFacts> = funcs
-            .iter()
-            .map(|function| validate_with_limits(function, false, &self.limits))
-            .collect::<Result<_, _>>()?;
-        // Complete every contextual check before declaring any Cranelift function.
-        // A declaration cannot be rolled back, so rejecting later would poison this
-        // NativeModule. Ordinary CallNative edges are temporarily unsupported here:
-        // their chained child payload can exceed the n_regs-sized group payload.
-        let return_types: Vec<JitValueType> = validation_facts
-            .iter()
-            .map(|facts| {
-                facts
-                    .return_type
-                    .ok_or_else(|| JitError::invalid_ir("recursive group member has no Return"))
-            })
-            .collect::<Result<_, _>>()?;
-        for (member_index, function) in funcs.iter().enumerate() {
-            if function
-                .code
-                .iter()
-                .any(|instr| matches!(instr, JitInstr::CallNative { .. }))
-            {
-                return Err(JitError::invalid_ir(format!(
-                    "recursive group member {member_index} contains unsupported CallNative"
-                )));
-            }
-            if function.reg_types[..function.n_params as usize]
-                .iter()
-                .any(|ty| {
-                    !matches!(
-                        ty,
-                        JitValueType::Int | JitValueType::Bool | JitValueType::Float
-                    )
-                })
-                || !matches!(
-                    return_types[member_index],
-                    JitValueType::Int | JitValueType::Bool | JitValueType::Float
-                )
-            {
-                return Err(JitError::invalid_ir(format!(
-                    "recursive group member {member_index} must use scalar parameters and return"
-                )));
-            }
-            for instr in &function.code {
-                let JitInstr::CallGroup {
-                    group_index,
-                    dst,
-                    args,
-                } = instr
-                else {
-                    continue;
-                };
-                let callee_index = *group_index as usize;
-                let Some(callee) = funcs.get(callee_index) else {
-                    return Err(JitError::invalid_ir(format!(
-                        "CallGroup group_index {callee_index} out of range"
-                    )));
-                };
-                if args.len() != callee.n_params as usize {
-                    return Err(JitError::invalid_ir(format!(
-                        "CallGroup got {} args, group member {callee_index} expects {}",
-                        args.len(),
-                        callee.n_params
-                    )));
-                }
-                if function.reg_types[*dst as usize] != return_types[callee_index] {
-                    return Err(JitError::invalid_ir(format!(
-                        "CallGroup result register {dst} has type {:?}, group member {callee_index} returns {:?}",
-                        function.reg_types[*dst as usize], return_types[callee_index]
-                    )));
-                }
-                for (arg_index, (&arg, expected)) in args
-                    .iter()
-                    .zip(&callee.reg_types[..callee.n_params as usize])
-                    .enumerate()
-                {
-                    let actual = function.reg_types[arg as usize];
-                    if actual != *expected {
-                        return Err(JitError::invalid_ir(format!(
-                            "CallGroup arg {arg_index} has type {actual:?}, group member {callee_index} expects {expected:?}"
-                        )));
-                    }
-                }
-            }
-        }
-        let ptr_ty = self.module.target_config().pointer_type();
-        // Phase 1: declare every member + assemble the group metadata.
-        let mut func_ids: Vec<FuncId> = Vec::with_capacity(funcs.len());
-        let mut group: Vec<NativeGroupMember> = Vec::with_capacity(funcs.len());
-        for (function, &return_type) in funcs.iter().zip(&return_types) {
-            self.module.clear_context(&mut self.ctx);
-            push_compiled_abi_signature(&mut self.ctx.func, ptr_ty);
-            let name = format!("rss_jit_{}", self.counter);
-            self.counter += 1;
-            let id = self
-                .module
-                .declare_function(&name, Linkage::Local, &self.ctx.func.signature)
-                .map_err(|e| err("declare", e))?;
-            func_ids.push(id);
-            group.push(NativeGroupMember {
-                func_id: id,
-                n_params: function.n_params as usize,
-                param_types: function.reg_types[..function.n_params as usize].to_vec(),
-                // Members are scalar (CallGroup/CallSelf are non-chaining), so a
-                // member's deopt payload is just its own register window.
-                deopt_payload_words: function.n_regs as usize,
-                return_type,
-            });
-        }
-        // Phase 2: build + define each member against the declared group ids.
-        let mut deopt_maps: Vec<DeoptMap> = Vec::with_capacity(funcs.len());
-        let mut code_sizes: Vec<u64> = Vec::with_capacity(funcs.len());
-        let mut bounds_checks_elided: Vec<u64> = Vec::with_capacity(funcs.len());
-        for (i, function) in funcs.iter().enumerate() {
-            let native_callees = self.resolve_native_callees(function)?;
-            self.module.clear_context(&mut self.ctx);
-            push_compiled_abi_signature(&mut self.ctx.func, ptr_ty);
-            let codegen = build_function(
-                &mut self.ctx.func,
-                &mut self.fbctx,
-                &mut self.module,
-                FunctionCodegenInput {
-                    imports: self.imports.clone(),
-                    program: function,
-                    forced: None,
-                    osr_header: None,
-                    native_callees: &native_callees,
-                    self_func_id: func_ids[i],
-                    group: &group,
-                    limit_checks: LimitChecks::default(),
-                    native_static_call_depth: 0,
-                    assigned_in: &validation_facts[i].assigned_in,
-                    deopt_in: &validation_facts[i].deopt_in,
-                },
-            )?;
-            self.module
-                .define_function(func_ids[i], &mut self.ctx)
-                .map_err(|e| err("define", e))?;
-            let code_size = self
-                .ctx
-                .compiled_code()
-                .map(|code| u64::from(code.code_info().total_size))
-                .unwrap_or(0);
-            bounds_checks_elided.push(codegen.direct_list_bounds_checks_elided);
-            deopt_maps.push(codegen.deopt_map);
-            code_sizes.push(code_size);
-        }
-        self.module.clear_context(&mut self.ctx);
-        self.module
-            .finalize_definitions()
-            .map_err(|e| err("finalize", e))?;
-        // Phase 3: publish each member and return its handle.
-        let mut handles = Vec::with_capacity(funcs.len());
-        for (i, function) in funcs.iter().enumerate() {
-            let code = self.module.get_finalized_function(func_ids[i]);
-            // SAFETY: emitted with the `CompiledAbi` signature declared above.
-            let f: CompiledAbi = unsafe { std::mem::transmute::<*const u8, CompiledAbi>(code) };
-            let scalar_leaf_callable = native_scalar_leaf_callable(function, false, false);
-            let handle = CompiledId {
-                module_id: self.id,
-                index: self.funcs.len(),
-            };
-            self.funcs.push(CompiledFunc {
-                f,
-                id: func_ids[i],
-                direct_scalar_id: None,
-                code_size_bytes: code_sizes[i],
-                direct_list_bounds_checks_elided: bounds_checks_elided[i],
-                native_call_depth: 0,
-                native_depth_cap: native_recursion_depth_cap(function) as u32,
-                n_params: function.n_params as usize,
-                n_regs: function.n_regs as usize,
-                deopt_map: std::mem::take(&mut deopt_maps[i]),
-                requires_limits: false,
-                limit_checks: LimitChecks::default(),
-                osr: false,
-                returns_handle: false,
-                param_types: function.reg_types[..function.n_params as usize].to_vec(),
-                reg_types: function.reg_types.clone(),
-                return_type: Some(return_types[i]),
-                scalar_leaf_callable,
-                // Recursive groups are research-only and intentionally retain the
-                // full child-frame path; their stack/deopt contract is different
-                // from the bounded acyclic scalar-leaf optimization.
-                compact_scalar_frame_callable: false,
-                direct_scalar_call_edges: 0,
-            });
-            handles.push(handle);
-        }
-        Ok(handles)
-    }
 
     /// Machine-code bytes emitted for a compiled function, including any constant
     /// data reported by Cranelift. Used only for host-side telemetry.
@@ -2067,5 +1834,3 @@ pub fn user_host_ctx(context: HostCtx) -> HostCtx {
     unsafe { (*(context as *const HostCallContext)).user }
 }
 use super::*;
-#[cfg(feature = "recursion")]
-use crate::validated::ValidationFacts;

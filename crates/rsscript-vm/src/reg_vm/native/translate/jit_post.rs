@@ -236,11 +236,6 @@ pub(super) fn native_forward_direct_list_store_loads(jit_code: &mut [vm_jit::Jit
             vm_jit::JitInstr::Jump { target }
             | vm_jit::JitInstr::JumpIfBool { target, .. }
             | vm_jit::JitInstr::JumpIfIntCompare { target, .. } => std::slice::from_ref(target),
-            #[cfg(feature = "jit-speculation")]
-            vm_jit::JitInstr::ProfiledJumpIfBool { target, .. }
-            | vm_jit::JitInstr::ProfiledJumpIfIntCompare { target, .. } => {
-                std::slice::from_ref(target)
-            }
             vm_jit::JitInstr::MatchMapGetInt {
                 some_ip, none_ip, ..
             }
@@ -871,8 +866,6 @@ fn native_loop_preserves_heap_query(
                 }
             }
             vm_jit::JitInstr::CallNative { .. } => return false,
-            #[cfg(feature = "jit-recursion-experimental")]
-            vm_jit::JitInstr::CallSelf { .. } | vm_jit::JitInstr::CallGroup { .. } => return false,
             vm_jit::JitInstr::ListSetIntDirect { base, .. }
             | vm_jit::JitInstr::ListSetFloatDirect { base, .. } => {
                 let write_domain =
@@ -970,10 +963,6 @@ pub(super) fn native_jit_written_reg(instr: &vm_jit::JitInstr) -> Option<u32> {
         | vm_jit::JitInstr::MatchSortedMapGetFloat { value_dst: dst, .. }
         | vm_jit::JitInstr::CallNative { dst, .. } => Some(*dst),
         vm_jit::JitInstr::MemoizedHostCall { dst, .. } => Some(*dst),
-        #[cfg(feature = "jit-recursion-experimental")]
-        vm_jit::JitInstr::CallSelf { dst, .. } | vm_jit::JitInstr::CallGroup { dst, .. } => {
-            Some(*dst)
-        }
         _ => None,
     }
 }
@@ -1310,28 +1299,11 @@ mod direct_store_forwarding_tests {
 
     #[test]
     fn calls_and_unknown_heap_effects_kill_available_store() {
-        #[cfg(any(feature = "jit-recursion-experimental", feature = "jit-speculation"))]
-        let mut barriers = vec![vm_jit::JitInstr::HostCall {
-            helper: vm_jit::HostHelper::StringLen,
-            dst: 19,
-            args: vec![vm_jit::HostArg::Reg(18)],
-        }];
-        #[cfg(not(any(feature = "jit-recursion-experimental", feature = "jit-speculation")))]
         let barriers = vec![vm_jit::JitInstr::HostCall {
             helper: vm_jit::HostHelper::StringLen,
             dst: 19,
             args: vec![vm_jit::HostArg::Reg(18)],
         }];
-        #[cfg(feature = "jit-recursion-experimental")]
-        barriers.push(vm_jit::JitInstr::CallSelf {
-            dst: 20,
-            args: vec![],
-        });
-        #[cfg(feature = "jit-speculation")]
-        barriers.push(vm_jit::JitInstr::GuardClosureId {
-            base: 21,
-            expected: 1,
-        });
         for barrier in barriers {
             let mut code = vec![int_store(0, 1, 2), barrier, int_load(3, 0, 1)];
 

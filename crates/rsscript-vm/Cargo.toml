@@ -27,18 +27,6 @@ native-jit = ["dep:vm-jit", "vm-jit/readonly-licm"]
 # Developer-only stress and benchmark entry points. Production hosts configure
 # the native engine exclusively through typed `NativeJitOptions`.
 jit-diagnostics = ["native-jit"]
-# Non-default research transforms whose current canonical workload evidence does
-# not meet the production retention threshold (profile-guided closure PIC and
-# branch side exits). This is deliberately not re-exported by the stable SDK.
-jit-speculation = ["native-jit", "vm-jit/speculation"]
-# Non-tail machine-code recursion still relies on a conservative host-stack
-# estimate. Keep it unavailable to the stable SDK until an explicit-stack or
-# measured-stack implementation provides a real boundary.
-jit-recursion-experimental = ["native-jit", "vm-jit/recursion"]
-# Nested and loop-carried struct scalar replacement has not met the canonical
-# workload retention threshold. Keep the implementation available to VM
-# research builds without making it part of the stable SDK `native-jit` path.
-jit-struct-sr-experimental = ["native-jit"]
 
 [build-dependencies]
 rsscript-build-support = { path = "../rsscript-build-support" }

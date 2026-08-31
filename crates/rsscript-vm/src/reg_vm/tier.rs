@@ -182,24 +182,6 @@ fn native_call_mut_args_supported(mut_args: &[usize], param_tys: &[NativeTy]) ->
     })
 }
 
-#[cfg(feature = "jit-speculation")]
-pub(in crate::reg_vm) fn native_scalar_callee_pending_on_branch_profile(
-    jit_state: &JitState,
-    func: &RegFunction,
-) -> bool {
-    let has_branch =
-        NativeRegionAnalysis::compute_prefix(&func.code, func.regs, 0, func.code.len())
-            .map(|analysis| analysis.has_reachable_conditional_branch(&func.code))
-            .unwrap_or_else(|| {
-                func.code.iter().any(|instr| {
-                    matches!(
-                        instr,
-                        RegInstr::JumpIfBool { .. } | RegInstr::JumpIfIntCompare { .. }
-                    )
-                })
-            });
-    has_branch && jit_state.branch_count(func) < PROFILE_WARMUP + PROFILE_BRANCH_MIN_SAMPLES
-}
 
 #[cfg(feature = "native-jit")]
 fn native_compiled_entry_call_descriptor(
@@ -297,10 +279,6 @@ fn native_compile_direct_scalar_callee(
             .and_then(native_compiled_entry_call_descriptor);
     }
     if native.whole_shape_count(&instance) >= MAX_NATIVE_SHAPE_VERSIONS {
-        return None;
-    }
-    #[cfg(feature = "jit-speculation")]
-    if native_scalar_callee_pending_on_branch_profile(jit_state, callee) {
         return None;
     }
     if !stack.insert(callee_key) {
@@ -730,16 +708,6 @@ impl RegVm {
         if native_status == NATIVE_STATUS_NOT_ELIGIBLE {
             return NativeAttempt::Fallback;
         }
-        #[cfg(feature = "jit-speculation")]
-        if native_status == NATIVE_STATUS_PROFILE_PENDING {
-            if self.jit_state.call_count(func) < PROFILE_RECORD_LIMIT {
-                return NativeAttempt::Fallback;
-            }
-            // The bounded profile is now immutable. Re-open translation once;
-            // the result will become either a compiled cache entry or a stable
-            // negative verdict.
-            self.jit_state.set_native_status(func, 0);
-        }
         // The unit is needed to resolve inlinable callees; clone the `Rc` so the
         // mutable `self.native` borrow below doesn't conflict.
         let unit = Rc::clone(&self.unit);
@@ -1093,16 +1061,6 @@ impl RegVm {
                             // monomorphic decision, the verdict is NOT invariant —
                             // re-attempt on a later (warmer) call. Don't cache and
                             // don't mark NOT_ELIGIBLE; just fall back this once.
-                            #[cfg(feature = "jit-speculation")]
-                            if native_translation_pending_on_profile(
-                                &unit, func, profile, call_count,
-                            ) {
-                                if matches!(native.cost_model, NativeCostModel::Enforce) {
-                                    self.jit_state
-                                        .set_native_status(func, NATIVE_STATUS_PROFILE_PENDING);
-                                }
-                                return NativeAttempt::Fallback;
-                            }
                             if native.collect_stats {
                                 native.stats.not_eligible += 1;
                             }
@@ -2729,16 +2687,6 @@ impl RegVm {
                 // profile settles (or there is no pending site) the `None`/`Some`
                 // verdict is stable and we cache it.
                 let profile_is_stable = {
-                    #[cfg(feature = "jit-speculation")]
-                    {
-                        !native_translation_pending_on_profile(
-                            &unit,
-                            func,
-                            self.jit_state.profile(func),
-                            self.jit_state.call_count(func),
-                        )
-                    }
-                    #[cfg(not(feature = "jit-speculation"))]
                     {
                         true
                     }
@@ -3572,56 +3520,6 @@ impl RegVm {
     }
 }
 
-/// The mutually-recursive group (call-graph SCC) containing `function_id`, if it is
-/// a cycle of >= 2 functions (native-call-ABI slice 4). Returned sorted; `None` for
-/// non-cyclic functions and pure self-recursion (handled by the self-recursive
-/// path). Per-member native eligibility (scalar params/return, native-subset body)
-/// is NOT decided here — the caller's `translate_to_native_jit_with_calls` per member
-/// is the single eligibility gate, so the group admits any cycle the general native
-/// path can compile (Int/Bool/Float bodies, members that also call inlinable leaves).
-#[cfg(feature = "native-jit")]
-#[cfg(feature = "jit-recursion-experimental")]
-fn native_recursive_group(unit: &RegUnit, function_id: usize) -> Option<Vec<usize>> {
-    use std::collections::HashSet;
-    let callees = |fid: usize| -> Vec<usize> {
-        unit.functions.get(fid).map_or_else(Vec::new, |f| {
-            f.code
-                .iter()
-                .filter_map(|instr| match instr {
-                    RegInstr::CallKnown { function, .. } => Some(*function),
-                    _ => None,
-                })
-                .collect()
-        })
-    };
-    // Forward-reachable from `function_id` via CallKnown edges.
-    let mut fwd = HashSet::new();
-    let mut stack = vec![function_id];
-    while let Some(f) = stack.pop() {
-        if fwd.insert(f) {
-            stack.extend(callees(f));
-        }
-    }
-    // Backward-reachable: functions that can transitively reach `function_id`.
-    let mut bwd = HashSet::new();
-    let mut stack = vec![function_id];
-    while let Some(target) = stack.pop() {
-        if bwd.insert(target) {
-            for caller in 0..unit.functions.len() {
-                if callees(caller).contains(&target) {
-                    stack.push(caller);
-                }
-            }
-        }
-    }
-    // The SCC is the intersection (mutually reachable with `function_id`).
-    let mut scc: Vec<usize> = fwd.intersection(&bwd).copied().collect();
-    scc.sort_unstable();
-    if scc.len() < 2 {
-        return None;
-    }
-    Some(scc)
-}
 
 #[cfg(all(test, feature = "native-jit"))]
 mod tests {

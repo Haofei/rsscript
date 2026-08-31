@@ -45,6 +45,14 @@ track migrations without confusing crate versions with wire versions.
   must rename the former field and explicitly choose whether eager probing is
   required.
 - Execution reports include actual interpreter/native engine telemetry.
+- Three native-JIT research surfaces were removed after their controlled
+  scorecard workloads failed the experimental-retention threshold: profile-guided
+  speculation (closure PIC and branch side exits), non-tail native recursion
+  (whose only stack boundary was a static frame estimate, not a hard safety
+  proof), and struct scalar replacement (net-negative against the interpreter).
+  Their VM feature flags (`jit-speculation`, `jit-recursion-experimental`,
+  `jit-struct-sr-experimental`) and the Cranelift `speculation`/`recursion`
+  features no longer exist; the supported `native-jit` engine is unaffected.
 
 ### Runner protocol
 

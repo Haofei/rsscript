@@ -111,10 +111,6 @@ pub(crate) use codegen::{
     FunctionCodegenInput, LimitChecks, build_function, native_recursion_depth_cap,
     push_compiled_abi_signature,
 };
-#[cfg(feature = "recursion")]
-pub(crate) use codegen::{
-    NATIVE_RECURSION_STACK_BUDGET_BYTES, native_recursion_frame_bytes_estimate,
-};
 pub(crate) use direct_codegen::{
     build_direct_scalar_frame_wrapper, build_direct_scalar_function, direct_scalar_callable,
     push_direct_scalar_signature,

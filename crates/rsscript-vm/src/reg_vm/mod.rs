@@ -1671,11 +1671,6 @@ struct NativeState {
     /// Explicit deopt stress mode: when set, every
     /// generated native safepoint bails unconditionally.
     force_all_safepoints: bool,
-    /// Explicit host opt-in for non-tail recursion in generated machine code.
-    /// Disabled by default because the backend's static frame estimate is not a
-    /// proof of the live host stack available at the call site.
-    #[cfg(feature = "jit-recursion-experimental")]
-    allow_recursive_calls: bool,
     /// Host-selected profitability behavior; never inferred from process state.
     cost_model: NativeCostModel,
     /// Interpreted work required before automatic OSR compilation.
@@ -1721,23 +1716,6 @@ struct NativeState {
     continuation_plans: HashMap<(usize, usize), Option<Rc<ContinuationRegion>>>,
     continuation_entry_sets: HashMap<usize, Rc<ContinuationEntrySet>>,
     continuation_functions: HashMap<usize, bool>,
-    /// Native self-recursion cache (native-call-ABI slice 3; generalized in Phase 2):
-    /// per-function stable ordinal key compiled `CallSelf` entry, with the
-    /// compiled parameter `NativeTy`s and return `NativeTy` so the dispatcher
-    /// marshals scalar args (Int/Bool/Float) and wraps the result. `None` = known
-    /// not natively self-recursion-compilable (fall back to the tier-0 i64 executor
-    /// for i64-only bodies, or the full interpreter for non-i64 bodies).
-    #[cfg(feature = "jit-recursion-experimental")]
-    self_recursive_native: HashMap<usize, Option<(vm_jit::CompiledId, Vec<NativeTy>, NativeTy)>>,
-    /// Native mutual-recursion cache (native-call-ABI slice 4; generalized to scalar
-    /// Float in the Phase 2 follow-up): per-function stable ordinal key
-    /// compiled group-member `(CompiledId, param_tys, ret)`. The dispatcher marshals
-    /// each scalar arg (Int/Bool/Float) and wraps the `i64` result per `ret`, exactly
-    /// like the self-recursion cache. Compiling any member of a recursive cycle
-    /// compiles+caches the whole group. `None` = known not a natively-compilable
-    /// mutual-recursion member (interpreter).
-    #[cfg(feature = "jit-recursion-experimental")]
-    mutual_recursive_native: HashMap<usize, Option<(vm_jit::CompiledId, Vec<NativeTy>, NativeTy)>>,
     /// Reusable per-call marshalling scratch buffers (TV2 arg/len words and the
     /// flat-list `Rc` keep-alive set). Held here and `mem::take`n into the call
     /// frame so a hot per-iteration native dispatch (e.g. a tiny leaf/closure
@@ -6269,7 +6247,6 @@ use native_text_helpers::*;
 #[cfg(feature = "native-jit")]
 impl NativeState {
     fn new_with_plan(plan: &NativeExecutionPlan) -> Result<Self, EvalError> {
-        #[cfg(not(feature = "jit-recursion-experimental"))]
         let _ = plan.allow_recursive_calls;
         let max_code_bytes = plan.admission.max_code_bytes;
         let max_compile_millis = plan.admission.max_compile_millis;
@@ -6324,8 +6301,6 @@ impl NativeState {
             force_bail: plan.force_bail,
             forced_safepoint: plan.forced_safepoint,
             force_all_safepoints: plan.force_all_safepoints,
-            #[cfg(feature = "jit-recursion-experimental")]
-            allow_recursive_calls: plan.allow_recursive_calls,
             cost_model: plan.cost_model,
             osr_work_threshold: plan.osr_work_threshold,
             stats: NativeStats::default(),
@@ -6344,10 +6319,6 @@ impl NativeState {
             continuation_plans: HashMap::new(),
             continuation_entry_sets: HashMap::new(),
             continuation_functions: HashMap::new(),
-            #[cfg(feature = "jit-recursion-experimental")]
-            self_recursive_native: HashMap::new(),
-            #[cfg(feature = "jit-recursion-experimental")]
-            mutual_recursive_native: HashMap::new(),
             scratch_args: Vec::new(),
             scratch_lens: Vec::new(),
             scratch_flat_owned: Vec::new(),

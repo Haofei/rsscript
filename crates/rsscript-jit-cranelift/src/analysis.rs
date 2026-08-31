@@ -427,15 +427,6 @@ pub(super) fn interval_analysis(program: &JitFunction) -> Vec<Vec<Interval>> {
                 expected,
                 target,
             } => (*lhs, *rhs, *op, *expected, *target),
-            #[cfg(feature = "speculation")]
-            JitInstr::ProfiledJumpIfIntCompare {
-                lhs,
-                rhs,
-                op,
-                expected,
-                target,
-                ..
-            } => (*lhs, *rhs, *op, *expected, *target),
             _ => return,
         };
         if !is_int(lhs) || !is_int(rhs) {

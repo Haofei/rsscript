@@ -9,12 +9,6 @@ publish = false
 
 [features]
 default = []
-# Research-only profile-guided branch and closure guards. The supported
-# baseline engine does not compile these IR variants or their code generation.
-speculation = []
-# Research-only non-tail recursion on the host C stack. Tail recursion remains
-# a loop in the supported baseline engine.
-recursion = []
 # Internal mechanism for the VM's verifier/alias-gated read-only LICM subset.
 readonly-licm = []
 # Coverage-guided harness support. This is not part of the VM or SDK feature

@@ -71,9 +71,12 @@ fn jit_planning_state_is_kept_out_of_verified_program_objects() {
     assert!(exec.contains("JitState::for_verified_program"));
     assert!(exec.contains("self.jit_state.tier0_analysis"));
     assert!(state.contains("native_status: u8"));
-    assert!(state.contains("call_count: u32"));
-    assert!(state.contains("branch_count: u32"));
-    assert!(state.contains("profile: Option<Box<FunctionProfile>>"));
+    // The call_count/branch_count/profile planning fields were removed with the
+    // jit-speculation profile-guided surface; only the base native_status tiering
+    // field remains as stored JIT planning state on JitState.
+    assert!(!state.contains("call_count: u32"));
+    assert!(!state.contains("branch_count: u32"));
+    assert!(!state.contains("profile: Option<Box<FunctionProfile>>"));
     assert!(!state.contains("BTreeMap<JitFunctionKey"));
     assert!(!state.contains(".clone();\n        self.functions"));
     for (name, source) in [
@@ -334,10 +337,13 @@ fn jit_profiles_only_genuinely_dynamic_targets_and_branch_bias() {
             "runtime profile must not rediscover static fact `{forbidden_static_fact}`"
         );
     }
-    assert!(inlining.contains("#[cfg(feature = \"jit-speculation\")]"));
-    assert!(inlining.contains("NativeGuardClosureId"));
-    assert!(state.contains("#[cfg(feature = \"jit-speculation\")]\n    branch_count: u32"));
-    assert!(state.contains("pub(crate) fn should_record_call"));
+    // Profile-guided closure inlining (PIC) and branch speculation were removed
+    // with the jit-speculation research surface. The runtime profile keeps only
+    // the base call/branch feedback structures; no speculation cfg, guard, or
+    // branch-recording machinery remains in the supported engine.
+    assert!(!inlining.contains("jit-speculation"));
+    assert!(!state.contains("jit-speculation"));
+    assert!(!state.contains("should_record_call"));
     assert!(!exec.contains("record_native_branch_feedback"));
 }
 
@@ -751,7 +757,9 @@ fn register_vm_execution_policy_is_snapshotted_before_running() {
     assert!(plan.contains("max_code_bytes"));
     assert!(plan.contains("max_compile_millis"));
     assert!(plan.contains("optimize_work_threshold"));
-    assert!(plan.contains("jit-recursion-experimental"));
+    // Native host-stack recursion was removed; the execution plan no longer
+    // references the retired jit-recursion-experimental surface.
+    assert!(!plan.contains("jit-recursion-experimental"));
 }
 
 #[test]
@@ -770,20 +778,23 @@ fn cranelift_engine_uses_real_modules_instead_of_flattened_includes() {
 }
 
 #[test]
-fn cranelift_engine_keeps_research_features_and_raw_abi_out_of_the_stable_surface() {
+fn cranelift_engine_retires_research_features_and_keeps_raw_abi_out_of_the_stable_surface() {
     let root = workspace_root();
     let manifest = read(&root.join("crates/rsscript-jit-cranelift/Cargo.toml"));
     let library = read(&root.join("crates/rsscript-jit-cranelift/src/lib.rs"));
     let vm_manifest = read(&root.join("crates/rsscript-vm/Cargo.toml"));
 
     assert!(manifest.contains("publish = false"));
-    for feature in ["speculation = []", "recursion = []"] {
+    // The speculation, recursion, and struct-scalar-replacement research surfaces
+    // were retired after their controlled workloads failed the retention
+    // threshold. Their features must no longer exist in either manifest, joining
+    // the earlier memoization removal.
+    for retired in ["speculation = []", "recursion = []", "memoization = []"] {
         assert!(
-            manifest.contains(feature),
-            "Cranelift manifest is missing isolated research feature `{feature}`"
+            !manifest.contains(retired),
+            "Cranelift manifest must not declare retired research feature `{retired}`"
         );
     }
-    assert!(!manifest.contains("memoization = []"));
     assert!(!library.contains("pub use host_abi::*;"));
     assert!(!library.contains("pub use ir::*;"));
     assert!(!library.contains("pub use module::*;"));
@@ -799,12 +810,15 @@ fn cranelift_engine_keeps_research_features_and_raw_abi_out_of_the_stable_surfac
     assert!(!native_jit.contains("speculation"));
     assert!(!native_jit.contains("recursion"));
     assert!(!native_jit.contains("memoization"));
-    assert!(vm_manifest.contains("jit-speculation"));
-    assert!(vm_manifest.contains("jit-recursion-experimental"));
-    assert!(!vm_manifest.contains("jit-memoization-experimental"));
-    assert!(vm_manifest.contains("jit-struct-sr-experimental"));
-
-    let scalar_replacement =
-        read(&root.join("crates/rsscript-vm/src/reg_vm/native/passes/scalar_replacement.rs"));
-    assert!(scalar_replacement.contains("feature = \"jit-struct-sr-experimental\""));
+    for retired in [
+        "jit-speculation",
+        "jit-recursion-experimental",
+        "jit-struct-sr-experimental",
+        "jit-memoization-experimental",
+    ] {
+        assert!(
+            !vm_manifest.contains(retired),
+            "VM manifest must not declare retired research feature `{retired}`"
+        );
+    }
 }

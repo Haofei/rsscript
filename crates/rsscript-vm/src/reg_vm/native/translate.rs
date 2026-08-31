@@ -34,20 +34,8 @@ pub(in crate::reg_vm) fn native_whole_function_region_exit(code: &[RegInstr]) ->
     exit
 }
 
-#[cfg(all(feature = "native-jit", feature = "jit-speculation"))]
-fn native_profile_guidance_with_analysis(
-    profile: Option<&FunctionProfile>,
-    code: &[RegInstr],
-    ip_map: &[usize],
-    analysis: &NativeRegionAnalysis,
-) -> NativeProfileGuidance {
-    let Some(profile) = profile else {
-        return NativeProfileGuidance::default();
-    };
-    analysis.profile_guidance(code, profile, ip_map)
-}
 
-#[cfg(all(feature = "native-jit", not(feature = "jit-speculation")))]
+#[cfg(feature = "native-jit")]
 fn native_profile_guidance_with_analysis(
     _profile: Option<&FunctionProfile>,
     _code: &[RegInstr],
@@ -307,8 +295,6 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     let reachable = analysis.reachable_mask();
     let profile_guidance =
         native_profile_guidance_with_analysis(profile, &code, &ip_map, &analysis);
-    #[cfg(feature = "jit-speculation")]
-    let profile_hot_branch_edges = &profile_guidance.hot_branch_edges;
 
     // Every *reachable* instruction must be in the native subset.
     for (i, instr) in code.iter().enumerate() {
@@ -1110,48 +1096,6 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                     }
                 }
             }
-            #[cfg(feature = "jit-recursion-experimental")]
-            RegInstr::CallKnown {
-                dst,
-                args,
-                mut_args,
-                ..
-            } if self_call_sites.contains(&ip_map[i]) => {
-                // Self-recursive native call (native-call-ABI slice 3): lower to
-                // `CallSelf`, which the codegen resolves to THIS function's own
-                // FuncId. Scalar params only (no `mut`); arity/types are re-checked by
-                // vm-jit's `validate` against this function's own signature.
-                require(mut_args.is_empty() && args.len() == func.params)?;
-                require(ty[*dst].is_some())?;
-                for arg in args {
-                    require(ty[*arg].is_some())?;
-                }
-                JitInstr::CallSelf {
-                    dst: r(*dst),
-                    args: args.iter().map(|arg| r(*arg)).collect(),
-                }
-            }
-            #[cfg(feature = "jit-recursion-experimental")]
-            RegInstr::CallKnown {
-                dst,
-                args,
-                mut_args,
-                ..
-            } if group_call_sites.contains_key(&ip_map[i]) => {
-                // Mutually-recursive native call (native-call-ABI slice 4): lower to
-                // `CallGroup` targeting the member's group index. Scalar params only.
-                let group_index = group_call_sites[&ip_map[i]];
-                require(mut_args.is_empty())?;
-                require(ty[*dst].is_some())?;
-                for arg in args {
-                    require(ty[*arg].is_some())?;
-                }
-                JitInstr::CallGroup {
-                    group_index,
-                    dst: r(*dst),
-                    args: args.iter().map(|arg| r(*arg)).collect(),
-                }
-            }
             RegInstr::CallKnown {
                 dst,
                 args,
@@ -1310,22 +1254,6 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 target,
             } => {
                 require(bool_ty(*cond))?;
-                #[cfg(feature = "jit-speculation")]
-                if let Some(&hot_target) = profile_hot_branch_edges.get(&i) {
-                    JitInstr::ProfiledJumpIfBool {
-                        cond: r(*cond),
-                        expected: *expected,
-                        target: r(*target),
-                        hot_target,
-                    }
-                } else {
-                    JitInstr::JumpIfBool {
-                        cond: r(*cond),
-                        expected: *expected,
-                        target: r(*target),
-                    }
-                }
-                #[cfg(not(feature = "jit-speculation"))]
                 JitInstr::JumpIfBool {
                     cond: r(*cond),
                     expected: *expected,
@@ -1340,26 +1268,6 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 target,
             } => {
                 require(int_pair_or_same_numeric(*lhs, *rhs))?;
-                #[cfg(feature = "jit-speculation")]
-                if let Some(&hot_target) = profile_hot_branch_edges.get(&i) {
-                    JitInstr::ProfiledJumpIfIntCompare {
-                        lhs: r(*lhs),
-                        rhs: r(*rhs),
-                        op: cmp(op),
-                        expected: *expected,
-                        target: r(*target),
-                        hot_target,
-                    }
-                } else {
-                    JitInstr::JumpIfIntCompare {
-                        lhs: r(*lhs),
-                        rhs: r(*rhs),
-                        op: cmp(op),
-                        expected: *expected,
-                        target: r(*target),
-                    }
-                }
-                #[cfg(not(feature = "jit-speculation"))]
                 JitInstr::JumpIfIntCompare {
                     lhs: r(*lhs),
                     rhs: r(*rhs),
@@ -1839,18 +1747,6 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                     }
                 }
             }
-            #[cfg(feature = "jit-speculation")]
-            RegInstr::NativeGuardClosureId { closure, expected } => {
-                // The closure handle is a native-readable handle (a param, or a
-                // stored closure fetched via `FieldHandle`/`ListGetHandle`); the
-                // guard reads its function id and bails on mismatch.
-                require(handle_reg(*closure))?;
-                let expected = i64::try_from(*expected).ok()?;
-                JitInstr::GuardClosureId {
-                    base: r(*closure),
-                    expected,
-                }
-            }
             RegInstr::NativeClosureId { dst, closure } => {
                 // The closure handle is a native-readable handle; reads its
                 // function id once into `dst` for the polymorphic dispatcher.
@@ -2289,7 +2185,6 @@ fn translate_osr_loop_inner(request: OsrLoweringRequest<'_>) -> Option<OsrTransl
         source_instruction_count,
         enable_flat_buffers,
     } = request;
-    #[cfg(not(feature = "jit-speculation"))]
     let _ = &profile_hot_branch_edges;
 
     if captures != 0 {
@@ -3286,22 +3181,6 @@ fn translate_osr_loop_inner(request: OsrLoweringRequest<'_>) -> Option<OsrTransl
                 target,
             } => {
                 require(bool_ty(*cond))?;
-                #[cfg(feature = "jit-speculation")]
-                if let Some(&hot_target) = profile_hot_branch_edges.get(&i) {
-                    JitInstr::ProfiledJumpIfBool {
-                        cond: r(*cond),
-                        expected: *expected,
-                        target: r(*target),
-                        hot_target,
-                    }
-                } else {
-                    JitInstr::JumpIfBool {
-                        cond: r(*cond),
-                        expected: *expected,
-                        target: r(*target),
-                    }
-                }
-                #[cfg(not(feature = "jit-speculation"))]
                 JitInstr::JumpIfBool {
                     cond: r(*cond),
                     expected: *expected,
@@ -3316,26 +3195,6 @@ fn translate_osr_loop_inner(request: OsrLoweringRequest<'_>) -> Option<OsrTransl
                 target,
             } => {
                 require(numeric_pair_or_int_free(*lhs, *rhs))?;
-                #[cfg(feature = "jit-speculation")]
-                if let Some(&hot_target) = profile_hot_branch_edges.get(&i) {
-                    JitInstr::ProfiledJumpIfIntCompare {
-                        lhs: r(*lhs),
-                        rhs: r(*rhs),
-                        op: cmp(op),
-                        expected: *expected,
-                        target: r(*target),
-                        hot_target,
-                    }
-                } else {
-                    JitInstr::JumpIfIntCompare {
-                        lhs: r(*lhs),
-                        rhs: r(*rhs),
-                        op: cmp(op),
-                        expected: *expected,
-                        target: r(*target),
-                    }
-                }
-                #[cfg(not(feature = "jit-speculation"))]
                 JitInstr::JumpIfIntCompare {
                     lhs: r(*lhs),
                     rhs: r(*rhs),
@@ -3795,15 +3654,6 @@ fn translate_osr_loop_inner(request: OsrLoweringRequest<'_>) -> Option<OsrTransl
                         some_ip: r(*some_ip),
                         none_ip: r(*none_ip),
                     }
-                }
-            }
-            #[cfg(feature = "jit-speculation")]
-            RegInstr::NativeGuardClosureId { closure, expected } => {
-                require(handle_reg(*closure))?;
-                let expected = i64::try_from(*expected).ok()?;
-                JitInstr::GuardClosureId {
-                    base: r(*closure),
-                    expected,
                 }
             }
             RegInstr::NativeClosureId { dst, closure } => {

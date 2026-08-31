@@ -33,85 +33,9 @@ pub(in crate::reg_vm) fn native_capturing_callee_inlinable(
     })
 }
 
-/// Inline `CallKnown`s to [`native_callee_inlinable`] callees into `func`,
-/// returning the rewritten code and new register count — this is what makes a
-/// function that calls small helpers native-eligible (the calls vanish). Callees
-/// may now contain internal branches/loops: each is spliced into a fresh register
-/// window, its internal jump targets are remapped, and every `Return` becomes a
-/// `Move` of the result into the call's destination plus a jump to the join point
-/// just past the spliced block. `None` if any call target is not inlinable (the
-/// function then falls back).
-/// If the `CallClosure` at instruction index `i` in `func` qualifies for profile-guided inlining
-/// profile-guided monomorphic inlining, return the observed callee's function id
-/// `k` (into `unit.functions`); otherwise `None`.
-///
-/// All of the following must hold (any failure ⇒ leave the site on its normal,
-/// interpreter path — behavior unchanged):
-/// - `func.code[i]` is a `CallClosure` with **no `mut` args** and a closure operand
-///   that is a **parameter** (`< func.params`), i.e. a native-visible handle (the
-///   higher-order "take a closure, call it" shape);
-/// - bounded profile collection's profile for site `i` is **Monomorphic** with exactly one observed callee
-///   key `k` (so the identity guard has a single speculated target);
-/// - `unit.functions[k]` is **non-capturing** and [`native_callee_inlinable`] at the
-///   call's arity (side-effect-free, splice-able).
-///
-/// Read-only over the profile (a `try_borrow`, never a panic); never mutates state
-/// or feeds a computed value.
-/// Whether `closure` is a **native-readable closure handle** operand for a
-/// `CallClosure` (Pending #1, stored-closure broadening). Either:
-/// - a **parameter** handle (`closure < func.params`) — the shipped higher-order
-///   "take a closure, call it" shape (marshalled into the heap-arg window); or
-/// - a register produced by an in-function native-subset heap read — a
-///   `GetFieldSlot` (`f = op.apply`) or `ListGet` (`op = List.get(ops, i)`) — i.e.
-///   a **stored** closure fetched each iteration. Such a register is lowered to a
-///   `FieldHandle`/`ListGetHandle` read (a fresh heap-table index) and consumed by
-///   the closure guard/dispatch, so the closure identity is checked at runtime and
-///   a wrong handle simply bails. We require the producer to be exactly one of those
-///   reads so the operand is provably a fetched heap value (never a scalar register
-///   reinterpreted as a handle).
-#[cfg(all(feature = "native-jit", feature = "jit-speculation"))]
-pub(in crate::reg_vm) fn native_readable_closure_operand(
-    func: &RegFunction,
-    closure: usize,
-) -> bool {
-    if closure < func.params {
-        return true;
-    }
-    // A non-param operand must be produced by a reachable native-subset heap read
-    // (`GetFieldSlot`/`ListGet`), possibly through `Move` temporaries the lowerer
-    // introduces. This shares the same CFG-backed alias closure as the other native
-    // eligibility analyses.
-    let Some(analysis) =
-        NativeRegionAnalysis::compute_prefix(&func.code, func.regs, 0, func.code.len())
-    else {
-        return false;
-    };
-    let Some(read_regs) = analysis.reachable_heap_read_defs_closed_under_moves(&func.code) else {
-        return false;
-    };
-    read_regs.get(closure).copied().unwrap_or(false)
-}
 
-#[cfg(all(feature = "native-jit", feature = "jit-speculation"))]
-pub(in crate::reg_vm) fn native_readable_or_sinkable_closure_operand_candidate(
-    func: &RegFunction,
-    closure: usize,
-) -> bool {
-    if closure < func.params {
-        return true;
-    }
-    let Some(analysis) =
-        NativeRegionAnalysis::compute_prefix(&func.code, func.regs, 0, func.code.len())
-    else {
-        return false;
-    };
-    let Some(value_regs) = analysis.native_readable_or_sinkable_closure_operands(&func.code) else {
-        return false;
-    };
-    value_regs.get(closure).copied().unwrap_or(false)
-}
 
-#[cfg(all(feature = "native-jit", not(feature = "jit-speculation")))]
+#[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn native_readable_or_sinkable_closure_operand_candidate(
     _func: &RegFunction,
     _closure: usize,
@@ -119,66 +43,8 @@ pub(in crate::reg_vm) fn native_readable_or_sinkable_closure_operand_candidate(
     false
 }
 
-#[cfg(all(feature = "native-jit", feature = "jit-speculation"))]
-pub(in crate::reg_vm) fn monomorphic_closure_inline_target(
-    unit: &RegUnit,
-    func: &RegFunction,
-    profile: Option<&FunctionProfile>,
-    call_count: u32,
-    i: usize,
-) -> Option<usize> {
-    let (closure, args, mut_args) = match func.code.get(i)? {
-        RegInstr::CallClosure {
-            closure,
-            args,
-            mut_args,
-            ..
-        } => (*closure, args, mut_args),
-        _ => return None,
-    };
-    // Conservative shape gate: side-effect-free call (no write-backs) whose closure
-    // is a native-readable handle (a parameter, or a stored closure fetched via a
-    // `GetFieldSlot`/`ListGet` heap read).
-    if !mut_args.is_empty() || !native_readable_closure_operand(func, closure) {
-        return None;
-    }
-    // bounded type profile: compile only after the bounded sampling window freezes. Before
-    // then a one-callee observation can still mature into a polymorphic site, and
-    // caching an early monomorphic native body would permanently hide that shape.
-    if call_count < PROFILE_RECORD_LIMIT {
-        return None;
-    }
-    // Frozen profile: this site must have settled on exactly one callee.
-    let feedback = profile?.call_sites.get(&i)?;
-    if feedback.state() != MonoState::Monomorphic {
-        return None;
-    }
-    // Monomorphic ⇒ exactly one observed callee key (its function id).
-    let &(key, _) = feedback.observed.first()?;
-    if feedback.observed.len() != 1 {
-        return None;
-    }
-    let k = usize::try_from(key).ok()?;
-    let callee = unit.functions.get(k)?;
-    // Non-capturing callee: the original (shipped) path. A capturing callee is
-    // allowed ONLY when every observed capture at this site was scalar (the
-    // profile's monotone `captures_all_scalar` bit) — then each capture is
-    // materialized as a scalar at the inline site via the `closure_capture` host
-    // helper. A heap capture (or a profile that ever saw one) leaves the site on
-    // its interpreter path: no inline, no OSR.
-    if callee.captures == 0 {
-        if !native_callee_inlinable(callee, args.len()) {
-            return None;
-        }
-    } else if !feedback.captures_all_scalar
-        || !native_capturing_callee_inlinable(callee, args.len())
-    {
-        return None;
-    }
-    Some(k)
-}
 
-#[cfg(all(feature = "native-jit", not(feature = "jit-speculation")))]
+#[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn monomorphic_closure_inline_target(
     _unit: &RegUnit,
     _func: &RegFunction,
@@ -189,89 +55,8 @@ pub(in crate::reg_vm) fn monomorphic_closure_inline_target(
     None
 }
 
-/// polymorphic inline cache gate. If the `CallClosure` at instruction index
-/// `i` qualifies, return its 2–3 observed callee ids (into `unit.functions`);
-/// otherwise `None`. Sibling to [`monomorphic_closure_inline_target`] — after the
-/// bounded bounded profile collection sampling window freezes, a site is EITHER mono (single-guard path)
-/// OR poly (this dispatch path), never both.
-///
-/// All of the following must hold (any failure ⇒ leave the site on its normal
-/// interpreter path — behavior unchanged):
-/// - `func.code[i]` is a `CallClosure` with **no `mut` args** and a closure operand
-///   that is a **parameter** (`< func.params`), i.e. a native-visible handle (same
-///   shape gate as the monomorphic case);
-/// - bounded profile collection's profile for site `i` is **Polymorphic** — by construction (bounded profile collection caps the
-///   observed set at 4 and marks >3 as Megamorphic) this means **2 or 3** distinct
-///   observed callee keys;
-/// - **EVERY** observed callee is **non-capturing** and [`native_callee_inlinable`]
-///   at the call's arity. If any single observed callee fails, the WHOLE site is
-///   disqualified (no partial inlining): a no-match bail must be able to re-run the
-///   exact same side-effect-free subset on the interpreter.
-///
-/// Read-only over the profile (a `try_borrow`, never a panic); never mutates state.
-#[cfg(all(feature = "native-jit", feature = "jit-speculation"))]
-pub(in crate::reg_vm) fn polymorphic_closure_inline_targets(
-    unit: &RegUnit,
-    func: &RegFunction,
-    profile: Option<&FunctionProfile>,
-    call_count: u32,
-    i: usize,
-) -> Option<Vec<usize>> {
-    let (closure, args, mut_args) = match func.code.get(i)? {
-        RegInstr::CallClosure {
-            closure,
-            args,
-            mut_args,
-            ..
-        } => (*closure, args, mut_args),
-        _ => return None,
-    };
-    // Same conservative shape gate as the monomorphic case.
-    if !mut_args.is_empty() || !native_readable_closure_operand(func, closure) {
-        return None;
-    }
-    // bounded type profile: compile only after the bounded sampling window freezes, so the
-    // 2- or 3-target PIC is derived from a stable observed set.
-    if call_count < PROFILE_RECORD_LIMIT {
-        return None;
-    }
-    let feedback = profile?.call_sites.get(&i)?;
-    if feedback.state() != MonoState::Polymorphic {
-        return None;
-    }
-    // Polymorphic ⇒ 2 or 3 distinct observed callees (bounded profile collection caps at 4 / >3 ⇒ Mega).
-    let n = feedback.observed.len();
-    if !(2..=3).contains(&n) {
-        return None;
-    }
-    let mut ranked: Vec<(usize, u32, usize)> = Vec::with_capacity(n);
-    for (first_seen, &(key, count)) in feedback.observed.iter().enumerate() {
-        let k = usize::try_from(key).ok()?;
-        let callee = unit.functions.get(k)?;
-        // EVERY observed callee must be inlinable, else disqualify the whole site
-        // (no partial inlining — a no-match bail must re-run the exact same side-
-        // effect-free subset on the interpreter). A CAPTURING callee is allowed
-        // ONLY when every observed capture at this site was scalar (the profile's
-        // monotone `captures_all_scalar` bit), so each capture materializes via the
-        // `closure_capture` host helper. A non-scalar (heap) capture, or any callee
-        // not native-inlinable at the call's arity, disqualifies the whole site.
-        let ok = if callee.captures == 0 {
-            native_callee_inlinable(callee, args.len())
-        } else {
-            feedback.captures_all_scalar && native_capturing_callee_inlinable(callee, args.len())
-        };
-        if !ok {
-            return None;
-        }
-        ranked.push((k, count, first_seen));
-    }
-    // Hottest-first PIC arm order: the common callee gets the first compare/branch.
-    // Preserve first-seen order for equal counts so the emitted code is stable.
-    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.2.cmp(&b.2)));
-    Some(ranked.into_iter().map(|(k, _, _)| k).collect())
-}
 
-#[cfg(all(feature = "native-jit", not(feature = "jit-speculation")))]
+#[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn polymorphic_closure_inline_targets(
     _unit: &RegUnit,
     _func: &RegFunction,
@@ -282,35 +67,8 @@ pub(in crate::reg_vm) fn polymorphic_closure_inline_targets(
     None
 }
 
-/// Whether a closure-call site could become eligible after its bounded profile
-/// freezes. The implementation is compiled only for the research feature; the
-/// stable native tier has no retry state for speculative closure shapes.
-#[cfg(all(feature = "native-jit", feature = "jit-speculation"))]
-pub(in crate::reg_vm) fn native_translation_pending_on_profile(
-    _unit: &RegUnit,
-    func: &RegFunction,
-    profile: Option<&FunctionProfile>,
-    call_count: u32,
-) -> bool {
-    if call_count >= PROFILE_RECORD_LIMIT {
-        return false;
-    }
-    func.code.iter().enumerate().any(|(i, instr)| match instr {
-        RegInstr::CallClosure {
-            closure, mut_args, ..
-        } => {
-            if !mut_args.is_empty() || !native_readable_closure_operand(func, *closure) {
-                return false;
-            }
-            profile
-                .and_then(|profile| profile.call_sites.get(&i))
-                .is_none_or(|feedback| feedback.state() != MonoState::Megamorphic)
-        }
-        _ => false,
-    })
-}
 
-#[cfg(all(feature = "native-jit", not(feature = "jit-speculation")))]
+#[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn native_translation_pending_on_profile(
     _unit: &RegUnit,
     _func: &RegFunction,

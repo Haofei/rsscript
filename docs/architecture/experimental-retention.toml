@@ -37,57 +37,6 @@ evidence_sha256 = ""
 removal_rule = "Keep as a preview-only engine until controlled workloads justify a supported optional release surface."
 
 [[surface]]
-id = "jit-speculation"
-workspace = "root"
-kind = "cargo_feature"
-package = "rsscript-vm"
-feature = "jit-speculation"
-owner = "@Haofei"
-status = "pending"
-maturity = "research"
-last_measured_at = "2026-08-28"
-decision_by = "2026-11-30"
-workloads = ["profile-closure-pic", "profile-branch-cold"]
-minimum_end_to_end_gain_percent = 15
-evidence_uri = ""
-evidence_sha256 = ""
-removal_rule = "Remove if gains are microbenchmark-only or canonical workloads do not clear the threshold."
-
-[[surface]]
-id = "jit-native-recursion"
-workspace = "root"
-kind = "cargo_feature"
-package = "rsscript-vm"
-feature = "jit-recursion-experimental"
-owner = "@Haofei"
-status = "pending"
-maturity = "research"
-last_measured_at = "2026-08-28"
-decision_by = "2026-11-30"
-workloads = ["recursion-tree", "recursion-linear"]
-minimum_end_to_end_gain_percent = 15
-evidence_uri = ""
-evidence_sha256 = ""
-removal_rule = "Keep disabled unless a non-heuristic stack boundary and canonical benefit are both demonstrated."
-
-[[surface]]
-id = "jit-struct-scalar-replacement"
-workspace = "root"
-kind = "cargo_feature"
-package = "rsscript-vm"
-feature = "jit-struct-sr-experimental"
-owner = "@Haofei"
-status = "pending"
-maturity = "research"
-last_measured_at = "2026-08-28"
-decision_by = "2026-11-30"
-workloads = ["native-struct-sr"]
-minimum_end_to_end_gain_percent = 15
-evidence_uri = ""
-evidence_sha256 = ""
-removal_rule = "Remove if the canonical aggregate workload does not establish a repeatable end-to-end gain."
-
-[[surface]]
 id = "aot-backend"
 workspace = "experiments"
 kind = "cargo_package"

@@ -177,8 +177,10 @@ impl NativeExecutionPlan {
             report: false,
             forced_safepoint: None,
             force_all_safepoints: false,
-            allow_recursive_calls: options.allow_recursive_calls
-                && cfg!(feature = "jit-recursion-experimental"),
+            // Native host-stack recursion was removed with the jit-recursion
+            // experimental surface; the option is retained as a no-op and never
+            // admits recursion into the native tier.
+            allow_recursive_calls: false,
             cost_model: options.cost_model,
             osr_work_threshold: options.osr_work_threshold,
             admission: NativeAdmissionPolicy {
@@ -316,7 +318,7 @@ mod tests {
         }
     }
 
-    #[cfg(all(feature = "native-jit", not(feature = "jit-recursion-experimental")))]
+    #[cfg(feature = "native-jit")]
     #[test]
     fn stable_native_feature_cannot_enable_host_stack_recursion() {
         let plan = NativeExecutionPlan::from_options(NativeJitOptions {

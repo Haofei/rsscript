@@ -675,50 +675,6 @@ pub(crate) fn validate_with_limits(
                     check_reg(*arg)?;
                 }
             }
-            #[cfg(feature = "recursion")]
-            JitInstr::CallSelf { dst, args } => {
-                check_reg(*dst)?;
-                if is_flat_type(class(*dst)) {
-                    return Err(JitError::invalid_ir(format!(
-                        "CallSelf result register {dst} is a flat-array register"
-                    )));
-                }
-                // A self-call invokes THIS function: arity and arg/result classes must
-                // match its own signature (params are regs `0..n_params`).
-                if args.len() != program.n_params as usize {
-                    return Err(JitError::invalid_ir(format!(
-                        "CallSelf got {} args, function expects {}",
-                        args.len(),
-                        program.n_params
-                    )));
-                }
-                for (i, arg) in args.iter().enumerate() {
-                    check_reg(*arg)?;
-                    let expected = program.reg_types[i];
-                    if class(*arg) != expected {
-                        return Err(JitError::invalid_ir(format!(
-                            "CallSelf arg {i}: register {arg} is {:?}, function param is {expected:?}",
-                            class(*arg)
-                        )));
-                    }
-                }
-            }
-            #[cfg(feature = "recursion")]
-            JitInstr::CallGroup { dst, args, .. } => {
-                // Group index, arity, and arg/result classes are checked against the
-                // co-compiled group in `compile_recursive_group`/`build_function`,
-                // where the group's signatures are known. Here only the local
-                // register references are validated.
-                check_reg(*dst)?;
-                if is_flat_type(class(*dst)) {
-                    return Err(JitError::invalid_ir(format!(
-                        "CallGroup result register {dst} is a flat-array register"
-                    )));
-                }
-                for arg in args {
-                    check_reg(*arg)?;
-                }
-            }
             JitInstr::MatchMapGetInt {
                 map,
                 key,
@@ -795,24 +751,10 @@ pub(crate) fn validate_with_limits(
                 check_target(*target)?;
                 check_fallthrough()?;
             }
-            #[cfg(feature = "speculation")]
-            JitInstr::ProfiledJumpIfBool { cond, target, .. } => {
-                require_class(*cond, JitValueType::Bool, "ProfiledJumpIfBool")?;
-                check_target(*target)?;
-                check_fallthrough()?;
-            }
             JitInstr::JumpIfIntCompare {
                 lhs, rhs, target, ..
             } => {
                 numeric_pair(*lhs, *rhs, "JumpIfIntCompare")?;
-                check_target(*target)?;
-                check_fallthrough()?;
-            }
-            #[cfg(feature = "speculation")]
-            JitInstr::ProfiledJumpIfIntCompare {
-                lhs, rhs, target, ..
-            } => {
-                numeric_pair(*lhs, *rhs, "ProfiledJumpIfIntCompare")?;
                 check_target(*target)?;
                 check_fallthrough()?;
             }
@@ -920,15 +862,6 @@ pub(crate) fn validate_with_limits(
                 }
                 require_class(*dst, JitValueType::Bool, "ListIsEmptyDirect result")?;
             }
-            #[cfg(feature = "speculation")]
-            JitInstr::GuardClosureId { base, expected } => {
-                require_class(*base, JitValueType::Handle, "GuardClosureId base")?;
-                if *expected < 0 {
-                    return Err(JitError::invalid_ir(format!(
-                        "GuardClosureId expected: {expected} is not a valid function id"
-                    )));
-                }
-            }
             // OSR-exit is a parameterless terminator (an unconditional deopt at its
             // own ip); its live set is computed from definite-assignment, so it
             // carries no operands to validate.
@@ -988,54 +921,7 @@ pub(crate) fn validate_with_limits(
         }
     }
 
-    #[cfg(feature = "recursion")]
-    let has_call_self = program
-        .code
-        .iter()
-        .enumerate()
-        .any(|(ip, instr)| reachable[ip] && matches!(instr, JitInstr::CallSelf { .. }));
-    #[cfg(feature = "recursion")]
-    if has_call_self {
-        let Some(return_type) = reachable_return_type else {
-            return Err(JitError::invalid_ir(
-                "CallSelf requires a reachable function Return",
-            ));
-        };
-        if program.reg_types[..program.n_params as usize]
-            .iter()
-            .any(|ty| is_flat_type(*ty))
-        {
-            return Err(JitError::invalid_ir(
-                "CallSelf does not support flat-array parameters",
-            ));
-        }
-        for (ip, instr) in program.code.iter().enumerate() {
-            let JitInstr::CallSelf { dst, .. } = instr else {
-                continue;
-            };
-            if reachable[ip] && program.reg_types[*dst as usize] != return_type {
-                return Err(JitError::invalid_ir(format!(
-                    "CallSelf result register {dst} is {:?}, function returns {return_type:?}",
-                    program.reg_types[*dst as usize]
-                )));
-            }
-        }
-    }
 
-    #[cfg(feature = "recursion")]
-    if (has_call_self
-        || program
-            .code
-            .iter()
-            .any(|instr| matches!(instr, JitInstr::CallGroup { .. })))
-        && native_recursion_frame_bytes_estimate(program) > NATIVE_RECURSION_STACK_BUDGET_BYTES
-    {
-        return Err(JitError::invalid_ir(format!(
-            "recursive native frame estimate {} bytes exceeds the {} byte stack budget",
-            native_recursion_frame_bytes_estimate(program),
-            NATIVE_RECURSION_STACK_BUDGET_BYTES
-        )));
-    }
     if !program.resume_live_regs.is_empty() && program.resume_live_regs.len() != program.code.len()
     {
         return Err(JitError::invalid_ir(format!(

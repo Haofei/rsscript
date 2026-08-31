@@ -302,10 +302,7 @@ fn validate_ci() -> Result<(), Box<dyn Error>> {
 
 fn validate_release_feature_closure(root: &Path) -> Result<(), Box<dyn Error>> {
     let release = fs::read_to_string(root.join(".github/workflows/release.yml"))?;
-    if release.contains("native-jit")
-        || release.contains("jit-speculation")
-        || release.contains("jit-recursion-experimental")
-    {
+    if release.contains("native-jit") {
         return Err("release workflow must not compile or validate preview native engines".into());
     }
     for command in release

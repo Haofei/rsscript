@@ -75,14 +75,16 @@ without increasing semantic differences, unsafe surface, or unbounded resource
 use. Microbenchmark-only wins are insufficient.
 
 Current evidence keeps baseline scalar loops, native call chains, and the shared
-Option/Result/Variant scalar-replacement path. Profile-guided closure PIC and
-branch-side-exit speculation are isolated behind the VM-only `jit-speculation`
-feature. Native recursion is isolated behind `jit-recursion-experimental`.
-Loop-invariant helper caching is owned by the stable readonly-LICM path. The
-struct scalar-replacement implementation is isolated behind
-`jit-struct-sr-experimental` after the canonical case failed to establish stable
-native entry and end-to-end benefit. The ordinary SDK `native-jit` feature
-compiles none of those research implementations.
+Option/Result/Variant scalar-replacement path. Loop-invariant helper caching is
+owned by the stable readonly-LICM path.
+
+Three research surfaces were removed after their controlled workloads failed the
+retention rule (2026-08): profile-guided closure PIC and branch-side-exit
+speculation (`profile-closure-pic`, `profile-branch-cold`), struct scalar
+replacement (`native-struct-sr` ran net-negative against the interpreter), and
+non-tail native recursion (its only stack boundary was a static frame estimate,
+not a hard safety proof). The `native-jit` feature and its research feature flags
+no longer exist for them.
 
 ## Adding a workload
 

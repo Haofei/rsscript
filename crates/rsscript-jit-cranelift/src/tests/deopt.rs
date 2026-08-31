@@ -137,49 +137,6 @@ fn deopt_map_uses_explicit_source_and_resume_identity() {
     assert_eq!(site.resume_ip, 4);
 }
 
-#[cfg(feature = "speculation")]
-#[test]
-fn profiled_branch_deopts_on_cold_edge() {
-    let mut m = module();
-    let id = m
-        .compile(&f(
-            2,
-            3,
-            vec![
-                JitInstr::ProfiledJumpIfIntCompare {
-                    lhs: 0,
-                    rhs: 1,
-                    op: JitCompare::Lt,
-                    expected: true,
-                    target: 3,
-                    hot_target: false,
-                },
-                JitInstr::LoadInt { dst: 2, value: 10 },
-                JitInstr::Return { src: 2 },
-                JitInstr::LoadInt { dst: 2, value: 99 },
-                JitInstr::Return { src: 2 },
-            ],
-        ))
-        .unwrap();
-
-    assert_eq!(m.call(id, &[5, 3], &[0, 0]).completed(), Some(10));
-    match m.call(id, &[1, 3], &[0, 0]) {
-        NativeOutcome::Deopt {
-            safepoint_id, live, ..
-        } => {
-            assert_eq!(safepoint_id, SafepointId(1));
-            assert_eq!(
-                live.iter().find(|reg| reg.reg == 0).map(|reg| reg.value),
-                Some(DeoptValue::Int(1))
-            );
-            assert_eq!(
-                live.iter().find(|reg| reg.reg == 1).map(|reg| reg.value),
-                Some(DeoptValue::Int(3))
-            );
-        }
-        other => panic!("expected profiled cold edge to deopt, got {other:?}"),
-    }
-}
 
 #[test]
 fn deopt_map_two_distinct_sites_track_prior_defs() {

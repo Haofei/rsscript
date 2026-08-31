@@ -106,8 +106,6 @@ fn instruction_descriptor_owns_flat_and_helper_capabilities() {
     assert_eq!(host_descriptor.cost_class, JitInstrCostClass::HostCall);
     assert!(!host_descriptor.compact_scalar_frame);
 }
-#[cfg(feature = "recursion")]
-use crate::codegen::NATIVE_RECURSION_DEPTH_CAP_MAX;
 
 /// Test shim: validate as a non-OSR program (the common case for these IR
 /// validation tests). OSR-specific validation is exercised via `compile_osr`.

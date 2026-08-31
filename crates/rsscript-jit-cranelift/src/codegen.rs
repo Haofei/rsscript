@@ -13,14 +13,8 @@ pub(crate) fn push_compiled_abi_signature(
     func.signature.params.push(AbiParam::new(ptr_ty)); // JitCallFrame ptr
     func.signature.returns.push(AbiParam::new(types::I8));
 }
-#[cfg(test)]
-pub(crate) use crate::codegen_call::NATIVE_RECURSION_DEPTH_CAP_MAX;
 pub(crate) use crate::codegen_call::native_recursion_depth_cap;
 use crate::codegen_call::{ChildCallFrameValues, build_child_call_frame};
-#[cfg(feature = "recursion")]
-pub(crate) use crate::codegen_call::{
-    NATIVE_RECURSION_STACK_BUDGET_BYTES, native_recursion_frame_bytes_estimate,
-};
 
 /// In-generated-code `VmLimits` enforcement requested for this compile. Each flag
 /// is set only when the corresponding limit is armed and the generated region can
@@ -134,7 +128,6 @@ pub(crate) fn build_function(
         assigned_in,
         deopt_in,
     } = input;
-    #[cfg(not(feature = "recursion"))]
     let _ = (self_func_id, group, native_static_call_depth);
     // Definite-assignment facts were computed by validation and are reused here;
     // codegen never repeats the most expensive structural dataflow pass.
@@ -190,28 +183,8 @@ pub(crate) fn build_function(
             )
         })
         .collect();
-    // Self-recursive native calls (native-call-ABI slice 2): a `CallSelf` invokes
-    // THIS function via its own (declared-before-defined) `FuncId`. Only declared when
-    // a self-call is present, so non-recursive functions get no extra func ref.
-    #[cfg(feature = "recursion")]
-    let has_call_self = program
-        .code
-        .iter()
-        .any(|instr| matches!(instr, JitInstr::CallSelf { .. }));
-    #[cfg(feature = "recursion")]
-    let self_ref = has_call_self.then(|| module.declare_func_in_func(self_func_id, bcx.func));
-    // Mutual-recursion group calls (native-call-ABI slice 4): a func ref per group
-    // member, resolving `CallGroup { group_index }` to the member's declared FuncId.
-    #[cfg(feature = "recursion")]
-    let has_call_group = program
-        .code
-        .iter()
-        .any(|instr| matches!(instr, JitInstr::CallGroup { .. }));
-    #[cfg(feature = "recursion")]
-    let group_refs: Vec<_> = group
-        .iter()
-        .map(|member| module.declare_func_in_func(member.func_id, bcx.func))
-        .collect();
+    // Native cross-function calls (native-call ABI): one Cranelift func ref per
+    // resolved native callee, using its direct-scalar id when available.
 
     let n = program.code.len();
     let n_regs = program.n_regs as usize;
@@ -466,14 +439,6 @@ pub(crate) fn build_function(
                     is_leader[i + 1] = true;
                 }
             }
-            #[cfg(feature = "speculation")]
-            JitInstr::ProfiledJumpIfBool { target, .. }
-            | JitInstr::ProfiledJumpIfIntCompare { target, .. } => {
-                is_leader[*target as usize] = true;
-                if i + 1 < n {
-                    is_leader[i + 1] = true;
-                }
-            }
             JitInstr::MatchMapGetInt {
                 some_ip, none_ip, ..
             }
@@ -602,34 +567,6 @@ pub(crate) fn build_function(
     // edges are statically resolved, so their maximum depth is checked once by the
     // top-level wrapper. Reserve that known descendant depth when recursion and an
     // ordinary native edge coexist.
-    #[cfg(feature = "recursion")]
-    if has_call_self || has_call_group {
-        let cap = bcx
-            .ins()
-            .iconst(ptr_ty, native_recursion_depth_cap(program));
-        let at_cap = bcx
-            .ins()
-            .icmp(IntCC::UnsignedGreaterThanOrEqual, native_call_depth, cap);
-        let native_too_deep = if native_static_call_depth == 0 {
-            at_cap
-        } else {
-            let deepest = bcx
-                .ins()
-                .iadd_imm(native_call_depth, i64::from(native_static_call_depth));
-            let descendants_exceed_cap = bcx.ins().icmp(IntCC::UnsignedGreaterThan, deepest, cap);
-            bcx.ins().bor(at_cap, descendants_exceed_cap)
-        };
-        let logical_too_deep = bcx.ins().icmp(
-            IntCC::UnsignedGreaterThan,
-            logical_call_depth,
-            logical_depth_limit,
-        );
-        let too_deep = bcx.ins().bor(native_too_deep, logical_too_deep);
-        let cont = bcx.create_block();
-        bcx.ins().brif(too_deep, fallback, &[], cont, &[]);
-        bcx.switch_to_block(cont);
-        bcx.seal_block(cont);
-    }
 
     match osr_header {
         // OSR-entry: begin native execution *inside* the loop at the header block.
@@ -1243,221 +1180,6 @@ pub(crate) fn build_function(
                     bcx.def_var(reg(*dst), result);
                 }
             }
-            #[cfg(feature = "recursion")]
-            JitInstr::CallSelf { dst, args } => {
-                // Self-recursive native call (native-call-ABI slice 2): invoke THIS
-                // function via its own func ref, sharing the caller's bail/safepoint/
-                // payload pointers (host-helper style). The self-call is NON-chaining:
-                // a self-recursive function uses re-run-from-top deopt, so on any child
-                // bail we propagate to the interpreter rather than reconstructing an
-                // unbounded native frame chain. Forward `depth + 1` so the callee's
-                // entry guard sees a deeper frame; that guard bounds the host stack.
-                let self_ref = self_ref.expect("self func ref declared when a CallSelf is present");
-                let n_params = program.n_params as usize;
-                let slot_bytes = |words: usize| (words.max(1) * 8) as u32;
-                let args_slot = bcx.create_sized_stack_slot(StackSlotData::new(
-                    StackSlotKind::ExplicitSlot,
-                    slot_bytes(n_params),
-                    3,
-                ));
-                let lens_slot = bcx.create_sized_stack_slot(StackSlotData::new(
-                    StackSlotKind::ExplicitSlot,
-                    slot_bytes(n_params),
-                    3,
-                ));
-                let out_slot = bcx.create_sized_stack_slot(StackSlotData::new(
-                    StackSlotKind::ExplicitSlot,
-                    8,
-                    3,
-                ));
-                let zero_i64 = bcx.ins().iconst(types::I64, 0);
-                for (i_arg, &arg) in args.iter().enumerate() {
-                    let value = bcx.use_var(reg(arg));
-                    bcx.ins().stack_store(value, args_slot, (i_arg as i32) * 8);
-                    // Self params are scalar (validated): no flat-array length needed.
-                    bcx.ins()
-                        .stack_store(zero_i64, lens_slot, (i_arg as i32) * 8);
-                }
-                let args_ptr_v = bcx.ins().stack_addr(ptr_ty, args_slot, 0);
-                let lens_ptr_v = bcx.ins().stack_addr(ptr_ty, lens_slot, 0);
-                let out_ptr_v = bcx.ins().stack_addr(ptr_ty, out_slot, 0);
-                let nargs_v = bcx.ins().iconst(ptr_ty, n_params as i64);
-                let one_depth = bcx.ins().iconst(ptr_ty, 1);
-                let child_depth = bcx.ins().iadd(native_call_depth, one_depth);
-                let caller_logical_depth = tail_depth_var
-                    .map(|tail_depth_var| bcx.use_var(tail_depth_var))
-                    .unwrap_or(logical_call_depth);
-                let child_logical_depth = bcx.ins().iadd(caller_logical_depth, one_depth);
-                let child_frame = build_child_call_frame(
-                    &mut bcx,
-                    ptr_ty,
-                    ChildCallFrameValues {
-                        args: args_ptr_v,
-                        lens: lens_ptr_v,
-                        arg_count: nargs_v,
-                        host_ctx,
-                        limits: limits_ptr,
-                        result: out_ptr_v,
-                        bail: bail_ptr,
-                        safepoint: safepoint_ptr,
-                        deopt: payload_ptr,
-                        native_depth: child_depth,
-                        logical_depth: child_logical_depth,
-                        logical_depth_limit,
-                    },
-                );
-                let call = bcx.ins().call(self_ref, &[child_frame]);
-                // A child guard-bail returns completed=0 WITHOUT setting the shared
-                // bail flag, so detect failure via the return value (covers guard and
-                // helper bails alike). On failure, propagate (re-run-from-top).
-                let completed = bcx.inst_results(call)[0];
-                let one_i8 = bcx.ins().iconst(types::I8, 1);
-                let not_completed = bcx.ins().icmp(IntCC::NotEqual, completed, one_i8);
-                let cont = bail_if(
-                    &mut bcx,
-                    not_completed,
-                    DeoptBuffers {
-                        fallback,
-                        safepoint_ptr,
-                        payload_ptr,
-                    },
-                    &vars,
-                    &mut next_id,
-                    deopt!(i),
-                );
-                bcx.switch_to_block(cont);
-                let result = if program.reg_types[*dst as usize] == JitValueType::Float {
-                    bcx.ins().stack_load(types::F64, out_slot, 0)
-                } else {
-                    bcx.ins().stack_load(types::I64, out_slot, 0)
-                };
-                bcx.def_var(reg(*dst), result);
-            }
-            #[cfg(feature = "recursion")]
-            JitInstr::CallGroup {
-                group_index,
-                dst,
-                args,
-            } => {
-                // Mutually-recursive native call to a co-compiled group member
-                // (native-call-ABI slice 4). NON-chaining (re-run-from-top deopt) like
-                // CallSelf, but the callee is a DIFFERENT member with its own register
-                // window, so it gets its own scratch slots (sized to the callee and
-                // discarded on bail). Forward depth+1; the entry guard bounds the stack.
-                let k = *group_index as usize;
-                let member = group.get(k).ok_or_else(|| {
-                    JitError::invalid_ir(format!("CallGroup group_index {k} out of range"))
-                })?;
-                if args.len() != member.n_params {
-                    return Err(JitError::invalid_ir(format!(
-                        "CallGroup got {} args, group member {k} expects {}",
-                        args.len(),
-                        member.n_params
-                    )));
-                }
-                for (i_arg, (&arg, expected)) in args.iter().zip(&member.param_types).enumerate() {
-                    let actual = program.reg_types[arg as usize];
-                    if actual != *expected {
-                        return Err(JitError::invalid_ir(format!(
-                            "CallGroup arg {i_arg} has type {actual:?}, group member {k} expects {expected:?}"
-                        )));
-                    }
-                }
-                let member_ref = group_refs[k];
-                let slot_bytes = |words: usize| (words.max(1) * 8) as u32;
-                let args_slot = bcx.create_sized_stack_slot(StackSlotData::new(
-                    StackSlotKind::ExplicitSlot,
-                    slot_bytes(member.n_params),
-                    3,
-                ));
-                let lens_slot = bcx.create_sized_stack_slot(StackSlotData::new(
-                    StackSlotKind::ExplicitSlot,
-                    slot_bytes(member.n_params),
-                    3,
-                ));
-                let out_slot = bcx.create_sized_stack_slot(StackSlotData::new(
-                    StackSlotKind::ExplicitSlot,
-                    8,
-                    3,
-                ));
-                let safepoint_slot = bcx.create_sized_stack_slot(StackSlotData::new(
-                    StackSlotKind::ExplicitSlot,
-                    8,
-                    3,
-                ));
-                let payload_slot = bcx.create_sized_stack_slot(StackSlotData::new(
-                    StackSlotKind::ExplicitSlot,
-                    slot_bytes(member.deopt_payload_words),
-                    3,
-                ));
-                let zero_i64 = bcx.ins().iconst(types::I64, 0);
-                bcx.ins().stack_store(zero_i64, safepoint_slot, 0);
-                for (i_arg, &arg) in args.iter().enumerate() {
-                    let value = bcx.use_var(reg(arg));
-                    bcx.ins().stack_store(value, args_slot, (i_arg as i32) * 8);
-                    bcx.ins()
-                        .stack_store(zero_i64, lens_slot, (i_arg as i32) * 8);
-                }
-                let args_ptr_v = bcx.ins().stack_addr(ptr_ty, args_slot, 0);
-                let lens_ptr_v = bcx.ins().stack_addr(ptr_ty, lens_slot, 0);
-                let out_ptr_v = bcx.ins().stack_addr(ptr_ty, out_slot, 0);
-                let safepoint_ptr_v = bcx.ins().stack_addr(ptr_ty, safepoint_slot, 0);
-                let payload_ptr_v = bcx.ins().stack_addr(ptr_ty, payload_slot, 0);
-                let nargs_v = bcx.ins().iconst(ptr_ty, member.n_params as i64);
-                let one_depth = bcx.ins().iconst(ptr_ty, 1);
-                let child_depth = bcx.ins().iadd(native_call_depth, one_depth);
-                let caller_logical_depth = tail_depth_var
-                    .map(|tail_depth_var| bcx.use_var(tail_depth_var))
-                    .unwrap_or(logical_call_depth);
-                let child_logical_depth = bcx.ins().iadd(caller_logical_depth, one_depth);
-                let child_frame = build_child_call_frame(
-                    &mut bcx,
-                    ptr_ty,
-                    ChildCallFrameValues {
-                        args: args_ptr_v,
-                        lens: lens_ptr_v,
-                        arg_count: nargs_v,
-                        host_ctx,
-                        limits: limits_ptr,
-                        result: out_ptr_v,
-                        bail: bail_ptr,
-                        safepoint: safepoint_ptr_v,
-                        deopt: payload_ptr_v,
-                        native_depth: child_depth,
-                        logical_depth: child_logical_depth,
-                        logical_depth_limit,
-                    },
-                );
-                let call = bcx.ins().call(member_ref, &[child_frame]);
-                // Non-chaining: a child bail uses its own safepoint/payload but the
-                // shared helper-bail channel. Propagate at this site (re-run-from-top).
-                let completed = bcx.inst_results(call)[0];
-                let one_i8 = bcx.ins().iconst(types::I8, 1);
-                let not_completed = bcx.ins().icmp(IntCC::NotEqual, completed, one_i8);
-                let child_bail = bcx.ins().load(types::I8, MemFlags::trusted(), bail_ptr, 0);
-                let zero_i8 = bcx.ins().iconst(types::I8, 0);
-                let child_bailed = bcx.ins().icmp(IntCC::NotEqual, child_bail, zero_i8);
-                let failed = bcx.ins().bor(not_completed, child_bailed);
-                let cont = bail_if(
-                    &mut bcx,
-                    failed,
-                    DeoptBuffers {
-                        fallback,
-                        safepoint_ptr,
-                        payload_ptr,
-                    },
-                    &vars,
-                    &mut next_id,
-                    deopt!(i),
-                );
-                bcx.switch_to_block(cont);
-                let result = if member.return_type == JitValueType::Float {
-                    bcx.ins().stack_load(types::F64, out_slot, 0)
-                } else {
-                    bcx.ins().stack_load(types::I64, out_slot, 0)
-                };
-                bcx.def_var(reg(*dst), result);
-            }
             JitInstr::MatchMapGetInt {
                 map,
                 key,
@@ -1747,45 +1469,6 @@ pub(crate) fn build_function(
                 }
                 terminated = true;
             }
-            #[cfg(feature = "speculation")]
-            JitInstr::ProfiledJumpIfBool {
-                cond,
-                expected,
-                target,
-                hot_target,
-            } => {
-                let value = bcx.use_var(reg(*cond));
-                let zero = bcx.ins().iconst(types::I64, 0);
-                let is_true = bcx.ins().icmp(IntCC::NotEqual, value, zero);
-                let taken = if *expected {
-                    is_true
-                } else {
-                    bcx.ins().icmp(IntCC::Equal, value, zero)
-                };
-                let cold = if *hot_target {
-                    let true_value = bcx.ins().icmp(IntCC::Equal, zero, zero);
-                    bcx.ins().bxor(taken, true_value)
-                } else {
-                    taken
-                };
-                let cont = bail_if(
-                    &mut bcx,
-                    cold,
-                    DeoptBuffers {
-                        fallback,
-                        safepoint_ptr,
-                        payload_ptr,
-                    },
-                    &vars,
-                    &mut next_id,
-                    deopt!(i),
-                );
-                bcx.switch_to_block(cont);
-                if *hot_target {
-                    bcx.ins().jump(block_for[*target as usize].unwrap(), &[]);
-                    terminated = true;
-                }
-            }
             JitInstr::JumpIfIntCompare {
                 lhs,
                 rhs,
@@ -1808,54 +1491,6 @@ pub(crate) fn build_function(
                     bcx.ins().brif(c, fb, &[], tb, &[]);
                 }
                 terminated = true;
-            }
-            #[cfg(feature = "speculation")]
-            JitInstr::ProfiledJumpIfIntCompare {
-                lhs,
-                rhs,
-                op,
-                expected,
-                target,
-                hot_target,
-            } => {
-                let a = bcx.use_var(reg(*lhs));
-                let b = bcx.use_var(reg(*rhs));
-                let cmp = if program.is_float(*lhs) {
-                    bcx.ins().fcmp(op.fcc(), a, b)
-                } else {
-                    bcx.ins().icmp(op.cc(), a, b)
-                };
-                let taken = if *expected {
-                    cmp
-                } else {
-                    let zero = bcx.ins().iconst(types::I64, 0);
-                    let true_value = bcx.ins().icmp(IntCC::Equal, zero, zero);
-                    bcx.ins().bxor(cmp, true_value)
-                };
-                let cold = if *hot_target {
-                    let zero = bcx.ins().iconst(types::I64, 0);
-                    let true_value = bcx.ins().icmp(IntCC::Equal, zero, zero);
-                    bcx.ins().bxor(taken, true_value)
-                } else {
-                    taken
-                };
-                let cont = bail_if(
-                    &mut bcx,
-                    cold,
-                    DeoptBuffers {
-                        fallback,
-                        safepoint_ptr,
-                        payload_ptr,
-                    },
-                    &vars,
-                    &mut next_id,
-                    deopt!(i),
-                );
-                bcx.switch_to_block(cont);
-                if *hot_target {
-                    bcx.ins().jump(block_for[*target as usize].unwrap(), &[]);
-                    terminated = true;
-                }
             }
             JitInstr::Return { src } => {
                 let v = bcx.use_var(reg(*src));
@@ -2051,35 +1686,6 @@ pub(crate) fn build_function(
                 let empty = bcx.ins().icmp(IntCC::Equal, len, zero);
                 let empty64 = bcx.ins().uextend(types::I64, empty);
                 bcx.def_var(reg(*dst), empty64);
-            }
-            #[cfg(feature = "speculation")]
-            JitInstr::GuardClosureId { base, expected } => {
-                // Read the closure handle's underlying function id and bail to the
-                // interpreter if it isn't the speculated callee `expected`. The
-                // helper is total (returns -1 on a non-closure handle), so the
-                // compare alone decides; the bail reuses the standard re-run-from-top
-                // fallback, sound because this guard precedes observable commit and
-                // the embedding VM rolls back any journaled writes before replay.
-                let handle = bcx.use_var(reg(*base));
-                let call = bcx
-                    .ins()
-                    .call(helper_ref(HostHelper::ClosureId), &[host_ctx, handle]);
-                let id = bcx.inst_results(call)[0];
-                let want = bcx.ins().iconst(types::I64, *expected);
-                let mismatch = bcx.ins().icmp(IntCC::NotEqual, id, want);
-                let cont = bail_if(
-                    &mut bcx,
-                    mismatch,
-                    DeoptBuffers {
-                        fallback,
-                        safepoint_ptr,
-                        payload_ptr,
-                    },
-                    &vars,
-                    &mut next_id,
-                    deopt!(i),
-                );
-                bcx.switch_to_block(cont);
             }
         }
     }

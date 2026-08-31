@@ -607,7 +607,7 @@ pub(in crate::reg_vm) struct VirtualMaterializeVariantArm {
 pub(in crate::reg_vm) enum VirtualMaterializeValue {
     Register(usize),
     OptionSome(Box<VirtualMaterializeValue>),
-    #[cfg(any(test, feature = "jit-struct-sr-experimental"))]
+    #[cfg(test)]
     Struct {
         layout: Rc<crate::vm_value::TypeLayout>,
         fields: Vec<VirtualMaterializeValue>,
