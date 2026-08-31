@@ -144,8 +144,28 @@ gated code, their three `experimental-retention.toml` entries, and the now-retir
 the size ceilings of the five shrunk allowlisted files. `struct-SR` gated code was
 kept as `#[cfg(test)]` regression scaffolding (its gates were `any(test, feature)`).
 Both feature configs compile clean; native-JIT differential/smoke, VM lib, and all
-97 SDK architecture tests pass; `xtask validate-ci` is green. Remaining: the
-controlled `RSS_JIT_CONTROLLED=1` evidence run for the two surviving Prove surfaces.
+97 SDK architecture tests pass; `xtask validate-ci` is green.
+
+**DONE (2026-08-31) — the two survivors, local-first.** Ran the controlled
+scorecard (25 samples, `RSS_JIT_CONTROLLED=1`, release, `dev` container) and
+collected `benchmarks/vm-jit/baseline/canonical-linux-aarch64.json` via
+`tools/collect-jit-baseline.py`. Per the maintainer's decision, the checked-in
+baseline (pinned by commit + `evidence_sha256`) is the immutable evidence — no
+CI-hosted artifact.
+
+- `jit-cranelift-engine` → **Prove**. All three named workloads clear the 15%
+  bar with 0 bails: native-scalar 31.4×, native-call 21.7×, native-read-heap
+  12.3×. `status` flipped `pending` → `proven`, evidence attached.
+- `jit-tier0` → **Extend** (ADR 0230). `string-text` clears the 10% bar (~1.2-1.3×),
+  but `mailbox-ring` and `closure-dynamic` are `unsupported_by_canonical_compiler`
+  — the typed-MIR pipeline cannot lower dynamic indirect closure dispatch (by
+  design) or a `mut`-struct `Option`-return place (a lowering gap). `decision_by`
+  moved 2026-11-30 → 2027-02-28 (90-day cap); the two workloads were added to the
+  scorecard so the gap is visible/reproducible. Cut is not viable — tier0 owns the
+  base `native_status` tiering that `jit-cranelift-engine` rides on.
+
+Deadline 1 (2026-11-30) is now resolved: no JIT surface is `pending` with empty
+evidence except `jit-tier0`, whose deadline is extended by ADR to 2027-02-28.
 
 ## Deadline 2 — experiments workspace (2026-12-31)
 

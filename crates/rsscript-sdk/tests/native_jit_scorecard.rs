@@ -152,6 +152,20 @@ const CASES: &[ScorecardCase] = &[
         source: include_str!("../../../benchmarks/vm-jit/kernels/string_text_processing.rss"),
     },
     ScorecardCase {
+        name: "mailbox-ring",
+        pass: "tier0/mailbox-ring",
+        workload: "mailbox",
+        size: "60000",
+        source: include_str!("../../../benchmarks/vm-jit/kernels/mailbox_ring_only.rss"),
+    },
+    ScorecardCase {
+        name: "closure-dynamic",
+        pass: "tier0/closure-dynamic",
+        workload: "closure_dynamic",
+        size: "200000",
+        source: include_str!("../../../benchmarks/vm-jit/kernels/dynamic_closure_call.rss"),
+    },
+    ScorecardCase {
         name: "async-call-loop",
         pass: "continuation/async",
         workload: "async",

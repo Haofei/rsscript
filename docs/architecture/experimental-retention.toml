@@ -12,8 +12,11 @@ package = "rsscript-vm"
 owner = "@Haofei"
 status = "pending"
 maturity = "experimental"
-last_measured_at = "2026-08-28"
-decision_by = "2026-11-30"
+last_measured_at = "2026-08-31"
+# Extended from 2026-11-30 by ADR 0230: two of the three named workloads
+# (mailbox-ring, closure-dynamic) are unsupported_by_canonical_compiler, so the
+# surface cannot be given a clean Prove verdict yet. 90-day review cap.
+decision_by = "2027-02-28"
 workloads = ["string-text", "mailbox-ring", "closure-dynamic"]
 minimum_end_to_end_gain_percent = 10
 evidence_uri = ""
@@ -26,14 +29,18 @@ workspace = "root"
 kind = "cargo_package"
 package = "rsscript-jit-cranelift"
 owner = "@Haofei"
-status = "pending"
+status = "proven"
 maturity = "experimental"
-last_measured_at = "2026-08-28"
+last_measured_at = "2026-08-31"
 decision_by = "2026-11-30"
 workloads = ["native-scalar", "native-call", "native-read-heap"]
 minimum_end_to_end_gain_percent = 15
-evidence_uri = ""
-evidence_sha256 = ""
+# Local-first controlled baseline (25 samples, RSS_JIT_CONTROLLED=1, release):
+# native-scalar 31.4x, native-call 21.7x, native-read-heap 12.3x, all above the
+# 15% threshold with 0 bails. Pinned by commit + sha256 per the maintainer's
+# local-first decision (no CI-hosted artifact).
+evidence_uri = "benchmarks/vm-jit/baseline/canonical-linux-aarch64.json"
+evidence_sha256 = "77743a13934e58fec1f19a0bb26658f45c1e97ebc9645b351ceeb27729feac2f"
 removal_rule = "Keep as a preview-only engine until controlled workloads justify a supported optional release surface."
 
 [[surface]]
