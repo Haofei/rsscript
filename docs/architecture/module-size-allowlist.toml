@@ -34,15 +34,6 @@ decision_by = "2026-12-31"
 tracking = "module-partition-backlog"
 
 [[allow]]
-path = "crates/rsscript-jit-cranelift/src/codegen.rs"
-max_bytes = 90000
-reason = "Cranelift lowering debt; executable-memory and ABI review remains centralized."
-owner = "@Haofei"
-target_bytes = 60000
-decision_by = "2026-12-31"
-tracking = "module-partition-backlog"
-
-[[allow]]
 path = "crates/rsscript-lowering/src/mir.rs"
 max_bytes = 159000
 reason = "Typed HIR-to-MIR lowering must be split while preserving diagnostic and source mappings."

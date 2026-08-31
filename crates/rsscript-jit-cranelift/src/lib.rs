@@ -46,6 +46,7 @@ compile_error!("rsscript native JIT currently requires a 64-bit target");
 mod analysis;
 mod codegen;
 mod codegen_call;
+mod codegen_deopt;
 mod deopt;
 mod direct_codegen;
 mod executable_memory;
