@@ -35,15 +35,6 @@ tracking = "module-partition-backlog"
 
 
 [[allow]]
-path = "crates/rsscript-semantics/src/database.rs"
-max_bytes = 136000
-reason = "CompilationSession storage/query partitioning must preserve revision and invalidation behavior."
-owner = "@Haofei"
-target_bytes = 60000
-decision_by = "2026-12-31"
-tracking = "module-partition-backlog"
-
-[[allow]]
 path = "crates/rsscript-vm/src/reg_vm/exec.rs"
 max_bytes = 128000
 reason = "Interpreter dispatch extraction is guarded by report-level differential tests."
