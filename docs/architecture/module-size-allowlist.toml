@@ -16,16 +16,6 @@ decision_by = "2026-12-31"
 tracking = "module-partition-backlog"
 
 [[allow]]
-path = "crates/rsscript-mir/src/lib.rs"
-max_bytes = 147000
-reason = "MIR model and verifier are a single versioned contract pending private-module extraction."
-owner = "@Haofei"
-target_bytes = 60000
-decision_by = "2026-12-31"
-tracking = "module-partition-backlog"
-
-
-[[allow]]
 path = "crates/rsscript-vm/src/reg_vm/exec.rs"
 max_bytes = 128000
 reason = "Interpreter dispatch extraction is guarded by report-level differential tests."
