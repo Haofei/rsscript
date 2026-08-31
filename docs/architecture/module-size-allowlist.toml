@@ -51,14 +51,6 @@ target_bytes = 60000
 decision_by = "2026-12-31"
 tracking = "module-partition-backlog"
 
-[[allow]]
-path = "crates/rsscript-project/src/lib.rs"
-max_bytes = 98000
-reason = "Project snapshot and manifest parsing require behavior-preserving module extraction."
-owner = "@Haofei"
-target_bytes = 60000
-decision_by = "2026-12-31"
-tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-semantics/src/database.rs"
