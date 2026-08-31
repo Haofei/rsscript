@@ -1,7 +1,6 @@
 use super::*;
 
 type WholeOptionRewrite = (Vec<RegInstr>, usize, Vec<usize>, Vec<usize>);
-type RegionRewrite<Recipe> = (Vec<RegInstr>, usize, Vec<usize>, Vec<Recipe>);
 
 /// Like [`native_callee_inlinable`] but permits a **capturing** closure callee
 /// (OSR × profile-guided inlining): every capture must be materialized as a scalar at the inline site

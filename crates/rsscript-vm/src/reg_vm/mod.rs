@@ -64,6 +64,7 @@ use rsscript_abi_model::BinaryOp;
 mod bytecode;
 mod calls;
 mod exec;
+mod exec_ops;
 mod execution_plan;
 #[cfg(feature = "native-jit")]
 mod intrinsic_metadata;

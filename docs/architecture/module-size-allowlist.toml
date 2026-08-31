@@ -16,15 +16,6 @@ decision_by = "2026-12-31"
 tracking = "module-partition-backlog"
 
 [[allow]]
-path = "crates/rsscript-vm/src/reg_vm/exec.rs"
-max_bytes = 128000
-reason = "Interpreter dispatch extraction is guarded by report-level differential tests."
-owner = "@Haofei"
-target_bytes = 60000
-decision_by = "2026-12-31"
-tracking = "module-partition-backlog"
-
-[[allow]]
 path = "crates/rsscript-vm/src/reg_vm/mod.rs"
 max_bytes = 246000
 reason = "Register VM root still owns execution composition; intrinsic metadata and native text helpers have moved to private modules."
