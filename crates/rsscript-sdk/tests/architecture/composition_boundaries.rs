@@ -428,7 +428,11 @@ fn package_analysis_schema_is_an_artifact_contract_not_compiler_implementation()
 #[test]
 fn compilation_session_owns_workspace_type_facts() {
     let root = workspace_root();
-    let database = read(&root.join("crates/rsscript-semantics/src/database.rs"));
+    let database = format!(
+        "{}\n{}",
+        read(&root.join("crates/rsscript-semantics/src/database.rs")),
+        read(&root.join("crates/rsscript-semantics/src/database/session.rs"))
+    );
     for required in [
         "workspace_type_cache: Option<Arc<SemanticTypeFacts>>",
         "pub fn workspace_type_facts(&mut self) -> Arc<SemanticTypeFacts>",
@@ -645,7 +649,11 @@ fn complete_frontend_checker_is_owned_by_semantics() {
 #[test]
 fn namespace_isolation_and_workspace_hir_are_semantic_queries() {
     let root = workspace_root();
-    let semantics = read(&root.join("crates/rsscript-semantics/src/database.rs"));
+    let semantics = format!(
+        "{}\n{}",
+        read(&root.join("crates/rsscript-semantics/src/database.rs")),
+        read(&root.join("crates/rsscript-semantics/src/database/session.rs"))
+    );
     for query in [
         "pub fn workspace_hir(",
         "pub fn workspace_hir_with_operation(",
@@ -682,7 +690,11 @@ fn namespace_isolation_and_workspace_hir_are_semantic_queries() {
 #[test]
 fn workspace_diagnostic_query_contract_is_semantic_owned() {
     let root = workspace_root();
-    let semantics = read(&root.join("crates/rsscript-semantics/src/database.rs"));
+    let semantics = format!(
+        "{}\n{}",
+        read(&root.join("crates/rsscript-semantics/src/database.rs")),
+        read(&root.join("crates/rsscript-semantics/src/database/session.rs"))
+    );
     assert!(semantics.contains("pub fn semantic_workspace_diagnostics_with_operation"));
     assert!(semantics.contains("self.workspace_analysis_with_operation(operation)?"));
     assert!(
@@ -701,7 +713,11 @@ fn workspace_diagnostic_query_contract_is_semantic_owned() {
 #[test]
 fn session_owns_the_core_interface_policy() {
     let root = workspace_root();
-    let semantics = read(&root.join("crates/rsscript-semantics/src/database.rs"));
+    let semantics = format!(
+        "{}\n{}",
+        read(&root.join("crates/rsscript-semantics/src/database.rs")),
+        read(&root.join("crates/rsscript-semantics/src/database/session.rs"))
+    );
     assert!(semantics.contains("pub enum SessionInterfacePolicy"));
     assert!(semantics.contains("pub fn without_core() -> Self"));
     assert!(semantics.contains("pub fn with_standard_packages() -> Self"));

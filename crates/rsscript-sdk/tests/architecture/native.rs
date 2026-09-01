@@ -96,8 +96,13 @@ fn jit_planning_state_is_kept_out_of_verified_program_objects() {
 fn verified_jit_facts_are_native_only_evaluation_local_state() {
     let root = workspace_root();
     let vm = format!(
-        "{}\n{}",
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}",
         read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/executable.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/native_stats_impl.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/jit_native_a.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/jit_native_b.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/jit_ctx_impl.rs")),
         read(&root.join("crates/rsscript-vm/src/reg_vm/state.rs"))
     );
     let native = read(&root.join("crates/rsscript-vm/src/reg_vm/native/mod.rs"));
@@ -210,8 +215,13 @@ fn jit_translation_consumes_verified_facts_without_multiplying_inference_engines
 fn jit_static_facts_and_missed_optimization_telemetry_stay_structured() {
     let root = workspace_root();
     let vm = format!(
-        "{}\n{}",
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}",
         read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/executable.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/native_stats_impl.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/jit_native_a.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/jit_native_b.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/jit_ctx_impl.rs")),
         read(&root.join("crates/rsscript-vm/src/reg_vm/state.rs"))
     );
     let facts = read(&root.join("crates/rsscript-vm/src/reg_vm/native/facts.rs"));
@@ -353,7 +363,12 @@ fn generic_jit_instances_flow_from_semantic_substitutions_not_runtime_guessing()
     let inference = read(&root.join("crates/rsscript-semantics/src/hir/infer.rs"));
     let hir = read(&root.join("crates/rsscript-semantics/src/hir/mod.rs"));
     let mir = read(&root.join("crates/rsscript-mir/src/lib.rs"));
-    let lowering = read(&root.join("crates/rsscript-lowering/src/mir.rs"));
+    let lowering = format!(
+        "{}\n{}\n{}",
+        read(&root.join("crates/rsscript-lowering/src/mir.rs")),
+        read(&root.join("crates/rsscript-lowering/src/mir/lowerer.rs")),
+        read(&root.join("crates/rsscript-lowering/src/mir/lowerer_calls.rs"))
+    );
     let codegen = read(&root.join("crates/rsscript-codegen-vm/src/lib.rs"));
     let verifier = read(&root.join("crates/rsscript-bytecode/src/typed_facts.rs"));
     let vm_facts = read(&root.join("crates/rsscript-vm/src/reg_vm/native/facts.rs"));
@@ -564,8 +579,13 @@ fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
     let corelib = read(&root.join("crates/rsscript-corelib/src/lib.rs"));
     let vm_manifest = read(&root.join("crates/rsscript-vm/Cargo.toml"));
     let vm = format!(
-        "{}\n{}",
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}",
         read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/executable.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/native_stats_impl.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/jit_native_a.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/jit_native_b.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/jit_ctx_impl.rs")),
         read(&root.join("crates/rsscript-vm/src/reg_vm/state.rs"))
     );
     let intrinsics = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/mod.rs"));
@@ -739,7 +759,15 @@ fn vm_runtime_dependency_inventory_prevents_library_implementation_regressions()
 #[test]
 fn register_vm_execution_policy_is_snapshotted_before_running() {
     let root = workspace_root();
-    let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));
+    let vm = format!(
+        "{}\n{}\n{}\n{}\n{}\n{}",
+        read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/executable.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/native_stats_impl.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/jit_native_a.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/jit_native_b.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/jit_ctx_impl.rs"))
+    );
     assert!(vm.contains("mod execution_plan;"));
     assert!(vm.contains("NativeExecutionPlan::for_diagnostics("));
     assert!(!vm.contains("std::env::var_os(\"RSS_JIT_"));
