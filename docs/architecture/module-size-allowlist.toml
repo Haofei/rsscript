@@ -26,8 +26,8 @@ tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-vm/src/reg_vm/tier.rs"
-max_bytes = 187000
-reason = "Whole/OSR/continuation controller debt remains behind the opt-in native engine."
+max_bytes = 127000
+reason = "attempt_native moved to a child module; the remaining impl RegVm is the single 96k try_osr method, which needs method-body decomposition (not a move) to shrink further."
 owner = "@Haofei"
 target_bytes = 60000
 decision_by = "2026-12-31"
