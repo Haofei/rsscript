@@ -22,6 +22,7 @@ use rsscript_sdk::{
     runtime::{ExecutionRequest, RunLimits, Runtime},
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 mod repository_architecture;
 
@@ -522,6 +523,15 @@ fn validate_experimental_retention(
             )
             .into());
         }
+        // `status` must be a recognized governance state. Add new states here
+        // deliberately — an unrecognized status must never pass silently.
+        let status = table["status"].as_str().expect("validated status");
+        if !matches!(status, "pending" | "proven") {
+            return Err(format!(
+                "experimental retention `{id}` has unknown status `{status}` (expected `pending` or `proven`)"
+            )
+            .into());
+        }
         let evidence_uri = table
             .get("evidence_uri")
             .and_then(toml::Value::as_str)
@@ -530,11 +540,57 @@ fn validate_experimental_retention(
             .get("evidence_sha256")
             .and_then(toml::Value::as_str)
             .unwrap_or("");
-        if decision < current_unix_day()? && (evidence_uri.is_empty() || evidence_sha.is_empty()) {
+        let has_evidence = !evidence_uri.is_empty() || !evidence_sha.is_empty();
+        if decision < current_unix_day()? && !has_evidence {
             return Err(format!(
                 "experimental retention `{id}` expired without immutable evidence; remove it or renew through an ADR"
             )
             .into());
+        }
+        // A `proven` surface must be backed by evidence regardless of date.
+        if status == "proven" && !has_evidence {
+            return Err(format!(
+                "experimental retention `{id}` is `proven` but carries no evidence"
+            )
+            .into());
+        }
+        // When any evidence is declared, it must be complete and verifiable: both
+        // fields present, a well-formed digest, and — for a repo-local file — the
+        // file must exist and hash to exactly that digest. This is what stops a
+        // bogus non-empty evidence string from satisfying the gate.
+        if has_evidence {
+            if evidence_uri.is_empty() || evidence_sha.is_empty() {
+                return Err(format!(
+                    "experimental retention `{id}` needs both evidence_uri and evidence_sha256"
+                )
+                .into());
+            }
+            if evidence_sha.len() != 64 || !evidence_sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err(format!(
+                    "experimental retention `{id}` evidence_sha256 must be 64 hex characters"
+                )
+                .into());
+            }
+            let expected = evidence_sha.to_ascii_lowercase();
+            // A remote URI (http/https) cannot be checked here; a local path is
+            // resolved against the repo root and its digest verified.
+            let is_remote =
+                evidence_uri.starts_with("http://") || evidence_uri.starts_with("https://");
+            if !is_remote {
+                let evidence_path = root.join(evidence_uri);
+                let bytes = fs::read(&evidence_path).map_err(|error| {
+                    format!(
+                        "experimental retention `{id}` evidence file `{evidence_uri}` is unreadable: {error}"
+                    )
+                })?;
+                let actual = format!("{:x}", Sha256::digest(&bytes));
+                if actual != expected {
+                    return Err(format!(
+                        "experimental retention `{id}` evidence digest mismatch for `{evidence_uri}` (recorded {expected}, actual {actual})"
+                    )
+                    .into());
+                }
+            }
         }
         if !table["owner"]
             .as_str()
