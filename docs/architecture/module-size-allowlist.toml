@@ -16,15 +16,6 @@ decision_by = "2026-12-31"
 tracking = "module-partition-backlog"
 
 [[allow]]
-path = "crates/rsscript-vm/src/reg_vm/mod.rs"
-max_bytes = 246000
-reason = "Register VM root still owns execution composition; intrinsic metadata and native text helpers have moved to private modules."
-owner = "@Haofei"
-target_bytes = 60000
-decision_by = "2026-12-31"
-tracking = "module-partition-backlog"
-
-[[allow]]
 path = "crates/rsscript-vm/src/reg_vm/native/translate.rs"
 max_bytes = 172000
 reason = "Native translation pipeline extraction must preserve origin/resume/source-cost contracts."
