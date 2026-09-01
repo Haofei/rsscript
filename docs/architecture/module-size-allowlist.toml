@@ -5,13 +5,9 @@ hard_bytes = 80000
 # Existing debt only. Ceilings are intentionally close to the current source
 # size so new large modules fail CI; entries should disappear as private-module
 # partitioning proceeds. Generated files are not scanned.
-
-[[allow]]
-path = "experiments/selfhost-parity/src/selfhost_parity/checker.rs"
-max_bytes = 82000
-reason = "Research-only self-host checker corpus is isolated in the experiments workspace pending partitioning."
-owner = "@Haofei"
-target_bytes = 60000
-decision_by = "2026-12-31"
-tracking = "module-partition-backlog"
+#
+# The module-partition backlog is fully cleared: every source module is at or
+# below the 80000-byte hard limit, so there are no `[[allow]]` entries. A new
+# module over the limit must be partitioned (or add a reviewed `[[allow]]` entry
+# with an @owner, target_bytes, decision_by and tracking reference).
 

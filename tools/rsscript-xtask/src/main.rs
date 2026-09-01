@@ -1046,9 +1046,13 @@ fn validate_module_sizes(root: &Path) -> Result<(), Box<dyn Error>> {
     let warn_bytes = document["warn_bytes"].as_integer().unwrap_or(50_000) as u64;
     let hard_bytes = document["hard_bytes"].as_integer().unwrap_or(80_000) as u64;
     let mut allowed = BTreeMap::new();
-    for entry in document["allow"]
-        .as_array()
-        .ok_or("module size allowlist must contain [[allow]] entries")?
+    // An empty (or absent) `[[allow]]` list is the success state: every oversized
+    // module has been partitioned and its debt entry retired.
+    for entry in document
+        .get("allow")
+        .and_then(toml::Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
     {
         let path = entry["path"]
             .as_str()
