@@ -17,8 +17,8 @@ tracking = "module-partition-backlog"
 
 [[allow]]
 path = "crates/rsscript-vm/src/reg_vm/native/translate.rs"
-max_bytes = 172000
-reason = "Native translation pipeline extraction must preserve origin/resume/source-cost contracts."
+max_bytes = 96000
+reason = "OSR-loop translator moved to a child module; the remaining translate_to_native_jit_with_calls is one 84k function whose 40k per-instruction loop threads heavy shared state, so it needs method-body decomposition (not a move) to shrink further."
 owner = "@Haofei"
 target_bytes = 60000
 decision_by = "2026-12-31"
