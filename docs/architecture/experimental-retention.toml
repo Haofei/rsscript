@@ -56,7 +56,7 @@ decision_by = "2026-12-31"
 workloads = ["aot_jit_matrix"]
 minimum_end_to_end_gain_percent = 15
 evidence_uri = "experiments/retention-evidence.json"
-evidence_sha256 = "2bf7bd318c382bbcd1a40daa7804575a4d0d7eb10b053df94a761676c8a6d2c7"
+evidence_sha256 = "6e70b5cad34a001985504fd84f957ad67fff87dbc472e38ee3739c60762fd341"
 removal_rule = "Freeze as a benchmark harness or remove the runtime if no product consumer and report differential evidence exist."
 
 [[surface]]
@@ -72,7 +72,7 @@ decision_by = "2026-12-31"
 workloads = ["source_map_contract_round_trips"]
 minimum_end_to_end_gain_percent = 0
 evidence_uri = "experiments/retention-evidence.json"
-evidence_sha256 = "2bf7bd318c382bbcd1a40daa7804575a4d0d7eb10b053df94a761676c8a6d2c7"
+evidence_sha256 = "6e70b5cad34a001985504fd84f957ad67fff87dbc472e38ee3739c60762fd341"
 removal_rule = "Merge into the AOT backend if it does not remain an independently consumed versioned model."
 
 [[surface]]
@@ -88,7 +88,7 @@ decision_by = "2026-12-31"
 workloads = ["runtime_services_execute_and_shutdown_independently_in_parallel"]
 minimum_end_to_end_gain_percent = 15
 evidence_uri = "experiments/retention-evidence.json"
-evidence_sha256 = "2bf7bd318c382bbcd1a40daa7804575a4d0d7eb10b053df94a761676c8a6d2c7"
+evidence_sha256 = "6e70b5cad34a001985504fd84f957ad67fff87dbc472e38ee3739c60762fd341"
 removal_rule = "Remove the standalone runtime when no product consumer or interpreter-level differential evidence exists."
 
 [[surface]]
@@ -104,7 +104,7 @@ decision_by = "2026-12-31"
 workloads = ["bounded_read_rejects_oversized_artifact"]
 minimum_end_to_end_gain_percent = 0
 evidence_uri = "experiments/retention-evidence.json"
-evidence_sha256 = "2bf7bd318c382bbcd1a40daa7804575a4d0d7eb10b053df94a761676c8a6d2c7"
+evidence_sha256 = "6e70b5cad34a001985504fd84f957ad67fff87dbc472e38ee3739c60762fd341"
 removal_rule = "Remove if no supported project or CLI path consumes persisted artifacts."
 
 [[surface]]
@@ -120,7 +120,7 @@ decision_by = "2026-12-31"
 workloads = ["reir_tests"]
 minimum_end_to_end_gain_percent = 0
 evidence_uri = "experiments/retention-evidence.json"
-evidence_sha256 = "2bf7bd318c382bbcd1a40daa7804575a4d0d7eb10b053df94a761676c8a6d2c7"
+evidence_sha256 = "6e70b5cad34a001985504fd84f957ad67fff87dbc472e38ee3739c60762fd341"
 removal_rule = "Retain only while it has an external review consumer or independent conformance value."
 
 [[surface]]
@@ -136,7 +136,7 @@ decision_by = "2026-12-31"
 workloads = ["parser_parity_tiny_sample"]
 minimum_end_to_end_gain_percent = 0
 evidence_uri = "experiments/retention-evidence.json"
-evidence_sha256 = "2bf7bd318c382bbcd1a40daa7804575a4d0d7eb10b053df94a761676c8a6d2c7"
+evidence_sha256 = "6e70b5cad34a001985504fd84f957ad67fff87dbc472e38ee3739c60762fd341"
 removal_rule = "Remove if the harness no longer detects regressions beyond the canonical Rust frontend corpus."
 
 [[surface]]
@@ -152,5 +152,5 @@ decision_by = "2026-12-31"
 workloads = ["reir_tests"]
 minimum_end_to_end_gain_percent = 0
 evidence_uri = "experiments/retention-evidence.json"
-evidence_sha256 = "2bf7bd318c382bbcd1a40daa7804575a4d0d7eb10b053df94a761676c8a6d2c7"
+evidence_sha256 = "6e70b5cad34a001985504fd84f957ad67fff87dbc472e38ee3739c60762fd341"
 removal_rule = "Remove when it has no external consumer or begins to affect compilation validity."

@@ -5,7 +5,7 @@
   "workspace": "experiments",
   "profile": "debug",
   "runner": "cargo test --workspace (experiments), dev container linux/aarch64",
-  "note": "Retention evidence for the experiments-workspace surfaces (decision_by 2026-12-31). These are 0%-threshold conformance/integration/differential surfaces, not speed surfaces; the evidence is that each surface's named retention workload runs and passes, demonstrating the conformance/differential/integration value its removal_rule protects. No surface's cut condition (no consumer AND no demonstrable value) holds.",
+  "note": "Retention evidence for the experiments-workspace surfaces (decision_by 2026-12-31). This is a local-first, functional (not performance) basis per the maintainer's decision: each surface's named retention workload runs and passes, demonstrating the conformance/differential/integration value its removal_rule protects, so no surface's cut condition (no consumer AND no demonstrable value) holds. IMPORTANT: aot-backend and aot-runtime carry minimum_end_to_end_gain_percent=15 in the retention TOML; this evidence does NOT measure that end-to-end speed gain. They are retained here on the non-speed keep-arm of their removal_rule (aot-backend as a differential benchmark harness; aot-runtime on interpreter-level differential evidence), not by clearing the 15% bar. The remaining five surfaces are 0%-threshold (conformance/integration). A controlled-hardware speed baseline for the 15% surfaces is separate follow-up work.",
   "surfaces": [
     {
       "id": "aot-backend",

@@ -4,10 +4,19 @@ Ad-hoc benchmark snapshots belong in CI artifacts, not source control. A file is
 accepted here only when produced on controlled hardware and named
 `canonical-<os>-<arch>.json`.
 
-No canonical timing baseline is checked in yet. Until controlled runners are
-provisioned, the release smoke enforces the scalar speedup and the weekly
-scorecard publishes diagnostic evidence without treating workstation timings as
-a product contract.
+No controlled-hardware canonical baseline is checked in yet. Until controlled
+runners are provisioned, the release smoke enforces the scalar speedup and the
+weekly scorecard publishes diagnostic evidence without treating workstation
+timings as a product contract.
+
+`canonical-linux-aarch64.json` is a **local-first** baseline collected in the dev
+container per the maintainer's decision, not a controlled-hardware run. Its
+`controlled` flag is `true` only because the collector requires it, but its
+provenance fields record the truth — `cpu: "unknown"`, `cpu_affinity: "none"`,
+`cpu_governor: "unavailable-macos-host"` — so it must be read as a directional
+local diagnostic, not the controlled product contract this directory is otherwise
+reserved for. It backs the `jit-cranelift-engine` retention decision on that
+explicit local-first basis; a controlled-hardware baseline remains follow-up work.
 
 Once the first controlled release exists, every later controlled run downloads
 the latest immutable `jit-baseline-*` release and runs
