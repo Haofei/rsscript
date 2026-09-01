@@ -246,7 +246,6 @@ pub(crate) struct NativeCallee {
     pub(crate) direct_scalar_func_id: Option<FuncId>,
 }
 
-
 #[derive(Clone)]
 pub(crate) struct NativeGroupMember;
 
@@ -1206,7 +1205,6 @@ impl NativeModule {
         });
         Ok(handle)
     }
-
 
     /// Machine-code bytes emitted for a compiled function, including any constant
     /// data reported by Cranelift. Used only for host-side telemetry.

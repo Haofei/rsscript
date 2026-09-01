@@ -1269,7 +1269,6 @@ impl MirModule {
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MirValidationError {
     FunctionDebugCount {

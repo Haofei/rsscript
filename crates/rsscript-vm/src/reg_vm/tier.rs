@@ -186,7 +186,6 @@ fn native_call_mut_args_supported(mut_args: &[usize], param_tys: &[NativeTy]) ->
     })
 }
 
-
 #[cfg(feature = "native-jit")]
 fn native_compiled_entry_call_descriptor(
     entry: &NativeCompiledEntry,
@@ -646,7 +645,6 @@ pub(in crate::reg_vm) fn select_osr_candidate_loops(
 }
 
 impl RegVm {
-
     /// OSR (on-stack replacement). The interpreter has reached `header_ip` —
     /// the entry of a qualifying native-subset hot loop in `func` — with the active
     /// frame's window at `base`. Hand that window to an OSR-compiled native loop
@@ -1495,7 +1493,6 @@ impl RegVm {
         }
     }
 }
-
 
 #[cfg(all(test, feature = "native-jit"))]
 mod tests {

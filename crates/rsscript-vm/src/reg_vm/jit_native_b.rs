@@ -1,10 +1,15 @@
 //! JIT host helpers (part 2) + NativeState impl — impls/free-fns split from `reg_vm/mod.rs` for module-size partitioning.
 //! All type definitions stay in mod.rs.
 
+#[cfg(feature = "native-jit")]
 use super::*;
 
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn rss_jit_set_insert_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value: i64) -> i64 {
+pub(in crate::reg_vm) fn rss_jit_set_insert_int_with_ctx(
+    ctx: JitHostCallCtx,
+    handle: i64,
+    value: i64,
+) -> i64 {
     match ctx.with_journaled_map_write(handle, |map| {
         Some(i64::from(
             map.insert(jit_int_key(value), VmValue::Unit).is_none(),
@@ -39,7 +44,11 @@ jit_host_boundary! {
 }
 
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn rss_jit_set_insert_handle_with_ctx(ctx: JitHostCallCtx, handle: i64, value_handle: i64) -> i64 {
+pub(in crate::reg_vm) fn rss_jit_set_insert_handle_with_ctx(
+    ctx: JitHostCallCtx,
+    handle: i64,
+    value_handle: i64,
+) -> i64 {
     let Some(key) = ctx.heap_read_handle(value_handle, |value| Some(VmMapKey::new(value.clone())))
     else {
         ctx.signal_bail();
@@ -104,7 +113,11 @@ jit_host_boundary! {
 }
 
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn rss_jit_sorted_set_insert_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value: i64) -> i64 {
+pub(in crate::reg_vm) fn rss_jit_sorted_set_insert_int_with_ctx(
+    ctx: JitHostCallCtx,
+    handle: i64,
+    value: i64,
+) -> i64 {
     match ctx.with_journaled_list_write(handle, |list| {
         sorted_insert_vm(list.as_boxed_mut(), VmValue::Int(value))
             .ok()
@@ -588,7 +601,11 @@ jit_host_boundary! {
 }
 
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn rss_jit_deque_push_back_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value: i64) -> i64 {
+pub(in crate::reg_vm) fn rss_jit_deque_push_back_int_with_ctx(
+    ctx: JitHostCallCtx,
+    handle: i64,
+    value: i64,
+) -> i64 {
     match ctx.with_journaled_deque_write(handle, |deque| {
         deque.push_back(VmValue::Int(value));
         Some(0)
@@ -644,7 +661,11 @@ jit_host_boundary! {
 }
 
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn rss_jit_deque_push_back_float_with_ctx(ctx: JitHostCallCtx, handle: i64, value: f64) -> i64 {
+pub(in crate::reg_vm) fn rss_jit_deque_push_back_float_with_ctx(
+    ctx: JitHostCallCtx,
+    handle: i64,
+    value: f64,
+) -> i64 {
     match ctx.with_journaled_deque_write(handle, |deque| {
         deque.push_back(VmValue::Float(value));
         Some(0)
@@ -669,7 +690,11 @@ jit_host_boundary! {
 }
 
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn rss_jit_deque_push_front_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value: i64) -> i64 {
+pub(in crate::reg_vm) fn rss_jit_deque_push_front_int_with_ctx(
+    ctx: JitHostCallCtx,
+    handle: i64,
+    value: i64,
+) -> i64 {
     match ctx.with_journaled_deque_write(handle, |deque| {
         deque.push_front(VmValue::Int(value));
         Some(0)
@@ -729,7 +754,11 @@ jit_host_boundary! {
 }
 
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn rss_jit_deque_push_front_float_with_ctx(ctx: JitHostCallCtx, handle: i64, value: f64) -> i64 {
+pub(in crate::reg_vm) fn rss_jit_deque_push_front_float_with_ctx(
+    ctx: JitHostCallCtx,
+    handle: i64,
+    value: f64,
+) -> i64 {
     match ctx.with_journaled_deque_write(handle, |deque| {
         deque.push_front(VmValue::Float(value));
         Some(0)
@@ -943,7 +972,10 @@ jit_host_boundary! {
 }
 
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn jit_struct_field_closure_function_id(value: &VmValue, slot: usize) -> Option<i64> {
+pub(in crate::reg_vm) fn jit_struct_field_closure_function_id(
+    value: &VmValue,
+    slot: usize,
+) -> Option<i64> {
     match value {
         VmValue::Struct(data) | VmValue::Variant(data) => {
             jit_closure_function_id(data.fields.get(slot)?)
@@ -1020,7 +1052,10 @@ jit_host_boundary! {
 /// read is allowed to fetch as a fresh handle. A scalar/absent field returns
 /// `None` (→ bail), so a misclassified slot never produces a bogus handle.
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn jit_struct_field_heap_value(value: &VmValue, slot: usize) -> Option<VmValue> {
+pub(in crate::reg_vm) fn jit_struct_field_heap_value(
+    value: &VmValue,
+    slot: usize,
+) -> Option<VmValue> {
     match value {
         VmValue::Struct(data) | VmValue::Variant(data) => {
             let field = data.fields.get(slot)?;
@@ -1107,7 +1142,6 @@ pub(in crate::reg_vm) fn jit_string_clone(value: &VmValue) -> Option<Rc<String>>
         _ => None,
     }
 }
-
 
 #[cfg(feature = "native-jit")]
 impl NativeState {
@@ -1243,7 +1277,11 @@ impl NativeState {
         self.cache.keys().any(|key| &key.instance == instance)
     }
 
-    pub(in crate::reg_vm) fn osr_shape_count(&self, region: RegionKey, type_arguments: &VerifiedTypeArgsKey) -> usize {
+    pub(in crate::reg_vm) fn osr_shape_count(
+        &self,
+        region: RegionKey,
+        type_arguments: &VerifiedTypeArgsKey,
+    ) -> usize {
         self.osr_cache
             .keys()
             .filter(|key| key.region == region && &key.type_arguments == type_arguments)
@@ -1259,13 +1297,21 @@ impl NativeState {
             .len()
     }
 
-    pub(in crate::reg_vm) fn has_osr_instance(&self, region: RegionKey, type_arguments: &VerifiedTypeArgsKey) -> bool {
+    pub(in crate::reg_vm) fn has_osr_instance(
+        &self,
+        region: RegionKey,
+        type_arguments: &VerifiedTypeArgsKey,
+    ) -> bool {
         self.osr_cache
             .keys()
             .any(|key| key.region == region && &key.type_arguments == type_arguments)
     }
 
-    pub(in crate::reg_vm) fn continuation_instance_count(&self, function: usize, entry: usize) -> usize {
+    pub(in crate::reg_vm) fn continuation_instance_count(
+        &self,
+        function: usize,
+        entry: usize,
+    ) -> usize {
         self.continuation_cache
             .keys()
             .filter(|key| key.instance.function == function && key.entry == entry)
@@ -1274,7 +1320,11 @@ impl NativeState {
             .len()
     }
 
-    pub(in crate::reg_vm) fn has_continuation_instance(&self, instance: &JitInstanceKey, entry: usize) -> bool {
+    pub(in crate::reg_vm) fn has_continuation_instance(
+        &self,
+        instance: &JitInstanceKey,
+        entry: usize,
+    ) -> bool {
         self.continuation_cache
             .keys()
             .any(|key| &key.instance == instance && key.entry == entry)

@@ -926,7 +926,6 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
     Some((new_code, next_reg, ip_map, recipes))
 }
 
-
 /// Registers an instruction READS (value operands). Returns [`RegFootprint::All`]
 /// for any variant whose read set we do not exhaustively model. Used by OSR × scalar replacement to
 /// prove a scalar-replaced Option register is dead at the loop boundary.

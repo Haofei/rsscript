@@ -93,13 +93,10 @@ impl NativeCompileTelemetry {
 
 #[cfg(feature = "native-jit")]
 pub(super) fn native_region_is_promotion_eligible(jit_fn: &vm_jit::JitFunction) -> bool {
-    !jit_fn.code.iter().any(|instr| {
-        matches!(instr, vm_jit::JitInstr::CallNative { .. }) || {
-            {
-                false
-            }
-        }
-    })
+    !jit_fn
+        .code
+        .iter()
+        .any(|instr| matches!(instr, vm_jit::JitInstr::CallNative { .. }) || { { false } })
 }
 
 #[cfg(feature = "native-jit")]

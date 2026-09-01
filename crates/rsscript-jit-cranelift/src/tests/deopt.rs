@@ -137,7 +137,6 @@ fn deopt_map_uses_explicit_source_and_resume_identity() {
     assert_eq!(site.resume_ip, 4);
 }
 
-
 #[test]
 fn deopt_map_two_distinct_sites_track_prior_defs() {
     use JitValueType::{FlatInt, Int};

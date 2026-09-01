@@ -1,6 +1,7 @@
 //! NativeStats impl + JIT report helpers — impls/free-fns split from `reg_vm/mod.rs` for module-size partitioning.
 //! All type definitions stay in mod.rs.
 
+#[cfg(feature = "native-jit")]
 use super::*;
 
 #[cfg(feature = "native-jit")]
@@ -123,7 +124,10 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} continuation_entries={} continuatio
         self.profile_branch_samples = taken.saturating_add(fallthrough);
     }
 
-    pub(in crate::reg_vm) fn add_loop_optimization_evidence(&mut self, evidence: &LoopOptimizationEvidence) {
+    pub(in crate::reg_vm) fn add_loop_optimization_evidence(
+        &mut self,
+        evidence: &LoopOptimizationEvidence,
+    ) {
         self.canonical_loops = evidence.canonical_loops;
         self.canonical_loop_preheaders = evidence.unique_preheaders;
         self.canonical_induction_variables = evidence.induction_variables;
@@ -647,7 +651,11 @@ pub(in crate::reg_vm) fn jit_profile_report_lines(
 /// scans the (leaf-inlined) reachable body for the first non-subset instruction —
 /// reporting the intrinsic-level cause from the registry. Read-only.
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn native_decline_reason(unit: &RegUnit, jit_state: &JitState, func: &RegFunction) -> String {
+pub(in crate::reg_vm) fn native_decline_reason(
+    unit: &RegUnit,
+    jit_state: &JitState,
+    func: &RegFunction,
+) -> String {
     if func.captures != 0 {
         return "function has captures (closure body, not a native leaf)".to_string();
     }

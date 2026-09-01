@@ -654,7 +654,6 @@ enum SessionFileRole {
     Interface,
 }
 
-
 fn interface_filename_module(path: &str) -> Option<String> {
     let fallback = path
         .rsplit('/')

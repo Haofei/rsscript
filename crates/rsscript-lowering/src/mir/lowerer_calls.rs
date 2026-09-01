@@ -124,7 +124,10 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
         Ok(destination)
     }
 
-    pub(super) fn lower_take(&mut self, value: &checked::HirExpr) -> Result<ValueId, MirLoweringError> {
+    pub(super) fn lower_take(
+        &mut self,
+        value: &checked::HirExpr,
+    ) -> Result<ValueId, MirLoweringError> {
         let checked::HirExpr::Ident { name, .. } = value else {
             return self.unsupported("take checked HIR effect on non-local value");
         };
@@ -208,7 +211,10 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
     /// identity. Keep both operations visible instead of treating `manage` as
     /// a transparent read, otherwise a later local use could bypass the
     /// ownership transition represented by semantic HIR.
-    pub(super) fn lower_manage(&mut self, value: &checked::HirExpr) -> Result<ValueId, MirLoweringError> {
+    pub(super) fn lower_manage(
+        &mut self,
+        value: &checked::HirExpr,
+    ) -> Result<ValueId, MirLoweringError> {
         let source = self.lower_take(value)?;
         let destination = self.value();
         self.emit(MirInstruction::Manage {
@@ -327,7 +333,10 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
     /// and `select` use this exact path so they share target resolution,
     /// Provider-wrapper construction, argument ownership checks, and the
     /// lexical task group.
-    pub(super) fn lower_spawn_call(&mut self, value: &checked::HirExpr) -> Result<TaskId, MirLoweringError> {
+    pub(super) fn lower_spawn_call(
+        &mut self,
+        value: &checked::HirExpr,
+    ) -> Result<TaskId, MirLoweringError> {
         let checked::HirExpr::Call {
             receiver,
             args,
@@ -410,7 +419,10 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
         Ok(task)
     }
 
-    pub(super) fn lower_await(&mut self, value: &checked::HirExpr) -> Result<ValueId, MirLoweringError> {
+    pub(super) fn lower_await(
+        &mut self,
+        value: &checked::HirExpr,
+    ) -> Result<ValueId, MirLoweringError> {
         // A checked async external call is already a suspension-capable MIR
         // `CallExternal`: the VM parks the current task while its linked
         // Provider future is pending, then writes the result to the call
@@ -453,7 +465,10 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
     /// ready wait, and ordinary CFG dispatch into the selected arm. The select
     /// instruction consumes every arm task: the VM transfers the winner value
     /// and cancels/reaps all losers before the branch ladder executes.
-    pub(super) fn lower_select(&mut self, arms: &[checked::HirSelectArm]) -> Result<(), MirLoweringError> {
+    pub(super) fn lower_select(
+        &mut self,
+        arms: &[checked::HirSelectArm],
+    ) -> Result<(), MirLoweringError> {
         if arms.is_empty() {
             return Ok(());
         }
@@ -1075,7 +1090,10 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
         ))
     }
 
-    pub(super) fn lower_checked_block(&mut self, block: &checked::HirBlock) -> Result<(), MirLoweringError> {
+    pub(super) fn lower_checked_block(
+        &mut self,
+        block: &checked::HirBlock,
+    ) -> Result<(), MirLoweringError> {
         for statement in &block.statements {
             if self.current_block().terminator.is_some() {
                 return self.unsupported("statement after checked HIR return");

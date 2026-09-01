@@ -34,7 +34,6 @@ fn rejects_out_of_range_cold_block_hint() {
     );
 }
 
-
 #[test]
 fn rejects_conditional_branch_without_fallthrough() {
     // A trailing conditional branch has no `i + 1` to fall through to.
@@ -185,8 +184,6 @@ fn rejects_inconsistent_return_types() {
         err.message
     );
 }
-
-
 
 #[test]
 fn rejects_reachable_use_before_definition() {
@@ -409,7 +406,6 @@ fn rejects_bool_arithmetic_and_accepts_float_compare_branches() {
     ))
     .expect("comparison branches accept same-class Float operands");
 
-
     let err = validate(&ft(
         2,
         vec![Float, Int],
@@ -427,8 +423,6 @@ fn rejects_bool_arithmetic_and_accepts_float_compare_branches() {
     .expect_err("comparison branches reject mixed numeric classes");
     assert!(err.message.contains("classes differ"), "{}", err.message);
 }
-
-
 
 #[test]
 fn rejects_mutable_flat_returns() {
@@ -1087,7 +1081,6 @@ fn precise_deopt_preserves_bool_logical_type() {
             .any(|reg| reg.reg == 3 && reg.value == DeoptValue::Bool(true))
     );
 }
-
 
 #[test]
 fn deep_acyclic_native_call_chain_deopts_at_cap() {

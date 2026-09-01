@@ -32,8 +32,6 @@ pub(in crate::reg_vm) fn native_capturing_callee_inlinable(
     })
 }
 
-
-
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn native_readable_or_sinkable_closure_operand_candidate(
     _func: &RegFunction,
@@ -41,7 +39,6 @@ pub(in crate::reg_vm) fn native_readable_or_sinkable_closure_operand_candidate(
 ) -> bool {
     false
 }
-
 
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn monomorphic_closure_inline_target(
@@ -54,7 +51,6 @@ pub(in crate::reg_vm) fn monomorphic_closure_inline_target(
     None
 }
 
-
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn polymorphic_closure_inline_targets(
     _unit: &RegUnit,
@@ -65,7 +61,6 @@ pub(in crate::reg_vm) fn polymorphic_closure_inline_targets(
 ) -> Option<Vec<usize>> {
     None
 }
-
 
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn native_translation_pending_on_profile(

@@ -123,21 +123,15 @@ impl JitState {
         self.state_mut(function).native_status = status;
     }
 
-
     #[cfg(feature = "native-jit")]
     pub(crate) fn call_count(&self, _function: impl FunctionOrdinal) -> u32 {
         0
     }
 
-
-
     #[cfg(feature = "native-jit")]
     pub(crate) fn profile(&self, _function: impl FunctionOrdinal) -> Option<&FunctionProfile> {
         None
     }
-
-
-
 }
 
 #[cfg(all(test, feature = "native-jit"))]
@@ -164,5 +158,4 @@ mod tests {
         let state = JitState::for_verified_program(&unit);
         assert_eq!(state.tier0_analysis(0, &unit.functions[0]), (true, false));
     }
-
 }

@@ -776,8 +776,6 @@ impl NativeRegionAnalysis {
         self.liveness.live_out(ip, reg)
     }
 
-
-
     pub(in crate::reg_vm) fn reachable_mask(&self) -> Vec<bool> {
         self.liveness.cfg.reachable_mask()
     }
@@ -945,10 +943,6 @@ impl NativeRegionAnalysis {
         }
         Some(())
     }
-
-
-
-
 
     pub(super) fn forward_definite_regs(
         &self,

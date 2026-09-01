@@ -72,20 +72,15 @@ pub(crate) const NATIVE_RECURSION_STACK_BUDGET_BYTES: i64 = 1 << 20;
 /// Upper bound for the frame-size-derived native recursion cap.
 pub(crate) const NATIVE_RECURSION_DEPTH_CAP_MAX: i64 = 250;
 
-/// Conservatively estimate one generated recursive frame's stack footprint.
+/// Conservatively estimate one generated recursive frame's stack footprint:
+/// a fixed overhead plus four 8-byte slots per register. This is an admission
+/// heuristic only — it is not a proof of the live host-stack bound, which is
+/// why non-tail native recursion is not admitted (see the native-jit contract).
 pub(crate) fn native_recursion_frame_bytes_estimate(program: &JitFunction) -> i64 {
     const SLOT_BYTES: i64 = 8;
     const FIXED_OVERHEAD_BYTES: i64 = 4096;
     let regs = program.n_regs as i64;
-    let explicit_slots = program.code.iter().fold(0_i64, |total, instr| {
-        let words: i64 = match instr {
-            _ => 0,
-        };
-        total.saturating_add(words.saturating_mul(SLOT_BYTES))
-    });
-    FIXED_OVERHEAD_BYTES
-        .saturating_add(SLOT_BYTES.saturating_mul(regs).saturating_mul(4))
-        .saturating_add(explicit_slots)
+    FIXED_OVERHEAD_BYTES.saturating_add(SLOT_BYTES.saturating_mul(regs).saturating_mul(4))
 }
 
 /// Derive a frame-size-aware recursive entry cap from the research budget.

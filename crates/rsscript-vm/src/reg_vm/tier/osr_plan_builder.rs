@@ -33,9 +33,18 @@ impl RegVm {
         &mut self,
         inputs: OsrPlanInputs<'_>,
     ) -> Option<(
-        vm_jit::CompiledId, usize, usize, usize,
-        Vec<NativeTy>, Vec<OsrDerivedLiveIn>, Vec<OsrScalarField>, Vec<usize>,
-        Vec<NativeTy>, Vec<bool>, Vec<Rc<String>>, Vec<OsrMaterializeRecipe>,
+        vm_jit::CompiledId,
+        usize,
+        usize,
+        usize,
+        Vec<NativeTy>,
+        Vec<OsrDerivedLiveIn>,
+        Vec<OsrScalarField>,
+        Vec<usize>,
+        Vec<NativeTy>,
+        Vec<bool>,
+        Vec<Rc<String>>,
+        Vec<OsrMaterializeRecipe>,
         NativeCodeTier,
     )> {
         let OsrPlanInputs {
@@ -809,19 +818,12 @@ impl RegVm {
                 })
                 })
                 });
-                // OSR × profile-guided inlining: a capturing/monomorphic closure inline is profile-
-                // guided, so on the first header hit (cold profile) the inline gate
-                // declines and `entry` is `None`. Caching that permanently would
-                // disable OSR forever — exactly the `try_native` warmup hazard. If a
-                // closure-inline site is still PENDING on its profile, leave the
-                // cache unpopulated so a later (warmer) header hit retries; once the
-                // profile settles (or there is no pending site) the `None`/`Some`
-                // verdict is stable and we cache it.
-                let profile_is_stable = {
-                    {
-                        true
-                    }
-                };
+                // Profile-guided closure inlining was removed, so there is no longer
+                // a pending-on-profile inline site: the `None`/`Some` verdict is
+                // always stable and can be cached on the first header hit. (Kept as a
+                // named constant rather than inlined so the removed warmup hazard the
+                // surrounding logic guarded against stays documented.)
+                let profile_is_stable = true;
                 if entry.is_some() || profile_is_stable {
                     if entry.is_some() && native.collect_stats {
                         native.stats.shape_versions += 1;

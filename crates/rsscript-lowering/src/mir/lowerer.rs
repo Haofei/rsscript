@@ -94,7 +94,10 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
         })
     }
 
-    pub(super) fn lower_statement(&mut self, statement: &checked::HirStmt) -> Result<(), MirLoweringError> {
+    pub(super) fn lower_statement(
+        &mut self,
+        statement: &checked::HirStmt,
+    ) -> Result<(), MirLoweringError> {
         match statement {
             checked::HirStmt::Let {
                 name,

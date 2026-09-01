@@ -16,7 +16,11 @@ impl RegVm {
     /// exact value or error. Safe because native-eligible functions are leaf and
     /// side-effect-free, so re-running them is observationally identical.
     #[cfg(feature = "native-jit")]
-    pub(in crate::reg_vm) fn attempt_native(&mut self, func: &RegFunction, base: usize) -> NativeAttempt {
+    pub(in crate::reg_vm) fn attempt_native(
+        &mut self,
+        func: &RegFunction,
+        base: usize,
+    ) -> NativeAttempt {
         // Host helpers may re-enter the VM, but the native heap tables, transaction,
         // literals, and deopt state are one top-level frame rather than a frame stack.
         // Preserve the outer call by interpreting the nested invocation.

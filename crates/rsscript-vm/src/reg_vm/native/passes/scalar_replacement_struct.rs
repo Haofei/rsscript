@@ -17,10 +17,7 @@ type RegionRewrite<Recipe> = (Vec<RegInstr>, usize, Vec<usize>, Vec<Recipe>);
 /// slot}` reading a struct-typed field has the shape of whatever `MakeStruct` wrote
 /// that slot of `base` (i.e. the inner field's own struct shape). Returns `None` when
 /// the shape is ambiguous or not statically resolvable (⇒ the caller bails OSR).
-#[cfg(all(
-    feature = "native-jit",
-    test
-))]
+#[cfg(all(feature = "native-jit", test))]
 pub(in crate::reg_vm) fn struct_shape_of_reg(
     code: &[RegInstr],
     header: usize,
@@ -146,10 +143,7 @@ pub(in crate::reg_vm) fn struct_shape_of_reg(
 ///
 /// Returns `(transformed_code, new_n_regs, ip_map)` with the same transformed→original
 /// `ip_map` discipline as the other two region passes.
-#[cfg(all(
-    feature = "native-jit",
-    test
-))]
+#[cfg(all(feature = "native-jit", test))]
 pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     code: &[RegInstr],
     n_regs: usize,
@@ -761,10 +755,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
 
 /// Stable native-JIT builds intentionally leave struct aggregates to the
 /// interpreter until this transform meets the canonical retention threshold.
-#[cfg(all(
-    feature = "native-jit",
-    not(test)
-))]
+#[cfg(all(feature = "native-jit", not(test)))]
 pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     code: &[RegInstr],
     n_regs: usize,
@@ -823,10 +814,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
 /// Returns `(transformed_code, new_n_regs, ip_map)` with the same transformed→original
 /// `ip_map` discipline as the other region passes; `new_n_regs == n_regs` (no fresh
 /// regs — leaves reuse the init sources).
-#[cfg(all(
-    feature = "native-jit",
-    test
-))]
+#[cfg(all(feature = "native-jit", test))]
 pub(in crate::reg_vm) fn native_loop_carried_struct_in_region(
     code: &[RegInstr],
     n_regs: usize,
@@ -1195,10 +1183,7 @@ pub(in crate::reg_vm) fn native_loop_carried_struct_in_region(
 
 /// Stable native-JIT builds leave loop-carried structs unchanged so native
 /// eligibility fails closed and the verified interpreter remains authoritative.
-#[cfg(all(
-    feature = "native-jit",
-    not(test)
-))]
+#[cfg(all(feature = "native-jit", not(test)))]
 pub(in crate::reg_vm) fn native_loop_carried_struct_in_region(
     code: &[RegInstr],
     n_regs: usize,

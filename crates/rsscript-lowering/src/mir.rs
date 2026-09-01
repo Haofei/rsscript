@@ -1056,7 +1056,6 @@ struct CheckedHirLowererInput<'source> {
     targets: CallTargets,
 }
 
-
 fn is_catalog_builtin(signature: &checked::FunctionSig) -> bool {
     signature
         .namespace

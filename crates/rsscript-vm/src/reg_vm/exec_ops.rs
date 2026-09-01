@@ -1,9 +1,9 @@
 //! `RegVm` dispatch loop (`drive`) and following execution methods, split from
 //! `exec.rs` for module-size partitioning (a second `impl RegVm` block).
 
-use super::*;
 #[cfg(feature = "native-jit")]
 use super::exec::advance_auto_osr_work;
+use super::*;
 
 impl RegVm {
     /// Drive the explicit call stack until the frame at depth `floor` returns
@@ -397,12 +397,7 @@ impl RegVm {
                 // copy of their semantics that the JIT executor also uses — so the
                 // two can never diverge. Only frame/suspension/call-shaped
                 // instructions need the interpreter-specific handling below.
-                match self.try_exec_pure(
-                    instr,
-                    base,
-                    &mut ip,
-                    None,
-                )? {
+                match self.try_exec_pure(instr, base, &mut ip, None)? {
                     PureStep::Next => {}
                     PureStep::Return(value) => {
                         let frame = self.frames.pop().expect("active frame");

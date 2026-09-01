@@ -1,8 +1,8 @@
 //! JitHeapHandle impl + JIT host helpers (part 1) — impls/free-fns split from `reg_vm/mod.rs` for module-size partitioning.
 //! All type definitions stay in mod.rs.
 
+#[cfg(feature = "native-jit")]
 use super::*;
-
 
 #[cfg(feature = "native-jit")]
 impl JitHeapHandle {
@@ -21,7 +21,10 @@ impl JitHeapHandle {
 }
 
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn jit_cached_heap_value_with_ctx(ctx: JitHostCallCtx, handle: i64) -> Option<VmValue> {
+pub(in crate::reg_vm) fn jit_cached_heap_value_with_ctx(
+    ctx: JitHostCallCtx,
+    handle: i64,
+) -> Option<VmValue> {
     if let Some(value) = JIT_HEAP_VALUE_CACHE.with(|cache| {
         cache
             .borrow()
@@ -60,7 +63,10 @@ pub(in crate::reg_vm) fn jit_materialize_heap_result(handle: i64) -> Option<VmVa
 }
 
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn jit_heap_result_root_with_ctx(ctx: JitHostCallCtx, handle: i64) -> Option<usize> {
+pub(in crate::reg_vm) fn jit_heap_result_root_with_ctx(
+    ctx: JitHostCallCtx,
+    handle: i64,
+) -> Option<usize> {
     match JitHeapHandle::decode(handle)? {
         JitHeapHandle::Input(index) => Some(index),
         JitHeapHandle::Output(index) => ctx.heap_result_root(index),
@@ -124,7 +130,10 @@ pub(in crate::reg_vm) fn jit_heap_list_handle_with_ctx(
 }
 
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn jit_heap_map_handle_with_ctx(ctx: JitHostCallCtx, handle: i64) -> Option<Rc<RefCell<ValueMap>>> {
+pub(in crate::reg_vm) fn jit_heap_map_handle_with_ctx(
+    ctx: JitHostCallCtx,
+    handle: i64,
+) -> Option<Rc<RefCell<ValueMap>>> {
     if let Some(cached) = JIT_MAP_HANDLE_CACHE.with(|cache| {
         let cache = cache.borrow();
         cache
@@ -188,7 +197,10 @@ pub(in crate::reg_vm) fn jit_heap_deque_handle_with_ctx(
 }
 
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn jit_snapshot_list_before_write(handle: i64, list: &Rc<RefCell<TypedVec>>) -> bool {
+pub(in crate::reg_vm) fn jit_snapshot_list_before_write(
+    handle: i64,
+    list: &Rc<RefCell<TypedVec>>,
+) -> bool {
     if !JitCallCtx::is_active() {
         return false;
     }
@@ -199,7 +211,9 @@ pub(in crate::reg_vm) fn jit_snapshot_list_before_write(handle: i64, list: &Rc<R
 }
 
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn jit_snapshot_input_list_before_write(list: &Rc<RefCell<TypedVec>>) -> bool {
+pub(in crate::reg_vm) fn jit_snapshot_input_list_before_write(
+    list: &Rc<RefCell<TypedVec>>,
+) -> bool {
     if !JitCallCtx::is_active() {
         return false;
     }
@@ -216,7 +230,10 @@ pub(in crate::reg_vm) fn jit_snapshot_input_list_before_write(list: &Rc<RefCell<
 }
 
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn jit_struct_field_list(value: &VmValue, slot: usize) -> Option<Rc<RefCell<TypedVec>>> {
+pub(in crate::reg_vm) fn jit_struct_field_list(
+    value: &VmValue,
+    slot: usize,
+) -> Option<Rc<RefCell<TypedVec>>> {
     match value {
         VmValue::Struct(data) | VmValue::Variant(data) => match data.fields.get(slot)? {
             VmValue::List(list) => Some(Rc::clone(list)),
@@ -247,14 +264,21 @@ pub(in crate::reg_vm) fn jit_value_may_contain_list(value: &VmValue) -> bool {
 }
 
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn jit_value_contains_list_rc(value: &VmValue, needle: &Rc<RefCell<TypedVec>>) -> bool {
+pub(in crate::reg_vm) fn jit_value_contains_list_rc(
+    value: &VmValue,
+    needle: &Rc<RefCell<TypedVec>>,
+) -> bool {
     // `seen` tracks the pointer identity of EVERY interior-mutable container already
     // entered (`List`/`Deque`/`Map`/`Managed`), not just `Managed`. A heap graph can be
     // cyclic (e.g. a `List` that, through a `RefCell`, contains itself), so without
     // recording every container identity the recursion would loop forever / stack-overflow.
     // A revisit returns `false`: the needle is matched by `Rc::ptr_eq` on FIRST visit, so a
     // back-edge to an already-seen node cannot be (a fresh path to) the needle.
-    pub(in crate::reg_vm) fn contains(value: &VmValue, needle: &Rc<RefCell<TypedVec>>, seen: &mut Vec<usize>) -> bool {
+    pub(in crate::reg_vm) fn contains(
+        value: &VmValue,
+        needle: &Rc<RefCell<TypedVec>>,
+        seen: &mut Vec<usize>,
+    ) -> bool {
         // Returns false if `ptr` was already visited; otherwise records it and returns true.
         fn first_visit(seen: &mut Vec<usize>, ptr: usize) -> bool {
             if seen.contains(&ptr) {
@@ -368,7 +392,10 @@ pub(in crate::reg_vm) fn jit_selected_heap_inputs_alias_flat_mut(
 }
 
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn jit_snapshot_map_before_write(handle: i64, map: &Rc<RefCell<ValueMap>>) -> bool {
+pub(in crate::reg_vm) fn jit_snapshot_map_before_write(
+    handle: i64,
+    map: &Rc<RefCell<ValueMap>>,
+) -> bool {
     if !JitCallCtx::is_active() {
         return false;
     }
@@ -388,7 +415,10 @@ pub(in crate::reg_vm) fn jit_snapshot_map_before_write(handle: i64, map: &Rc<Ref
 }
 
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn jit_snapshot_deque_before_write(handle: i64, deque: &Rc<RefCell<VecDeque<VmValue>>>) -> bool {
+pub(in crate::reg_vm) fn jit_snapshot_deque_before_write(
+    handle: i64,
+    deque: &Rc<RefCell<VecDeque<VmValue>>>,
+) -> bool {
     if !JitCallCtx::is_active() {
         return false;
     }
@@ -478,7 +508,10 @@ pub(in crate::reg_vm) fn jit_struct_field_int(value: &VmValue, slot: usize) -> O
 }
 
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn jit_struct_with_int_field_updates(value: &VmValue, updates: &[(usize, i64)]) -> Option<VmValue> {
+pub(in crate::reg_vm) fn jit_struct_with_int_field_updates(
+    value: &VmValue,
+    updates: &[(usize, i64)],
+) -> Option<VmValue> {
     match value {
         VmValue::Struct(data) => {
             let mut fields = data.fields.clone();
@@ -524,7 +557,6 @@ pub(in crate::reg_vm) fn jit_struct_field_float(value: &VmValue, slot: usize) ->
         _ => None,
     }
 }
-
 
 #[cfg(feature = "native-jit")]
 jit_host_boundary! {
@@ -588,7 +620,12 @@ jit_host_boundary! {
 }
 
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn rss_jit_field_set_int_with_ctx(ctx: JitHostCallCtx, handle: i64, slot: i64, value: i64) -> i64 {
+pub(in crate::reg_vm) fn rss_jit_field_set_int_with_ctx(
+    ctx: JitHostCallCtx,
+    handle: i64,
+    slot: i64,
+    value: i64,
+) -> i64 {
     let Some(slot) = usize::try_from(slot).ok() else {
         ctx.signal_bail();
         return 0;
@@ -876,7 +913,12 @@ jit_host_boundary! {
 }
 
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn rss_jit_list_set_int_with_ctx(ctx: JitHostCallCtx, handle: i64, index: i64, value: i64) -> i64 {
+pub(in crate::reg_vm) fn rss_jit_list_set_int_with_ctx(
+    ctx: JitHostCallCtx,
+    handle: i64,
+    index: i64,
+    value: i64,
+) -> i64 {
     let Some(index) = usize::try_from(index).ok() else {
         ctx.signal_bail();
         return 0;
@@ -952,7 +994,11 @@ jit_host_boundary! {
 }
 
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn rss_jit_list_push_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value: i64) -> i64 {
+pub(in crate::reg_vm) fn rss_jit_list_push_int_with_ctx(
+    ctx: JitHostCallCtx,
+    handle: i64,
+    value: i64,
+) -> i64 {
     match ctx.with_journaled_list_write(handle, |list| {
         // `checked_push_accounted` returns the flat-capacity growth in bytes — exactly
         // what the interpreter's `List.push` bills to `allocation_budget` (`account_bytes`).
@@ -996,7 +1042,11 @@ jit_host_boundary! {
 }
 
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn rss_jit_list_push_handle_with_ctx(ctx: JitHostCallCtx, handle: i64, value_handle: i64) -> i64 {
+pub(in crate::reg_vm) fn rss_jit_list_push_handle_with_ctx(
+    ctx: JitHostCallCtx,
+    handle: i64,
+    value_handle: i64,
+) -> i64 {
     // Resolve the heap value (clone it out of its table) before the journaled write.
     let Some(value) = ctx.heap_read_handle(value_handle, |value| Some(value.clone())) else {
         ctx.signal_bail();
@@ -1032,7 +1082,11 @@ jit_host_boundary! {
 /// `rss_jit_list_get_float`. A non-Float list / invalid handle bails out-of-band,
 /// so a mis-typed lowering falls back to the interpreter.
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn rss_jit_list_push_float_with_ctx(ctx: JitHostCallCtx, handle: i64, value: f64) -> i64 {
+pub(in crate::reg_vm) fn rss_jit_list_push_float_with_ctx(
+    ctx: JitHostCallCtx,
+    handle: i64,
+    value: f64,
+) -> i64 {
     match ctx.with_journaled_list_write(handle, |list| {
         list.checked_push_accounted(VmValue::Float(value)).ok()
     }) {
@@ -1112,7 +1166,12 @@ jit_host_boundary! {
 }
 
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn rss_jit_map_insert_int_with_ctx(ctx: JitHostCallCtx, handle: i64, key: i64, value: i64) -> i64 {
+pub(in crate::reg_vm) fn rss_jit_map_insert_int_with_ctx(
+    ctx: JitHostCallCtx,
+    handle: i64,
+    key: i64,
+    value: i64,
+) -> i64 {
     match ctx.with_journaled_map_write(handle, |map| {
         map.insert(jit_int_key(key), VmValue::Int(value));
         Some(0)

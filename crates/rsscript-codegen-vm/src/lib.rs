@@ -34,7 +34,7 @@ pub enum CodegenError {
 }
 
 mod facts;
-use facts::{effect, fact_type, legacy_signature_type, ownership, typed_executable_facts};
+use facts::{legacy_signature_type, typed_executable_facts};
 
 impl fmt::Display for CodegenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -171,7 +171,6 @@ fn wire_unit(mir: &MirModule) -> Result<Value, CodegenError> {
         "source_map": source_map,
     }))
 }
-
 
 struct EmittedWireFunction {
     function: Value,

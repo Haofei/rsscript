@@ -9,7 +9,11 @@ pub(in crate::reg_vm) fn accumulate_osr_work(current: u32, iteration_work: u32) 
 }
 
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn advance_auto_osr_work(current: u32, iteration_work: u32, threshold: u32) -> (u32, bool) {
+pub(in crate::reg_vm) fn advance_auto_osr_work(
+    current: u32,
+    iteration_work: u32,
+    threshold: u32,
+) -> (u32, bool) {
     let next = accumulate_osr_work(current, iteration_work);
     (next, next >= threshold)
 }
@@ -1284,7 +1288,6 @@ impl RegVm {
             )),
         }
     }
-
 }
 
 #[cfg(all(test, feature = "native-jit"))]

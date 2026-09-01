@@ -921,7 +921,6 @@ pub(crate) fn validate_with_limits(
         }
     }
 
-
     if !program.resume_live_regs.is_empty() && program.resume_live_regs.len() != program.code.len()
     {
         return Err(JitError::invalid_ir(format!(

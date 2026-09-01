@@ -60,12 +60,7 @@ impl RegVm {
                 self.set_reg(base + *dst, result);
                 continue;
             }
-            match self.try_exec_pure(
-                instr,
-                base,
-                &mut ip,
-                None,
-            )? {
+            match self.try_exec_pure(instr, base, &mut ip, None)? {
                 PureStep::Next => {}
                 PureStep::Return(value) => return Ok(value),
                 // Eligibility guarantees only pure instructions (and the
@@ -86,12 +81,7 @@ impl RegVm {
         while let Some(instr) = func.code.get(ip) {
             self.tick()?;
             ip += 1;
-            match self.try_exec_pure(
-                instr,
-                base,
-                &mut ip,
-                None,
-            )? {
+            match self.try_exec_pure(instr, base, &mut ip, None)? {
                 PureStep::Next => {}
                 PureStep::Return(value) => return Ok(value),
                 PureStep::NotPure => {
@@ -104,7 +94,6 @@ impl RegVm {
         Ok(VmValue::Unit)
     }
 
-
     #[cfg(feature = "native-jit")]
     fn try_native_self_recursive(
         &mut self,
@@ -116,7 +105,6 @@ impl RegVm {
     ) -> Option<VmValue> {
         None
     }
-
 
     #[cfg(feature = "native-jit")]
     pub(in crate::reg_vm) fn try_native_mutual_recursive_int(

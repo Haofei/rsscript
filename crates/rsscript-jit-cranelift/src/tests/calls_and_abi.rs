@@ -543,8 +543,6 @@ fn native_scalar_call_deopts_at_caller_when_callee_deopts() {
     ));
 }
 
-
-
 #[test]
 fn native_scalar_call_chains_child_deopt_payload() {
     let mut m = module();
@@ -1316,7 +1314,6 @@ fn float_read_helpers_compile_and_bail() {
     assert_eq!(m.callt(id2, &[0]), None);
     let _ = Int;
 }
-
 
 #[test]
 fn closure_id_dispatch_selects_arm_or_bails() {

@@ -99,14 +99,17 @@ macro_rules! jit_host_boundary {
 
 mod jit_ctx_impl;
 mod jit_native_a;
+#[cfg(feature = "native-jit")]
 use jit_native_a::*;
 mod jit_native_b;
+#[cfg(feature = "native-jit")]
 use jit_native_b::*;
 #[cfg(feature = "native-jit")]
 mod native_text_helpers;
 #[cfg(feature = "native-jit")]
 use native_text_helpers::*;
 mod native_stats_impl;
+#[cfg(feature = "native-jit")]
 use native_stats_impl::*;
 mod execution_plan;
 #[cfg(feature = "native-jit")]
@@ -214,7 +217,6 @@ impl RegVmExecutable {
             .map_err(|error| EvalError::Runtime(error.to_string()))
     }
 }
-
 
 /// Result of driving a task's call stack one slice at a time.
 enum Outcome {
@@ -1359,13 +1361,11 @@ enum JitHeapSnapshotKey {
 #[cfg(feature = "native-jit")]
 struct JitCallCtx;
 
-
 #[cfg(feature = "native-jit")]
 #[derive(Clone, Copy)]
 struct JitHostCallCtx {
     call_context: vm_jit::HostCtx,
 }
-
 
 #[cfg(feature = "native-jit")]
 struct JitCallCtxGuard;

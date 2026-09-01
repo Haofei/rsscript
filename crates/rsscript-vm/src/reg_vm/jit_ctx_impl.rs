@@ -1,5 +1,6 @@
 //! `impl JitCallCtx` split from `reg_vm/mod.rs` for module-size partitioning.
 
+#[cfg(feature = "native-jit")]
 use super::*;
 
 #[cfg(feature = "native-jit")]
@@ -92,7 +93,10 @@ impl JitCallCtx {
         })
     }
 
-    pub(in crate::reg_vm) fn with_heap_arg<R>(index: usize, read: impl FnOnce(&VmValue) -> Option<R>) -> Option<R> {
+    pub(in crate::reg_vm) fn with_heap_arg<R>(
+        index: usize,
+        read: impl FnOnce(&VmValue) -> Option<R>,
+    ) -> Option<R> {
         JIT_CALL_CTX.with(|ctx| {
             let ctx = ctx.borrow();
             if ctx.active_depth == 0 {
@@ -212,7 +216,11 @@ impl JitHostCallCtx {
         JitCallCtx::push_heap_arg(value)
     }
 
-    pub(in crate::reg_vm) fn with_heap_arg<R>(self, index: usize, read: impl FnOnce(&VmValue) -> Option<R>) -> Option<R> {
+    pub(in crate::reg_vm) fn with_heap_arg<R>(
+        self,
+        index: usize,
+        read: impl FnOnce(&VmValue) -> Option<R>,
+    ) -> Option<R> {
         JitCallCtx::with_heap_arg(index, read)
     }
 
@@ -220,7 +228,11 @@ impl JitHostCallCtx {
         JitCallCtx::clone_heap_arg(index)
     }
 
-    pub(in crate::reg_vm) fn push_heap_result(self, value: VmValue, root: Option<usize>) -> Option<i64> {
+    pub(in crate::reg_vm) fn push_heap_result(
+        self,
+        value: VmValue,
+        root: Option<usize>,
+    ) -> Option<i64> {
         JitCallCtx::push_heap_result(value, root)
     }
 
@@ -250,11 +262,18 @@ impl JitHostCallCtx {
         JitCallCtx::push_heap_writeback(root, handle);
     }
 
-    pub(in crate::reg_vm) fn with_heap_writebacks<R>(self, read: impl FnOnce(&[(usize, i64)]) -> R) -> R {
+    pub(in crate::reg_vm) fn with_heap_writebacks<R>(
+        self,
+        read: impl FnOnce(&[(usize, i64)]) -> R,
+    ) -> R {
         JitCallCtx::with_heap_writebacks(read)
     }
 
-    pub(in crate::reg_vm) fn heap_read<R>(self, handle: i64, read: impl FnOnce(&VmValue) -> Option<R>) -> Option<R> {
+    pub(in crate::reg_vm) fn heap_read<R>(
+        self,
+        handle: i64,
+        read: impl FnOnce(&VmValue) -> Option<R>,
+    ) -> Option<R> {
         let index = usize::try_from(handle).ok()?;
         self.with_heap_arg(index, read)
     }
@@ -276,7 +295,10 @@ impl JitHostCallCtx {
         jit_heap_map_handle_with_ctx(self, handle)
     }
 
-    pub(in crate::reg_vm) fn heap_deque_handle(self, handle: i64) -> Option<Rc<RefCell<VecDeque<VmValue>>>> {
+    pub(in crate::reg_vm) fn heap_deque_handle(
+        self,
+        handle: i64,
+    ) -> Option<Rc<RefCell<VecDeque<VmValue>>>> {
         jit_heap_deque_handle_with_ctx(self, handle)
     }
 

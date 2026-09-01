@@ -38,7 +38,6 @@ pub(in crate::reg_vm) fn native_whole_function_region_exit(code: &[RegInstr]) ->
     exit
 }
 
-
 #[cfg(feature = "native-jit")]
 fn native_profile_guidance_with_analysis(
     _profile: Option<&FunctionProfile>,
@@ -335,7 +334,19 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     // `try_osr`), so it cannot identify a heap-typed param register here (there is no
     // `heap_param` predicate on this path; heap collection key/value PARAMS are not specially
     // typed). A heap key/value LOCAL still flows its `Handle` type from its in-region definition.
-    native_infer_types(&code, func, facts, &ip_map, &reachable, declared_return_ty, profile, compiled_callees, self_call_sites, group_call_sites, &mut ty)?;
+    native_infer_types(
+        &code,
+        func,
+        facts,
+        &ip_map,
+        &reachable,
+        declared_return_ty,
+        profile,
+        compiled_callees,
+        self_call_sites,
+        group_call_sites,
+        &mut ty,
+    )?;
 
     // TV2 flat-array classification. A `Handle` *parameter* whose uses are list
     // reads (`ListGet`/`ListLen`) can be reclassified as read-only `FlatInt`/

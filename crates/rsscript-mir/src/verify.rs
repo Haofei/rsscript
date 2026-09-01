@@ -894,7 +894,7 @@ pub(super) fn transfer_move_state(
     }
 }
 
-struct InstructionVerification<'a> {
+pub(super) struct InstructionVerification<'a> {
     defined: &'a mut BTreeSet<ValueId>,
     used: &'a mut Vec<ValueId>,
     moved_places: &'a mut BTreeSet<PlaceId>,
@@ -1579,7 +1579,10 @@ pub(super) fn verify_instruction(
     }
 }
 
-pub(super) fn call_argument_compatible(actual: MirCallArgumentMode, expected: MirParameterMode) -> bool {
+pub(super) fn call_argument_compatible(
+    actual: MirCallArgumentMode,
+    expected: MirParameterMode,
+) -> bool {
     matches!(
         (actual, expected),
         (

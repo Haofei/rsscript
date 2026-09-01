@@ -107,11 +107,11 @@ pub struct NativeJitOptions {
     pub optimize_work_threshold: u64,
     pub cost_model: NativeCostModel,
     pub osr_work_threshold: u32,
-    /// Enables non-tail native recursion on the host C stack.
-    ///
-    /// This remains disabled by default because the current Cranelift backend
-    /// cannot prove the live host stack bound. Tail recursion continues to lower
-    /// to loops, and disabled recursive calls fall back to the interpreter.
+    /// Retained no-op: non-tail native recursion was removed because the Cranelift
+    /// backend cannot prove the live host-stack bound, so this flag no longer
+    /// enables anything. The plan builder always forces it off and recursive call
+    /// graphs run on the interpreter; tail recursion continues to lower to loops.
+    /// The field is kept so host `NativeJitOptions` stay source-compatible.
     pub allow_recursive_calls: bool,
 }
 

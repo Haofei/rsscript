@@ -1,6 +1,5 @@
 use super::super::*;
 
-
 /// Minimum branch samples before branch feedback is strong enough to guide profile-guided inlining
 /// speculation. Reporting can show smaller samples, but codegen should not treat
 /// them as a stable bias.
@@ -103,7 +102,6 @@ impl Default for CallSiteFeedback {
 }
 
 impl CallSiteFeedback {
-
     /// Monomorphism state derived from the distinct-callee count. Read by the bounded profile collection
     /// tests and the forthcoming profile-guided inlining inliner.
     pub(crate) fn state(&self) -> MonoState {
@@ -127,7 +125,6 @@ pub(crate) struct BranchFeedback {
 }
 
 impl BranchFeedback {
-
     pub(crate) fn total(&self) -> u32 {
         self.taken.saturating_add(self.fallthrough)
     }
@@ -183,8 +180,6 @@ pub(crate) struct FunctionProfile {
 }
 
 impl FunctionProfile {
-
-
     pub(crate) fn branch_feedback(&self, instr_idx: usize) -> Option<&BranchFeedback> {
         self.branch_sites.get(&instr_idx)
     }
@@ -201,4 +196,3 @@ impl FunctionProfile {
             .map(|(instr_idx, feedback)| (*instr_idx, feedback))
     }
 }
-
