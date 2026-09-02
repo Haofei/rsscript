@@ -62,10 +62,11 @@ re-introduce the removed `jit-speculation`, `jit-recursion-experimental`, or
 `jit-struct-sr-experimental` surfaces. It is a bounded deferral, not a
 resolution.
 
-Per the maintainer's local-first decision for this milestone, controlled
-evidence is the checked-in canonical baseline
-`benchmarks/vm-jit/baseline/canonical-linux-aarch64.json`, pinned by its commit
-and recorded `evidence_sha256`, rather than a CI-hosted release artifact.
+Per the maintainer's local-first decision for this milestone, the evidence is the
+checked-in **local-first** baseline
+`benchmarks/vm-jit/baseline/local-linux-aarch64.json` (not controlled hardware;
+its `decision_basis` in the retention TOML is `local-performance`), pinned by its
+commit and recorded `evidence_sha256`, rather than a controlled CI-hosted artifact.
 
 ## Compatibility and migration
 
@@ -73,8 +74,9 @@ No language, Artifact, Provider ABI, SDK runtime API, or persisted-data contract
 change. `jit-tier0` remains opt-in experimental and off the stable SDK path. The
 native tier already falls back to the verified interpreter for both un-lowered
 shapes, so no execution changes for any program. `jit-cranelift-engine` is
-resolved separately in the same cycle: it is marked `proven` with the same local
-canonical baseline attached (its three workloads clear the 15% threshold).
+resolved separately in the same cycle: it is marked `proven` on a
+`local-performance` basis with the same local-first baseline attached (its three
+workloads clear the 15% threshold locally, not on controlled hardware).
 
 ## Verifier and security impact
 
@@ -95,8 +97,8 @@ and the `mut`-struct `Option` place fix) or a retention `workloads` narrowing.
   `unsupported_by_canonical_compiler` with the reasons quoted above, and
   `string-processing` as `entered` above the 10% bar. The two cases were added to
   the scorecard so the gap is visible and reproducible rather than silent.
-- `benchmarks/vm-jit/baseline/canonical-linux-aarch64.json` is the controlled
-  local baseline (25 samples, alternating order) backing both this extension and
-  the `jit-cranelift-engine` Prove.
+- `benchmarks/vm-jit/baseline/local-linux-aarch64.json` is the local-first
+  baseline (25 samples, alternating order; not controlled hardware) backing both
+  this extension and the `jit-cranelift-engine` Prove.
 - `xtask validate-ci` accepts the extended `decision_by` and the attached
   `jit-cranelift-engine` evidence.

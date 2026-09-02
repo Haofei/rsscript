@@ -9,7 +9,7 @@ runners are provisioned, the release smoke enforces the scalar speedup and the
 weekly scorecard publishes diagnostic evidence without treating workstation
 timings as a product contract.
 
-`canonical-linux-aarch64.json` is a **local-first** baseline collected in the dev
+`local-linux-aarch64.json` is a **local-first** baseline collected in the dev
 container per the maintainer's decision, not a controlled-hardware run. Its
 `controlled` flag is `true` only because the collector requires it, but its
 provenance fields record the truth — `cpu: "unknown"`, `cpu_affinity: "none"`,

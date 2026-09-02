@@ -496,6 +496,7 @@ fn validate_experimental_retention(
             "package",
             "owner",
             "status",
+            "decision_basis",
             "maturity",
             "last_measured_at",
             "decision_by",
@@ -529,6 +530,25 @@ fn validate_experimental_retention(
         if !matches!(status, "pending" | "proven") {
             return Err(format!(
                 "experimental retention `{id}` has unknown status `{status}` (expected `pending` or `proven`)"
+            )
+            .into());
+        }
+        // `decision_basis` makes the retention rationale explicit and auditable: a
+        // surface with a non-zero `minimum_end_to_end_gain_percent` that is kept on
+        // a `differential`/`conformance`/`integration` basis is honestly NOT
+        // claiming it cleared that speed bar, and a `local-performance` basis
+        // states the measurement was not on controlled hardware.
+        let decision_basis = table["decision_basis"].as_str().expect("validated basis");
+        if !matches!(
+            decision_basis,
+            "controlled-performance"
+                | "local-performance"
+                | "differential"
+                | "conformance"
+                | "integration"
+        ) {
+            return Err(format!(
+                "experimental retention `{id}` has unknown decision_basis `{decision_basis}`"
             )
             .into());
         }
