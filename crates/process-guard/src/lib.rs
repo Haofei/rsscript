@@ -188,7 +188,7 @@ impl StrictIsolationRequirements {
     pub const fn linux_runner() -> Self {
         #[cfg(any(target_os = "linux", target_os = "android"))]
         {
-            return Self::none().require(StrictIsolationControl::NoNewPrivileges);
+            Self::none().require(StrictIsolationControl::NoNewPrivileges)
         }
         #[cfg(not(any(target_os = "linux", target_os = "android")))]
         Self::none()
@@ -248,7 +248,7 @@ impl StrictIsolationRequirements {
 pub const fn strict_isolation_support(control: StrictIsolationControl) -> LimitSupport {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
-        return match control {
+        match control {
             StrictIsolationControl::NoNewPrivileges
             | StrictIsolationControl::UserNamespace
             | StrictIsolationControl::MountNamespace
@@ -273,7 +273,7 @@ pub const fn strict_isolation_support(control: StrictIsolationControl) -> LimitS
                     LimitSupport::Unsupported
                 }
             }
-        };
+        }
     }
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
     {
@@ -464,6 +464,9 @@ pub fn restrict_current_process_to_root(
             format!("Landlock ABI v5 is required for complete filesystem mediation, found v{abi}"),
         ));
     }
+    // SAFETY: PR_GET_NO_NEW_PRIVS takes only integer arguments (no pointers), so
+    // this prctl FFI call has no memory-safety preconditions; it merely reads the
+    // current no-new-privs bit and cannot violate any Rust invariant.
     let no_new_privileges = unsafe { libc::prctl(libc::PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) };
     if no_new_privileges != 1 {
         return Err(io::Error::new(
@@ -2059,13 +2062,13 @@ mod tests {
         const ROOT: &str = "RSSCRIPT_LANDLOCK_ROOT";
         const OUTSIDE: &str = "RSSCRIPT_LANDLOCK_OUTSIDE";
         if let (Some(root), Some(outside)) = (std::env::var_os(ROOT), std::env::var_os(OUTSIDE)) {
-            // SAFETY: the helper is a fresh test process and installs the same
-            // irreversible kernel prerequisite that the strict runner launcher
+            // SAFETY: PR_SET_NO_NEW_PRIVS takes only integer arguments (no
+            // pointers), so this prctl FFI call has no memory-safety
+            // preconditions. The helper is a fresh test process installing the
+            // same irreversible kernel prerequisite the strict runner launcher
             // applies before its child begins execution.
-            assert_eq!(
-                unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) },
-                0
-            );
+            let set_no_new_privs = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
+            assert_eq!(set_no_new_privs, 0);
             match restrict_current_process_to_root(Path::new(&root), FilesystemRootAccess::ReadOnly)
             {
                 Ok(()) => {
