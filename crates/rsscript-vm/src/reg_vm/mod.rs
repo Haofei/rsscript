@@ -108,9 +108,6 @@ use jit_native_b::*;
 mod native_text_helpers;
 #[cfg(feature = "native-jit")]
 use native_text_helpers::*;
-mod native_stats_impl;
-#[cfg(feature = "native-jit")]
-use native_stats_impl::*;
 mod execution_plan;
 #[cfg(feature = "native-jit")]
 mod intrinsic_metadata;
@@ -118,6 +115,7 @@ mod intrinsics;
 mod model;
 #[cfg(feature = "native-jit")]
 mod native;
+mod native_stats_impl;
 mod planning;
 mod resource_io;
 mod resources;

@@ -27,26 +27,33 @@ pub(in crate::reg_vm) struct OsrPlanInputs<'a> {
     pub(in crate::reg_vm) region_key: RegionKey,
 }
 
+/// Compiled OSR plan returned by [`RegVm::build_osr_plan`]: the compiled entry
+/// id, its transformed/original loop exits and JIT register width, the marshalling
+/// metadata (param/live-in/scalar-field/heap-input/register types, written-register
+/// mask, string literals, materialize recipes) and the selected native code tier.
+#[cfg(feature = "native-jit")]
+type OsrPlan = (
+    vm_jit::CompiledId,
+    usize,
+    usize,
+    usize,
+    Vec<NativeTy>,
+    Vec<OsrDerivedLiveIn>,
+    Vec<OsrScalarField>,
+    Vec<usize>,
+    Vec<NativeTy>,
+    Vec<bool>,
+    Vec<Rc<String>>,
+    Vec<OsrMaterializeRecipe>,
+    NativeCodeTier,
+);
+
 impl RegVm {
     #[cfg(feature = "native-jit")]
     pub(in crate::reg_vm) fn build_osr_plan(
         &mut self,
         inputs: OsrPlanInputs<'_>,
-    ) -> Option<(
-        vm_jit::CompiledId,
-        usize,
-        usize,
-        usize,
-        Vec<NativeTy>,
-        Vec<OsrDerivedLiveIn>,
-        Vec<OsrScalarField>,
-        Vec<usize>,
-        Vec<NativeTy>,
-        Vec<bool>,
-        Vec<Rc<String>>,
-        Vec<OsrMaterializeRecipe>,
-        NativeCodeTier,
-    )> {
+    ) -> Option<OsrPlan> {
         let OsrPlanInputs {
             func,
             native_key,
@@ -67,7 +74,7 @@ impl RegVm {
         Some({
             // Fast path: cached and NOT at the header ⇒ nothing to do (no clone).
             if let Some(native) = self.native.as_ref()
-                && let Some(entry) = native.osr_cache.get(&osr_version_key)
+                && let Some(entry) = native.osr_cache.get(osr_version_key)
             {
                 match entry {
                     Some(e) if e.orig_header == header_ip => {}
@@ -77,9 +84,7 @@ impl RegVm {
             // Clone the unit handle before borrowing `self.native` mutably: the OSR
             // pre-pass inlines leaf `CallKnown`s, which needs the callee bodies.
             let unit = Rc::clone(&self.unit);
-            let Some(native) = self.native.as_mut() else {
-                return None;
-            };
+            let native = self.native.as_mut()?;
             // Detect + compile the function's single OSR loop ONCE, keyed by the
             // function (independent of the current ip). The header gate decides when
             // to actually fire.
@@ -94,7 +99,7 @@ impl RegVm {
             // resumes). When the body has no replaceable Option the region pass
             // returns the code unchanged with an identity ip-map, so plain
             // native-subset OSR is byte-for-byte the old path.
-            if !native.osr_cache.contains_key(&osr_version_key) {
+            if !native.osr_cache.contains_key(osr_version_key) {
                 if native.osr_instance_count(region_key) >= MAX_JIT_INSTANCES_PER_FUNCTION
                     && !native.has_osr_instance(region_key, &instance.type_arguments)
                 {
@@ -169,8 +174,8 @@ impl RegVm {
                             capture_count: func.captures,
                             region: lp,
                             ip_map: &identity_ip_map,
-                            parameter_types: &param_native_types,
-                            immutable_leaf_params: &immutable_leaf_params,
+                            parameter_types: param_native_types,
+                            immutable_leaf_params,
                         });
                         if let Some(started) = translation_started {
                             native.stats.translation_nanos = native
@@ -624,8 +629,8 @@ impl RegVm {
                                 capture_count: eff_func.captures,
                                 region: lp,
                                 ip_map: &real_ip_map,
-                                parameter_types: &param_native_types,
-                                immutable_leaf_params: &immutable_leaf_params,
+                                parameter_types: param_native_types,
+                                immutable_leaf_params,
                             });
                             if let Some(started) = translation_started {
                                 native.stats.translation_nanos = native
@@ -839,7 +844,7 @@ impl RegVm {
                     native.osr_cache.insert(osr_version_key.clone(), entry);
                     if native
                         .osr_cache
-                        .get(&osr_version_key)
+                        .get(osr_version_key)
                         .is_some_and(Option::is_some)
                     {
                         native
@@ -882,8 +887,8 @@ impl RegVm {
                 let promote =
                     controller.observe_native_work(promote_work, native.optimize_work_threshold);
                 if promote
-                    && !native.optimized_osr_cache.contains_key(&osr_version_key)
-                    && let Some(source) = native.osr_optimization_sources.remove(&osr_version_key)
+                    && !native.optimized_osr_cache.contains_key(osr_version_key)
+                    && let Some(source) = native.osr_optimization_sources.remove(osr_version_key)
                     && let Some(admission) =
                         begin_native_compile(native, 1, NativeCodeTier::Optimized)
                 {
@@ -932,7 +937,7 @@ impl RegVm {
                                         NativeCodeTier::Optimized,
                                     );
                                     if let Some(Some(baseline)) =
-                                        native.osr_cache.get(&osr_version_key)
+                                        native.osr_cache.get(osr_version_key)
                                     {
                                         let mut promoted = baseline.clone();
                                         promoted.id = optimized_id;
@@ -956,13 +961,13 @@ impl RegVm {
                 }
             }
             let (entry, selected_tier) =
-                if let Some(entry) = native.optimized_osr_cache.get(&osr_version_key) {
+                if let Some(entry) = native.optimized_osr_cache.get(osr_version_key) {
                     (Some(entry), NativeCodeTier::Optimized)
                 } else {
                     (
                         native
                             .osr_cache
-                            .get(&osr_version_key)
+                            .get(osr_version_key)
                             .and_then(Option::as_ref),
                         NativeCodeTier::Baseline,
                     )

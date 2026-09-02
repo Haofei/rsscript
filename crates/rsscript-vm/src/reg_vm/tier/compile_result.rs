@@ -96,7 +96,7 @@ pub(super) fn native_region_is_promotion_eligible(jit_fn: &vm_jit::JitFunction) 
     !jit_fn
         .code
         .iter()
-        .any(|instr| matches!(instr, vm_jit::JitInstr::CallNative { .. }) || { { false } })
+        .any(|instr| matches!(instr, vm_jit::JitInstr::CallNative { .. }))
 }
 
 #[cfg(feature = "native-jit")]

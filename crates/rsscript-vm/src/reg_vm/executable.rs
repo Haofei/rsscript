@@ -2,6 +2,11 @@
 //! partitioning (a second impl block; the type stays in `mod.rs`).
 
 use super::*;
+// `jit_missed_opt_report` lives in the native_stats_impl module; import it under
+// the exact cfg of its sole caller (the diagnostics reporter below) so the import
+// is present precisely when used.
+#[cfg(all(feature = "native-jit", any(test, feature = "jit-diagnostics")))]
+use super::native_stats_impl::jit_missed_opt_report;
 
 impl RegVmExecutable {
     /// Serialize this already-verified executable as `rsscript.bytecode.v1`.

@@ -3,19 +3,35 @@
 
 use super::*;
 
+/// Read-only inputs to [`native_infer_types`], bundled so the fixed point is a
+/// single-argument call (the mutable `ty` window is passed separately).
+pub(super) struct TypeInferInputs<'a> {
+    pub(super) code: &'a [RegInstr],
+    pub(super) func: &'a RegFunction,
+    pub(super) facts: &'a VerifiedFunctionFacts,
+    pub(super) ip_map: &'a [usize],
+    pub(super) reachable: &'a [bool],
+    pub(super) declared_return_ty: Option<NativeTy>,
+    pub(super) compiled_callees: &'a HashMap<usize, NativeCompiledCallee>,
+    pub(super) self_call_sites: &'a HashSet<usize>,
+    pub(super) group_call_sites: &'a HashMap<usize, u32>,
+}
+
 pub(super) fn native_infer_types(
-    code: &[RegInstr],
-    func: &RegFunction,
-    facts: &VerifiedFunctionFacts,
-    ip_map: &[usize],
-    reachable: &[bool],
-    declared_return_ty: Option<NativeTy>,
-    profile: Option<&FunctionProfile>,
-    compiled_callees: &HashMap<usize, NativeCompiledCallee>,
-    self_call_sites: &HashSet<usize>,
-    group_call_sites: &HashMap<usize, u32>,
+    inputs: TypeInferInputs<'_>,
     ty: &mut Vec<Option<NativeTy>>,
 ) -> Option<()> {
+    let TypeInferInputs {
+        code,
+        func,
+        facts,
+        ip_map,
+        reachable,
+        declared_return_ty,
+        compiled_callees,
+        self_call_sites,
+        group_call_sites,
+    } = inputs;
     let mut changed = true;
     while changed {
         changed = false;

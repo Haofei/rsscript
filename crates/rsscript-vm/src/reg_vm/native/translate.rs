@@ -335,16 +335,17 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     // `heap_param` predicate on this path; heap collection key/value PARAMS are not specially
     // typed). A heap key/value LOCAL still flows its `Handle` type from its in-region definition.
     native_infer_types(
-        &code,
-        func,
-        facts,
-        &ip_map,
-        &reachable,
-        declared_return_ty,
-        profile,
-        compiled_callees,
-        self_call_sites,
-        group_call_sites,
+        TypeInferInputs {
+            code: &code,
+            func,
+            facts,
+            ip_map: &ip_map,
+            reachable: &reachable,
+            declared_return_ty,
+            compiled_callees,
+            self_call_sites,
+            group_call_sites,
+        },
         &mut ty,
     )?;
 
