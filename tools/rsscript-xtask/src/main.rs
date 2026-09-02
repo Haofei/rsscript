@@ -552,6 +552,10 @@ fn validate_experimental_retention(
             )
             .into());
         }
+        let is_performance = matches!(
+            decision_basis,
+            "controlled-performance" | "local-performance"
+        );
         let evidence_uri = table
             .get("evidence_uri")
             .and_then(toml::Value::as_str)
@@ -610,6 +614,55 @@ fn validate_experimental_retention(
                     )
                     .into());
                 }
+                // For a proven performance surface backed by a scorecard baseline,
+                // the pinned file must actually contain a passing measurement — the
+                // gain claim has to rest on real evidence, not just a file that
+                // hashes correctly.
+                if status == "proven"
+                    && is_performance
+                    && let Ok(document) = serde_json::from_slice::<serde_json::Value>(&bytes)
+                    && let Some(cases) = document.get("cases").and_then(|cases| cases.as_array())
+                    && !cases.iter().any(|case| {
+                        case.get("retention_threshold_met")
+                            .and_then(serde_json::Value::as_bool)
+                            == Some(true)
+                    })
+                {
+                    return Err(format!(
+                        "experimental retention `{id}` performance evidence `{evidence_uri}` records no case with retention_threshold_met=true"
+                    )
+                    .into());
+                }
+            }
+        }
+        // `measured_gain_percent`, when present, is the minimum measured end-to-end
+        // gain across the surface's workloads. A proven performance surface must
+        // declare one that meets its threshold; the sha-pinned evidence above is the
+        // auditable source of the number.
+        let measured_gain = table
+            .get("measured_gain_percent")
+            .and_then(toml::Value::as_integer);
+        if measured_gain.is_some_and(|gain| gain < 0) {
+            return Err(format!(
+                "experimental retention `{id}` measured_gain_percent must be non-negative"
+            )
+            .into());
+        }
+        if status == "proven" && is_performance {
+            let threshold = table
+                .get("minimum_end_to_end_gain_percent")
+                .and_then(toml::Value::as_integer)
+                .unwrap_or(0);
+            let gain = measured_gain.ok_or_else(|| {
+                format!(
+                    "experimental retention `{id}` is proven on a performance basis but declares no measured_gain_percent"
+                )
+            })?;
+            if gain < threshold {
+                return Err(format!(
+                    "experimental retention `{id}` measured_gain_percent {gain} is below its {threshold}% threshold"
+                )
+                .into());
             }
         }
         if !table["owner"]

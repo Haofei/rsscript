@@ -20,6 +20,10 @@ last_measured_at = "2026-08-31"
 decision_by = "2027-02-28"
 workloads = ["string-text", "mailbox-ring", "closure-dynamic"]
 minimum_end_to_end_gain_percent = 10
+# Only string-text is measurable (29% gain); mailbox-ring and closure-dynamic are
+# unsupported_by_canonical_compiler (ADR 0230). Recorded for the measurable
+# workload; not enforced while the surface is `pending`.
+measured_gain_percent = 29
 evidence_uri = ""
 evidence_sha256 = ""
 removal_rule = "Remove or merge into the interpreter if controlled fallback workloads do not show a repeatable 10-15% gain."
@@ -37,10 +41,14 @@ last_measured_at = "2026-08-31"
 decision_by = "2026-11-30"
 workloads = ["native-scalar", "native-call", "native-read-heap"]
 minimum_end_to_end_gain_percent = 15
-# Local-first controlled baseline (25 samples, RSS_JIT_CONTROLLED=1, release):
-# native-scalar 31.4x, native-call 21.7x, native-read-heap 12.3x, all above the
-# 15% threshold with 0 bails. Pinned by commit + sha256 per the maintainer's
-# local-first decision (no CI-hosted artifact).
+# Minimum measured end-to-end gain across the workloads (the weakest link):
+# native-read-heap 12.27x = 1127%, vs native-scalar 31.4x and native-call 21.7x.
+# validate-ci enforces measured_gain_percent >= minimum_end_to_end_gain_percent
+# for a proven *-performance surface.
+measured_gain_percent = 1127
+# Local-first baseline (25 samples, RSS_JIT_CONTROLLED=1, release): all three
+# workloads clear the 15% threshold with 0 bails. Pinned by commit + sha256 per
+# the maintainer's local-first decision (not controlled hardware).
 evidence_uri = "benchmarks/vm-jit/baseline/local-linux-aarch64.json"
 evidence_sha256 = "77743a13934e58fec1f19a0bb26658f45c1e97ebc9645b351ceeb27729feac2f"
 removal_rule = "Keep as a preview-only engine until controlled workloads justify a supported optional release surface."
