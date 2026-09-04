@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 mod repository_architecture;
+mod retention_evidence;
 
 const METRICS_SCHEMA: &str = "rsscript.core_metrics.v1";
 const SLO_SCHEMA: &str = "rsscript.core_slo.v1";
@@ -556,6 +557,49 @@ fn validate_experimental_retention(
             decision_basis,
             "controlled-performance" | "local-performance"
         );
+        let workloads = table
+            .get("workloads")
+            .and_then(toml::Value::as_array)
+            .ok_or_else(|| format!("experimental retention `{id}` needs workloads"))?;
+        let workload_names = workloads
+            .iter()
+            .map(|workload| {
+                workload
+                    .as_str()
+                    .filter(|workload| !workload.trim().is_empty())
+                    .map(str::to_owned)
+                    .ok_or_else(|| format!("experimental retention `{id}` has an invalid workload"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if workload_names.is_empty() {
+            return Err(format!("experimental retention `{id}` has no workload").into());
+        }
+        let evidence_cases = table
+            .get("evidence_cases")
+            .and_then(toml::Value::as_array)
+            .map(|cases| {
+                cases
+                    .iter()
+                    .map(|case| {
+                        case.as_str()
+                            .filter(|case| !case.trim().is_empty())
+                            .map(str::to_owned)
+                            .ok_or_else(|| {
+                                format!(
+                                    "experimental retention `{id}` has an invalid evidence case"
+                                )
+                            })
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+        if status == "proven" && is_performance && evidence_cases.len() != workload_names.len() {
+            return Err(format!(
+                "experimental retention `{id}` must map every workload to exactly one evidence case"
+            )
+            .into());
+        }
         let evidence_uri = table
             .get("evidence_uri")
             .and_then(toml::Value::as_str)
@@ -582,6 +626,7 @@ fn validate_experimental_retention(
         // fields present, a well-formed digest, and — for a repo-local file — the
         // file must exist and hash to exactly that digest. This is what stops a
         // bogus non-empty evidence string from satisfying the gate.
+        let mut verified_performance_gain = None;
         if has_evidence {
             if evidence_uri.is_empty() || evidence_sha.is_empty() {
                 return Err(format!(
@@ -600,6 +645,12 @@ fn validate_experimental_retention(
             // resolved against the repo root and its digest verified.
             let is_remote =
                 evidence_uri.starts_with("http://") || evidence_uri.starts_with("https://");
+            if is_remote && status == "proven" && is_performance {
+                return Err(format!(
+                    "experimental retention `{id}` performance evidence must be repo-local so its measurements can be verified"
+                )
+                .into());
+            }
             if !is_remote {
                 let evidence_path = root.join(evidence_uri);
                 let bytes = fs::read(&evidence_path).map_err(|error| {
@@ -614,53 +665,35 @@ fn validate_experimental_retention(
                     )
                     .into());
                 }
-                // For a proven performance surface backed by a scorecard baseline,
-                // the pinned file must actually contain a passing measurement — the
-                // gain claim has to rest on real evidence, not just a file that
-                // hashes correctly.
-                if status == "proven"
-                    && is_performance
-                    && let Ok(document) = serde_json::from_slice::<serde_json::Value>(&bytes)
-                    && let Some(cases) = document.get("cases").and_then(|cases| cases.as_array())
-                    && !cases.iter().any(|case| {
-                        case.get("retention_threshold_met")
-                            .and_then(serde_json::Value::as_bool)
-                            == Some(true)
-                    })
-                {
-                    return Err(format!(
-                        "experimental retention `{id}` performance evidence `{evidence_uri}` records no case with retention_threshold_met=true"
-                    )
-                    .into());
+                if status == "proven" && is_performance {
+                    verified_performance_gain = Some(
+                        retention_evidence::minimum_verified_gain_percent(
+                            &bytes,
+                            decision_basis,
+                            &evidence_cases,
+                        )
+                        .map_err(|error| {
+                            format!(
+                                "experimental retention `{id}` cannot verify performance evidence `{evidence_uri}`: {error}"
+                            )
+                        })?,
+                    );
                 }
             }
-        }
-        // `measured_gain_percent`, when present, is the minimum measured end-to-end
-        // gain across the surface's workloads. A proven performance surface must
-        // declare one that meets its threshold; the sha-pinned evidence above is the
-        // auditable source of the number.
-        let measured_gain = table
-            .get("measured_gain_percent")
-            .and_then(toml::Value::as_integer);
-        if measured_gain.is_some_and(|gain| gain < 0) {
-            return Err(format!(
-                "experimental retention `{id}` measured_gain_percent must be non-negative"
-            )
-            .into());
         }
         if status == "proven" && is_performance {
             let threshold = table
                 .get("minimum_end_to_end_gain_percent")
                 .and_then(toml::Value::as_integer)
                 .unwrap_or(0);
-            let gain = measured_gain.ok_or_else(|| {
+            let gain = verified_performance_gain.ok_or_else(|| {
                 format!(
-                    "experimental retention `{id}` is proven on a performance basis but declares no measured_gain_percent"
+                    "experimental retention `{id}` is proven on a performance basis but has no verified gain"
                 )
             })?;
-            if gain < threshold {
+            if gain + 1.0e-9 < threshold as f64 {
                 return Err(format!(
-                    "experimental retention `{id}` measured_gain_percent {gain} is below its {threshold}% threshold"
+                    "experimental retention `{id}` evidence-derived gain {gain:.2}% is below its {threshold}% threshold"
                 )
                 .into());
             }
@@ -706,13 +739,6 @@ fn validate_experimental_retention(
                     format!("experimental retention `{id}` has unknown kind `{kind}`").into(),
                 );
             }
-        }
-        let workloads = table
-            .get("workloads")
-            .and_then(toml::Value::as_array)
-            .ok_or_else(|| format!("experimental retention `{id}` needs workloads"))?;
-        if workloads.is_empty() {
-            return Err(format!("experimental retention `{id}` has no workload").into());
         }
         if table
             .get("minimum_end_to_end_gain_percent")
@@ -2042,6 +2068,7 @@ mod tests {
             "warmup": 3,
             "samples": 25,
             "fixture_digest": "sha256:test",
+            "evidence_class": "controlled-canonical",
             "controlled": true,
             "cpu_affinity": "2",
             "cpu_governor": "performance",
@@ -2078,6 +2105,10 @@ mod tests {
             }]
         });
         assert!(validator.is_valid(&valid));
+        let mut mismatched = valid.clone();
+        mismatched["evidence_class"] = "local-diagnostic".into();
+        mismatched["controlled"] = false.into();
+        assert!(!validator.is_valid(&mismatched));
         let mut invalid = valid;
         invalid["samples"] = 5.into();
         assert!(!validator.is_valid(&invalid));

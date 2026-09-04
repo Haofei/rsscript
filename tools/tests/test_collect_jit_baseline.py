@@ -26,6 +26,7 @@ def document():
         "warmup": 3,
         "samples": 20,
         "fixture_digest": "fixture",
+        "evidence_class": "controlled-canonical",
         "controlled": True,
         "cpu_affinity": "0",
         "cpu_governor": "performance",
@@ -57,6 +58,7 @@ def document():
                 "readonly_licm_sites": 0,
                 "bounds_check_sites": 0,
                 "bounds_checks_elided": 0,
+                "controlled": True,
             }
         ],
     }
@@ -75,6 +77,22 @@ class CollectBaselineTests(unittest.TestCase):
     def test_rejects_non_alternating_collection(self):
         invalid = document()
         invalid["sample_order"] = "native-first"
+        with self.assertRaises(SystemExit):
+            MODULE.validate(invalid)
+
+    def test_accepts_explicit_local_diagnostic_evidence(self):
+        local = document()
+        local["evidence_class"] = "local-diagnostic"
+        local["controlled"] = False
+        local["cpu"] = "unknown"
+        local["cpu_affinity"] = "none"
+        local["cpu_governor"] = "unavailable-local-host"
+        local["cases"][0]["controlled"] = False
+        MODULE.validate(local)
+
+    def test_rejects_placeholder_controlled_environment(self):
+        invalid = document()
+        invalid["cpu"] = "unknown"
         with self.assertRaises(SystemExit):
             MODULE.validate(invalid)
 

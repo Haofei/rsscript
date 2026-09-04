@@ -53,6 +53,7 @@ def validate(document: dict) -> None:
         "warmup",
         "samples",
         "fixture_digest",
+        "evidence_class",
         "controlled",
         "cpu_affinity",
         "cpu_governor",
@@ -64,8 +65,23 @@ def validate(document: dict) -> None:
         raise SystemExit(f"baseline is missing fields: {', '.join(missing)}")
     if document["schema"] != "rsscript.native_jit_baseline.v1":
         raise SystemExit("unexpected baseline schema")
-    if not document["controlled"] or document["samples"] < 20:
-        raise SystemExit("canonical baselines require controlled=true and at least 20 samples")
+    evidence_class = document["evidence_class"]
+    if evidence_class not in {"controlled-canonical", "local-diagnostic"}:
+        raise SystemExit("unexpected benchmark evidence class")
+    expected_controlled = evidence_class == "controlled-canonical"
+    if document["controlled"] is not expected_controlled:
+        raise SystemExit("benchmark evidence class and controlled flag disagree")
+    if document["samples"] < 20:
+        raise SystemExit("benchmark evidence requires at least 20 samples")
+    if expected_controlled:
+        if document["cpu"].strip().lower() == "unknown":
+            raise SystemExit("controlled baselines require a known CPU model")
+        if document["cpu_affinity"].strip().lower() in {"", "none"}:
+            raise SystemExit("controlled baselines require pinned CPU affinity")
+        if document["cpu_governor"].strip().lower() in {"", "none", "unavailable"} or document[
+            "cpu_governor"
+        ].startswith("unavailable-"):
+            raise SystemExit("controlled baselines require a known CPU governor")
     if document["sample_order"] != "alternating":
         raise SystemExit("canonical baselines require alternating sample order")
     if len(document["commit"]) != 40 or any(c not in "0123456789abcdef" for c in document["commit"]):
@@ -98,6 +114,10 @@ def validate(document: dict) -> None:
         "bounds_checks_elided",
     }
     for case in document["cases"]:
+        if case.get("controlled") is not expected_controlled:
+            raise SystemExit(
+                f"baseline case {case.get('case', '<unknown>')} controlled flag disagrees with evidence class"
+            )
         missing_case = sorted(case_evidence - case.keys())
         if missing_case:
             raise SystemExit(
@@ -123,15 +143,17 @@ def validate(document: dict) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--controlled", action="store_true")
-    parser.add_argument("--cpu-affinity", required=True)
-    parser.add_argument("--cpu-governor", required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--controlled", action="store_true")
+    mode.add_argument("--local", action="store_true")
+    parser.add_argument("--cpu-affinity")
+    parser.add_argument("--cpu-governor")
     parser.add_argument("--samples", type=int, default=25)
     parser.add_argument("--warmup", type=int, default=3)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    if not args.controlled:
-        raise SystemExit("refusing canonical collection without --controlled")
+    if args.controlled and (not args.cpu_affinity or not args.cpu_governor):
+        raise SystemExit("controlled collection requires --cpu-affinity and --cpu-governor")
     if args.samples < 20:
         raise SystemExit("canonical collection requires --samples >= 20")
 
@@ -160,6 +182,10 @@ def main() -> None:
     if header is None or not records:
         raise SystemExit("scorecard did not emit a header and measured cases")
 
+    controlled = bool(args.controlled)
+    for record in records:
+        record["controlled"] = controlled
+
     cranelift = output(["cargo", "tree", "-p", "rsscript-jit-cranelift", "-i", "cranelift-codegen"])
     document = {
         "schema": "rsscript.native_jit_baseline.v1",
@@ -173,9 +199,10 @@ def main() -> None:
         "warmup": args.warmup,
         "samples": args.samples,
         "fixture_digest": fixture_digest(),
-        "controlled": True,
-        "cpu_affinity": args.cpu_affinity,
-        "cpu_governor": args.cpu_governor,
+        "evidence_class": "controlled-canonical" if controlled else "local-diagnostic",
+        "controlled": controlled,
+        "cpu_affinity": args.cpu_affinity or "none",
+        "cpu_governor": args.cpu_governor or "unavailable-local-host",
         "sample_order": header.get("order", "alternating"),
         "cases": records,
     }

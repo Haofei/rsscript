@@ -11,12 +11,12 @@ timings as a product contract.
 
 `local-linux-aarch64.json` is a **local-first** baseline collected in the dev
 container per the maintainer's decision, not a controlled-hardware run. Its
-`controlled` flag is `true` only because the collector requires it, but its
-provenance fields record the truth — `cpu: "unknown"`, `cpu_affinity: "none"`,
-`cpu_governor: "unavailable-macos-host"` — so it must be read as a directional
-local diagnostic, not the controlled product contract this directory is otherwise
-reserved for. It backs the `jit-cranelift-engine` retention decision on that
-explicit local-first basis; a controlled-hardware baseline remains follow-up work.
+machine contract says `evidence_class: "local-diagnostic"` and
+`controlled: false`; the provenance fields also retain `cpu: "unknown"`,
+`cpu_affinity: "none"`, and `cpu_governor: "unavailable-macos-host"`. The
+controlled comparator rejects this class. It backs the `jit-cranelift-engine`
+retention decision only on that explicit local-first basis; a controlled-hardware
+baseline remains follow-up work.
 
 Once the first controlled release exists, every later controlled run downloads
 the latest immutable `jit-baseline-*` release and runs
@@ -31,6 +31,9 @@ python3 tools/collect-jit-baseline.py \
   --samples 25 --warmup 3 \
   --output benchmarks/vm-jit/baseline/canonical-linux-x86_64.json
 ```
+
+Local diagnostics use `--local` instead and cannot be accepted by the controlled
+baseline comparator.
 
 The collector records the exact commit, CPU, OS/architecture, Rust and Cranelift
 versions, fixture digest, affinity/governor, alternating sample order, compile and

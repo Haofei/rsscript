@@ -20,10 +20,9 @@ last_measured_at = "2026-08-31"
 decision_by = "2027-02-28"
 workloads = ["string-text", "mailbox-ring", "closure-dynamic"]
 minimum_end_to_end_gain_percent = 10
-# Only string-text is measurable (29% gain); mailbox-ring and closure-dynamic are
-# unsupported_by_canonical_compiler (ADR 0230). Recorded for the measurable
-# workload; not enforced while the surface is `pending`.
-measured_gain_percent = 29
+# Only string-text is currently measurable; mailbox-ring and closure-dynamic are
+# unsupported_by_canonical_compiler (ADR 0230). Pending entries do not claim a
+# measured gain until every workload has immutable evidence.
 evidence_uri = ""
 evidence_sha256 = ""
 removal_rule = "Remove or merge into the interpreter if controlled fallback workloads do not show a repeatable 10-15% gain."
@@ -40,17 +39,15 @@ maturity = "experimental"
 last_measured_at = "2026-08-31"
 decision_by = "2026-11-30"
 workloads = ["native-scalar", "native-call", "native-read-heap"]
+evidence_cases = ["scalar-loop", "native-call-chain", "list-read-loop"]
 minimum_end_to_end_gain_percent = 15
-# Minimum measured end-to-end gain across the workloads (the weakest link):
-# native-read-heap 12.27x = 1127%, vs native-scalar 31.4x and native-call 21.7x.
-# validate-ci enforces measured_gain_percent >= minimum_end_to_end_gain_percent
-# for a proven *-performance surface.
-measured_gain_percent = 1127
+# validate-ci derives the weakest gain directly from the three named scorecard
+# cases; no manually entered gain can satisfy the retention gate.
 # Local-first baseline (25 samples, RSS_JIT_CONTROLLED=1, release): all three
 # workloads clear the 15% threshold with 0 bails. Pinned by commit + sha256 per
 # the maintainer's local-first decision (not controlled hardware).
 evidence_uri = "benchmarks/vm-jit/baseline/local-linux-aarch64.json"
-evidence_sha256 = "77743a13934e58fec1f19a0bb26658f45c1e97ebc9645b351ceeb27729feac2f"
+evidence_sha256 = "f0767cb60591f635bbc8d3dc06851e64d42dd1a233406ab8845d8889cda0efdd"
 removal_rule = "Keep as a preview-only engine until controlled workloads justify a supported optional release surface."
 
 [[surface]]
@@ -65,7 +62,7 @@ maturity = "experimental"
 last_measured_at = "2026-08-31"
 decision_by = "2026-12-31"
 workloads = ["aot_jit_matrix"]
-minimum_end_to_end_gain_percent = 15
+minimum_end_to_end_gain_percent = 0
 evidence_uri = "experiments/retention-evidence.json"
 evidence_sha256 = "6e70b5cad34a001985504fd84f957ad67fff87dbc472e38ee3739c60762fd341"
 removal_rule = "Freeze as a benchmark harness or remove the runtime if no product consumer and report differential evidence exist."
@@ -99,7 +96,7 @@ maturity = "experimental"
 last_measured_at = "2026-08-31"
 decision_by = "2026-12-31"
 workloads = ["runtime_services_execute_and_shutdown_independently_in_parallel"]
-minimum_end_to_end_gain_percent = 15
+minimum_end_to_end_gain_percent = 0
 evidence_uri = "experiments/retention-evidence.json"
 evidence_sha256 = "6e70b5cad34a001985504fd84f957ad67fff87dbc472e38ee3739c60762fd341"
 removal_rule = "Remove the standalone runtime when no product consumer or interpreter-level differential evidence exists."

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 
 import importlib.util
+import json
 import pathlib
+import tempfile
 import unittest
 
 
@@ -15,6 +17,7 @@ SPEC.loader.exec_module(MODULE)
 def baseline(runtime: int = 100, compile_ns: int = 50, code: int = 40):
     return {
         "schema": "rsscript.native_jit_baseline.v1",
+        "evidence_class": "controlled-canonical",
         "controlled": True,
         "cpu": "fixed",
         "os": "linux",
@@ -23,6 +26,8 @@ def baseline(runtime: int = 100, compile_ns: int = 50, code: int = 40):
         "cranelift_version": "cranelift",
         "profile": "release",
         "fixture_digest": "fixture",
+        "cpu_affinity": "0",
+        "cpu_governor": "performance",
         "cases": [
             {
                 "case": "scalar",
@@ -77,6 +82,16 @@ class CompareBaselineTests(unittest.TestCase):
         current["cpu"] = "different"
         failures = self.compare(baseline(), current)
         self.assertTrue(any("environment mismatch" in failure for failure in failures))
+
+    def test_loader_rejects_local_diagnostic_evidence(self):
+        local = baseline()
+        local["evidence_class"] = "local-diagnostic"
+        local["controlled"] = False
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "local.json"
+            path.write_text(json.dumps(local))
+            with self.assertRaises(ValueError):
+                MODULE.load(path)
 
 
 if __name__ == "__main__":

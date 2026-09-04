@@ -11,6 +11,7 @@ from typing import Any
 
 
 ENVIRONMENT_FIELDS = (
+    "evidence_class",
     "cpu",
     "os",
     "arch",
@@ -18,6 +19,8 @@ ENVIRONMENT_FIELDS = (
     "cranelift_version",
     "profile",
     "fixture_digest",
+    "cpu_affinity",
+    "cpu_governor",
 )
 
 
@@ -25,7 +28,7 @@ def load(path: pathlib.Path) -> dict[str, Any]:
     document = json.loads(path.read_text(encoding="utf-8"))
     if document.get("schema") != "rsscript.native_jit_baseline.v1":
         raise ValueError(f"{path}: unsupported baseline schema")
-    if document.get("controlled") is not True:
+    if document.get("evidence_class") != "controlled-canonical" or document.get("controlled") is not True:
         raise ValueError(f"{path}: baseline is not controlled evidence")
     return document
 

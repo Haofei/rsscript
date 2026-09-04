@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://rsscript.dev/schemas/native-jit-baseline-v1.json",
-  "title": "RSScript native JIT canonical baseline v1",
+  "title": "RSScript native JIT benchmark evidence v1",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -16,6 +16,7 @@
     "warmup",
     "samples",
     "fixture_digest",
+    "evidence_class",
     "controlled",
     "cpu_affinity",
     "cpu_governor",
@@ -34,7 +35,10 @@
     "warmup": { "type": "integer", "minimum": 1 },
     "samples": { "type": "integer", "minimum": 20 },
     "fixture_digest": { "type": "string", "minLength": 1 },
-    "controlled": { "const": true },
+    "evidence_class": {
+      "enum": ["controlled-canonical", "local-diagnostic"]
+    },
+    "controlled": { "type": "boolean" },
     "cpu_affinity": { "type": "string", "minLength": 1 },
     "cpu_governor": { "type": "string", "minLength": 1 },
     "sample_order": { "const": "alternating" },
@@ -112,10 +116,40 @@
           "bounds_check_sites": { "type": "integer", "minimum": 0 },
           "bounds_checks_elided": { "type": "integer", "minimum": 0 },
           "semantic_match": { "const": true },
-          "controlled": { "const": true },
+          "controlled": { "type": "boolean" },
           "retention_threshold_met": { "type": "boolean" }
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "evidence_class": { "const": "controlled-canonical" } },
+        "required": ["evidence_class"]
+      },
+      "then": {
+        "properties": {
+          "controlled": { "const": true },
+          "cases": {
+            "items": { "properties": { "controlled": { "const": true } } }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "evidence_class": { "const": "local-diagnostic" } },
+        "required": ["evidence_class"]
+      },
+      "then": {
+        "properties": {
+          "controlled": { "const": false },
+          "cases": {
+            "items": { "properties": { "controlled": { "const": false } } }
+          }
+        }
+      }
+    }
+  ]
 }
