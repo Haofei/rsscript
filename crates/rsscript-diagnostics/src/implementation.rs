@@ -341,6 +341,14 @@ pub fn explain_diagnostic_code(code: &str) -> Option<&'static DiagnosticExplanat
         .find(|explanation| explanation.code == code)
 }
 
+/// The complete, stable diagnostic explanation catalog.
+///
+/// Documentation generators consume this registry instead of duplicating
+/// diagnostic codes and prose in a second hand-maintained list.
+pub fn diagnostic_explanations() -> &'static [DiagnosticExplanation] {
+    DIAGNOSTIC_EXPLANATIONS
+}
+
 pub fn format_diagnostic_explanation(explanation: &DiagnosticExplanation) -> String {
     format!(
         "{}: {}\n\n{}\n",
@@ -769,12 +777,12 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::WEAK_FIELD_REQUIRES_UPGRADE,
         title: "weak field requires upgrade",
-        explanation: "`weak` fields are non-owning handles. Upgrade them explicitly with `Weak.upgrade(value: read weak_field)` before using the target value.",
+        explanation: "`weak` fields are non-owning handles. Upgrade them explicitly with `Weak.upgrade(value: weak_field)` before using the target value.",
     },
     DiagnosticExplanation {
         code: code::WEAK_FIELD_REQUIRES_WEAK_HANDLE,
         title: "weak field requires weak handle",
-        explanation: "`weak` fields must be initialized from an explicit weak-handle expression such as `Weak.from(value: read target)`.",
+        explanation: "`weak` fields must be initialized from an explicit weak-handle expression such as `Weak.from(value: target)`.",
     },
     DiagnosticExplanation {
         code: code::OPERATOR_OVERLOAD_ATTEMPT,
@@ -784,7 +792,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::IMPLICIT_CONVERSION_ATTEMPT,
         title: "implicit conversion attempt",
-        explanation: "RSScript rejects cast-style conversion syntax. Conversions must be visible named APIs such as `Type.from(value: read x)`.",
+        explanation: "RSScript rejects cast-style conversion syntax. Conversions must be visible named APIs such as `Type.from(value: x)`.",
     },
     DiagnosticExplanation {
         code: code::OWN_STRUCT_ATTEMPT,

@@ -1,0 +1,183 @@
+{
+  "schema": "rsscript.grammar.v1",
+  "version": 1,
+  "completeness": "partial",
+  "provenance": [
+    "rsscript_syntax::lexer::KEYWORDS",
+    "rsscript_syntax::lexer::CONTEXTUAL_KEYWORDS",
+    "rsscript_syntax::lexer::BUILTIN_CONSTANTS"
+  ],
+  "reserved_keywords": [
+    {
+      "word": "as",
+      "category": "modifier",
+      "contextual": false
+    },
+    {
+      "word": "async",
+      "category": "modifier",
+      "contextual": false
+    },
+    {
+      "word": "break",
+      "category": "control",
+      "contextual": false
+    },
+    {
+      "word": "class",
+      "category": "declaration",
+      "contextual": false
+    },
+    {
+      "word": "continue",
+      "category": "control",
+      "contextual": false
+    },
+    {
+      "word": "drop",
+      "category": "modifier",
+      "contextual": false
+    },
+    {
+      "word": "effects",
+      "category": "modifier",
+      "contextual": false
+    },
+    {
+      "word": "else",
+      "category": "control",
+      "contextual": false
+    },
+    {
+      "word": "features",
+      "category": "declaration",
+      "contextual": false
+    },
+    {
+      "word": "fn",
+      "category": "declaration",
+      "contextual": false
+    },
+    {
+      "word": "for",
+      "category": "control",
+      "contextual": false
+    },
+    {
+      "word": "fresh",
+      "category": "ownership",
+      "contextual": false
+    },
+    {
+      "word": "handle",
+      "category": "declaration",
+      "contextual": false
+    },
+    {
+      "word": "if",
+      "category": "control",
+      "contextual": false
+    },
+    {
+      "word": "in",
+      "category": "control",
+      "contextual": false
+    },
+    {
+      "word": "let",
+      "category": "declaration",
+      "contextual": false
+    },
+    {
+      "word": "local",
+      "category": "ownership",
+      "contextual": false
+    },
+    {
+      "word": "loop",
+      "category": "control",
+      "contextual": false
+    },
+    {
+      "word": "manage",
+      "category": "ownership",
+      "contextual": false
+    },
+    {
+      "word": "match",
+      "category": "control",
+      "contextual": false
+    },
+    {
+      "word": "mut",
+      "category": "ownership",
+      "contextual": false
+    },
+    {
+      "word": "pub",
+      "category": "modifier",
+      "contextual": false
+    },
+    {
+      "word": "read",
+      "category": "ownership",
+      "contextual": false
+    },
+    {
+      "word": "resource",
+      "category": "declaration",
+      "contextual": false
+    },
+    {
+      "word": "return",
+      "category": "control",
+      "contextual": false
+    },
+    {
+      "word": "struct",
+      "category": "declaration",
+      "contextual": false
+    },
+    {
+      "word": "take",
+      "category": "ownership",
+      "contextual": false
+    },
+    {
+      "word": "weak",
+      "category": "ownership",
+      "contextual": false
+    },
+    {
+      "word": "while",
+      "category": "control",
+      "contextual": false
+    },
+    {
+      "word": "with",
+      "category": "modifier",
+      "contextual": false
+    }
+  ],
+  "contextual_keywords": [
+    {
+      "word": "await",
+      "category": "control",
+      "contextual": true
+    },
+    {
+      "word": "native",
+      "category": "modifier",
+      "contextual": true
+    }
+  ],
+  "builtin_constants": [
+    "Err",
+    "None",
+    "Ok",
+    "Some",
+    "Unit",
+    "false",
+    "true"
+  ]
+}

@@ -1,0 +1,14 @@
+schema = "rsscript.eval.task.v1"
+id = "option-result"
+version = 1
+mode = "review"
+title = "Handle Option and Result exhaustively"
+prompt = "Review that absence and parse failure are represented with explicit Option and Result match arms, without unwraps."
+candidate = "fixtures/option-result/candidate.rss"
+interfaces = ["interfaces/eval_api.rssi"]
+expected = "expected/option-result.json"
+tags = ["option", "result", "match"]
+
+[[completion_probes]]
+source = "sum Status {\n    Ready\n    Failed(message: String)\n}\nfn main() -> Unit {\n    let status: Status = "
+candidate = "Ready"

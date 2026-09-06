@@ -1,0 +1,23 @@
+{
+  "task_id": "unknown-external",
+  "candidate_check": {
+    "outcome": "fail",
+    "diagnostic_codes": [
+      "RS0206"
+    ]
+  },
+  "target_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "invariants": [
+    {
+      "kind": "diagnostic_absent",
+      "value": "RS0206"
+    },
+    {
+      "kind": "source_excludes",
+      "value": "RemoteLedger.fetch"
+    }
+  ]
+}

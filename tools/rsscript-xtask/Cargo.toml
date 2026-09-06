@@ -9,6 +9,10 @@ publish = false
 [dependencies]
 rsscript-sdk = { path = "../../crates/rsscript-sdk", features = ["execution"] }
 rsscript-provider-api = { path = "../../crates/rsscript-provider-api" }
+rsscript-diagnostics = { path = "../../crates/rsscript-diagnostics" }
+rsscript-interface-catalog = { path = "../../crates/rsscript-interface-catalog" }
+rsscript-semantics = { path = "../../crates/rsscript-semantics" }
+rsscript-syntax = { path = "../../crates/rsscript-syntax" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

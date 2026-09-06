@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rsscript.dev/evals/candidate.v1.json",
+  "title": "RSScript evaluation candidate v1",
+  "type": "object",
+  "required": ["schema", "task_id"],
+  "properties": {
+    "schema": { "const": "rsscript.eval.candidate.v1" },
+    "task_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "source": { "type": "string" },
+    "mode": { "type": "string", "enum": ["prompt_only", "language_card", "repair_loop", "constrained", "offline_fixture"] },
+    "model": { "type": "string" },
+    "model_version": { "type": "string" },
+    "temperature": { "type": ["number", "null"], "minimum": 0 },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "generation_tokens": { "type": "integer", "minimum": 0 },
+    "generation_duration_ms": { "type": "integer", "minimum": 0 },
+    "repair_turns": { "type": "integer", "minimum": 0 }
+  },
+  "additionalProperties": false
+}

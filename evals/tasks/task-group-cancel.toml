@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "task-group-cancel"
+version = 1
+mode = "review"
+title = "Use cancellation inside a task group"
+prompt = "Review structured concurrency: cancellation observation must be lexically inside task_group, cancellation must use the explicit source, and the child task must be awaited."
+candidate = "fixtures/task-group-cancel/candidate.rss"
+interfaces = ["interfaces/eval_api.rssi"]
+expected = "expected/task-group-cancel.json"
+tags = ["async", "task-group", "cancellation"]

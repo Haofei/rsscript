@@ -1,0 +1,14 @@
+schema = "rsscript.eval.task.v1"
+id = "receiver-method"
+version = 1
+mode = "review"
+title = "Preserve a typed receiver method call"
+prompt = "Review that the Buffer receiver call remains explicit, uses the declared read receiver contract, and does not replace it with an untyped free call."
+candidate = "fixtures/receiver-method/candidate.rss"
+interfaces = []
+expected = "expected/receiver-method.json"
+tags = ["calls", "receiver", "effect", "high-signal"]
+
+[[completion_probes]]
+source = "fn String.inspect(self: read String) -> Int { return 0 }\nfn main(text: read String) -> Unit {\n    text."
+candidate = "inspect"

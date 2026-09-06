@@ -24,6 +24,8 @@ use rsscript_sdk::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+mod agent_eval;
+mod language_card;
 mod repository_architecture;
 mod retention_evidence;
 
@@ -133,14 +135,25 @@ fn main() -> Result<(), Box<dyn Error>> {
     match arguments.next().as_deref() {
         Some("core-metrics") => run_core_metrics(parse_arguments(arguments)?),
         Some("validate-ci") => validate_ci(),
+        Some("language-card") => language_card_command(arguments),
+        Some("agent-eval") => agent_eval::run(&workspace_root(), arguments),
         Some(command @ ("check-tier" | "clippy-tier" | "test-tier" | "doc-tier")) => {
             run_tier_command(command, arguments)
         }
         _ => Err(
-            "usage:\n  cargo run -p rsscript-xtask --release -- core-metrics [--iterations N] [--output FILE] [--check SLO]\n  cargo run -p rsscript-xtask -- validate-ci\n  cargo run -p rsscript-xtask -- {check,clippy,test,doc}-tier TIER [--workspace root|experiments] [--feature-set supported|research]"
+            "usage:\n  cargo run -p rsscript-xtask --release -- core-metrics [--iterations N] [--output FILE] [--check SLO]\n  cargo run -p rsscript-xtask -- validate-ci\n  cargo run -p rsscript-xtask -- language-card [--check]\n  cargo run -p rsscript-xtask -- agent-eval --tasks DIR --candidates DIR --output FILE\n  cargo run -p rsscript-xtask -- {check,clippy,test,doc}-tier TIER [--workspace root|experiments] [--feature-set supported|research]"
                 .into(),
         ),
     }
+}
+
+fn language_card_command(arguments: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
+    let arguments = arguments.collect::<Vec<_>>();
+    let check = arguments.as_slice() == ["--check"];
+    if !arguments.is_empty() && !check {
+        return Err("language-card accepts only `--check`".into());
+    }
+    language_card::run(&workspace_root(), check)
 }
 
 const PACKAGE_TIERS: &[&str] = &[
@@ -257,6 +270,7 @@ struct CargoPackageInventory {
 /// against the workspace that each command explicitly selects.
 fn validate_ci() -> Result<(), Box<dyn Error>> {
     let root = workspace_root();
+    language_card::run(&root, true)?;
     let root_inventory = cargo_inventory(&root, None)?;
     let experiments_inventory = cargo_inventory(&root, Some("experiments/Cargo.toml"))?;
     validate_workspace_tiers(&root, &root_inventory)?;

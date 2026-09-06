@@ -19,7 +19,6 @@ required-features = ["grammar-tools"]
 [features]
 default = []
 execution = [
-    "dep:rsscript-compiler",
     "dep:rsscript-sdk",
     "rsscript-sdk/project",
     "dep:rss-process-guard",
@@ -27,8 +26,7 @@ execution = [
     "dep:rsscript-provider-log",
 ]
 native-jit = ["execution", "rsscript-sdk/native-jit"]
-# Preview builds may opt into the adaptive native tier with interpreter fallback;
-# the release workflow deliberately selects `execution` without this feature.
+# The grammar generator alone needs compiler-owned editor grammar assets.
 grammar-tools = ["dep:rsscript-compiler"]
 
 [dependencies]

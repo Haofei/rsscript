@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "moved-value"
+version = 1
+mode = "repair"
+title = "Remove a use after take"
+prompt = "Repair the candidate without using buffer after it has been passed with take. Keep the consume operation explicit."
+candidate = "fixtures/moved-value/candidate.rss"
+interfaces = ["interfaces/eval_api.rssi"]
+expected = "expected/moved-value.json"
+tags = ["ownership", "move", "diagnostic"]

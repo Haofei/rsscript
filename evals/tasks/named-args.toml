@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "named-args"
+version = 1
+mode = "repair"
+title = "Name every call argument"
+prompt = "Repair the candidate so the join call uses the declared argument labels. Preserve the value and keep the program checkable."
+candidate = "fixtures/named-args/candidate.rss"
+interfaces = ["interfaces/eval_api.rssi"]
+expected = "expected/named-args.json"
+tags = ["calls", "named-arguments"]

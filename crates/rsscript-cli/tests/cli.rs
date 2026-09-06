@@ -50,6 +50,103 @@ fn top_level_help_succeeds_on_stdout() {
 }
 
 #[test]
+fn generate_commands_emit_the_versioned_json_schemas() {
+    let bin = env!("CARGO_BIN_EXE_rss");
+    let temp = tempfile::tempdir().expect("temp dir should be creatable");
+    let source = temp.path().join("prefix.rss");
+    fs::write(&source, "fn main() -> Unit {\n").expect("fixture should write");
+    let path = source.to_str().expect("path is utf-8");
+
+    let status = Command::new(bin)
+        .args(["generate", "prefix-status", "--json", path])
+        .output()
+        .expect("prefix status command should run");
+    assert!(status.status.success(), "{:?}", status);
+    let status: serde_json::Value =
+        serde_json::from_slice(&status.stdout).expect("prefix status emits JSON");
+    assert_eq!(status["schema"], "rsscript.generate.prefix_status.v1");
+    assert_eq!(status["status"], "incomplete");
+    assert_eq!(status["syntax_complete"], false);
+    assert!(status["replace"]["start"].is_u64());
+    assert!(status["terminals"].is_array());
+
+    let continuations = Command::new(bin)
+        .args([
+            "generate",
+            "continuations",
+            "--json",
+            "--no-core",
+            "--max-names",
+            "1",
+            path,
+        ])
+        .output()
+        .expect("continuations command should run");
+    assert!(continuations.status.success(), "{:?}", continuations);
+    let continuations: serde_json::Value =
+        serde_json::from_slice(&continuations.stdout).expect("continuations emit JSON");
+    assert_eq!(
+        continuations["schema"],
+        "rsscript.generate.continuations.v1"
+    );
+    assert!(continuations["current_terminal_completeness"].is_string());
+    assert!(continuations["terminal_completeness"].is_string());
+    assert!(continuations["name_completeness"].is_string());
+    assert_eq!(continuations["status"], "incomplete");
+    assert!(continuations["replace"]["start"].is_u64());
+    assert!(continuations["replace"]["end"].is_u64());
+    assert!(continuations["identity"]["session_id"].is_u64());
+    assert!(continuations["identity"]["revision"].is_u64());
+    assert!(continuations["identity"]["interface_revision"].is_u64());
+    assert!(continuations["identity"]["source_bytes"].is_u64());
+    assert!(
+        continuations["names"]
+            .as_array()
+            .is_some_and(|names| names.len() <= 1)
+    );
+    assert!(continuations["total_discovered_names"].is_u64());
+    assert!(continuations["truncated"].is_boolean());
+}
+
+#[test]
+fn generate_no_core_changes_completion_and_semantic_validity() {
+    let bin = env!("CARGO_BIN_EXE_rss");
+    let temp = tempfile::tempdir().expect("temp dir should be creatable");
+    let source = temp.path().join("core-prefix.rss");
+    fs::write(&source, "fn main() -> Unit {\n    List.is_empty(").expect("fixture should write");
+    let path = source.to_str().expect("path is utf-8");
+
+    let run = |extra: &[&str]| {
+        let mut args = vec!["generate", "continuations", "--json"];
+        args.extend_from_slice(extra);
+        args.push(path);
+        let output = Command::new(bin)
+            .args(args)
+            .output()
+            .expect("continuations command should run");
+        assert!(output.status.success(), "{:?}", output);
+        serde_json::from_slice::<serde_json::Value>(&output.stdout)
+            .expect("continuations emit JSON")
+    };
+
+    let with_core = run(&[]);
+    assert!(
+        with_core["names"]
+            .as_array()
+            .is_some_and(|names| { names.iter().any(|candidate| candidate["text"] == "list") })
+    );
+
+    let without_core = run(&["--no-core"]);
+    assert_eq!(without_core["semantic_validity"], "invalid");
+    assert_eq!(without_core["core_interfaces"], "without_core");
+    assert!(
+        !without_core["names"]
+            .as_array()
+            .is_some_and(|names| { names.iter().any(|candidate| candidate["text"] == "list") })
+    );
+}
+
+#[test]
 fn fix_write_resolves_missing_data_effects_to_a_clean_check() {
     let bin = env!("CARGO_BIN_EXE_rss");
     let temp = tempfile::tempdir().expect("temp dir should be creatable");

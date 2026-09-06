@@ -1,0 +1,23 @@
+{
+  "task_id": "resource-escape",
+  "candidate_check": {
+    "outcome": "fail",
+    "diagnostic_codes": [
+      "RS0702"
+    ]
+  },
+  "target_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "invariants": [
+    {
+      "kind": "diagnostic_absent",
+      "value": "RS0702"
+    },
+    {
+      "kind": "source_excludes",
+      "value": "return Ok(lease)"
+    }
+  ]
+}

@@ -17,6 +17,35 @@ language correctness; it does not establish that arbitrary code is safe to run
 inside the host process. Untrusted scripts require an independently isolated
 runner as described in [threat-model.md](threat-model.md).
 
+## Generation-facing direction
+
+The current product direction is an **Agent-authored generation oracle**: a
+machine-facing query that lets a code-generating agent ask what the current
+source, interfaces, and compiler contracts permit, then receive a canonical
+context and structured diagnostics suitable for an iteration or an evaluation.
+It is a correctness aid for generated RSScript, not an authority grant or an
+alternate compiler. Syntax owns prefix facts, semantics owns and composes typed
+continuations, and compiler callers may consume the same result, as recorded in
+[ADR 0232](architecture/adr/0232-parser-owned-generation-oracle.md).
+
+The first implemented slice provides four cooperating outputs:
+
+- structured diagnostics with stable stage, code, span, severity, and
+  machine-readable context;
+- a bounded continuation response that records source size, Core policy,
+  interface revision, and stage outcome, plus generated language/schema
+  metadata, without ambient host state;
+- evaluation fixtures that measure whether an agent can recover from feedback
+  without treating an incomplete answer as acceptance; and
+- a sound success boundary: it reports success only after the owned stages have
+  actually established their respective facts.
+
+The v1 query and offline corpus are Experimental: terminal coverage and
+semantic candidate coverage may remain explicitly `partial`. Machine
+generation remains untrusted input; the parser, semantic validator, Artifact
+admission, and execution boundaries remain the authorities for their existing
+decisions.
+
 ## Core workflow
 
 ```text
@@ -67,3 +96,8 @@ fail-closed contracts defined in [compatibility.md](compatibility.md).
   record; semantic diff reports facts without authorizing execution.
 - New syntax is frozen until semantic IR, provider ABI, bytecode verification,
   diagnostics, and VM conformance are stable.
+- Generation feedback is canonical and evidence-bound when available; it never
+  substitutes for parsing, semantic validation, compilation, Artifact admission,
+  or execution isolation.
+- Product evolution does not require splitting the repository, deleting an
+  existing backend, or reordering the Cargo workspace.

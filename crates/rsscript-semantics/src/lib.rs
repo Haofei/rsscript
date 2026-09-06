@@ -20,6 +20,7 @@ mod call_binding;
 mod callbacks;
 mod checks;
 mod closure_escape;
+mod completion;
 mod control_flow;
 mod database;
 mod diagnostic {
@@ -34,6 +35,7 @@ mod fresh_match_bindings;
 mod fresh_return_flow;
 mod fresh_return_projection;
 mod frontend_budget;
+mod generation;
 mod generic_constraints;
 pub mod hir;
 mod hir_uses;
@@ -92,7 +94,8 @@ pub use analyzer::{
     analyze_frontend_input_snapshot_with_operation, analyze_source, analyze_source_result,
     analyze_source_result_with_operation, analyze_source_with_core, analyze_source_with_interfaces,
     analyze_source_with_interfaces_result, analyze_source_with_interfaces_result_with_operation,
-    analyze_source_with_interfaces_without_core, analyze_source_without_core,
+    analyze_source_with_interfaces_without_core,
+    analyze_source_with_interfaces_without_core_result, analyze_source_without_core,
     analyze_sources_with_interfaces, analyze_sources_with_interfaces_result,
     analyze_sources_with_interfaces_result_with_operation,
     analyze_sources_with_interfaces_without_core,
@@ -129,6 +132,12 @@ pub use callbacks::{
 pub use closure_escape::{
     ClosureEscapeContext, local_closure_escape_diagnostic, noescape_escape_diagnostic,
 };
+pub use completion::{
+    SemanticCompletion, SemanticCompletionCompleteness, SemanticCompletionCorePolicy,
+    SemanticCompletionKind, SemanticCompletionResult, SemanticCompletionValidity,
+    semantic_completion, semantic_completion_at, semantic_completion_with_context,
+    semantic_completion_with_interface_sources, semantic_completion_with_interfaces,
+};
 pub use control_flow::{
     bool_condition_diagnostic, conflicting_pattern_field_effect_diagnostic,
     duplicate_pattern_field_diagnostic, for_iterable_diagnostic, function_fallthrough_diagnostics,
@@ -162,6 +171,14 @@ pub use fresh_return_projection::{
 pub use frontend_budget::{
     AnalysisDiagnostics, BudgetExhaustion, FrontendBudget, FrontendBudgetLimits, budget_completion,
     incomplete_diagnostic,
+};
+pub use generation::{
+    Completeness, Completion, CompletionKind, ContinuationOptions, Continuations, Effect,
+    ExpectedType, GenerateContext, GenerationCheckpoint, GenerationCoreInterfacePolicy,
+    GenerationInterfaceSetSnapshot, GenerationInterfaceSnapshot, GenerationQueryIdentity,
+    GenerationQuerySnapshot, GenerationRestoreError, GenerationSession, GenerationSessionStats,
+    IdentifierRoleName, LiteralKindName, ParserTerminal, PrefixStatus, SemanticValidity, TextRange,
+    TypeRef, valid_continuations,
 };
 pub use generic_constraints::{
     ProtocolSatisfactionFacts, SubstitutionBudget, SubstitutionError,

@@ -420,6 +420,28 @@ pub fn analyze_source_with_interfaces_without_core(
     })
 }
 
+/// Analyze one source with caller-supplied interfaces without injecting Core.
+///
+/// This is the result-bearing counterpart to
+/// [`analyze_source_with_interfaces_without_core`].  Editor integrations use
+/// it when completion and stop-validity must be derived from the exact same
+/// Core-interface policy.
+pub fn analyze_source_with_interfaces_without_core_result(
+    file: &str,
+    source: &str,
+    interfaces: &[(&str, &str)],
+) -> AnalysisResult {
+    analyze_input_result(
+        AnalysisInput {
+            sources: AnalysisSources::Single { file, source },
+            interfaces,
+            flavor: AnalysisFlavor::FullWithoutBuiltinInterfaces,
+        },
+        FrontendBudgetLimits::default(),
+        None,
+    )
+}
+
 pub fn analyze_sources_with_interfaces(
     sources: &[(&str, &str)],
     interfaces: &[(&str, &str)],

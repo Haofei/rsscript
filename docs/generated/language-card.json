@@ -1,0 +1,28 @@
+{
+  "schema": "rsscript.language-card.v1",
+  "version": 1,
+  "completeness": "partial",
+  "provenance": [
+    "rsscript_syntax::lexer",
+    "rsscript_diagnostics::diagnostic_explanations",
+    "rsscript_interface_catalog::CORE_INTERFACES"
+  ],
+  "language_version": "0.7",
+  "specification_version": "RSScript_v0.7",
+  "grammar_sha256_algorithm": "sha256",
+  "grammar_sha256": "e1b65a7b4dce6135f4d7efa12ad4f3855392634ded9475da08ab84145ea29dec",
+  "reserved_keyword_count": 30,
+  "contextual_keyword_count": 2,
+  "builtin_constant_count": 7,
+  "diagnostic_count": 83,
+  "core_interface_count": 35,
+  "diagnostic_fixes": {
+    "scope": "instance_only",
+    "available_from": [
+      "rss check --json",
+      "rss fix --json"
+    ],
+    "description": "Static diagnostic explanations do not claim fixes; machine-applicable edits are attached to concrete diagnostic instances."
+  },
+  "canonical_call_example": "fn apply(target: mut Buffer, input: take String, note: read String) -> Unit {}\n\nfn update(target: mut Buffer, input: take String, note: read String) -> Unit {\n    return apply(target: mut target, input: take input, note: note)\n}\n"
+}

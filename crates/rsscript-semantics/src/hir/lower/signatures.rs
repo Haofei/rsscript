@@ -509,6 +509,44 @@ impl Hir {
         )
     }
 
+    /// Enumerate the unambiguous methods available through receiver-call
+    /// shorthand for one already-resolved receiver type.  This is a semantic
+    /// projection: callers must not reconstruct protocol implementations or
+    /// facade rules from signature names.
+    pub fn receiver_methods(&self, receiver_type: &ResolvedType) -> Vec<FunctionSig> {
+        let value_types = HashMap::new();
+        let mut methods = std::collections::BTreeMap::new();
+        for method in self
+            .signatures
+            .values()
+            .filter_map(|signature| {
+                signature
+                    .namespace
+                    .as_ref()
+                    .map(|_| signature.name.as_str())
+            })
+            .chain(std::iter::once("clone"))
+        {
+            let (resolution, _) =
+                self.resolve_receiver_call(&receiver_type.to_string(), method, &value_types);
+            let CallResolution::Resolved { signature, .. } = resolution else {
+                continue;
+            };
+            // A receiver call consumes the implicit first parameter. A static
+            // namespace function is not a method completion candidate.
+            if signature
+                .params
+                .first()
+                .and_then(|parameter| parameter.effect)
+                .is_none()
+            {
+                continue;
+            }
+            methods.entry(signature.name.clone()).or_insert(*signature);
+        }
+        methods.into_values().collect()
+    }
+
     pub fn canonical_type_name(&self, type_name: &str) -> String {
         self.expand_type_alias(type_name)
     }

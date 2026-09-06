@@ -1,0 +1,433 @@
+{
+  "schema": "rsscript.diagnostic-catalog.v1",
+  "version": 1,
+  "completeness": "complete",
+  "provenance": [
+    "rsscript_diagnostics::diagnostic_explanations"
+  ],
+  "fixes": {
+    "scope": "instance_only",
+    "available_from": [
+      "rss check --json",
+      "rss fix --json"
+    ],
+    "description": "Static diagnostic explanations do not claim fixes; machine-applicable edits are attached to concrete diagnostic instances."
+  },
+  "diagnostics": [
+    {
+      "code": "PKG0101",
+      "title": "package feature resolution",
+      "explanation": "Selected package features must be declared by the target package. Declared features may depend on other declared features; feature resolution is additive and deterministic."
+    },
+    {
+      "code": "PKG0102",
+      "title": "unsupported package dependency source",
+      "explanation": "The v0.6 package-manager contract accepts registry and local path package dependencies. Future-looking dependency source forms such as git must be rejected with a stable package-manager diagnostic."
+    },
+    {
+      "code": "PKG0501",
+      "title": "package review policy violation",
+      "explanation": "`[review.policy]` turns package review facts such as unknown risk, native boundaries, and unsafe APIs into package-manager errors."
+    },
+    {
+      "code": "PKG0601",
+      "title": "package native binding metadata mismatch",
+      "explanation": "`native/bindings.rssbind.toml` and `[native.rust]` metadata must point from declared native `.rssi` functions to Rust wrapper functions in the configured native Rust crate. This is a package-manager diagnostic, not an RSScript frontend diagnostic."
+    },
+    {
+      "code": "PKG0901",
+      "title": "package provider declaration mismatch",
+      "explanation": "`[implements.\"<interface-package>\"]` provider declarations must bind a provider to one interface package version, selected interface feature set, and effective interface hash."
+    },
+    {
+      "code": "RS0001",
+      "title": "reserved diagnostic",
+      "explanation": "RS0001 is reserved and is not emitted by the current language frontend."
+    },
+    {
+      "code": "RS0002",
+      "title": "missing return type",
+      "explanation": "Function signatures must spell out their return type. The checker applies this review rule broadly so API contracts do not rely on inference."
+    },
+    {
+      "code": "RS0003",
+      "title": "missing parameter type",
+      "explanation": "Parameters must have explicit types so call effects, freshness, and resource rules can be checked against a stable signature."
+    },
+    {
+      "code": "RS0005",
+      "title": "duplicate declaration",
+      "explanation": "Top-level type, constructor, and function names must be unique so symbol resolution cannot silently overwrite an earlier declaration."
+    },
+    {
+      "code": "RS0007",
+      "title": "invalid retained parameter",
+      "explanation": "`retains(param)` must name a non-Copy parameter declared by the function signature. Copy values have no managed retention boundary."
+    },
+    {
+      "code": "RS0013",
+      "title": "invalid try operator",
+      "explanation": "`?` may only be used inside functions that return a compatible `Result<T, E>` type."
+    },
+    {
+      "code": "RS0015",
+      "title": "unsupported syntax",
+      "explanation": "The frontend parser could not lower this source construct into the supported RSScript AST. The checker reports this before Rust lowering so unsupported source does not become generated Rust `todo!()` code."
+    },
+    {
+      "code": "RS0021",
+      "title": "non-exhaustive match",
+      "explanation": "`match` must cover every visible variant for the supported enum shapes. In v0.7 that means `Some`/`None`, `Ok`/`Err`, all variants of a declared sum type, or a `_` fallback."
+    },
+    {
+      "code": "RS0022",
+      "title": "async call not consumed",
+      "explanation": "Async calls must be consumed by `await` so suspension boundaries remain review-visible. `spawn` is reserved but not executable in v0.7."
+    },
+    {
+      "code": "RS0023",
+      "title": "Fd outside native/resource internals",
+      "explanation": "`Fd` is not an ordinary user-facing value type in v0.7. It may appear only in native function signatures or resource internals such as resource fields."
+    },
+    {
+      "code": "RS0024",
+      "title": "unknown type",
+      "explanation": "Every type used in a signature or field must be a built-in type, a core/runtime type known to the frontend, a generic parameter in scope, or a declared source/interface type. Unknown types are rejected before Rust lowering."
+    },
+    {
+      "code": "RS0025",
+      "title": "unknown field",
+      "explanation": "Field accesses must resolve against the RSScript type known for the base expression. Unknown fields are rejected by the frontend instead of being deferred to generated Rust diagnostics."
+    },
+    {
+      "code": "RS0026",
+      "title": "unknown binding",
+      "explanation": "Value identifiers must resolve to a visible parameter, local binding, with-bound resource, or pattern binding before Rust lowering."
+    },
+    {
+      "code": "RS0027",
+      "title": "unknown protocol",
+      "explanation": "Protocol bounds and protocol implementations must name a declared RSScript protocol. Protocols are nominal external_binding contracts, not structural matches inferred from function names."
+    },
+    {
+      "code": "RS0028",
+      "title": "invalid self parameter",
+      "explanation": "`self` is reserved for explicit method/protocol receiver contracts. It may only appear as the first parameter of a qualified method signature, and protocol methods must declare `self: read|mut|take Self` first."
+    },
+    {
+      "code": "RS0029",
+      "title": "await outside async function",
+      "explanation": "`await` is an explicit suspension boundary and is only valid inside an `async fn` body."
+    },
+    {
+      "code": "RS0030",
+      "title": "await non-async expression",
+      "explanation": "`await` must directly consume an async call in the executable async MVP; RSScript does not expose Future or Task values as source-level types."
+    },
+    {
+      "code": "RS0031",
+      "title": "local value live across await",
+      "explanation": "RSScript async frames may suspend managed handles and Copy snapshots, but local values, resources, and runtime guards must not live across an await boundary."
+    },
+    {
+      "code": "RS0032",
+      "title": "protocol not satisfied",
+      "explanation": "A `Protocol.method(...)` call must prove that the receiver type satisfies the protocol through an explicit generic bound or an explicit `impl Protocol for Type` declaration. Protocols are nominal external_binding contracts, not structural matches inferred from method names."
+    },
+    {
+      "code": "RS0033",
+      "title": "integer literal out of range",
+      "explanation": "RSScript `Int` is a 64-bit signed integer. An integer literal that does not fit in i64 is rejected at the frontend so it never reaches the VM (runtime error) or the compiled backend (rustc error) — review-critical failures surface as checker diagnostics, not backend surprises."
+    },
+    {
+      "code": "RS0034",
+      "title": "binding type cannot be inferred",
+      "explanation": "A `let` binding whose value is a bare `Ok(...)`, `Err(...)`, or `None` leaves a type parameter open (the `Result` error type, the `Result` ok type, or the `Option` value type). RSScript normally resolves that parameter from how the binding is later used; when the binding is never used, nothing can constrain it, so the type is genuinely ambiguous and the program would not lower to valid Rust. The checker reports this in RSScript — instead of letting it surface as a backend `type annotations needed` error — and the fix is to add a type annotation (e.g. `let v: Result<Int, String> = Ok(value)`) or to remove the unused binding."
+    },
+    {
+      "code": "RS0035",
+      "title": "lowered name conflict",
+      "explanation": "A `#lower_name(\"...\")` pin must be a valid Rust identifier and must not collide with any other declaration's lowered backend name, so generated symbols stay unique."
+    },
+    {
+      "code": "RS0037",
+      "title": "variant pattern arity mismatch",
+      "explanation": "A positional variant pattern must bind exactly as many sub-patterns as the variant declares fields, in declared order (`V(a, b)` for a two-field variant, `V(a, b, c)` for three). A payload-free variant may still be matched by its bare name (`V`), but once a parenthesised payload is written its arity must match the declaration. Positional binding is allowed only for declared sum-variant fields; it does not reintroduce anonymous positional records (spec §20.1)."
+    },
+    {
+      "code": "RS0040",
+      "title": "semantic analysis incomplete",
+      "explanation": "The analyzer stopped after exhausting a shared work budget for visited nodes, generic substitutions, emitted diagnostics, or recursion depth. Other diagnostics from this run may be incomplete; reduce generated breadth or type nesting before relying on the result."
+    },
+    {
+      "code": "RS0201",
+      "title": "unnamed argument",
+      "explanation": "RSScript requires named call arguments so signature and review diffs remain readable."
+    },
+    {
+      "code": "RS0202",
+      "title": "call-site data-effect mismatch",
+      "explanation": "A bare argument has the default `read` effect. Arguments for `mut` or `take` parameters must spell that non-default effect explicitly and match the callee signature."
+    },
+    {
+      "code": "RS0203",
+      "title": "unknown named argument",
+      "explanation": "Named call arguments must match the resolved callee signature. This catches misspellings and stale call sites after API changes."
+    },
+    {
+      "code": "RS0204",
+      "title": "missing required argument",
+      "explanation": "Every parameter in the resolved callee signature must be supplied by name at the call site."
+    },
+    {
+      "code": "RS0205",
+      "title": "duplicate named argument",
+      "explanation": "A call may bind each named parameter only once. Duplicate names make effect and ownership review ambiguous."
+    },
+    {
+      "code": "RS0206",
+      "title": "unknown callee",
+      "explanation": "The checker could not resolve the function or method call against user declarations, known constructors, or builtin signatures."
+    },
+    {
+      "code": "RS0207",
+      "title": "argument type mismatch",
+      "explanation": "When both sides are known, a call argument's expression type must match the resolved parameter type before Rust lowering, and a binding initializer must match its explicit binding type. For `noescape Fn(...) -> T` parameters, the callback arity, callback call arguments, callback body call arguments, and known return expression must match the function type before Rust lowering."
+    },
+    {
+      "code": "RS0208",
+      "title": "return type mismatch",
+      "explanation": "When both sides are known, a returned expression must match the function's declared return type before Rust lowering. Falling through a non-Unit function is a Unit return mismatch. Result and Option constructors are checked against their success, error, or Some payload types."
+    },
+    {
+      "code": "RS0209",
+      "title": "control-flow type mismatch",
+      "explanation": "`if` and `while` conditions must be `Bool`, and v0.7 `match` scrutinees must be `Option<T>`, `Result<T, E>`, or a declared sum type with matching arm variants before Rust lowering."
+    },
+    {
+      "code": "RS0210",
+      "title": "operator type mismatch",
+      "explanation": "Built-in comparison and logical operators have fixed operand types. Equality requires matching known operand types, ordering requires numeric operands, and logical operators require Bool operands."
+    },
+    {
+      "code": "RS0211",
+      "title": "derive requirement not satisfied",
+      "explanation": "A compiler-owned derive expands to generated Rust, so every field must support it. `Eq`, `Ord`, and `Hash` require equatable/orderable/hashable fields: `Float` fields, `handle`/`weak` fields (which lower to `Managed<T>`, implementing only `Clone`/`Debug`), `Map`/`Set` fields for `Ord`/`Hash`, and fields whose type does not derive the same trait are rejected. The checker recurses through `List`/`Option`/`Result` and `Map`/`Set` element types, and because a `HashMap`/`HashSet` key or element must be `Hash`, an `Eq`-derived `Map`/`Set` requires `Eq + Hash` keys/elements. `JsonEncode`/`JsonDecode` require fields whose type also derives JSON encoding/decoding; `JsonDecode` additionally rejects non-`Eq`/`Hash` `Map` keys and `Set` elements (such as `Float`). Generic type parameters are accepted as ordinary fields — the derive adds the matching `T: Trait` bound — but rejected in a `Map`-key/`Set`-element position, where the required `Hash` bound cannot be expressed. The checker reports this before lowering so the requirement is explained in RSScript instead of leaking as a generated-Rust trait-bound error."
+    },
+    {
+      "code": "RS0212",
+      "title": "unsupported resource derive",
+      "explanation": "Resources are move-only RAII values that default to `Debug` only. They accept only the implicit `Debug` and the review-only `Schema`/`ReviewSchema` markers. Value derives such as `Clone`, `Eq`, `Ord`, `Hash`, `JsonEncode`, and `JsonDecode` would expand into generated Rust that copies or compares the resource, which contradicts its move-only model. This is a resource-derive policy enforced by RSScript — the Rust backend could expand some of these derives, but RSScript rejects them to keep resource ownership explicit. Model the data as a `struct` if you need value semantics."
+    },
+    {
+      "code": "RS0301",
+      "title": "managed-to-local conversion",
+      "explanation": "Managed values cannot be rebound as local values. Create the value locally at its origin if local ownership is required."
+    },
+    {
+      "code": "RS0302",
+      "title": "whole-base field partial access conflict",
+      "explanation": "A call cannot mix a whole local base or whole local prefix access with a mutable or taking access to one of its fields."
+    },
+    {
+      "code": "RS0303",
+      "title": "nested field prefix conflict",
+      "explanation": "Two local field paths conflict when one path is the same as, or a prefix of, the other and either access mutates or takes the path."
+    },
+    {
+      "code": "RS0304",
+      "title": "indexed container partial access conflict",
+      "explanation": "RSScript v0.7 does not prove indexed element disjointness. Indexed local paths conflict with other accesses to the same local base when mutation or take is involved."
+    },
+    {
+      "code": "RS0305",
+      "title": "move-base field access conflict",
+      "explanation": "A call cannot move a local base with `manage` or `take` in the same expression where another argument accesses one of that base's fields."
+    },
+    {
+      "code": "RS0306",
+      "title": "local class binding",
+      "explanation": "Classes are managed identity objects in RSScript v0.7. They are created as managed handles and cannot be bound as local exclusive values."
+    },
+    {
+      "code": "RS0307",
+      "title": "invalid manage operand",
+      "explanation": "`manage value` moves a local exclusive binding into the managed runtime. The operand must be a local binding that has not already become managed."
+    },
+    {
+      "code": "RS0308",
+      "title": "invalid take operand",
+      "explanation": "`take value` consumes a local value. Managed values cannot be passed to taking parameters because they may have aliases."
+    },
+    {
+      "code": "RS0310",
+      "title": "read view mutation",
+      "explanation": "`for` loop variables for non-Copy struct elements are read views into the list. They can be passed as `read`, but cannot be used as `mut`, `take`, or `manage` because iteration does not grant exclusive ownership of list elements."
+    },
+    {
+      "code": "RS0311",
+      "title": "invalid assignment",
+      "explanation": "Controlled assignment (`x = e`) updates a place. The left side must be a `let mut` local: a plain `let`/`local` binding is immutable, a parameter is not a reassignable local (mutate through `mut` parameters by call or field update), an unknown name has no place, and the left side must be a place expression (a local, field, or index) rather than a call result such as `get_user().name = ...`. `mut` must appear explicitly in the binding, so mutation stays visible in the type system and review evidence."
+    },
+    {
+      "code": "RS0312",
+      "title": "assignment target deferred",
+      "explanation": "Field assignment (`obj.field = e`) and `List` index assignment (`list[i] = e`) are executable controlled-assignment forms when rooted at a `let mut` local. Other indexed targets are still deferred: use explicit APIs such as `Map.insert` until the language defines controlled index-set semantics for that type."
+    },
+    {
+      "code": "RS0313",
+      "title": "assignment type mismatch",
+      "explanation": "When both sides are known, the value assigned to a place must match the place's type. Like the other type checks (`RS0207`/`RS0208`), this is checked before Rust lowering so an `Int = String` style error is reported in RSScript instead of leaking from rustc. Assignments whose value type cannot be determined are left to the existing checks."
+    },
+    {
+      "code": "RS0401",
+      "title": "use after manage",
+      "explanation": "`manage value` moves a local value into the managed runtime. The original local binding cannot be used afterwards on any reachable path."
+    },
+    {
+      "code": "RS0411",
+      "title": "async function not lowerable",
+      "explanation": "In this version a user `async fn` lowers to a `Pending` chain. Top-level `await`, `task_group`, `select`, `await for`, and control-flow statements (`if`/`loop`/`match`/`with`) that contain awaits are supported through explicit pending boundaries. An `await` embedded inside an ordinary expression argument is still rejected instead of being silently mis-lowered because it needs full async expression lowering. Move the await to a statement boundary first."
+    },
+    {
+      "code": "RS0412",
+      "title": "cancellation token outside task_group",
+      "explanation": "`Task.cancellation_token()` returns the token of the lexically enclosing `task_group` scope. A user `async fn` is lowered at its definition site, with no enclosing `task_group`, so calling it there would silently produce a never-cancelled token — the child would not observe the group's cancellation. In this version it is rejected rather than mis-lowered. Call `Task.cancellation_token()` directly inside the `task_group` block and pass the resulting `CancellationToken` into the async function as a `read` parameter."
+    },
+    {
+      "code": "RS0501",
+      "title": "local value retained",
+      "explanation": "APIs marked `retains(param)` may store the argument beyond the call. Passing a clean local value directly would let local ownership escape."
+    },
+    {
+      "code": "RS0601",
+      "title": "fresh return is not clean",
+      "explanation": "A `fresh` function may only return a newly created value, a known fresh call, a clean local value, or a clean inline field of a local value. Clean locals must not have escaped through manage, take, retain, or capture."
+    },
+    {
+      "code": "RS0602",
+      "title": "freshness unknown",
+      "explanation": "The MVP checker could not prove the returned value is fresh. Current proof support trusts clean locals, clean inline fields of locals, struct constructors, known fresh calls, and literals."
+    },
+    {
+      "code": "RS0603",
+      "title": "invalid fresh return type",
+      "explanation": "`fresh` may only be used with struct types. Classes and resources are not fresh values."
+    },
+    {
+      "code": "RS0604",
+      "title": "fresh value requires local binding",
+      "explanation": "A direct `fresh` expression may materialize as a managed temporary for `read`, but `mut` and `take` require an explicit `local` binding first."
+    },
+    {
+      "code": "RS0701",
+      "title": "resource field",
+      "explanation": "Resource values cannot be stored directly in ordinary class or struct fields. Use them through `with`."
+    },
+    {
+      "code": "RS0702",
+      "title": "resource escape",
+      "explanation": "A resource introduced by `with` must not escape the block through return, managed binding, manage, retention, or managed closure capture."
+    },
+    {
+      "code": "RS0704",
+      "title": "resource in ordinary generic type",
+      "explanation": "Ordinary generic containers must not be instantiated with resource types."
+    },
+    {
+      "code": "RS0706",
+      "title": "Result resource producer missing try",
+      "explanation": "A `with` resource context consuming `Result<Resource, E>` must use explicit `?` on the producer expression."
+    },
+    {
+      "code": "RS0801",
+      "title": "local captured by managed closure",
+      "explanation": "A closure bound with `let` is managed and may outlive clean local values. Use a local/noescape callback shape instead."
+    },
+    {
+      "code": "RS0802",
+      "title": "noescape callback escape",
+      "explanation": "`noescape Fn()` parameters are temporary callback external_bindings. They may be called directly or forwarded only to another resolved noescape parameter, but they cannot be returned, stored, retained, or passed as ordinary managed values."
+    },
+    {
+      "code": "RS0803",
+      "title": "local closure escape",
+      "explanation": "A closure bound with `local` is an exclusive local external_binding. It may be called directly or passed to `noescape Fn()` parameters, but it cannot be returned, stored in managed bindings, or passed as an ordinary managed callback."
+    },
+    {
+      "code": "RS0804",
+      "title": "noescape closure consumes captured local",
+      "explanation": "`noescape Fn()` callbacks are non-consuming in v0.7: the callee may call them multiple times, so a noescape closure may read or mutate captured local values but must not take or manage them."
+    },
+    {
+      "code": "RS0901",
+      "title": "take of handle field",
+      "explanation": "Handle fields are managed references. They cannot be consumed with `take` as if they were inline local fields."
+    },
+    {
+      "code": "RS0902",
+      "title": "invalid weak field",
+      "explanation": "`weak` fields break managed class cycles. The MVP only allows weak fields whose type is a class."
+    },
+    {
+      "code": "RS0903",
+      "title": "weak field requires upgrade",
+      "explanation": "`weak` fields are non-owning handles. Upgrade them explicitly with `Weak.upgrade(value: weak_field)` before using the target value."
+    },
+    {
+      "code": "RS0904",
+      "title": "weak field requires weak handle",
+      "explanation": "`weak` fields must be initialized from an explicit weak-handle expression such as `Weak.from(value: target)`."
+    },
+    {
+      "code": "RS1001",
+      "title": "operator overload attempt",
+      "explanation": "The MVP language surface rejects likely user-defined operator overloads to keep review semantics explicit."
+    },
+    {
+      "code": "RS1002",
+      "title": "implicit conversion attempt",
+      "explanation": "RSScript rejects cast-style conversion syntax. Conversions must be visible named APIs such as `Type.from(value: x)`."
+    },
+    {
+      "code": "RS1003",
+      "title": "own struct attempt",
+      "explanation": "RSScript v0.7 has exactly three type declaration kinds: `class`, `struct`, and `resource`. There is no `own struct`."
+    },
+    {
+      "code": "RS1004",
+      "title": "surface reference attempt",
+      "explanation": "RSScript does not expose `&T` or `&mut T` syntax. Use explicit parameter effects such as `read`, `mut`, and `take`."
+    },
+    {
+      "code": "RS1101",
+      "title": "mapped rustc diagnostic",
+      "explanation": "A backend rustc diagnostic was translated through RSScript source-map metadata. Treat this as a compiler, runtime, native binding, or lowering issue unless the mapped RSScript source clearly violates the language rules."
+    },
+    {
+      "code": "RS1102",
+      "title": "unmappable rustc diagnostic",
+      "explanation": "rustc reported a backend diagnostic whose generated Rust location could not be mapped back to RSScript source. The compiler should surface the generated Rust reference as secondary internal detail instead of exposing raw rustc output as the primary diagnostic."
+    },
+    {
+      "code": "RS1201",
+      "title": "runtime diagnostic",
+      "explanation": "The RSScript runtime reported a managed aliasing or resource conflict with an RSScript source span. Runtime diagnostics should be surfaced as RSScript diagnostics instead of raw Rust panics."
+    },
+    {
+      "code": "RS1301",
+      "title": "package interface mismatch",
+      "explanation": "A package `.rssi` public contract must be implemented by the package source with the same type declarations, function signatures, return freshness, and declared effects."
+    },
+    {
+      "code": "RSL001",
+      "title": "signature complexity lint",
+      "explanation": "Public signatures should remain reviewable in one screen. The linter warns when public parameters, generic parameters, effect clauses, or nested type shapes exceed the current review budget."
+    },
+    {
+      "code": "RSL002",
+      "title": "duplicate effect lint",
+      "explanation": "Effect clauses are review contracts. Repeating the same effect adds noise without changing semantics, so the linter warns and suggests removing the duplicate."
+    }
+  ]
+}

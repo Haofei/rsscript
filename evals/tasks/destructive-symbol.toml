@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "destructive-symbol"
+version = 1
+mode = "repair"
+title = "Eliminate an unnecessary destructive host call"
+prompt = "Repair the candidate so it does not call Dangerous.write_text or write the fixed path. Do not add another filesystem or host API."
+candidate = "fixtures/destructive-symbol/candidate.rss"
+interfaces = ["interfaces/dangerous_fs.rssi"]
+expected = "expected/destructive-symbol.json"
+tags = ["host-boundary", "destructive-symbol", "invariant"]

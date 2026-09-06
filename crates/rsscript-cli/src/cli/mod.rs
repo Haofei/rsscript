@@ -10,6 +10,7 @@ mod artifact;
 mod check;
 mod fix;
 mod fmt;
+mod generate;
 #[cfg(feature = "execution")]
 mod profile;
 #[cfg(feature = "execution")]
@@ -36,6 +37,7 @@ pub fn run() -> ExitCode {
         "check" => check::run_check(&args[2..]),
         "fix" => fix::run_fix(&args[2..]),
         "fmt" => fmt::run_fmt(&args[2..]),
+        "generate" => generate::run_generate(&args[2..]),
         #[cfg(feature = "execution")]
         "inspect" => artifact::run_inspect(&args[2..]),
         #[cfg(feature = "execution")]
@@ -169,6 +171,8 @@ const USAGE: &str = r#"usage:
   rss check --explain <code>
   rss fix [--write] [--json] [--interface <file.rssi> ...] <file.rss>  # apply machine-applicable fixes
   rss fmt <file.rss>  # writes formatted source to stdout
+  rss generate prefix-status [--json] [--no-core] [--interface <file.rssi> ...] <file.rss>
+  rss generate continuations [--json] [--no-core] [--interface <file.rssi> ...] [--max-names <N>] <file.rss>
   rss inspect <imports|bytecode> [--json] <file-or-artifact-or-package>
   rss inspect <analysis|resources|async|call-graph> [--json] <package-directory>
   rss profile [--json] [profile-name]  # inspect host-selected runner presets

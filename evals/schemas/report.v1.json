@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rsscript.dev/evals/report.v1.json",
+  "title": "RSScript evaluation report v1",
+  "type": "object",
+  "required": ["schema", "candidate", "status", "candidate_static_check", "parse", "static_check", "diagnostic_match", "safety", "invariants", "oracle_soundness", "compiler_query_latency_ms"],
+  "properties": {
+    "schema": { "const": "rsscript.eval.report.v1" },
+    "candidate": {
+      "type": "object",
+      "required": ["task_id", "task_mode", "mode", "model", "model_version", "temperature", "attempt", "generation_tokens", "generation_duration_ms", "repair_turns"],
+      "properties": {
+        "task_id": { "type": "string" }, "task_mode": { "type": "string", "enum": ["repair", "review"] },
+        "mode": { "type": "string", "enum": ["prompt_only", "language_card", "repair_loop", "constrained", "offline_fixture"] },
+        "model": { "type": "string" }, "model_version": { "type": "string" },
+        "temperature": { "type": ["number", "null"], "minimum": 0 }, "attempt": { "type": "integer", "minimum": 1 },
+        "generation_tokens": { "type": "integer", "minimum": 0 },
+        "generation_duration_ms": { "type": "integer", "minimum": 0 },
+        "repair_turns": { "type": "integer", "minimum": 0 }
+      }, "additionalProperties": false
+    },
+    "status": { "type": "string", "enum": ["pass", "fail", "error"] },
+    "parse": {
+      "type": "object", "required": ["outcome", "unknown_top_level_count", "malformed_declaration_count"],
+      "properties": { "outcome": { "type": "string", "enum": ["pass", "fail", "not-run"] }, "unknown_top_level_count": { "type": "integer", "minimum": 0 }, "malformed_declaration_count": { "type": "integer", "minimum": 0 } }, "additionalProperties": false
+    },
+    "candidate_static_check": {
+      "type": "object", "required": ["outcome", "diagnostic_codes"],
+      "properties": { "outcome": { "type": "string", "enum": ["pass", "fail", "not-run"] }, "diagnostic_codes": { "type": "array", "items": { "type": "string", "pattern": "^RS[0-9]{4}$" }, "uniqueItems": true } },
+      "additionalProperties": false
+    },
+    "static_check": {
+      "type": "object", "required": ["outcome", "diagnostic_codes"],
+      "properties": { "outcome": { "type": "string", "enum": ["pass", "fail", "not-run"] }, "diagnostic_codes": { "type": "array", "items": { "type": "string", "pattern": "^RS[0-9]{4}$" }, "uniqueItems": true } },
+      "additionalProperties": false
+    },
+    "diagnostic_match": { "type": "object" },
+    "safety": { "type": "object" },
+    "invariants": { "type": "array", "items": { "type": "object" } },
+    "oracle_soundness": {
+      "type": "object",
+      "required": ["prefixes_checked", "terminals_recommended", "terminals_accepted", "dead_after_insert", "semantic_candidates_checked", "violations"],
+      "properties": {
+        "prefixes_checked": { "type": "integer", "minimum": 0 },
+        "terminals_recommended": { "type": "integer", "minimum": 0 },
+        "terminals_accepted": { "type": "integer", "minimum": 0 },
+        "dead_after_insert": { "type": "integer", "minimum": 0 },
+        "semantic_candidates_checked": { "type": "integer", "minimum": 0 },
+        "violations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["kind", "value"],
+            "properties": {
+              "kind": { "type": "string" },
+              "value": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "compiler_query_latency_ms": { "type": "integer", "minimum": 0 }
+  },
+  "additionalProperties": false
+}

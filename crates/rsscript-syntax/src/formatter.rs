@@ -779,7 +779,21 @@ impl Formatter {
             self.out.push_str(name);
             self.out.push_str(": ");
         }
-        self.expr_at(&arg.value, 0, indent);
+        self.call_arg_value(&arg.value, indent);
+    }
+
+    /// `read` is the default call-site data effect.  It is therefore safe to
+    /// remove only when it is the direct argument wrapper; nested effects stay
+    /// intact and argument labels are never inferred or rewritten.
+    fn call_arg_value(&mut self, value: &Expr, indent: usize) {
+        match value {
+            Expr::Effect {
+                effect: DataEffect::Read,
+                value,
+                ..
+            } => self.expr_at(value, 0, indent),
+            _ => self.expr_at(value, 0, indent),
+        }
     }
 
     fn receiver_call_chain(&mut self, expr: &Expr, indent: usize) -> bool {
@@ -1132,7 +1146,7 @@ fn format_call_arg(arg: &CallArg) -> String {
         formatter.out.push_str(name);
         formatter.out.push_str(": ");
     }
-    formatter.expr(&arg.value, 0);
+    formatter.call_arg_value(&arg.value, 0);
     formatter.out
 }
 
@@ -1224,7 +1238,14 @@ fn inline_tuple_literal(callee: &Callee, args: &[CallArg]) -> Option<String> {
 }
 
 fn inline_call_arg(arg: &CallArg) -> Option<String> {
-    let value = inline_expr(&arg.value)?;
+    let value = match &arg.value {
+        Expr::Effect {
+            effect: DataEffect::Read,
+            value,
+            ..
+        } => inline_expr(value)?,
+        value => inline_expr(value)?,
+    };
     Some(match &arg.name {
         Some(name) => format!("{name}: {value}"),
         None => value,
@@ -1554,8 +1575,8 @@ return Unit
 }
 
 fn save(image: read Image, path: read Path) -> Result<Unit, IOError> {
-    local tmp = Image.clone(image: read image)?
-    Image.save(image: read tmp, path: read path)
+    local tmp = Image.clone(image: image)?
+    Image.save(image: tmp, path: path)
     return Unit
 }
 "#
@@ -1583,7 +1604,7 @@ return ""
             format_source("pattern.rss", source),
             r#"fn inspect(expr: read Expr) -> String {
     match read expr {
-        Call { callee, args } if List.is_empty(list: read args) => {
+        Call { callee, args } if List.is_empty(list: args) => {
             return callee
         }
         Binary { left: _, right: read rhs, .. } => {
@@ -1794,9 +1815,9 @@ return AgentConfig(model:"AGENT_MODEL".env_or("gpt-5.5:medium"),endpoint:"AGENT_
             format_source("call-format.rss", source),
             r#"async fn main(config: read AgentConfig) -> Result<Unit, HttpError> {
     let http = await Http.post_json_bearer_retry_async(
-        url: read config.endpoint,
-        body: read request_body,
-        token: read config.api_key,
+        url: config.endpoint,
+        body: request_body,
+        token: config.api_key,
         timeout_ms: config.request_timeout_ms,
         attempts: config.max_attempts,
         backoff_ms: config.backoff_ms,
@@ -1911,11 +1932,11 @@ Writer.write(self:mut writer,message:read message)
 struct BufferWriter
 
 fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit {
-    Output.write(message: read message)
+    Output.write(message: message)
 }
 
 fn write_line<W: Writer>(writer: mut W, message: read String) -> Unit {
-    Writer.write(self: mut writer, message: read message)
+    Writer.write(self: mut writer, message: message)
 }
 
 impl Writer for BufferWriter {
@@ -2034,8 +2055,8 @@ return Unit
 
 fn main() -> Unit {
     let (a, b) = (5, "x")
-    Output.write(message: read b)
-    Output.write(message: read String.from_int(value: first(p: read (a, b))))
+    Output.write(message: b)
+    Output.write(message: String.from_int(value: first(p: (a, b))))
     return Unit
 }
 "#

@@ -1,0 +1,9 @@
+fn bad_escape(name: read String) -> Result<Lease, String> {
+    with Lease.open(name: read name)? as lease {
+        return Ok(lease)
+    }
+}
+
+fn main() -> Unit {
+    return Unit
+}

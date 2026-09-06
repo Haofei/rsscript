@@ -19,7 +19,7 @@ are ordinary bodyless declarations. Parameters use the closed `read`, `mut`, and
 
 ```rsscript
 fn transform(input: take Image, options: read Options) -> fresh Image {
-    return Image.transform(input: take input, options: read options)
+    return Image.transform(input: take input, options)
 }
 ```
 
@@ -85,3 +85,11 @@ cargo test --workspace --all-features
 
 Also verify the removed source syntax and compiler policy types do not reappear,
 and that `crates/rsscript-compiler/src/interfaces.rs` contains no default host includes.
+
+<!-- BEGIN GENERATED LANGUAGE CARD -->
+
+## Generated language card
+
+The generated [language card](docs/generated/language-card.md) and machine-readable [language card](docs/generated/language-card.json), [grammar](docs/generated/grammar.json), [diagnostic catalog](docs/generated/diagnostic-catalog.json), and [core-interface catalog](docs/generated/core-interfaces.json) are derived from syntax keyword tables, the diagnostic registry, and the core-interface catalog. Refresh them with `cargo run -p rsscript-xtask -- language-card`; verify freshness with the same command plus `--check`.
+
+<!-- END GENERATED LANGUAGE CARD -->

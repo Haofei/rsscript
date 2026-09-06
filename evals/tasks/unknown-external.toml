@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "unknown-external"
+version = 1
+mode = "repair"
+title = "Remove an undeclared external symbol"
+prompt = "Repair the candidate without inventing a host dependency or declaration for RemoteLedger. The result must use only symbols available in the task context."
+candidate = "fixtures/unknown-external/candidate.rss"
+interfaces = []
+expected = "expected/unknown-external.json"
+tags = ["external-symbol", "host-boundary", "diagnostic"]

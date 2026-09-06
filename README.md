@@ -72,6 +72,8 @@ with the validated call graph; its conclusions never change language validity.
 ```text
 rss check <file-or-package>
 rss fmt <file>
+rss generate prefix-status [--json] <file>
+rss generate continuations [--json] [--no-core] [--interface <file.rssi>] [--max-names <n>] <file>
 rss build [--out <artifact.rssbundle>] [--analysis-out <analysis.json>] <file-or-package>
 rss verify <artifact.rssbundle>
 rss diff [--json|--markdown] <old-input> <new-input>
@@ -114,8 +116,8 @@ back for unsupported regions. It is intentionally unavailable to the isolated
 runner: exact step, allocation, cancellation, and deadline accounting remains
 the bounded interpreter's contract. An Artifact cannot request native execution.
 
-Frontend tooling uses `rsscript-compiler` with its default features; that
-closure contains no runtime or provider. Rust hosts depend on `rsscript-sdk`
+Frontend queries use the syntax and semantics crates without runtime or Provider
+dependencies. Compilation consumers use `rsscript-compiler`; Rust hosts depend on `rsscript-sdk`
 and enable its `execution` feature to use the stable embedding surface: `Compiler`,
 `BuiltArtifact`, `VerifiedArtifact`, `Runtime`, `LinkedArtifact`,
 `ProviderRegistry`, `ExecutionRequest`, `RunLimits`,
@@ -135,10 +137,18 @@ cargo test --workspace
 
 These are the Core workspace checks. AOT, REIR, and self-hosting are isolated
 experiments. Native JIT is an explicit trusted-host performance feature and is
-absent from the normal Core verification closure; its correctness and release
-performance gates run separately.
+absent from the normal Core verification closure; its correctness and workload
+evidence run separately.
 
 The normative language description is in
 [`docs/spec/RSScript_v0.7_Spec.md`](docs/spec/RSScript_v0.7_Spec.md), and the layer
 boundaries are summarized in
 [`docs/architecture/ARCHITECTURE.md`](docs/architecture/ARCHITECTURE.md).
+The generated, source-backed quick reference is the
+[`language card`](docs/generated/language-card.md). Its machine-readable
+companions are [`language-card.json`](docs/generated/language-card.json),
+[`grammar.json`](docs/generated/grammar.json),
+[`diagnostic-catalog.json`](docs/generated/diagnostic-catalog.json), and
+[`core-interfaces.json`](docs/generated/core-interfaces.json). Refresh them
+with `cargo run -p rsscript-xtask -- language-card` and verify them with
+`--check`.

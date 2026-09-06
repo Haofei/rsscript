@@ -33,6 +33,8 @@ When documents disagree, use this order:
 | [development/DEVELOPMENT.md](development/DEVELOPMENT.md) | Local development and verification |
 | [development/DOCKER.md](development/DOCKER.md) | Containerized development |
 | [self-hosting.md](self-hosting.md) | Experimental self-hosting goal, current coverage, and validation contract |
+| [generated/language-card.md](generated/language-card.md) | Generated keyword, diagnostic, and core-interface quick reference |
+| [generated/language-card.json](generated/language-card.json), [grammar.json](generated/grammar.json), [diagnostic-catalog.json](generated/diagnostic-catalog.json), [core-interfaces.json](generated/core-interfaces.json) | Machine-readable generated language-reference catalogs |
 
 ## Specifications
 
@@ -44,6 +46,18 @@ When documents disagree, use this order:
 
 The specifications are intentionally detailed and some tests read them by path.
 Do not rename them without updating those tests.
+
+## Generated language reference
+
+[`generated/language-card.md`](generated/language-card.md) and its linked
+grammar, keyword, diagnostic, and core-interface tables are generated from the
+owning Rust registries. Machine consumers should use
+[`language-card.json`](generated/language-card.json),
+[`grammar.json`](generated/grammar.json),
+[`diagnostic-catalog.json`](generated/diagnostic-catalog.json), and
+[`core-interfaces.json`](generated/core-interfaces.json). Refresh them with
+`cargo run -p rsscript-xtask -- language-card`; CI and local verification should
+use `language-card --check`.
 
 ## Maintenance Rules
 

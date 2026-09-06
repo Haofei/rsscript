@@ -1,0 +1,24 @@
+{
+  "task_id": "named-args",
+  "candidate_check": {
+    "outcome": "fail",
+    "diagnostic_codes": [
+      "RS0201",
+      "RS0204"
+    ]
+  },
+  "target_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "invariants": [
+    {
+      "kind": "source_contains",
+      "value": "EvalApi.describe(input: \"left\")"
+    },
+    {
+      "kind": "source_excludes",
+      "value": "EvalApi.describe(\"left\")"
+    }
+  ]
+}

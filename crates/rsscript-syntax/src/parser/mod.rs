@@ -25,6 +25,133 @@ use scan::*;
 use stmt::*;
 use types::*;
 
+/// The parser's closed top-level dispatch table. Prefix completion reads this
+/// table directly; it is intentionally not a second, completion-only catalog.
+/// Retired source spellings such as `features` and `native` are absent.
+pub(crate) const TOP_LEVEL_STARTERS: &[TopLevelStarter] = &[
+    TopLevelStarter::Type("class"),
+    TopLevelStarter::Type("struct"),
+    TopLevelStarter::Type("resource"),
+    TopLevelStarter::Type("opaque"),
+    TopLevelStarter::Sum("sum"),
+    TopLevelStarter::Protocol("protocol"),
+    TopLevelStarter::Impl("impl"),
+    TopLevelStarter::TypeAlias("type"),
+    TopLevelStarter::Const("const"),
+    TopLevelStarter::Module("module"),
+    TopLevelStarter::Use("use"),
+    TopLevelStarter::Public("pub"),
+    TopLevelStarter::Function("async"),
+    TopLevelStarter::Function("fn"),
+    TopLevelStarter::Function("#"),
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TopLevelStarter {
+    Type(&'static str),
+    Sum(&'static str),
+    Protocol(&'static str),
+    Impl(&'static str),
+    TypeAlias(&'static str),
+    Const(&'static str),
+    Module(&'static str),
+    Use(&'static str),
+    Public(&'static str),
+    Function(&'static str),
+}
+
+impl TopLevelStarter {
+    pub(crate) const fn text(self) -> &'static str {
+        match self {
+            Self::Type(text)
+            | Self::Sum(text)
+            | Self::Protocol(text)
+            | Self::Impl(text)
+            | Self::TypeAlias(text)
+            | Self::Const(text)
+            | Self::Module(text)
+            | Self::Use(text)
+            | Self::Public(text)
+            | Self::Function(text) => text,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ParserExpectationTerminal {
+    Fixed(&'static str),
+    Identifier(ParserIdentifierRole),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ParserIdentifierRole {
+    Function,
+    Parameter,
+    Type,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ParserExpectationSite {
+    TopLevel,
+    FunctionHeader,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParserPrefixOracle {
+    pub expected: Vec<ParserExpectationTerminal>,
+    pub site: ParserExpectationSite,
+    /// Whether every expected terminal came from an instrumented parser
+    /// failpoint. A false value must be surfaced as Partial by callers.
+    pub instrumented: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ExpectationSink {
+    farthest: usize,
+    expected: Vec<ParserExpectationTerminal>,
+    site: ParserExpectationSite,
+    instrumented: bool,
+}
+
+impl Default for ExpectationSink {
+    fn default() -> Self {
+        Self {
+            farthest: 0,
+            expected: Vec::new(),
+            site: ParserExpectationSite::Unknown,
+            instrumented: false,
+        }
+    }
+}
+
+impl ExpectationSink {
+    fn record(
+        &mut self,
+        index: usize,
+        terminal: ParserExpectationTerminal,
+        site: ParserExpectationSite,
+    ) {
+        if index > self.farthest {
+            self.farthest = index;
+            self.expected.clear();
+        }
+        if index == self.farthest && !self.expected.contains(&terminal) {
+            self.expected.push(terminal);
+            self.site = site;
+            self.instrumented = true;
+        }
+    }
+
+    fn finish(self) -> Option<ParserPrefixOracle> {
+        (!self.expected.is_empty()).then_some(ParserPrefixOracle {
+            expected: self.expected,
+            site: self.site,
+            instrumented: self.instrumented,
+        })
+    }
+}
+
 /// Parse `source`, then apply source-preserving desugarings (currently:
 /// associated-constant references). This is what every *semantic* consumer
 /// (checker, HIR, lowering) uses. Tools that must preserve the exact source
@@ -60,7 +187,21 @@ pub fn parse_source_raw(file: &str, source: &str) -> Program {
 
 fn parse_source_tokens_raw(_file: &str, tokens: &[Token], budget: Rc<FrontendBudget>) -> Program {
     let _active_budget = ActiveParseBudget::set(budget);
-    Parser { tokens, index: 0 }.parse_program()
+    Parser::new(tokens).parse_program()
+}
+
+/// Run the ordinary parser with its prefix failpoint sink enabled. This is not
+/// an incremental parser: callers still own source revision and caching.
+pub(crate) fn parse_prefix_oracle(file: &str, source: &str) -> Option<ParserPrefixOracle> {
+    let budget = FrontendBudget::new(
+        FrontendBudgetLimits::default(),
+        source_start_span(file, source.len()),
+    );
+    let tokens = lex_with_budget(file, source, budget.clone());
+    let sink = Rc::new(RefCell::new(ExpectationSink::default()));
+    let _active_budget = ActiveParseBudget::set(budget);
+    Parser::with_expectations(&tokens, sink.clone()).parse_program();
+    sink.borrow().clone().finish()
 }
 
 fn source_start_span(file: &str, length: usize) -> Span {
@@ -116,9 +257,29 @@ pub(super) fn parse_is_active() -> bool {
 struct Parser<'a> {
     tokens: &'a [Token],
     index: usize,
+    expectations: Option<Rc<RefCell<ExpectationSink>>>,
 }
 
 impl Parser<'_> {
+    fn new(tokens: &[Token]) -> Parser<'_> {
+        Parser {
+            tokens,
+            index: 0,
+            expectations: None,
+        }
+    }
+
+    fn with_expectations(
+        tokens: &[Token],
+        expectations: Rc<RefCell<ExpectationSink>>,
+    ) -> Parser<'_> {
+        Parser {
+            tokens,
+            index: 0,
+            expectations: Some(expectations),
+        }
+    }
+
     fn parse_program(&mut self) -> Program {
         let _parse = enter_parse();
         let mut unknown_top_level_spans = Vec::new();
@@ -128,103 +289,112 @@ impl Parser<'_> {
         let mut items = Vec::new();
 
         while parse_is_active() && !self.is_eof() {
-            if self.at_ident("class")
-                || self.at_ident("struct")
-                || self.at_ident("resource")
-                || self.at_ident("opaque")
-                || (self.at_ident("pub")
-                    && (self.peek_ident(1, "class")
-                        || self.peek_ident(1, "struct")
-                        || self.peek_ident(1, "resource")
-                        || self.peek_ident(1, "opaque")))
-            {
-                let start = self.index;
-                if let Some(item) = self.parse_type_decl() {
-                    items.push(Item::Type(item));
-                } else {
-                    malformed_declaration_spans.push(self.tokens[start].span.clone());
-                    self.index = skip_unknown_top_level(self.tokens, start);
+            match self.top_level_starter() {
+                Some(TopLevelStarter::Type(_)) => {
+                    let start = self.index;
+                    if let Some(item) = self.parse_type_decl() {
+                        items.push(Item::Type(item));
+                    } else {
+                        malformed_declaration_spans.push(self.tokens[start].span.clone());
+                        self.index = skip_unknown_top_level(self.tokens, start);
+                    }
                 }
-            } else if self.at_ident("sum") || (self.at_ident("pub") && self.peek_ident(1, "sum")) {
-                let start = self.index;
-                if let Some(item) = self.parse_sum_type_decl() {
-                    items.push(Item::SumType(item));
-                } else {
-                    malformed_declaration_spans.push(self.tokens[start].span.clone());
-                    self.index = skip_unknown_top_level(self.tokens, start);
+                Some(TopLevelStarter::Sum(_)) => {
+                    let start = self.index;
+                    if let Some(item) = self.parse_sum_type_decl() {
+                        items.push(Item::SumType(item));
+                    } else {
+                        malformed_declaration_spans.push(self.tokens[start].span.clone());
+                        self.index = skip_unknown_top_level(self.tokens, start);
+                    }
                 }
-            } else if self.at_ident("protocol") {
-                let start = self.index;
-                if let Some((protocol, functions)) = self.parse_protocol_decl() {
-                    protocols.push(protocol);
-                    items.extend(functions.into_iter().map(Item::Function));
-                } else {
-                    malformed_declaration_spans.push(self.tokens[start].span.clone());
-                    self.index = skip_unknown_top_level(self.tokens, start);
-                }
-            } else if self.at_ident("impl") {
-                let start = self.index;
-                if self.impl_is_inherent() {
-                    if let Some(functions) = self.parse_inherent_impl_decl() {
+                Some(TopLevelStarter::Protocol(_)) => {
+                    let start = self.index;
+                    if let Some((protocol, functions)) = self.parse_protocol_decl() {
+                        protocols.push(protocol);
                         items.extend(functions.into_iter().map(Item::Function));
                     } else {
                         malformed_declaration_spans.push(self.tokens[start].span.clone());
                         self.index = skip_unknown_top_level(self.tokens, start);
                     }
-                } else if let Some(protocol_impl) = self.parse_protocol_impl_decl() {
-                    protocol_impls.push(protocol_impl);
-                } else {
-                    malformed_declaration_spans.push(self.tokens[start].span.clone());
-                    self.index = skip_unknown_top_level(self.tokens, start);
                 }
-            } else if self.at_ident("type") || (self.at_ident("pub") && self.peek_ident(1, "type"))
-            {
-                let start = self.index;
-                if let Some(alias) = self.parse_type_alias_decl() {
-                    items.push(Item::TypeAlias(alias));
-                } else {
-                    malformed_declaration_spans.push(self.tokens[start].span.clone());
-                    self.index = skip_unknown_top_level(self.tokens, start);
+                Some(TopLevelStarter::Impl(_)) => {
+                    let start = self.index;
+                    if self.impl_is_inherent() {
+                        if let Some(functions) = self.parse_inherent_impl_decl() {
+                            items.extend(functions.into_iter().map(Item::Function));
+                        } else {
+                            malformed_declaration_spans.push(self.tokens[start].span.clone());
+                            self.index = skip_unknown_top_level(self.tokens, start);
+                        }
+                    } else if let Some(protocol_impl) = self.parse_protocol_impl_decl() {
+                        protocol_impls.push(protocol_impl);
+                    } else {
+                        malformed_declaration_spans.push(self.tokens[start].span.clone());
+                        self.index = skip_unknown_top_level(self.tokens, start);
+                    }
                 }
-            } else if self.at_ident("const")
-                || (self.at_ident("pub") && self.peek_ident(1, "const"))
-            {
-                let start = self.index;
-                if let Some(decl) = self.parse_const_decl() {
-                    items.push(Item::Const(decl));
-                } else {
-                    malformed_declaration_spans.push(self.tokens[start].span.clone());
-                    self.index = skip_unknown_top_level(self.tokens, start);
+                Some(TopLevelStarter::TypeAlias(_)) => {
+                    let start = self.index;
+                    if let Some(alias) = self.parse_type_alias_decl() {
+                        items.push(Item::TypeAlias(alias));
+                    } else {
+                        malformed_declaration_spans.push(self.tokens[start].span.clone());
+                        self.index = skip_unknown_top_level(self.tokens, start);
+                    }
                 }
-            } else if self.at_ident("module") && !self.peek_ident(1, "{") {
-                if let Some(decl) = self.parse_module_decl() {
-                    items.push(Item::Module(decl));
-                } else {
-                    self.index += 1;
+                Some(TopLevelStarter::Const(_)) => {
+                    let start = self.index;
+                    if let Some(decl) = self.parse_const_decl() {
+                        items.push(Item::Const(decl));
+                    } else {
+                        malformed_declaration_spans.push(self.tokens[start].span.clone());
+                        self.index = skip_unknown_top_level(self.tokens, start);
+                    }
                 }
-            } else if self.at_ident("use") {
-                if let Some(decl) = self.parse_use_decl() {
-                    items.push(Item::Use(decl));
-                } else {
-                    self.index += 1;
+                Some(TopLevelStarter::Module(_)) if !self.peek_ident(1, "{") => {
+                    if let Some(decl) = self.parse_module_decl() {
+                        items.push(Item::Module(decl));
+                    } else {
+                        self.index += 1;
+                    }
                 }
-            } else if self.at_ident("pub")
-                || self.at_ident("async")
-                || self.at_ident("native")
-                || self.at_ident("fn")
-                || self.at_symbol("#")
-            {
-                let start = self.index;
-                if let Some(item) = self.parse_function_decl() {
-                    items.push(Item::Function(item));
-                } else {
-                    malformed_declaration_spans.push(self.tokens[start].span.clone());
-                    self.index = skip_unknown_top_level(self.tokens, start);
+                Some(TopLevelStarter::Module(_)) => {
+                    self.record_top_level_expectations();
+                    unknown_top_level_spans.push(self.tokens[self.index].span.clone());
+                    self.index = skip_unknown_top_level(self.tokens, self.index);
                 }
-            } else {
-                unknown_top_level_spans.push(self.tokens[self.index].span.clone());
-                self.index = skip_unknown_top_level(self.tokens, self.index);
+                Some(TopLevelStarter::Use(_)) => {
+                    if let Some(decl) = self.parse_use_decl() {
+                        items.push(Item::Use(decl));
+                    } else {
+                        self.index += 1;
+                    }
+                }
+                Some(TopLevelStarter::Function(_)) | Some(TopLevelStarter::Public(_)) => {
+                    let start = self.index;
+                    if let Some(item) = self.parse_function_decl() {
+                        items.push(Item::Function(item));
+                    } else {
+                        malformed_declaration_spans.push(self.tokens[start].span.clone());
+                        self.index = skip_unknown_top_level(self.tokens, start);
+                    }
+                }
+                None => {
+                    self.record_top_level_expectations();
+                    unknown_top_level_spans.push(self.tokens[self.index].span.clone());
+                    self.index = skip_unknown_top_level(self.tokens, self.index);
+                }
             }
+        }
+
+        if items.is_empty()
+            && protocols.is_empty()
+            && protocol_impls.is_empty()
+            && unknown_top_level_spans.is_empty()
+            && malformed_declaration_spans.is_empty()
+        {
+            self.record_top_level_expectations();
         }
 
         Program {
@@ -513,23 +683,58 @@ impl Parser<'_> {
             self.index += 1;
         }
         if !self.at_ident("fn") {
+            self.record_expectation(
+                ParserExpectationTerminal::Fixed("fn"),
+                ParserExpectationSite::FunctionHeader,
+            );
             return None;
         }
         self.index += 1;
-        let name = self.take_function_name()?;
+        let name = self.expect_identifier(
+            ParserExpectationSite::FunctionHeader,
+            ParserIdentifierRole::Function,
+        )?;
+        let mut name = name;
+        while self.at_symbol(".") {
+            self.index += 1;
+            let segment = self.expect_identifier(
+                ParserExpectationSite::FunctionHeader,
+                ParserIdentifierRole::Function,
+            )?;
+            name.push('.');
+            name.push_str(&segment);
+        }
         let parsed_type_params = self.parse_generic_params();
         let type_params = parsed_type_params.params;
         let malformed_generic_param_spans = parsed_type_params.malformed_spans;
 
         let mut params = Vec::new();
         let mut malformed_param_spans = Vec::new();
-        if self.at_symbol("(") {
-            let open = self.index;
-            let close = find_matching(self.tokens, open, "(", ")")?;
+        if self.expect_symbol("(", ParserExpectationSite::FunctionHeader) {
+            let open = self.index - 1;
+            let Some(close) = find_matching(self.tokens, open, "(", ")") else {
+                self.record_expectation_at_eof(
+                    ParserExpectationTerminal::Identifier(ParserIdentifierRole::Parameter),
+                    ParserExpectationSite::FunctionHeader,
+                );
+                self.record_expectation_at_eof(
+                    ParserExpectationTerminal::Fixed(")"),
+                    ParserExpectationSite::FunctionHeader,
+                );
+                return None;
+            };
             let parsed_params = parse_params(self.tokens, open + 1, close);
             params = parsed_params.params;
             malformed_param_spans = parsed_params.malformed_spans;
             self.index = close + 1;
+        } else {
+            self.record_expectation(
+                ParserExpectationTerminal::Fixed("("),
+                ParserExpectationSite::FunctionHeader,
+            );
+            if self.expectations.is_some() {
+                return None;
+            }
         }
 
         let signature_end = function_signature_end(self.tokens, self.index);
@@ -552,6 +757,12 @@ impl Parser<'_> {
                 }
                 self.index += 1;
             }
+            if return_start == self.index {
+                self.record_expectation(
+                    ParserExpectationTerminal::Identifier(ParserIdentifierRole::Type),
+                    ParserExpectationSite::FunctionHeader,
+                );
+            }
             return_ty = parse_type_ref(self.tokens, return_start, self.index);
         }
 
@@ -572,7 +783,13 @@ impl Parser<'_> {
         }
         let (has_body, body) = if self.at_symbol("{") {
             let open = self.index;
-            let close = find_matching(self.tokens, open, "{", "}")?;
+            let Some(close) = find_matching(self.tokens, open, "{", "}") else {
+                self.record_expectation_at_eof(
+                    ParserExpectationTerminal::Fixed("}"),
+                    ParserExpectationSite::Unknown,
+                );
+                return None;
+            };
             self.index = close + 1;
             (true, parse_block(self.tokens, open, close))
         } else {
@@ -783,10 +1000,92 @@ impl Parser<'_> {
             .is_some_and(|token| token.symbol(symbol))
     }
 
+    fn expect_symbol(&mut self, symbol: &'static str, site: ParserExpectationSite) -> bool {
+        if self.at_symbol(symbol) {
+            self.index += 1;
+            true
+        } else {
+            self.record_expectation(ParserExpectationTerminal::Fixed(symbol), site);
+            false
+        }
+    }
+
+    fn expect_identifier(
+        &mut self,
+        site: ParserExpectationSite,
+        role: ParserIdentifierRole,
+    ) -> Option<String> {
+        if let Some(name) = self.take_ident_name() {
+            Some(name)
+        } else {
+            self.record_expectation(ParserExpectationTerminal::Identifier(role), site);
+            None
+        }
+    }
+
+    fn record_expectation(&self, terminal: ParserExpectationTerminal, site: ParserExpectationSite) {
+        if let Some(expectations) = &self.expectations {
+            expectations.borrow_mut().record(self.index, terminal, site);
+        }
+    }
+
+    fn record_expectation_at_eof(
+        &self,
+        terminal: ParserExpectationTerminal,
+        site: ParserExpectationSite,
+    ) {
+        if let Some(expectations) = &self.expectations {
+            expectations
+                .borrow_mut()
+                .record(self.tokens.len().saturating_sub(1), terminal, site);
+        }
+    }
+
+    fn record_top_level_expectations(&self) {
+        for starter in TOP_LEVEL_STARTERS {
+            self.record_expectation(
+                ParserExpectationTerminal::Fixed(starter.text()),
+                ParserExpectationSite::TopLevel,
+            );
+        }
+    }
+
     fn peek_symbol(&self, offset: usize, symbol: &str) -> bool {
         self.tokens
             .get(self.index + offset)
             .is_some_and(|token| token.symbol(symbol))
+    }
+
+    fn top_level_starter(&self) -> Option<TopLevelStarter> {
+        let token = self.current()?;
+        let text = if token.symbol("#") {
+            "#"
+        } else {
+            ident_name(token)?
+        };
+        let starter = TOP_LEVEL_STARTERS
+            .iter()
+            .copied()
+            .find(|starter| starter.text() == text)?;
+        if !matches!(starter, TopLevelStarter::Public(_)) {
+            return Some(starter);
+        }
+
+        let next = self.tokens.get(self.index + 1).and_then(ident_name);
+        TOP_LEVEL_STARTERS
+            .iter()
+            .copied()
+            .find(|candidate| candidate.text() == next.unwrap_or_default())
+            .filter(|candidate| {
+                matches!(
+                    candidate,
+                    TopLevelStarter::Type(_)
+                        | TopLevelStarter::Sum(_)
+                        | TopLevelStarter::TypeAlias(_)
+                        | TopLevelStarter::Const(_)
+                )
+            })
+            .or(Some(TopLevelStarter::Function("fn")))
     }
 
     fn take_ident_name(&mut self) -> Option<String> {

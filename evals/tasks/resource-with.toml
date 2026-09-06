@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "resource-with"
+version = 1
+mode = "review"
+title = "Keep a lease scoped by with"
+prompt = "Review the resource acquisition and cleanup boundary. The lease must remain scoped to with and mutation must be explicit."
+candidate = "fixtures/resource-with/candidate.rss"
+interfaces = ["interfaces/lease.rssi"]
+expected = "expected/resource-with.json"
+tags = ["resource", "with", "lifetime"]

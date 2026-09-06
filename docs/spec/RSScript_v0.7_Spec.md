@@ -52,7 +52,7 @@ protocol Render {
 }
 
 fn render_dynamic(value: read Dyn<Render>) -> fresh String {
-    return Render.render(self: read value)
+    return Render.render(self: value)
 }
 ```
 
@@ -84,7 +84,7 @@ affects escape checking. It is represented directly on a function declaration.
 fn Cache.put(cache: mut Cache, value: read Value) -> Unit
     retains(value)
 {
-    Cache.store(cache: mut cache, value: read value)
+    Cache.store(cache: mut cache, value)
 }
 ```
 
@@ -101,7 +101,7 @@ their scope unless the type and ownership rules explicitly permit the transfer.
 Handle and weak-reference rules continue to govern managed object graphs.
 
 ```rsscript
-with Stream.open(config: read config) as stream {
+with Stream.open(config) as stream {
     Stream.consume(stream: mut stream)
 }
 ```
@@ -128,6 +128,12 @@ semantics. Ambient path queries and I/O belong to a host filesystem package.
 Durations may be pure values; reading a clock belongs to a host time package.
 Deterministic PRNGs require an explicit seed; system entropy belongs to a host
 random package.
+
+The generated [core-interface catalog](../generated/core-interfaces.md) names
+the exact current interface files. Its companion
+[language card](../generated/language-card.md) is a non-normative, source-backed
+quick reference for lexical keywords and diagnostics; this specification and
+the parser remain authoritative.
 
 ## 9. External symbols and bindings
 

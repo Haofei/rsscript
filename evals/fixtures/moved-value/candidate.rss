@@ -1,0 +1,6 @@
+fn main() -> Unit {
+    local buffer = Buffer(text: "once")
+    EvalApi.consume(value: take buffer)
+    let description = EvalApi.describe(input: read buffer.text)
+    Output.write(message: description)
+}

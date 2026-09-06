@@ -1,0 +1,23 @@
+{
+  "task_id": "moved-value",
+  "candidate_check": {
+    "outcome": "fail",
+    "diagnostic_codes": [
+      "RS0401"
+    ]
+  },
+  "target_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "invariants": [
+    {
+      "kind": "diagnostic_absent",
+      "value": "RS0401"
+    },
+    {
+      "kind": "source_contains",
+      "value": "EvalApi.consume(value: take buffer)"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rsscript.dev/evals/task.v1.json",
+  "title": "RSScript evaluation task v1",
+  "type": "object",
+  "required": ["schema", "id", "version", "mode", "prompt", "candidate", "interfaces", "expected"],
+  "properties": {
+    "schema": { "const": "rsscript.eval.task.v1" },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "version": { "type": "integer", "const": 1 },
+    "mode": { "type": "string", "enum": ["repair", "review"] },
+    "title": { "type": "string", "minLength": 1 },
+    "prompt": { "type": "string", "minLength": 1 },
+    "candidate": { "type": "string", "pattern": "^fixtures/.+\\.rss$" },
+    "interfaces": { "type": "array", "items": { "type": "string", "pattern": "^interfaces/.+\\.rssi$" }, "uniqueItems": true },
+    "expected": { "type": "string", "pattern": "^expected/.+\\.json$" },
+    "tags": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+  },
+  "additionalProperties": false
+}

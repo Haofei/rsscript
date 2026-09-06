@@ -1,0 +1,3 @@
+fn main() -> Unit {
+    Dangerous.write_text(path: "/tmp/eval-output.txt", text: "replace me")
+}

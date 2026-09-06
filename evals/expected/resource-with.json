@@ -1,0 +1,21 @@
+{
+  "task_id": "resource-with",
+  "candidate_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "target_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "invariants": [
+    {
+      "kind": "source_contains",
+      "value": "with Lease.open(name: name)? as lease"
+    },
+    {
+      "kind": "source_contains",
+      "value": "Lease.read(lease: mut lease)"
+    }
+  ]
+}

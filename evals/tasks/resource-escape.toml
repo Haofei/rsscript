@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "resource-escape"
+version = 1
+mode = "repair"
+title = "Prevent a resource escape"
+prompt = "Repair the candidate so a Lease acquired by with cannot escape its cleanup scope. Preserve fallible behavior."
+candidate = "fixtures/resource-escape/candidate.rss"
+interfaces = ["interfaces/lease.rssi"]
+expected = "expected/resource-escape.json"
+tags = ["resource", "with", "escape"]

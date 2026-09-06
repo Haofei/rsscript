@@ -35,15 +35,19 @@ pub use diagnostic::{
 };
 pub use editor_grammar::{VSCODE_GRAMMAR_PATH, vscode_tmlanguage_json};
 pub use generate::{
-    CommitBehavior, Completion, CompletionKind, ContinuationOptions, Continuations, Effect,
-    ExpectedType, GenerateContext, LiteralClass, PrefixStatus, SymbolCompleteness, TextRange,
-    TypeRef, prefix_status, valid_continuations,
+    Completeness, Completion, CompletionKind, ContinuationOptions, Continuations, Effect,
+    ExpectedType, GenerateContext, GenerationCheckpoint, GenerationCoreInterfacePolicy,
+    GenerationInterfaceSetSnapshot, GenerationInterfaceSnapshot, GenerationQueryIdentity,
+    GenerationQuerySnapshot, GenerationRestoreError, GenerationSession, GenerationSessionStats,
+    IdentifierRoleName, LiteralKindName, ParserTerminal, PrefixStatus, SemanticValidity, TextRange,
+    TypeRef, valid_continuations,
 };
 pub use rsscript_semantics::{
     analyze_frontend_input_snapshot_with_operation, analyze_source, analyze_source_result,
     analyze_source_result_with_operation, analyze_source_with_core, analyze_source_with_interfaces,
     analyze_source_with_interfaces_result, analyze_source_with_interfaces_result_with_operation,
-    analyze_source_with_interfaces_without_core, analyze_source_without_core,
+    analyze_source_with_interfaces_without_core,
+    analyze_source_with_interfaces_without_core_result, analyze_source_without_core,
     analyze_sources_with_interfaces, analyze_sources_with_interfaces_result,
     analyze_sources_with_interfaces_result_with_operation,
     analyze_sources_with_interfaces_without_core,
@@ -56,7 +60,7 @@ pub use rsscript_syntax::{format_program, format_source, lint_source};
 
 pub use rsscript_semantics::{
     AnalysisResult, FrontendCompletion, FrontendInputSnapshot, FrontendStopReason,
-    SemanticDatabase, SourceFileSnapshot, SourceSnapshot, ValidatedProgram,
+    SemanticDatabase, SessionInterfacePolicy, SourceFileSnapshot, SourceSnapshot, ValidatedProgram,
 };
 pub use symbols::{
     Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,

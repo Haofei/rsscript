@@ -1,0 +1,10 @@
+struct Buffer {
+    text: String
+}
+
+pub fn EvalApi.describe(input: read String) -> fresh String
+pub fn EvalApi.append(buffer: mut Buffer, suffix: read String) -> Unit
+pub fn EvalApi.consume(value: take Buffer) -> Unit
+pub fn EvalApi.first(values: read List<String>) -> Option<String>
+pub fn EvalApi.parse(input: read String) -> Result<Int, String>
+pub async fn EvalApi.fetch(key: read String) -> Result<String, String>

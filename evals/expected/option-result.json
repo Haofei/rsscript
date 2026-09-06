@@ -1,0 +1,29 @@
+{
+  "task_id": "option-result",
+  "candidate_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "target_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "invariants": [
+    {
+      "kind": "source_contains",
+      "value": "Some(value)"
+    },
+    {
+      "kind": "source_contains",
+      "value": "None"
+    },
+    {
+      "kind": "source_contains",
+      "value": "Ok(value)"
+    },
+    {
+      "kind": "source_contains",
+      "value": "Err(message)"
+    }
+  ]
+}

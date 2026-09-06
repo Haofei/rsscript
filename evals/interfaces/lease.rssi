@@ -1,0 +1,4 @@
+resource Lease
+
+pub fn Lease.open(name: read String) -> Result<Lease, String>
+pub fn Lease.read(lease: mut Lease) -> Result<fresh String, String>

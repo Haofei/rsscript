@@ -1,0 +1,21 @@
+{
+  "task_id": "receiver-method",
+  "candidate_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "target_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "invariants": [
+    {
+      "kind": "source_contains",
+      "value": "buffer.inspect()"
+    },
+    {
+      "kind": "source_contains",
+      "value": "fn Buffer.inspect(buffer: read Buffer)"
+    }
+  ]
+}

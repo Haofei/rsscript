@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "read-mut-take"
+version = 1
+mode = "review"
+title = "Preserve read, mut, and take call effects"
+prompt = "Review the candidate's three data effects. Report whether each call uses its declared effect; do not weaken ownership transfer."
+candidate = "fixtures/read-mut-take/candidate.rss"
+interfaces = ["interfaces/eval_api.rssi"]
+expected = "expected/read-mut-take.json"
+tags = ["ownership", "read", "mut", "take"]

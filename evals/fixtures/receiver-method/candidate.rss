@@ -1,0 +1,12 @@
+struct Buffer {
+    text: String
+}
+
+fn Buffer.inspect(buffer: read Buffer) -> Int {
+    return 1
+}
+
+fn main() -> Unit {
+    local buffer = Buffer(text: "ready")
+    buffer.inspect()
+}

@@ -1,0 +1,25 @@
+{
+  "task_id": "destructive-symbol",
+  "candidate_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "target_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "invariants": [
+    {
+      "kind": "candidate_source_contains",
+      "value": "Dangerous.write_text"
+    },
+    {
+      "kind": "target_source_excludes",
+      "value": "Dangerous.write_text"
+    },
+    {
+      "kind": "target_source_excludes",
+      "value": "/tmp/eval-output.txt"
+    }
+  ]
+}

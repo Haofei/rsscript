@@ -1,0 +1,25 @@
+{
+  "task_id": "read-mut-take",
+  "candidate_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "target_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "invariants": [
+    {
+      "kind": "source_contains",
+      "value": "buffer: mut buffer"
+    },
+    {
+      "kind": "source_contains",
+      "value": "suffix: suffix"
+    },
+    {
+      "kind": "source_contains",
+      "value": "value: take buffer"
+    }
+  ]
+}
