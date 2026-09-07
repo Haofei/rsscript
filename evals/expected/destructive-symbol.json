@@ -14,7 +14,7 @@
       "value": "Dangerous.write_text"
     },
     {
-      "kind": "target_source_excludes",
+      "kind": "target_call_excludes",
       "value": "Dangerous.write_text"
     },
     {

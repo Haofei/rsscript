@@ -50,6 +50,40 @@ fn top_level_help_succeeds_on_stdout() {
 }
 
 #[test]
+fn unterminated_constants_cannot_hide_declarations_or_produce_artifacts() {
+    let bin = env!("CARGO_BIN_EXE_rss");
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("main.rss");
+    for quote in ["\"", "\"\"\"", "$\""] {
+        let source = format!(
+            "fn main() -> Int {{ return 0 }}\nconst MESSAGE: String = {quote}oops\nfn broken() -> Int {{ return missing }}\n"
+        );
+        fs::write(&path, source).unwrap();
+        let checked = Command::new(bin)
+            .args(["check", "--json"])
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert_eq!(checked.status.code(), Some(1), "{quote}: {checked:?}");
+        let diagnostics: serde_json::Value = serde_json::from_slice(&checked.stdout).unwrap();
+        assert!(!diagnostics.as_array().unwrap().is_empty());
+        #[cfg(feature = "execution")]
+        {
+            let artifact = temp.path().join("main.rssbundle");
+            let built = Command::new(bin)
+                .arg("build")
+                .arg(&path)
+                .arg("--out")
+                .arg(&artifact)
+                .output()
+                .unwrap();
+            assert_eq!(built.status.code(), Some(1), "{quote}: {built:?}");
+            assert!(!artifact.exists());
+        }
+    }
+}
+
+#[test]
 fn generate_commands_emit_the_versioned_json_schemas() {
     let bin = env!("CARGO_BIN_EXE_rss");
     let temp = tempfile::tempdir().expect("temp dir should be creatable");

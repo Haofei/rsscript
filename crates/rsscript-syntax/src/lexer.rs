@@ -12,7 +12,8 @@ pub enum TokenKind {
     MultilineString(String),
     Keyword(&'static str),
     Symbol(&'static str),
-    /// A source character outside RSScript's lexical inventory. Kept as a token
+    /// An invalid source character or the opening quote of an unterminated literal.
+    /// Kept as a token
     /// (rather than silently mapped to a valid operator) so the parser surfaces it
     /// as unsupported syntax instead of, e.g., turning a stray `©` into the `?`
     /// try operator.
@@ -107,6 +108,37 @@ fn eof_token(file: &str) -> Token {
         kind: TokenKind::Eof,
         span: source_span(file, 0),
     }
+}
+
+/// Count characters through the closing quote of an interpolation, starting
+/// immediately after `$"`. Both lexing and prefix recovery use this boundary.
+pub(crate) fn interpolated_content_length(chars: impl Iterator<Item = char>) -> Option<usize> {
+    let mut chars = chars.enumerate().peekable();
+    let mut depth = 0usize;
+    let mut in_string = false;
+    while let Some((index, ch)) = chars.next() {
+        if ch == '\\' {
+            chars.next();
+            continue;
+        }
+        if in_string {
+            if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' if depth == 0 => return Some(index + 1),
+            '"' => in_string = true,
+            '{' | '}' if depth == 0 && chars.peek().is_some_and(|(_, next)| *next == ch) => {
+                chars.next();
+            }
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    None
 }
 
 struct Lexer<'a> {
@@ -222,11 +254,16 @@ impl Lexer<'_> {
         let value = self.chars[start_index..self.index.min(self.chars.len())]
             .iter()
             .collect();
-        if self.peek() == Some('"') {
+        let terminated = self.peek() == Some('"');
+        if terminated {
             self.bump();
         }
         self.tokens.push(Token {
-            kind: TokenKind::String(value),
+            kind: if terminated {
+                TokenKind::String(value)
+            } else {
+                TokenKind::Unknown('"')
+            },
             span: Span {
                 file: self.file.to_string(),
                 line: start_line,
@@ -243,60 +280,23 @@ impl Lexer<'_> {
         self.bump();
         self.bump();
         let start_index = self.index;
-        let mut interpolation_depth = 0usize;
-        while let Some(ch) = self.peek() {
-            if ch == '"' && interpolation_depth == 0 {
-                break;
-            }
-            if ch == '\\' {
-                self.bump();
-                if self.peek().is_some() {
-                    self.bump();
-                }
-                continue;
-            }
-            if interpolation_depth > 0 && ch == '"' {
-                self.bump();
-                while let Some(string_ch) = self.peek() {
-                    if string_ch == '\\' {
-                        self.bump();
-                        if self.peek().is_some() {
-                            self.bump();
-                        }
-                        continue;
-                    }
-                    self.bump();
-                    if string_ch == '"' {
-                        break;
-                    }
-                }
-                continue;
-            }
-            if ch == '{' && interpolation_depth == 0 && self.peek_next() == Some('{') {
-                self.bump();
-                self.bump();
-                continue;
-            }
-            if ch == '}' && interpolation_depth == 0 && self.peek_next() == Some('}') {
-                self.bump();
-                self.bump();
-                continue;
-            }
-            if ch == '{' {
-                interpolation_depth += 1;
-            } else if ch == '}' {
-                interpolation_depth = interpolation_depth.saturating_sub(1);
-            }
+        let length = interpolated_content_length(self.chars[start_index..].iter().copied());
+        let content_end = length.map_or(self.chars.len(), |length| start_index + length - 1);
+        while self.index < content_end {
             self.bump();
         }
         let value = self.chars[start_index..self.index.min(self.chars.len())]
             .iter()
             .collect();
-        if self.peek() == Some('"') {
+        if length.is_some() {
             self.bump();
         }
         self.tokens.push(Token {
-            kind: TokenKind::InterpolatedString(value),
+            kind: if length.is_some() {
+                TokenKind::InterpolatedString(value)
+            } else {
+                TokenKind::Unknown('"')
+            },
             span: Span {
                 file: self.file.to_string(),
                 line: start_line,
@@ -326,13 +326,19 @@ impl Lexer<'_> {
         let value = self.chars[start_index..self.index.min(self.chars.len())]
             .iter()
             .collect();
-        if self.peek() == Some('"') && self.peek_n(1) == Some('"') && self.peek_n(2) == Some('"') {
+        let terminated =
+            self.peek() == Some('"') && self.peek_n(1) == Some('"') && self.peek_n(2) == Some('"');
+        if terminated {
             self.bump();
             self.bump();
             self.bump();
         }
         self.tokens.push(Token {
-            kind: TokenKind::MultilineString(value),
+            kind: if terminated {
+                TokenKind::MultilineString(value)
+            } else {
+                TokenKind::Unknown('"')
+            },
             span: Span {
                 file: self.file.to_string(),
                 line: start_line,

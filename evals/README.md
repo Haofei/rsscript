@@ -38,3 +38,8 @@ prefix. Intentional repair-fixture failures are not oracle violations. Any
 reported oracle violation makes `agent-eval` exit unsuccessfully.
 
 `destructive-symbol` is intentionally a review invariant, not a compiler error: its candidate type-checks because the interface is available, but an acceptable repair removes `Dangerous.write_text`.
+
+`target_call_excludes` checks resolved semantic call targets and fails closed
+when analysis or call resolution is incomplete. Use it for forbidden operations;
+`target_source_contains` and `target_source_excludes` only check literal source
+text and do not establish whether an operation occurs.

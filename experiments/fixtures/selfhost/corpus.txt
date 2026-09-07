@@ -413,6 +413,16 @@ crates/rsscript-sdk/tests/hostile-malformed/unbalanced-parens.rss
 crates/rsscript-sdk/tests/hostile-malformed/unicode-bidi.rss
 crates/rsscript-sdk/tests/hostile-malformed/unterminated-multiline.rss
 crates/rsscript-sdk/tests/hostile-malformed/unterminated-string.rss
+evals/fixtures/destructive-symbol/candidate.rss
+evals/fixtures/moved-value/candidate.rss
+evals/fixtures/named-args/candidate.rss
+evals/fixtures/option-result/candidate.rss
+evals/fixtures/read-mut-take/candidate.rss
+evals/fixtures/receiver-method/candidate.rss
+evals/fixtures/resource-escape/candidate.rss
+evals/fixtures/resource-with/candidate.rss
+evals/fixtures/task-group-cancel/candidate.rss
+evals/fixtures/unknown-external/candidate.rss
 examples/scripts/async/cancellation.rss
 examples/scripts/async/channel_pipeline.rss
 examples/scripts/basic/assert_equal.rss

@@ -721,6 +721,11 @@ impl Parser<'_> {
                     ParserExpectationTerminal::Fixed(")"),
                     ParserExpectationSite::FunctionHeader,
                 );
+                // The parameter slice has not been parsed. These are recovery
+                // hints, not an exhaustive set for its current type/effect slot.
+                if let Some(expectations) = &self.expectations {
+                    expectations.borrow_mut().instrumented = false;
+                }
                 return None;
             };
             let parsed_params = parse_params(self.tokens, open + 1, close);

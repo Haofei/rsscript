@@ -100,6 +100,55 @@ fn restored_branches_never_reuse_source_or_interface_query_identities() {
 }
 
 #[test]
+fn partial_names_replace_the_typed_token_inside_unclosed_bodies_and_calls() {
+    for (source, suffix, name, kind) in [
+        (
+            "fn main() -> Unit {\n    let value: Int = 1\n    val",
+            "val",
+            "value",
+            CompletionKind::Local,
+        ),
+        (
+            "fn use_value(value: read Int) -> Unit {}\nfn main() -> Unit {\n    let value: Int = 1\n    use_value(val",
+            "val",
+            "value",
+            CompletionKind::Local,
+        ),
+        (
+            "fn main(text: read String) -> Unit {\n    text.len",
+            "len",
+            "len",
+            CompletionKind::Method,
+        ),
+    ] {
+        let mut session = GenerationSession::with_source("main.rss", source);
+        let response = session.query(options(1000));
+        let candidate = response
+            .names
+            .iter()
+            .find(|candidate| candidate.text == name && candidate.kind == kind)
+            .unwrap_or_else(|| panic!("missing {name} in {:?}", response.names));
+        assert_eq!(
+            &source[candidate.replace.start..candidate.replace.end],
+            suffix
+        );
+        assert!(
+            response
+                .names
+                .iter()
+                .all(|candidate| candidate.text.starts_with(suffix))
+        );
+        let mut edited = source.to_owned();
+        edited.replace_range(
+            candidate.replace.start..candidate.replace.end,
+            &candidate.insert_text,
+        );
+        assert!(edited.ends_with(&candidate.insert_text));
+        assert!(!edited.ends_with(&format!("{suffix}{}", candidate.insert_text)));
+    }
+}
+
+#[test]
 fn checkpoint_cannot_cross_session_identity_boundary() {
     let first = GenerationSession::with_source("main.rss", "fn main() -> Unit {}");
     let checkpoint = first.checkpoint();

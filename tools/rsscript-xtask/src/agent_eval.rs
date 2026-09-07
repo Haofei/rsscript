@@ -11,8 +11,10 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use rsscript_diagnostics::Severity;
+use rsscript_semantics::hir::CallResolution;
 use rsscript_semantics::{
-    analyze_source_with_interfaces, semantic_completion, standard_package_interfaces,
+    AnalysisResult, FrontendCompletion, analyze_source_with_interfaces,
+    analyze_source_with_interfaces_result, semantic_completion, standard_package_interfaces,
 };
 use rsscript_syntax::{
     ExpectedTerminal, PrefixParseState, TerminalCompleteness, parse_source_prefix, parse_source_raw,
@@ -447,13 +449,13 @@ fn score_task(
     };
 
     let start = Instant::now();
-    let diagnostics = analyze_source_with_interfaces(
+    let analysis = analyze_source_with_interfaces_result(
         &candidate_path.to_string_lossy(),
         &source,
         &analyzer_interfaces,
     );
     let compiler_query_latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
-    let static_codes = diagnostic_codes(&diagnostics);
+    let static_codes = diagnostic_codes(analysis.diagnostics());
     let static_check = static_check_from_codes(static_codes.clone());
     let candidate_static_check = if baseline_path == candidate_path {
         static_check.clone()
@@ -468,7 +470,15 @@ fn score_task(
     let invariant_results = expected
         .invariants
         .iter()
-        .map(|invariant| evaluate_invariant(invariant, &baseline_source, &source, &static_codes))
+        .map(|invariant| {
+            evaluate_invariant(
+                invariant,
+                &baseline_source,
+                &source,
+                &static_codes,
+                &analysis,
+            )
+        })
         .collect::<Vec<_>>();
     let candidate_check_matches = check_matches(&expected.candidate_check, &candidate_static_check);
     let target_check_matches = check_matches(&expected.target_check, &static_check);
@@ -745,6 +755,7 @@ fn evaluate_invariant(
     candidate_source: &str,
     target_source: &str,
     diagnostic_codes: &[String],
+    analysis: &AnalysisResult,
 ) -> InvariantResult {
     let (scope, passed) = match invariant.kind.as_str() {
         "candidate_source_contains" => (
@@ -759,6 +770,10 @@ fn evaluate_invariant(
             InvariantScope::Target,
             !target_source.contains(&invariant.value),
         ),
+        "target_call_excludes" => (
+            InvariantScope::Target,
+            excludes_resolved_call(analysis, &invariant.value),
+        ),
         "diagnostic_absent" => (
             InvariantScope::Target,
             diagnostic_codes.binary_search(&invariant.value).is_err(),
@@ -771,6 +786,32 @@ fn evaluate_invariant(
         scope,
         passed,
     }
+}
+
+/// A call exclusion is a semantic fact. Unknown or incomplete call resolution
+/// cannot establish absence, and formatting must not change the answer.
+fn excludes_resolved_call(analysis: &AnalysisResult, forbidden: &str) -> bool {
+    analysis.completion() == FrontendCompletion::Complete
+        && !analysis
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.severity.is_error())
+        && analysis
+            .database()
+            .hir()
+            .call_sites()
+            .iter()
+            .all(|call| match &call.resolution {
+                CallResolution::Resolved { signature, .. } => {
+                    let name = signature.namespace.as_ref().map_or_else(
+                        || signature.name.clone(),
+                        |namespace| format!("{namespace}.{}", signature.name),
+                    );
+                    name != forbidden
+                }
+                CallResolution::EnumVariant => true,
+                CallResolution::Unknown | CallResolution::Ambiguous { .. } => false,
+            })
 }
 
 fn aggregate(tasks: &[TaskReport]) -> Aggregate {
@@ -856,6 +897,46 @@ fn aggregate(tasks: &[TaskReport]) -> Aggregate {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forbidden_calls_are_checked_semantically_even_when_the_source_is_reformatted() {
+        let interface = [(
+            "dangerous.rssi",
+            "pub fn Dangerous.write_text(path: read String, text: read String) -> Unit",
+        )];
+        let invariant = Invariant {
+            kind: "target_call_excludes".into(),
+            value: "Dangerous.write_text".into(),
+        };
+        for source in [
+            "fn main() -> Unit { Dangerous.write_text(path: \"other\", text: \"x\") }",
+            "fn main() -> Unit { Dangerous . write_text(path: String.concat(left: \"/tmp/\", right: \"eval-output.txt\"), text: \"x\") }",
+            "fn helper() -> Unit { Dangerous.write_text(path: \"other\", text: \"x\") }\nfn main() -> Unit { helper() }",
+        ] {
+            let analysis =
+                analyze_source_with_interfaces_result("candidate.rss", source, &interface);
+            assert!(
+                analysis.diagnostics().is_empty(),
+                "{:?}",
+                analysis.diagnostics()
+            );
+            assert!(
+                !evaluate_invariant(&invariant, "", source, &[], &analysis).passed,
+                "{source}"
+            );
+        }
+        let safe = "// Dangerous.write_text is deliberately absent\nfn main() -> Unit {}";
+        let analysis = analyze_source_with_interfaces_result("candidate.rss", safe, &interface);
+        assert!(evaluate_invariant(&invariant, "", safe, &[], &analysis).passed);
+        for source in [
+            "fn main() -> Unit { Missing.call() }",
+            "fn main() -> Unit { let write = Dangerous.write_text\nwrite(path: \"other\", text: \"x\") }",
+        ] {
+            let invalid =
+                analyze_source_with_interfaces_result("candidate.rss", source, &interface);
+            assert!(!excludes_resolved_call(&invalid, "Dangerous.write_text"));
+        }
+    }
 
     #[test]
     fn fixture_scoring_is_stably_aggregated() {

@@ -11,7 +11,7 @@ use crate::ast::{
     Block, Callee, ConstDecl, Expr, FieldDecl, FunctionDecl, Item, LetStmt, MatchArm, MatchStmt,
     Stmt, SumTypeDecl, TypeAliasDecl, TypeDecl, TypeRef,
 };
-use crate::lexer::{Token, TokenKind, lex};
+use crate::lexer::{Token, TokenKind, interpolated_content_length, lex};
 use crate::parse_source_raw;
 use crate::parser::{
     ParserExpectationSite, ParserExpectationTerminal, ParserIdentifierRole, TOP_LEVEL_STARTERS,
@@ -249,7 +249,7 @@ pub fn parse_source_prefix(file: &str, source: &str) -> PrefixParseResult {
     {
         return incomplete_with_context(
             source,
-            source.len()..source.len(),
+            replace_range,
             vec![fixed(close.expected_close())],
             current_terminal_completeness,
             TerminalCompleteness::Partial,
@@ -267,7 +267,11 @@ pub fn parse_source_prefix(file: &str, source: &str) -> PrefixParseResult {
         return incomplete_with_context(
             source,
             replace_range,
-            oracle.expected.into_iter().map(parser_terminal).collect(),
+            oracle
+                .expected
+                .into_iter()
+                .map(|terminal| parser_terminal(terminal, oracle.instrumented))
+                .collect(),
             current_terminal_completeness,
             // Parser failpoints are exact only for the productions explicitly
             // instrumented above. The top-level catalog and delimiter recovery
@@ -285,7 +289,7 @@ pub fn parse_source_prefix(file: &str, source: &str) -> PrefixParseResult {
     if let Some(close) = surface.unclosed.last().copied() {
         return incomplete_with_context(
             source,
-            source.len()..source.len(),
+            replace_range,
             vec![fixed(close.expected_close())],
             current_terminal_completeness,
             TerminalCompleteness::Partial,
@@ -320,14 +324,22 @@ pub fn parse_source_prefix(file: &str, source: &str) -> PrefixParseResult {
     )
 }
 
-fn parser_terminal(terminal: ParserExpectationTerminal) -> ExpectedTerminal {
+fn parser_terminal(terminal: ParserExpectationTerminal, instrumented: bool) -> ExpectedTerminal {
+    let completeness = if instrumented {
+        TerminalCompleteness::Complete
+    } else {
+        TerminalCompleteness::Partial
+    };
     match terminal {
-        ParserExpectationTerminal::Fixed(text) => fixed(text),
-        ParserExpectationTerminal::Identifier(role) => identifier(match role {
-            ParserIdentifierRole::Function => IdentifierRole::FunctionName,
-            ParserIdentifierRole::Parameter => IdentifierRole::ParameterName,
-            ParserIdentifierRole::Type => IdentifierRole::TypeName,
-        }),
+        ParserExpectationTerminal::Fixed(text) => ExpectedTerminal::Fixed { text, completeness },
+        ParserExpectationTerminal::Identifier(role) => ExpectedTerminal::Identifier {
+            role: match role {
+                ParserIdentifierRole::Function => IdentifierRole::FunctionName,
+                ParserIdentifierRole::Parameter => IdentifierRole::ParameterName,
+                ParserIdentifierRole::Type => IdentifierRole::TypeName,
+            },
+            completeness,
+        },
     }
 }
 
@@ -575,6 +587,7 @@ fn fixed(text: &'static str) -> ExpectedTerminal {
     }
 }
 
+#[cfg(test)]
 fn identifier(role: IdentifierRole) -> ExpectedTerminal {
     ExpectedTerminal::Identifier {
         role,
@@ -918,9 +931,14 @@ fn scan_surface(source: &str) -> SurfaceScan {
         }
         if rest.starts_with("$\"") {
             let start = index;
-            match quoted_end(source, index + 1, '"', true) {
-                Some(end) => {
-                    index = end;
+            let content = &source[index + 2..];
+            match interpolated_content_length(content.chars()) {
+                Some(length) => {
+                    index += 2 + content
+                        .chars()
+                        .take(length)
+                        .map(char::len_utf8)
+                        .sum::<usize>();
                     continue;
                 }
                 None => {
@@ -1154,7 +1172,10 @@ mod tests {
         assert!(
             result
                 .expected_terminals
-                .contains(&identifier(IdentifierRole::ParameterName))
+                .contains(&ExpectedTerminal::Identifier {
+                    role: IdentifierRole::ParameterName,
+                    completeness: TerminalCompleteness::Partial,
+                })
         );
         let result = parse_source_prefix("prefix.rss", "fn main");
         assert_eq!(result.state, PrefixParseState::Incomplete);
@@ -1166,7 +1187,11 @@ mod tests {
         for (source, terminal) in [("fn main", "("), ("fn main(", ")")] {
             let result = parse_source_prefix("prefix.rss", source);
             assert!(
-                result.expected_terminals.contains(&fixed(terminal)),
+                result
+                    .expected_terminals
+                    .iter()
+                    .any(|expected| matches!(expected,
+                    ExpectedTerminal::Fixed { text, .. } if *text == terminal)),
                 "{source:?} did not expose parser failpoint {terminal:?}"
             );
             let mut completed = source.to_owned();
@@ -1192,6 +1217,53 @@ mod tests {
         let complete = parse_source_prefix("prefix.rss", "fn main() -> Unit { }");
         assert!(complete.matches_source("fn main() -> Unit { }"));
         assert_eq!(complete.recovery_suffix(), None);
+    }
+
+    #[test]
+    fn unfinished_parameter_slots_do_not_claim_exhaustive_terminals() {
+        for source in [
+            "fn main(",
+            "fn main(value: ",
+            "fn main(value: read ",
+            "fn main(value: read Int, ",
+        ] {
+            let prefix = parse_source_prefix("prefix.rss", source);
+            assert_eq!(
+                prefix.expected_terminals_completeness,
+                TerminalCompleteness::Partial,
+                "{source}"
+            );
+            assert!(
+                prefix
+                    .expected_terminals
+                    .iter()
+                    .all(|terminal| match terminal {
+                        ExpectedTerminal::Fixed { completeness, .. }
+                        | ExpectedTerminal::Identifier { completeness, .. }
+                        | ExpectedTerminal::Literal { completeness, .. } =>
+                            *completeness == TerminalCompleteness::Partial,
+                    })
+            );
+        }
+    }
+
+    #[test]
+    fn interpolations_share_lexer_boundaries_for_nested_strings() {
+        for source in [
+            r#"fn main() -> String { return $"{String.concat(left: "}", right: "hé")}" }"#,
+            r#"fn main() -> String { return $"{{quoted}} {String.concat(left: "{", right: "\"")}" }"#,
+        ] {
+            assert_eq!(state(source), PrefixParseState::Complete, "{source}");
+            let start = source.find("$\"").unwrap() + 2;
+            for (end, _) in source.char_indices().filter(|(end, _)| *end >= start) {
+                assert_ne!(
+                    state(&source[..end]),
+                    PrefixParseState::Dead,
+                    "{:?}",
+                    &source[..end]
+                );
+            }
+        }
     }
 
     #[test]
