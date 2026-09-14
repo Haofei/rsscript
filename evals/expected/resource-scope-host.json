@@ -1,0 +1,25 @@
+{
+  "task_id": "resource-scope-host",
+  "candidate_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "target_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "invariants": [
+    {
+      "kind": "source_contains",
+      "value": "with ConfigStore.open"
+    },
+    {
+      "kind": "source_contains",
+      "value": "store: mut store"
+    },
+    {
+      "kind": "diagnostic_absent",
+      "value": "RS0702"
+    }
+  ]
+}

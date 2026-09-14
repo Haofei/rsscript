@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "csv-record-transform"
+version = 1
+mode = "review"
+title = "Transform a CSV-like list of records"
+prompt = "Write a single RSScript file that parses CSV-like text into records. Declare a struct Record with fields id: String and amount: Int. Write fn parse_record(line: read String) -> Result<fresh Record, String> that splits the line on a comma, trims both fields, requires exactly two fields, and returns Err when the amount is not an integer. Write fn parse_all(text: read String) -> Result<fresh List<Record>, String> that skips blank lines and collects every record, and fn total_amount(records: read List<Record>) -> Int that sums the amounts. Add fn main() -> Unit that parses a literal two-line document and writes the total or the error. Use only the core interfaces."
+candidate = "fixtures/csv-record-transform/candidate.rss"
+interfaces = []
+expected = "expected/csv-record-transform.json"
+tags = ["collections", "parsing", "result", "generation"]

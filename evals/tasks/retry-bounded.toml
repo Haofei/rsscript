@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "retry-bounded"
+version = 1
+mode = "review"
+title = "Bounded retry loop over a fallible host call"
+prompt = "Write a single RSScript file that retries a fallible host call a bounded number of times. The only host surface available is the declared interface: Sync.push(id: read String, amount: Int) -> Result<Int, SyncError>, Sync.is_retryable(error: read SyncError) -> Bool, SyncError.message(error: read SyncError) -> fresh String, and Metrics.record(name: read String, value: Int) -> Unit. Write fn push_with_retry(id: read String, amount: Int, max_attempts: Int) -> Result<Int, String> that attempts the push at most max_attempts times, stops immediately when the error is not retryable, records the attempt count with Metrics.record on success, and returns the last error message otherwise. Add fn main() -> Unit that calls it and writes the result. Do not invent any other host API."
+candidate = "fixtures/retry-bounded/candidate.rss"
+interfaces = ["interfaces/automation_api.rssi"]
+expected = "expected/retry-bounded.json"
+tags = ["result", "retry", "host-boundary", "generation"]

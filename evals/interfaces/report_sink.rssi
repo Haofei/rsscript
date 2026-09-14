@@ -1,0 +1,9 @@
+// A three-stage report pipeline: the report is built, mutated, and finally
+// consumed. The final stage takes ownership.
+
+struct Report {
+    title: String
+    lines: List<String>
+}
+
+pub fn ReportSink.emit(report: take Report) -> Unit

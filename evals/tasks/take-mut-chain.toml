@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "take-mut-chain"
+version = 1
+mode = "review"
+title = "A take/mut ownership chain through three functions"
+prompt = "Write a single RSScript file that threads one value through three functions with three different data effects. The declared host interface supplies struct Report { title: String, lines: List<String> } and ReportSink.emit(report: take Report) -> Unit. Write fn build_report(title: take String) -> fresh Report that consumes the title, fn add_line(report: mut Report, line: read String) -> Unit that appends a copy of the line, and fn finish_report(report: take Report) -> Unit that hands the report to ReportSink.emit. Add fn main() -> Unit that builds a report, adds two lines, and finishes it. Call-site `mut` and `take` are explicit; a `read` wrapper is omitted because it is the default."
+candidate = "fixtures/take-mut-chain/candidate.rss"
+interfaces = ["interfaces/report_sink.rssi"]
+expected = "expected/take-mut-chain.json"
+tags = ["ownership", "take", "mut", "generation"]

@@ -1,0 +1,29 @@
+{
+  "task_id": "producer-consumer-bounded",
+  "candidate_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "target_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "invariants": [
+    {
+      "kind": "source_contains",
+      "value": "task_group"
+    },
+    {
+      "kind": "source_contains",
+      "value": "Channel.bounded"
+    },
+    {
+      "kind": "source_contains",
+      "value": "Task.cancellation_token()"
+    },
+    {
+      "kind": "source_contains",
+      "value": "take "
+    }
+  ]
+}

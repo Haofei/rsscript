@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "async-stream-consume"
+version = 1
+mode = "review"
+title = "Drain a bounded number of items from a Stream"
+prompt = "Write a single RSScript file that drains a stream. Write async fn drain(stream: Stream<Int>, limit: Int) -> Result<Int, ChannelError> that awaits Stream.next until it has consumed `limit` items or the stream returns None, summing the values. In fn main() -> Result<Unit, ChannelError>, build a local List<Int> with two values, turn it into a Stream with the core interface, and run drain inside a task_group with an async let that is awaited in the same task_group; write the total. `await` appears only inside an async function."
+candidate = "fixtures/async-stream-consume/candidate.rss"
+interfaces = []
+expected = "expected/async-stream-consume.json"
+tags = ["async", "stream", "task-group", "generation"]

@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "json-config-validate"
+version = 1
+mode = "review"
+title = "Parse and validate a JSON service config"
+prompt = "Write a single RSScript file that parses a JSON service configuration and validates it. Declare a struct ServiceConfig with fields name: String, port: Int, and enabled: Bool. Write fn load_config(text: String) -> Result<fresh ServiceConfig, String> that parses the text with the core Json interface, reads the string field `name` and the integer field `port`, and rejects a port below 1 or above 65535 with an explanatory Err. Handle every JsonError explicitly; do not unwrap. Add fn main() -> Unit that calls load_config on a literal config and writes either the name or the error with Output.write. Use only the core interfaces; do not invent a host API."
+candidate = "fixtures/json-config-validate/candidate.rss"
+interfaces = []
+expected = "expected/json-config-validate.json"
+tags = ["json", "validation", "result", "generation"]

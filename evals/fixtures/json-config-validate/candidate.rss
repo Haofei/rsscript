@@ -1,0 +1,43 @@
+struct ServiceConfig {
+    name: String
+    port: Int
+    enabled: Bool
+}
+
+fn validate_port(port: Int) -> Result<Int, String> {
+    if port < 1 {
+        return Err("port must be positive")
+    }
+    if port > 65535 {
+        return Err("port out of range")
+    }
+    return Ok(port)
+}
+
+fn load_config(text: String) -> Result<fresh ServiceConfig, String> {
+    match Json.parse(text: text) {
+        Ok(document) => {
+            match Json.field_string(value: document, name: "name") {
+                Ok(name) => {
+                    match Json.field_int(value: document, name: "port") {
+                        Ok(port) => {
+                            let checked = validate_port(port: port)?
+                            return Ok(ServiceConfig(name: name, port: checked, enabled: true))
+                        }
+                        Err(error) => { return Err(JsonError.message(error: error)) }
+                    }
+                }
+                Err(error) => { return Err(JsonError.message(error: error)) }
+            }
+        }
+        Err(error) => { return Err(JsonError.message(error: error)) }
+    }
+}
+
+fn main() -> Unit {
+    match load_config(text: "{\"name\":\"rss\",\"port\":8080}") {
+        Ok(config) => { Output.write(message: config.name) }
+        Err(message) => { Output.write(message: message) }
+    }
+    return Unit
+}

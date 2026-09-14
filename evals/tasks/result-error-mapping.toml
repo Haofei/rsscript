@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "result-error-mapping"
+version = 1
+mode = "review"
+title = "Map a host error into a domain sum type"
+prompt = "Write a single RSScript file that maps host errors into a domain error type. Declare sum PipelineError with variants BadInput(detail: String) and Upstream(detail: String), and fn PipelineError.detail(error: read PipelineError) -> fresh String that renders each variant. Write fn parse_amount(raw: read String) -> Result<Int, PipelineError> returning BadInput when the text is not an integer, and fn push_amount(id: read String, raw: read String) -> Result<Int, PipelineError> that parses the amount and then calls the declared host function Sync.push(id:, amount:), converting any SyncError into Upstream using SyncError.message. Add fn main() -> Unit that writes the accepted count or the rendered error. Do not invent a host API."
+candidate = "fixtures/result-error-mapping/candidate.rss"
+interfaces = ["interfaces/automation_api.rssi"]
+expected = "expected/result-error-mapping.json"
+tags = ["result", "sum-type", "error-mapping", "generation"]

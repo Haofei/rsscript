@@ -1,0 +1,14 @@
+// A minimal embedded-automation host surface. Everything an automation task is
+// allowed to reach must be declared here; nothing else is available.
+
+struct SyncError
+
+pub fn SyncError.message(error: read SyncError) -> fresh String
+
+pub fn Sync.push(id: read String, amount: Int) -> Result<Int, SyncError>
+
+pub fn Sync.is_retryable(error: read SyncError) -> Bool
+
+pub async fn Sync.fetch_page(cursor: read String) -> Result<fresh String, SyncError>
+
+pub fn Metrics.record(name: read String, value: Int) -> Unit

@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "list-try-fold-validate"
+version = 1
+mode = "review"
+title = "Validate and total a list with a fallible fold"
+prompt = "Write a single RSScript file that validates and totals a list of numeric strings. Declare struct Tally with fields total: Int and count: Int. Write fn add_amount(tally: Tally, raw: String) -> Result<fresh Tally, String> that rejects a non-integer and a negative amount with an explanatory Err, and fn tally_all(raws: read List<String>) -> Result<fresh Tally, String> that folds the list with the core fallible fold so the first failure short-circuits. Add fn main() -> Unit that tallies three literal amounts and writes the total or the error."
+candidate = "fixtures/list-try-fold-validate/candidate.rss"
+interfaces = []
+expected = "expected/list-try-fold-validate.json"
+tags = ["collections", "fold", "result", "generation"]

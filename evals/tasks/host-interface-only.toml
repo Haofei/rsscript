@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "host-interface-only"
+version = 1
+mode = "review"
+title = "Publish a batch using only the declared host interface"
+prompt = "Write a single RSScript file that publishes a batch of records. The ONLY host functions available are the declared interface: Sync.push(id: read String, amount: Int) -> Result<Int, SyncError>, SyncError.message(error: read SyncError) -> fresh String, and Metrics.record(name: read String, value: Int) -> Unit. Write fn publish_batch(ids: read List<String>, amount: Int) -> Result<Int, String> that pushes each id with the given amount, stops at the first failure and returns its message, and otherwise records the accepted total with Metrics.record and returns it. Add fn main() -> Unit that publishes two ids and writes the outcome. Do not invent, import, or assume any other host, filesystem, network, logging, time, or environment API."
+candidate = "fixtures/host-interface-only/candidate.rss"
+interfaces = ["interfaces/automation_api.rssi"]
+expected = "expected/host-interface-only.json"
+tags = ["host-boundary", "external-symbol", "generation"]

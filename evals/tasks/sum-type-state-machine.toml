@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "sum-type-state-machine"
+version = 1
+mode = "review"
+title = "Exhaustive match over a job state sum type"
+prompt = "Write a single RSScript file modelling a job state machine. Declare sum JobState with variants Queued, Running(worker: String), Done(code: Int), and Failed(reason: String). Write fn advance(state: read JobState, worker: read String) -> fresh JobState that moves Queued to Running, Running to Done with code 0, and leaves Done and Failed unchanged, and fn describe(state: read JobState) -> fresh String that renders each variant. Every match must be exhaustive over all four variants. Add fn main() -> Unit that advances a queued job twice and writes the description."
+candidate = "fixtures/sum-type-state-machine/candidate.rss"
+interfaces = []
+expected = "expected/sum-type-state-machine.json"
+tags = ["sum-type", "match", "exhaustiveness", "generation"]
