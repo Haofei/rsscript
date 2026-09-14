@@ -180,8 +180,13 @@ pub(crate) fn rust_files_below(root: &Path) -> Vec<PathBuf> {
         }
     }
 
+    // A directory that a refactor removed is the strongest form of "no files
+    // below it"; a fresh clone never has the empty directory a working tree may
+    // keep, so absence must not panic.
     let mut files = Vec::new();
-    visit(root, &mut files);
+    if root.is_dir() {
+        visit(root, &mut files);
+    }
     files
 }
 
