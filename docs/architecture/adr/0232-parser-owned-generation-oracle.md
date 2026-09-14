@@ -2,7 +2,10 @@
 
 ## Status
 
-Accepted; the v1 baseline is Experimental.
+Accepted; the v1 baseline is Experimental. Its clause limiting the Cranelift
+JIT to correctness, security, dependency, and regression maintenance is
+superseded by [ADR 0233](0233-jit-is-a-product-owned-vm-tier.md); the clause still binds
+Rust AOT, REIR, and self-hosting.
 
 ## Problem
 

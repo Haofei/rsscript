@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted
+Accepted. Its JIT clause — that the resolved surfaces gain no feature work — is
+superseded for the Cranelift JIT only by [ADR 0233](0233-jit-is-a-product-owned-vm-tier.md);
+the seven experiments-workspace surfaces resolved here are unchanged.
 
 ## Problem
 

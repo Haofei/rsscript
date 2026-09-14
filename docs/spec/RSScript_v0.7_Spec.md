@@ -4,9 +4,10 @@ Status: breaking platform-neutral language revision.
 
 ## 1. Scope and invariants
 
-RSScript defines syntax, types, ownership, lifetime and resource rules, and
-structured asynchronous control flow. It does not define operating-system APIs,
-host permissions, deployment authorization, risk policy, or sandbox behavior.
+This specification defines RSScript's syntax, types, ownership, lifetime and
+resource rules, and structured asynchronous control flow. Operating-system APIs,
+host permissions, deployment authorization, risk policy, and sandbox behavior
+lie outside it and are defined by the host that embeds the language.
 
 The following invariant is normative:
 
@@ -14,9 +15,9 @@ The following invariant is normative:
 > independent of host permissions, deployment grants, runner policy, provider
 > selection, and operating-system services.
 
-Parsing and compilation therefore take source and declared interfaces, never a
-runner context or deployment profile. External implementation selection happens
-after compilation.
+Parsing and compilation therefore take exactly two inputs: the source and the
+interfaces it declares. External implementation selection happens after
+compilation.
 
 ## 2. Files and declarations
 

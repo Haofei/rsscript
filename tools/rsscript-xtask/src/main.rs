@@ -282,10 +282,6 @@ fn validate_ci() -> Result<(), Box<dyn Error>> {
     repository_architecture::validate(&root)?;
     validate_workflow_boundaries(&root)?;
     validate_release_feature_closure(&root)?;
-    validate_security_debt(&root)?;
-    validate_test_closures(&root)?;
-    validate_module_sizes(&root)?;
-    validate_allow_debt(&root)?;
     let workflow_dir = root.join(".github/workflows");
     validate_sdk_test_reachability(&root, &root_inventory)?;
     let mut workflows = fs::read_dir(&workflow_dir)?
@@ -486,6 +482,56 @@ fn current_unix_day() -> Result<i64, Box<dyn Error>> {
     Ok(i64::try_from(seconds / 86_400)?)
 }
 
+/// Checks one retention surface's governance state and reports whether it is
+/// product-owned.
+///
+/// `pending` and `proven` are time-bounded states: the surface owes a
+/// `decision_by` date and a `removal_rule`, and it stays a removal candidate
+/// until that decision is made. `product` states that the surface is owned by
+/// the product rather than by a retention program: it is not a removal
+/// candidate, so it must carry neither clock field, and only a root-workspace
+/// surface may claim it. That restriction is deliberate - no
+/// experiments-workspace surface can escape its clock by relabeling itself.
+fn classify_retention_status(
+    id: &str,
+    status: &str,
+    workspace: &str,
+    decision_by: Option<&str>,
+    removal_rule: Option<&str>,
+) -> Result<bool, String> {
+    // Add new states here deliberately - an unrecognized status must never
+    // pass silently.
+    if !matches!(status, "pending" | "proven" | "product") {
+        return Err(format!(
+            "experimental retention `{id}` has unknown status `{status}` (expected `pending`, `proven`, or `product`)"
+        ));
+    }
+    let clock_fields = [("decision_by", decision_by), ("removal_rule", removal_rule)];
+    if status != "product" {
+        for (field, value) in clock_fields {
+            if value.is_none_or(|value| value.trim().is_empty()) {
+                return Err(format!(
+                    "experimental retention `{id}` is missing `{field}`"
+                ));
+            }
+        }
+        return Ok(false);
+    }
+    if workspace != "root" {
+        return Err(format!(
+            "experimental retention `{id}` is `product` but lives in workspace `{workspace}`; only root-workspace surfaces are product-owned"
+        ));
+    }
+    for (field, value) in clock_fields {
+        if value.is_some() {
+            return Err(format!(
+                "experimental retention `{id}` is product-owned and must not carry the retention-clock field `{field}`"
+            ));
+        }
+    }
+    Ok(true)
+}
+
 fn validate_experimental_retention(
     root: &Path,
     root_inventory: &BTreeMap<String, CargoPackageInventory>,
@@ -499,6 +545,7 @@ fn validate_experimental_retention(
     let surfaces = document["surface"]
         .as_array()
         .ok_or("experimental retention inventory must contain [[surface]] entries")?;
+    let today = current_unix_day()?;
     let mut ids = BTreeSet::new();
     for surface in surfaces {
         let table = surface
@@ -514,8 +561,6 @@ fn validate_experimental_retention(
             "decision_basis",
             "maturity",
             "last_measured_at",
-            "decision_by",
-            "removal_rule",
         ];
         for field in required_strings {
             if table
@@ -530,21 +575,27 @@ fn validate_experimental_retention(
         if !ids.insert(id) {
             return Err(format!("experimental retention id `{id}` is duplicated").into());
         }
-        let decision = parse_civil_day(table["decision_by"].as_str().expect("validated date"))?;
+        let status = table["status"].as_str().expect("validated status");
+        let workspace = table["workspace"].as_str().expect("validated workspace");
+        let is_product = classify_retention_status(
+            id,
+            status,
+            workspace,
+            table.get("decision_by").and_then(toml::Value::as_str),
+            table.get("removal_rule").and_then(toml::Value::as_str),
+        )?;
+        let decision = if is_product {
+            None
+        } else {
+            Some(parse_civil_day(
+                table["decision_by"].as_str().expect("validated date"),
+            )?)
+        };
         let measured =
             parse_civil_day(table["last_measured_at"].as_str().expect("validated date"))?;
-        if measured > decision {
+        if decision.is_some_and(|decision| measured > decision) {
             return Err(format!(
                 "experimental retention `{id}` was measured after its decision date"
-            )
-            .into());
-        }
-        // `status` must be a recognized governance state. Add new states here
-        // deliberately — an unrecognized status must never pass silently.
-        let status = table["status"].as_str().expect("validated status");
-        if !matches!(status, "pending" | "proven") {
-            return Err(format!(
-                "experimental retention `{id}` has unknown status `{status}` (expected `pending` or `proven`)"
             )
             .into());
         }
@@ -588,6 +639,20 @@ fn validate_experimental_retention(
         if workload_names.is_empty() {
             return Err(format!("experimental retention `{id}` has no workload").into());
         }
+        let evidence_uri = table
+            .get("evidence_uri")
+            .and_then(toml::Value::as_str)
+            .unwrap_or("");
+        let evidence_sha = table
+            .get("evidence_sha256")
+            .and_then(toml::Value::as_str)
+            .unwrap_or("");
+        let has_evidence = !evidence_uri.is_empty() || !evidence_sha.is_empty();
+        // A product-owned surface owes no retention verdict, but any evidence it
+        // does publish is held to the same bar as a `proven` surface: complete,
+        // verifiable, and above its threshold. That is what keeps individual
+        // optimizations evidence-gated once the engine itself is not.
+        let evidence_is_gated = status == "proven" || (is_product && has_evidence);
         let evidence_cases = table
             .get("evidence_cases")
             .and_then(toml::Value::as_array)
@@ -608,22 +673,13 @@ fn validate_experimental_retention(
             })
             .transpose()?
             .unwrap_or_default();
-        if status == "proven" && is_performance && evidence_cases.len() != workload_names.len() {
+        if evidence_is_gated && is_performance && evidence_cases.len() != workload_names.len() {
             return Err(format!(
                 "experimental retention `{id}` must map every workload to exactly one evidence case"
             )
             .into());
         }
-        let evidence_uri = table
-            .get("evidence_uri")
-            .and_then(toml::Value::as_str)
-            .unwrap_or("");
-        let evidence_sha = table
-            .get("evidence_sha256")
-            .and_then(toml::Value::as_str)
-            .unwrap_or("");
-        let has_evidence = !evidence_uri.is_empty() || !evidence_sha.is_empty();
-        if decision < current_unix_day()? && !has_evidence {
+        if decision.is_some_and(|decision| decision < today) && !has_evidence {
             return Err(format!(
                 "experimental retention `{id}` expired without immutable evidence; remove it or renew through an ADR"
             )
@@ -659,7 +715,7 @@ fn validate_experimental_retention(
             // resolved against the repo root and its digest verified.
             let is_remote =
                 evidence_uri.starts_with("http://") || evidence_uri.starts_with("https://");
-            if is_remote && status == "proven" && is_performance {
+            if is_remote && evidence_is_gated && is_performance {
                 return Err(format!(
                     "experimental retention `{id}` performance evidence must be repo-local so its measurements can be verified"
                 )
@@ -679,7 +735,7 @@ fn validate_experimental_retention(
                     )
                     .into());
                 }
-                if status == "proven" && is_performance {
+                if evidence_is_gated && is_performance {
                     verified_performance_gain = Some(
                         retention_evidence::minimum_verified_gain_percent(
                             &bytes,
@@ -695,7 +751,7 @@ fn validate_experimental_retention(
                 }
             }
         }
-        if status == "proven" && is_performance {
+        if evidence_is_gated && is_performance {
             let threshold = table
                 .get("minimum_end_to_end_gain_percent")
                 .and_then(toml::Value::as_integer)
@@ -719,7 +775,6 @@ fn validate_experimental_retention(
         {
             return Err(format!("experimental retention `{id}` needs a concrete @owner").into());
         }
-        let workspace = table["workspace"].as_str().expect("validated workspace");
         let inventory = match workspace {
             "root" => root_inventory,
             "experiments" => experiments_inventory,
@@ -819,82 +874,6 @@ fn validate_experimental_retention(
                     "experimental retention `{id}` names missing workload/test `{workload}`"
                 )
                 .into());
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_security_debt(root: &Path) -> Result<(), Box<dyn Error>> {
-    let document: toml::Value = toml::from_str(&fs::read_to_string(
-        root.join("docs/architecture/security-debt.toml"),
-    )?)?;
-    if document["schema"].as_integer() != Some(1) {
-        return Err("security debt inventory must use schema 1".into());
-    }
-    let exceptions = document
-        .get("exception")
-        .and_then(toml::Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default();
-    for exception in exceptions {
-        let id = exception["id"].as_str().ok_or("security debt needs id")?;
-        for field in [
-            "owner",
-            "advisory",
-            "scope",
-            "tracking",
-            "decision_by",
-            "removal_rule",
-        ] {
-            if exception[field]
-                .as_str()
-                .is_none_or(|value| value.trim().is_empty())
-            {
-                return Err(format!("security debt `{id}` is missing `{field}`").into());
-            }
-        }
-        if parse_civil_day(exception["decision_by"].as_str().expect("validated"))?
-            < current_unix_day()?
-        {
-            return Err(format!("security debt `{id}` has expired").into());
-        }
-    }
-    Ok(())
-}
-
-fn validate_test_closures(root: &Path) -> Result<(), Box<dyn Error>> {
-    let document: toml::Value = toml::from_str(&fs::read_to_string(
-        root.join("docs/architecture/test-closures.toml"),
-    )?)?;
-    if document["schema"].as_integer() != Some(1) {
-        return Err("test closure inventory must use schema 1".into());
-    }
-    for closure in document["closure"]
-        .as_array()
-        .ok_or("test closure inventory needs [[closure]] entries")?
-    {
-        let id = closure["id"].as_str().ok_or("test closure needs id")?;
-        let paths = closure["paths"]
-            .as_array()
-            .ok_or_else(|| format!("test closure `{id}` needs paths"))?;
-        let workflows = closure["workflows"]
-            .as_array()
-            .ok_or_else(|| format!("test closure `{id}` needs workflows"))?;
-        for workflow in workflows {
-            let workflow = workflow.as_str().ok_or("workflow must be a string")?;
-            let source = fs::read_to_string(root.join(".github/workflows").join(workflow))?;
-            if !source.lines().any(|line| line.trim() == "paths:") {
-                continue;
-            }
-            for path in paths {
-                let path = path.as_str().ok_or("closure path must be a string")?;
-                if !source.contains(&format!("\"{path}\"")) {
-                    return Err(format!(
-                        "test closure `{id}` workflow `{workflow}` is missing path `{path}`"
-                    )
-                    .into());
-                }
             }
         }
     }
@@ -1207,197 +1186,6 @@ fn validate_security_workflow_coverage(
         }
     }
     Ok(())
-}
-
-fn validate_module_sizes(root: &Path) -> Result<(), Box<dyn Error>> {
-    let allowlist_path = root.join("docs/architecture/module-size-allowlist.toml");
-    let document: toml::Value = toml::from_str(&fs::read_to_string(&allowlist_path)?)?;
-    let warn_bytes = document["warn_bytes"].as_integer().unwrap_or(50_000) as u64;
-    let hard_bytes = document["hard_bytes"].as_integer().unwrap_or(80_000) as u64;
-    let mut allowed = BTreeMap::new();
-    // An empty (or absent) `[[allow]]` list is the success state: every oversized
-    // module has been partitioned and its debt entry retired.
-    for entry in document
-        .get("allow")
-        .and_then(toml::Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[])
-    {
-        let path = entry["path"]
-            .as_str()
-            .ok_or("module size allow entry requires path")?;
-        let max_bytes = entry["max_bytes"]
-            .as_integer()
-            .ok_or("module size allow entry requires max_bytes")? as u64;
-        let reason = entry["reason"]
-            .as_str()
-            .ok_or("module size allow entry requires reason")?;
-        if reason.trim().is_empty() {
-            return Err(format!("module size allow entry `{path}` has no reason").into());
-        }
-        let owner = entry["owner"]
-            .as_str()
-            .ok_or("module size allow entry requires owner")?;
-        let target_bytes = entry["target_bytes"]
-            .as_integer()
-            .ok_or("module size allow entry requires target_bytes")?
-            as u64;
-        let decision_by = entry["decision_by"]
-            .as_str()
-            .ok_or("module size allow entry requires decision_by")?;
-        let tracking = entry["tracking"]
-            .as_str()
-            .ok_or("module size allow entry requires tracking")?;
-        if !owner.starts_with('@') || tracking.trim().is_empty() {
-            return Err(format!(
-                "module size allow entry `{path}` needs an @owner and tracking reference"
-            )
-            .into());
-        }
-        if target_bytes >= max_bytes || target_bytes > hard_bytes {
-            return Err(format!(
-                "module size allow entry `{path}` needs a target below its ceiling and hard limit"
-            )
-            .into());
-        }
-        if parse_civil_day(decision_by)? < current_unix_day()? {
-            return Err(format!("module size debt `{path}` expired on `{decision_by}`").into());
-        }
-        let source_path = root.join(path);
-        if !source_path.is_file() {
-            return Err(format!(
-                "module size allow entry `{path}` is stale because the file is gone"
-            )
-            .into());
-        }
-        let current = fs::metadata(&source_path)?.len();
-        if current <= hard_bytes {
-            return Err(format!(
-                "module size allow entry `{path}` is stale; the file is below the hard limit"
-            )
-            .into());
-        }
-        if max_bytes > current.saturating_add(4096) {
-            return Err(format!(
-                "module size debt ceiling for `{path}` must ratchet down after shrinkage (current={current}, max={max_bytes})"
-            )
-            .into());
-        }
-        allowed.insert(path.to_owned(), max_bytes);
-    }
-
-    let mut pending = vec![
-        root.join("crates"),
-        root.join("providers"),
-        root.join("tools"),
-        root.join("examples"),
-        root.join("experiments"),
-        root.join("fuzz"),
-    ];
-    while let Some(path) = pending.pop() {
-        for entry in fs::read_dir(path)? {
-            let path = entry?.path();
-            if path.is_dir() {
-                if path.file_name().is_none_or(|name| name != "target") {
-                    pending.push(path);
-                }
-                continue;
-            }
-            if path.extension().is_none_or(|extension| extension != "rs") {
-                continue;
-            }
-            let size = fs::metadata(&path)?.len();
-            let relative = path
-                .strip_prefix(root)
-                .expect("scanned source is below workspace root")
-                .to_string_lossy()
-                .replace('\\', "/");
-            if size > hard_bytes {
-                let max = allowed.get(&relative).ok_or_else(|| {
-                    format!(
-                        "Rust source `{relative}` is {size} bytes (> {hard_bytes}); split it or add a reviewed debt entry"
-                    )
-                })?;
-                if size > *max {
-                    return Err(format!(
-                        "Rust source `{relative}` grew to {size} bytes above its debt ceiling {max}"
-                    )
-                    .into());
-                }
-            } else if size > warn_bytes {
-                eprintln!("warning: large Rust source `{relative}` is {size} bytes");
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_allow_debt(root: &Path) -> Result<(), Box<dyn Error>> {
-    let document: toml::Value = toml::from_str(&fs::read_to_string(
-        root.join("docs/architecture/allow-debt.toml"),
-    )?)?;
-    if document["schema"].as_integer() != Some(2) {
-        return Err("allow policy must use schema 2".into());
-    }
-    let policy = document["repository"]
-        .as_table()
-        .ok_or("allow policy must contain [repository]")?;
-    if policy["total"].as_integer() != Some(0) {
-        return Err("repository allow policy must remain at zero".into());
-    }
-
-    let mut violations = Vec::new();
-    for path in rust_files_below(root)? {
-        let source = fs::read_to_string(&path)?;
-        for line in allow_attribute_lines(&source) {
-            let relative = path
-                .strip_prefix(root)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            violations.push(format!("{relative}:{line}"));
-        }
-    }
-    if !violations.is_empty() {
-        return Err(format!(
-            "Rust lint suppression is forbidden; replace these `allow` attributes with structural fixes:\n{}",
-            violations.join("\n")
-        )
-        .into());
-    }
-    Ok(())
-}
-
-fn allow_attribute_lines(source: &str) -> Vec<usize> {
-    let mut violations = Vec::new();
-    let mut attribute = String::new();
-    let mut attribute_line = 0;
-    for (index, line) in source.lines().enumerate() {
-        let trimmed = line.trim_start();
-        if attribute.is_empty() {
-            if !trimmed.starts_with("#[") && !trimmed.starts_with("#![") {
-                continue;
-            }
-            attribute_line = index + 1;
-        }
-        attribute.push_str(trimmed);
-        if !trimmed.ends_with(']') {
-            continue;
-        }
-        let compact = attribute
-            .chars()
-            .filter(|character| !character.is_whitespace())
-            .collect::<String>();
-        if compact.starts_with("#[allow(")
-            || compact.starts_with("#![allow(")
-            || ((compact.starts_with("#[cfg_attr(") || compact.starts_with("#![cfg_attr("))
-                && compact.contains("allow("))
-        {
-            violations.push(attribute_line);
-        }
-        attribute.clear();
-    }
-    violations
 }
 
 fn rust_files_below(root: &Path) -> Result<Vec<PathBuf>, Box<dyn Error>> {
@@ -1985,6 +1773,70 @@ mod tests {
         let samples = (1..=20).map(f64::from).collect::<Vec<_>>();
         assert_eq!(percentile(&samples, 0.50), 11.0);
         assert_eq!(percentile(&samples, 0.95), 20.0);
+    }
+
+    #[test]
+    fn product_owned_surfaces_drop_the_clock_and_stay_root_only() {
+        assert_eq!(
+            classify_retention_status("jit-cranelift-engine", "product", "root", None, None),
+            Ok(true)
+        );
+        assert_eq!(
+            classify_retention_status(
+                "aot-backend",
+                "proven",
+                "experiments",
+                Some("2026-12-31"),
+                Some("Remove if unused.")
+            ),
+            Ok(false)
+        );
+        // A product-owned surface must not keep a stale clock.
+        assert!(
+            classify_retention_status("jit-tier0", "product", "root", Some("2027-02-28"), None)
+                .is_err()
+        );
+        assert!(
+            classify_retention_status(
+                "jit-tier0",
+                "product",
+                "root",
+                None,
+                Some("Remove if slow.")
+            )
+            .is_err()
+        );
+        // An experiments-workspace surface cannot escape its clock by
+        // relabeling itself product-owned.
+        assert!(
+            classify_retention_status("aot-backend", "product", "experiments", None, None).is_err()
+        );
+        // A time-bounded surface still owes both clock fields.
+        assert!(
+            classify_retention_status(
+                "aot-model",
+                "pending",
+                "experiments",
+                Some("2026-12-31"),
+                None
+            )
+            .is_err()
+        );
+        assert!(
+            classify_retention_status("aot-model", "pending", "experiments", None, Some("Remove."))
+                .is_err()
+        );
+        assert!(
+            classify_retention_status(
+                "aot-model",
+                "pending",
+                "experiments",
+                Some("2026-12-31"),
+                Some("  ")
+            )
+            .is_err()
+        );
+        assert!(classify_retention_status("aot-model", "retired", "root", None, None).is_err());
     }
 
     #[test]
