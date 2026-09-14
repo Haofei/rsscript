@@ -1,7 +1,10 @@
 # Threat model
 
-RSScript separates language validation, host integration, and process isolation.
-These boundaries must not be presented as interchangeable security controls.
+RSScript has three separate boundaries, each with its own job: language
+validation proves what a program means, host integration decides what a program
+can reach, and process isolation contains what a program does. They are not
+interchangeable security controls, and a vulnerability report should say which
+one it is about.
 
 ## What Core validates
 
@@ -24,7 +27,7 @@ provider, native plugin, JIT, or generated program trustworthy.
   to the reference isolated runner and currently selects the explicit unbounded
   trusted-host limits profile because exact source-step accounting is not yet
   equivalent to the interpreter.
-- Review and REIR report evidence; they do not grant or revoke authority.
+- Review and REIR report evidence; authority stays with the host.
 
 ## Untrusted and generated input
 
@@ -41,18 +44,22 @@ a Landlock ABI-v5 filesystem allowlist rooted at a parent-owned path, or a
 narrow Linux x86-64 seccomp deny-list. A separate cgroup-v2 profile creates a
 child boundary only where the parent has explicit controller delegation. A
 missing kernel feature, denied control, or unavailable cgroup delegation
-rejects that profile; it never falls back to the ambient boundary. These
-profiles remain defense in depth, not a complete container: deployments that
-require filesystem, network, identity, namespace, or syscall isolation must
-select and validate the OS controls that match their own Provider authority.
+rejects that profile; it never falls back to the ambient boundary.
 
-No RSScript API or documentation may describe the in-process runtime as a
-sandbox. Vulnerability reports and deployment guidance must identify which
-boundary failed: compiler invariant, verifier, runtime limit, provider, native
-code, or external isolation.
+These profiles are defense in depth rather than a complete container. A
+deployment that requires filesystem, network, identity, namespace, or syscall
+isolation selects and validates the OS controls that match its own Provider
+authority.
+
+## Reporting and documentation rules
+
+The in-process runtime is not a sandbox, and no RSScript API or documentation
+may describe it as one. Vulnerability reports and deployment guidance identify
+which boundary failed: compiler invariant, verifier, runtime limit, provider,
+native code, or external isolation.
 
 ## Out of scope
 
-Core does not implement language-level permissions, deployment policy,
-capability grants, a package trust hierarchy, or a claim that static review can
-prove arbitrary host code safe.
+Language-level permissions, deployment policy, capability grants, and a package
+trust hierarchy are outside Core. So is any claim that static review can prove
+arbitrary host code safe.

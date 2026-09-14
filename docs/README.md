@@ -1,5 +1,12 @@
 # RSScript Documentation
 
+RSScript is a small, ownership-aware scripting language for scripts embedded in
+Rust hosts. One compile produces a provider-neutral verified Artifact, a bounded
+interpreter is the reference way to run it, and a trusted host can opt into the
+Cranelift JIT. Start with the root [README](../README.md) for the overview,
+[product.md](product.md) for scope and guarantees, and the
+[language specification](spec/RSScript_v0.7_Spec.md) for the normative text.
+
 This directory has one current document for each concern. Git history is the
 archive for superseded plans, review reports, and remediation logs.
 
@@ -28,7 +35,7 @@ When documents disagree, use this order:
 | [architecture/workspace-tiers.toml](architecture/workspace-tiers.toml) | Machine-checked package maturity and CI ownership |
 | [architecture/contracts.toml](architecture/contracts.toml) | Machine-checked public contract identifiers and owning constants |
 | [architecture/runner-platforms.toml](architecture/runner-platforms.toml) | Machine-readable isolation controls and platform limitations |
-| [architecture/experimental-retention.toml](architecture/experimental-retention.toml) | Time-bounded evidence and removal rules for research surfaces |
+| [architecture/experimental-retention.toml](architecture/experimental-retention.toml) | Evidence, retention clocks, and product ownership for surfaces outside Core |
 | [development/DEVELOPMENT.md](development/DEVELOPMENT.md) | Local development and verification |
 | [development/DOCKER.md](development/DOCKER.md) | Containerized development |
 | [self-hosting.md](self-hosting.md) | Experimental self-hosting goal, current coverage, and validation contract |
