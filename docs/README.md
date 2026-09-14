@@ -29,7 +29,6 @@ When documents disagree, use this order:
 | [architecture/contracts.toml](architecture/contracts.toml) | Machine-checked public contract identifiers and owning constants |
 | [architecture/runner-platforms.toml](architecture/runner-platforms.toml) | Machine-readable isolation controls and platform limitations |
 | [architecture/experimental-retention.toml](architecture/experimental-retention.toml) | Time-bounded evidence and removal rules for research surfaces |
-| [architecture/module-size-allowlist.toml](architecture/module-size-allowlist.toml) | Enforced module-size debt ceilings |
 | [development/DEVELOPMENT.md](development/DEVELOPMENT.md) | Local development and verification |
 | [development/DOCKER.md](development/DOCKER.md) | Containerized development |
 | [self-hosting.md](self-hosting.md) | Experimental self-hosting goal, current coverage, and validation contract |

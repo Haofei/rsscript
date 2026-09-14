@@ -1,5 +1,0 @@
-schema = 1
-
-# No active advisory exceptions. Bytecode v1 owns a bounded canonical CBOR
-# subset implementation, so replacing the abandoned codec dependency did not
-# introduce a second executable format.

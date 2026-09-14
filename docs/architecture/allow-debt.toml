@@ -1,7 +1,0 @@
-schema = 2
-
-# Zero-tolerance invariant. `cargo xtask validate-ci` scans every Rust source
-# in the root and nested workspaces. New lint suppressions must be replaced by
-# a structural fix instead of being recorded as debt.
-[repository]
-total = 0
