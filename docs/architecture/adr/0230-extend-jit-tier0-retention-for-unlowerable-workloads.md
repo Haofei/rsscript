@@ -2,7 +2,12 @@
 
 ## Status
 
-Accepted
+Accepted; superseded in part by [ADR 0233](0233-jit-is-a-product-owned-vm-tier.md). The Cranelift JIT
+is now a product-owned VM tier, so `jit-tier0` no longer carries a retention
+clock and this extension has nothing left to extend. What survives is the
+coverage record below: `mailbox-ring` and `closure-dynamic` are still outside
+the typed-MIR subset, and closing that gap is now active JIT work rather than a
+deferred Prove/Cut verdict.
 
 ## Problem
 

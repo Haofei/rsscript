@@ -1,5 +1,15 @@
 # 2026 Q4 experimental-decision milestone
 
+> **Superseded for the JIT.** The Cranelift JIT is now a product-owned VM tier
+> under active development, not a retention-gated preview. The JIT deadline,
+> the Prove/Cut/Extend framing for `jit-tier0` and `jit-cranelift-engine`, and
+> the freeze on JIT feature work recorded below no longer apply; see
+> [ADR 0233](../architecture/adr/0233-jit-is-a-product-owned-vm-tier.md).
+> Individual native optimizations are still evidence-gated by the scorecard in
+> `benchmarks/vm-jit`. The rest of this log — including the module-size
+> convergence notes, which describe a mechanism the project has since retired —
+> stands as a historical record of what was decided and executed.
+
 This milestone implements the convergence priority in
 [../roadmap.md](../roadmap.md) by resolving the time-bounded experimental
 surfaces the project has already committed to, rather than adding scope. It is

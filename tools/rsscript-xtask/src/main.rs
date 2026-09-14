@@ -482,6 +482,56 @@ fn current_unix_day() -> Result<i64, Box<dyn Error>> {
     Ok(i64::try_from(seconds / 86_400)?)
 }
 
+/// Checks one retention surface's governance state and reports whether it is
+/// product-owned.
+///
+/// `pending` and `proven` are time-bounded states: the surface owes a
+/// `decision_by` date and a `removal_rule`, and it stays a removal candidate
+/// until that decision is made. `product` states that the surface is owned by
+/// the product rather than by a retention program: it is not a removal
+/// candidate, so it must carry neither clock field, and only a root-workspace
+/// surface may claim it. That restriction is deliberate - no
+/// experiments-workspace surface can escape its clock by relabeling itself.
+fn classify_retention_status(
+    id: &str,
+    status: &str,
+    workspace: &str,
+    decision_by: Option<&str>,
+    removal_rule: Option<&str>,
+) -> Result<bool, String> {
+    // Add new states here deliberately - an unrecognized status must never
+    // pass silently.
+    if !matches!(status, "pending" | "proven" | "product") {
+        return Err(format!(
+            "experimental retention `{id}` has unknown status `{status}` (expected `pending`, `proven`, or `product`)"
+        ));
+    }
+    let clock_fields = [("decision_by", decision_by), ("removal_rule", removal_rule)];
+    if status != "product" {
+        for (field, value) in clock_fields {
+            if value.is_none_or(|value| value.trim().is_empty()) {
+                return Err(format!(
+                    "experimental retention `{id}` is missing `{field}`"
+                ));
+            }
+        }
+        return Ok(false);
+    }
+    if workspace != "root" {
+        return Err(format!(
+            "experimental retention `{id}` is `product` but lives in workspace `{workspace}`; only root-workspace surfaces are product-owned"
+        ));
+    }
+    for (field, value) in clock_fields {
+        if value.is_some() {
+            return Err(format!(
+                "experimental retention `{id}` is product-owned and must not carry the retention-clock field `{field}`"
+            ));
+        }
+    }
+    Ok(true)
+}
+
 fn validate_experimental_retention(
     root: &Path,
     root_inventory: &BTreeMap<String, CargoPackageInventory>,
@@ -495,6 +545,7 @@ fn validate_experimental_retention(
     let surfaces = document["surface"]
         .as_array()
         .ok_or("experimental retention inventory must contain [[surface]] entries")?;
+    let today = current_unix_day()?;
     let mut ids = BTreeSet::new();
     for surface in surfaces {
         let table = surface
@@ -510,8 +561,6 @@ fn validate_experimental_retention(
             "decision_basis",
             "maturity",
             "last_measured_at",
-            "decision_by",
-            "removal_rule",
         ];
         for field in required_strings {
             if table
@@ -526,21 +575,27 @@ fn validate_experimental_retention(
         if !ids.insert(id) {
             return Err(format!("experimental retention id `{id}` is duplicated").into());
         }
-        let decision = parse_civil_day(table["decision_by"].as_str().expect("validated date"))?;
+        let status = table["status"].as_str().expect("validated status");
+        let workspace = table["workspace"].as_str().expect("validated workspace");
+        let is_product = classify_retention_status(
+            id,
+            status,
+            workspace,
+            table.get("decision_by").and_then(toml::Value::as_str),
+            table.get("removal_rule").and_then(toml::Value::as_str),
+        )?;
+        let decision = if is_product {
+            None
+        } else {
+            Some(parse_civil_day(
+                table["decision_by"].as_str().expect("validated date"),
+            )?)
+        };
         let measured =
             parse_civil_day(table["last_measured_at"].as_str().expect("validated date"))?;
-        if measured > decision {
+        if decision.is_some_and(|decision| measured > decision) {
             return Err(format!(
                 "experimental retention `{id}` was measured after its decision date"
-            )
-            .into());
-        }
-        // `status` must be a recognized governance state. Add new states here
-        // deliberately — an unrecognized status must never pass silently.
-        let status = table["status"].as_str().expect("validated status");
-        if !matches!(status, "pending" | "proven") {
-            return Err(format!(
-                "experimental retention `{id}` has unknown status `{status}` (expected `pending` or `proven`)"
             )
             .into());
         }
@@ -584,6 +639,20 @@ fn validate_experimental_retention(
         if workload_names.is_empty() {
             return Err(format!("experimental retention `{id}` has no workload").into());
         }
+        let evidence_uri = table
+            .get("evidence_uri")
+            .and_then(toml::Value::as_str)
+            .unwrap_or("");
+        let evidence_sha = table
+            .get("evidence_sha256")
+            .and_then(toml::Value::as_str)
+            .unwrap_or("");
+        let has_evidence = !evidence_uri.is_empty() || !evidence_sha.is_empty();
+        // A product-owned surface owes no retention verdict, but any evidence it
+        // does publish is held to the same bar as a `proven` surface: complete,
+        // verifiable, and above its threshold. That is what keeps individual
+        // optimizations evidence-gated once the engine itself is not.
+        let evidence_is_gated = status == "proven" || (is_product && has_evidence);
         let evidence_cases = table
             .get("evidence_cases")
             .and_then(toml::Value::as_array)
@@ -604,22 +673,13 @@ fn validate_experimental_retention(
             })
             .transpose()?
             .unwrap_or_default();
-        if status == "proven" && is_performance && evidence_cases.len() != workload_names.len() {
+        if evidence_is_gated && is_performance && evidence_cases.len() != workload_names.len() {
             return Err(format!(
                 "experimental retention `{id}` must map every workload to exactly one evidence case"
             )
             .into());
         }
-        let evidence_uri = table
-            .get("evidence_uri")
-            .and_then(toml::Value::as_str)
-            .unwrap_or("");
-        let evidence_sha = table
-            .get("evidence_sha256")
-            .and_then(toml::Value::as_str)
-            .unwrap_or("");
-        let has_evidence = !evidence_uri.is_empty() || !evidence_sha.is_empty();
-        if decision < current_unix_day()? && !has_evidence {
+        if decision.is_some_and(|decision| decision < today) && !has_evidence {
             return Err(format!(
                 "experimental retention `{id}` expired without immutable evidence; remove it or renew through an ADR"
             )
@@ -655,7 +715,7 @@ fn validate_experimental_retention(
             // resolved against the repo root and its digest verified.
             let is_remote =
                 evidence_uri.starts_with("http://") || evidence_uri.starts_with("https://");
-            if is_remote && status == "proven" && is_performance {
+            if is_remote && evidence_is_gated && is_performance {
                 return Err(format!(
                     "experimental retention `{id}` performance evidence must be repo-local so its measurements can be verified"
                 )
@@ -675,7 +735,7 @@ fn validate_experimental_retention(
                     )
                     .into());
                 }
-                if status == "proven" && is_performance {
+                if evidence_is_gated && is_performance {
                     verified_performance_gain = Some(
                         retention_evidence::minimum_verified_gain_percent(
                             &bytes,
@@ -691,7 +751,7 @@ fn validate_experimental_retention(
                 }
             }
         }
-        if status == "proven" && is_performance {
+        if evidence_is_gated && is_performance {
             let threshold = table
                 .get("minimum_end_to_end_gain_percent")
                 .and_then(toml::Value::as_integer)
@@ -715,7 +775,6 @@ fn validate_experimental_retention(
         {
             return Err(format!("experimental retention `{id}` needs a concrete @owner").into());
         }
-        let workspace = table["workspace"].as_str().expect("validated workspace");
         let inventory = match workspace {
             "root" => root_inventory,
             "experiments" => experiments_inventory,
@@ -1714,6 +1773,70 @@ mod tests {
         let samples = (1..=20).map(f64::from).collect::<Vec<_>>();
         assert_eq!(percentile(&samples, 0.50), 11.0);
         assert_eq!(percentile(&samples, 0.95), 20.0);
+    }
+
+    #[test]
+    fn product_owned_surfaces_drop_the_clock_and_stay_root_only() {
+        assert_eq!(
+            classify_retention_status("jit-cranelift-engine", "product", "root", None, None),
+            Ok(true)
+        );
+        assert_eq!(
+            classify_retention_status(
+                "aot-backend",
+                "proven",
+                "experiments",
+                Some("2026-12-31"),
+                Some("Remove if unused.")
+            ),
+            Ok(false)
+        );
+        // A product-owned surface must not keep a stale clock.
+        assert!(
+            classify_retention_status("jit-tier0", "product", "root", Some("2027-02-28"), None)
+                .is_err()
+        );
+        assert!(
+            classify_retention_status(
+                "jit-tier0",
+                "product",
+                "root",
+                None,
+                Some("Remove if slow.")
+            )
+            .is_err()
+        );
+        // An experiments-workspace surface cannot escape its clock by
+        // relabeling itself product-owned.
+        assert!(
+            classify_retention_status("aot-backend", "product", "experiments", None, None).is_err()
+        );
+        // A time-bounded surface still owes both clock fields.
+        assert!(
+            classify_retention_status(
+                "aot-model",
+                "pending",
+                "experiments",
+                Some("2026-12-31"),
+                None
+            )
+            .is_err()
+        );
+        assert!(
+            classify_retention_status("aot-model", "pending", "experiments", None, Some("Remove."))
+                .is_err()
+        );
+        assert!(
+            classify_retention_status(
+                "aot-model",
+                "pending",
+                "experiments",
+                Some("2026-12-31"),
+                Some("  ")
+            )
+            .is_err()
+        );
+        assert!(classify_retention_status("aot-model", "retired", "root", None, None).is_err());
     }
 
     #[test]

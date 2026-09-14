@@ -1,8 +1,18 @@
 schema = 2
 
-# Time-bounded evidence programs. `pending` entries may omit evidence until
+# Evidence programs for surfaces that are not yet part of the supported product.
+#
+# `pending` and `proven` entries are time-bounded: they carry a `decision_by`
+# date and a `removal_rule`. A `pending` entry may omit evidence until
 # decision_by; after that date validate-ci fails unless an ADR extends the date
 # or the surface is removed. Extensions are limited to 90 days by review.
+#
+# `product` entries are product-owned (ADR 0233): the surface is part of the
+# product, so it is not a removal candidate and carries no clock. It must not
+# declare `decision_by` or `removal_rule`, and only root-workspace surfaces may
+# use it. Any evidence a `product` entry does declare is verified exactly as a
+# `proven` entry's is, so individual optimizations stay evidence-gated by the
+# scorecard even though the engine itself is not on a retention clock.
 
 [[surface]]
 id = "jit-tier0"
@@ -10,22 +20,21 @@ workspace = "root"
 kind = "internal"
 package = "rsscript-vm"
 owner = "@Haofei"
-status = "pending"
+# Product-owned (ADR 0233). Tier 0 owns the `native_status` tiering the supported
+# native engine rides on; it is not a removal candidate and has no decision date.
+status = "product"
 decision_basis = "local-performance"
 maturity = "experimental"
 last_measured_at = "2026-08-31"
-# Extended from 2026-11-30 by ADR 0230: two of the three named workloads
-# (mailbox-ring, closure-dynamic) are unsupported_by_canonical_compiler, so the
-# surface cannot be given a clean Prove verdict yet. 90-day review cap.
-decision_by = "2027-02-28"
+# The named workloads stay listed as the coverage target, not as a survival
+# test: string-text clears the bar, while mailbox-ring and closure-dynamic are
+# still unsupported_by_canonical_compiler (ADR 0230) and remain open native
+# coverage work. The threshold is the bar a tier-0 optimization must clear to
+# be kept, measured through the scorecard in benchmarks/vm-jit.
 workloads = ["string-text", "mailbox-ring", "closure-dynamic"]
 minimum_end_to_end_gain_percent = 10
-# Only string-text is currently measurable; mailbox-ring and closure-dynamic are
-# unsupported_by_canonical_compiler (ADR 0230). Pending entries do not claim a
-# measured gain until every workload has immutable evidence.
 evidence_uri = ""
 evidence_sha256 = ""
-removal_rule = "Remove or merge into the interpreter if controlled fallback workloads do not show a repeatable 10-15% gain."
 
 [[surface]]
 id = "jit-cranelift-engine"
@@ -33,11 +42,13 @@ workspace = "root"
 kind = "cargo_package"
 package = "rsscript-jit-cranelift"
 owner = "@Haofei"
-status = "proven"
+# Product-owned (ADR 0233): a required VM tier under active development, not a
+# preview awaiting a retention verdict. The scorecard evidence below stays
+# attached and verified, because each optimization still has to earn its place.
+status = "product"
 decision_basis = "local-performance"
 maturity = "experimental"
 last_measured_at = "2026-08-31"
-decision_by = "2026-11-30"
 workloads = ["native-scalar", "native-call", "native-read-heap"]
 evidence_cases = ["scalar-loop", "native-call-chain", "list-read-loop"]
 minimum_end_to_end_gain_percent = 15
@@ -48,7 +59,6 @@ minimum_end_to_end_gain_percent = 15
 # the maintainer's local-first decision (not controlled hardware).
 evidence_uri = "benchmarks/vm-jit/baseline/local-linux-aarch64.json"
 evidence_sha256 = "f0767cb60591f635bbc8d3dc06851e64d42dd1a233406ab8845d8889cda0efdd"
-removal_rule = "Keep as a preview-only engine until controlled workloads justify a supported optional release surface."
 
 [[surface]]
 id = "aot-backend"
