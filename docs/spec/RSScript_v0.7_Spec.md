@@ -184,3 +184,12 @@ sandbox.
 This revision intentionally provides no compatibility aliases or legacy artifact
 reader for the removed language surface. Old sources must be migrated to ordinary
 declarations, structured `retains(param)`, `Dyn<P>`, and explicit host packages.
+
+## See also
+
+[RSScript Semantics v0.7](RSScript_Semantics_v0.7.md) is the source-backed
+companion reference: it derives each rule in this specification from the
+implementing file in `crates/rsscript-syntax` and `crates/rsscript-semantics`,
+gives a verified accepted and rejected example for every rule, states explicitly
+where behaviour is unspecified, and indexes every `RS` diagnostic code to the
+rule it enforces.
