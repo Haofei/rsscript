@@ -76,10 +76,12 @@ plus a diagnostic message instead of a bare string error.
 The bytecode VM interpreter is the reference execution model. Rust AOT, native
 plugins, REIR, and self-hosting remain optional Experimental, Integration, or
 Research surfaces. The Cranelift tier is an explicit trusted-host performance
-feature of the VM: it consumes the same verified bytecode, cannot be selected by
-source or Artifact, and does not change language validity. Bounded and isolated
+feature of the VM and a required part of the product for CPU-bound embedded
+workloads: it consumes the same verified bytecode, cannot be selected by source
+or Artifact, and does not change language validity. Bounded and isolated
 execution continue to use the interpreter until native execution provides the
-same deterministic accounting.
+same deterministic accounting; closing that gap is roadmap work, not a
+retention question.
 
 Language, Artifact, runtime ABI, and Provider compatibility are independent,
 fail-closed contracts defined in [compatibility.md](compatibility.md).

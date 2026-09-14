@@ -21,7 +21,7 @@ regression value and does not drive the product roadmap.
 | Reference isolated runner | Experimental | On in CLI | Runner protocol v1 and process limits |
 | Host providers | Experimental | Explicit | Provider ABI and runner configuration |
 | Rust AOT backend | Experimental | Off | Differential parity with reference VM |
-| Cranelift JIT, OSR, deopt | Experimental | Explicit trusted host | Differential parity, safe fallback, and workload evidence |
+| Cranelift JIT, OSR, deopt | Experimental (active) | Explicit trusted host | Differential parity, safe fallback, and workload evidence; see [roadmap.md](roadmap.md) |
 | Native plugins | Experimental | Off | Trusted provider boundary only |
 | REIR review | Integration | Off | Consumes neutral analysis and metadata |
 | Self-host frontend and C backend | Research | Off | Corpus and parity regression harness |
@@ -30,10 +30,13 @@ A feature is not promoted by implementation count. Promotion requires a stable
 contract, conformance coverage, bounded failure behavior, supported-platform CI,
 and a threat model consistent with [threat-model.md](threat-model.md).
 
-Rust AOT, Cranelift JIT, REIR, and self-hosting are not feature-development
-targets in this matrix. They accept only correctness, security, dependency, and
-regression maintenance. The generation-oracle work does not split this
-repository, delete a backend, or reorder the Cargo workspace.
+Rust AOT, REIR, and self-hosting are not feature-development targets in this
+matrix. They accept only correctness, security, dependency, and regression
+maintenance. The Cranelift JIT is different: it is a required VM tier under
+active development, and its Experimental maturity records that its accounting
+and platform contracts are still converging, not that it is a removal
+candidate. The generation-oracle work does not split this repository, delete a
+backend, or reorder the Cargo workspace.
 
 ## Language conformance
 

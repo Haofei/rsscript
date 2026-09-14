@@ -136,9 +136,10 @@ cargo test --workspace
 ```
 
 These are the Core workspace checks. AOT, REIR, and self-hosting are isolated
-experiments. Native JIT is an explicit trusted-host performance feature and is
-absent from the normal Core verification closure; its correctness and workload
-evidence run separately.
+experiments. Native JIT is a required trusted-host performance tier of the VM
+under active development; it is feature-gated out of the default Core
+verification closure, and its correctness and workload evidence run separately
+(see [`docs/roadmap.md`](docs/roadmap.md)).
 
 The normative language description is in
 [`docs/spec/RSScript_v0.7_Spec.md`](docs/spec/RSScript_v0.7_Spec.md), and the layer

@@ -51,7 +51,7 @@ compiler, or trust boundary.
    all four generation modes with caller-supplied model samples. Evaluations may
    demonstrate progress, but no incomplete query result is a successful compile
    or an execution authorization.
-5. Preserve the one-way experimental boundary. JIT, Rust AOT, REIR, and
+5. Preserve the one-way experimental boundary. Rust AOT, REIR, and
    self-hosting accept only correctness, security, dependency, and regression
    maintenance; they do not gain roadmap feature work or become default SDK,
    VM, or CLI dependencies.
@@ -60,14 +60,36 @@ compiler, or trust boundary.
    work. Keep `rsscript.bytecode.v1`, host deployment boundaries, and the
    capture/build/verify/inspect/default-isolated-run golden path intact.
 
+## Parallel priority: native JIT as a supported VM tier
+
+The Cranelift JIT is a required part of the product, not an experiment awaiting
+a retention verdict. CPU-bound embedded workloads need native execution, and
+the interpreter alone does not meet that need. The JIT remains an opt-in VM
+feature that consumes the same verified bytecode and cannot be selected by
+source or Artifact, and the interpreter remains the semantic oracle for every
+native path. Within those invariants, JIT work is active feature work:
+
+1. Close the accounting gap: native execution must report the same
+   deterministic step, allocation, cancellation, and deadline facts as the
+   interpreter, so bounded and isolated execution can use it.
+2. Grow native coverage of the language so fewer regions fall back to the
+   interpreter, with differential parity gates for every new region kind.
+3. Keep the controlled workload scorecard as the evidence for each
+   optimization; measured regressions are removed, but the engine itself is
+   not a removal candidate.
+4. Promote the engine to Core once accounting parity, supported-platform CI,
+   and the threat model align, following [feature-matrix.md](feature-matrix.md).
+
 ## Frozen scope
 
 Until the priorities above are complete, do not expand language syntax, public
-intrinsics, JIT tiers or speculation, the C backend, full self-host bootstrap,
-package publishing, native plugin surface, or language-level policy. Correctness,
-security boundary, maintenance, and measured-regression fixes remain allowed.
+intrinsics, speculative JIT tiers without scorecard evidence, the C backend,
+full self-host bootstrap, package publishing, native plugin surface, or
+language-level policy. Correctness, security boundary, maintenance, and
+measured-regression fixes remain allowed.
 
-Rust AOT and Cranelift JIT stay Experimental. REIR stays an Integration.
-Self-hosting stays Research. For these four surfaces, allowed changes are
-limited to correctness, security, dependency, and regression maintenance;
-promotion follows the criteria in [feature-matrix.md](feature-matrix.md).
+Rust AOT stays Experimental. REIR stays an Integration. Self-hosting stays
+Research. For these three surfaces, allowed changes are limited to correctness,
+security, dependency, and regression maintenance. The Cranelift JIT is
+Experimental in maturity but is an active product surface; its promotion
+follows the criteria in [feature-matrix.md](feature-matrix.md).
