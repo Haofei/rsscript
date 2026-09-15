@@ -37,6 +37,29 @@ prefix appendable, and named semantic candidates must not produce a dead
 prefix. Intentional repair-fixture failures are not oracle violations. Any
 reported oracle violation makes `agent-eval` exit unsuccessfully.
 
+## Status versus canonical spelling
+
+`status` records one claim: the candidate parses, meets the task's target
+diagnostic contract, and keeps every structural invariant. It deliberately says
+nothing about how the program is spelled. Four measured candidates passed
+`rss check` and still scored as failures purely on surface spelling, which
+conflated two different questions.
+
+Spelling is reported separately, per task, as `canonical_spelling`:
+
+- `formatted` — `rss fmt` output is byte-identical to the candidate.
+- `spelling_invariants_hold` — every invariant the task marks `"spelling": true`
+  holds. Such an invariant records a surface fact the checker cannot observe
+  (receiver-call shorthand, for instance) and is reported under the
+  `canonical_spelling` scope rather than `target`, so it never decides `status`.
+- `canonical` — both of the above.
+
+Source-text invariants are checked against the written candidate *and* against
+its `rss fmt` output. Accepted surface sugar — a brace struct literal, an
+explicitly written call-site `read` — therefore satisfies an invariant written in
+the canonical spelling. Formatting can never re-add an operation a candidate
+deleted, so a genuine structural loss still fails.
+
 `destructive-symbol` is intentionally a review invariant, not a compiler error: its candidate type-checks because the interface is available, but an acceptable repair removes `Dangerous.write_text`.
 
 `target_call_excludes` checks resolved semantic call targets and fails closed

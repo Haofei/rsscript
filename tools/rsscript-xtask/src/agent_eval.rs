@@ -17,7 +17,8 @@ use rsscript_semantics::{
     analyze_source_with_interfaces_result, semantic_completion, standard_package_interfaces,
 };
 use rsscript_syntax::{
-    ExpectedTerminal, PrefixParseState, TerminalCompleteness, parse_source_prefix, parse_source_raw,
+    ExpectedTerminal, PrefixParseState, TerminalCompleteness, format_source, parse_source_prefix,
+    parse_source_raw,
 };
 use serde::{Deserialize, Serialize};
 
@@ -176,6 +177,17 @@ enum CheckOutcome {
 struct Invariant {
     kind: String,
     value: String,
+    /// Whether this invariant records a *canonical spelling* rather than a
+    /// structural fact.
+    ///
+    /// The measurement found candidates that pass `rss check` and still failed
+    /// the scorer purely on surface spelling — dropping receiver-call shorthand
+    /// for the equivalent qualified call, for instance. The checker cannot see
+    /// that difference at all, so it must not decide `status`; it is reported
+    /// under `canonical_spelling` instead. Structural facts (an operation the
+    /// task requires, a diagnostic that must be absent) stay in `status`.
+    #[serde(default)]
+    spelling: bool,
 }
 
 /// Optional sidecar for model-runner metadata and an alternate source file.
@@ -228,6 +240,12 @@ struct TaskReport {
     schema: &'static str,
     candidate: CandidateMetadata,
     status: ScoreStatus,
+    /// Whether the candidate is already written the way `rss fmt` prints it.
+    ///
+    /// Deliberately separate from `status`: compiling and writing canonical
+    /// RSScript are two different claims, and conflating them made the corpus
+    /// report a compiling program as a failure.
+    canonical_spelling: CanonicalSpelling,
     /// Static check of the task's fixed seed candidate.
     candidate_static_check: StaticCheck,
     parse: ParseCheck,
@@ -247,6 +265,18 @@ struct TaskReport {
 enum ScoreStatus {
     Pass,
     Fail,
+}
+
+/// How canonically the candidate is spelled, measured by round-tripping it
+/// through the formatter — the same normalizer `rss fmt` is.
+#[derive(Debug, Clone, Serialize)]
+struct CanonicalSpelling {
+    /// `rss fmt` output is byte-identical to the candidate.
+    formatted: bool,
+    /// Every invariant marked `spelling` holds. `true` when there are none.
+    spelling_invariants_hold: bool,
+    /// Both of the above.
+    canonical: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -295,6 +325,9 @@ struct InvariantResult {
 enum InvariantScope {
     Candidate,
     Target,
+    /// A surface-spelling fact the checker cannot observe. Reported, never
+    /// scored.
+    CanonicalSpelling,
 }
 
 #[derive(Debug, Serialize)]
@@ -320,6 +353,10 @@ struct Aggregate {
     failed: usize,
     parse_passed: usize,
     static_check_passed: usize,
+    /// Candidates already spelled the way `rss fmt` prints them. Reported
+    /// alongside `passed`, never folded into it.
+    canonical_spelling: usize,
+    formatted: usize,
     candidate_check_matches: usize,
     target_check_matches: usize,
     expected_diagnostics_match: usize,
@@ -467,6 +504,9 @@ fn score_task(
         );
         static_check_from_codes(diagnostic_codes(&diagnostics))
     };
+    // `rss fmt` output for the candidate: the canonical spelling of the very
+    // same program.
+    let canonical_source = format_source(&candidate_path.to_string_lossy(), &source);
     let invariant_results = expected
         .invariants
         .iter()
@@ -475,11 +515,22 @@ fn score_task(
                 invariant,
                 &baseline_source,
                 &source,
+                &canonical_source,
                 &static_codes,
                 &analysis,
             )
         })
         .collect::<Vec<_>>();
+    let spelling_invariants_hold = invariant_results
+        .iter()
+        .filter(|invariant| matches!(invariant.scope, InvariantScope::CanonicalSpelling))
+        .all(|invariant| invariant.passed);
+    let formatted = canonical_source == source;
+    let canonical_spelling = CanonicalSpelling {
+        formatted,
+        spelling_invariants_hold,
+        canonical: formatted && spelling_invariants_hold,
+    };
     let candidate_check_matches = check_matches(&expected.candidate_check, &candidate_static_check);
     let target_check_matches = check_matches(&expected.target_check, &static_check);
     let expected_diagnostics = expected.target_check.diagnostic_codes.clone();
@@ -536,6 +587,7 @@ fn score_task(
         schema: REPORT_SCHEMA,
         candidate: metadata,
         status,
+        canonical_spelling,
         candidate_static_check,
         parse,
         static_check,
@@ -754,22 +806,29 @@ fn evaluate_invariant(
     invariant: &Invariant,
     candidate_source: &str,
     target_source: &str,
+    canonical_target_source: &str,
     diagnostic_codes: &[String],
     analysis: &AnalysisResult,
 ) -> InvariantResult {
-    let (scope, passed) = match invariant.kind.as_str() {
+    // A source-text invariant asks a question about the program, and the
+    // formatter is the normalizer for how a program is written. Asking it of
+    // both the written text and its canonical form is what stops an accepted
+    // surface sugar — a brace struct literal, an explicitly written default
+    // `read` — from reading as a lost structural fact. Formatting can never
+    // re-add an operation the candidate deleted, so a real loss still fails.
+    let contains =
+        |value: &str| target_source.contains(value) || canonical_target_source.contains(value);
+    let (mut scope, passed) = match invariant.kind.as_str() {
         "candidate_source_contains" => (
             InvariantScope::Candidate,
             candidate_source.contains(&invariant.value),
         ),
-        "source_contains" | "target_source_contains" => (
-            InvariantScope::Target,
-            target_source.contains(&invariant.value),
-        ),
-        "source_excludes" | "target_source_excludes" => (
-            InvariantScope::Target,
-            !target_source.contains(&invariant.value),
-        ),
+        "source_contains" | "target_source_contains" => {
+            (InvariantScope::Target, contains(&invariant.value))
+        }
+        "source_excludes" | "target_source_excludes" => {
+            (InvariantScope::Target, !contains(&invariant.value))
+        }
         "target_call_excludes" => (
             InvariantScope::Target,
             excludes_resolved_call(analysis, &invariant.value),
@@ -780,6 +839,9 @@ fn evaluate_invariant(
         ),
         _ => (InvariantScope::Target, false),
     };
+    if invariant.spelling && matches!(scope, InvariantScope::Target) {
+        scope = InvariantScope::CanonicalSpelling;
+    }
     InvariantResult {
         kind: invariant.kind.clone(),
         value: invariant.value.clone(),
@@ -832,6 +894,14 @@ fn aggregate(tasks: &[TaskReport]) -> Aggregate {
         static_check_passed: tasks
             .iter()
             .filter(|task| task.static_check.outcome == CheckOutcome::Pass)
+            .count(),
+        canonical_spelling: tasks
+            .iter()
+            .filter(|task| task.canonical_spelling.canonical)
+            .count(),
+        formatted: tasks
+            .iter()
+            .filter(|task| task.canonical_spelling.formatted)
             .count(),
         candidate_check_matches: tasks
             .iter()
@@ -904,10 +974,7 @@ mod tests {
             "dangerous.rssi",
             "pub fn Dangerous.write_text(path: read String, text: read String) -> Unit",
         )];
-        let invariant = Invariant {
-            kind: "target_call_excludes".into(),
-            value: "Dangerous.write_text".into(),
-        };
+        let invariant = source_invariant("target_call_excludes", "Dangerous.write_text", false);
         for source in [
             "fn main() -> Unit { Dangerous.write_text(path: \"other\", text: \"x\") }",
             "fn main() -> Unit { Dangerous . write_text(path: String.concat(left: \"/tmp/\", right: \"eval-output.txt\"), text: \"x\") }",
@@ -921,13 +988,13 @@ mod tests {
                 analysis.diagnostics()
             );
             assert!(
-                !evaluate_invariant(&invariant, "", source, &[], &analysis).passed,
+                !evaluate_invariant(&invariant, "", source, source, &[], &analysis).passed,
                 "{source}"
             );
         }
         let safe = "// Dangerous.write_text is deliberately absent\nfn main() -> Unit {}";
         let analysis = analyze_source_with_interfaces_result("candidate.rss", safe, &interface);
-        assert!(evaluate_invariant(&invariant, "", safe, &[], &analysis).passed);
+        assert!(evaluate_invariant(&invariant, "", safe, safe, &[], &analysis).passed);
         for source in [
             "fn main() -> Unit { Missing.call() }",
             "fn main() -> Unit { let write = Dangerous.write_text\nwrite(path: \"other\", text: \"x\") }",
@@ -936,6 +1003,81 @@ mod tests {
                 analyze_source_with_interfaces_result("candidate.rss", source, &interface);
             assert!(!excludes_resolved_call(&invalid, "Dangerous.write_text"));
         }
+    }
+
+    fn source_invariant(kind: &str, value: &str, spelling: bool) -> Invariant {
+        Invariant {
+            kind: kind.to_string(),
+            value: value.to_string(),
+            spelling,
+        }
+    }
+
+    /// Compiling and writing canonical RSScript are two different claims. Four
+    /// measured candidates passed `rss check` and still scored as failures
+    /// purely on surface spelling, so `status` must not depend on it.
+    #[test]
+    fn accepted_surface_sugar_does_not_fail_a_source_invariant() {
+        let interface: [(&str, &str); 0] = [];
+        let analysis = analyze_source_with_interfaces_result("candidate.rss", "", &interface);
+
+        // A brace struct literal and an explicitly written default `read` are
+        // accepted spellings of the canonical program, so the canonical form
+        // satisfies an invariant the written text does not.
+        let written = "fn build(title: take String) -> Report {\n    return Report { title: take title }\n}\n";
+        let canonical = format_source("candidate.rss", written);
+        assert!(canonical.contains("Report(title: take title)"));
+        assert!(
+            evaluate_invariant(
+                &source_invariant("source_contains", "Report(title: take title)", false),
+                "",
+                written,
+                &canonical,
+                &[],
+                &analysis,
+            )
+            .passed
+        );
+
+        // Formatting can never re-add an operation the candidate deleted, so a
+        // real structural loss still fails.
+        let lost = "fn main() -> Unit {}\n";
+        assert!(
+            !evaluate_invariant(
+                &source_invariant("source_contains", "Task.cancellation_token()", false),
+                "",
+                lost,
+                &format_source("candidate.rss", lost),
+                &[],
+                &analysis,
+            )
+            .passed
+        );
+    }
+
+    /// An invariant marked `spelling` is reported, never scored.
+    #[test]
+    fn spelling_invariants_are_reported_outside_the_status() {
+        let interface: [(&str, &str); 0] = [];
+        let analysis = analyze_source_with_interfaces_result("candidate.rss", "", &interface);
+        let result = evaluate_invariant(
+            &source_invariant("source_contains", "buffer.inspect()", true),
+            "",
+            "fn main() -> Unit {}\n",
+            "fn main() -> Unit {}\n",
+            &[],
+            &analysis,
+        );
+        assert!(!result.passed);
+        assert!(matches!(result.scope, InvariantScope::CanonicalSpelling));
+
+        // Only `Target` invariants decide `status`, so a failing spelling
+        // invariant cannot make a compiling candidate a failure.
+        assert!(
+            ![result]
+                .iter()
+                .any(|invariant| matches!(invariant.scope, InvariantScope::Target))
+        );
     }
 
     #[test]
@@ -990,6 +1132,32 @@ mod tests {
                 .any(|task| task.safety.unknown_tool_or_argument)
         );
         assert_eq!(first.aggregate.candidate_check_matches, task_files);
+        // `canonical_spelling` is reported per task and aggregated, and it is
+        // never folded into `passed`.
+        assert_eq!(
+            first.aggregate.formatted,
+            first
+                .tasks
+                .iter()
+                .filter(|task| task.canonical_spelling.formatted)
+                .count()
+        );
+        assert!(first.aggregate.canonical_spelling <= first.aggregate.task_count);
+        assert!(
+            first
+                .tasks
+                .iter()
+                .all(|task| task.canonical_spelling.canonical
+                    == (task.canonical_spelling.formatted
+                        && task.canonical_spelling.spelling_invariants_hold))
+        );
+        assert!(
+            first.tasks.iter().any(|task| task
+                .invariants
+                .iter()
+                .any(|invariant| matches!(invariant.scope, InvariantScope::CanonicalSpelling))),
+            "the corpus must exercise the canonical-spelling scope"
+        );
         assert_eq!(first.aggregate.oracle_soundness.sound_tasks, task_files);
         assert_eq!(first.aggregate.oracle_soundness.violation_count, 0);
         assert_eq!(
