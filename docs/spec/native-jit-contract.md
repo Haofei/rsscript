@@ -188,6 +188,14 @@ delta into a transaction-local cell that is committed only with the heap
 transaction. Every other allocating or replacing helper and every native-call
 edge fails closed.
 
+The proof is per region, and every region is offered it. A function that declines
+because it contains a call does not take its callees down with it: the
+interpreter runs the calling function, pushes a real frame per call, and each
+callee is admitted or declined on its own proof. `fn main() { ... hot(200000)
+... }` under `RunnerLimitsV1::default()` therefore executes the helper natively —
+whole-function for a scalar helper, OSR for a `List.push` helper — while `main`
+itself stays interpreted. Gap 4 below is what remains: the *calling* region.
+
 ### Recursion depth
 
 **Equivalent, or declined.** `RegionCallControls::logical_depth` forwards the
@@ -311,14 +319,43 @@ accounting segment rather than by one instruction.
    Artifact verification with `invalid typed executable facts: typed call
    parameter disagrees with its argument register` before they reach the JIT at
    all, which is a separate defect outside this contract.
-4. **Allocation controls still need a per-region proof.** See "Allocation bytes"
-   above: whole-function entry admits an armed `allocation_budget` or
-   `live_memory_limit` only for a body that cannot grow retained storage, which a
-   function containing *any* call is not. A `main` that calls a hot helper
-   therefore reaches no native tier under the default runner profile even though
-   the helper itself would qualify, because the call site is what is offered to
-   `attempt_native` first and the helper alone never crosses the tier-up
-   threshold.
+4. **A region containing a call still needs a per-region allocation proof.** See
+   "Allocation bytes" above: whole-function entry admits an armed
+   `allocation_budget` or `live_memory_limit` only for a body that cannot grow
+   retained storage, which a function containing *any* call is not.
+   `whole_function_memory_controls_supported` is unchanged, and the reason it is
+   unchanged is concrete rather than conservative: the interpreter charges a
+   called frame's register-window growth through `RegVm::ensure_regs`
+   (`crates/rsscript-vm/src/reg_vm/exec.rs`), which bills
+   `grew * (size_of::<VmValue>() + 1)` against the high-water mark of the shared
+   register stack. That charge is data-dependent on the stack depth at the call,
+   so an inlined callee body or a native-to-native edge has no compile-time
+   constant to reserve it with, and the region declines rather than
+   under-reporting. Threading the memory controls through the call edge the way
+   the step and intrinsic cells were threaded would still leave that charge
+   unattributed.
+
+   What this no longer costs is the *callee*. A `main` that calls a hot helper
+   now runs the helper natively under the default runner profile, on the helper's
+   own proof: `main` declines whole-function entry exactly as before, and the
+   interpreter's `CallKnown` pushes a real frame for the helper, which
+   `RegVm::attempt_native` then admits (a scalar body cannot grow storage) or
+   which OSR admits through the `List.push` transaction cell. Nothing tiers "up"
+   by call count — `JitState::call_count` is a constant `0` and there is no
+   tier-up threshold for whole-function entry, which is offered on every fresh
+   frame. What used to hide the helper was the tier-0 executor: `RegVm::run_jit`
+   (`crates/rsscript-vm/src/reg_vm/tier/jit_entry.rs`) runs a whole call tree
+   inside one frame, executing a `CallKnown` to a pure-leaf callee through
+   `run_jit_pure_leaf` instead of pushing a frame, so the callee never re-entered
+   `RegVm::drive` and was never offered to the native tier at all. `drive`
+   (`crates/rsscript-vm/src/reg_vm/exec_ops.rs`) now keeps such a frame on the
+   interpreter loop whenever the native engine is active and
+   `JitState::tier0_hides_native_callee` reports that tier-0 would swallow a
+   callee that is not yet `NATIVE_STATUS_NOT_ELIGIBLE`. The check reads each
+   callee's current status, so a callee whose native attempt reaches an invariant
+   decline returns its caller to tier-0. Step and allocation accounting are
+   identical across that switch: both paths tick once per source instruction and
+   both open the callee window through `prepare_frame` -> `ensure_regs`.
 
 `rss run --trusted-in-process --native`
 (`crates/rsscript-cli/src/cli/runner.rs`) now keeps
@@ -328,8 +365,9 @@ path runs under - instead of replacing it with
 `intrinsic_call_budget: 1_000_000` and sets `max_depth: 256` against the VM's
 `DEFAULT_MAX_DEPTH` of `16_384`, both of which used to refuse every
 whole-function and OSR region; neither does now. `--native` selects an
-accelerator, not a trust level. Gap 4 is why a program whose hot loop lives in a
-called helper still reaches no native tier under that profile.
+accelerator, not a trust level. A program whose hot loop lives in a called helper
+now reaches the native tier under that profile too; what gap 4 still costs is
+native entry for the *calling* region, not for the helper.
 
 ### Measured cost of unconditional accounting
 
@@ -348,7 +386,12 @@ accounting armed only when a control is armed:
 Only the third shape ships. Adding the intrinsic meter on the same charge points
 measured within run-to-run noise on the same gate (native median 1.65 ms against
 1.61 ms over four paired runs), because the gate's hot loop dispatches no
-intrinsic and therefore materializes no second counter at all. The first two are recorded because they are the
+intrinsic and therefore materializes no second counter at all. Keeping a frame
+whose tier-0 run would swallow a native-eligible callee on the interpreter loop
+(gap 4) emits no different code and measured 1.83 ms against 1.79 ms over four
+interleaved paired runs, within noise on the same gate: the gate's own `main`
+was never tier-0 eligible, because its `Output.write` barrier is not a tier-0
+instruction. The first two are recorded because they are the
 obvious implementations and both miss the gate's ~10% budget; what costs is the
 per-segment reservation bail site and the live `steps_resume` variable, not the
 counting.
@@ -402,6 +445,18 @@ logical frame limit, and
 `the_default_runner_limit_profile_still_admits_native_dispatch` /
 `..._still_stops_an_over_budget_native_run` cover the whole default runner
 profile that `rss run --trusted-in-process --native` now keeps.
+`a_called_hot_helper_reaches_native_under_the_default_runner_limits` covers the
+`fn main() { ... hot(200000) ... }` shape under that profile for a scalar helper
+and for a `List.push` helper, pinning `native_calls + osr_entries > 0` alongside
+the interpreter's outcome, `steps_consumed`, `intrinsic_calls`, allocation bytes,
+peak live memory, and live memory at return.
+`a_called_hot_helper_stops_on_the_interpreter_memory_reason` pins the same facts
+when the ceiling trips: an allocation budget and a live-memory limit that run out
+inside a growing helper *after* a scalar helper has already executed natively
+(so the ceiling is enforced against a partly native run rather than by refusing
+dispatch), and an allocation budget one byte short of the scalar shape's
+completed usage, which must trip on the register-window growth
+`RegVm::ensure_regs` charges when the callee's frame is opened.
 `crates/rsscript-cli/tests/cli.rs` covers the CLI itself end to end:
 `trusted_native_execution_keeps_the_default_runner_step_budget` and
 `trusted_native_execution_still_engages_under_the_default_runner_limits`. The CLI
