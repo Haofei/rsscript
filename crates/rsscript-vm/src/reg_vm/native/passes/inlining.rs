@@ -285,11 +285,36 @@ pub(in crate::reg_vm) fn native_inline_leaf_calls(
     j3: bool,
     loop_region: Option<(usize, usize)>,
 ) -> Option<(Vec<RegInstr>, usize, Vec<usize>)> {
-    native_inline_leaf_calls_inner(unit, func, profile, call_count, j3, loop_region, &|_| false)
+    let (code, n_regs, ip_map, _accounting) =
+        native_inline_leaf_calls_inner(unit, func, profile, call_count, j3, loop_region, &|_| {
+            false
+        })?;
+    Some((code, n_regs, ip_map))
 }
 
+/// Exact interpreter source-step accounting for one inline-pass result.
+///
+/// The inliner splices a callee body into the caller's instruction stream, where
+/// it has no distinct bytecode position. Without this table every spliced
+/// instruction collapses onto the caller's call ip and the whole callee body —
+/// including its loops — owns zero source steps, so a natively executed region
+/// under-reports usage and can run past an armed step budget.
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) fn native_inline_leaf_calls_preserving_known_calls(
+pub(in crate::reg_vm) struct NativeInlineAccounting {
+    /// Interpreter source steps owned by each transformed instruction.
+    pub(in crate::reg_vm) source_cost: Vec<u32>,
+    /// Transformed instructions belonging to an inlined callee region (its
+    /// argument marshalling, dispatch scaffolding and spliced body). A deopt
+    /// inside such a region resumes by re-executing the caller's call, so its
+    /// charge must be rolled back rather than reported.
+    pub(in crate::reg_vm) inlined: Vec<bool>,
+}
+
+/// Like [`native_inline_leaf_calls_preserving_known_calls`], but also returns the
+/// exact per-instruction source-step accounting for the rewritten stream.
+#[cfg(feature = "native-jit")]
+#[allow(clippy::type_complexity)]
+pub(in crate::reg_vm) fn native_inline_leaf_calls_preserving_known_calls_with_accounting(
     unit: &RegUnit,
     func: &RegFunction,
     profile: Option<&FunctionProfile>,
@@ -297,7 +322,7 @@ pub(in crate::reg_vm) fn native_inline_leaf_calls_preserving_known_calls(
     j3: bool,
     loop_region: Option<(usize, usize)>,
     preserve_call_known: &std::collections::HashSet<usize>,
-) -> Option<(Vec<RegInstr>, usize, Vec<usize>)> {
+) -> Option<(Vec<RegInstr>, usize, Vec<usize>, NativeInlineAccounting)> {
     native_inline_leaf_calls_inner(unit, func, profile, call_count, j3, loop_region, &|i| {
         preserve_call_known.contains(&i)
     })
@@ -312,7 +337,7 @@ fn native_inline_leaf_calls_inner(
     j3: bool,
     loop_region: Option<(usize, usize)>,
     preserve_call_known: &dyn Fn(usize) -> bool,
-) -> Option<(Vec<RegInstr>, usize, Vec<usize>)> {
+) -> Option<(Vec<RegInstr>, usize, Vec<usize>, NativeInlineAccounting)> {
     // A call at original index `i` is subject to inline-or-bail only if it lies in
     // the loop region (or no region was supplied ⇒ whole function in-scope).
     let in_region = |i: usize| match loop_region {
@@ -340,7 +365,15 @@ fn native_inline_leaf_calls_inner(
     });
     if !has_inlinable_call {
         let ip_map: Vec<usize> = (0..func.code.len()).collect();
-        return Some((func.code.clone(), func.regs, ip_map));
+        return Some((
+            func.code.clone(),
+            func.regs,
+            ip_map,
+            NativeInlineAccounting {
+                source_cost: vec![1; func.code.len()],
+                inlined: vec![false; func.code.len()],
+            },
+        ));
     }
 
     let direct_call_results: Vec<usize> = func
@@ -390,6 +423,11 @@ fn native_inline_leaf_calls_inner(
         j3: bool,
         new_code: &'a mut Vec<RegInstr>,
         ip_map: &'a mut Vec<usize>,
+        /// Transformed indices that own one *callee* interpreter source step.
+        /// The caller's own `CallKnown`/`CallClosure`/`SpawnTask` tick is charged
+        /// separately by the first-occurrence rule over `ip_map`, so this records
+        /// exactly the steps the interpreter would spend inside the callee body.
+        charged: &'a mut Vec<usize>,
         fixups: &'a mut Vec<(usize, Fix)>,
         splices: &'a mut Vec<Splice>,
         joins: &'a mut Vec<usize>,
@@ -399,6 +437,8 @@ fn native_inline_leaf_calls_inner(
     let mut new_code: Vec<RegInstr> = Vec::new();
     // `ip_map[transformed_ip] = original_ip`, grown in lockstep with `new_code`.
     let mut ip_map: Vec<usize> = Vec::new();
+    // Transformed indices owning one callee source step (see `SpliceContext`).
+    let mut charged: Vec<usize> = Vec::new();
     let mut index_map = vec![0usize; func.code.len()];
     let mut fixups: Vec<(usize, Fix)> = Vec::new();
     let mut splices: Vec<Splice> = Vec::new();
@@ -424,6 +464,7 @@ fn native_inline_leaf_calls_inner(
         let j3 = context.j3;
         let new_code = &mut *context.new_code;
         let ip_map = &mut *context.ip_map;
+        let charged = &mut *context.charged;
         let fixups = &mut *context.fixups;
         let splices = &mut *context.splices;
         let joins = &mut *context.joins;
@@ -464,6 +505,11 @@ fn native_inline_leaf_calls_inner(
                 ip_map.push(origin);
                 continue;
             }
+            // Exact source accounting: the interpreter spends one step on this
+            // callee instruction, so the first transformed item emitted for it owns
+            // that step. Register scaffolding (argument moves, join jumps, dispatch
+            // guards) owns none — it is not a source instruction.
+            charged.push(new_code.len());
             match cinstr {
                 RegInstr::SpawnTask {
                     dst: spawn_dst,
@@ -491,6 +537,7 @@ fn native_inline_leaf_calls_inner(
                             j3,
                             new_code,
                             ip_map,
+                            charged,
                             fixups,
                             splices,
                             joins,
@@ -837,6 +884,7 @@ fn native_inline_leaf_calls_inner(
                         j3,
                         new_code: &mut new_code,
                         ip_map: &mut ip_map,
+                        charged: &mut charged,
                         fixups: &mut fixups,
                         splices: &mut splices,
                         joins: &mut joins,
@@ -883,6 +931,7 @@ fn native_inline_leaf_calls_inner(
                         j3,
                         new_code: &mut new_code,
                         ip_map: &mut ip_map,
+                        charged: &mut charged,
                         fixups: &mut fixups,
                         splices: &mut splices,
                         joins: &mut joins,
@@ -1011,6 +1060,7 @@ fn native_inline_leaf_calls_inner(
                             j3,
                             new_code: &mut new_code,
                             ip_map: &mut ip_map,
+                            charged: &mut charged,
                             fixups: &mut fixups,
                             splices: &mut splices,
                             joins: &mut joins,
@@ -1169,7 +1219,56 @@ fn native_inline_leaf_calls_inner(
         }
     }
     debug_assert_eq!(ip_map.len(), new_code.len());
-    Some((new_code, next_reg, ip_map))
+    // Exact source accounting for the rewritten stream.
+    //
+    // A copy-through instruction keeps the one-to-one rule: the first transformed
+    // item produced for an original ip owns that instruction's single step. On top
+    // of that, every instruction spliced in from a callee body owns its own step,
+    // recorded by `splice_callee` in `charged`. The two together reproduce the
+    // interpreter exactly: one tick for the call itself, then one tick per callee
+    // instruction actually executed.
+    let mut source_cost = vec![0_u32; new_code.len()];
+    let mut seen_original = std::collections::HashSet::new();
+    for (transformed, &original) in ip_map.iter().enumerate() {
+        if seen_original.insert(original) {
+            source_cost[transformed] = 1;
+        }
+    }
+    let mut charged_mask = vec![false; new_code.len()];
+    for &transformed in &charged {
+        source_cost[transformed] = source_cost[transformed].checked_add(1)?;
+        charged_mask[transformed] = true;
+    }
+    // An inlined region is the contiguous run of transformed items produced for one
+    // original call instruction. `index_map` is monotonic, so each original ip owns
+    // `[index_map[i], index_map[i + 1])`.
+    let mut inlined = vec![false; new_code.len()];
+    for (i, instr) in func.code.iter().enumerate() {
+        let start = index_map[i];
+        let end = index_map.get(i + 1).copied().unwrap_or(new_code.len());
+        if end <= start {
+            continue;
+        }
+        let call_shaped = matches!(
+            instr,
+            RegInstr::CallKnown { .. } | RegInstr::CallClosure { .. } | RegInstr::SpawnTask { .. }
+        );
+        let spliced = charged_mask[start..end].iter().any(|charged| *charged);
+        if spliced || (call_shaped && end - start > 1) {
+            for slot in &mut inlined[start..end] {
+                *slot = true;
+            }
+        }
+    }
+    Some((
+        new_code,
+        next_reg,
+        ip_map,
+        NativeInlineAccounting {
+            source_cost,
+            inlined,
+        },
+    ))
 }
 
 /// JIT side-table native-status value: the function is known not native-eligible.

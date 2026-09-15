@@ -13,6 +13,7 @@ use osr_loop::*;
 mod type_infer;
 use type_infer::*;
 
+pub(in crate::reg_vm) use jit_post::native_source_cost_is_static;
 use jit_post::*;
 pub(in crate::reg_vm) use loop_regions::*;
 
@@ -228,16 +229,17 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
         .chain(self_call_sites.iter().copied())
         .chain(group_call_sites.keys().copied())
         .collect();
-    let (code, n_regs, ip_map) = native_inline_leaf_calls_preserving_known_calls(
-        unit,
-        func,
-        profile,
-        call_count,
-        false,
-        None,
-        &preserve_call_known,
-    )?;
-    let mut pipeline = NativePipelineState::new(code, n_regs, ip_map)?;
+    let (code, n_regs, ip_map, accounting) =
+        native_inline_leaf_calls_preserving_known_calls_with_accounting(
+            unit,
+            func,
+            profile,
+            call_count,
+            false,
+            None,
+            &preserve_call_known,
+        )?;
+    let mut pipeline = NativePipelineState::new(code, n_regs, ip_map, Some(accounting))?;
     let region_exit = native_whole_function_region_exit(&pipeline.code);
     let (code, n_regs, next_ip_map) = native_elide_readonly_full_list_slices_in_region(
         &pipeline.code,
@@ -1694,11 +1696,12 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     // parameter defaults to `Int` (and a mismatching argument then just falls back).
     let param_types: Vec<NativeTy> = native_reg_types[..func.params].to_vec();
 
-    let instruction_origins = origins
+    let mut instruction_origins = origins
         .iter()
         .copied()
         .map(NativeInstructionOrigin::to_jit)
         .collect::<Option<Vec<_>>>()?;
+    charge_native_key_hash_work(&jit_code, &mut instruction_origins);
 
     let jit_fn = vm_jit::JitFunction {
         n_params: func.params as u32,
