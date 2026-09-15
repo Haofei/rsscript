@@ -1,0 +1,61 @@
+struct ServiceConfig {
+    name: String,
+    port: Int,
+    enabled: Bool
+}
+
+fn describe_json_error(error: read JsonError) -> String {
+    return "invalid or missing json field"
+}
+
+fn load_config(text: read String) -> Result<fresh ServiceConfig, String> {
+    let parsed: Result<fresh JsonValue, JsonError> = Json.parse(text: text)
+    match parsed {
+        Ok(document) => {
+            let name_lookup: Result<String, JsonError> = Json.field_string(value: document, name: "name")
+            match name_lookup {
+                Ok(raw_name) => {
+                    local name = raw_name
+                    let port_lookup: Result<Int, JsonError> = Json.field_int(value: document, name: "port")
+                    match port_lookup {
+                        Ok(port) => {
+                            if port < 1 || port > 65535 {
+                                return Err("port must be between 1 and 65535")
+                            }
+                            let enabled_lookup: Result<Bool, JsonError> = Json.field_bool(value: document, name: "enabled")
+                            match enabled_lookup {
+                                Ok(enabled) => {
+                                    return Ok(ServiceConfig(name: take name, port: port, enabled: enabled))
+                                }
+                                Err(error) => {
+                                    return Err(describe_json_error(error: error))
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            return Err(describe_json_error(error: error))
+                        }
+                    }
+                }
+                Err(error) => {
+                    return Err(describe_json_error(error: error))
+                }
+            }
+        }
+        Err(error) => {
+            return Err(describe_json_error(error: error))
+        }
+    }
+}
+
+fn main() -> Unit {
+    let result: Result<ServiceConfig, String> = load_config(text: "{\"name\": \"payments\", \"port\": 8080, \"enabled\": true}")
+    match result {
+        Ok(config) => {
+            Output.write(message: config.name)
+        }
+        Err(message) => {
+            Output.write(message: message)
+        }
+    }
+}

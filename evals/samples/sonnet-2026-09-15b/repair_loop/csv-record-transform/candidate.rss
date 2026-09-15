@@ -1,0 +1,54 @@
+struct Record {
+    id: String,
+    amount: Int,
+}
+
+fn parse_record(line: read String) -> Result<fresh Record, String> {
+    let parts: List<String> = String.split(value: line, delimiter: ",")
+    if List.len(list: parts) != 2 {
+        return Err("expected exactly two fields")
+    }
+    local id = String.trim(value: List.get(list: parts, index: 0))
+    local amount_text = String.trim(value: List.get(list: parts, index: 1))
+    match String.parse_int(value: amount_text) {
+        Some(amount) => { return Ok(Record(id: take id, amount: amount)) }
+        None => { return Err("invalid amount") }
+    }
+}
+
+fn parse_all(text: read String) -> Result<fresh List<Record>, String> {
+    let mut records: List<Record> = List.new()
+    let lines: List<String> = String.split(value: text, delimiter: "\n")
+    for line in lines {
+        local trimmed = String.trim(value: line)
+        if !String.is_empty(value: trimmed) {
+            match parse_record(line: line) {
+                Ok(record) => {
+                    local rec = record
+                    List.push(list: mut records, value: manage rec)
+                }
+                Err(message) => { return Err(message) }
+            }
+        }
+    }
+    return Ok(records)
+}
+
+fn total_amount(records: read List<Record>) -> Int {
+    let mut total: Int = 0
+    for record in records {
+        total = total + record.amount
+    }
+    return total
+}
+
+fn main() -> Unit {
+    let document: String = "alice, 100\nbob, 250"
+    match parse_all(text: document) {
+        Ok(records) => {
+            let total: Int = total_amount(records: records)
+            Output.write(value: Int.to_string(value: total))
+        }
+        Err(message) => { Output.write(value: message) }
+    }
+}

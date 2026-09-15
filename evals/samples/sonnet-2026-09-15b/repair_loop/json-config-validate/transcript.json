@@ -1,0 +1,415 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 125933,
+    "check_ok": false,
+    "codes": [
+      "RS0021",
+      "RS0203",
+      "RS0204",
+      "RS0206",
+      "RS0207",
+      "RS0209"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0021",
+        "severity": "error",
+        "summary": "match statement is not exhaustive.",
+        "line": 8,
+        "label": "non-exhaustive match",
+        "causes": [
+          "Supported match statements must cover `Some`/`None`, `Ok`/`Err`, all sum type variants, or include `_`."
+        ],
+        "fixes": [
+          {
+            "title": "Add the missing variant arm or a final `_` fallback.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0207",
+        "severity": "error",
+        "summary": "binding `parsed` has initializer type `Result<fresh JsonValue, JsonError>`, expected `Result<Json, JsonError>`.",
+        "line": 22,
+        "label": "binding type mismatch",
+        "causes": [
+          "Explicit `let` and `local` type annotations are source-level contracts and must match the initializer before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Initialize `parsed` with a `Result<Json, JsonError>` value, or change the binding annotation.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Json.get_string` does not resolve.",
+        "line": 25,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Json.field_string`, `Json.at_string`, `Json.as_string`?",
+            "applicability": "machine-applicable",
+            "replacement": "Json.field_string",
+            "replace_line": 25,
+            "replace_column": 58,
+            "replace_length": 15
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Json.get_int` does not resolve.",
+        "line": 29,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Json.field_int`, `Json.at_int`?",
+            "applicability": "machine-applicable",
+            "replacement": "Json.field_int",
+            "replace_line": 29,
+            "replace_column": 63,
+            "replace_length": 12
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Json.get_bool` does not resolve.",
+        "line": 35,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Json.field_bool`, `Json.at_bool`, `Json.as_bool`?",
+            "applicability": "machine-applicable",
+            "replacement": "Json.field_bool",
+            "replace_line": 35,
+            "replace_column": 75,
+            "replace_length": 13
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Output.write` has no argument named `text`.",
+        "line": 65,
+        "label": "unknown argument",
+        "causes": [
+          "`Output.write` does not declare a parameter named `text`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `message`? Declared: message.",
+            "applicability": "machine-applicable",
+            "replacement": "message",
+            "replace_line": 65,
+            "replace_column": 26,
+            "replace_length": 4
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Output.write` is missing required argument `message`.",
+        "line": 65,
+        "label": "missing argument",
+        "causes": [
+          "`Output.write` requires a named argument `message`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `message: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Output.write` has no argument named `text`.",
+        "line": 68,
+        "label": "unknown argument",
+        "causes": [
+          "`Output.write` does not declare a parameter named `text`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `message`? Declared: message.",
+            "applicability": "machine-applicable",
+            "replacement": "message",
+            "replace_line": 68,
+            "replace_column": 26,
+            "replace_length": 4
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Output.write` is missing required argument `message`.",
+        "line": 68,
+        "label": "missing argument",
+        "causes": [
+          "`Output.write` requires a named argument `message`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `message: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0209",
+        "severity": "error",
+        "summary": "match scrutinee has type `JsonError`, expected `Option<T>`, `Result<T, E>`, `List<T>`, a declared sum/struct/class type, or an `Int`/`String`/`Char`/`Bool` literal match.",
+        "line": 8,
+        "label": "control-flow type mismatch",
+        "causes": [
+          "RSScript v0.7 `match` is limited to review-visible `Option`, `Result`, declared sum/struct/class patterns, and simple scalar literal dispatch."
+        ],
+        "fixes": [
+          {
+            "title": "Match an `Option<T>`, `Result<T, E>`, declared sum value, or scalar literal value; otherwise rewrite this branch as `if`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0209",
+        "severity": "error",
+        "summary": "match pattern `Syntax` cannot match scrutinee type `JsonError`.",
+        "line": 9,
+        "label": "match pattern type mismatch",
+        "causes": [
+          "RSScript match patterns must belong to the scrutinee's type."
+        ],
+        "fixes": []
+      },
+      {
+        "code": "RS0209",
+        "severity": "error",
+        "summary": "match pattern `MissingField` cannot match scrutinee type `JsonError`.",
+        "line": 12,
+        "label": "match pattern type mismatch",
+        "causes": [
+          "RSScript match patterns must belong to the scrutinee's type."
+        ],
+        "fixes": []
+      },
+      {
+        "code": "RS0209",
+        "severity": "error",
+        "summary": "match pattern `TypeMismatch` cannot match scrutinee type `JsonError`.",
+        "line": 15,
+        "label": "match pattern type mismatch",
+        "causes": [
+          "RSScript match patterns must belong to the scrutinee's type."
+        ],
+        "fixes": []
+      }
+    ]
+  },
+  {
+    "turn": 2,
+    "duration_ms": 47166,
+    "check_ok": false,
+    "codes": [
+      "RS0203",
+      "RS0204"
+    ],
+    "source": "turn2.rss",
+    "diagnostics": [
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Json.field_string` has no argument named `field`.",
+        "line": 15,
+        "label": "unknown argument",
+        "causes": [
+          "`Json.field_string` does not declare a parameter named `field`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `name`? Declared: value, name.",
+            "applicability": "machine-applicable",
+            "replacement": "name",
+            "replace_line": 15,
+            "replace_column": 93,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Json.field_string` is missing required argument `name`.",
+        "line": 15,
+        "label": "missing argument",
+        "causes": [
+          "`Json.field_string` requires a named argument `name`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `name: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Json.field_int` has no argument named `field`.",
+        "line": 19,
+        "label": "unknown argument",
+        "causes": [
+          "`Json.field_int` does not declare a parameter named `field`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `name`? Declared: value, name.",
+            "applicability": "machine-applicable",
+            "replacement": "name",
+            "replace_line": 19,
+            "replace_column": 95,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Json.field_int` is missing required argument `name`.",
+        "line": 19,
+        "label": "missing argument",
+        "causes": [
+          "`Json.field_int` requires a named argument `name`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `name: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Json.field_bool` has no argument named `field`.",
+        "line": 25,
+        "label": "unknown argument",
+        "causes": [
+          "`Json.field_bool` does not declare a parameter named `field`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `name`? Declared: value, name.",
+            "applicability": "machine-applicable",
+            "replacement": "name",
+            "replace_line": 25,
+            "replace_column": 108,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Json.field_bool` is missing required argument `name`.",
+        "line": 25,
+        "label": "missing argument",
+        "causes": [
+          "`Json.field_bool` requires a named argument `name`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `name: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 3,
+    "duration_ms": 8553,
+    "check_ok": true,
+    "codes": [],
+    "source": "turn3.rss",
+    "diagnostics": []
+  }
+]

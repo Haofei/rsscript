@@ -1,0 +1,540 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 98138,
+    "check_ok": false,
+    "codes": [
+      "RS0206",
+      "RS0207",
+      "RS1301"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS1301",
+        "severity": "error",
+        "summary": "`PlainFormatter` does not satisfy protocol `Formatter` method `format`.",
+        "line": 13,
+        "label": "missing protocol method mapping",
+        "causes": [
+          "`PlainFormatter` must map protocol method `format` to a concrete function."
+        ],
+        "fixes": [
+          {
+            "title": "Update the protocol impl mapping or concrete function signature to match the protocol contract exactly.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1301",
+        "severity": "error",
+        "summary": "`JsonFormatter` does not satisfy protocol `Formatter` method `format`.",
+        "line": 19,
+        "label": "missing protocol method mapping",
+        "causes": [
+          "`JsonFormatter` must map protocol method `format` to a concrete function."
+        ],
+        "fixes": [
+          {
+            "title": "Update the protocol impl mapping or concrete function signature to match the protocol contract exactly.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0207",
+        "severity": "error",
+        "summary": "binding `plainFormatter` has initializer type `PlainFormatter`, expected `Dyn<Formatter>`.",
+        "line": 33,
+        "label": "binding type mismatch",
+        "causes": [
+          "Explicit `let` and `local` type annotations are source-level contracts and must match the initializer before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Initialize `plainFormatter` with a `Dyn<Formatter>` value, or change the binding annotation.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0207",
+        "severity": "error",
+        "summary": "binding `jsonFormatter` has initializer type `JsonFormatter`, expected `Dyn<Formatter>`.",
+        "line": 34,
+        "label": "binding type mismatch",
+        "causes": [
+          "Explicit `let` and `local` type annotations are source-level contracts and must match the initializer before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Initialize `jsonFormatter` with a `Dyn<Formatter>` value, or change the binding annotation.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Io.print` does not resolve.",
+        "line": 39,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Io.print` does not resolve.",
+        "line": 40,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 2,
+    "duration_ms": 115130,
+    "check_ok": false,
+    "codes": [
+      "RS0028",
+      "RS0201",
+      "RS0206",
+      "RS0207",
+      "RS0208",
+      "RS1301"
+    ],
+    "source": "turn2.rss",
+    "diagnostics": [
+      {
+        "code": "RS1301",
+        "severity": "error",
+        "summary": "`PlainFormatter` does not satisfy protocol `Formatter` method `format`.",
+        "line": 17,
+        "label": "missing protocol method mapping",
+        "causes": [
+          "`PlainFormatter` must map protocol method `format` to a concrete function."
+        ],
+        "fixes": [
+          {
+            "title": "Update the protocol impl mapping or concrete function signature to match the protocol contract exactly.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1301",
+        "severity": "error",
+        "summary": "`JsonFormatter` does not satisfy protocol `Formatter` method `format`.",
+        "line": 25,
+        "label": "missing protocol method mapping",
+        "causes": [
+          "`JsonFormatter` must map protocol method `format` to a concrete function."
+        ],
+        "fixes": [
+          {
+            "title": "Update the protocol impl mapping or concrete function signature to match the protocol contract exactly.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0028",
+        "severity": "error",
+        "summary": "invalid `self` parameter in `formatPlainFormatter`.",
+        "line": 13,
+        "label": "invalid self parameter",
+        "causes": [
+          "`self` may only be the first parameter of a qualified method signature."
+        ],
+        "fixes": [
+          {
+            "title": "Use a different parameter name, or make this the first parameter of an explicit method/protocol signature.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0028",
+        "severity": "error",
+        "summary": "invalid `self` parameter in `formatJsonFormatter`.",
+        "line": 21,
+        "label": "invalid self parameter",
+        "causes": [
+          "`self` may only be the first parameter of a qualified method signature."
+        ],
+        "fixes": [
+          {
+            "title": "Use a different parameter name, or make this the first parameter of an explicit method/protocol signature.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `formatJsonFormatter` has type `Result<fresh JsonValue, JsonError>`, expected `String`.",
+        "line": 22,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `String` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0207",
+        "severity": "error",
+        "summary": "argument `value` for `Json.field` has type `String`, expected `JsonValue`.",
+        "line": 22,
+        "label": "argument type mismatch",
+        "causes": [
+          "RSScript call argument types must match the resolved callee signature before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Pass a value of type `JsonValue` for `value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `Dyn<Formatter>` uses an unnamed argument.",
+        "line": 37,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `Dyn<Formatter>` uses an unnamed argument.",
+        "line": 38,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Io.write` does not resolve.",
+        "line": 43,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 43,
+            "replace_column": 5,
+            "replace_length": 8
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Io.write` does not resolve.",
+        "line": 44,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 44,
+            "replace_column": 5,
+            "replace_length": 8
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 3,
+    "duration_ms": 83474,
+    "check_ok": false,
+    "codes": [
+      "RS0203",
+      "RS0204",
+      "RS1301"
+    ],
+    "source": "turn3.rss",
+    "diagnostics": [
+      {
+        "code": "RS1301",
+        "severity": "error",
+        "summary": "`PlainFormatter` does not satisfy protocol `Formatter` method `format`.",
+        "line": 13,
+        "label": "missing protocol method mapping",
+        "causes": [
+          "`PlainFormatter` must map protocol method `format` to a concrete function."
+        ],
+        "fixes": [
+          {
+            "title": "Update the protocol impl mapping or concrete function signature to match the protocol contract exactly.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1301",
+        "severity": "error",
+        "summary": "`JsonFormatter` does not satisfy protocol `Formatter` method `format`.",
+        "line": 19,
+        "label": "missing protocol method mapping",
+        "causes": [
+          "`JsonFormatter` must map protocol method `format` to a concrete function."
+        ],
+        "fixes": [
+          {
+            "title": "Update the protocol impl mapping or concrete function signature to match the protocol contract exactly.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Dyn<Formatter>` has no argument named `value`.",
+        "line": 42,
+        "label": "unknown argument",
+        "causes": [
+          "`Dyn<Formatter>` does not declare a parameter named `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Use one of: .",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Dyn<Formatter>` has no argument named `value`.",
+        "line": 43,
+        "label": "unknown argument",
+        "causes": [
+          "`Dyn<Formatter>` does not declare a parameter named `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Use one of: .",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Output.write` has no argument named `value`.",
+        "line": 48,
+        "label": "unknown argument",
+        "causes": [
+          "`Output.write` does not declare a parameter named `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `message`? Declared: message.",
+            "applicability": "machine-applicable",
+            "replacement": "message",
+            "replace_line": 48,
+            "replace_column": 18,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Output.write` is missing required argument `message`.",
+        "line": 48,
+        "label": "missing argument",
+        "causes": [
+          "`Output.write` requires a named argument `message`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `message: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Output.write` has no argument named `value`.",
+        "line": 49,
+        "label": "unknown argument",
+        "causes": [
+          "`Output.write` does not declare a parameter named `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `message`? Declared: message.",
+            "applicability": "machine-applicable",
+            "replacement": "message",
+            "replace_line": 49,
+            "replace_column": 18,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Output.write` is missing required argument `message`.",
+        "line": 49,
+        "label": "missing argument",
+        "causes": [
+          "`Output.write` requires a named argument `message`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `message: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

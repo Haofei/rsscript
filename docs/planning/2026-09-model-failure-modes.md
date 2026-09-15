@@ -640,3 +640,114 @@ for mode in prompt_only language_card repair_loop; do
 done
 python3 tools/analyze-model-samples.py --model sonnet-2026-09-15 --rss ./target/debug/rss
 ```
+
+### Measured after the changes: `repair_loop` re-run (2026-09-15b)
+
+The changes above are only worth what they measure, so `repair_loop` was run
+once more against the tree that contains them — 30 tasks, up to three turns,
+one draw — into `evals/samples/sonnet-2026-09-15b/repair_loop/`:
+
+```bash
+python3 tools/collect-model-samples.py --model sonnet --mode repair_loop \
+  --jobs 5 --timeout 400 --rss ./target/debug/rss \
+  --out evals/samples/sonnet-2026-09-15b
+```
+
+| `repair_loop` | compiles | scorer pass | on the 20 generation tasks | clean on turn 1 | converted by repair |
+|---|---|---|---|---|---|
+| September | 15/30 | 14/30 | 5/20 | 10 | 5 |
+| fresh (15) | 17/30 | 17/30 | 8/20 | 11 | 6 |
+| **post-change (15b)** | **20/30** | **20/30** | **11/20** | 11 | **9** |
+
+**Every point of the gain is in the repair loop, not the first attempt.** Both
+runs produce exactly 11 candidates that compile on turn 1; repair converts 6 in
+the fresh run and 9 in the re-run. That is what should happen: four of the five
+changes are diagnostic-side and cannot touch turn 1, and it means the difference
+is not a better first draw.
+
+Errors left in the final candidates, counted as instances:
+
+| code | fresh (15) | post-change (15b) |
+|---|---|---|
+| RS0308 `take` of a non-local | 12 | **2** |
+| RS0204 missing argument | 11 | **4** |
+| RS0203 invented label | 10 | 6 |
+| RS0206 invents a symbol | 13 | 9 |
+| RS0202 wrong call-site effect | 6 | **1** |
+
+RS0308 is the one the card change targeted and it is the one that moved most:
+12 instances over 6 candidates down to 2 over 2, and across repair turns it goes
+from **persisting 4 times** — the largest persisted class in the fresh run — to
+persisting **zero**. `take-mut-chain` is the clean illustration: in the fresh run
+it reported RS0308 on all three turns and failed; here it writes `local title =
+"Daily Report"` and `local report = build_report(title: take title)` on turn 1,
+exactly the spelling the new surface-form rows show. Seven of the thirty
+candidates use a `local` binding, against three before.
+
+RS0202 falls from 6 instances to 1, which is the fix-edit change: the wrong-
+effect shape now carries an edit that replaces or deletes the keyword instead of
+inserting a second one in front of it.
+
+### Were the machine-applicable fixes actually taken?
+
+This run's transcripts keep each turn's source and the exact rows that turn was
+shown, so the question is now answered directly rather than inferred. Counting
+every machine-applicable replacement offered on turn N and asking whether it
+appears in the source the model produced for turn N+1:
+
+| code | offered | present next turn |
+|---|---|---|
+| RS0206 rename callee | 27 | 24 |
+| RS0203 rename argument label | 10 | **10** |
+| RS0202 match data effect | 2 | **2** |
+| **total** | **39** | **36** |
+
+Thirty-six of thirty-nine. The three misses are all RS0206 and all in two
+candidates (`Channel.sender`/`Channel.receiver` in producer-consumer-bounded,
+`String.trim` in noescape-filter-callback) where the model restructured the
+region rather than renaming inside it.
+
+The causal chain the RS0203 work was aimed at is visible turn by turn in the
+transcripts. `async-stream-consume`: turn 1 calls `Stream.fromList`, is told
+"Did you mean `Stream.from_list`?"; turn 2 takes it and then invents the label
+`list`, is told "Did you mean `items`?"; turn 3 is clean. Without the second
+suggestion that candidate spends its last turn guessing, which is what it did in
+the fresh run.
+
+### What is left
+
+Ten candidates still fail. The remaining errors are thinly spread — RS0206 9,
+RS0203 6, RS0204 4, RS0209 3, RS0308 2, RS1301 2 — with no single class
+dominating for the first time in this report's three measurements. RS0206 is
+still the largest, and it now resists at the *ranking* level rather than at the
+message level: only three of its nine surviving instances carry a
+machine-applicable rename at all.
+
+The six that do not are a concrete list, and two of them are ranking defects
+rather than genuine dead ends. `List.length` gets nothing because the real name
+is `List.len`, three edits away with a two-edit budget for a six-character name
+— and `List.length` was invented three times in the fresh `language_card` set,
+so it earns a place in the alias table. `Console.print` likewise: the table
+carries `Console.write_line` for `Output.write` but not `Console.print`. The
+other four (`Receiver.receive`, a chained `read Channel.receiver().unwrap`
+twice) have no near-miss and nothing should be offered.
+
+One mis-suggestion is also visible and worth recording rather than hiding:
+`Json.as_array` is offered `Json.is_array`, one edit away and semantically a
+different function — a predicate where an accessor was wanted. Edit distance
+buys reach at the cost of occasional confident nonsense, which is the same
+trade-off the positional rule for `RS0203` deliberately avoids by refusing to
+guess when the shape does not settle it.
+
+`RS0206`'s alias table lives in `crates/rsscript-semantics/src/symbols.rs`,
+outside the files this work owns, so those two entries and the mis-rank are
+recorded here for that owner. Extending an alias table is a treadmill in any
+case; the durable form of the fix is getting the signature index in front of the
+model before it writes the call, which is what the parameter facts in `rss
+generate continuations` now carry and what no measurement here exercises,
+because the collector prompts a model rather than driving a generation
+session.
+
+n = 1 per task, one draw, 30 candidates. 17/30 to 20/30 and 8/20 to 11/20 are
+three-candidate moves in the direction the mechanism predicts, with a
+class-level account of which three and why; they are not a rate.

@@ -1,0 +1,183 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 90413,
+    "check_ok": false,
+    "codes": [
+      "RS0206",
+      "RS0209"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Json.get_field` does not resolve.",
+        "line": 7,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Json.field`, `Json.int_field`, `Json.raw_field`?",
+            "applicability": "machine-applicable",
+            "replacement": "Json.field",
+            "replace_line": 7,
+            "replace_column": 23,
+            "replace_length": 14
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Json.as_array` does not resolve.",
+        "line": 12,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Json.is_array`, `Json.array`?",
+            "applicability": "machine-applicable",
+            "replacement": "Json.is_array",
+            "replace_line": 12,
+            "replace_column": 23,
+            "replace_length": 13
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Json.get_field` does not resolve.",
+        "line": 19,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Json.field`, `Json.int_field`, `Json.raw_field`?",
+            "applicability": "machine-applicable",
+            "replacement": "Json.field",
+            "replace_line": 19,
+            "replace_column": 27,
+            "replace_length": 14
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Console.print` does not resolve.",
+        "line": 36,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Console.print` does not resolve.",
+        "line": 37,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0209",
+        "severity": "error",
+        "summary": "match arm has type `Result<T, JsonError>`, expected `fresh JsonValue` from the first produced arm.",
+        "line": 4,
+        "label": "match arm type mismatch",
+        "causes": [
+          "A match expression must produce one compatible value type across every arm."
+        ],
+        "fixes": [
+          {
+            "title": "Return the same value type from every match expression arm.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0209",
+        "severity": "error",
+        "summary": "match arm has type `Result<T, JsonError>`, expected `Int` from the first produced arm.",
+        "line": 25,
+        "label": "match arm type mismatch",
+        "causes": [
+          "A match expression must produce one compatible value type across every arm."
+        ],
+        "fixes": [
+          {
+            "title": "Return the same value type from every match expression arm.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 2,
+    "error": "timed out after 400s",
+    "duration_ms": 400009
+  }
+]

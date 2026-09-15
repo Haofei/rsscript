@@ -1,0 +1,50 @@
+protocol Formatter {
+    fn format(self: read Self) -> fresh String
+}
+
+struct PlainFormatter {
+    prefix: String
+}
+
+struct JsonFormatter {
+    field: String
+}
+
+impl Formatter for PlainFormatter {
+    fn format(self: read Self) -> fresh String {
+        return self.prefix
+    }
+}
+
+impl Formatter for JsonFormatter {
+    fn format(self: read Self) -> fresh String {
+        let fieldValue: JsonValue = Json.string(value: self.field)
+        let result: Result<JsonValue, JsonError> = Json.field(name: "field", value: fieldValue)
+        match result {
+            Ok(value) => {
+                return Json.encode(value: value)
+            }
+            Err(_) => {
+                return ""
+            }
+        }
+    }
+}
+
+fn render(formatter: read Dyn<Formatter>) -> fresh String {
+    return Formatter.format(self: formatter)
+}
+
+fn main() -> Unit {
+    let plain: PlainFormatter = PlainFormatter(prefix: "LOG: ")
+    let json: JsonFormatter = JsonFormatter(field: "status")
+
+    let plainFormatter: Dyn<Formatter> = Dyn<Formatter>(value: plain)
+    let jsonFormatter: Dyn<Formatter> = Dyn<Formatter>(value: json)
+
+    let plainText: String = render(formatter: plainFormatter)
+    let jsonText: String = render(formatter: jsonFormatter)
+
+    Output.write(value: plainText)
+    Output.write(value: jsonText)
+}

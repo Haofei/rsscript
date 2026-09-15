@@ -1,0 +1,45 @@
+protocol Formatter {
+    fn format(self: read Self) -> fresh String
+}
+
+struct PlainFormatter {
+    prefix: String
+}
+
+struct JsonFormatter {
+    field: String
+}
+
+fn formatPlainFormatter(self: read PlainFormatter) -> fresh String {
+    return self.prefix
+}
+
+impl Formatter for PlainFormatter {
+    format: formatPlainFormatter
+}
+
+fn formatJsonFormatter(self: read JsonFormatter) -> fresh String {
+    return Json.field(name: "field", value: self.field)
+}
+
+impl Formatter for JsonFormatter {
+    format: formatJsonFormatter
+}
+
+fn render(formatter: read Dyn<Formatter>) -> fresh String {
+    return Formatter.format(self: formatter)
+}
+
+fn main() -> Unit {
+    let plain: PlainFormatter = PlainFormatter(prefix: "LOG: ")
+    let json: JsonFormatter = JsonFormatter(field: "status")
+
+    let plainFormatter: Dyn<Formatter> = Dyn<Formatter>(plain)
+    let jsonFormatter: Dyn<Formatter> = Dyn<Formatter>(json)
+
+    let plainText: String = render(formatter: plainFormatter)
+    let jsonText: String = render(formatter: jsonFormatter)
+
+    Io.write(value: plainText)
+    Io.write(value: jsonText)
+}

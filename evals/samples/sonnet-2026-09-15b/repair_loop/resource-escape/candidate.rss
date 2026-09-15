@@ -1,0 +1,9 @@
+fn read_lease(name: read String) -> Result<fresh String, String> {
+    with Lease.open(name: read name)? as lease {
+        return Lease.read(lease: mut lease)
+    }
+}
+
+fn main() -> Unit {
+    return Unit
+}
