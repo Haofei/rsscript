@@ -10,9 +10,10 @@
   "language_version": "0.7",
   "specification_version": "RSScript_v0.7",
   "grammar_sha256_algorithm": "sha256",
-  "grammar_sha256": "e1b65a7b4dce6135f4d7efa12ad4f3855392634ded9475da08ab84145ea29dec",
+  "grammar_sha256": "a397adadab73604627acc29a26df54ff3db7e91756a2efe6fded653ab2bec0d9",
   "reserved_keyword_count": 30,
   "contextual_keyword_count": 2,
+  "parser_keyword_count": 17,
   "builtin_constant_count": 7,
   "diagnostic_count": 107,
   "core_interface_count": 35,
@@ -24,5 +25,3197 @@
     ],
     "description": "Static diagnostic explanations do not claim fixes; machine-applicable edits are attached to concrete diagnostic instances."
   },
-  "canonical_call_example": "fn apply(target: mut Buffer, input: take String, note: read String) -> Unit {}\n\nfn update(target: mut Buffer, input: take String, note: read String) -> Unit {\n    return apply(target: mut target, input: take input, note: note)\n}\n"
+  "canonical_call_example": "fn apply(target: mut Buffer, input: take String, note: read String) -> Unit {}\n\nfn update(target: mut Buffer, input: take String, note: read String) -> Unit {\n    return apply(target: mut target, input: take input, note: note)\n}\n",
+  "accepted_surface_sugar": [
+    {
+      "accepted": "T { field: value }",
+      "canonical": "T(field: value)",
+      "desugars_in": "parser"
+    },
+    {
+      "accepted": "Pattern => expr,",
+      "canonical": "Pattern => { expr }",
+      "desugars_in": "parser"
+    }
+  ],
+  "canonical_surface_forms": [
+    {
+      "form": "constructor call",
+      "right": "Report(title: take title, count: 0)",
+      "wrong": "Report { title: title, count: 0 }"
+    },
+    {
+      "form": "match arm",
+      "right": "Ok(value) => { return value }",
+      "wrong": "Ok(value) => value,"
+    },
+    {
+      "form": "`task_group`, `with` and `select` are statements",
+      "right": "task_group { spawn work() }",
+      "wrong": "let results = task_group { spawn work() }"
+    },
+    {
+      "form": "no tuple destructuring in `for`",
+      "right": "for key in Map.keys(map: counts) { }",
+      "wrong": "for (key, value) in counts { }"
+    },
+    {
+      "form": "mutable binding",
+      "right": "let mut total: Int = 0",
+      "wrong": "mut total: Int = 0"
+    }
+  ],
+  "signature_count": 450,
+  "signatures": [
+    {
+      "namespace": "Arguments",
+      "name": "Arguments.all",
+      "signature": "Arguments.all(args: read List<String>) -> fresh List<String>",
+      "path": "stdlib/arguments/arguments.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Arguments",
+      "name": "Arguments.count",
+      "signature": "Arguments.count(args: read List<String>) -> Int",
+      "path": "stdlib/arguments/arguments.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Arguments",
+      "name": "Arguments.get",
+      "signature": "Arguments.get(args: read List<String>, index: Int) -> Option<String>",
+      "path": "stdlib/arguments/arguments.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Arguments",
+      "name": "Arguments.get_or_default",
+      "signature": "Arguments.get_or_default(args: read List<String>, index: Int, default: String) -> String",
+      "path": "stdlib/arguments/arguments.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Assert",
+      "name": "Assert.equal",
+      "signature": "Assert.equal(left: String, right: String) -> Unit",
+      "path": "stdlib/test/assert.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Assert",
+      "name": "Assert.equal_bool",
+      "signature": "Assert.equal_bool(left: Bool, right: Bool) -> Unit",
+      "path": "stdlib/test/assert.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Assert",
+      "name": "Assert.equal_int",
+      "signature": "Assert.equal_int(left: Int, right: Int) -> Unit",
+      "path": "stdlib/test/assert.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Base64",
+      "name": "Base64.decode",
+      "signature": "Base64.decode(text: String) -> Result<fresh Bytes, DecodeError>",
+      "path": "stdlib/encoding/encoding.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Base64",
+      "name": "Base64.decode_string",
+      "signature": "Base64.decode_string(text: String) -> Result<fresh String, DecodeError>",
+      "path": "stdlib/encoding/encoding.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Base64",
+      "name": "Base64.encode",
+      "signature": "Base64.encode(value: String) -> fresh String",
+      "path": "stdlib/encoding/encoding.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Base64",
+      "name": "Base64.encode_bytes",
+      "signature": "Base64.encode_bytes(value: Bytes) -> fresh String",
+      "path": "stdlib/encoding/encoding.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Buffer",
+      "name": "Buffer.clear",
+      "signature": "Buffer.clear(buffer: mut Buffer) -> Unit",
+      "path": "stdlib/collections/buffer.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Buffer",
+      "name": "Buffer.consume",
+      "signature": "Buffer.consume(buffer: take Buffer) -> Unit",
+      "path": "stdlib/collections/buffer.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Buffer",
+      "name": "Buffer.is_empty",
+      "signature": "Buffer.is_empty(buffer: Buffer) -> Bool",
+      "path": "stdlib/collections/buffer.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Buffer",
+      "name": "Buffer.len",
+      "signature": "Buffer.len(buffer: Buffer) -> Int",
+      "path": "stdlib/collections/buffer.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Buffer",
+      "name": "Buffer.new",
+      "signature": "Buffer.new(size: Int) -> fresh Buffer",
+      "path": "stdlib/collections/buffer.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Buffer",
+      "name": "Buffer.view",
+      "signature": "Buffer.view(buffer: Buffer, start: Int, len: Int) -> BufferView",
+      "path": "stdlib/collections/buffer.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "BufferView",
+      "name": "BufferView.is_empty",
+      "signature": "BufferView.is_empty(value: BufferView) -> Bool",
+      "path": "stdlib/collections/buffer.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "BufferView",
+      "name": "BufferView.len",
+      "signature": "BufferView.len(value: BufferView) -> Int",
+      "path": "stdlib/collections/buffer.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "BufferView",
+      "name": "BufferView.slice",
+      "signature": "BufferView.slice(value: BufferView, start: Int, len: Int) -> BufferView",
+      "path": "stdlib/collections/buffer.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "BufferView",
+      "name": "BufferView.to_bytes",
+      "signature": "BufferView.to_bytes(value: BufferView) -> fresh Bytes",
+      "path": "stdlib/collections/buffer.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Bytes",
+      "name": "Bytes.concat",
+      "signature": "Bytes.concat(left: Bytes, right: Bytes) -> fresh Bytes",
+      "path": "stdlib/collections/bytes.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Bytes",
+      "name": "Bytes.consume",
+      "signature": "Bytes.consume(bytes: take Bytes) -> Unit",
+      "path": "stdlib/collections/bytes.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Bytes",
+      "name": "Bytes.from_buffer",
+      "signature": "Bytes.from_buffer(buffer: Buffer) -> fresh Bytes",
+      "path": "stdlib/collections/bytes.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Bytes",
+      "name": "Bytes.from_string",
+      "signature": "Bytes.from_string(value: String) -> fresh Bytes",
+      "path": "stdlib/collections/bytes.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Bytes",
+      "name": "Bytes.from_uints",
+      "signature": "Bytes.from_uints(values: List<Int>) -> fresh Bytes",
+      "path": "stdlib/collections/bytes.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Bytes",
+      "name": "Bytes.is_empty",
+      "signature": "Bytes.is_empty(value: Bytes) -> Bool",
+      "path": "stdlib/collections/bytes.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Bytes",
+      "name": "Bytes.len",
+      "signature": "Bytes.len(value: Bytes) -> Int",
+      "path": "stdlib/collections/bytes.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Bytes",
+      "name": "Bytes.slice",
+      "signature": "Bytes.slice(value: Bytes, start: Int, len: Int) -> fresh Bytes",
+      "path": "stdlib/collections/bytes.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Bytes",
+      "name": "Bytes.to_string",
+      "signature": "Bytes.to_string(value: Bytes) -> fresh String",
+      "path": "stdlib/collections/bytes.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Bytes",
+      "name": "Bytes.to_uints",
+      "signature": "Bytes.to_uints(value: Bytes) -> fresh List<Int>",
+      "path": "stdlib/collections/bytes.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Bytes",
+      "name": "Bytes.view",
+      "signature": "Bytes.view(value: Bytes, start: Int, len: Int) -> BytesView",
+      "path": "stdlib/collections/bytes.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "BytesView",
+      "name": "BytesView.is_empty",
+      "signature": "BytesView.is_empty(value: BytesView) -> Bool",
+      "path": "stdlib/collections/bytes.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "BytesView",
+      "name": "BytesView.len",
+      "signature": "BytesView.len(value: BytesView) -> Int",
+      "path": "stdlib/collections/bytes.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "BytesView",
+      "name": "BytesView.slice",
+      "signature": "BytesView.slice(value: BytesView, start: Int, len: Int) -> BytesView",
+      "path": "stdlib/collections/bytes.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "BytesView",
+      "name": "BytesView.starts_with",
+      "signature": "BytesView.starts_with(value: BytesView, prefix: BytesView) -> Bool",
+      "path": "stdlib/collections/bytes.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "BytesView",
+      "name": "BytesView.to_bytes",
+      "signature": "BytesView.to_bytes(value: BytesView) -> fresh Bytes",
+      "path": "stdlib/collections/bytes.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "CancellationSource",
+      "name": "CancellationSource.cancel",
+      "signature": "CancellationSource.cancel(source: mut CancellationSource) -> Unit",
+      "path": "packages/async/interface/cancellation.rssi",
+      "kind": "standard_package"
+    },
+    {
+      "namespace": "CancellationSource",
+      "name": "CancellationSource.new",
+      "signature": "CancellationSource.new() -> fresh CancellationSource",
+      "path": "packages/async/interface/cancellation.rssi",
+      "kind": "standard_package"
+    },
+    {
+      "namespace": "CancellationSource",
+      "name": "CancellationSource.token",
+      "signature": "CancellationSource.token(source: CancellationSource) -> fresh CancellationToken",
+      "path": "packages/async/interface/cancellation.rssi",
+      "kind": "standard_package"
+    },
+    {
+      "namespace": "CancellationToken",
+      "name": "CancellationToken.is_cancelled",
+      "signature": "CancellationToken.is_cancelled(token: CancellationToken) -> Bool",
+      "path": "packages/async/interface/cancellation.rssi",
+      "kind": "standard_package"
+    },
+    {
+      "namespace": "Channel",
+      "name": "Channel.bounded",
+      "signature": "Channel.bounded<T>(capacity: Int) -> Result<fresh Channel<T>, ChannelError>",
+      "path": "packages/async/interface/channel.rssi",
+      "kind": "standard_package"
+    },
+    {
+      "namespace": "Channel",
+      "name": "Channel.message",
+      "signature": "Channel.message<T>(capacity: Int) -> Result<fresh Channel<T>, ChannelError>",
+      "path": "packages/async/interface/channel.rssi",
+      "kind": "standard_package"
+    },
+    {
+      "namespace": "Channel",
+      "name": "Channel.receiver",
+      "signature": "Channel.receiver<T>(channel: mut Channel<T>) -> Result<fresh Receiver<T>, ChannelError>",
+      "path": "packages/async/interface/channel.rssi",
+      "kind": "standard_package"
+    },
+    {
+      "namespace": "Channel",
+      "name": "Channel.sender",
+      "signature": "Channel.sender<T>(channel: Channel<T>) -> fresh Sender<T>",
+      "path": "packages/async/interface/channel.rssi",
+      "kind": "standard_package"
+    },
+    {
+      "namespace": "ChannelError",
+      "name": "ChannelError.message",
+      "signature": "ChannelError.message(error: ChannelError) -> fresh String",
+      "path": "packages/async/interface/channel.rssi",
+      "kind": "standard_package"
+    },
+    {
+      "namespace": "Char",
+      "name": "Char.compare",
+      "signature": "Char.compare(left: Char, right: Char) -> Int",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Char",
+      "name": "Char.from_code",
+      "signature": "Char.from_code(value: Int) -> Option<Char>",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Char",
+      "name": "Char.is_alpha",
+      "signature": "Char.is_alpha(value: Char) -> Bool",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Char",
+      "name": "Char.is_alphanumeric",
+      "signature": "Char.is_alphanumeric(value: Char) -> Bool",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Char",
+      "name": "Char.is_digit",
+      "signature": "Char.is_digit(value: Char) -> Bool",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Char",
+      "name": "Char.is_lower",
+      "signature": "Char.is_lower(value: Char) -> Bool",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Char",
+      "name": "Char.is_upper",
+      "signature": "Char.is_upper(value: Char) -> Bool",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Char",
+      "name": "Char.is_whitespace",
+      "signature": "Char.is_whitespace(value: Char) -> Bool",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Char",
+      "name": "Char.to_code",
+      "signature": "Char.to_code(value: Char) -> Int",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Char",
+      "name": "Char.to_lower",
+      "signature": "Char.to_lower(value: Char) -> Char",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Char",
+      "name": "Char.to_string",
+      "signature": "Char.to_string(value: Char) -> fresh String",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Char",
+      "name": "Char.to_upper",
+      "signature": "Char.to_upper(value: Char) -> Char",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Clone",
+      "name": "Clone.clone",
+      "signature": "Clone.clone<Self: Managed>(self: Self) -> fresh Self",
+      "path": "stdlib/clone/clone.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Csv",
+      "name": "Csv.parse_row",
+      "signature": "Csv.parse_row(buffer: RowBuffer) -> Result<fresh Row, CsvError>",
+      "path": "stdlib/csv/csv.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Date",
+      "name": "Date.add_days",
+      "signature": "Date.add_days(unix_ms: Int, days: Int) -> Int",
+      "path": "stdlib/date/date.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Date",
+      "name": "Date.add_ms",
+      "signature": "Date.add_ms(unix_ms: Int, ms: Int) -> Int",
+      "path": "stdlib/date/date.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Date",
+      "name": "Date.day",
+      "signature": "Date.day(unix_ms: Int) -> Int",
+      "path": "stdlib/date/date.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Date",
+      "name": "Date.days_between",
+      "signature": "Date.days_between(start_unix_ms: Int, end_unix_ms: Int) -> Int",
+      "path": "stdlib/date/date.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Date",
+      "name": "Date.days_in_month",
+      "signature": "Date.days_in_month(year: Int, month: Int) -> Int",
+      "path": "stdlib/date/date.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Date",
+      "name": "Date.format_iso",
+      "signature": "Date.format_iso(unix_ms: Int) -> fresh String",
+      "path": "stdlib/date/date.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Date",
+      "name": "Date.format_ymd",
+      "signature": "Date.format_ymd(unix_ms: Int) -> fresh String",
+      "path": "stdlib/date/date.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Date",
+      "name": "Date.hour",
+      "signature": "Date.hour(unix_ms: Int) -> Int",
+      "path": "stdlib/date/date.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Date",
+      "name": "Date.is_leap_year",
+      "signature": "Date.is_leap_year(year: Int) -> Bool",
+      "path": "stdlib/date/date.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Date",
+      "name": "Date.minute",
+      "signature": "Date.minute(unix_ms: Int) -> Int",
+      "path": "stdlib/date/date.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Date",
+      "name": "Date.month",
+      "signature": "Date.month(unix_ms: Int) -> Int",
+      "path": "stdlib/date/date.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Date",
+      "name": "Date.parse_iso",
+      "signature": "Date.parse_iso(value: String) -> Option<Int>",
+      "path": "stdlib/date/date.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Date",
+      "name": "Date.parse_ymd",
+      "signature": "Date.parse_ymd(value: String) -> Option<Int>",
+      "path": "stdlib/date/date.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Date",
+      "name": "Date.second",
+      "signature": "Date.second(unix_ms: Int) -> Int",
+      "path": "stdlib/date/date.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Date",
+      "name": "Date.start_of_day",
+      "signature": "Date.start_of_day(unix_ms: Int) -> Int",
+      "path": "stdlib/date/date.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Date",
+      "name": "Date.weekday",
+      "signature": "Date.weekday(unix_ms: Int) -> Int",
+      "path": "stdlib/date/date.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Date",
+      "name": "Date.year",
+      "signature": "Date.year(unix_ms: Int) -> Int",
+      "path": "stdlib/date/date.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "DecodeError",
+      "name": "DecodeError.message",
+      "signature": "DecodeError.message(error: DecodeError) -> String",
+      "path": "stdlib/encoding/encoding.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Deque",
+      "name": "Deque.clear",
+      "signature": "Deque.clear<T>(deque: mut Deque<T>) -> Unit",
+      "path": "stdlib/collections/deque.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Deque",
+      "name": "Deque.is_empty",
+      "signature": "Deque.is_empty<T>(deque: Deque<T>) -> Bool",
+      "path": "stdlib/collections/deque.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Deque",
+      "name": "Deque.len",
+      "signature": "Deque.len<T>(deque: Deque<T>) -> Int",
+      "path": "stdlib/collections/deque.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Deque",
+      "name": "Deque.new",
+      "signature": "Deque.new<T>() -> fresh Deque<T>",
+      "path": "stdlib/collections/deque.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Deque",
+      "name": "Deque.pop_back",
+      "signature": "Deque.pop_back<T>(deque: mut Deque<T>) -> Option<T>",
+      "path": "stdlib/collections/deque.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Deque",
+      "name": "Deque.pop_front",
+      "signature": "Deque.pop_front<T>(deque: mut Deque<T>) -> Option<T>",
+      "path": "stdlib/collections/deque.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Deque",
+      "name": "Deque.push_back",
+      "signature": "Deque.push_back<T>(deque: mut Deque<T>, value: T) -> Unit retains(value)",
+      "path": "stdlib/collections/deque.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Deque",
+      "name": "Deque.push_front",
+      "signature": "Deque.push_front<T>(deque: mut Deque<T>, value: T) -> Unit retains(value)",
+      "path": "stdlib/collections/deque.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Deque",
+      "name": "Deque.to_list",
+      "signature": "Deque.to_list<T>(deque: Deque<T>) -> fresh List<T>",
+      "path": "stdlib/collections/deque.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Diff",
+      "name": "Diff.unified",
+      "signature": "Diff.unified(old: String, new: String) -> fresh String",
+      "path": "stdlib/diff/diff.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Duration",
+      "name": "Duration.add",
+      "signature": "Duration.add(left: Duration, right: Duration) -> fresh Duration",
+      "path": "stdlib/duration/duration.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Duration",
+      "name": "Duration.as_ms",
+      "signature": "Duration.as_ms(value: Duration) -> Int",
+      "path": "stdlib/duration/duration.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Duration",
+      "name": "Duration.as_seconds",
+      "signature": "Duration.as_seconds(value: Duration) -> Int",
+      "path": "stdlib/duration/duration.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Duration",
+      "name": "Duration.ms",
+      "signature": "Duration.ms(value: Int) -> fresh Duration",
+      "path": "stdlib/duration/duration.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Duration",
+      "name": "Duration.seconds",
+      "signature": "Duration.seconds(value: Int) -> fresh Duration",
+      "path": "stdlib/duration/duration.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Dyn",
+      "name": "Dyn.from",
+      "signature": "Dyn.from<P, T>(value: take T) -> fresh Dyn<P>",
+      "path": "stdlib/dyn/dyn.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Eq",
+      "name": "Eq.equals",
+      "signature": "Eq.equals<Self: Managed>(self: Self, other: Self) -> Bool",
+      "path": "stdlib/cmp/eq.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "FalliblePipeline",
+      "name": "FalliblePipeline.collect",
+      "signature": "FalliblePipeline.collect<T, E>(pipeline: FalliblePipeline<T, E>) -> Result<fresh List<T>, E>",
+      "path": "stdlib/collections/pipeline.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "FalliblePipeline",
+      "name": "FalliblePipeline.each",
+      "signature": "FalliblePipeline.each<T, E>(pipeline: FalliblePipeline<T, E>, action: noescape Fn(T) -> Unit) -> fresh FalliblePipeline<T, E>",
+      "path": "stdlib/collections/pipeline.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "FalliblePipeline",
+      "name": "FalliblePipeline.filter",
+      "signature": "FalliblePipeline.filter<T, E>(pipeline: FalliblePipeline<T, E>, predicate: noescape Fn(T) -> Bool) -> fresh FalliblePipeline<T, E>",
+      "path": "stdlib/collections/pipeline.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "FalliblePipeline",
+      "name": "FalliblePipeline.map",
+      "signature": "FalliblePipeline.map<T, U, E>(pipeline: FalliblePipeline<T, E>, mapper: noescape Fn(T) -> U) -> fresh FalliblePipeline<U, E>",
+      "path": "stdlib/collections/pipeline.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "FalliblePipeline",
+      "name": "FalliblePipeline.try_map",
+      "signature": "FalliblePipeline.try_map<T, U, E>(pipeline: FalliblePipeline<T, E>, mapper: noescape Fn(T) -> Result<fresh U, E>) -> fresh FalliblePipeline<U, E>",
+      "path": "stdlib/collections/pipeline.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Float",
+      "name": "Float.is_finite",
+      "signature": "Float.is_finite(value: Float) -> Bool",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Float",
+      "name": "Float.is_infinite",
+      "signature": "Float.is_infinite(value: Float) -> Bool",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Float",
+      "name": "Float.is_nan",
+      "signature": "Float.is_nan(value: Float) -> Bool",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Float",
+      "name": "Float.to_string",
+      "signature": "Float.to_string(value: Float) -> fresh String",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Gzip",
+      "name": "Gzip.decompress_bytes",
+      "signature": "Gzip.decompress_bytes(value: Bytes) -> Result<fresh Bytes, DecodeError>",
+      "path": "stdlib/encoding/encoding.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Hash",
+      "name": "Hash.sha256_bytes",
+      "signature": "Hash.sha256_bytes(value: Bytes) -> fresh String",
+      "path": "stdlib/hash/hash.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Hash",
+      "name": "Hash.sha256_string",
+      "signature": "Hash.sha256_string(value: String) -> fresh String",
+      "path": "stdlib/hash/hash.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Hash",
+      "name": "Hash.sha3_224_bytes",
+      "signature": "Hash.sha3_224_bytes(value: Bytes) -> fresh Bytes",
+      "path": "stdlib/hash/hash.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Hash",
+      "name": "Hash.sha3_256_bytes",
+      "signature": "Hash.sha3_256_bytes(value: Bytes) -> fresh Bytes",
+      "path": "stdlib/hash/hash.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Hash",
+      "name": "Hash.shake128_bytes",
+      "signature": "Hash.shake128_bytes(value: Bytes, out_len: Int) -> fresh Bytes",
+      "path": "stdlib/hash/hash.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Hashable",
+      "name": "Hashable.hash_value",
+      "signature": "Hashable.hash_value<Self: Managed>(self: Self) -> Int",
+      "path": "stdlib/hash/hashable.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Hex",
+      "name": "Hex.decode",
+      "signature": "Hex.decode(text: String) -> Result<fresh Bytes, DecodeError>",
+      "path": "stdlib/encoding/encoding.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Hex",
+      "name": "Hex.encode",
+      "signature": "Hex.encode(value: Bytes) -> fresh String",
+      "path": "stdlib/encoding/encoding.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Hex",
+      "name": "Hex.encode_string",
+      "signature": "Hex.encode_string(value: String) -> fresh String",
+      "path": "stdlib/encoding/encoding.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Hmac",
+      "name": "Hmac.sha256_bytes",
+      "signature": "Hmac.sha256_bytes(key: Bytes, value: Bytes) -> fresh String",
+      "path": "stdlib/hash/hash.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Hmac",
+      "name": "Hmac.sha256_string",
+      "signature": "Hmac.sha256_string(key: String, value: String) -> fresh String",
+      "path": "stdlib/hash/hash.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Int",
+      "name": "Int.bit_and",
+      "signature": "Int.bit_and(left: Int, right: Int) -> Int",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Int",
+      "name": "Int.bit_not",
+      "signature": "Int.bit_not(value: Int) -> Int",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Int",
+      "name": "Int.bit_or",
+      "signature": "Int.bit_or(left: Int, right: Int) -> Int",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Int",
+      "name": "Int.bit_xor",
+      "signature": "Int.bit_xor(left: Int, right: Int) -> Int",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Int",
+      "name": "Int.shift_left",
+      "signature": "Int.shift_left(value: Int, bits: Int) -> Int",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Int",
+      "name": "Int.shift_right",
+      "signature": "Int.shift_right(value: Int, bits: Int) -> Int",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Int",
+      "name": "Int.to_float",
+      "signature": "Int.to_float(value: Int) -> Float",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Int",
+      "name": "Int.to_string",
+      "signature": "Int.to_string(value: Int) -> fresh String",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.array",
+      "signature": "Json.array(items: List<String>) -> fresh String",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.array_bools",
+      "signature": "Json.array_bools(value: JsonValue) -> Result<fresh List<Bool>, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.array_contains_prefix",
+      "signature": "Json.array_contains_prefix(value: JsonValue, prefix: String) -> Result<Bool, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.array_contains_string",
+      "signature": "Json.array_contains_string(value: JsonValue, item: String) -> Result<Bool, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.array_contains_substring",
+      "signature": "Json.array_contains_substring(value: JsonValue, text: String) -> Result<Bool, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.array_count_where",
+      "signature": "Json.array_count_where(value: JsonValue, predicate: noescape Fn(JsonValue) -> Result<Bool, JsonError>) -> Result<Int, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.array_fold",
+      "signature": "Json.array_fold<T: Struct>(value: JsonValue, initial: T, folder: noescape Fn(T, JsonValue) -> Result<fresh T, JsonError>) -> Result<fresh T, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.array_get",
+      "signature": "Json.array_get(value: JsonValue, index: Int) -> Result<fresh JsonValue, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.array_ints",
+      "signature": "Json.array_ints(value: JsonValue) -> Result<fresh List<Int>, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.array_len",
+      "signature": "Json.array_len(value: JsonValue) -> Result<Int, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.array_strings",
+      "signature": "Json.array_strings(value: JsonValue) -> Result<fresh List<String>, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.as_bool",
+      "signature": "Json.as_bool(value: JsonValue) -> Result<Bool, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.as_int",
+      "signature": "Json.as_int(value: JsonValue) -> Result<Int, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.as_string",
+      "signature": "Json.as_string(value: JsonValue) -> Result<String, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.at",
+      "signature": "Json.at(value: JsonValue, path: String) -> Result<fresh JsonValue, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.at_bool",
+      "signature": "Json.at_bool(value: JsonValue, path: String) -> Result<Bool, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.at_bool_or",
+      "signature": "Json.at_bool_or(value: JsonValue, path: String, fallback: Bool) -> Bool",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.at_int",
+      "signature": "Json.at_int(value: JsonValue, path: String) -> Result<Int, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.at_int_or",
+      "signature": "Json.at_int_or(value: JsonValue, path: String, fallback: Int) -> Int",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.at_optional",
+      "signature": "Json.at_optional(value: JsonValue, path: String) -> Result<Option<JsonValue>, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.at_optional_bool",
+      "signature": "Json.at_optional_bool(value: JsonValue, path: String) -> Result<Option<Bool>, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.at_optional_int",
+      "signature": "Json.at_optional_int(value: JsonValue, path: String) -> Result<Option<Int>, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.at_optional_string",
+      "signature": "Json.at_optional_string(value: JsonValue, path: String) -> Result<Option<String>, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.at_or",
+      "signature": "Json.at_or(value: JsonValue, path: String, fallback: JsonValue) -> fresh JsonValue",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.at_string",
+      "signature": "Json.at_string(value: JsonValue, path: String) -> Result<String, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.at_string_or",
+      "signature": "Json.at_string_or(value: JsonValue, path: String, fallback: String) -> String",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.at_to_string",
+      "signature": "Json.at_to_string(value: JsonValue, path: String) -> Result<String, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.at_to_string_or",
+      "signature": "Json.at_to_string_or(value: JsonValue, path: String, fallback: String) -> String",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.bool_at",
+      "signature": "Json.bool_at(text: String, path: String) -> Result<Bool, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.bool_at_or",
+      "signature": "Json.bool_at_or(text: String, path: String, fallback: Bool) -> Bool",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.bool_field",
+      "signature": "Json.bool_field(name: String, value: Bool) -> fresh String",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.clone",
+      "signature": "Json.clone(value: JsonValue) -> fresh JsonValue",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.decode",
+      "signature": "Json.decode<T: Struct>(value: JsonValue) -> Result<fresh T, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.decode_text",
+      "signature": "Json.decode_text<T: Struct>(text: String) -> Result<fresh T, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.encode",
+      "signature": "Json.encode(value: JsonLiteral) -> fresh String",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.field",
+      "signature": "Json.field(value: JsonValue, name: String) -> Result<fresh JsonValue, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.field_bool",
+      "signature": "Json.field_bool(value: JsonValue, name: String) -> Result<Bool, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.field_int",
+      "signature": "Json.field_int(value: JsonValue, name: String) -> Result<Int, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.field_optional",
+      "signature": "Json.field_optional(value: JsonValue, name: String) -> Result<Option<JsonValue>, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.field_optional_bool",
+      "signature": "Json.field_optional_bool(value: JsonValue, name: String) -> Result<Option<Bool>, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.field_optional_int",
+      "signature": "Json.field_optional_int(value: JsonValue, name: String) -> Result<Option<Int>, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.field_optional_string",
+      "signature": "Json.field_optional_string(value: JsonValue, name: String) -> Result<Option<String>, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.field_string",
+      "signature": "Json.field_string(value: JsonValue, name: String) -> Result<String, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.int_at",
+      "signature": "Json.int_at(text: String, path: String) -> Result<Int, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.int_at_or",
+      "signature": "Json.int_at_or(text: String, path: String, fallback: Int) -> Int",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.int_field",
+      "signature": "Json.int_field(name: String, value: Int) -> fresh String",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.is_array",
+      "signature": "Json.is_array(value: JsonValue) -> Bool",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.is_null",
+      "signature": "Json.is_null(value: JsonValue) -> Bool",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.is_object",
+      "signature": "Json.is_object(value: JsonValue) -> Bool",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.json_bool_at_or",
+      "signature": "Json.json_bool_at_or(text: String, path: String, fallback: Bool) -> Bool",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.json_int_at_or",
+      "signature": "Json.json_int_at_or(text: String, path: String, fallback: Int) -> Int",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.json_parse",
+      "signature": "Json.json_parse(text: String) -> Result<fresh JsonValue, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.json_string_at_or",
+      "signature": "Json.json_string_at_or(text: String, path: String, fallback: String) -> String",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.kind",
+      "signature": "Json.kind(value: JsonValue) -> String",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.object",
+      "signature": "Json.object(fields: List<String>) -> fresh String",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.object_keys",
+      "signature": "Json.object_keys(value: JsonValue) -> Result<fresh List<String>, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.object_len",
+      "signature": "Json.object_len(value: JsonValue) -> Result<Int, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.parse",
+      "signature": "Json.parse(text: String) -> Result<fresh JsonValue, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.quote_string",
+      "signature": "Json.quote_string(value: String) -> fresh String",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.raw_field",
+      "signature": "Json.raw_field(name: String, value: String) -> fresh String",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.string_array",
+      "signature": "Json.string_array(items: List<String>) -> fresh String",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.string_at",
+      "signature": "Json.string_at(text: String, path: String) -> Result<String, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.string_at_or",
+      "signature": "Json.string_at_or(text: String, path: String, fallback: String) -> String",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.string_field",
+      "signature": "Json.string_field(name: String, value: String) -> fresh String",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.strings",
+      "signature": "Json.strings(items: List<String>) -> fresh JsonValue",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.to_string",
+      "signature": "Json.to_string(value: JsonValue) -> fresh String",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.to_string_at",
+      "signature": "Json.to_string_at(text: String, path: String) -> Result<String, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.to_string_at_or",
+      "signature": "Json.to_string_at_or(text: String, path: String, fallback: String) -> String",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.value",
+      "signature": "Json.value(value: JsonLiteral) -> fresh JsonValue",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.value_at",
+      "signature": "Json.value_at(value: JsonValue, path: String) -> Result<fresh JsonValue, JsonError>",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Json",
+      "name": "Json.values",
+      "signature": "Json.values(items: List<JsonValue>) -> fresh JsonValue",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "JsonError",
+      "name": "JsonError.message",
+      "signature": "JsonError.message(error: JsonError) -> String",
+      "path": "stdlib/json/json.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.all",
+      "signature": "List.all<T>(list: List<T>, predicate: noescape Fn(T) -> Bool) -> Bool",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.any",
+      "signature": "List.any<T>(list: List<T>, predicate: noescape Fn(T) -> Bool) -> Bool",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.append",
+      "signature": "List.append<T>(list: mut List<T>, values: List<T>) -> Unit retains(values)",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.clear",
+      "signature": "List.clear<T>(list: mut List<T>) -> Unit",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.consume",
+      "signature": "List.consume<T>(list: take List<T>) -> Unit",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.contains",
+      "signature": "List.contains<T>(list: List<T>, predicate: noescape Fn(T) -> Bool) -> Bool",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.contains_value",
+      "signature": "List.contains_value<T>(list: List<T>, value: T) -> Bool",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.count_where",
+      "signature": "List.count_where<T>(list: List<T>, predicate: noescape Fn(T) -> Bool) -> Int",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.dedup",
+      "signature": "List.dedup<T>(list: List<T>) -> fresh List<T>",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.enumerate",
+      "signature": "List.enumerate(list: List<Int>) -> fresh List<List<Int>>",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.filter",
+      "signature": "List.filter<T>(list: List<T>, predicate: noescape Fn(T) -> Bool) -> fresh List<T>",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.find",
+      "signature": "List.find<T>(list: List<T>, predicate: noescape Fn(T) -> Bool) -> Option<T>",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.first",
+      "signature": "List.first<T>(list: List<T>) -> Option<T>",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.flat_map",
+      "signature": "List.flat_map<T, U>(list: List<T>, mapper: noescape Fn(T) -> List<U>) -> fresh List<U>",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.flatten",
+      "signature": "List.flatten<T>(list: List<List<T>>) -> fresh List<T>",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.fold",
+      "signature": "List.fold<T, U: Struct>(list: List<T>, initial: U, folder: noescape Fn(U, T) -> fresh U) -> fresh U",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.get",
+      "signature": "List.get<T>(list: List<T>, index: Int) -> T",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.group_by",
+      "signature": "List.group_by<T, K>(list: List<T>, key: noescape Fn(T) -> K) -> fresh Map<K, List<T>>",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.is_empty",
+      "signature": "List.is_empty<T>(list: List<T>) -> Bool",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.join",
+      "signature": "List.join(list: List<String>, separator: String) -> fresh String",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.last",
+      "signature": "List.last<T>(list: List<T>) -> Option<T>",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.len",
+      "signature": "List.len<T>(list: List<T>) -> Int",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.map",
+      "signature": "List.map<T, U>(list: List<T>, mapper: noescape Fn(T) -> U) -> fresh List<U>",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.max",
+      "signature": "List.max(list: List<Int>) -> Option<Int>",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.min",
+      "signature": "List.min(list: List<Int>) -> Option<Int>",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.new",
+      "signature": "List.new<T>() -> fresh List<T>",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.partition",
+      "signature": "List.partition<T>(list: List<T>, predicate: noescape Fn(T) -> Bool) -> fresh List<List<T>>",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.pop",
+      "signature": "List.pop<T>(list: mut List<T>) -> Option<T>",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.push",
+      "signature": "List.push<T>(list: mut List<T>, value: T) -> Unit retains(value)",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.remove_at",
+      "signature": "List.remove_at<T>(list: mut List<T>, index: Int) -> Option<T>",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.reverse",
+      "signature": "List.reverse<T>(list: List<T>) -> fresh List<T>",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.set",
+      "signature": "List.set<T>(list: mut List<T>, index: Int, value: T) -> Unit retains(value)",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.skip",
+      "signature": "List.skip<T>(list: List<T>, count: Int) -> fresh List<T>",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.slice",
+      "signature": "List.slice<T>(list: List<T>, start: Int, len: Int) -> fresh List<T>",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.sort",
+      "signature": "List.sort<T: Ord>(list: mut List<T>) -> Unit",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.sort_by",
+      "signature": "List.sort_by<T, K>(list: List<T>, key: noescape Fn(T) -> K, compare: noescape Fn(K, K) -> Int) -> fresh List<T>",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.sort_with",
+      "signature": "List.sort_with<T>(list: mut List<T>, compare: noescape Fn(T, T) -> Int) -> Unit",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.sum",
+      "signature": "List.sum(list: List<Int>) -> Int",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.take",
+      "signature": "List.take<T>(list: List<T>, count: Int) -> fresh List<T>",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.to_json_strings",
+      "signature": "List.to_json_strings(list: List<String>) -> fresh JsonValue",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.to_json_values",
+      "signature": "List.to_json_values(list: List<JsonValue>) -> fresh JsonValue",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.try_fold",
+      "signature": "List.try_fold<T, U: Struct, E>(list: List<T>, initial: U, folder: noescape Fn(U, T) -> Result<fresh U, E>) -> Result<fresh U, E>",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.zip",
+      "signature": "List.zip<T>(left: List<T>, right: List<T>) -> fresh List<List<T>>",
+      "path": "stdlib/collections/list.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "List",
+      "name": "List.pipeline",
+      "signature": "List.pipeline<T>(list: List<T>) -> fresh Pipeline<T>",
+      "path": "stdlib/collections/pipeline.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Map",
+      "name": "Map.clear",
+      "signature": "Map.clear<K: Hashable, V>(map: mut Map<K, V>) -> Unit",
+      "path": "stdlib/collections/map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Map",
+      "name": "Map.contains_key",
+      "signature": "Map.contains_key<K: Hashable, V>(map: Map<K, V>, key: K) -> Bool",
+      "path": "stdlib/collections/map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Map",
+      "name": "Map.filter",
+      "signature": "Map.filter<K: Hashable, V>(map: Map<K, V>, predicate: noescape Fn(K, V) -> Bool) -> fresh Map<K, V>",
+      "path": "stdlib/collections/map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Map",
+      "name": "Map.fold",
+      "signature": "Map.fold<K: Hashable, V, U: Struct>(map: Map<K, V>, initial: U, folder: noescape Fn(U, K, V) -> fresh U) -> fresh U",
+      "path": "stdlib/collections/map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Map",
+      "name": "Map.for_each",
+      "signature": "Map.for_each<K: Hashable, V>(map: Map<K, V>, callback: noescape Fn(K, V) -> Unit) -> Unit",
+      "path": "stdlib/collections/map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Map",
+      "name": "Map.get",
+      "signature": "Map.get<K: Hashable, V>(map: Map<K, V>, key: K) -> Option<V>",
+      "path": "stdlib/collections/map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Map",
+      "name": "Map.get_or_default",
+      "signature": "Map.get_or_default<K: Hashable, V>(map: Map<K, V>, key: K, default: V) -> V",
+      "path": "stdlib/collections/map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Map",
+      "name": "Map.insert",
+      "signature": "Map.insert<K: Hashable, V>(map: mut Map<K, V>, key: K, value: V) -> Unit retains(key) retains(value)",
+      "path": "stdlib/collections/map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Map",
+      "name": "Map.insert_old",
+      "signature": "Map.insert_old<K: Hashable, V>(map: mut Map<K, V>, key: K, value: V) -> Option<V> retains(key) retains(value)",
+      "path": "stdlib/collections/map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Map",
+      "name": "Map.is_empty",
+      "signature": "Map.is_empty<K: Hashable, V>(map: Map<K, V>) -> Bool",
+      "path": "stdlib/collections/map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Map",
+      "name": "Map.keys",
+      "signature": "Map.keys<K: Hashable, V>(map: Map<K, V>) -> fresh List<K>",
+      "path": "stdlib/collections/map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Map",
+      "name": "Map.len",
+      "signature": "Map.len<K: Hashable, V>(map: Map<K, V>) -> Int",
+      "path": "stdlib/collections/map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Map",
+      "name": "Map.map_values",
+      "signature": "Map.map_values<K: Hashable, V, U>(map: Map<K, V>, mapper: noescape Fn(V) -> U) -> fresh Map<K, U>",
+      "path": "stdlib/collections/map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Map",
+      "name": "Map.merge",
+      "signature": "Map.merge<K: Hashable, V>(left: Map<K, V>, right: Map<K, V>, resolver: noescape Fn(V, V) -> V) -> fresh Map<K, V>",
+      "path": "stdlib/collections/map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Map",
+      "name": "Map.new",
+      "signature": "Map.new<K: Hashable, V>() -> fresh Map<K, V>",
+      "path": "stdlib/collections/map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Map",
+      "name": "Map.remove",
+      "signature": "Map.remove<K: Hashable, V>(map: mut Map<K, V>, key: K) -> Option<V>",
+      "path": "stdlib/collections/map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Map",
+      "name": "Map.try_fold",
+      "signature": "Map.try_fold<K: Hashable, V, U: Struct, E>(map: Map<K, V>, initial: U, folder: noescape Fn(U, K, V) -> Result<fresh U, E>) -> Result<fresh U, E>",
+      "path": "stdlib/collections/map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Map",
+      "name": "Map.values",
+      "signature": "Map.values<K: Hashable, V>(map: Map<K, V>) -> fresh List<V>",
+      "path": "stdlib/collections/map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.abs",
+      "signature": "Math.abs(value: Int) -> Int",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.abs_float",
+      "signature": "Math.abs_float(value: Float) -> Float",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.ceil",
+      "signature": "Math.ceil(value: Float) -> Int",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.clamp",
+      "signature": "Math.clamp(value: Int, min: Int, max: Int) -> Int",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.clamp_float",
+      "signature": "Math.clamp_float(value: Float, min: Float, max: Float) -> Float",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.cos",
+      "signature": "Math.cos(value: Float) -> Float",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.exp",
+      "signature": "Math.exp(value: Float) -> Float",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.exp2",
+      "signature": "Math.exp2(value: Float) -> Float",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.floor",
+      "signature": "Math.floor(value: Float) -> Int",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.log",
+      "signature": "Math.log(value: Float) -> Float",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.log2",
+      "signature": "Math.log2(value: Float) -> Float",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.max",
+      "signature": "Math.max(left: Int, right: Int) -> Int",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.max_float",
+      "signature": "Math.max_float(left: Float, right: Float) -> Float",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.min",
+      "signature": "Math.min(left: Int, right: Int) -> Int",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.min_float",
+      "signature": "Math.min_float(left: Float, right: Float) -> Float",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.pow",
+      "signature": "Math.pow(base: Int, exponent: Int) -> Int",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.pow_float",
+      "signature": "Math.pow_float(base: Float, exponent: Float) -> Float",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.round",
+      "signature": "Math.round(value: Float) -> Int",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.saturating_add",
+      "signature": "Math.saturating_add(left: Int, right: Int) -> Int",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.saturating_mul",
+      "signature": "Math.saturating_mul(left: Int, right: Int) -> Int",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.saturating_sub",
+      "signature": "Math.saturating_sub(left: Int, right: Int) -> Int",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.sin",
+      "signature": "Math.sin(value: Float) -> Float",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.sqrt",
+      "signature": "Math.sqrt(value: Float) -> Float",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.tanh",
+      "signature": "Math.tanh(value: Float) -> Float",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.trunc_float",
+      "signature": "Math.trunc_float(value: Float) -> Float",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.wrapping_add",
+      "signature": "Math.wrapping_add(left: Int, right: Int) -> Int",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.wrapping_mul",
+      "signature": "Math.wrapping_mul(left: Int, right: Int) -> Int",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Math",
+      "name": "Math.wrapping_sub",
+      "signature": "Math.wrapping_sub(left: Int, right: Int) -> Int",
+      "path": "stdlib/math/math.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Option",
+      "name": "Option.and_then",
+      "signature": "Option.and_then<T, U>(value: Option<T>, mapper: noescape Fn(T) -> Option<U>) -> Option<U>",
+      "path": "stdlib/option/option.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Option",
+      "name": "Option.filter",
+      "signature": "Option.filter<T>(value: Option<T>, predicate: noescape Fn(T) -> Bool) -> Option<T>",
+      "path": "stdlib/option/option.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Option",
+      "name": "Option.is_none",
+      "signature": "Option.is_none<T>(value: Option<T>) -> Bool",
+      "path": "stdlib/option/option.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Option",
+      "name": "Option.is_some",
+      "signature": "Option.is_some<T>(value: Option<T>) -> Bool",
+      "path": "stdlib/option/option.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Option",
+      "name": "Option.map",
+      "signature": "Option.map<T, U>(value: Option<T>, mapper: noescape Fn(T) -> U) -> Option<U>",
+      "path": "stdlib/option/option.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Option",
+      "name": "Option.ok_or",
+      "signature": "Option.ok_or<T, E>(value: Option<T>, error: E) -> Result<T, E>",
+      "path": "stdlib/option/option.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Option",
+      "name": "Option.or",
+      "signature": "Option.or<T>(value: Option<T>, fallback: Option<T>) -> Option<T>",
+      "path": "stdlib/option/option.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Option",
+      "name": "Option.unwrap_or",
+      "signature": "Option.unwrap_or<T>(value: Option<T>, default: T) -> T",
+      "path": "stdlib/option/option.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Option",
+      "name": "Option.unwrap_or_else",
+      "signature": "Option.unwrap_or_else<T>(value: Option<T>, default: noescape Fn() -> T) -> T",
+      "path": "stdlib/option/option.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Ord",
+      "name": "Ord.compare",
+      "signature": "Ord.compare<Self: Managed>(self: Self, other: Self) -> Int",
+      "path": "stdlib/cmp/ord.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Output",
+      "name": "Output.error",
+      "signature": "Output.error(message: String) -> Unit",
+      "path": "stdlib/output/output.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Output",
+      "name": "Output.error_json",
+      "signature": "Output.error_json(value: JsonValue) -> Unit",
+      "path": "stdlib/output/output.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Output",
+      "name": "Output.trace",
+      "signature": "Output.trace(event: String, message: String) -> Unit",
+      "path": "stdlib/output/output.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Output",
+      "name": "Output.write",
+      "signature": "Output.write(message: String) -> Unit",
+      "path": "stdlib/output/output.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Output",
+      "name": "Output.write_json",
+      "signature": "Output.write_json(value: JsonValue) -> Unit",
+      "path": "stdlib/output/output.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Patch",
+      "name": "Patch.apply_text",
+      "signature": "Patch.apply_text(original: String, patch: String) -> Result<fresh String, String>",
+      "path": "stdlib/patch/patch.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Path",
+      "name": "Path.extension",
+      "signature": "Path.extension(path: Path) -> Option<String>",
+      "path": "stdlib/path/path.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Path",
+      "name": "Path.file_name",
+      "signature": "Path.file_name(path: Path) -> Option<String>",
+      "path": "stdlib/path/path.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Path",
+      "name": "Path.from_string",
+      "signature": "Path.from_string(value: String) -> fresh Path",
+      "path": "stdlib/path/path.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Path",
+      "name": "Path.is_absolute",
+      "signature": "Path.is_absolute(path: Path) -> Bool",
+      "path": "stdlib/path/path.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Path",
+      "name": "Path.join",
+      "signature": "Path.join(base: Path, child: String) -> fresh Path",
+      "path": "stdlib/path/path.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Path",
+      "name": "Path.normalize",
+      "signature": "Path.normalize(path: Path) -> fresh Path",
+      "path": "stdlib/path/path.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Path",
+      "name": "Path.parent",
+      "signature": "Path.parent(path: Path) -> Option<Path>",
+      "path": "stdlib/path/path.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Path",
+      "name": "Path.resolve_relative",
+      "signature": "Path.resolve_relative(root: Path, relative: String) -> Result<fresh Path, String>",
+      "path": "stdlib/path/path.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Path",
+      "name": "Path.safe_relative",
+      "signature": "Path.safe_relative(value: String) -> Result<fresh Path, String>",
+      "path": "stdlib/path/path.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Path",
+      "name": "Path.starts_with",
+      "signature": "Path.starts_with(path: Path, base: Path) -> Bool",
+      "path": "stdlib/path/path.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Path",
+      "name": "Path.to_string",
+      "signature": "Path.to_string(path: Path) -> fresh String",
+      "path": "stdlib/path/path.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Path",
+      "name": "Path.with_extension",
+      "signature": "Path.with_extension(path: Path, extension: String) -> fresh Path",
+      "path": "stdlib/path/path.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "PersistentMap",
+      "name": "PersistentMap.clear",
+      "signature": "PersistentMap.clear<K, V>(map: PersistentMap<K, V>) -> fresh PersistentMap<K, V>",
+      "path": "stdlib/collections/persistent_map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "PersistentMap",
+      "name": "PersistentMap.contains_key",
+      "signature": "PersistentMap.contains_key<K, V>(map: PersistentMap<K, V>, key: K) -> Bool",
+      "path": "stdlib/collections/persistent_map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "PersistentMap",
+      "name": "PersistentMap.get",
+      "signature": "PersistentMap.get<K, V>(map: PersistentMap<K, V>, key: K) -> Option<V>",
+      "path": "stdlib/collections/persistent_map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "PersistentMap",
+      "name": "PersistentMap.insert",
+      "signature": "PersistentMap.insert<K, V>(map: PersistentMap<K, V>, key: K, value: V) -> fresh PersistentMap<K, V> retains(key) retains(value)",
+      "path": "stdlib/collections/persistent_map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "PersistentMap",
+      "name": "PersistentMap.is_empty",
+      "signature": "PersistentMap.is_empty<K, V>(map: PersistentMap<K, V>) -> Bool",
+      "path": "stdlib/collections/persistent_map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "PersistentMap",
+      "name": "PersistentMap.len",
+      "signature": "PersistentMap.len<K, V>(map: PersistentMap<K, V>) -> Int",
+      "path": "stdlib/collections/persistent_map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "PersistentMap",
+      "name": "PersistentMap.new",
+      "signature": "PersistentMap.new<K, V>() -> fresh PersistentMap<K, V>",
+      "path": "stdlib/collections/persistent_map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "PersistentMap",
+      "name": "PersistentMap.remove",
+      "signature": "PersistentMap.remove<K, V>(map: PersistentMap<K, V>, key: K) -> fresh PersistentMap<K, V>",
+      "path": "stdlib/collections/persistent_map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Pipeline",
+      "name": "Pipeline.collect",
+      "signature": "Pipeline.collect<T>(pipeline: Pipeline<T>) -> fresh List<T>",
+      "path": "stdlib/collections/pipeline.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Pipeline",
+      "name": "Pipeline.each",
+      "signature": "Pipeline.each<T>(pipeline: Pipeline<T>, action: noescape Fn(T) -> Unit) -> fresh Pipeline<T>",
+      "path": "stdlib/collections/pipeline.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Pipeline",
+      "name": "Pipeline.filter",
+      "signature": "Pipeline.filter<T>(pipeline: Pipeline<T>, predicate: noescape Fn(T) -> Bool) -> fresh Pipeline<T>",
+      "path": "stdlib/collections/pipeline.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Pipeline",
+      "name": "Pipeline.map",
+      "signature": "Pipeline.map<T, U>(pipeline: Pipeline<T>, mapper: noescape Fn(T) -> U) -> fresh Pipeline<U>",
+      "path": "stdlib/collections/pipeline.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Pipeline",
+      "name": "Pipeline.try_map",
+      "signature": "Pipeline.try_map<T, U, E>(pipeline: Pipeline<T>, mapper: noescape Fn(T) -> Result<fresh U, E>) -> fresh FalliblePipeline<U, E>",
+      "path": "stdlib/collections/pipeline.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Receiver",
+      "name": "Receiver.close",
+      "signature": "Receiver.close<T>(receiver: mut Receiver<T>) -> Unit",
+      "path": "packages/async/interface/channel.rssi",
+      "kind": "standard_package"
+    },
+    {
+      "namespace": "Receiver",
+      "name": "Receiver.recv",
+      "signature": "async Receiver.recv<T>(receiver: Receiver<T>) -> Result<Option<T>, ChannelError>",
+      "path": "packages/async/interface/channel.rssi",
+      "kind": "standard_package"
+    },
+    {
+      "namespace": "Receiver",
+      "name": "Receiver.recv_cancellable",
+      "signature": "async Receiver.recv_cancellable<T>(receiver: Receiver<T>, token: CancellationToken) -> Result<Option<T>, ChannelError>",
+      "path": "packages/async/interface/channel.rssi",
+      "kind": "standard_package"
+    },
+    {
+      "namespace": "Receiver",
+      "name": "Receiver.into_stream",
+      "signature": "Receiver.into_stream<T>(receiver: take Receiver<T>) -> fresh Stream<T>",
+      "path": "packages/async/interface/stream.rssi",
+      "kind": "standard_package"
+    },
+    {
+      "namespace": "Regex",
+      "name": "Regex.captures",
+      "signature": "Regex.captures(regex: Regex, value: String) -> fresh List<String>",
+      "path": "stdlib/regex/regex.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Regex",
+      "name": "Regex.compile",
+      "signature": "Regex.compile(pattern: String) -> Result<fresh Regex, RegexError>",
+      "path": "stdlib/regex/regex.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Regex",
+      "name": "Regex.find",
+      "signature": "Regex.find(regex: Regex, value: String) -> Option<fresh String>",
+      "path": "stdlib/regex/regex.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Regex",
+      "name": "Regex.is_match",
+      "signature": "Regex.is_match(regex: Regex, value: String) -> Bool",
+      "path": "stdlib/regex/regex.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Regex",
+      "name": "Regex.replace_all",
+      "signature": "Regex.replace_all(regex: Regex, value: String, replacement: String) -> fresh String",
+      "path": "stdlib/regex/regex.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Regex",
+      "name": "Regex.split",
+      "signature": "Regex.split(regex: Regex, value: String) -> fresh List<String>",
+      "path": "stdlib/regex/regex.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "RegexError",
+      "name": "RegexError.message",
+      "signature": "RegexError.message(error: RegexError) -> String",
+      "path": "stdlib/regex/regex.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Result",
+      "name": "Result.and_then",
+      "signature": "Result.and_then<T, E, U>(result: Result<T, E>, mapper: noescape Fn(T) -> Result<U, E>) -> Result<U, E>",
+      "path": "stdlib/result/result.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Result",
+      "name": "Result.err",
+      "signature": "Result.err<T, E>(value: Result<T, E>) -> Option<E>",
+      "path": "stdlib/result/result.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Result",
+      "name": "Result.err_message",
+      "signature": "Result.err_message<T, E>(value: Result<T, E>) -> Option<String>",
+      "path": "stdlib/result/result.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Result",
+      "name": "Result.is_err",
+      "signature": "Result.is_err<T, E>(value: Result<T, E>) -> Bool",
+      "path": "stdlib/result/result.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Result",
+      "name": "Result.is_ok",
+      "signature": "Result.is_ok<T, E>(value: Result<T, E>) -> Bool",
+      "path": "stdlib/result/result.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Result",
+      "name": "Result.map",
+      "signature": "Result.map<T, E, U>(result: Result<T, E>, mapper: noescape Fn(T) -> U) -> Result<U, E>",
+      "path": "stdlib/result/result.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Result",
+      "name": "Result.map_error",
+      "signature": "Result.map_error<T, E, F>(result: Result<T, E>, mapper: noescape Fn(E) -> F) -> Result<T, F>",
+      "path": "stdlib/result/result.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Result",
+      "name": "Result.ok",
+      "signature": "Result.ok<T, E>(value: Result<T, E>) -> Option<T>",
+      "path": "stdlib/result/result.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Result",
+      "name": "Result.unwrap_or",
+      "signature": "Result.unwrap_or<T, E>(value: Result<T, E>, default: T) -> T",
+      "path": "stdlib/result/result.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Result",
+      "name": "Result.unwrap_or_else",
+      "signature": "Result.unwrap_or_else<T, E>(result: Result<T, E>, fallback: noescape Fn(E) -> T) -> T",
+      "path": "stdlib/result/result.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Row",
+      "name": "Row.field_string",
+      "signature": "Row.field_string(row: Row, index: Int) -> Result<String, CsvError>",
+      "path": "stdlib/csv/csv.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "RowBuffer",
+      "name": "RowBuffer.new",
+      "signature": "RowBuffer.new(size: Int) -> fresh RowBuffer",
+      "path": "stdlib/csv/csv.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Sender",
+      "name": "Sender.close",
+      "signature": "Sender.close<T>(sender: mut Sender<T>) -> Unit",
+      "path": "packages/async/interface/channel.rssi",
+      "kind": "standard_package"
+    },
+    {
+      "namespace": "Sender",
+      "name": "Sender.send",
+      "signature": "async Sender.send<T>(sender: Sender<T>, value: take T) -> Result<Unit, ChannelError>",
+      "path": "packages/async/interface/channel.rssi",
+      "kind": "standard_package"
+    },
+    {
+      "namespace": "Sender",
+      "name": "Sender.send_cancellable",
+      "signature": "async Sender.send_cancellable<T>(sender: Sender<T>, value: take T, token: CancellationToken) -> Result<Unit, ChannelError>",
+      "path": "packages/async/interface/channel.rssi",
+      "kind": "standard_package"
+    },
+    {
+      "namespace": "Set",
+      "name": "Set.clear",
+      "signature": "Set.clear<T: Hashable>(set: mut Set<T>) -> Unit",
+      "path": "stdlib/collections/set.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Set",
+      "name": "Set.contains",
+      "signature": "Set.contains<T: Hashable>(set: Set<T>, value: T) -> Bool",
+      "path": "stdlib/collections/set.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Set",
+      "name": "Set.difference",
+      "signature": "Set.difference<T: Hashable>(left: Set<T>, right: Set<T>) -> fresh Set<T>",
+      "path": "stdlib/collections/set.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Set",
+      "name": "Set.for_each",
+      "signature": "Set.for_each<T: Hashable>(set: Set<T>, callback: noescape Fn(T) -> Unit) -> Unit",
+      "path": "stdlib/collections/set.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Set",
+      "name": "Set.insert",
+      "signature": "Set.insert<T: Hashable>(set: mut Set<T>, value: T) -> Bool retains(value)",
+      "path": "stdlib/collections/set.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Set",
+      "name": "Set.intersection",
+      "signature": "Set.intersection<T: Hashable>(left: Set<T>, right: Set<T>) -> fresh Set<T>",
+      "path": "stdlib/collections/set.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Set",
+      "name": "Set.is_empty",
+      "signature": "Set.is_empty<T: Hashable>(set: Set<T>) -> Bool",
+      "path": "stdlib/collections/set.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Set",
+      "name": "Set.is_subset",
+      "signature": "Set.is_subset<T: Hashable>(left: Set<T>, right: Set<T>) -> Bool",
+      "path": "stdlib/collections/set.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Set",
+      "name": "Set.len",
+      "signature": "Set.len<T: Hashable>(set: Set<T>) -> Int",
+      "path": "stdlib/collections/set.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Set",
+      "name": "Set.new",
+      "signature": "Set.new<T: Hashable>() -> fresh Set<T>",
+      "path": "stdlib/collections/set.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Set",
+      "name": "Set.remove",
+      "signature": "Set.remove<T: Hashable>(set: mut Set<T>, value: T) -> Bool",
+      "path": "stdlib/collections/set.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Set",
+      "name": "Set.to_list",
+      "signature": "Set.to_list<T: Hashable>(set: Set<T>) -> fresh List<T>",
+      "path": "stdlib/collections/set.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Set",
+      "name": "Set.union",
+      "signature": "Set.union<T: Hashable>(left: Set<T>, right: Set<T>) -> fresh Set<T>",
+      "path": "stdlib/collections/set.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "SortedMap",
+      "name": "SortedMap.clear",
+      "signature": "SortedMap.clear<K: Ord, V>(map: mut SortedMap<K, V>) -> Unit",
+      "path": "stdlib/collections/sorted_map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "SortedMap",
+      "name": "SortedMap.contains_key",
+      "signature": "SortedMap.contains_key<K: Ord, V>(map: SortedMap<K, V>, key: K) -> Bool",
+      "path": "stdlib/collections/sorted_map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "SortedMap",
+      "name": "SortedMap.get",
+      "signature": "SortedMap.get<K: Ord, V>(map: SortedMap<K, V>, key: K) -> Option<V>",
+      "path": "stdlib/collections/sorted_map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "SortedMap",
+      "name": "SortedMap.insert",
+      "signature": "SortedMap.insert<K: Ord, V>(map: mut SortedMap<K, V>, key: K, value: V) -> Unit retains(key) retains(value)",
+      "path": "stdlib/collections/sorted_map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "SortedMap",
+      "name": "SortedMap.is_empty",
+      "signature": "SortedMap.is_empty<K: Ord, V>(map: SortedMap<K, V>) -> Bool",
+      "path": "stdlib/collections/sorted_map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "SortedMap",
+      "name": "SortedMap.keys",
+      "signature": "SortedMap.keys<K: Ord, V>(map: SortedMap<K, V>) -> fresh List<K>",
+      "path": "stdlib/collections/sorted_map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "SortedMap",
+      "name": "SortedMap.len",
+      "signature": "SortedMap.len<K: Ord, V>(map: SortedMap<K, V>) -> Int",
+      "path": "stdlib/collections/sorted_map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "SortedMap",
+      "name": "SortedMap.new",
+      "signature": "SortedMap.new<K: Ord, V>() -> fresh SortedMap<K, V>",
+      "path": "stdlib/collections/sorted_map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "SortedMap",
+      "name": "SortedMap.remove",
+      "signature": "SortedMap.remove<K: Ord, V>(map: mut SortedMap<K, V>, key: K) -> Option<V>",
+      "path": "stdlib/collections/sorted_map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "SortedMap",
+      "name": "SortedMap.values",
+      "signature": "SortedMap.values<K: Ord, V>(map: SortedMap<K, V>) -> fresh List<V>",
+      "path": "stdlib/collections/sorted_map.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "SortedSet",
+      "name": "SortedSet.clear",
+      "signature": "SortedSet.clear<T: Ord>(set: mut SortedSet<T>) -> Unit",
+      "path": "stdlib/collections/sorted_set.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "SortedSet",
+      "name": "SortedSet.contains",
+      "signature": "SortedSet.contains<T: Ord>(set: SortedSet<T>, value: T) -> Bool",
+      "path": "stdlib/collections/sorted_set.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "SortedSet",
+      "name": "SortedSet.insert",
+      "signature": "SortedSet.insert<T: Ord>(set: mut SortedSet<T>, value: T) -> Bool retains(value)",
+      "path": "stdlib/collections/sorted_set.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "SortedSet",
+      "name": "SortedSet.is_empty",
+      "signature": "SortedSet.is_empty<T: Ord>(set: SortedSet<T>) -> Bool",
+      "path": "stdlib/collections/sorted_set.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "SortedSet",
+      "name": "SortedSet.len",
+      "signature": "SortedSet.len<T: Ord>(set: SortedSet<T>) -> Int",
+      "path": "stdlib/collections/sorted_set.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "SortedSet",
+      "name": "SortedSet.new",
+      "signature": "SortedSet.new<T: Ord>() -> fresh SortedSet<T>",
+      "path": "stdlib/collections/sorted_set.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "SortedSet",
+      "name": "SortedSet.remove",
+      "signature": "SortedSet.remove<T: Ord>(set: mut SortedSet<T>, value: T) -> Bool",
+      "path": "stdlib/collections/sorted_set.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "SortedSet",
+      "name": "SortedSet.to_list",
+      "signature": "SortedSet.to_list<T: Ord>(set: SortedSet<T>) -> fresh List<T>",
+      "path": "stdlib/collections/sorted_set.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Stream",
+      "name": "Stream.collect_list",
+      "signature": "Stream.collect_list<T>(stream: Stream<T>) -> Result<fresh List<T>, ChannelError>",
+      "path": "packages/async/interface/stream.rssi",
+      "kind": "standard_package"
+    },
+    {
+      "namespace": "Stream",
+      "name": "Stream.from_list",
+      "signature": "Stream.from_list<T>(items: take List<T>) -> fresh Stream<T>",
+      "path": "packages/async/interface/stream.rssi",
+      "kind": "standard_package"
+    },
+    {
+      "namespace": "Stream",
+      "name": "Stream.next",
+      "signature": "async Stream.next<T>(stream: Stream<T>) -> Result<Option<T>, ChannelError>",
+      "path": "packages/async/interface/stream.rssi",
+      "kind": "standard_package"
+    },
+    {
+      "namespace": "String",
+      "name": "String.after",
+      "signature": "String.after(value: String, delimiter: String) -> Option<String>",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.before",
+      "signature": "String.before(value: String, delimiter: String) -> Option<String>",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.char_at",
+      "signature": "String.char_at(value: String, index: Int) -> Option<Char>",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.chars",
+      "signature": "String.chars(value: String) -> fresh List<Char>",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.clone",
+      "signature": "String.clone(value: String) -> fresh String",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.concat",
+      "signature": "String.concat(left: String, right: String) -> fresh String",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.contains",
+      "signature": "String.contains(value: String, needle: String) -> Bool",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.copy",
+      "signature": "String.copy(value: String) -> fresh String",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.count",
+      "signature": "String.count(value: String, needle: String) -> Int",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.ends_with",
+      "signature": "String.ends_with(value: String, suffix: String) -> Bool",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.env",
+      "signature": "String.env(value: String) -> Option<fresh String>",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.env_or",
+      "signature": "String.env_or(value: String, default: String) -> fresh String",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.format",
+      "signature": "String.format(template: String, args: List<String>) -> fresh String",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.from_bool",
+      "signature": "String.from_bool(value: Bool) -> fresh String",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.from_float",
+      "signature": "String.from_float(value: Float) -> fresh String",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.from_int",
+      "signature": "String.from_int(value: Int) -> fresh String",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.index_of",
+      "signature": "String.index_of(value: String, needle: String) -> Option<Int>",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.is_empty",
+      "signature": "String.is_empty(value: String) -> Bool",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.join",
+      "signature": "String.join(parts: List<String>, separator: String) -> fresh String",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.len",
+      "signature": "String.len(value: String) -> Int",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.lines",
+      "signature": "String.lines(value: String) -> fresh List<String>",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.pad_left",
+      "signature": "String.pad_left(value: String, width: Int, fill: String) -> fresh String",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.pad_right",
+      "signature": "String.pad_right(value: String, width: Int, fill: String) -> fresh String",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.parse_float",
+      "signature": "String.parse_float(value: String) -> Option<Float>",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.parse_int",
+      "signature": "String.parse_int(value: String) -> Option<Int>",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.repeat",
+      "signature": "String.repeat(value: String, count: Int) -> fresh String",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.replace",
+      "signature": "String.replace(value: String, from: String, to: String) -> fresh String",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.replace_first",
+      "signature": "String.replace_first(value: String, from: String, to: String) -> fresh String",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.reverse",
+      "signature": "String.reverse(value: String) -> fresh String",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.safe_relative",
+      "signature": "String.safe_relative(value: String) -> Result<fresh Path, String>",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.slice",
+      "signature": "String.slice(value: String, start: Int, len: Int) -> fresh String",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.split",
+      "signature": "String.split(value: String, delimiter: String) -> fresh List<String>",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.starts_with",
+      "signature": "String.starts_with(value: String, prefix: String) -> Bool",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.strip_prefix",
+      "signature": "String.strip_prefix(value: String, prefix: String) -> Option<String>",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.to_bytes",
+      "signature": "String.to_bytes(value: String) -> fresh Bytes",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.to_lowercase",
+      "signature": "String.to_lowercase(value: String) -> fresh String",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.to_path",
+      "signature": "String.to_path(value: String) -> fresh Path",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.to_uppercase",
+      "signature": "String.to_uppercase(value: String) -> fresh String",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.to_url",
+      "signature": "String.to_url(value: String) -> fresh Url",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.trim",
+      "signature": "String.trim(value: String) -> fresh String",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.trim_end",
+      "signature": "String.trim_end(value: String) -> fresh String",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.trim_start",
+      "signature": "String.trim_start(value: String) -> fresh String",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "String",
+      "name": "String.view",
+      "signature": "String.view(value: String, start: Int, len: Int) -> StringView",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "StringBuilder",
+      "name": "StringBuilder.finish",
+      "signature": "StringBuilder.finish(builder: take StringBuilder) -> fresh String",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "StringBuilder",
+      "name": "StringBuilder.new",
+      "signature": "StringBuilder.new() -> fresh StringBuilder",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "StringBuilder",
+      "name": "StringBuilder.push",
+      "signature": "StringBuilder.push(builder: mut StringBuilder, value: String) -> Unit",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "StringView",
+      "name": "StringView.after",
+      "signature": "StringView.after(value: StringView, delimiter: String) -> Option<StringView>",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "StringView",
+      "name": "StringView.before",
+      "signature": "StringView.before(value: StringView, delimiter: String) -> Option<StringView>",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "StringView",
+      "name": "StringView.contains",
+      "signature": "StringView.contains(value: StringView, needle: String) -> Bool",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "StringView",
+      "name": "StringView.is_empty",
+      "signature": "StringView.is_empty(value: StringView) -> Bool",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "StringView",
+      "name": "StringView.len",
+      "signature": "StringView.len(value: StringView) -> Int",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "StringView",
+      "name": "StringView.slice",
+      "signature": "StringView.slice(value: StringView, start: Int, len: Int) -> StringView",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "StringView",
+      "name": "StringView.starts_with",
+      "signature": "StringView.starts_with(value: StringView, prefix: String) -> Bool",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "StringView",
+      "name": "StringView.to_string",
+      "signature": "StringView.to_string(value: StringView) -> fresh String",
+      "path": "stdlib/string/string.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Task",
+      "name": "Task.cancellation_token",
+      "signature": "Task.cancellation_token() -> fresh CancellationToken",
+      "path": "packages/async/interface/task.rssi",
+      "kind": "standard_package"
+    },
+    {
+      "namespace": "Url",
+      "name": "Url.decode_component",
+      "signature": "Url.decode_component(value: String) -> Result<fresh String, DecodeError>",
+      "path": "stdlib/encoding/encoding.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Url",
+      "name": "Url.encode_component",
+      "signature": "Url.encode_component(value: String) -> fresh String",
+      "path": "stdlib/encoding/encoding.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Url",
+      "name": "Url.from_string",
+      "signature": "Url.from_string(value: String) -> fresh Url",
+      "path": "stdlib/url/url.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Url",
+      "name": "Url.to_string",
+      "signature": "Url.to_string(url: Url) -> fresh String",
+      "path": "stdlib/url/url.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Weak",
+      "name": "Weak.downgrade",
+      "signature": "Weak.downgrade<T: Managed>(value: T) -> T",
+      "path": "stdlib/weak/weak.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Weak",
+      "name": "Weak.from",
+      "signature": "Weak.from<T: Managed>(value: T) -> T",
+      "path": "stdlib/weak/weak.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Weak",
+      "name": "Weak.upgrade",
+      "signature": "Weak.upgrade<T: Managed>(value: T) -> Option<T>",
+      "path": "stdlib/weak/weak.rssi",
+      "kind": "core"
+    },
+    {
+      "namespace": "Yaml",
+      "name": "Yaml.parse",
+      "signature": "Yaml.parse(text: String) -> Result<fresh JsonValue, JsonError>",
+      "path": "stdlib/yaml/yaml.rssi",
+      "kind": "core"
+    }
+  ]
 }

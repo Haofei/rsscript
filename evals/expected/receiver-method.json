@@ -11,7 +11,8 @@
   "invariants": [
     {
       "kind": "source_contains",
-      "value": "buffer.inspect()"
+      "value": "buffer.inspect()",
+      "spelling": true
     },
     {
       "kind": "source_contains",

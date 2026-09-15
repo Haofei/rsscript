@@ -918,6 +918,259 @@ impl Builder<'_> {
     }
 }
 
+/// Why a replacement was proposed for a name that failed to resolve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SuggestionSource {
+    /// A name models are measured to invent, mapped to the real core-interface
+    /// name it stands for.
+    KnownAlias,
+    /// An in-scope name within a small edit distance of what was written.
+    EditDistance,
+}
+
+/// A replacement proposed for a name that did not resolve (RS0206).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NameSuggestion {
+    /// The in-scope name to call instead.
+    pub name: String,
+    pub source: SuggestionSource,
+    /// Whether swapping `name` in for what was written leaves the argument list
+    /// untouched. Only a pure rename may carry a machine-applicable edit; a
+    /// suggestion that also moves the receiver into a named argument is advice.
+    pub pure_rename: bool,
+}
+
+/// Names a code-generating model invents, mapped to the real core-interface
+/// function they stand for.
+///
+/// Every entry is drawn from the measured most-invented list in
+/// `docs/planning/2026-09-model-failure-modes.md`; `RS0206` was the only failure
+/// class larger after three repair turns than any other, because the diagnostic
+/// named the error without naming a substitute. Each target is asserted to
+/// exist in the prelude interfaces by
+/// `known_aliases_name_real_core_interface_functions`, so this table can never
+/// point at a function that was renamed or removed.
+pub const INVENTED_NAME_ALIASES: &[(&str, &str)] = &[
+    ("Channel.take_receiver", "Channel.receiver"),
+    ("Console.write_line", "Output.write"),
+    ("IO.println", "Output.write"),
+    ("Int.parse", "String.parse_int"),
+    ("Json.get_bool", "Json.field_bool"),
+    ("Json.get_field", "Json.field"),
+    ("Json.get_int", "Json.field_int"),
+    ("Json.get_string", "Json.field_string"),
+    ("List.fold_result", "List.try_fold"),
+    ("List.of", "List.new"),
+    ("Map.get_or", "Map.get_or_default"),
+    ("String.find", "String.index_of"),
+    ("print", "Output.write"),
+    ("println", "Output.write"),
+    ("write", "Output.write"),
+];
+
+/// Bare method names models invent on a receiver (`value.get_int()`), mapped to
+/// the real namespaced function. Substituting one is *not* a pure rename — the
+/// receiver has to become a named argument — so these are advisory only.
+pub const INVENTED_METHOD_ALIASES: &[(&str, &str)] = &[
+    ("get_bool", "Json.field_bool"),
+    ("get_field", "Json.field"),
+    ("get_int", "Json.field_int"),
+    ("get_string", "Json.field_string"),
+];
+
+/// At most this many candidates are reported, so the help line stays readable
+/// and a near-miss never buries the best answer.
+const MAX_SUGGESTIONS: usize = 3;
+
+/// Candidate replacements for `written`, a callee that failed to resolve.
+///
+/// `in_scope` is the checker's own callable symbol table (user functions and
+/// every prelude-visible core-interface function), so a suggestion can only
+/// ever name something that really exists. Known aliases are consulted first —
+/// `Int.parse` is nowhere near `String.parse_int` by edit distance — and then
+/// in-scope names within a small edit distance, preferring the namespace that
+/// was actually written.
+pub fn unresolved_call_suggestions<'a>(
+    written: &str,
+    in_scope: impl IntoIterator<Item = &'a str>,
+) -> Vec<NameSuggestion> {
+    let callable: Vec<String> = {
+        let mut names: Vec<String> = in_scope
+            .into_iter()
+            .map(callable_lookup_name)
+            .filter(|name| !name.is_empty())
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    };
+    let is_in_scope = |name: &str| callable.iter().any(|candidate| candidate == name);
+
+    // A receiver-call display carries its borrow (`read value.get_int`); the
+    // name that failed to resolve is the last whitespace-separated segment.
+    let written = written.rsplit(' ').next().unwrap_or(written);
+    let (namespace, method) = split_qualified(written);
+    let is_receiver_call = namespace.is_some_and(|namespace| !is_namespace_like(namespace));
+
+    let mut suggestions: Vec<NameSuggestion> = Vec::new();
+    let push = |suggestion: NameSuggestion, suggestions: &mut Vec<NameSuggestion>| {
+        if suggestions.len() < MAX_SUGGESTIONS
+            && !suggestions
+                .iter()
+                .any(|existing| existing.name == suggestion.name)
+        {
+            suggestions.push(suggestion);
+        }
+    };
+
+    if let Some(target) = lookup_alias(INVENTED_NAME_ALIASES, written).filter(|target| {
+        // A receiver spelling of an aliased name still has to move its receiver
+        // into a named argument, so it is never a pure rename.
+        is_in_scope(target)
+    }) {
+        push(
+            NameSuggestion {
+                name: target.to_string(),
+                source: SuggestionSource::KnownAlias,
+                pure_rename: !is_receiver_call,
+            },
+            &mut suggestions,
+        );
+    }
+
+    if is_receiver_call
+        && let Some(target) =
+            lookup_alias(INVENTED_METHOD_ALIASES, method).filter(|target| is_in_scope(target))
+    {
+        push(
+            NameSuggestion {
+                name: target.to_string(),
+                source: SuggestionSource::KnownAlias,
+                pure_rename: false,
+            },
+            &mut suggestions,
+        );
+    }
+
+    for name in near_misses(written, namespace, method, is_receiver_call, &callable) {
+        push(
+            NameSuggestion {
+                name,
+                source: SuggestionSource::EditDistance,
+                pure_rename: !is_receiver_call,
+            },
+            &mut suggestions,
+        );
+    }
+
+    suggestions
+}
+
+/// In-scope names within a small edit distance of what was written, best first.
+fn near_misses(
+    written: &str,
+    namespace: Option<&str>,
+    method: &str,
+    is_receiver_call: bool,
+    callable: &[String],
+) -> Vec<String> {
+    let mut scored: Vec<(usize, usize, &str)> = Vec::new();
+    for candidate in callable {
+        let (candidate_namespace, candidate_method) = split_qualified(candidate);
+        // Tier 0 is the best match: the same namespace with a mistyped method,
+        // or a mistyped bare name. Tier 1 is the right method in the wrong
+        // namespace, which is how a model spells a function it half-remembers.
+        let (tier, distance) = match (namespace, candidate_namespace) {
+            _ if is_receiver_call => {
+                if candidate_namespace.is_none() {
+                    continue;
+                }
+                (1, edit_distance(method, candidate_method))
+            }
+            (Some(namespace), Some(candidate_namespace)) if namespace == candidate_namespace => {
+                (0, edit_distance(method, candidate_method))
+            }
+            (Some(_), Some(_)) if method == candidate_method => (1, 0),
+            (Some(_), _) | (_, Some(_)) => continue,
+            (None, None) => (0, edit_distance(written, candidate)),
+        };
+        if distance <= distance_budget(method) {
+            scored.push((tier, distance, candidate.as_str()));
+        }
+    }
+    scored.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then(left.1.cmp(&right.1))
+            .then(left.2.cmp(right.2))
+    });
+    scored
+        .into_iter()
+        .take(MAX_SUGGESTIONS)
+        .map(|(_, _, name)| name.to_string())
+        .collect()
+}
+
+/// How far a candidate may sit from what was written. Short names get a tight
+/// budget so `Map.len` is not offered for `Map.get`.
+fn distance_budget(method: &str) -> usize {
+    match method.chars().count() {
+        0..=3 => 1,
+        4..=7 => 2,
+        _ => 3,
+    }
+}
+
+fn lookup_alias<'a>(table: &'a [(&'a str, &'a str)], written: &str) -> Option<&'a str> {
+    table
+        .iter()
+        .find(|(invented, _)| *invented == written)
+        .map(|(_, real)| *real)
+}
+
+/// A callable key as a plain name: `List.new<T>` looks up as `List.new`.
+fn callable_lookup_name(key: &str) -> String {
+    key.split('<').next().unwrap_or(key).trim().to_string()
+}
+
+fn split_qualified(name: &str) -> (Option<&str>, &str) {
+    match name.rsplit_once('.') {
+        Some((namespace, method)) => (Some(namespace), method),
+        None => (None, name),
+    }
+}
+
+/// Whether a dotted prefix reads as a namespace (`Json`) rather than a local
+/// binding in a receiver call (`value`). Namespaces are capitalized.
+fn is_namespace_like(prefix: &str) -> bool {
+    prefix
+        .chars()
+        .next()
+        .is_some_and(|first| first.is_uppercase())
+}
+
+/// Levenshtein distance, two rows at a time.
+fn edit_distance(left: &str, right: &str) -> usize {
+    let left: Vec<char> = left.chars().collect();
+    let right: Vec<char> = right.chars().collect();
+    if left.is_empty() {
+        return right.len();
+    }
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    let mut current = vec![0usize; right.len() + 1];
+    for (row, left_char) in left.iter().enumerate() {
+        current[0] = row + 1;
+        for (column, right_char) in right.iter().enumerate() {
+            let substitution = previous[column] + usize::from(left_char != right_char);
+            current[column + 1] = substitution
+                .min(previous[column + 1] + 1)
+                .min(current[column] + 1);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[right.len()]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1098,6 +1351,130 @@ mod tests {
 
         assert_eq!(inner.line, 3);
         assert_eq!(outer.line, 1);
+    }
+
+    /// The prelude the checker actually offers, as `unresolved_call_suggestions`
+    /// receives it: qualified keys, some carrying generic parameters.
+    fn prelude() -> Vec<&'static str> {
+        vec![
+            "Channel.receiver<T>",
+            "Int.to_string",
+            "Json.at_int",
+            "Json.field",
+            "Json.field_bool",
+            "Json.field_int",
+            "Json.field_string",
+            "Json.parse",
+            "List.len<T>",
+            "List.new<T>",
+            "List.try_fold<T, U: Struct, E>",
+            "Map.get_or_default<K: Hashable, V>",
+            "Output.write",
+            "String.index_of",
+            "String.parse_int",
+            "helper",
+        ]
+    }
+
+    #[test]
+    fn known_aliases_resolve_invented_names_to_real_functions() {
+        for (invented, real) in [
+            ("print", "Output.write"),
+            ("println", "Output.write"),
+            ("write", "Output.write"),
+            ("Int.parse", "String.parse_int"),
+            ("Json.get_string", "Json.field_string"),
+            ("Json.get_int", "Json.field_int"),
+            ("Json.get_bool", "Json.field_bool"),
+            ("Json.get_field", "Json.field"),
+            ("List.of", "List.new"),
+            ("Map.get_or", "Map.get_or_default"),
+        ] {
+            let suggestions = unresolved_call_suggestions(invented, prelude());
+            assert_eq!(
+                suggestions
+                    .first()
+                    .map(|suggestion| suggestion.name.as_str()),
+                Some(real),
+                "`{invented}` must suggest `{real}`"
+            );
+            assert!(
+                suggestions[0].pure_rename,
+                "`{invented}` -> `{real}` changes only the callee name"
+            );
+        }
+    }
+
+    #[test]
+    fn near_misses_prefer_the_namespace_that_was_written() {
+        let suggestions = unresolved_call_suggestions("List.lenn", prelude());
+        assert_eq!(
+            suggestions
+                .first()
+                .map(|suggestion| suggestion.name.as_str()),
+            Some("List.len")
+        );
+        assert_eq!(suggestions[0].source, SuggestionSource::EditDistance);
+    }
+
+    /// A receiver spelling must still name the real function, but substituting
+    /// it also moves the receiver into a named argument, so it is not a rename.
+    #[test]
+    fn receiver_spellings_are_suggested_but_never_a_pure_rename() {
+        let suggestions = unresolved_call_suggestions("read value.get_int", prelude());
+        assert_eq!(
+            suggestions
+                .first()
+                .map(|suggestion| suggestion.name.as_str()),
+            Some("Json.field_int")
+        );
+        assert!(suggestions.iter().all(|suggestion| !suggestion.pure_rename));
+    }
+
+    /// A suggestion may only ever name something in scope. An alias whose target
+    /// is missing from the symbol table must not be offered.
+    #[test]
+    fn suggestions_are_drawn_only_from_the_in_scope_table() {
+        assert!(unresolved_call_suggestions("print", vec!["helper"]).is_empty());
+        assert!(unresolved_call_suggestions("totally_unrelated_name", prelude()).is_empty());
+    }
+
+    /// Every alias target must be a real prelude function, so the table cannot
+    /// outlive a rename or removal in the core interfaces.
+    #[test]
+    fn known_aliases_name_real_core_interface_functions() {
+        let prelude: Vec<String> = rsscript_interface_catalog::CORE_INTERFACES
+            .iter()
+            .chain(rsscript_interface_catalog::STANDARD_PACKAGE_INTERFACES.iter())
+            .flat_map(|(_, source)| source.lines())
+            .filter_map(|line| line.trim().strip_prefix("pub fn "))
+            .map(|declaration| {
+                declaration
+                    .split(['(', '<'])
+                    .next()
+                    .unwrap_or(declaration)
+                    .trim()
+                    .to_string()
+            })
+            .collect();
+
+        for (invented, real) in INVENTED_NAME_ALIASES
+            .iter()
+            .chain(INVENTED_METHOD_ALIASES.iter())
+        {
+            assert!(
+                prelude.iter().any(|name| name == real),
+                "alias `{invented}` -> `{real}` names a function that is not in the core interfaces"
+            );
+        }
+    }
+
+    #[test]
+    fn edit_distance_counts_single_character_operations() {
+        assert_eq!(edit_distance("len", "len"), 0);
+        assert_eq!(edit_distance("lenn", "len"), 1);
+        assert_eq!(edit_distance("", "len"), 3);
+        assert_eq!(edit_distance("kitten", "sitting"), 3);
     }
 
     #[test]

@@ -9,7 +9,7 @@ use crate::ast::{
     ProtocolImplMapping, ReturnStmt, SelectArm, SelectStmt, Stmt, SumTypeDecl, SumVariant,
     TaskGroupStmt, TypeAliasDecl, TypeDecl, TypeKind, TypeRef, UseDecl, WithStmt,
 };
-use crate::lexer::{Token, TokenKind, lex_with_budget};
+use crate::lexer::{KeywordCategory, Token, TokenKind, lex_with_budget};
 use crate::{FrontendBudget, FrontendBudgetLimits, ParseRecursionGuard, Span};
 
 mod expr;
@@ -24,6 +24,38 @@ use items::*;
 use scan::*;
 use stmt::*;
 use types::*;
+
+/// Words the parser matches as keywords in specific positions, which the lexer
+/// deliberately leaves as plain identifiers and which are therefore absent from
+/// [`crate::lexer::KEYWORDS`].
+///
+/// The generated grammar surface reads this table. It is not a second,
+/// documentation-only catalog: `parser_keywords_are_matched_by_a_parser_
+/// production` asserts every entry is really matched by a production in this
+/// module, so a word cannot survive here after the parser stops recognizing it.
+pub const PARSER_KEYWORDS: &[(&str, KeywordCategory)] = &[
+    // Declarations and bindings
+    ("sum", KeywordCategory::Declaration),
+    ("protocol", KeywordCategory::Declaration),
+    ("impl", KeywordCategory::Declaration),
+    ("type", KeywordCategory::Declaration),
+    ("const", KeywordCategory::Declaration),
+    ("opaque", KeywordCategory::Declaration),
+    ("module", KeywordCategory::Declaration),
+    ("use", KeywordCategory::Declaration),
+    ("view", KeywordCategory::Declaration),
+    // Declaration clauses
+    ("derives", KeywordCategory::Modifier),
+    ("retains", KeywordCategory::Modifier),
+    ("captures", KeywordCategory::Modifier),
+    // Ownership annotations on a type
+    ("noescape", KeywordCategory::Ownership),
+    ("owned", KeywordCategory::Ownership),
+    // Structured concurrency statements
+    ("task_group", KeywordCategory::Control),
+    ("select", KeywordCategory::Control),
+    ("spawn", KeywordCategory::Control),
+];
 
 /// The parser's closed top-level dispatch table. Prefix completion reads this
 /// table directly; it is intentionally not a second, completion-only catalog.
@@ -1314,5 +1346,211 @@ fn run() -> Unit {
                 },
             ]
         ));
+    }
+
+    /// Every parser keyword must really be matched by a production in this
+    /// module. The parser recognizes a positional keyword through exactly three
+    /// forms, so scanning its own sources for them ties the published grammar
+    /// surface to the parser's behavior instead of to a hand-kept list.
+    #[test]
+    fn parser_keywords_are_matched_by_a_parser_production() {
+        const SOURCES: &[&str] = &[
+            include_str!("mod.rs"),
+            include_str!("expr.rs"),
+            include_str!("items.rs"),
+            include_str!("pattern.rs"),
+            include_str!("scan.rs"),
+            include_str!("stmt.rs"),
+            include_str!("types.rs"),
+        ];
+
+        for (word, _) in PARSER_KEYWORDS {
+            let matched = SOURCES.iter().any(|source| {
+                source.contains(&format!("is_ident_text(\"{word}\")"))
+                    || source.contains(&format!("at_ident(\"{word}\")"))
+                    || source.contains(&format!("name == \"{word}\""))
+                    || source.contains(&format!("(\"{word}\")"))
+            });
+            assert!(
+                matched,
+                "`{word}` is published as a parser keyword but no production matches it"
+            );
+        }
+    }
+
+    /// A parser keyword is by definition one the lexer does *not* reserve, so
+    /// the three published tables stay disjoint.
+    #[test]
+    fn parser_keywords_are_disjoint_from_the_lexer_tables() {
+        for (word, _) in PARSER_KEYWORDS {
+            assert!(
+                !crate::lexer::KEYWORDS.iter().any(|(kw, _)| kw == word),
+                "`{word}` is already a reserved keyword"
+            );
+            assert!(
+                !crate::lexer::CONTEXTUAL_KEYWORDS
+                    .iter()
+                    .any(|(kw, _)| kw == word),
+                "`{word}` is already a contextual keyword"
+            );
+        }
+    }
+
+    /// The single statement of `function`'s body, by index.
+    fn body_statement(program: &Program, index: usize) -> &Stmt {
+        let Item::Function(function) = &program.items[index] else {
+            panic!("expected a function at item {index}");
+        };
+        &function.body.statements[0]
+    }
+
+    #[test]
+    fn brace_struct_literal_parses_as_the_canonical_constructor_call() {
+        let program = parse_source(
+            "test.rss",
+            "fn build(title: take String) -> Report {\n    return Report { title: take title, count: 0 }\n}\n",
+        );
+        let Stmt::Return(ReturnStmt {
+            value: Some(Expr::Call { callee, args, .. }),
+            ..
+        }) = body_statement(&program, 0)
+        else {
+            panic!("expected a constructor call, got {:?}", program.items[0]);
+        };
+
+        assert_eq!(callee, &Callee::Name("Report".to_string()));
+        assert_eq!(
+            args.iter()
+                .map(|arg| arg.name.clone())
+                .collect::<Vec<_>>()
+                .as_slice(),
+            [Some("title".to_string()), Some("count".to_string())]
+        );
+        assert!(args.iter().all(|arg| !arg.malformed));
+        assert!(matches!(
+            &args[0].value,
+            Expr::Effect {
+                effect: DataEffect::Take,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn brace_struct_literal_accepts_a_trailing_comma_and_a_qualified_head() {
+        let program = parse_source(
+            "test.rss",
+            "fn build() -> Report {\n    return shapes.Report {\n        title: \"t\",\n        count: 0,\n    }\n}\n",
+        );
+        let Stmt::Return(ReturnStmt {
+            value: Some(Expr::Call { callee, args, .. }),
+            ..
+        }) = body_statement(&program, 0)
+        else {
+            panic!("expected a constructor call");
+        };
+
+        assert_eq!(
+            callee,
+            &Callee::Qualified {
+                namespace: "shapes".to_string(),
+                name: "Report".to_string(),
+            }
+        );
+        assert_eq!(args.len(), 2);
+    }
+
+    /// A brace group that is not `Head { field: value, ... }` must keep falling
+    /// through to the other productions, so `select`/`task_group` in value
+    /// position still report unsupported syntax instead of becoming a call.
+    #[test]
+    fn brace_struct_literal_does_not_swallow_statement_only_blocks() {
+        let program = parse_source(
+            "test.rss",
+            "fn run() -> Unit {\n    let handle = select { ready = await Stream.next(stream: mut stream) => { return Unit } }\n}\n",
+        );
+        let Stmt::Let(LetStmt { value, .. }) = body_statement(&program, 0) else {
+            panic!("expected a let statement");
+        };
+        assert!(
+            !matches!(value, Some(Expr::Call { .. })),
+            "select in value position must not parse as a constructor call: {value:?}"
+        );
+    }
+
+    #[test]
+    fn expression_match_arm_with_a_trailing_comma_parses_as_the_canonical_block_arm() {
+        let sugar = parse_source(
+            "test.rss",
+            "fn classify(value: Int) -> Int {\n    return match value {\n        0 => 10,\n        _ => 20,\n    }\n}\n",
+        );
+        let canonical = parse_source(
+            "test.rss",
+            "fn classify(value: Int) -> Int {\n    return match value {\n        0 => { 10 }\n        _ => { 20 }\n    }\n}\n",
+        );
+
+        let arm_shapes = |program: &Program| {
+            let Stmt::Return(ReturnStmt {
+                value:
+                    Some(Expr::Match {
+                        arms,
+                        malformed_arm_spans,
+                        ..
+                    }),
+                ..
+            }) = body_statement(program, 0)
+            else {
+                panic!("expected a match expression");
+            };
+            assert!(malformed_arm_spans.is_empty(), "arm failed to parse");
+            arms.iter()
+                .map(|arm| {
+                    assert_eq!(arm.body.statements.len(), 1);
+                    let Stmt::Expr(Expr::Number(literal, _)) = &arm.body.statements[0] else {
+                        panic!("expected a single expression statement, got {:?}", arm.body);
+                    };
+                    (
+                        format!("{:?}", arm.pattern.binding_names()),
+                        literal.clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(arm_shapes(&sugar), arm_shapes(&canonical));
+        assert_eq!(arm_shapes(&sugar).len(), 2);
+    }
+
+    #[test]
+    fn block_match_arm_accepts_a_trailing_comma() {
+        let program = parse_source(
+            "test.rss",
+            "fn classify(value: Int) -> Int {\n    match value {\n        0 => { return 1 },\n        _ => { return 2 },\n    }\n}\n",
+        );
+        let Stmt::Match(MatchStmt {
+            arms,
+            malformed_arm_spans,
+            ..
+        }) = body_statement(&program, 0)
+        else {
+            panic!("expected a match statement");
+        };
+        assert!(malformed_arm_spans.is_empty());
+        assert_eq!(arms.len(), 2);
+    }
+
+    /// The sugar must not merge two comma-free arms: an arm without a trailing
+    /// comma still ends at its own line.
+    #[test]
+    fn comma_free_expression_arms_stay_separate() {
+        let program = parse_source(
+            "test.rss",
+            "fn classify(value: Int) -> Int {\n    match value {\n        0 => return 1\n        _ => return 2\n    }\n}\n",
+        );
+        let Stmt::Match(MatchStmt { arms, .. }) = body_statement(&program, 0) else {
+            panic!("expected a match statement");
+        };
+        assert_eq!(arms.len(), 2);
+        assert!(arms.iter().all(|arm| arm.body.statements.len() == 1));
     }
 }

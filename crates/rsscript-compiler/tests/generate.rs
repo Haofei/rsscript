@@ -381,3 +381,65 @@ fn receiver_method_completion_exposes_a_resolved_receiver_effect() {
         Some("Int")
     );
 }
+
+/// A cursor sitting at a known receiver namespace must answer "what can I call
+/// here?" with that namespace's real signatures.
+///
+/// This is the first implication of the model failure-mode measurement: RS0206
+/// is the largest class that survives everything, and models fill the vacuum
+/// with plausible namespaced calls to functions that do not exist. The
+/// continuation response now carries the parameter names, their declared
+/// effects and the return type, so the choice is made from facts.
+#[test]
+fn namespace_cursor_lists_that_namespace_signatures() {
+    let mut session = GenerationSession::with_source(
+        "main.rss",
+        "fn main(text: read String) -> Unit {\n    String.",
+    );
+    let response = session.query(options(500));
+
+    let parse_int = response
+        .names
+        .iter()
+        .find(|candidate| candidate.text == "parse_int")
+        .expect("the namespace's own functions are offered");
+    assert_eq!(parse_int.kind, CompletionKind::Function);
+    assert_eq!(
+        parse_int.signature.as_deref(),
+        Some("String.parse_int(value: read String) -> Option<Int>")
+    );
+
+    // Every callable candidate belongs to the namespace at the cursor, and each
+    // carries the signature a caller needs to write the call correctly.
+    let callables = response
+        .names
+        .iter()
+        .filter(|candidate| candidate.kind == CompletionKind::Function)
+        .collect::<Vec<_>>();
+    assert!(callables.len() > 10, "{callables:#?}");
+    assert!(
+        callables.iter().all(|candidate| candidate
+            .signature
+            .as_deref()
+            .is_some_and(|signature| signature.starts_with("String."))),
+        "{callables:#?}"
+    );
+}
+
+/// A local binding still resolves as a receiver, not as a namespace.
+#[test]
+fn a_typed_local_still_completes_as_a_receiver_not_a_namespace() {
+    let mut session = GenerationSession::with_source(
+        "main.rss",
+        "fn String.inspect(self: read String) -> Int { return 0 }\nfn main(text: read String) -> Unit {\n    text.",
+    );
+    let response = session.query(options(200));
+    assert!(
+        response
+            .names
+            .iter()
+            .any(|candidate| candidate.kind == CompletionKind::Method),
+        "{:#?}",
+        response.names
+    );
+}

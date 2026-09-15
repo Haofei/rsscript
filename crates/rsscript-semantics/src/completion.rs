@@ -376,6 +376,12 @@ fn complete_program(
         candidates.extend(remaining_named_arguments(&context, replace_prefix));
     } else if let Some(receiver) = receiver {
         candidates.extend(receiver_method_candidates(hir, receiver, replace_prefix));
+    } else if let Some(namespace) = namespace_at_cursor(source, prefix, &scope) {
+        candidates.extend(namespace_function_candidates(
+            hir,
+            namespace,
+            replace_prefix,
+        ));
     } else {
         candidates.extend(top_level_candidates(program, hir, replace_prefix));
         candidates.extend(sum_variant_candidates(
@@ -512,6 +518,60 @@ fn receiver_method_candidates(
             })
         })
         .collect()
+}
+
+/// The namespace written immediately before the cursor (`Json.`), when it names
+/// a namespace the checker actually knows.
+///
+/// A local binding is handled by [`receiver_at_cursor`] and takes precedence, so
+/// this only fires for a genuine namespace. Answering it matters because a model
+/// that has typed `Json.` is asking exactly the question the measurement says
+/// nothing answers today: *which functions exist here?* Without it the cursor
+/// falls through to the whole top-level list and the namespace's own functions
+/// are absent from it.
+fn namespace_at_cursor<'a>(
+    source: &'a str,
+    prefix: &PrefixParseResult,
+    scope: &ScopeFacts,
+) -> Option<&'a str> {
+    let before_replace = source.get(..prefix.replace_range.start)?;
+    let namespace_prefix = before_replace.strip_suffix('.')?;
+    let namespace = namespace_prefix
+        .rsplit(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+        .next()?;
+    (is_identifier(namespace) && !scope.bindings.contains_key(namespace)).then_some(namespace)
+}
+
+/// Every in-scope function of `namespace`, with its resolved signature.
+fn namespace_function_candidates(
+    hir: &Hir,
+    namespace: &str,
+    replace_prefix: &str,
+) -> Vec<SemanticCompletion> {
+    let mut candidates: Vec<SemanticCompletion> = Vec::new();
+    for (_, signature) in hir.signatures() {
+        if signature.namespace.as_deref() != Some(namespace)
+            || !signature.name.starts_with(replace_prefix)
+            || candidates
+                .iter()
+                .any(|candidate| candidate.name == signature.name)
+        {
+            continue;
+        }
+        candidates.push(SemanticCompletion {
+            name: signature.name.clone(),
+            insert_text: format!("{}()", signature.name),
+            kind: SemanticCompletionKind::Function,
+            ty: signature.return_ty.clone(),
+            signature: Some(signature.clone()),
+            // A namespace call has no implicit receiver, so nothing at this
+            // cursor proves a use-site effect.
+            required_effect: None,
+            scope_depth: 0,
+            completeness: SemanticCompletionCompleteness::Complete,
+        });
+    }
+    candidates
 }
 
 fn sum_variant_candidates(

@@ -1095,6 +1095,34 @@ fn expr_text(expr: &Expr) -> String {
     formatter.out
 }
 
+/// One canonical line for a declared function's signature:
+/// `Namespace.name<T>(param: effect Type, ...) -> fresh Return retains(param)`.
+///
+/// This is the formatter's own spelling of every part — parameter effects,
+/// generic parameters, `fresh`, `retains` — so a generated reference of callable
+/// signatures cannot drift from what `rss fmt` prints. Unlike the block
+/// formatter it never wraps, because a caller listing signatures wants one
+/// searchable line each.
+pub fn format_declaration_signature(function: &FunctionDecl) -> String {
+    let mut signature = String::new();
+    if function.is_async {
+        signature.push_str("async ");
+    }
+    signature.push_str(&function.name);
+    signature.push_str(&generic_params_text(&function.type_params));
+    signature.push_str(&format_params_text(&function.params));
+    signature.push_str(&return_type_text(
+        function.return_ty.as_ref(),
+        function.returns_fresh,
+    ));
+    for retained in &function.retained_params {
+        signature.push_str(" retains(");
+        signature.push_str(retained);
+        signature.push(')');
+    }
+    signature
+}
+
 fn format_params_text(params: &[Param]) -> String {
     format!(
         "({})",
@@ -1552,6 +1580,53 @@ fn protocol_method_name(name: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::format_source;
+
+    /// Formatting is the normalizer for the two accepted surface sugars: a brace
+    /// struct literal and a comma-terminated match arm format to exactly the
+    /// canonical constructor call and block arm, and formatting the canonical
+    /// spelling again is a fixed point.
+    #[test]
+    fn normalizes_accepted_surface_sugar_to_the_canonical_spelling() {
+        let sugar = r#"struct Report {
+    title: String
+    count: Int
+}
+
+fn build(title: take String, value: Int) -> Report {
+    return Report { title: take title, count: value }
+}
+
+fn classify(value: Int) -> Int {
+    return match value {
+        0 => 10,
+        _ => 20,
+    }
+}
+"#;
+        let canonical = r#"struct Report {
+    title: String
+    count: Int
+}
+
+fn build(title: take String, value: Int) -> Report {
+    return Report(title: take title, count: value)
+}
+
+fn classify(value: Int) -> Int {
+    return match value {
+        0 => {
+            10
+        }
+        _ => {
+            20
+        }
+    }
+}
+"#;
+
+        assert_eq!(format_source("sugar.rss", sugar), canonical);
+        assert_eq!(format_source("canonical.rss", canonical), canonical);
+    }
 
     #[test]
     fn formats_core_surface_deterministically() {

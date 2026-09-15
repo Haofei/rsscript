@@ -39,6 +39,24 @@ Do not use source assertions for purity, allocation, blocking, panic behavior,
 parallelism, native implementation, or host service access. These facts are
 inferred or supplied by external provider metadata.
 
+## Accepted surface spellings
+
+Two alternate spellings are accepted and desugared by the parser to the
+canonical form. Both produce the same AST — the checker never sees the alternate
+spelling — and `rss fmt` rewrites them to the canonical one, so formatting is
+the normalizer. Prefer the canonical spelling when writing new code.
+
+| Also accepted | Canonical (what `rss fmt` prints) |
+| --- | --- |
+| `T { field: value }` | `T(field: value)` |
+| `Pattern => expr,` | `Pattern => { expr }` |
+
+A trailing comma after a block arm (`Pattern => { ... },`) is accepted too.
+Nothing else outside the generated [grammar surface](docs/generated/grammar.md)
+is accepted: `::` paths, `task_group`/`with`/`select` in expression position,
+tuple destructuring in `for`, and `mut x: T = ...` as a binding form are all
+errors.
+
 ## Ownership and lifetime
 
 - `read` observes an argument.

@@ -392,3 +392,199 @@ fn artifact_bundle_verify_run_and_semantic_diff_form_one_cli_workflow() {
     assert_eq!(diff["schema"], "rsscript.semantic_diff.v2");
     assert_ne!(diff["old"]["module_digest"], diff["new"]["module_digest"]);
 }
+
+/// Check `source` end to end through the real `rss check --json` entry point and
+/// return the diagnostic codes it reports, in order.
+fn check_diagnostic_codes(source: &str) -> Vec<String> {
+    let temp = tempfile::tempdir().expect("temp dir should be creatable");
+    let path = temp.path().join("main.rss");
+    fs::write(&path, source).expect("write fixture");
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .args(["check", "--json"])
+        .arg(&path)
+        .output()
+        .expect("rss check should run");
+    let diagnostics: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("rss check --json emits JSON");
+    diagnostics
+        .as_array()
+        .expect("diagnostics are an array")
+        .iter()
+        .map(|diagnostic| diagnostic["code"].as_str().unwrap_or_default().to_string())
+        .collect()
+}
+
+/// Brace struct literals are accepted surface sugar that the parser desugars to
+/// the canonical constructor call, so the checker only ever sees one form: an
+/// accepted program and a rejected one must produce the same diagnostics in
+/// either spelling.
+#[test]
+fn brace_struct_literals_type_check_exactly_like_constructor_calls() {
+    let program = |literal: &str| {
+        format!(
+            "struct Report {{\n    title: String\n    count: Int\n}}\n\nfn build(title: take String, count: Int) -> Report {{\n    return {literal}\n}}\n"
+        )
+    };
+
+    assert_eq!(
+        check_diagnostic_codes(&program("Report(title: take title, count: count)")),
+        Vec::<String>::new(),
+        "the canonical constructor call must check cleanly"
+    );
+    assert_eq!(
+        check_diagnostic_codes(&program("Report { title: take title, count: count }")),
+        Vec::<String>::new(),
+        "the brace struct literal must check exactly like the constructor call"
+    );
+
+    // The sugar is not a checker bypass: the same mistake is reported the same
+    // way in both spellings.
+    let canonical_errors = check_diagnostic_codes(&program(
+        "Report(title: take title, count: count, extra: 1)",
+    ));
+    let sugared_errors = check_diagnostic_codes(&program(
+        "Report { title: take title, count: count, extra: 1 }",
+    ));
+    assert!(
+        !canonical_errors.is_empty(),
+        "an unknown constructor field must be rejected"
+    );
+    assert_eq!(canonical_errors, sugared_errors);
+}
+
+/// A comma-terminated expression match arm is accepted sugar for the canonical
+/// block arm, and reaches the checker as the same AST.
+#[test]
+fn expression_match_arms_check_exactly_like_block_arms() {
+    let program = |arms: &str| {
+        format!("fn classify(value: Int) -> Int {{\n    return match value {{\n{arms}    }}\n}}\n")
+    };
+
+    assert_eq!(
+        check_diagnostic_codes(&program(
+            "        0 => {\n            10\n        }\n        _ => {\n            20\n        }\n"
+        )),
+        Vec::<String>::new(),
+        "the canonical block arm must check cleanly"
+    );
+    assert_eq!(
+        check_diagnostic_codes(&program("        0 => 10,\n        _ => 20,\n")),
+        Vec::<String>::new(),
+        "the expression arm must check exactly like the block arm"
+    );
+}
+
+/// `RS0206` used to name only the failure, and the measured repair data shows
+/// that is exactly the class a model cannot recover from: it persisted through
+/// three repair turns nine times because nothing told it what to write instead.
+/// The diagnostic now names in-scope replacements, and a pure rename carries a
+/// machine-applicable edit that `rss fix` applies.
+#[test]
+fn unresolved_calls_suggest_in_scope_names_and_rename_fixes_apply() {
+    let source = concat!(
+        "fn report(count: Int) -> Unit {\n",
+        "    print(String.from_int(value: count))\n",
+        "    return Unit\n",
+        "}\n",
+        "\n",
+        "fn parse(raw: String) -> Option<Int> {\n",
+        "    return Int.parse(value: raw)\n",
+        "}\n",
+        "\n",
+        "fn size(values: List<Int>) -> Int {\n",
+        "    return List.lenn(list: values)\n",
+        "}\n",
+    );
+
+    let temp = tempfile::tempdir().expect("temp dir should be creatable");
+    let path = temp.path().join("main.rss");
+    fs::write(&path, source).expect("write fixture");
+
+    let checked = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .args(["check", "--json"])
+        .arg(&path)
+        .output()
+        .expect("rss check should run");
+    let diagnostics: serde_json::Value =
+        serde_json::from_slice(&checked.stdout).expect("rss check --json emits JSON");
+    let diagnostics = diagnostics.as_array().expect("diagnostics are an array");
+    assert_eq!(diagnostics.len(), 3, "{diagnostics:#?}");
+
+    for (diagnostic, expected) in
+        diagnostics
+            .iter()
+            .zip(["Output.write", "String.parse_int", "List.len"])
+    {
+        assert_eq!(diagnostic["code"], "RS0206");
+        let fix = diagnostic["fixes"]
+            .as_array()
+            .and_then(|fixes| fixes.iter().find(|fix| fix["kind"] == "rename_callee"))
+            .unwrap_or_else(|| panic!("RS0206 must carry a rename fix: {diagnostic:#?}"));
+        assert!(
+            fix["title"]
+                .as_str()
+                .is_some_and(|title| title.starts_with("Did you mean") && title.contains(expected)),
+            "help must name `{expected}`: {fix:#?}"
+        );
+        assert_eq!(fix["applicability"], "machine-applicable");
+        assert_eq!(fix["edit"]["replacement"], expected);
+    }
+
+    let fixed = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .args(["fix", "--write"])
+        .arg(&path)
+        .output()
+        .expect("rss fix should run");
+    assert!(
+        fixed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fixed.stderr)
+    );
+
+    let rewritten = fs::read_to_string(&path).expect("read fixed source");
+    assert!(rewritten.contains("Output.write(String.from_int(value: count))"));
+    assert!(rewritten.contains("return String.parse_int(value: raw)"));
+    assert!(rewritten.contains("return List.len(list: values)"));
+    assert!(
+        check_diagnostic_codes(&rewritten)
+            .iter()
+            .all(|code| code != "RS0206"),
+        "every unresolved call must be gone after the renames"
+    );
+}
+
+/// A receiver spelling still gets the real name, but substituting it also moves
+/// the receiver into a named argument, so the fix stays advice rather than
+/// claiming a rewrite it cannot perform.
+#[test]
+fn receiver_spelling_suggestions_are_advisory_not_machine_applicable() {
+    let temp = tempfile::tempdir().expect("temp dir should be creatable");
+    let path = temp.path().join("main.rss");
+    fs::write(
+        &path,
+        "fn read_port(value: JsonValue) -> Int {\n    return value.get_int(name: \"port\")\n}\n",
+    )
+    .expect("write fixture");
+
+    let checked = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .args(["check", "--json"])
+        .arg(&path)
+        .output()
+        .expect("rss check should run");
+    let diagnostics: serde_json::Value =
+        serde_json::from_slice(&checked.stdout).expect("rss check --json emits JSON");
+    let fix = diagnostics[0]["fixes"]
+        .as_array()
+        .and_then(|fixes| fixes.iter().find(|fix| fix["kind"] == "rename_callee"))
+        .expect("receiver spelling still gets a suggestion");
+
+    assert_eq!(diagnostics[0]["code"], "RS0206");
+    assert!(
+        fix["title"]
+            .as_str()
+            .is_some_and(|title| title.contains("Json.field_int")),
+        "{fix:#?}"
+    );
+    assert_eq!(fix["applicability"], "maybe-incorrect");
+    assert!(fix["edit"].is_null(), "advice must carry no edit: {fix:#?}");
+}

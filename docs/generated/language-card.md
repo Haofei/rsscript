@@ -6,14 +6,15 @@ Source: `syntax, diagnostics, and core interface registries`.
 
 A compact generated index for contributors and tools.
 
-- 30 reserved keywords, 2 contextual words, and 7 built-in constants.
+- 30 reserved keywords, 2 contextual words, 17 parser-level words, and 7 built-in constants.
 - 107 documented diagnostic codes.
-- 35 platform-neutral core interface files.
+- 35 platform-neutral core interface files carrying 450 callable signatures.
 
 - [Grammar surface](grammar.md) ([JSON](grammar.json))
 - [Keyword classification](keywords.md)
 - [Diagnostic catalog](diagnostic-catalog.md) ([JSON](diagnostic-catalog.json))
 - [Core interfaces](core-interfaces.md) ([JSON](core-interfaces.json))
+- [Core interface signatures](signatures.md)
 
 Machine-readable summary: [language-card.json](language-card.json). Diagnostic explanation catalogs do not fabricate fixes; machine-applicable edits are instance-level data returned by `rss check --json` and `rss fix --json`.
 
@@ -28,3 +29,36 @@ fn update(target: mut Buffer, input: take String, note: read String) -> Unit {
     return apply(target: mut target, input: take input, note: note)
 }
 ```
+
+## Accepted surface sugar
+
+Two alternate spellings are accepted and desugared by the parser to the
+canonical form. They produce the same AST, so the checker sees only the
+canonical node, and `rss fmt` rewrites them to the canonical spelling —
+formatting is the normalizer.
+
+| Also accepted | Canonical |
+| --- | --- |
+| `T { field: value }` | `T(field: value)` |
+| `Pattern => expr,` | `Pattern => { expr }` |
+
+A trailing comma after a block arm (`Pattern => { ... },`) is accepted too.
+Prefer the canonical spelling when writing new code.
+
+## Canonical surface forms
+
+These are the forms most often written wrong. The right column is what `rss fmt` prints.
+
+| Form | Write this | Not this |
+| --- | --- | --- |
+| constructor call | `Report(title: take title, count: 0)` | `Report { title: title, count: 0 }` |
+| match arm | `Ok(value) => { return value }` | `Ok(value) => value,` |
+| `task_group`, `with` and `select` are statements | `task_group { spawn work() }` | `let results = task_group { spawn work() }` |
+| no tuple destructuring in `for` | `for key in Map.keys(map: counts) { }` | `for (key, value) in counts { }` |
+| mutable binding | `let mut total: Int = 0` | `mut total: Int = 0` |
+
+## Core interface signatures
+
+450 callable signatures across 59 namespaces are prelude-visible to a single-file check. The full list, grouped by namespace and generated from the interface sources themselves, is [signatures.md](signatures.md); the machine-readable form is the `signatures` array of [language-card.json](language-card.json).
+
+At a cursor, `rss generate continuations` returns the signatures for the namespace being typed, so a call can be written from facts rather than guessed.

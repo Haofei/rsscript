@@ -7,6 +7,7 @@ use std::path::Path;
 
 use rsscript_diagnostics::diagnostic_explanations;
 use rsscript_interface_catalog::{CORE_INTERFACES, STANDARD_PACKAGE_INTERFACES};
+use rsscript_syntax::PARSER_KEYWORDS;
 use rsscript_syntax::lexer::{BUILTIN_CONSTANTS, CONTEXTUAL_KEYWORDS, KEYWORDS};
 use serde::Serialize;
 
@@ -59,9 +60,13 @@ struct GrammarJson {
     schema: &'static str,
     version: u32,
     completeness: &'static str,
-    provenance: [&'static str; 3],
+    provenance: [&'static str; 4],
     reserved_keywords: Vec<Keyword>,
     contextual_keywords: Vec<Keyword>,
+    /// Words the parser matches positionally that the lexer leaves as plain
+    /// identifiers. Omitting them made the published grammar surface claim a
+    /// smaller language than the parser accepts.
+    parser_keywords: Vec<Keyword>,
     builtin_constants: Vec<String>,
 }
 
@@ -97,11 +102,97 @@ struct LanguageCardJson {
     grammar_sha256: String,
     reserved_keyword_count: usize,
     contextual_keyword_count: usize,
+    parser_keyword_count: usize,
     builtin_constant_count: usize,
     diagnostic_count: usize,
     core_interface_count: usize,
     diagnostic_fixes: DiagnosticFixAvailability,
     canonical_call_example: String,
+    accepted_surface_sugar: Vec<SurfaceSugar>,
+    canonical_surface_forms: Vec<CanonicalSurfaceForm>,
+    signature_count: usize,
+    signatures: Vec<InterfaceSignature>,
+}
+
+/// One surface form models get wrong, with the right and wrong spelling.
+///
+/// Every entry is a measured failure class from
+/// `docs/planning/2026-09-model-failure-modes.md`; the card's single
+/// `Namespace.function(...)` example eliminated Rust `::` path syntax outright
+/// (6 candidates -> 0), which is the evidence that showing the form works.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct CanonicalSurfaceForm {
+    form: &'static str,
+    right: &'static str,
+    wrong: &'static str,
+}
+
+/// One `pub fn` signature from an interface source, as the formatter spells it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct InterfaceSignature {
+    /// The declaring namespace (`Json`), or `null` for a free function.
+    namespace: Option<String>,
+    /// The declared name including its namespace (`Json.field_int`).
+    name: String,
+    /// The full one-line signature, parameter effects and return type included.
+    signature: String,
+    /// The interface file the declaration comes from.
+    path: String,
+    kind: &'static str,
+}
+
+fn canonical_surface_forms() -> Vec<CanonicalSurfaceForm> {
+    vec![
+        CanonicalSurfaceForm {
+            form: "constructor call",
+            right: "Report(title: take title, count: 0)",
+            wrong: "Report { title: title, count: 0 }",
+        },
+        CanonicalSurfaceForm {
+            form: "match arm",
+            right: "Ok(value) => { return value }",
+            wrong: "Ok(value) => value,",
+        },
+        CanonicalSurfaceForm {
+            form: "`task_group`, `with` and `select` are statements",
+            right: "task_group { spawn work() }",
+            wrong: "let results = task_group { spawn work() }",
+        },
+        CanonicalSurfaceForm {
+            form: "no tuple destructuring in `for`",
+            right: "for key in Map.keys(map: counts) { }",
+            wrong: "for (key, value) in counts { }",
+        },
+        CanonicalSurfaceForm {
+            form: "mutable binding",
+            right: "let mut total: Int = 0",
+            wrong: "mut total: Int = 0",
+        },
+    ]
+}
+
+/// An alternate surface spelling the parser desugars to `canonical` before the
+/// checker sees it. `rss fmt` rewrites `accepted` to `canonical`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct SurfaceSugar {
+    accepted: &'static str,
+    canonical: &'static str,
+    desugars_in: &'static str,
+}
+
+fn accepted_surface_sugar() -> Vec<SurfaceSugar> {
+    vec![
+        SurfaceSugar {
+            accepted: "T { field: value }",
+            canonical: "T(field: value)",
+            desugars_in: "parser",
+        },
+        SurfaceSugar {
+            accepted: "Pattern => expr,",
+            canonical: "Pattern => { expr }",
+            desugars_in: "parser",
+        },
+    ]
 }
 
 pub fn run(root: &Path, check: bool) -> Result<(), Box<dyn Error>> {
@@ -144,6 +235,7 @@ fn generated_documents() -> BTreeMap<&'static str, String> {
         ),
         ("docs/generated/language-card.md", language_card_document()),
         ("docs/generated/language-card.json", language_card_json()),
+        ("docs/generated/signatures.md", signatures_document()),
     ])
 }
 
@@ -168,6 +260,10 @@ fn grammar_document() -> String {
     }
     output.push_str("## Contextual words\n\n");
     for keyword in keywords.iter().filter(|keyword| keyword.contextual) {
+        output.push_str(&format!("- `{}` ({})\n", keyword.word, keyword.category));
+    }
+    output.push_str("\n## Parser-level words\n\nThe lexer leaves these as plain identifiers; the parser matches them as keywords in specific positions. They are declaration, clause, ownership and structured-concurrency words, and a program that uses one as an ordinary name will not parse where the parser expects the keyword.\n\n");
+    for keyword in parser_keywords() {
         output.push_str(&format!("- `{}` ({})\n", keyword.word, keyword.category));
     }
     output.push_str("\n## Built-in constants and constructors\n\n");
@@ -239,12 +335,160 @@ fn language_card_document() -> String {
         "syntax, diagnostics, and core interface registries",
     );
     output.push_str("A compact generated index for contributors and tools.\n\n");
-    output.push_str(&format!("- {} reserved keywords, {} contextual words, and {} built-in constants.\n- {} documented diagnostic codes.\n- {} platform-neutral core interface files.\n\n", keyword_data.iter().filter(|keyword| !keyword.contextual).count(), keyword_data.iter().filter(|keyword| keyword.contextual).count(), builtin_constants().len(), diagnostics().len(), core_interfaces().len()));
-    output.push_str("- [Grammar surface](grammar.md) ([JSON](grammar.json))\n- [Keyword classification](keywords.md)\n- [Diagnostic catalog](diagnostic-catalog.md) ([JSON](diagnostic-catalog.json))\n- [Core interfaces](core-interfaces.md) ([JSON](core-interfaces.json))\n\nMachine-readable summary: [language-card.json](language-card.json). Diagnostic explanation catalogs do not fabricate fixes; machine-applicable edits are instance-level data returned by `rss check --json` and `rss fix --json`.\n\n## Canonical call spelling\n\nNamed arguments stay named. A direct call-site `read` wrapper is omitted because it is the default; `mut` and `take` remain explicit. The formatter does not invent or remove argument labels.\n\n```rsscript\n");
+    output.push_str(&format!("- {} reserved keywords, {} contextual words, {} parser-level words, and {} built-in constants.\n- {} documented diagnostic codes.\n- {} platform-neutral core interface files carrying {} callable signatures.\n\n", keyword_data.iter().filter(|keyword| !keyword.contextual).count(), keyword_data.iter().filter(|keyword| keyword.contextual).count(), parser_keywords().len(), builtin_constants().len(), diagnostics().len(), core_interfaces().len(), interface_signatures().len()));
+    output.push_str("- [Grammar surface](grammar.md) ([JSON](grammar.json))\n- [Keyword classification](keywords.md)\n- [Diagnostic catalog](diagnostic-catalog.md) ([JSON](diagnostic-catalog.json))\n- [Core interfaces](core-interfaces.md) ([JSON](core-interfaces.json))\n- [Core interface signatures](signatures.md)\n\nMachine-readable summary: [language-card.json](language-card.json). Diagnostic explanation catalogs do not fabricate fixes; machine-applicable edits are instance-level data returned by `rss check --json` and `rss fix --json`.\n\n## Canonical call spelling\n\nNamed arguments stay named. A direct call-site `read` wrapper is omitted because it is the default; `mut` and `take` remain explicit. The formatter does not invent or remove argument labels.\n\n```rsscript\n");
     output.push_str(&canonical_example());
-    output.push_str("```\n");
+    output.push_str("```\n\n");
+    output.push_str(ACCEPTED_SUGAR_SECTION);
+    output.push_str(&canonical_surface_forms_section());
+    output.push_str(&core_signatures_section());
     output
 }
+
+/// The five forms models get wrong most often, each with a right/wrong pair.
+///
+/// The card used to be silent on exactly these, and hallucinated syntax stayed
+/// the largest first-attempt failure class (19 candidates without the card, 16
+/// with it). Silence is what costs; the one call-spelling example the card
+/// already carried removed Rust `::` paths entirely.
+fn canonical_surface_forms_section() -> String {
+    let mut output = String::from(
+        "## Canonical surface forms\n\nThese are the forms most often written wrong. The right column is what `rss fmt` prints.\n\n| Form | Write this | Not this |\n| --- | --- | --- |\n",
+    );
+    for form in canonical_surface_forms() {
+        output.push_str(&format!(
+            "| {} | `{}` | `{}` |\n",
+            form.form, form.right, form.wrong
+        ));
+    }
+    output.push('\n');
+    output
+}
+
+/// A pointer to the generated signature index.
+///
+/// The measurement is blunt about why this exists: `RS0206` is the largest
+/// class that survives everything (15 / 14 / 9 candidates across the three
+/// modes), and the card named 35 interface *files* while carrying zero callable
+/// signatures. Models filled that vacuum with `print`, `Int.parse` and a
+/// nine-call `get_*` JSON accessor family that does not exist.
+fn core_signatures_section() -> String {
+    let signatures = interface_signatures();
+    let namespaces = namespace_count(&signatures);
+    format!(
+        "## Core interface signatures\n\n{} callable signatures across {namespaces} namespaces are prelude-visible to a single-file check. The full list, grouped by namespace and generated from the interface sources themselves, is [signatures.md](signatures.md); the machine-readable form is the `signatures` array of [language-card.json](language-card.json).\n\nAt a cursor, `rss generate continuations` returns the signatures for the namespace being typed, so a call can be written from facts rather than guessed.\n",
+        signatures.len()
+    )
+}
+
+fn namespace_count(signatures: &[InterfaceSignature]) -> usize {
+    let mut namespaces = signatures
+        .iter()
+        .filter_map(|signature| signature.namespace.clone())
+        .collect::<Vec<_>>();
+    namespaces.sort();
+    namespaces.dedup();
+    namespaces.len()
+}
+
+/// Every prelude-visible `pub fn`, grouped by namespace.
+///
+/// The list is deliberately never truncated: a signature index that silently
+/// drops entries is worse than none, because a caller cannot tell absence from
+/// omission. It is grouped by namespace and, within a namespace, by interface
+/// file, so its size stays navigable as it grows.
+fn signatures_document() -> String {
+    let signatures = interface_signatures();
+    let mut output = header(
+        "RSScript core interface signatures",
+        "rsscript-interface-catalog::{CORE_INTERFACES, STANDARD_PACKAGE_INTERFACES}",
+    );
+    output.push_str(&format!(
+        "Every public function a single-file check can call without declaring anything — top-level `pub fn` and `pub async fn` declarations, plus the methods declared by a `protocol` — as {} signatures across {} namespaces, spelled exactly as `rss fmt` prints them. Nothing here is truncated. The machine-readable form is the `signatures` array of [language-card.json](language-card.json).\n\nA call is `Namespace.function(label: value)`. Parameter declarations keep `read`; at a call site `read` is omitted because it is the default, while `mut` and `take` stay explicit.\n",
+        signatures.len(),
+        namespace_count(&signatures)
+    ));
+
+    let mut namespace = None;
+    let mut path = None;
+    for signature in &signatures {
+        if namespace.as_ref() != Some(&signature.namespace) {
+            namespace = Some(signature.namespace.clone());
+            path = None;
+            output.push_str(&format!(
+                "\n## {}\n",
+                signature
+                    .namespace
+                    .as_deref()
+                    .unwrap_or("Free functions (no namespace)")
+            ));
+        }
+        if path.as_deref() != Some(signature.path.as_str()) {
+            path = Some(signature.path.clone());
+            output.push_str(&format!("\n`{}`\n\n", signature.path));
+        }
+        output.push_str(&format!("- `{}`\n", signature.signature));
+    }
+    output
+}
+
+/// Parse every prelude interface source and render each public declaration
+/// through the formatter, so the card cannot disagree with the compiler about
+/// what exists or how it is spelled.
+fn interface_signatures() -> Vec<InterfaceSignature> {
+    let mut signatures = Vec::new();
+    for interface in prelude_interfaces() {
+        let program = rsscript_syntax::parse_source_raw(&interface.path, &interface.source);
+        for item in &program.items {
+            let rsscript_syntax::ast::Item::Function(function) = item else {
+                continue;
+            };
+            if !function.is_public {
+                continue;
+            }
+            let (namespace, _) = function
+                .name
+                .rsplit_once('.')
+                .map_or((None, function.name.as_str()), |(namespace, name)| {
+                    (Some(namespace.to_string()), name)
+                });
+            signatures.push(InterfaceSignature {
+                namespace,
+                name: function.name.clone(),
+                signature: rsscript_syntax::format_declaration_signature(function),
+                path: interface.path.clone(),
+                kind: interface.kind,
+            });
+        }
+    }
+    signatures.sort_by(|left, right| {
+        left.namespace
+            .cmp(&right.namespace)
+            .then(left.path.cmp(&right.path))
+            .then(left.signature.cmp(&right.signature))
+    });
+    signatures
+}
+
+/// Two surface spellings models already write are accepted and desugared by the
+/// parser. Both are listed here because silence about them was measured to cost
+/// more than the sugar does: see `docs/planning/2026-09-model-failure-modes.md`.
+const ACCEPTED_SUGAR_SECTION: &str = r#"## Accepted surface sugar
+
+Two alternate spellings are accepted and desugared by the parser to the
+canonical form. They produce the same AST, so the checker sees only the
+canonical node, and `rss fmt` rewrites them to the canonical spelling —
+formatting is the normalizer.
+
+| Also accepted | Canonical |
+| --- | --- |
+| `T { field: value }` | `T(field: value)` |
+| `Pattern => expr,` | `Pattern => { expr }` |
+
+A trailing comma after a block arm (`Pattern => { ... },`) is accepted too.
+Prefer the canonical spelling when writing new code.
+
+"#;
 
 fn canonical_example() -> String {
     "fn apply(target: mut Buffer, input: take String, note: read String) -> Unit {}\n\nfn update(target: mut Buffer, input: take String, note: read String) -> Unit {\n    return apply(target: mut target, input: take input, note: note)\n}\n".to_string()
@@ -259,6 +503,7 @@ fn grammar_json() -> String {
         provenance: [
             "rsscript_syntax::lexer::KEYWORDS",
             "rsscript_syntax::lexer::CONTEXTUAL_KEYWORDS",
+            "rsscript_syntax::PARSER_KEYWORDS",
             "rsscript_syntax::lexer::BUILTIN_CONSTANTS",
         ],
         reserved_keywords: all_keywords
@@ -270,6 +515,7 @@ fn grammar_json() -> String {
             .into_iter()
             .filter(|keyword| keyword.contextual)
             .collect(),
+        parser_keywords: parser_keywords(),
         builtin_constants: builtin_constants(),
     })
 }
@@ -322,11 +568,16 @@ fn language_card_json() -> String {
             .iter()
             .filter(|keyword| keyword.contextual)
             .count(),
+        parser_keyword_count: parser_keywords().len(),
         builtin_constant_count: builtin_constants().len(),
         diagnostic_count: diagnostics().len(),
         core_interface_count: core_interfaces().len(),
         diagnostic_fixes: diagnostic_fix_availability(),
         canonical_call_example: canonical_example(),
+        accepted_surface_sugar: accepted_surface_sugar(),
+        canonical_surface_forms: canonical_surface_forms(),
+        signature_count: interface_signatures().len(),
+        signatures: interface_signatures(),
     })
 }
 
@@ -375,6 +626,25 @@ fn keywords() -> Vec<Keyword> {
     }));
     output.sort_by(|left, right| left.word.cmp(&right.word));
     output
+}
+
+/// The parser's own positional-keyword table, rendered like the lexer tables.
+///
+/// `docs/generated/grammar.md` omitted every one of these, so the published
+/// grammar surface described a smaller language than the parser accepts.
+/// `rsscript_syntax` owns the table and tests it against its own productions;
+/// this generator only renders it.
+fn parser_keywords() -> Vec<Keyword> {
+    let mut keywords = PARSER_KEYWORDS
+        .iter()
+        .map(|(word, category)| Keyword {
+            word: (*word).to_string(),
+            category: format!("{category:?}").to_ascii_lowercase(),
+            contextual: true,
+        })
+        .collect::<Vec<_>>();
+    keywords.sort_by(|left, right| left.word.cmp(&right.word));
+    keywords
 }
 
 fn builtin_constants() -> Vec<String> {
@@ -566,6 +836,228 @@ mod tests {
             card["canonical_call_example"]
                 .as_str()
                 .is_some_and(|example| example.contains("note: note"))
+        );
+    }
+
+    /// The card may only advertise sugar the parser really accepts, and it must
+    /// name the spelling `rss fmt` actually prints.
+    #[test]
+    fn advertised_surface_sugar_formats_to_its_canonical_spelling() {
+        let sugared = "fn build(title: take String) -> Report {\n    return Report { title: take title }\n}\n\nfn classify(value: Int) -> Int {\n    return match value {\n        0 => 10,\n        _ => 20,\n    }\n}\n";
+        let formatted = rsscript_syntax::format_source("card.rss", sugared);
+        assert!(
+            formatted.contains("Report(title: take title)"),
+            "brace struct literal must format to the constructor call: {formatted}"
+        );
+        assert!(
+            !formatted.contains("=> 10,"),
+            "expression arm must format to a block arm: {formatted}"
+        );
+
+        for sugar in accepted_surface_sugar() {
+            assert!(
+                ACCEPTED_SUGAR_SECTION.contains(sugar.accepted)
+                    && ACCEPTED_SUGAR_SECTION.contains(sugar.canonical),
+                "the rendered card must document `{}` -> `{}`",
+                sugar.accepted,
+                sugar.canonical
+            );
+        }
+    }
+
+    /// The published grammar surface must list every word the parser treats as
+    /// a keyword, not only the ones the lexer reserves. It used to omit all
+    /// seventeen parser-level words, so it described a smaller language than
+    /// the parser accepts.
+    #[test]
+    fn grammar_surface_lists_the_parser_level_words() {
+        let document = grammar_document();
+        let grammar: serde_json::Value = serde_json::from_str(&grammar_json()).unwrap();
+
+        assert_eq!(
+            grammar["parser_keywords"]
+                .as_array()
+                .map(Vec::len)
+                .unwrap_or_default(),
+            rsscript_syntax::PARSER_KEYWORDS.len()
+        );
+        assert!(
+            grammar["provenance"]
+                .as_array()
+                .expect("provenance array")
+                .iter()
+                .any(|entry| entry == "rsscript_syntax::PARSER_KEYWORDS"),
+            "the parser table must be named as a source of the grammar surface"
+        );
+
+        for (word, _) in rsscript_syntax::PARSER_KEYWORDS {
+            assert!(
+                document.contains(&format!("- `{word}` (")),
+                "`{word}` is missing from the rendered grammar surface"
+            );
+        }
+        for word in [
+            "sum",
+            "protocol",
+            "impl",
+            "type",
+            "const",
+            "opaque",
+            "derives",
+            "retains",
+            "noescape",
+            "owned",
+            "captures",
+            "task_group",
+            "select",
+            "spawn",
+            "use",
+            "module",
+        ] {
+            assert!(
+                rsscript_syntax::PARSER_KEYWORDS
+                    .iter()
+                    .any(|(published, _)| *published == word),
+                "`{word}` must be published as a parser keyword"
+            );
+        }
+
+        let card: serde_json::Value = serde_json::from_str(&language_card_json()).unwrap();
+        assert_eq!(
+            card["parser_keyword_count"].as_u64().unwrap_or_default() as usize,
+            rsscript_syntax::PARSER_KEYWORDS.len()
+        );
+    }
+
+    /// `RS0207` is a semantic-frontend check, not a Rust-backend one.
+    #[test]
+    fn argument_type_mismatch_does_not_name_an_archived_backend() {
+        let explanation = diagnostics()
+            .into_iter()
+            .find(|diagnostic| diagnostic.code == "RS0207")
+            .expect("RS0207 is documented");
+        assert!(
+            !explanation.explanation.contains("Rust lowering"),
+            "{}",
+            explanation.explanation
+        );
+        assert!(explanation.explanation.contains("backend lowering"));
+    }
+
+    /// The signature index is generated from the interface sources themselves,
+    /// so it can neither invent a function nor miss one.
+    #[test]
+    fn signatures_come_from_the_interface_sources_and_are_never_truncated() {
+        let signatures = interface_signatures();
+
+        // Every public declaration in the prelude reaches the index. The index
+        // also carries protocol methods, which are callable contracts declared
+        // inside a `protocol` block rather than as a top-level `pub fn`.
+        let declared = prelude_interfaces()
+            .iter()
+            .flat_map(|interface| interface.source.lines())
+            .filter_map(|line| {
+                let line = line.trim_start();
+                line.strip_prefix("pub async fn ")
+                    .or_else(|| line.strip_prefix("pub fn "))
+            })
+            .map(|declaration| {
+                declaration
+                    .split(['(', '<'])
+                    .next()
+                    .unwrap_or(declaration)
+                    .trim()
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        assert!(!declared.is_empty());
+        for name in &declared {
+            assert!(
+                signatures.iter().any(|signature| &signature.name == name),
+                "`{name}` is declared in an interface but missing from the index"
+            );
+        }
+        assert!(
+            signatures.len() >= declared.len(),
+            "the index must carry every declared function, with nothing dropped"
+        );
+        assert!(
+            signatures
+                .iter()
+                .any(|signature| signature.name == "Clone.clone"),
+            "protocol methods are callable contracts and belong in the index"
+        );
+
+        // A few load-bearing names the failure report singles out.
+        for expected in [
+            "Output.write(message: String) -> Unit",
+            "String.parse_int(value: String) -> Option<Int>",
+        ] {
+            assert!(
+                signatures
+                    .iter()
+                    .any(|signature| signature.signature == expected),
+                "missing `{expected}`"
+            );
+        }
+
+        let json_fields = signatures
+            .iter()
+            .filter(|signature| signature.namespace.as_deref() == Some("Json"))
+            .map(|signature| signature.name.as_str())
+            .collect::<Vec<_>>();
+        for field in ["Json.field", "Json.field_int", "Json.field_string"] {
+            assert!(json_fields.contains(&field), "missing `{field}`");
+        }
+
+        // Grouped by namespace, then by file, so the rendered list stays
+        // navigable as it grows past a screenful.
+        let document = signatures_document();
+        assert!(document.contains("\n## Json\n"));
+        assert!(document.contains("`stdlib/json/json.rssi`"));
+        assert!(document.contains("- `Output.write(message: String) -> Unit`"));
+        for signature in &signatures {
+            assert!(
+                document.contains(&format!("- `{}`\n", signature.signature)),
+                "`{}` is missing from the rendered index",
+                signature.signature
+            );
+        }
+    }
+
+    /// Each canonical surface form must name a real measured failure and render
+    /// a right/wrong pair, and the "right" spelling has to be one the parser
+    /// actually accepts.
+    #[test]
+    fn canonical_surface_forms_show_a_right_and_wrong_pair() {
+        let forms = canonical_surface_forms();
+        assert_eq!(forms.len(), 5);
+        let section = canonical_surface_forms_section();
+        for form in &forms {
+            assert_ne!(form.right, form.wrong);
+            assert!(section.contains(form.right), "missing `{}`", form.right);
+            assert!(section.contains(form.wrong), "missing `{}`", form.wrong);
+        }
+
+        let card: serde_json::Value = serde_json::from_str(&language_card_json()).unwrap();
+        assert_eq!(
+            card["canonical_surface_forms"]
+                .as_array()
+                .map(Vec::len)
+                .unwrap_or_default(),
+            forms.len()
+        );
+        assert_eq!(
+            card["signature_count"].as_u64().unwrap_or_default() as usize,
+            interface_signatures().len()
+        );
+        assert_eq!(
+            card["signatures"]
+                .as_array()
+                .map(Vec::len)
+                .unwrap_or_default(),
+            interface_signatures().len(),
+            "language-card.json must stay in sync with the rendered index"
         );
     }
 

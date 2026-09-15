@@ -160,6 +160,10 @@ pub(super) fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<E
         return Some(object);
     }
 
+    if let Some(literal) = parse_brace_struct_literal_expr(tokens, start, end) {
+        return Some(literal);
+    }
+
     if let Some(receiver_call) = parse_receiver_call_expr_from_receiver(tokens, start, end, None) {
         return Some(receiver_call);
     }
@@ -532,6 +536,62 @@ fn parse_object_literal_expr(tokens: &[Token], start: usize, end: usize) -> Opti
     }
     Some(Expr::ObjectLiteral {
         fields,
+        span: tokens[start].span.clone(),
+    })
+}
+
+/// Brace struct-literal sugar: `T { field: value, ... }` (and the
+/// module-qualified `ns.T { ... }`) parses to exactly the canonical constructor
+/// call `T(field: value, ...)`.
+///
+/// This is surface sugar only. The node produced here is token-for-token the
+/// same [`Expr::Call`] the canonical spelling produces, so the checker, HIR,
+/// LSP and formatter need no knowledge of the alternate spelling, and
+/// `format_program` — which parses with [`super::parse_source_raw`] — prints the
+/// canonical constructor call. Formatting is therefore the normalizer.
+///
+/// The form is deliberately narrow: every entry must be `field: value`, and an
+/// empty brace group is not a constructor call. A head that is not a plain
+/// callee (an `if` condition, a `match` scrutinee, a `task_group`/`select`
+/// block, a closure) fails to parse here and is left to the other productions,
+/// so `select { ... }` in value position still reports unsupported syntax
+/// rather than becoming a bogus call.
+fn parse_brace_struct_literal_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
+    if !tokens.get(end.checked_sub(1)?)?.symbol("}") {
+        return None;
+    }
+    let open = find_matching_open(tokens, start, end - 1, "{", "}")?;
+    if open <= start {
+        return None;
+    }
+    let callee = parse_callee(tokens, start, open)?;
+    let ranges: Vec<_> = split_param_ranges(tokens, open + 1, end - 1)
+        .into_iter()
+        .filter(|range| range.empty_span.is_none())
+        .collect();
+    if ranges.is_empty() {
+        return None;
+    }
+    let mut args = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        let name = tokens.get(range.start).and_then(ident_name)?;
+        if !tokens
+            .get(range.start + 1)
+            .is_some_and(|token| token.symbol(":"))
+        {
+            return None;
+        }
+        let value = parse_expr(tokens, range.start + 2, range.end)?;
+        args.push(CallArg {
+            name: Some(name.to_string()),
+            value,
+            malformed: false,
+            span: tokens[range.start].span.clone(),
+        });
+    }
+    Some(Expr::Call {
+        callee,
+        args,
         span: tokens[start].span.clone(),
     })
 }

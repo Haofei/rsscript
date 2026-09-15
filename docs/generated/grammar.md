@@ -55,6 +55,28 @@ This is a generated lexical reference, not a replacement for the parser. The par
 - `await` (control)
 - `native` (modifier)
 
+## Parser-level words
+
+The lexer leaves these as plain identifiers; the parser matches them as keywords in specific positions. They are declaration, clause, ownership and structured-concurrency words, and a program that uses one as an ordinary name will not parse where the parser expects the keyword.
+
+- `captures` (modifier)
+- `const` (declaration)
+- `derives` (modifier)
+- `impl` (declaration)
+- `module` (declaration)
+- `noescape` (ownership)
+- `opaque` (declaration)
+- `owned` (ownership)
+- `protocol` (declaration)
+- `retains` (modifier)
+- `select` (control)
+- `spawn` (control)
+- `sum` (declaration)
+- `task_group` (control)
+- `type` (declaration)
+- `use` (declaration)
+- `view` (declaration)
+
 ## Built-in constants and constructors
 
 - `Err`

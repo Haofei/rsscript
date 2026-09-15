@@ -3,7 +3,7 @@
   "$id": "https://rsscript.dev/evals/report.v1.json",
   "title": "RSScript evaluation report v1",
   "type": "object",
-  "required": ["schema", "candidate", "status", "candidate_static_check", "parse", "static_check", "diagnostic_match", "safety", "invariants", "oracle_soundness", "compiler_query_latency_ms"],
+  "required": ["schema", "candidate", "status", "canonical_spelling", "candidate_static_check", "parse", "static_check", "diagnostic_match", "safety", "invariants", "oracle_soundness", "compiler_query_latency_ms"],
   "properties": {
     "schema": { "const": "rsscript.eval.report.v1" },
     "candidate": {
@@ -19,7 +19,19 @@
         "repair_turns": { "type": "integer", "minimum": 0 }
       }, "additionalProperties": false
     },
-    "status": { "type": "string", "enum": ["pass", "fail", "error"] },
+    "status": {
+      "description": "Compile and structural-invariant outcome only: parse, the target diagnostic contract, and every `target`-scope invariant. Canonical spelling is reported under `canonical_spelling` and never decides this field.",
+      "type": "string", "enum": ["pass", "fail", "error"]
+    },
+    "canonical_spelling": {
+      "description": "Whether the candidate is spelled the way `rss fmt` prints it. Deliberately separate from `status`: a candidate that passes `rss check` is not a failure for non-canonical spelling alone.",
+      "type": "object", "required": ["formatted", "spelling_invariants_hold", "canonical"],
+      "properties": {
+        "formatted": { "type": "boolean" },
+        "spelling_invariants_hold": { "type": "boolean" },
+        "canonical": { "type": "boolean" }
+      }, "additionalProperties": false
+    },
     "parse": {
       "type": "object", "required": ["outcome", "unknown_top_level_count", "malformed_declaration_count"],
       "properties": { "outcome": { "type": "string", "enum": ["pass", "fail", "not-run"] }, "unknown_top_level_count": { "type": "integer", "minimum": 0 }, "malformed_declaration_count": { "type": "integer", "minimum": 0 } }, "additionalProperties": false
@@ -36,7 +48,20 @@
     },
     "diagnostic_match": { "type": "object" },
     "safety": { "type": "object" },
-    "invariants": { "type": "array", "items": { "type": "object" } },
+    "invariants": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["kind", "value", "scope", "passed"],
+        "properties": {
+          "kind": { "type": "string" }, "value": { "type": "string" },
+          "scope": {
+            "description": "`candidate` checks the task's seed source, `target` is a structural fact that decides `status`, and `canonical_spelling` is a surface-spelling fact the checker cannot observe \u2014 reported, never scored.",
+            "type": "string", "enum": ["candidate", "target", "canonical_spelling"]
+          },
+          "passed": { "type": "boolean" }
+        }, "additionalProperties": false
+      }
+    },
     "oracle_soundness": {
       "type": "object",
       "required": ["prefixes_checked", "terminals_recommended", "terminals_accepted", "dead_after_insert", "semantic_candidates_checked", "violations"],
