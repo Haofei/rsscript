@@ -807,9 +807,23 @@ lowers as `__Tuple2<Int, String>` rather than as the declaration's parameter
 names. That substitution is what the typed executable facts carry, and the
 bytecode verifier checks them against the enclosing function's concrete result;
 an unsubstituted `__Tuple2<A, B>` is rejected there. The checker proves a call
-site's type arguments all at once or not at all, so where it cannot,
-`lower_record_constructor` refuses to lower rather than guess — a build error,
-never a fact naming a type parameter.
+site's type arguments all at once or not at all, and lowering never guesses: it
+emits the substituted result or nothing.
+
+Where the arguments cannot be proved, that is a **check** error, not a build
+one:
+
+> A generic record construction whose type arguments the checker cannot prove is
+> `RS0034` at the construction itself
+> (`checks/body/binding.rs::check_provable_generic_construction`). A program
+> that `rss check` accepts therefore never fails `rss build` for a missing type
+> instance.
+
+What leaves a construction unprovable is an argument with no inferred type, and
+that set is small: a bare `None` (`Option<?>`), an empty `[]`, an unannotated
+closure, whose parameter types are contextual and not written anywhere in the
+AST, and a value whose own binding was never given one. Everything an operand or
+a declared signature determines is inferred — §3 lists the forms.
 
 `desugar.rs::tuple_type_param` names element `i`'s type parameter `__rss_T{i}`.
 The name is built from the index, so it is unique at every arity and always an
@@ -1071,7 +1085,7 @@ checks *skip* rather than report.
 
 | Expression | Inferred type |
 | --- | --- |
-| identifier | its recorded binding type, else the sum type owning a variant of that name |
+| identifier | its recorded binding type; else `Bool`/`Bool`/`Unit` for the literals `true`, `false`, and `Unit`, which the surface spells as identifiers; else the sum type owning a variant of that name |
 | literal | §1.2 |
 | `f(args)` | the resolved signature's return type, with generic parameters substituted (§3.4) |
 | `Some(x)` | `Option<typeof x>` |
@@ -1079,15 +1093,27 @@ checks *skip* rather than report.
 | `Err(x)` | `Result<T, typeof x>` — the ok position is left as the placeholder `T` |
 | `Variant(...)` | the declared sum type owning `Variant` |
 | `base.field` | the declared field type, with the base's generic arguments substituted |
-| `base[i]` | *not inferred* (`None`) |
+| `base[i]` | the element type of a `List<T>` or the value type of a `Map<K, V>`; *not inferred* for any other base |
 | `a == b`, `a < b`, `a && b` (comparison and logical) | `Bool` |
 | `a + b`, `a << b` (arithmetic and bitwise) | the shared numeric operand type; *not inferred* if the operands are not one matching numeric type |
 | `read e` / `mut e` / `take e` / `manage e` | the type of `e` |
-| `e?` | the `Ok` type of `e` |
+| `e?` | the payload the operator produces: the ok type of a `Result<T, E>`, or the value type of an `Option<T>` (§6.10) |
 | `await e` | the `Task` payload of `e` if it has one, else the type of `e` |
 | `spawn e` | `Task<typeof e>` |
-| `match e { … }` | the value type of the *first* arm |
+| `match e { … }` | the type its arms agree on (see below) |
+| `if c { … } else { … }` | the same rule: an `if` expression is a `match` over `true`/`false` (§6.2), but see the exhaustiveness limit in §12.2 |
 | closure | *not inferred* (`None`) — see §3.5 |
+
+A block used as a value takes its type from its last statement, and that
+statement may itself branch: a block ending in an `if` or a `match` *statement*
+is typed from the branch bodies, recursively. The agreement rule is the same at
+every level:
+
+> A branching expression is typed from the branches that prove a type. A branch
+> that proves nothing — one ending in a `loop`, say — is skipped rather than
+> making the whole expression untyped. Two branches proving *different* types
+> prove nothing: that program is an `RS0209` control-flow mismatch, and picking
+> one of the two would contradict the other.
 
 Two consequences are worth stating plainly because they surprise people:
 
@@ -1102,6 +1128,23 @@ Two consequences are worth stating plainly because they surprise people:
   type `List<?>`, and `?` makes the dependent checks skip. An *unused* one is
   `RS0034` (§3.3); a used one is trusted, exactly as a used bare `Ok(...)` is.
   Annotate it (`let xs: List<Int> = []`) when the element type matters.
+
+**What is left untyped, and why.** The table above is close to exhaustive over
+`ast.rs::Expr`, and what remains is untyped for a reason rather than for want of
+a case:
+
+| Form | Why |
+| --- | --- |
+| a closure | its parameter types are contextual and are not written anywhere in the AST: `Expr::Closure` carries parameter *names* only. Typing it from its body would turn an ordinary explicit closure into a permanently `noescape` value (§3.5) |
+| a bare `None` | its type is `Option<?>`; the open position proves nothing |
+| an identifier whose own binding was never typed | inference is a single bottom-up pass with no constraint propagation back from later uses (§3.2, §12.2) |
+| an unresolved call, field, or index | the callee, field, or container is already `RS0206`/`RS0025`/a non-container, and a derived type would add a second error |
+| a mismatched or non-numeric arithmetic pair | already `RS0210`/`RS1001` |
+| an unparseable expression | already a syntax error |
+
+This is the set that can leave a generic construction unprovable, which is why
+it is short and why the residue is `RS0034` at the construction rather than a
+build failure (§2.9).
 
 Local bindings do not need annotations when the initializer's type is known:
 
@@ -2596,7 +2639,12 @@ flow. Concretely `control_flow.rs` produces:
 `if cond { … } else { … }`. The condition must be `Bool`; there is no truthiness.
 `if` is also an **expression**: the parser records `Expr::Match` with
 `from_if_expression: true`, so an `if`/`else` used for a value shares the match
-expression's typing and lowering.
+expression's typing and lowering — the `true` and `false` literal arms cover
+`Bool`, so the desugared match is exhaustive (§6.7).
+
+In expression position the condition must be one the checker can *type* as
+`Bool`, and a comparison is not: see §12.2. `if flag { … } else { … }` is a
+value; `if n > 10 { … } else { … }` is `RS0021`.
 
 **Accepted**
 
@@ -2737,7 +2785,7 @@ fn main() -> Unit {
 
 | Pattern | Syntax | Notes |
 | --- | --- | --- |
-| binding | `name` | irrefutable; binds the whole scrutinee |
+| binding | `name` | parsed, but no scrutinee type accepts it — `RS0209` (§12.2); `_` is the only irrefutable arm |
 | wildcard | `_` | irrefutable |
 | variant | `None`, `Some(v)`, `Ok(e)`, `Circle(r)`, `Rectangle(w, h)` | positional sub-patterns bind declared fields in declared order |
 | struct | `Point { x, y }`, `Point { x, .. }`, `Point { x: inner_pattern }` | named fields; `..` allows omitting the rest |
@@ -2752,6 +2800,31 @@ Variant pattern arity is checked: a bare `V` matches a payload-free variant, but
 once a parenthesised payload is written its arity must equal the variant's
 declared field count — `RS0037`. Positional binding exists only for declared
 sum-variant fields; it does not reintroduce anonymous positional records.
+
+A **tuple pattern** is not a seventh form: `(0, name)` parses as the struct
+pattern `__Tuple2 { item0: 0, item1: name }` over the synthetic tuple struct
+(§2.9, `parser/pattern.rs`), so everything §6.5 says about struct-pattern field
+effects applies to it unchanged.
+
+**What lowers.** Lowering accepts a subset of the pattern forms above, and a
+pattern outside it is a build error rather than a check error:
+
+| Form | Lowers |
+| --- | --- |
+| wildcard | yes |
+| literal | yes |
+| variant — `Ok`/`Err`, `Some`/`None`, declared sum variants | yes, with flat positional bindings or `_` per declared field |
+| tuple (`__TupleN` struct pattern) | yes: each element may bind, be `_`, be a literal, or be a nested tuple pattern of the same |
+| every other struct pattern | no |
+| list | no |
+| guard on any arm | no |
+
+A tuple has one shape, so there is no tag to test: only a literal element is
+refutable, and the refutable elements become a short-circuiting branch ladder
+(`lowerer_calls.rs::lower_tuple_pattern_edge`). Nested tuple patterns recurse
+through both the test and the binding half. This subset is shared by the
+statement and the expression form of `match`, which cannot drift apart because
+both go through one `lower_pattern_edge`.
 
 **Accepted** — guards
 
@@ -4318,12 +4391,21 @@ under separate headings, and every entry in `core-interfaces.json` carries a
 **Signature-level rules apply to `.rssi` declarations.** An interface has no
 bodies, so body rules have nothing to run on, but its *signatures* are ordinary
 RSScript signatures and are checked as such: `checks/declarations.rs` runs
-`signature_diagnostics` and `generic_constraint_diagnostics` over the source
-program and over every supplied interface program. `pub fn make_default<T>() ->
-fresh T` is `RS0603` in a `.rssi` exactly as it is in a `.rss`, and the
-diagnostic carries the interface file's own span, because each interface is
-parsed under its own path. Declaration-*inventory* rules (duplicates, protocol
-implementations) stay merged-program rules and are not repeated per file.
+`signature_diagnostics`, `generic_constraint_diagnostics`, and the `fresh`
+return-type rule over the source program and over every supplied interface
+program. Both halves of `RS0603` therefore hold in a `.rssi` exactly as in a
+`.rss`: `pub fn make_default<T>() -> fresh T` needs its `T: Struct` bound, and
+`pub fn open() -> fresh Session` is rejected when `Session` is a class or a
+resource (§5.8). The diagnostic carries the interface file's own span, because
+each interface is parsed under its own path. Declaration-*inventory* rules
+(duplicates, protocol implementations) stay merged-program rules and are not
+repeated per file.
+
+The `fresh Class` / `fresh Resource` rule reads the declared return type and
+nothing else, which is what makes it a signature rule. It used to run inside the
+body pass, over the source program's functions only, so a bodyless `.rssi`
+declaration escaped it and an interface could export a contract the language
+does not have.
 
 `crates/rsscript-sdk/tests/fixture_corpus.rs::every_shipped_interface_passes_the_signature_checks`
 runs those rules over every `stdlib/**/*.rssi` and `packages/**/interface/*.rssi`
@@ -4508,11 +4590,6 @@ and finding no enforcing code.
 
 ### 12.1 Genuinely unspecified
 
-* **Wake order after a park.** When one event unblocks several parked tasks at
-  once, the order in which they resume is not defined (§9.9). Task *start* order
-  and the FIFO ready queue are stable; this is not.
-* **Fairness.** Nothing bounds how long a ready task may wait, and a task that
-  never suspends never yields (§9.9).
 * **Parallelism.** Nothing in the language says whether children run on separate
   OS threads or are interleaved on one; the register VM interleaves on one, but
   that is an implementation fact, not a contract (§9.9).
@@ -4527,6 +4604,26 @@ and finding no enforcing code.
 Rules this document previously reported as *unspecified* and that are in fact
 deterministic. Each is now stated normatively in its own section; they are
 collected here so a reader of an older draft can find what changed.
+
+**Wake order after a park** (`reg_vm/scheduler.rs::satisfy_waiters`) — made
+deterministic rather than discovered to be:
+
+> When one event makes several parked tasks runnable at once, they wake in
+> ascending task-id order, which is creation order, and enter the FIFO ready
+> queue in that order.
+
+`satisfy_waiters` scans the task table, which is a `HashMap`, and now sorts the
+woken set before waking any. Before the sort, wake order was hash order and
+varied between runs of the same program — the one scheduling decision in the VM
+that was not reproducible. Pinned by
+`scheduler.rs::one_event_wakes_parked_tasks_in_creation_order`, which observes
+hash order without it. Stated in §9.9.
+
+**Fairness** is still *not* a guarantee, but it is no longer a silence: §9.9
+states the rule — a task is scheduled only at the front of the ready queue and
+runs until it suspends or completes, with no preemption, no time slice, and no
+starvation bound. The ordering rules say which task runs next; nothing says
+when.
 
 **Cross-module privacy — `RS0019`** (new;
 `module_isolation.rs::cross_module_privacy_diagnostics`):
@@ -4610,18 +4707,25 @@ explicit note and offers a `_` arm rather than implying a missing case
 
 These are findings for the maintainer, not features.
 
-* **A generic construction is only as provable as its arguments' types.** The
-  checker proves a call site's generic arguments all at once or not at all
-  (`hir/infer.rs::infer_call_type_arguments`), from the types it can give the
-  argument expressions. Identifiers, literals, calls, field reads, operator
-  results, and `List`/`Map` element reads all carry a type; anything else does
-  not. A generic record built only from expressions in that last group — a
-  tuple whose element is an index into an untyped value, say — therefore has no
-  proved instance, and `lower_record_constructor` refuses to lower it rather
-  than record a type argument it cannot prove (§2.9). It is a build error, not
-  a wrong answer, but it is a rule the design implies and the front end does
-  not fully deliver: the fix is a checker that types more expression forms, not
-  a backend that guesses.
+* **An `if` expression whose condition is a comparison is `RS0021`.** An `if`
+  used for a value desugars to a `match` over `true`/`false` literal arms, which
+  §6.7 says covers `Bool` — but the coverage rule needs the scrutinee's *type*,
+  and `analyzer.rs::hir_expr_type_name` returns `None` for `HirExpr::Binary`
+  because the node carries no type at all. `let value = if flag { 1 } else { 2 }`
+  therefore checks clean while `let value = if n > 10 { 1 } else { 2 }` is
+  "match expression is not exhaustive". Inference types the operator fine
+  (`infer_binary_type` gives `Bool`); it is the HIR node that drops the answer
+  on the floor, so every consumer reading types off the HIR rather than
+  re-inferring sees a comparison as untyped. The same gap makes a comparison an
+  unusable `match` scrutinee.
+* **A `match` arm cannot bind the whole scrutinee.** `ast.rs::MatchPattern`
+  has a `Binding` form and §6.4 lists it, but no scrutinee type accepts it:
+  `match n { other => … }` is `RS0209` ("match pattern `other` cannot match
+  scrutinee type `Int`"), plus `RS0026` for each use of the binding and `RS0021`
+  because nothing closed the match. `_` is the only irrefutable arm the checker
+  takes. The form is reachable from the parser and from
+  `match_pattern_binding_types`, which types it, so this is an unimplemented
+  case rather than a deliberate rejection.
 * **A protocol cannot be declared inside a module.** A protocol's methods are
   contributed as bodyless `Protocol.method` functions, and
   `source_rules.rs` exempts them from `RS0015` ("bodyless source function") by
