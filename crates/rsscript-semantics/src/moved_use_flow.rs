@@ -1,7 +1,7 @@
 //! Flow-sensitive use-after-move facts derived from checked HIR.
 
 use crate::hir::{HirBlock, HirExpr, HirStmt};
-use crate::{LocalFlowState, MovedUse};
+use crate::{LocalFlowState, MoveSite, MovedUse};
 use rsscript_syntax::Span;
 use std::collections::HashMap;
 
@@ -128,10 +128,10 @@ fn collect_ordered_moved_uses_from_expr(
 ) {
     match expr {
         HirExpr::Ident { name, span, .. } => {
-            if let Some(move_span) = state.move_span(name) {
-                push_moved_use(moved_uses, name.clone(), span.clone(), move_span.clone());
-            } else if let Some((moved_path, move_span)) = state.moved_subpath_span(name) {
-                push_moved_use(moved_uses, moved_path, span.clone(), move_span.clone());
+            if let Some(move_site) = state.move_site(name) {
+                push_moved_use(moved_uses, name.clone(), span.clone(), move_site.clone());
+            } else if let Some((moved_path, move_site)) = state.moved_subpath_site(name) {
+                push_moved_use(moved_uses, moved_path, span.clone(), move_site.clone());
             }
         }
         HirExpr::Call { args, events, .. } => {
@@ -153,7 +153,7 @@ fn collect_ordered_moved_uses_from_expr(
             collect_ordered_moved_uses_from_expr(value, state, moved_uses);
             state.apply_move_events(events);
             if let Some((path, _)) = crate::hir_expr_path(value) {
-                state.mark_moved(&path, span.clone());
+                state.mark_moved(&path, MoveSite::manage(span.clone()));
             }
         }
         HirExpr::Spawn { value, .. } => {
@@ -194,8 +194,8 @@ fn collect_ordered_moved_uses_from_expr(
         }
         HirExpr::Closure { body, .. } => {
             for (name, span) in crate::hir_block_identifier_uses(body) {
-                if let Some(move_span) = state.move_span(&name) {
-                    push_moved_use(moved_uses, name, span, move_span.clone());
+                if let Some(move_site) = state.move_site(&name) {
+                    push_moved_use(moved_uses, name, span, move_site.clone());
                 }
             }
         }
@@ -241,13 +241,13 @@ fn collect_field_move_use(
 ) {
     if let Some((path, span)) = crate::hir_expr_path(expr) {
         if let Some(root) = crate::path_root(&path)
-            && let Some(move_span) = state.move_span(root)
+            && let Some(move_site) = state.move_site(root)
         {
-            push_moved_use(moved_uses, root.to_string(), span, move_span.clone());
+            push_moved_use(moved_uses, root.to_string(), span, move_site.clone());
             return;
         }
-        if let Some((moved_path, move_span)) = state.moved_path_span(&path) {
-            push_moved_use(moved_uses, moved_path, span, move_span.clone());
+        if let Some((moved_path, move_site)) = state.moved_path_site(&path) {
+            push_moved_use(moved_uses, moved_path, span, move_site.clone());
         }
     } else {
         collect_ordered_moved_uses_from_expr(base, state, moved_uses);
@@ -364,7 +364,7 @@ fn apply_match_take_move(
         return;
     }
     if let Some((path, span)) = crate::hir_expr_path(value) {
-        state.mark_moved(&path, span);
+        state.mark_moved(&path, MoveSite::take(span));
     }
 }
 
@@ -502,11 +502,16 @@ fn collect_closure_local_moved_uses_from_expr(expr: &HirExpr, moved_uses: &mut V
     }
 }
 
-fn push_moved_use(moved_uses: &mut Vec<MovedUse>, name: String, use_span: Span, move_span: Span) {
+fn push_moved_use(
+    moved_uses: &mut Vec<MovedUse>,
+    name: String,
+    use_span: Span,
+    move_site: MoveSite,
+) {
     let moved_use = MovedUse {
         name,
         use_span,
-        move_span,
+        move_site,
     };
     if !moved_uses.contains(&moved_use) {
         moved_uses.push(moved_use);

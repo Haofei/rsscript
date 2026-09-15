@@ -2,6 +2,7 @@ use super::*;
 use crate::ResolvedType;
 use crate::hir::{CallResolution, HirBlock, HirExpr, HirStmt};
 use crate::syntax::ast::Callee;
+use crate::{MoveKind, MoveSite};
 
 fn span(line: usize) -> Span {
     Span {
@@ -49,7 +50,8 @@ fn applies_move_and_retain_events_to_clean_local_state() {
 
     assert!(!state.clean_locals.contains("cached"));
     assert!(!state.clean_locals.contains("image"));
-    assert_eq!(state.moved["image"].line, 11);
+    assert_eq!(state.moved["image"].span.line, 11);
+    assert_eq!(state.moved["image"].kind, MoveKind::Manage);
 }
 
 #[test]
@@ -718,7 +720,7 @@ fn local_flow_entry_states_carry_loop_break_moves() {
         .expect("return should be reachable");
 
     assert_eq!(
-        return_state.move_span("image").map(|span| span.line),
+        return_state.move_site("image").map(|site| site.span.line),
         Some(3)
     );
     assert!(!return_state.is_clean_local("image"));
@@ -776,7 +778,7 @@ fn local_analysis_reports_moved_uses_from_flow_state() {
         vec![MovedUse {
             name: "image".to_string(),
             use_span: span(3),
-            move_span: span(2),
+            move_site: MoveSite::manage(span(2)),
         }]
     );
 }

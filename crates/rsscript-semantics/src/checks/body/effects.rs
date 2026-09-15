@@ -134,7 +134,10 @@ pub(super) fn apply_expr_effects(expr: &HirExpr, state: &mut BodyState) {
             state.apply_retention_events(events);
             state.apply_move_events(events);
             if let Some(path) = place_path(value) {
-                state.mark_moved(&place_path_display(&path), span.clone());
+                state.mark_moved(
+                    &place_path_display(&path),
+                    rsscript_semantics::MoveSite::manage(span.clone()),
+                );
             }
             apply_expr_effects(value, state);
         }
@@ -195,7 +198,10 @@ pub(super) fn apply_match_scrutinee_effect(
         return;
     }
     if let Some(path) = place_path(value) {
-        state.mark_moved(&place_path_display(&path), span.clone());
+        state.mark_moved(
+            &place_path_display(&path),
+            rsscript_semantics::MoveSite::take(span.clone()),
+        );
     }
 }
 
@@ -218,7 +224,7 @@ pub(super) fn check_moved_uses(analyzer: &mut Analyzer<'_>, local_analysis: &Loc
             .push(rsscript_semantics::moved_use_diagnostic(
                 &moved_use.name,
                 moved_use.use_span,
-                &moved_use.move_span,
+                &moved_use.move_site,
             ));
     }
 }

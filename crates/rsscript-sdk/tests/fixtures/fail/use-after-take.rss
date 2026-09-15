@@ -1,0 +1,25 @@
+// expect: RS0401
+
+// interface: use-after-take.rssi
+
+// The sibling `use-after-manage.rss` covers the `manage` move. This is the
+// other move the language has: `take` at a call site. RS0401 covers both, and
+// names the one that happened (`crates/rsscript-semantics/src/ownership.rs`).
+
+struct Bag {
+    items: List<Int>
+}
+
+fn count(bag: read Bag) -> Int {
+    return List.len(list: bag.items)
+}
+
+fn consume(bag: take Bag) -> Int {
+    return List.len(list: bag.items)
+}
+
+fn run() -> Int {
+    local bag = make_bag()
+    let consumed = consume(bag: take bag)
+    return consumed + count(bag: bag)
+}

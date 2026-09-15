@@ -4,7 +4,7 @@ use crate::hir::{
     HirBinding, HirBindingKind, HirEffectEvent, HirEffectEventKind, HirFunctionBody, ParamEffect,
 };
 use crate::is_copy_type_name;
-use rsscript_syntax::Span;
+use crate::{MoveKind, MoveSite};
 use std::collections::{HashMap, HashSet};
 
 /// Flow-sensitive local ownership state. Fields remain public during the
@@ -19,8 +19,8 @@ pub struct LocalFlowState {
     pub managed: HashSet<String>,
     pub read_views: HashSet<String>,
     pub resources: HashSet<String>,
-    pub moved: HashMap<String, Span>,
-    pub moved_paths: HashMap<String, Span>,
+    pub moved: HashMap<String, MoveSite>,
+    pub moved_paths: HashMap<String, MoveSite>,
     pub value_types: HashMap<String, String>,
 }
 
@@ -91,15 +91,15 @@ impl LocalFlowState {
         self.value_types.insert(name.into(), type_name.into());
     }
 
-    pub fn mark_moved(&mut self, name: &str, span: Span) {
+    pub fn mark_moved(&mut self, name: &str, site: MoveSite) {
         if name.contains('.') {
-            self.moved_paths.insert(name.to_string(), span);
+            self.moved_paths.insert(name.to_string(), site);
             if let Some(root) = path_root(name) {
                 self.clean_locals.remove(root);
                 self.fresh_returnable_locals.remove(root);
             }
         } else {
-            self.moved.insert(name.to_string(), span);
+            self.moved.insert(name.to_string(), site);
             self.clean_locals.remove(name);
             self.fresh_returnable_locals.remove(name);
         }
@@ -131,11 +131,11 @@ impl LocalFlowState {
     pub fn is_fresh_returnable_local(&self, name: &str) -> bool {
         self.fresh_returnable_locals.contains(name)
     }
-    pub fn move_span(&self, name: &str) -> Option<&Span> {
+    pub fn move_site(&self, name: &str) -> Option<&MoveSite> {
         self.moved.get(name)
     }
 
-    pub fn moved_path_span(&self, path: &str) -> Option<(String, &Span)> {
+    pub fn moved_path_site(&self, path: &str) -> Option<(String, &MoveSite)> {
         self.moved_paths
             .iter()
             .find(|(moved_path, _)| {
@@ -144,14 +144,14 @@ impl LocalFlowState {
                         .strip_prefix(moved_path.as_str())
                         .is_some_and(|suffix| suffix.starts_with('.'))
             })
-            .map(|(path, span)| (path.clone(), span))
+            .map(|(path, site)| (path.clone(), site))
     }
 
-    pub fn moved_subpath_span(&self, root: &str) -> Option<(String, &Span)> {
+    pub fn moved_subpath_site(&self, root: &str) -> Option<(String, &MoveSite)> {
         self.moved_paths
             .iter()
             .find(|(path, _)| path_root(path).is_some_and(|path_root| path_root == root))
-            .map(|(path, span)| (path.clone(), span))
+            .map(|(path, site)| (path.clone(), site))
     }
 
     pub fn value_type(&self, name: &str) -> Option<&str> {
@@ -160,20 +160,20 @@ impl LocalFlowState {
 
     pub fn apply_move_events(&mut self, events: &[HirEffectEvent]) {
         for event in events {
-            if !matches!(
-                event.kind,
-                HirEffectEventKind::Manage | HirEffectEventKind::Take
-            ) {
-                continue;
-            }
+            let kind = match event.kind {
+                HirEffectEventKind::Manage => MoveKind::Manage,
+                HirEffectEventKind::Take => MoveKind::Take,
+                HirEffectEventKind::Retain { .. } => continue,
+            };
+            let site = MoveSite::new(kind, event.span.clone());
             if event.binding_name.contains('.') {
                 if path_root(&event.binding_name).is_some_and(|root| self.locals.contains(root)) {
-                    self.mark_moved(&event.binding_name, event.span.clone());
+                    self.mark_moved(&event.binding_name, site);
                 }
             } else if self.locals.contains(&event.binding_name)
                 || self.fresh_returnable_locals.contains(&event.binding_name)
             {
-                self.mark_moved(&event.binding_name, event.span.clone());
+                self.mark_moved(&event.binding_name, site);
             }
         }
     }
@@ -211,6 +211,7 @@ pub fn path_root(path: &str) -> Option<&str> {
 mod tests {
     use super::*;
     use crate::hir::{HirBinding, HirBindingKind, ParamEffect};
+    use rsscript_syntax::Span;
 
     fn span() -> Span {
         Span {
@@ -234,7 +235,13 @@ mod tests {
             type_name: Some("Item".to_owned()),
         }]);
         assert!(state.is_local("item"));
-        state.mark_moved("item.part", span());
+        state.mark_moved("item.part", MoveSite::take(span()));
+        assert_eq!(
+            state
+                .moved_subpath_site("item")
+                .map(|(path, site)| (path, site.kind)),
+            Some(("item.part".to_owned(), MoveKind::Take))
+        );
         assert!(!state.is_clean_local("item"));
         assert_eq!(path_root("item.part"), Some("item"));
     }

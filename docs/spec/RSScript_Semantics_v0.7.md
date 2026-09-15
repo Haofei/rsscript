@@ -1947,7 +1947,19 @@ is reachable on **any** path from the move. The fixture set covers moves inside
 operands, and inline `manage` in an argument position.
 
 Two moves produce the fact: `manage x` and `take x` (including `take x.field`
-for an inline field).
+for an inline field). **The diagnostic names the one that happened.** The move
+kind travels with the fact (`local_flow_facts.rs::MoveSite`, recorded by
+`local_flow_state.rs::mark_moved`), so a `take` reads
+
+> `bag` was moved out of this scope by `take bag`. … used after take
+
+and a `manage` reads
+
+> `bag` was moved into the managed runtime by `manage bag`. … used after manage
+
+with the cause note pointing at that move's own span in both cases. Fixtures:
+`fail/use-after-manage.rss`, `fail/use-after-take.rss`,
+`fail/take-inline-field-use-after.rss`.
 
 **Rejected — `RS0401`**
 
@@ -4361,7 +4373,7 @@ explanations).
 | `RS0308` | invalid `take` operand | §5.1 |
 | `RS0309` | managed field split conflict | §5.4 |
 | `RS0310` | read-view mutation (`for` element) | §5.6 |
-| `RS0401` | use after manage / move | §5.3 |
+| `RS0401` | use after move (`manage` or `take`) | §5.3 |
 | `RS0501` | local value retained | §5.7 |
 | `RS0601` | fresh return is not clean | §5.8 |
 | `RS0602` | freshness unknown (warning) | §5.8 |

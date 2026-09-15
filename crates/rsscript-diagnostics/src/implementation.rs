@@ -741,8 +741,8 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     },
     DiagnosticExplanation {
         code: code::USE_AFTER_MANAGE,
-        title: "use after manage",
-        explanation: "`manage value` moves a local value into the managed runtime. The original local binding cannot be used afterwards on any reachable path.",
+        title: "use after move",
+        explanation: "A local value can be moved out of its binding two ways: `manage value` hands it to the managed runtime, and `take value` hands it to a callee (or to a `match take value` scrutinee). Either way the original binding cannot be used afterwards on any reachable path. The diagnostic names the move that happened and points at it.",
     },
     DiagnosticExplanation {
         code: code::LOCAL_VALUE_RETAINED,
