@@ -1199,12 +1199,22 @@ fn check_call_args(
     let argument_facts = args
         .iter()
         .zip(&resolved_names)
-        .map(
-            |(argument, resolved_name)| rsscript_semantics::CallArgumentFact {
+        .map(|(argument, resolved_name)| {
+            // A written `mut`/`take`/`read` is its own HIR node whose span is
+            // the keyword alone, so the keyword and the value it wraps are
+            // reported separately. A call-site effect fix has to be able to
+            // replace or delete that keyword, not only insert in front of it.
+            let (effect_span, value_span) = match &argument.value {
+                HirExpr::Effect { span, value, .. } => {
+                    (Some(span.clone()), hir_expr_span(value).clone())
+                }
+                value => (None, hir_expr_span(value).clone()),
+            };
+            rsscript_semantics::CallArgumentFact {
                 explicit_name: argument.name.is_some(),
                 resolved_name: resolved_name.map(str::to_owned),
                 span: argument.span.clone(),
-                value_span: hir_expr_span(&argument.value).clone(),
+                value_span,
                 constructor_shorthand: constructor_field_shorthand_name(
                     allow_constructor_field_shorthand,
                     argument,
@@ -1212,8 +1222,9 @@ fn check_call_args(
                 )
                 .is_some(),
                 effect: expr_data_effect(&argument.value),
-            },
-        )
+                effect_span,
+            }
+        })
         .collect::<Vec<_>>();
     analyzer
         .diagnostics

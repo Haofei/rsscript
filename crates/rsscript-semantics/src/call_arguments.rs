@@ -10,10 +10,19 @@ pub struct CallArgumentFact {
     pub explicit_name: bool,
     pub resolved_name: Option<String>,
     pub span: Span,
+    /// The argument's value, with any leading effect keyword excluded.
     pub value_span: Span,
     pub constructor_shorthand: bool,
     /// `None` is the source language's implicit `read` effect.
     pub effect: Option<&'static str>,
+    /// The `mut`/`take`/`read` keyword actually written in front of the value.
+    ///
+    /// `None` means no keyword is present to rewrite: either the argument is
+    /// bare, or its effect was inferred from a form that spells no keyword at
+    /// all (receiver-call shorthand). Keeping the keyword separate from
+    /// [`Self::value_span`] is what lets a fix *replace* or *remove* a wrong
+    /// effect instead of only inserting a new one in front of it.
+    pub effect_span: Option<Span>,
 }
 
 /// The call-relevant subset of a resolved function parameter.
@@ -241,24 +250,70 @@ pub fn call_argument_diagnostics(
             continue;
         }
         if arg.effect != Some(expected) {
-            diagnostics.push(
-                Diagnostic::error(
-                    code::MISSING_DATA_EFFECT,
-                    format!("argument `{name}` for `{call_name}` must use `{expected}`."),
-                    arg.value_span.clone(),
-                    "data effect mismatch",
+            let written = arg.effect.unwrap_or("read");
+            let summary = if expected == "read" {
+                format!(
+                    "argument `{name}` for `{call_name}` uses `{written}` but the parameter is `read`."
                 )
-                .with_cause("A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter.")
-                .with_fix_edit(
-                    "add_data_effect",
-                    format!("Write `{name}: {expected} ...` at the call site."),
-                    FixEdit::insert_before(&arg.value_span, format!("{expected} ")),
-                ),
-            );
+            } else {
+                format!("argument `{name}` for `{call_name}` must use `{expected}`.")
+            };
+            let title = if expected == "read" {
+                format!(
+                    "Remove `{written}` from `{name}`: a `read` parameter takes the bare value."
+                )
+            } else {
+                format!("Write `{name}: {expected} ...` at the call site.")
+            };
+            let diagnostic = Diagnostic::error(
+                code::MISSING_DATA_EFFECT,
+                summary,
+                arg.effect_span.clone().unwrap_or_else(|| arg.value_span.clone()),
+                "data effect mismatch",
+            )
+            .with_cause("A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter.");
+            diagnostics.push(match data_effect_edit(arg, expected) {
+                Some(edit) => diagnostic.with_fix_edit("match_data_effect", title, edit),
+                None => diagnostic.with_fix("match_data_effect", title, "manual"),
+            });
         }
     }
 
     diagnostics
+}
+
+/// The concrete edit that turns an argument's written effect into `expected`.
+///
+/// There are three shapes and only the first used to be handled: a bare
+/// argument *gains* the keyword, a wrongly spelled keyword is *replaced*, and a
+/// keyword in front of a `read` parameter is *removed*, because `read` is
+/// canonical by omission. Inserting in front of an argument that already
+/// carries an effect produced `take mut value`, which does not parse — a
+/// machine-applicable fix that makes the file worse is worse than no fix, and
+/// the measured repair data shows models do apply what this fix names.
+fn data_effect_edit(arg: &CallArgumentFact, expected: &str) -> Option<FixEdit> {
+    let Some(written) = arg.effect_span.as_ref() else {
+        // Nothing in the source spells an effect keyword here. A bare argument
+        // simply gains one; an effect read off a form with no keyword at all
+        // (receiver-call shorthand) has nothing to rewrite, so it stays advice.
+        return (arg.effect.is_none() && expected != "read")
+            .then(|| FixEdit::insert_before(&arg.value_span, format!("{expected} ")));
+    };
+    if expected != "read" {
+        return Some(FixEdit::replace(written, expected));
+    }
+    // Deleting the keyword must also delete the whitespace that followed it, so
+    // the span runs from the keyword up to the value. Only a value on the
+    // keyword's own line has a length this column arithmetic can express.
+    (written.line == arg.value_span.line && arg.value_span.column > written.column).then(|| {
+        FixEdit::replace(
+            &Span {
+                length: arg.value_span.column - written.column,
+                ..written.clone()
+            },
+            "",
+        )
+    })
 }
 
 /// Diagnose a return value that does not match its resolved declared type.
@@ -351,6 +406,7 @@ mod tests {
                 value_span: span(),
                 constructor_shorthand: false,
                 effect: None,
+                effect_span: None,
             },
             CallArgumentFact {
                 explicit_name: true,
@@ -359,6 +415,7 @@ mod tests {
                 value_span: span(),
                 constructor_shorthand: false,
                 effect: None,
+                effect_span: None,
             },
             CallArgumentFact {
                 explicit_name: true,
@@ -367,6 +424,7 @@ mod tests {
                 value_span: span(),
                 constructor_shorthand: false,
                 effect: None,
+                effect_span: None,
             },
             CallArgumentFact {
                 explicit_name: true,
@@ -375,6 +433,7 @@ mod tests {
                 value_span: span(),
                 constructor_shorthand: false,
                 effect: None,
+                effect_span: None,
             },
         ];
 
