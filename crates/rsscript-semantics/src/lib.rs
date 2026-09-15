@@ -140,7 +140,8 @@ pub use completion::{
 };
 pub use control_flow::{
     bool_condition_diagnostic, conflicting_pattern_field_effect_diagnostic,
-    duplicate_pattern_field_diagnostic, for_iterable_diagnostic, function_fallthrough_diagnostics,
+    definite_assignment_diagnostics, duplicate_pattern_field_diagnostic, for_iterable_diagnostic,
+    function_fallthrough_diagnostics, loop_control_flow_diagnostics,
     managed_pattern_field_effect_diagnostic, match_expression_arm_type_diagnostics,
     match_guard_mutation_diagnostic, match_literal_type_diagnostic, match_pattern_type_diagnostic,
     match_scrutinee_diagnostic, match_variant_family_diagnostic, missing_return_value_diagnostics,
@@ -215,6 +216,7 @@ pub use local_flow_solver::{
 pub use local_flow_state::{LocalFlowState, initial_local_flow_state, path_root};
 pub use module_isolation::{
     demangle_diagnostics, isolate_module_namespaces, isolate_sources_with_interfaces,
+    unresolved_use_diagnostics,
 };
 pub use moved_use_flow::moved_uses_from_flow;
 pub use operators::{
@@ -240,7 +242,7 @@ pub use place::{
     indexed_place_conflict_diagnostic, managed_field_split_conflict_diagnostic,
     move_base_field_conflict_diagnostic,
 };
-pub use try_checks::{try_error_type_diagnostics, try_operand_diagnostic};
+pub use try_checks::{TryContext, try_error_type_diagnostics, try_operand_diagnostic};
 pub use type_compatibility::{
     UnresolvedGenericFacts, ambiguous_receiver_call_diagnostic,
     argument_payload_type_mismatch_diagnostic, argument_type_mismatch_diagnostic,

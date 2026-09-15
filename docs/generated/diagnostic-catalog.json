@@ -67,12 +67,27 @@
     {
       "code": "RS0013",
       "title": "invalid try operator",
-      "explanation": "`?` may only be used inside functions that return a compatible `Result<T, E>` type."
+      "explanation": "`?` is an early return of the failure case, so three things must hold. The operand must be a `Result<T, E>` or an `Option<T>`. The enclosing function must return `Result<T, E>` or `Option<T>`, so the failure has somewhere to go. And inside a `Result`-returning function the operand's error type must match the function's error type exactly — RSScript performs no implicit error conversion, so convert explicitly with `match` instead."
     },
     {
       "code": "RS0015",
       "title": "unsupported syntax",
       "explanation": "The frontend parser could not lower this source construct into the supported RSScript AST. The checker reports this before Rust lowering so unsupported source does not become generated Rust `todo!()` code."
+    },
+    {
+      "code": "RS0016",
+      "title": "loop control outside a loop",
+      "explanation": "`break` and `continue` name the innermost enclosing `loop`, `while`, or `for` of the same function body. A closure body starts a new control-flow region, so a `break` written inside a closure does not reach a loop around the closure. Outside any enclosing loop the statement has no target and the program would not lower, so the checker rejects it instead of letting it become a backend error."
+    },
+    {
+      "code": "RS0017",
+      "title": "binding read before it is assigned",
+      "explanation": "A `let` declared with a type but no initializer holds no value until something assigns it. Reading it first would lower to uninitialized memory, so the checker rejects it. The analysis is deliberately conservative: it reports a read only when *no* earlier statement assigns the binding at all, so a binding assigned on just one arm of an `if`, or only inside a loop body, is treated as assigned. Closure bodies are not analysed, because a closure runs at a time the checker does not model."
+    },
+    {
+      "code": "RS0018",
+      "title": "unresolved import",
+      "explanation": "`use a.b.name` imports `name` from module `a.b`, so `a.b` must be declared by a `module a.b` header on some file in the compilation unit — the sources being checked or an interface supplied to the check. When it is not, the import binds nothing: name resolution leaves the reference unmangled, and a typo in the path goes unnoticed until the imported name is used, if it is used at all. Core and standard-package interfaces declare no module and are prelude-visible, so their names need no `use` at all."
     },
     {
       "code": "RS0021",
@@ -150,9 +165,24 @@
       "explanation": "A `#lower_name(\"...\")` pin must be a valid Rust identifier and must not collide with any other declaration's lowered backend name, so generated symbols stay unique."
     },
     {
+      "code": "RS0036",
+      "title": "message payload not transferable",
+      "explanation": "A value sent across an isolate boundary — a channel message, a spawned task's payload — must be transferable: plain data with no managed identity, no handle or weak field, and no resource. Classes, resources, and types containing them stay inside the isolate that owns them."
+    },
+    {
       "code": "RS0037",
       "title": "variant pattern arity mismatch",
       "explanation": "A positional variant pattern must bind exactly as many sub-patterns as the variant declares fields, in declared order (`V(a, b)` for a two-field variant, `V(a, b, c)` for three). A payload-free variant may still be matched by its bare name (`V`), but once a parenthesised payload is written its arity must match the declaration. Positional binding is allowed only for declared sum-variant fields; it does not reintroduce anonymous positional records (spec §20.1)."
+    },
+    {
+      "code": "RS0038",
+      "title": "char literal is not a single scalar value",
+      "explanation": "A `Char` is one Unicode scalar value. A `'...'` literal holding zero, two, or more scalars — including a grapheme cluster written as base plus combining mark — is not a `Char`; use a `String` for text of any other length."
+    },
+    {
+      "code": "RS0039",
+      "title": "cyclic type alias",
+      "explanation": "Type aliases are expanded wherever a type is classified, so a cycle (`type A = B` with `type B = A`, directly or through a chain) has no fixed point and would make expansion diverge. Break the cycle by pointing one alias at a declared type."
     },
     {
       "code": "RS0040",
@@ -260,6 +290,11 @@
       "explanation": "`take value` consumes a local value. Managed values cannot be passed to taking parameters because they may have aliases."
     },
     {
+      "code": "RS0309",
+      "title": "managed field split conflict",
+      "explanation": "Field splitting into disjoint paths is a local-only affordance. A managed object is a single runtime value behind one write guard, so two mutable accesses to its inline fields conflict even though the paths are disjoint; the conflict root is the managed object itself."
+    },
+    {
       "code": "RS0310",
       "title": "read view mutation",
       "explanation": "`for` loop variables for non-Copy struct elements are read views into the list. They can be passed as `read`, but cannot be used as `mut`, `take`, or `manage` because iteration does not grant exclusive ownership of list elements."
@@ -360,6 +395,11 @@
       "explanation": "`noescape Fn()` callbacks are non-consuming in v0.7: the callee may call them multiple times, so a noescape closure may read or mutate captured local values but must not take or manage them."
     },
     {
+      "code": "RS0805",
+      "title": "explicit closure capture contract",
+      "explanation": "An explicit `captures(...)` clause is the closure's capture contract: every name it lists must actually be captured, every captured name must be listed, and each capture's effect must match how the body uses it. The clause is what makes a closure's ownership reviewable without reading its body."
+    },
+    {
       "code": "RS0901",
       "title": "take of handle field",
       "explanation": "Handle fields are managed references. They cannot be consumed with `take` as if they were inline local fields."
@@ -428,6 +468,86 @@
       "code": "RSL002",
       "title": "duplicate effect lint",
       "explanation": "Effect clauses are review contracts. Repeating the same effect adds noise without changing semantics, so the linter warns and suggests removing the duplicate."
+    },
+    {
+      "code": "RSR001",
+      "title": "review: file features changed",
+      "explanation": "Source-review finding. The advanced language features a file enables changed between the two revisions being compared. Review whether the file should carry the changed feature set."
+    },
+    {
+      "code": "RSR002",
+      "title": "review: function removed",
+      "explanation": "Source-review finding. A function present in the old revision is gone from the new one. Restore it or migrate every call site."
+    },
+    {
+      "code": "RSR003",
+      "title": "review: function added",
+      "explanation": "Source-review finding. The new revision adds a function. Review its API surface and ownership contract before it becomes part of the reviewed boundary."
+    },
+    {
+      "code": "RSR004",
+      "title": "review: parameter contract changed",
+      "explanation": "Source-review finding. A function's parameters changed — names, types, or data effects. Update call sites for the new contract."
+    },
+    {
+      "code": "RSR005",
+      "title": "review: return contract changed",
+      "explanation": "Source-review finding. A function's return type or return freshness changed. Review callers that depend on the old contract."
+    },
+    {
+      "code": "RSR006",
+      "title": "review: retention contract changed",
+      "explanation": "Source-review finding. A function's `retains(...)` set changed, so which arguments may outlive the call changed with it. Review callers that pass local values."
+    },
+    {
+      "code": "RSR007",
+      "title": "review: type removed",
+      "explanation": "Source-review finding. A type present in the old revision is gone from the new one. Restore it or migrate every consumer."
+    },
+    {
+      "code": "RSR008",
+      "title": "review: type added",
+      "explanation": "Source-review finding. The new revision adds a type. Review its ownership mode and whether it contains resource or handle fields."
+    },
+    {
+      "code": "RSR009",
+      "title": "review: type kind changed",
+      "explanation": "Source-review finding. A type changed between `struct`, `class`, and `resource`. The three have different identity and lifetime semantics, so every use of the type is affected."
+    },
+    {
+      "code": "RSR010",
+      "title": "review: type fields changed",
+      "explanation": "Source-review finding. A type's fields changed. Review field ownership, `handle`/`weak` markers, and whether the type now contains a resource."
+    },
+    {
+      "code": "RSR011",
+      "title": "review: ownership boundary changed",
+      "explanation": "Source-review finding. The local/managed boundary of a declaration changed, so which values are exclusively owned and which are managed changed with it."
+    },
+    {
+      "code": "RSR014",
+      "title": "review: function kind changed",
+      "explanation": "Source-review finding. A function changed kind — for example between synchronous and `async`, or between a body and an external declaration. Review callers and scheduling assumptions."
+    },
+    {
+      "code": "RSR016",
+      "title": "review: protocol implementation changed",
+      "explanation": "Source-review finding. An `impl P for T` mapping changed, was added, or was removed, so dynamic and generic dispatch for that pair resolves differently."
+    },
+    {
+      "code": "RSR018",
+      "title": "review: sum type changed",
+      "explanation": "Source-review finding. A sum type's variants or variant fields changed. Every `match` over it has to be revisited, including ones that relied on exhaustiveness."
+    },
+    {
+      "code": "RSR019",
+      "title": "review: constant changed",
+      "explanation": "Source-review finding. A declared constant's value or type changed."
+    },
+    {
+      "code": "RSR020",
+      "title": "review: type alias changed",
+      "explanation": "Source-review finding. A `type` alias now expands to a different target, so every position that spells the alias resolves to a different type."
     }
   ]
 }

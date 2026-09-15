@@ -1,0 +1,7 @@
+// expect: RS0017
+
+fn main() -> Unit {
+    let x: Int
+    Output.write(message: Int.to_string(value: x))
+    return Unit
+}

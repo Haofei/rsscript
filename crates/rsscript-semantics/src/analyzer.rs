@@ -938,6 +938,13 @@ impl Analyzer<'_> {
         run_pass!(self.check_unsupported_syntax());
         run_pass!(
             self.diagnostics
+                .extend(rsscript_semantics::unresolved_use_diagnostics(
+                    &self.syntax_program,
+                    &self.interface_programs,
+                ))
+        );
+        run_pass!(
+            self.diagnostics
                 .extend(rsscript_semantics::derive_field_diagnostics(
                     &self.syntax_program
                 ))

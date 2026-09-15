@@ -1,0 +1,10 @@
+// expect: RS0013
+
+fn parse(text: String) -> Result<Int, String> {
+    return Ok(1)
+}
+
+fn double(text: String) -> Int {
+    let value = parse(text: text)?
+    return value * 2
+}

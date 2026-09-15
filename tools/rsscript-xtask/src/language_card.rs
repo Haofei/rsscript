@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 
 use rsscript_diagnostics::diagnostic_explanations;
-use rsscript_interface_catalog::CORE_INTERFACES;
+use rsscript_interface_catalog::{CORE_INTERFACES, STANDARD_PACKAGE_INTERFACES};
 use rsscript_syntax::lexer::{BUILTIN_CONSTANTS, CONTEXTUAL_KEYWORDS, KEYWORDS};
 use serde::Serialize;
 
@@ -35,9 +35,17 @@ struct CatalogDiagnostic {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct CoreInterface {
     path: String,
+    /// `core` for `CORE_INTERFACES`, `standard_package` for the
+    /// `STANDARD_PACKAGE_INTERFACES` under `packages/`. Both are prelude-visible
+    /// to a single-file check; only the first is available to a package build
+    /// without an explicit dependency.
+    kind: &'static str,
     sha256: String,
     source: String,
 }
+
+const CORE_KIND: &str = "core";
+const STANDARD_PACKAGE_KIND: &str = "standard_package";
 
 #[derive(Serialize)]
 struct DiagnosticFixAvailability {
@@ -72,7 +80,7 @@ struct CoreInterfacesJson {
     schema: &'static str,
     version: u32,
     completeness: &'static str,
-    provenance: [&'static str; 1],
+    provenance: [&'static str; 2],
     sha256_algorithm: &'static str,
     interfaces: Vec<CoreInterface>,
 }
@@ -207,13 +215,18 @@ fn diagnostics_document() -> String {
 }
 
 fn core_interfaces_document() -> String {
-    let interfaces = core_interfaces();
+    let core = core_interfaces();
+    let standard_packages = standard_package_interfaces();
     let mut output = header(
         "RSScript core interfaces",
-        "rsscript-interface-catalog::CORE_INTERFACES",
+        "rsscript-interface-catalog::{CORE_INTERFACES, STANDARD_PACKAGE_INTERFACES}",
     );
-    output.push_str(&format!("{} platform-neutral core interface files are available to the single-file environment. Machine-readable catalog: [core-interfaces.json](core-interfaces.json).\n\n", interfaces.len()));
-    for interface in interfaces {
+    output.push_str(&format!("{} core interface files and {} standard-package interface files are prelude-visible to a single-file check. Machine-readable catalog: [core-interfaces.json](core-interfaces.json), where each entry carries a `kind` of `{CORE_KIND}` or `{STANDARD_PACKAGE_KIND}`.\n\n## Core interfaces\n\nPlatform-neutral, always available.\n\n", core.len(), standard_packages.len()));
+    for interface in core {
+        output.push_str(&format!("- `{}`\n", interface.path));
+    }
+    output.push_str("\n## Standard-package interfaces\n\nEqually prelude-visible to a single-file check or lowering. A package build must instead receive these through an explicit package dependency.\n\n");
+    for interface in standard_packages {
         output.push_str(&format!("- `{}`\n", interface.path));
     }
     output
@@ -277,9 +290,12 @@ fn core_interfaces_json() -> String {
         schema: "rsscript.core-interfaces.v1",
         version: VERSION,
         completeness: COMPLETE,
-        provenance: ["rsscript_interface_catalog::CORE_INTERFACES"],
+        provenance: [
+            "rsscript_interface_catalog::CORE_INTERFACES",
+            "rsscript_interface_catalog::STANDARD_PACKAGE_INTERFACES",
+        ],
         sha256_algorithm: "sha256",
-        interfaces: core_interfaces(),
+        interfaces: prelude_interfaces(),
     })
 }
 
@@ -384,10 +400,28 @@ fn diagnostics() -> Vec<CatalogDiagnostic> {
 }
 
 fn core_interfaces() -> Vec<CoreInterface> {
-    let mut interfaces = CORE_INTERFACES
+    catalog_interfaces(CORE_INTERFACES, CORE_KIND)
+}
+
+fn standard_package_interfaces() -> Vec<CoreInterface> {
+    catalog_interfaces(STANDARD_PACKAGE_INTERFACES, STANDARD_PACKAGE_KIND)
+}
+
+/// Every interface a single-file check sees without declaring anything, in one
+/// path-ordered list; the `kind` field keeps the two registries distinguishable.
+fn prelude_interfaces() -> Vec<CoreInterface> {
+    let mut interfaces = core_interfaces();
+    interfaces.extend(standard_package_interfaces());
+    interfaces.sort_by(|left, right| left.path.cmp(&right.path));
+    interfaces
+}
+
+fn catalog_interfaces(entries: &[(&str, &str)], kind: &'static str) -> Vec<CoreInterface> {
+    let mut interfaces = entries
         .iter()
         .map(|(path, source)| CoreInterface {
             path: (*path).to_string(),
+            kind,
             sha256: sha256(source),
             source: (*source).to_string(),
         })
@@ -456,6 +490,18 @@ mod tests {
             core_interfaces()
                 .iter()
                 .any(|interface| interface.path.ends_with("string.rssi"))
+        );
+        // Standard-package interfaces are prelude-visible too, so the catalog
+        // lists them beside the core ones, distinguished by `kind`.
+        assert!(prelude_interfaces().iter().any(|interface| interface.path
+            == "packages/async/interface/task.rssi"
+            && interface.kind == STANDARD_PACKAGE_KIND));
+        assert!(prelude_interfaces().iter().any(
+            |interface| interface.path.ends_with("string.rssi") && interface.kind == CORE_KIND
+        ));
+        assert_eq!(
+            prelude_interfaces().len(),
+            core_interfaces().len() + standard_package_interfaces().len()
         );
         assert!(canonical_example().contains("note: note"));
     }

@@ -99,7 +99,7 @@ pub(super) fn check_dyn_from_call(
                 protocol,
                 "<unknown>",
                 call_span.clone(),
-                "ExternalBinding construction requires a typed value binding.",
+                "`Dyn.from` requires a value whose type the checker can resolve.",
             ));
         return;
     };
@@ -122,7 +122,7 @@ pub(super) fn check_dyn_from_call(
             protocol,
             value_type,
             call_span.clone(),
-            "The wrapped value must satisfy the external_binding protocol via an explicit impl.",
+            "The wrapped value must satisfy the protocol via a visible `impl` or a declared protocol bound.",
         ));
     }
 }
@@ -134,7 +134,12 @@ pub(super) fn dyn_from_protocol(callee: &Callee) -> Option<&str> {
     if type_root_name(namespace) != "Dyn" || type_root_name(name) != "from" {
         return None;
     }
-    type_arg_names(namespace).and_then(|args| args.first().copied())
+    // `Dyn.from<P, T>(value: …)` is the declared spelling (`stdlib/dyn/dyn.rssi`),
+    // so the protocol argument arrives on the *method* segment. `Dyn<P>.from(…)`
+    // puts it on the namespace instead; accept both.
+    type_arg_names(name)
+        .or_else(|| type_arg_names(namespace))
+        .and_then(|args| args.first().copied())
 }
 
 pub(super) fn check_enum_variant_form(
@@ -607,4 +612,74 @@ pub(super) fn substitute_type_params(
         substitutions,
     )
     .map_err(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::analyze_source;
+    use crate::diagnostic::code;
+
+    const PROTOCOL_AND_TYPE: &str = r#"
+protocol Render {
+    fn render(self: read Self) -> fresh String
+}
+
+struct Label {
+    text: String
+}
+
+fn Label.render(self: read Label) -> fresh String {
+    return String.concat(left: self.text, right: "!")
+}
+"#;
+
+    #[test]
+    fn dyn_from_requires_an_impl_of_the_named_protocol() {
+        let source = format!(
+            "{PROTOCOL_AND_TYPE}
+fn box_it(label: take Label) -> fresh Dyn<Render> {{
+    return Dyn.from<Render, Label>(value: take label)
+}}
+"
+        );
+        let diagnostics = analyze_source("dyn-from-unconformant.rss", &source);
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.code == code::PROTOCOL_NOT_SATISFIED)
+                .count(),
+            1,
+            "`Dyn.from<Render, Label>` without `impl Render for Label` must be rejected: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn dyn_from_accepts_a_declared_impl() {
+        let source = format!(
+            "{PROTOCOL_AND_TYPE}
+impl Render for Label {{
+    render = Label.render
+}}
+
+fn box_it(label: take Label) -> fresh Dyn<Render> {{
+    return Dyn.from<Render, Label>(value: take label)
+}}
+"
+        );
+        let diagnostics = analyze_source("dyn-from-conformant.rss", &source);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn dyn_from_accepts_a_declared_generic_bound() {
+        let source = format!(
+            "{PROTOCOL_AND_TYPE}
+fn box_any<T: Render>(value: take T) -> fresh Dyn<Render> {{
+    return Dyn.from<Render, T>(value: take value)
+}}
+"
+        );
+        let diagnostics = analyze_source("dyn-from-bound.rss", &source);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
 }

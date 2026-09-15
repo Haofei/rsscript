@@ -778,6 +778,77 @@ fn update(cache: mut RetainedImageStore, config: mut Config, path: read Path) ->
     assert!(access.is_handle);
 }
 
+fn binding_type(source: &str, binding: &str) -> Option<String> {
+    let program = parse_source("binary-inference.rss", source);
+    let hir = Hir::from_syntax(&program);
+    hir.function_body("check")
+        .expect("check body")
+        .bindings
+        .iter()
+        .find(|candidate| candidate.name == binding)
+        .expect("binding exists")
+        .ty
+        .as_ref()
+        .map(ToString::to_string)
+}
+
+#[test]
+fn infers_the_operand_type_of_an_arithmetic_expression() {
+    let source =
+        "fn check(a: Int, b: Int) -> Unit {\n    let sum = a + b\n    let shifted = a << b\n}\n";
+    assert_eq!(binding_type(source, "sum").as_deref(), Some("Int"));
+    assert_eq!(binding_type(source, "shifted").as_deref(), Some("Int"));
+
+    let floats = "fn check(a: Float, b: Float) -> Unit {\n    let scaled = a * b\n}\n";
+    assert_eq!(binding_type(floats, "scaled").as_deref(), Some("Float"));
+}
+
+#[test]
+fn infers_bool_for_comparison_and_logical_expressions() {
+    let source = "fn check(a: Int, b: Int, flag: Bool) -> Unit {\n    let ordered = a < b\n    let same = a == b\n    let both = flag && ordered\n}\n";
+    assert_eq!(binding_type(source, "ordered").as_deref(), Some("Bool"));
+    assert_eq!(binding_type(source, "same").as_deref(), Some("Bool"));
+    assert_eq!(binding_type(source, "both").as_deref(), Some("Bool"));
+}
+
+#[test]
+fn leaves_a_non_numeric_or_mismatched_arithmetic_expression_untyped() {
+    // `operators.rs` reports these as RS1001/RS0210; inference must not invent a
+    // type and add a second, derived error on top.
+    let text = "fn check(a: String, b: String) -> Unit {\n    let joined = a + b\n}\n";
+    assert_eq!(binding_type(text, "joined"), None);
+
+    let mixed = "fn check(a: Int, b: Float) -> Unit {\n    let mixed = a + b\n}\n";
+    assert_eq!(binding_type(mixed, "mixed"), None);
+
+    let unknown = "fn check(b: Int) -> Unit {\n    let total = missing + b\n}\n";
+    assert_eq!(binding_type(unknown, "total"), None);
+}
+
+#[test]
+fn an_inferred_binary_type_reaches_downstream_argument_checks() {
+    let source = r#"
+fn takes_string(value: String) -> Unit {
+    return Unit
+}
+
+fn check(a: Int, b: Int) -> Unit {
+    let sum = a + b
+    takes_string(value: sum)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("binary-argument.rss", source);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == code::ARGUMENT_TYPE_MISMATCH)
+            .count(),
+        1,
+        "{diagnostics:?}"
+    );
+}
+
 #[test]
 fn classifies_fresh_return_facts() {
     let source = r#"

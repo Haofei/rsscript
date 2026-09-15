@@ -1,0 +1,13 @@
+// expect: RS0207
+
+fn takes_string(value: String) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    let a = 1
+    let b = 2
+    let sum = a + b
+    takes_string(value: sum)
+    return Unit
+}

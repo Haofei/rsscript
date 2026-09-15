@@ -2,9 +2,13 @@
 
 # RSScript core interfaces
 
-Source: `rsscript-interface-catalog::CORE_INTERFACES`.
+Source: `rsscript-interface-catalog::{CORE_INTERFACES, STANDARD_PACKAGE_INTERFACES}`.
 
-35 platform-neutral core interface files are available to the single-file environment. Machine-readable catalog: [core-interfaces.json](core-interfaces.json).
+35 core interface files and 4 standard-package interface files are prelude-visible to a single-file check. Machine-readable catalog: [core-interfaces.json](core-interfaces.json), where each entry carries a `kind` of `core` or `standard_package`.
+
+## Core interfaces
+
+Platform-neutral, always available.
 
 - `stdlib/arguments/arguments.rssi`
 - `stdlib/clone/clone.rssi`
@@ -41,3 +45,12 @@ Source: `rsscript-interface-catalog::CORE_INTERFACES`.
 - `stdlib/url/url.rssi`
 - `stdlib/weak/weak.rssi`
 - `stdlib/yaml/yaml.rssi`
+
+## Standard-package interfaces
+
+Equally prelude-visible to a single-file check or lowering. A package build must instead receive these through an explicit package dependency.
+
+- `packages/async/interface/cancellation.rssi`
+- `packages/async/interface/channel.rssi`
+- `packages/async/interface/stream.rssi`
+- `packages/async/interface/task.rssi`

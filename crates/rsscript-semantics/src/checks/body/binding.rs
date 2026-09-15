@@ -226,7 +226,7 @@ pub(super) fn check_uninferable_bindings_in_stmt(
     uses: &HashSet<String>,
 ) {
     match statement {
-        // A bare `Ok`/`Err`/`None` with no user annotation (the HIR sets
+        // A bare `Ok`/`Err`/`None`/`[]` with no user annotation (the HIR sets
         // `ty == value_ty` exactly when the user did not annotate — an annotation
         // overrides the binding type with a placeholder-free structural type),
         // bound to a name that is never used, so nothing pins the open parameter.
@@ -237,7 +237,7 @@ pub(super) fn check_uninferable_bindings_in_stmt(
             value_ty,
             span,
             ..
-        } if ty == value_ty && !uses.contains(name) && open_variant_constructor(value) => {
+        } if ty == value_ty && !uses.contains(name) && open_generic_initializer(value) => {
             analyzer
                 .diagnostics
                 .push(rsscript_semantics::uninferable_binding_type_diagnostic(
@@ -272,16 +272,19 @@ pub(super) fn check_uninferable_bindings_in_stmt(
     }
 }
 
-/// Whether `value` is a bare `Ok(..)`/`Err(..)`/`None` constructor — the
-/// constructors that leave a type parameter unconstrained (`Some(x)` is fully
-/// determined by `x`, so it is excluded).
-pub(super) fn open_variant_constructor(value: &HirExpr) -> bool {
+/// Whether `value` leaves a type parameter unconstrained: a bare
+/// `Ok(..)`/`Err(..)`/`None` constructor, or an empty list literal, whose
+/// element type inference records as the `?` placeholder. `Some(x)` and a
+/// non-empty `[x, …]` are fully determined by their contents, so both are
+/// excluded.
+pub(super) fn open_generic_initializer(value: &HirExpr) -> bool {
     match value {
         HirExpr::Call {
             callee: Callee::Name(name),
             ..
         } => matches!(name.as_str(), "Ok" | "Err" | "None"),
         HirExpr::Ident { name, .. } => name == "None",
+        HirExpr::ArrayLiteral { items, .. } => items.is_empty(),
         _ => false,
     }
 }
@@ -453,5 +456,44 @@ pub(super) fn remove_stmt_bindings(statement: &HirStmt, uses: &mut HashSet<Strin
         | HirStmt::Break(_)
         | HirStmt::Continue(_)
         | HirStmt::Unknown(_) => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::analyze_source;
+    use crate::diagnostic::code;
+
+    fn uninferable_count(source: &str) -> usize {
+        analyze_source("uninferable-binding.rss", source)
+            .iter()
+            .filter(|diagnostic| diagnostic.code == code::UNINFERABLE_BINDING_TYPE)
+            .count()
+    }
+
+    #[test]
+    fn an_unused_empty_list_literal_is_as_uninferable_as_a_bare_ok() {
+        assert_eq!(
+            uninferable_count("fn main() -> Unit {\n    let xs = []\n    return Unit\n}\n"),
+            1
+        );
+        assert_eq!(
+            uninferable_count("fn main() -> Unit {\n    let value = Ok(1)\n    return Unit\n}\n"),
+            1
+        );
+    }
+
+    #[test]
+    fn an_annotated_or_non_empty_list_literal_is_inferable() {
+        assert_eq!(
+            uninferable_count(
+                "fn main() -> Unit {\n    let xs: List<Int> = []\n    return Unit\n}\n"
+            ),
+            0
+        );
+        assert_eq!(
+            uninferable_count("fn main() -> Unit {\n    let xs = [1, 2]\n    return Unit\n}\n"),
+            0
+        );
     }
 }

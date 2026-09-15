@@ -93,7 +93,7 @@ recognised by the parser as ordinary identifiers in keyword position.
 | `'x'` | `Char` |
 | `true` / `false` | `Bool` |
 | `Unit` | `Unit` |
-| `[a, b]` | `List<T>` where `T` is the type of the *first* element; an empty list gets the placeholder element type `?` |
+| `[a, b]` | `List<T>` where `T` is the type of the *first* element; an empty list gets the placeholder element type `?`, and an unused binding of one is `RS0034` (§3.3) |
 | `{ … }` object literal | `JsonLiteral` |
 | `{ k: v }` map literal | `MapLiteral` |
 
@@ -190,7 +190,45 @@ Violations are `RS0015` with a specific label
   (free functions, constants, types, sums, and type aliases). A glob has no
   single local name and cannot carry an alias.
 
+A `use` path must name a module the compilation unit declares — either a file
+being checked or an interface supplied to the check. Otherwise it is `RS0018`
+(`module_isolation.rs::unresolved_use_diagnostics`). Resolution is a renaming
+pass with no fallback (§1.5), so an import of a module that exists nowhere binds
+nothing at all, and without this check a typo in the path stays invisible until
+the imported name is used — if it ever is.
+
+Core and standard-package interfaces (`CORE_INTERFACES`,
+`STANDARD_PACKAGE_INTERFACES`) declare no `module`: they are the root namespace
+and are prelude-visible, so their names are reached without any `use`.
+
+A cross-module import therefore only resolves when the other module's file or
+`.rssi` is part of the same check — that is why the example pipelines under
+`examples/` pass their `interfaces/*.rssi` to `rss check`. Within one file, the
+module it declares is itself importable:
+
 **Accepted**
+
+```rsscript
+module app.report
+
+use app.report.Row
+
+struct Row {
+    name: String
+}
+
+pub fn title(row: read Row) -> fresh String {
+    return String.concat(left: "Report: ", right: row.name)
+}
+
+fn main() -> Unit {
+    local row = Row(name: "q1")
+    Output.write(message: title(row: read row))
+    return Unit
+}
+```
+
+**Rejected — `RS0018`** — no file declares `core.text`
 
 ```rsscript
 module app.report
@@ -207,13 +245,6 @@ fn main() -> Unit {
 }
 ```
 
-Note that `use core.text.Formatter` names a module that does not exist in this
-program. An import of an unknown module is **not** an error: name resolution
-simply leaves the reference unmangled, and only an actual *use* of an
-unresolvable name produces `RS0026`/`RS0206`. This is deliberate — the merged
-workspace may supply the module later — but it means typos in `use` paths are
-silent.
-
 **Rejected — `RS0015`** (module after a declaration)
 
 ```rsscript
@@ -224,7 +255,8 @@ fn helper() -> Int {
 module app.late
 ```
 
-**Rejected — `RS0015`** (duplicate import name)
+**Rejected — `RS0015`** (duplicate import name; also `RS0018` twice, since
+neither module exists)
 
 ```rsscript
 use gadgets.thing
@@ -679,7 +711,8 @@ The argument is deliberately *not* re-checked as an ordinary type, so a protocol
 name never produces a contradictory `RS0024`.
 
 `Dyn.from<P, T>(value: take T) -> fresh Dyn<P>` (declared in
-`stdlib/dyn/dyn.rssi`) constructs one. See §7.4 for the conformance gap.
+`stdlib/dyn/dyn.rssi`) constructs one, and requires that `T` satisfies `P`
+(§7.4).
 
 **Rejected — `RS0027`**
 
@@ -961,7 +994,8 @@ checks *skip* rather than report.
 | `Variant(...)` | the declared sum type owning `Variant` |
 | `base.field` | the declared field type, with the base's generic arguments substituted |
 | `base[i]` | *not inferred* (`None`) |
-| `a + b` and every binary operator | *not inferred* (`None`) |
+| `a == b`, `a < b`, `a && b` (comparison and logical) | `Bool` |
+| `a + b`, `a << b` (arithmetic and bitwise) | the shared numeric operand type; *not inferred* if the operands are not one matching numeric type |
 | `read e` / `mut e` / `take e` / `manage e` | the type of `e` |
 | `e?` | the `Ok` type of `e` |
 | `await e` | the `Task` payload of `e` if it has one, else the type of `e` |
@@ -971,11 +1005,17 @@ checks *skip* rather than report.
 
 Two consequences are worth stating plainly because they surprise people:
 
-* **Binary expressions have no inferred type.** `let x = a + b` gives `x` an
-  unknown type, so `x` will not be checked against later uses. Annotate the
-  binding when the type matters.
-* **An empty list literal has element type `?`.** `let xs = []` is effectively
-  untyped; annotate it (`let xs: List<Int> = []`).
+* **A binary expression is typed only when its operands agree.** Comparison and
+  logical operators always give `Bool`. The arithmetic and bitwise operators
+  give their operand type, but only when both operands are known and are the
+  *same* numeric type — there is no operator overloading and no `String +
+  String` (§2.13). `let x = a + b` on a mismatched or non-numeric pair leaves
+  `x` untyped, because `operators.rs` already reports that pair as
+  `RS0210`/`RS1001` and a derived type would only add a second error.
+* **An empty list literal has element type `?`.** `let xs = []` gives `xs` the
+  type `List<?>`, and `?` makes the dependent checks skip. An *unused* one is
+  `RS0034` (§3.3); a used one is trusted, exactly as a used bare `Ok(...)` is.
+  Annotate it (`let xs: List<Int> = []`) when the element type matters.
 
 Local bindings do not need annotations when the initializer's type is known:
 
@@ -994,18 +1034,29 @@ fn main() -> Unit {
 
 ### 3.3 When a binding annotation is required
 
-Because `Ok`, `Err`, and `None` each leave one generic position open, a `let`
-bound to a bare one of them is only well-typed if something later constrains the
-open position. If the binding is never used, nothing can, and the program would
-not lower. The checker reports that in RSScript instead of letting it surface as
-a backend "type annotations needed" error: `RS0034`
-(`source_rules.rs::uninferable_binding_type_diagnostic`).
+Because `Ok`, `Err`, `None`, and an empty list literal `[]` each leave one
+generic position open, a `let` bound to a bare one of them is only well-typed if
+something later constrains the open position. If the binding is never used,
+nothing can, and the program would not lower. The checker reports that in
+RSScript instead of letting it surface as a backend "type annotations needed"
+error: `RS0034` (`ownership.rs::uninferable_binding_type_diagnostic`, applied by
+`checks/body/binding.rs::open_generic_initializer`). `Some(x)` and a non-empty
+`[x, …]` are fully determined by their contents and are excluded.
 
 **Rejected — `RS0034`**
 
 ```rsscript
 fn main() -> Unit {
     let value = Ok(1)
+    return Unit
+}
+```
+
+**Rejected — `RS0034`**
+
+```rsscript
+fn main() -> Unit {
+    let xs = []
     return Unit
 }
 ```
@@ -2480,9 +2531,14 @@ Three loop forms (`ast.rs`):
 | `for name in iterable { … }` | `ForStmt`; the iterable must be `List<T>` |
 | `await for name in stream { … }` | `ForStmt` with `is_async`; the iterable must be `Stream<T>` |
 
-`break` and `continue` are statements. Note that a `loop` is treated as
-*possibly falling through* by the return check (§4.7), so an unconditional
-`loop { }` at the end of a non-`Unit` function still produces `RS0208`.
+`break` and `continue` are statements. Each targets the innermost enclosing
+`loop`/`while`/`for` *of the same control-flow region*; a closure body starts a
+new region, so a `break` written inside a closure does not reach a loop around
+the closure. With no such enclosing loop the statement is `RS0016`
+(`control_flow.rs::loop_control_flow_diagnostics`). Note that a `loop` is
+treated as *possibly falling through* by the return check (§4.7), so an
+unconditional `loop { }` at the end of a non-`Unit` function still produces
+`RS0208`.
 
 The `for` element binding is a read view for non-Copy struct elements (§5.6).
 
@@ -2529,6 +2585,19 @@ fn main() -> Unit {
     for x in n {
         Output.write(message: "x")
     }
+    return Unit
+}
+```
+
+**Rejected — `RS0016`** (twice: once for `break`, once for `continue`)
+
+```rsscript
+fn main() -> Unit {
+    let n = 1
+    if n > 0 {
+        break
+    }
+    continue
     return Unit
 }
 ```
@@ -2795,16 +2864,21 @@ checks apply (`crates/rsscript-semantics/src/try_checks.rs`):
 * **Operand** — the operand's type must be `Result<…>` or `Option<…>`. Applying
   `?` to anything else whose type is known is `RS0013`. An operand whose type is
   unknown is skipped.
+* **Propagation target** — the enclosing function must return `Result<…>` or
+  `Option<…>`, so the failure case has somewhere to go. `?` in a function with
+  any other concrete return type is `RS0013`.
 * **Error type** — inside a function returning `Result<T, E>`, every `?` on a
   `Result<_, F>` must have `F` compatible with `E`; otherwise `RS0013`.
 
 There is no `From`-style error conversion: the error types must match.
 
-Note what is *not* checked: using `?` inside a function whose return type is not
-a `Result`/`Option` is **not** diagnosed as long as the operand is a `Result`.
-`try_error_type_diagnostics` is driven by the *function's* error type, so a
-function with no error type produces no error-type obligation. This is a real
-gap; see §12.
+The propagation-target check is deliberately conservative
+(`try_checks.rs::TryContext::from_return_type`). It classifies the declared
+return type with type aliases expanded, and derives no obligation at all when
+the return type is a bare type parameter of the function, still carries an
+unresolved generic placeholder, or is a bare `Result`/`Option` with no
+arguments. A `?` inside a **closure body** is also never reported this way: the
+closure has its own return contract, which this check does not model.
 
 **Accepted**
 
@@ -2819,7 +2893,7 @@ fn double(text: String) -> Result<Int, String> {
 }
 ```
 
-**Rejected — `RS0013`**
+**Rejected — `RS0013`** — the operand is not a `Result`/`Option`
 
 ```rsscript
 fn load(value: Int) -> Int {
@@ -2829,6 +2903,19 @@ fn load(value: Int) -> Int {
 fn wrap(value: Int) -> Result<Int, String> {
     let loaded = load(value: value)?
     return Ok(loaded)
+}
+```
+
+**Rejected — `RS0013`** — the enclosing function cannot propagate the failure
+
+```rsscript
+fn parse(text: String) -> Result<Int, String> {
+    return Ok(1)
+}
+
+fn double(text: String) -> Int {
+    let value = parse(text: text)?
+    return value * 2
 }
 ```
 
@@ -2894,10 +2981,32 @@ fn main() -> Unit {
 
 ### 6.12 Definite assignment
 
-There is **no definite-assignment analysis**. A `let` with a type annotation and
-no initializer is accepted, and reading the binding afterwards is accepted:
+A `let` with a type annotation and no initializer is a **deferred declaration**:
+the binding exists but holds no value. Reading it before anything assigns it is
+`RS0017` (`control_flow.rs::definite_assignment_diagnostics`).
 
-**Accepted** (but see §12 — this is a gap, not an intended feature)
+The analysis is deliberately weaker than full definite assignment, and the exact
+rule is:
+
+* The body is walked in source order. Within one statement, the reads in its
+  expressions are seen before that statement's own assignment takes effect — so
+  `x = x + 1` on a deferred `x` is a read of an unassigned binding.
+* **Any** assignment to the name earlier in that walk marks it assigned from
+  then on, including an assignment inside one arm of an `if`, one `match` arm,
+  or a loop body that may run zero times. The analysis is therefore *optimistic
+  about paths*.
+* A later `let` of the same name with an initializer also marks it assigned.
+* Closure bodies are not walked: a closure runs at a time the check does not
+  model.
+* `let … else` bindings are not deferred declarations. They lower to a `let`
+  with no value in HIR, so the deferred set is read off the *syntax* tree to
+  keep the two apart exactly.
+
+The consequence is that every read `RS0017` reports is unassigned on *every*
+path: branch merging produces no false positives, at the cost of missing reads
+that are unassigned on only some paths.
+
+**Rejected — `RS0017`**
 
 ```rsscript
 fn main() -> Unit {
@@ -2907,8 +3016,21 @@ fn main() -> Unit {
 }
 ```
 
-Likewise `break` and `continue` outside any loop are accepted by the checker.
-Both are listed in §12.
+**Accepted** — one assigning path is enough
+
+```rsscript
+fn main() -> Unit {
+    let mut x: Int
+    let c = true
+    if c {
+        x = 1
+    } else {
+        x = 2
+    }
+    Output.write(message: Int.to_string(value: x))
+    return Unit
+}
+```
 
 ---
 
@@ -3056,13 +3178,15 @@ fn main() -> Unit {
 }
 ```
 
-**However**, `Dyn.from` does **not** currently check that `T` satisfies `P`. The
-semantic layer defines the diagnostic for it
-(`generic_constraints.rs::dyn_from_diagnostic`, which would be `RS0032`), but
-nothing in the checker calls it, and the following program — identical except
-that the `impl Render for Label` block is deleted — is **accepted**:
+`Dyn.from<P, T>` requires that `T` satisfies `P` — either through a visible
+`impl P for T` or through a declared protocol bound on a type parameter
+(`fn box_any<T: Render>(value: take T) -> fresh Dyn<Render>` is accepted). The
+check is `checks/calls/generic_constraints.rs::check_dyn_from_call`, and the
+diagnostic is `generic_constraints.rs::dyn_from_diagnostic` (`RS0032`). The
+following program — identical except that the `impl Render for Label` block is
+deleted — is **rejected**:
 
-**Accepted, and arguably should not be** (see §12)
+**Rejected — `RS0032`**
 
 ```rsscript
 protocol Render {
@@ -3090,7 +3214,7 @@ fn main() -> Unit {
 | | `fn f<T: P>(x: read T)` | `fn f(x: read Dyn<P>)` |
 | --- | --- | --- |
 | dispatch | static, resolved per instantiation | dynamic |
-| conformance proof | at the call site, by §3.5 | when the `Dyn` is constructed (currently unchecked) |
+| conformance proof | at the call site, by §3.5 | when the `Dyn` is constructed, by §3.5 (`RS0032`) |
 | number of bounds | exactly one per type parameter | one protocol per `Dyn` |
 | value shape | the concrete value | an explicit boundary value |
 
@@ -3891,8 +4015,8 @@ Note that `Output.write` exists but `Output.print` does not; the interface is
 `default_interfaces()` is their concatenation. A single-file
 `rss check` / `rss build` sees both.
 
-**`CORE_INTERFACES` — 35 platform-neutral core interface files** (this is the
-list published as `docs/generated/core-interfaces.md`):
+**`CORE_INTERFACES` — 35 platform-neutral core interface files** (published as
+the *Core interfaces* section of `docs/generated/core-interfaces.md`):
 
 ```
 stdlib/arguments/arguments.rssi     stdlib/clone/clone.rssi
@@ -3931,9 +4055,9 @@ are why the channel and cancellation examples in §9 check clean as single files
 
 Package review and package lowering must receive these through explicit package
 dependencies instead — the prelude visibility is a single-file convenience, not
-a language guarantee. `docs/generated/core-interfaces.md` documents only the
-first list, so the four async files are prelude-visible but undocumented there
-(§12).
+a language guarantee. `docs/generated/core-interfaces.md` publishes both lists
+under separate headings, and every entry in `core-interfaces.json` carries a
+`kind` of `core` or `standard_package`.
 
 `rss check` accepts `--no-core` to drop the core prelude and `--interface
 <file.rssi>` to add contracts explicitly.
@@ -3971,6 +4095,7 @@ explanations).
 | `RS0005` | duplicate declaration | §1.9 |
 | `RS0007` | invalid retained parameter | §5.7 |
 | `RS0015` | unsupported syntax | §1.3, §1.4, §1.7, §1.8, §1.10, §2.3, §2.6, §2.12, §7.1, §9.3 |
+| `RS0018` | unresolved import | §1.4 |
 | `RS0028` | invalid `self` parameter | §4.3, §7.1 |
 | `RS0035` | lowered name conflict / invalid pin | §4.1 |
 | `RS0040` | semantic analysis incomplete (work budget exhausted) | §3.4 |
@@ -4011,13 +4136,15 @@ explanations).
 | `RS0206` | unknown callee | §4.2, §10.1 |
 | `RS0207` | argument / initializer / callback-shape type mismatch | §3.3, §4.10, §5.10 |
 | `RS0208` | return type mismatch (including fall-through) | §4.7 |
-| `RS0032` | protocol bound not satisfied | §3.5, §7.3 |
+| `RS0032` | protocol bound not satisfied | §3.5, §7.3, §7.4 |
 
 ### 11.4 Control flow
 
 | Code | Title | Section |
 | --- | --- | --- |
 | `RS0013` | invalid try operator | §6.10 |
+| `RS0016` | `break`/`continue` outside a loop | §6.3 |
+| `RS0017` | binding read before it is assigned | §6.12 |
 | `RS0021` | non-exhaustive match | §6.7 |
 | `RS0037` | variant pattern arity mismatch | §6.4 |
 | `RS0209` | control-flow type mismatch (condition, iterable, scrutinee, literal pattern, variant family, match-arm type) | §6.2, §6.3, §6.6, §6.8 |
@@ -4089,26 +4216,18 @@ or the package manager, not by the language rules described here.
 | `PKG0101` `PKG0102` `PKG0501` `PKG0601` `PKG0901` | package manager: feature resolution, dependency sources, review policy, native binding metadata, provider declarations |
 | `RSR001`–`RSR020` | package review / API-diff codes (features, functions, params, returns, retention, types, boundaries, protocol impls, sums, consts, aliases) |
 
-### 11.9 Codes in the registry but not in the published catalog
+### 11.9 The published catalog is complete
 
-`docs/generated/diagnostic-catalog.md` publishes 83 entries. The registry
-(`crates/rsscript-diagnostics/src/implementation.rs`) defines these additional
-codes, all of which the front end really does emit (each is exercised by a
-fixture or by an example in this document):
+`docs/generated/diagnostic-catalog.{md,json}` is a pure projection of
+`diagnostic_explanations()` in
+`crates/rsscript-diagnostics/src/implementation.rs`, and every code the registry
+declares now has an entry — `RS0036`, `RS0038`, `RS0039`, `RS0309`, `RS0805` and
+the whole `RSR0xx` family were missing and have been added. A test in that crate
+reads its own source back and fails if a declared code has no explanation, so a
+new code cannot be added without a catalog entry.
 
-| Code | Meaning | Section |
-| --- | --- | --- |
-| `RS0036` | message payload not cross-isolate transferable | §9.5 |
-| `RS0038` | char literal is not exactly one Unicode scalar | §1.2 |
-| `RS0039` | cyclic type alias | §2.8 |
-| `RS0309` | managed field split conflict | §5.4 |
-| `RS0805` | explicit-closure capture contract | §5.9 |
-| `RSR001`–`RSR020` | package review codes | §11.8 |
-
-This is a documentation gap in the generated catalog, not a language gap (§12).
-
-Note also that the code space has holes: `RS0004`, `RS0006`, `RS0008`–`RS0012`,
-`RS0014`, `RS0016`–`RS0020`, `RS0703`, and `RS0705` are not defined.
+Note that the code space has holes: `RS0004`, `RS0006`, `RS0008`–`RS0012`,
+`RS0014`, `RS0019`, `RS0020`, `RS0703`, and `RS0705` are not defined.
 
 ---
 
@@ -4143,30 +4262,11 @@ and finding no enforcing code.
 
 These are findings for the maintainer, not features.
 
-* **`Dyn.from` does not check conformance.** `dyn_from_diagnostic` exists in
-  `generic_constraints.rs` and would emit `RS0032`, but nothing calls it.
-  `Dyn.from<Render, Label>(value: take label)` is accepted even with no
-  `impl Render for Label` and no `Render` bound (§7.4). The *use* of the
-  resulting `Dyn<Render>` is accepted too, because `Dyn<P>` satisfies `P`
-  unconditionally. This is the one place where the nominal-protocol invariant
-  can currently be bypassed.
-* **No definite-assignment analysis.** `let x: Int` with no initializer,
-  followed by a read of `x`, is accepted (§6.12).
-* **`break` / `continue` outside a loop** are accepted by the checker.
-* **`?` in a function that returns neither `Result` nor `Option`** is not
-  diagnosed as long as the operand is a `Result`. `try_error_type_diagnostics`
-  derives its obligation from the *function's* error type, so a function with no
-  error type produces no obligation (§6.10). The catalog text for `RS0013` says
-  "`?` may only be used inside functions that return a compatible `Result<T, E>`
-  type", which overstates what is enforced.
-* **`use` of a non-existent module is silent.** An unresolvable import simply
-  leaves the reference unmangled; only an actual use of an unresolvable *name*
-  produces `RS0026`/`RS0206` (§1.4).
-* **Binary expressions have no inferred type**, so `let x = a + b` leaves `x`
-  untyped and every downstream check on `x` is skipped (§3.2). This silently
-  weakens checking in ordinary arithmetic code.
-* **An empty list literal has element type `?`** and does not trigger `RS0034`,
-  unlike a bare `Ok(...)`/`None` (§1.2, §3.3).
+* **A used binding with an open generic position is trusted.** `RS0034` fires
+  only when the binding is never used (§3.3). `let xs = []` followed by pushes
+  of mixed element types, or a bare `let v = Ok(1)` that is later returned, keeps
+  the `?`/placeholder position and the dependent checks keep skipping it. There
+  is no constraint propagation from later uses back to the binding (§3.2).
 
 ### 12.3 Surprises worth calling out
 
@@ -4189,8 +4289,8 @@ These are findings for the maintainer, not features.
   intentional infinite loop at the end of a non-`Unit` function produces
   `RS0208` (§4.7).
 * **`Type.method` dispatch is by inferred receiver type**, not by method name,
-  so a receiver whose type is unknown (e.g. the result of a binary expression)
-  makes `x.m()` unresolvable — `RS0206` (§4.2).
+  so a receiver whose type is unknown makes `x.m()` unresolvable — `RS0206`
+  (§4.2).
 * **Tuple arity is capped at 26** because the checker recognises a generic type
   variable only as a single uppercase letter (§2.9).
 * **The exhaustiveness witness product is capped at 512 rows.** A struct or sum
@@ -4199,18 +4299,6 @@ These are findings for the maintainer, not features.
 
 ### 12.4 Documentation drift found while writing this reference
 
-* `docs/generated/diagnostic-catalog.md` is missing `RS0036`, `RS0038`,
-  `RS0039`, `RS0309`, `RS0805`, and the whole `RSR0xx` family, all of which are
-  defined in `crates/rsscript-diagnostics/src/implementation.rs` (§11.9).
-* `docs/generated/core-interfaces.md` documents only `CORE_INTERFACES` (35
-  files). The four `STANDARD_PACKAGE_INTERFACES` under
-  `packages/async/interface/` are equally prelude-visible to a single-file check
-  and are not listed there (§10.2).
-* `docs/spec/RSScript_Execution_Spec_v0.1.md` names conformance anchors at
-  `tests/checker_frontend/async_resources.rs` and
-  `tests/vm_eval_parity/async_concurrency.rs`. Neither path exists in the
-  repository.
-* The `RS0013` catalog text overstates the enforced rule (§12.2).
 * `docs/generated/grammar.md` lists reserved keyword classes from the lexer
   table only. Words the parser gives declaration meaning to — `sum`, `protocol`,
   `impl`, `type`, `const`, `opaque`, `derives`, `retains`, `noescape`, `owned`,
