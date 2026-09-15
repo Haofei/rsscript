@@ -46,6 +46,64 @@ fn infer_enum_variant_type(
     }
 }
 
+/// Infer the type of a builtin binary operator expression.
+///
+/// The operand rules are exactly `operators.rs`'s (§2.13): comparison and
+/// logical operators produce `Bool`; the arithmetic and bitwise operators
+/// produce their operand type, which must be one matching numeric type. There
+/// is no operator overloading and no `String + String`, so anything else — an
+/// operand whose type is unknown, a non-numeric operand, or a mismatched pair,
+/// all of which `operators.rs` already reports as `RS0210`/`RS1001` — leaves the
+/// expression untyped rather than inventing a second, derived error.
+fn infer_binary_type(
+    hir: &Hir,
+    op: BinaryOp,
+    left: &Expr,
+    right: &Expr,
+    value_types: &HirValueTypes,
+) -> Option<ResolvedType> {
+    match op {
+        // A comparison or logical operator yields `Bool` whatever its operands
+        // turn out to be; a bad operand pair is the operator check's business.
+        BinaryOp::Equal
+        | BinaryOp::NotEqual
+        | BinaryOp::Less
+        | BinaryOp::LessEqual
+        | BinaryOp::Greater
+        | BinaryOp::GreaterEqual
+        | BinaryOp::LogicalAnd
+        | BinaryOp::LogicalOr => Some(ResolvedType::named("Bool", [])),
+        BinaryOp::Add
+        | BinaryOp::Subtract
+        | BinaryOp::Multiply
+        | BinaryOp::Divide
+        | BinaryOp::Modulo
+        | BinaryOp::BitAnd
+        | BinaryOp::BitOr
+        | BinaryOp::BitXor
+        | BinaryOp::ShiftLeft
+        | BinaryOp::ShiftRight => {
+            let left = canonical_operand_root(hir, left, value_types)?;
+            let right = canonical_operand_root(hir, right, value_types)?;
+            if left != right || !crate::operators::is_numeric_type(&left) {
+                return None;
+            }
+            Some(ResolvedType::named(left, []))
+        }
+    }
+}
+
+/// The alias-expanded root name of an operand's inferred type.
+fn canonical_operand_root(hir: &Hir, expr: &Expr, value_types: &HirValueTypes) -> Option<String> {
+    let ty = infer_hir_expr_type(hir, expr, value_types)?;
+    let canonical = hir.canonical_type_name(&ty.to_string());
+    Some(
+        ResolvedType::from_display(&canonical)
+            .root_name()?
+            .to_owned(),
+    )
+}
+
 pub fn infer_hir_expr_type(
     hir: &Hir,
     expr: &Expr,
@@ -56,7 +114,9 @@ pub fn infer_hir_expr_type(
             hir.sum_type_for_variant(name)
                 .map(|name| ResolvedType::named(name, []))
         }),
-        Expr::Binary { .. } => None,
+        Expr::Binary {
+            op, left, right, ..
+        } => infer_binary_type(hir, *op, left, right, value_types),
         Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
             infer_hir_expr_type(hir, value, value_types)
         }

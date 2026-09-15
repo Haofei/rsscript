@@ -984,7 +984,8 @@ checks *skip* rather than report.
 | `Variant(...)` | the declared sum type owning `Variant` |
 | `base.field` | the declared field type, with the base's generic arguments substituted |
 | `base[i]` | *not inferred* (`None`) |
-| `a + b` and every binary operator | *not inferred* (`None`) |
+| `a == b`, `a < b`, `a && b` (comparison and logical) | `Bool` |
+| `a + b`, `a << b` (arithmetic and bitwise) | the shared numeric operand type; *not inferred* if the operands are not one matching numeric type |
 | `read e` / `mut e` / `take e` / `manage e` | the type of `e` |
 | `e?` | the `Ok` type of `e` |
 | `await e` | the `Task` payload of `e` if it has one, else the type of `e` |
@@ -994,9 +995,13 @@ checks *skip* rather than report.
 
 Two consequences are worth stating plainly because they surprise people:
 
-* **Binary expressions have no inferred type.** `let x = a + b` gives `x` an
-  unknown type, so `x` will not be checked against later uses. Annotate the
-  binding when the type matters.
+* **A binary expression is typed only when its operands agree.** Comparison and
+  logical operators always give `Bool`. The arithmetic and bitwise operators
+  give their operand type, but only when both operands are known and are the
+  *same* numeric type — there is no operator overloading and no `String +
+  String` (§2.13). `let x = a + b` on a mismatched or non-numeric pair leaves
+  `x` untyped, because `operators.rs` already reports that pair as
+  `RS0210`/`RS1001` and a derived type would only add a second error.
 * **An empty list literal has element type `?`.** `let xs = []` is effectively
   untyped; annotate it (`let xs: List<Int> = []`).
 
@@ -4242,9 +4247,6 @@ and finding no enforcing code.
 
 These are findings for the maintainer, not features.
 
-* **Binary expressions have no inferred type**, so `let x = a + b` leaves `x`
-  untyped and every downstream check on `x` is skipped (§3.2). This silently
-  weakens checking in ordinary arithmetic code.
 * **An empty list literal has element type `?`** and does not trigger `RS0034`,
   unlike a bare `Ok(...)`/`None` (§1.2, §3.3).
 
@@ -4269,8 +4271,8 @@ These are findings for the maintainer, not features.
   intentional infinite loop at the end of a non-`Unit` function produces
   `RS0208` (§4.7).
 * **`Type.method` dispatch is by inferred receiver type**, not by method name,
-  so a receiver whose type is unknown (e.g. the result of a binary expression)
-  makes `x.m()` unresolvable — `RS0206` (§4.2).
+  so a receiver whose type is unknown makes `x.m()` unresolvable — `RS0206`
+  (§4.2).
 * **Tuple arity is capped at 26** because the checker recognises a generic type
   variable only as a single uppercase letter (§2.9).
 * **The exhaustiveness witness product is capped at 512 rows.** A struct or sum

@@ -290,7 +290,10 @@ fn arithmetic_operator(op: BinaryOp) -> bool {
     )
 }
 
-fn is_numeric_type(type_name: &str) -> bool {
+/// The builtin numeric type roots. Shared with HIR inference so the type a
+/// binary expression is given and the type the operator check demands stay one
+/// rule.
+pub(crate) fn is_numeric_type(type_name: &str) -> bool {
     matches!(
         type_root_name(type_name),
         "Int"
