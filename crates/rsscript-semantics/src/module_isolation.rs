@@ -43,6 +43,96 @@ fn module_prefix_from_dotted(namespace: &str) -> String {
     module_prefix(&namespace.split('.').map(str::to_string).collect::<Vec<_>>())
 }
 
+/// Diagnose `use` declarations whose module is declared nowhere in the
+/// compilation unit.
+///
+/// `use a.b.name` binds `name` only if some file declares `module a.b` — in the
+/// sources being checked or in an interface supplied to the check. Resolution
+/// is a renaming pass with no fallback (see the module docs), so an import of a
+/// module that does not exist binds nothing at all and a typo in the path is
+/// otherwise invisible until the name is used, if it ever is.
+///
+/// Core and standard-package interfaces declare no `module`: they are the root
+/// namespace and are prelude-visible, so their names are reached without a
+/// `use`. A `use` with no module segment (`use name`) is not reported here —
+/// it binds nothing either way and carries no path to be wrong about.
+pub fn unresolved_use_diagnostics<'a>(
+    program: &Program,
+    interfaces: impl IntoIterator<Item = &'a Program>,
+) -> Vec<Diagnostic> {
+    let mut declared = declared_module_paths(program);
+    for interface in interfaces {
+        declared.extend(declared_module_paths(interface));
+    }
+    program
+        .items
+        .iter()
+        .filter_map(|item| {
+            let Item::Use(decl) = item else {
+                return None;
+            };
+            let module_path = if decl.glob {
+                decl.path.as_slice()
+            } else if decl.path.len() >= 2 {
+                &decl.path[..decl.path.len() - 1]
+            } else {
+                return None;
+            };
+            if module_path.is_empty() {
+                return None;
+            }
+            let module_path = module_path.join(".");
+            if declared.contains(&module_path) {
+                return None;
+            }
+            Some(unresolved_import_diagnostic(
+                &module_path,
+                &decl.path.join("."),
+                decl.glob,
+                decl.span.clone(),
+            ))
+        })
+        .collect()
+}
+
+fn declared_module_paths(program: &Program) -> HashSet<String> {
+    program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Module(module) => Some(module.path.join(".")),
+            _ => None,
+        })
+        .collect()
+}
+
+fn unresolved_import_diagnostic(
+    module_path: &str,
+    full_path: &str,
+    glob: bool,
+    span: rsscript_syntax::Span,
+) -> Diagnostic {
+    let import = if glob {
+        format!("{full_path}.*")
+    } else {
+        full_path.to_string()
+    };
+    Diagnostic::error(
+        rsscript_diagnostics::code::UNRESOLVED_IMPORT,
+        format!("`use {import}` names the module `{module_path}`, which is not declared."),
+        span,
+        "unresolved import",
+    )
+    .with_cause(
+        "No file in this compilation unit — source or supplied interface — declares this module, so the import binds nothing.",
+    )
+    .with_fix(
+        "declare_or_correct_module",
+        format!("Correct the path, or add a file declaring `module {module_path}` (or supply the interface that declares it)."),
+        "manual",
+    )
+}
+
 /// Rewrite a program so each `module`-scoped symbol becomes globally unique.
 pub fn isolate_module_namespaces(program: &mut Program) {
     // Desugar named-function values into forwarding closures first, so the
@@ -1178,6 +1268,53 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn unresolvable_use_paths_are_diagnosed() {
+        let program = parse_source(
+            "app.rss",
+            "module app.report\n\nuse core.text.Formatter\nuse gadgets.*\n",
+        );
+        let codes = unresolved_use_diagnostics(&program, [])
+            .into_iter()
+            .map(|diagnostic| diagnostic.code.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            codes,
+            [
+                rsscript_diagnostics::code::UNRESOLVED_IMPORT,
+                rsscript_diagnostics::code::UNRESOLVED_IMPORT
+            ]
+        );
+    }
+
+    #[test]
+    fn a_use_resolves_against_source_and_interface_module_declarations() {
+        let program = parse_source(
+            "app.rss",
+            "module app.report\n\nuse host.fs.read_all\nuse app.report.Row\n",
+        );
+        let interface = parse_source("fs.rssi", "module host.fs\n\nfn read_all() -> Unit\n");
+        assert!(
+            unresolved_use_diagnostics(&program, [&interface]).is_empty(),
+            "{:?}",
+            unresolved_use_diagnostics(&program, [&interface])
+        );
+    }
+
+    #[test]
+    fn prelude_interfaces_declare_no_module_so_their_names_need_no_import() {
+        // `unresolved_use_diagnostics` only sees module declarations. Core and
+        // standard-package interfaces are the root namespace; if that ever
+        // changes, the resolvable set has to grow with it.
+        for (file, source) in crate::interfaces::default_interfaces() {
+            let program = parse_source(file, source);
+            assert!(
+                declared_module_paths(&program).is_empty(),
+                "{file} declares a module"
+            );
+        }
     }
 
     #[test]

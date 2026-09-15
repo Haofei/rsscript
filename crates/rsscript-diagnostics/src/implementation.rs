@@ -15,6 +15,7 @@ pub mod code {
     pub const UNSUPPORTED_SYNTAX: &str = "RS0015";
     pub const LOOP_CONTROL_OUTSIDE_LOOP: &str = "RS0016";
     pub const READ_BEFORE_ASSIGNMENT: &str = "RS0017";
+    pub const UNRESOLVED_IMPORT: &str = "RS0018";
     pub const NON_EXHAUSTIVE_MATCH: &str = "RS0021";
     pub const ASYNC_CALL_NOT_CONSUMED: &str = "RS0022";
     pub const FD_OUTSIDE_INTERNAL_BOUNDARY: &str = "RS0023";
@@ -505,6 +506,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::READ_BEFORE_ASSIGNMENT,
         title: "binding read before it is assigned",
         explanation: "A `let` declared with a type but no initializer holds no value until something assigns it. Reading it first would lower to uninitialized memory, so the checker rejects it. The analysis is deliberately conservative: it reports a read only when *no* earlier statement assigns the binding at all, so a binding assigned on just one arm of an `if`, or only inside a loop body, is treated as assigned. Closure bodies are not analysed, because a closure runs at a time the checker does not model.",
+    },
+    DiagnosticExplanation {
+        code: code::UNRESOLVED_IMPORT,
+        title: "unresolved import",
+        explanation: "`use a.b.name` imports `name` from module `a.b`, so `a.b` must be declared by a `module a.b` header on some file in the compilation unit — the sources being checked or an interface supplied to the check. When it is not, the import binds nothing: name resolution leaves the reference unmangled, and a typo in the path goes unnoticed until the imported name is used, if it is used at all. Core and standard-package interfaces declare no module and are prelude-visible, so their names need no `use` at all.",
     },
     DiagnosticExplanation {
         code: code::NON_EXHAUSTIVE_MATCH,

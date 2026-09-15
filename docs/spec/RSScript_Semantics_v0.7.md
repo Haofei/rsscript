@@ -190,7 +190,35 @@ Violations are `RS0015` with a specific label
   (free functions, constants, types, sums, and type aliases). A glob has no
   single local name and cannot carry an alias.
 
-**Accepted**
+A `use` path must name a module the compilation unit declares — either a file
+being checked or an interface supplied to the check. Otherwise it is `RS0018`
+(`module_isolation.rs::unresolved_use_diagnostics`). Resolution is a renaming
+pass with no fallback (§1.5), so an import of a module that exists nowhere binds
+nothing at all, and without this check a typo in the path stays invisible until
+the imported name is used — if it ever is.
+
+Core and standard-package interfaces (`CORE_INTERFACES`,
+`STANDARD_PACKAGE_INTERFACES`) declare no `module`: they are the root namespace
+and are prelude-visible, so their names are reached without any `use`.
+
+**Accepted** — the interface declaring `module host.fs` is supplied to the check
+
+```rsscript
+module app.report
+
+use host.fs.read_all
+
+pub fn title(name: String) -> fresh String {
+    return String.concat(left: "Report: ", right: name)
+}
+
+fn main() -> Unit {
+    Output.write(message: title(name: "q1"))
+    return Unit
+}
+```
+
+**Rejected — `RS0018`** — no file declares `core.text`
 
 ```rsscript
 module app.report
@@ -207,13 +235,6 @@ fn main() -> Unit {
 }
 ```
 
-Note that `use core.text.Formatter` names a module that does not exist in this
-program. An import of an unknown module is **not** an error: name resolution
-simply leaves the reference unmangled, and only an actual *use* of an
-unresolvable name produces `RS0026`/`RS0206`. This is deliberate — the merged
-workspace may supply the module later — but it means typos in `use` paths are
-silent.
-
 **Rejected — `RS0015`** (module after a declaration)
 
 ```rsscript
@@ -224,7 +245,8 @@ fn helper() -> Int {
 module app.late
 ```
 
-**Rejected — `RS0015`** (duplicate import name)
+**Rejected — `RS0015`** (duplicate import name; also `RS0018` twice, since
+neither module exists)
 
 ```rsscript
 use gadgets.thing
@@ -4045,6 +4067,7 @@ explanations).
 | `RS0005` | duplicate declaration | §1.9 |
 | `RS0007` | invalid retained parameter | §5.7 |
 | `RS0015` | unsupported syntax | §1.3, §1.4, §1.7, §1.8, §1.10, §2.3, §2.6, §2.12, §7.1, §9.3 |
+| `RS0018` | unresolved import | §1.4 |
 | `RS0028` | invalid `self` parameter | §4.3, §7.1 |
 | `RS0035` | lowered name conflict / invalid pin | §4.1 |
 | `RS0040` | semantic analysis incomplete (work budget exhausted) | §3.4 |
@@ -4184,7 +4207,7 @@ fixture or by an example in this document):
 This is a documentation gap in the generated catalog, not a language gap (§12).
 
 Note also that the code space has holes: `RS0004`, `RS0006`, `RS0008`–`RS0012`,
-`RS0014`, `RS0018`–`RS0020`, `RS0703`, and `RS0705` are not defined.
+`RS0014`, `RS0019`, `RS0020`, `RS0703`, and `RS0705` are not defined.
 
 ---
 
@@ -4219,9 +4242,6 @@ and finding no enforcing code.
 
 These are findings for the maintainer, not features.
 
-* **`use` of a non-existent module is silent.** An unresolvable import simply
-  leaves the reference unmangled; only an actual use of an unresolvable *name*
-  produces `RS0026`/`RS0206` (§1.4).
 * **Binary expressions have no inferred type**, so `let x = a + b` leaves `x`
   untyped and every downstream check on `x` is skipped (§3.2). This silently
   weakens checking in ordinary arithmetic code.

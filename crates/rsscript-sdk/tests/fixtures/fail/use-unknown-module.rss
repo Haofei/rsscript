@@ -1,0 +1,14 @@
+// expect: RS0018
+
+module app.report
+
+use core.text.Formatter
+
+pub fn title(name: String) -> fresh String {
+    return String.concat(left: "Report: ", right: name)
+}
+
+fn main() -> Unit {
+    Output.write(message: title(name: "q1"))
+    return Unit
+}

@@ -216,6 +216,7 @@ pub use local_flow_solver::{
 pub use local_flow_state::{LocalFlowState, initial_local_flow_state, path_root};
 pub use module_isolation::{
     demangle_diagnostics, isolate_module_namespaces, isolate_sources_with_interfaces,
+    unresolved_use_diagnostics,
 };
 pub use moved_use_flow::moved_uses_from_flow;
 pub use operators::{

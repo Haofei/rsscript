@@ -1,11 +1,16 @@
 module rss.package.review
 
-use rss.package.contract.PackageContract
-use rss.review.ReviewMap
-use core.collections.Map
+// A `use` path must name a module the compilation unit declares. This file is
+// the only module here, so it imports from itself; a cross-module import needs
+// the other module's file or interface to be part of the same check.
+use rss.package.review.PackageReview
 
-fn review_package(name: String) -> String {
-    return name
+struct PackageReview {
+    name: String
+}
+
+fn review_package(name: String) -> fresh PackageReview {
+    return PackageReview(name: name)
 }
 
 fn main() -> Unit {
