@@ -1,0 +1,42 @@
+async fn feed(sender: Sender<Int>, value: Int) -> Result<Unit, ChannelError> {
+    local item = value
+    await Sender.send<Int>(sender: sender, value: take item)?
+    return Ok(Unit)
+}
+
+fn race_first_ready() -> Result<Unit, ChannelError> {
+    let mut primary = Channel.bounded<Int>(capacity: 1)?
+    let mut secondary = Channel.bounded<Int>(capacity: 1)?
+    let primary_sender = Channel.sender<Int>(channel: primary)
+    let secondary_sender = Channel.sender<Int>(channel: secondary)
+    let primary_receiver = Channel.receiver<Int>(channel: mut primary)?
+    let secondary_receiver = Channel.receiver<Int>(channel: mut secondary)?
+    let mut source = CancellationSource.new()
+
+    task_group {
+        async let left = feed(sender: primary_sender, value: 1)
+        async let right = feed(sender: secondary_sender, value: 2)
+        select {
+            first = await Receiver.recv<Int>(receiver: primary_receiver) => {
+                Output.write(message: "primary won")
+                CancellationSource.cancel(source: mut source)
+            }
+            second = await Receiver.recv<Int>(receiver: secondary_receiver) => {
+                Output.write(message: "secondary won")
+                CancellationSource.cancel(source: mut source)
+            }
+        }
+        await left?
+        await right?
+    }
+
+    return Ok(Unit)
+}
+
+fn main() -> Unit {
+    match race_first_ready() {
+        Ok(done) => { Output.write(message: "raced") }
+        Err(error) => { Output.error(message: ChannelError.message(error: error)) }
+    }
+    return Unit
+}

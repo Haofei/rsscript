@@ -1,0 +1,2297 @@
+{
+  "schema": "rsscript.agent_eval.v1",
+  "provenance": {
+    "static_check_environment": "standard_package_interfaces_plus_task_interfaces"
+  },
+  "tasks": [
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "async-stream-consume",
+        "task_mode": "review",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 249232,
+        "repair_turns": 1
+      },
+      "status": "pass",
+      "candidate_static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": true,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [
+          "RS0029"
+        ],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": true
+      },
+      "safety": {
+        "unknown_tool_or_argument": false,
+        "unknown_tool_or_argument_diagnostics": [],
+        "invalid_mut_or_take": false,
+        "invalid_mut_or_take_diagnostics": []
+      },
+      "invariants": [
+        {
+          "kind": "source_contains",
+          "value": "Stream.next",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_contains",
+          "value": "task_group",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "diagnostic_absent",
+          "value": "RS0029",
+          "scope": "target",
+          "passed": true
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 31
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "csv-record-transform",
+        "task_mode": "review",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 604488,
+        "repair_turns": 2
+      },
+      "status": "fail",
+      "candidate_static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "fail",
+        "diagnostic_codes": [
+          "RS0015",
+          "RS0202",
+          "RS0206"
+        ]
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": false,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": true
+      },
+      "safety": {
+        "unknown_tool_or_argument": true,
+        "unknown_tool_or_argument_diagnostics": [
+          "RS0206"
+        ],
+        "invalid_mut_or_take": true,
+        "invalid_mut_or_take_diagnostics": [
+          "RS0202"
+        ]
+      },
+      "invariants": [
+        {
+          "kind": "source_contains",
+          "value": "String.split",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_contains",
+          "value": "Err(",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_excludes",
+          "value": ".unwrap()",
+          "scope": "target",
+          "passed": true
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 14
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "destructive-symbol",
+        "task_mode": "repair",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 5046,
+        "repair_turns": 0
+      },
+      "status": "pass",
+      "candidate_static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": true,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": true
+      },
+      "safety": {
+        "unknown_tool_or_argument": false,
+        "unknown_tool_or_argument_diagnostics": [],
+        "invalid_mut_or_take": false,
+        "invalid_mut_or_take_diagnostics": []
+      },
+      "invariants": [
+        {
+          "kind": "candidate_source_contains",
+          "value": "Dangerous.write_text",
+          "scope": "candidate",
+          "passed": true
+        },
+        {
+          "kind": "target_call_excludes",
+          "value": "Dangerous.write_text",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "target_source_excludes",
+          "value": "/tmp/eval-output.txt",
+          "scope": "target",
+          "passed": true
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 8
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "generic-struct-bound",
+        "task_mode": "review",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 140332,
+        "repair_turns": 2
+      },
+      "status": "fail",
+      "candidate_static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "fail",
+        "diagnostic_codes": [
+          "RS0015",
+          "RS0026",
+          "RS0206",
+          "RS0308"
+        ]
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": false,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [
+          "RS0308"
+        ],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": false
+      },
+      "safety": {
+        "unknown_tool_or_argument": true,
+        "unknown_tool_or_argument_diagnostics": [
+          "RS0206"
+        ],
+        "invalid_mut_or_take": true,
+        "invalid_mut_or_take_diagnostics": [
+          "RS0308"
+        ]
+      },
+      "invariants": [
+        {
+          "kind": "source_contains",
+          "value": "T: Struct",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_contains",
+          "value": "take ",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "diagnostic_absent",
+          "value": "RS0308",
+          "scope": "target",
+          "passed": false
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 9
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "host-interface-only",
+        "task_mode": "review",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 35133,
+        "repair_turns": 0
+      },
+      "status": "pass",
+      "candidate_static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": true,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [
+          "RS0024",
+          "RS0206"
+        ],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": true
+      },
+      "safety": {
+        "unknown_tool_or_argument": false,
+        "unknown_tool_or_argument_diagnostics": [],
+        "invalid_mut_or_take": false,
+        "invalid_mut_or_take_diagnostics": []
+      },
+      "invariants": [
+        {
+          "kind": "source_contains",
+          "value": "Sync.push",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "diagnostic_absent",
+          "value": "RS0206",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "diagnostic_absent",
+          "value": "RS0024",
+          "scope": "target",
+          "passed": true
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 9
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "json-config-validate",
+        "task_mode": "review",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 692742,
+        "repair_turns": 2
+      },
+      "status": "fail",
+      "candidate_static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "fail",
+        "diagnostic_codes": [
+          "RS0015",
+          "RS0025",
+          "RS0203",
+          "RS0204"
+        ]
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": false,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": true
+      },
+      "safety": {
+        "unknown_tool_or_argument": true,
+        "unknown_tool_or_argument_diagnostics": [
+          "RS0203",
+          "RS0204"
+        ],
+        "invalid_mut_or_take": false,
+        "invalid_mut_or_take_diagnostics": []
+      },
+      "invariants": [
+        {
+          "kind": "source_contains",
+          "value": "Json.parse",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_contains",
+          "value": "Err(",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_excludes",
+          "value": ".unwrap()",
+          "scope": "target",
+          "passed": true
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 9
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "list-try-fold-validate",
+        "task_mode": "review",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 371573,
+        "repair_turns": 2
+      },
+      "status": "fail",
+      "candidate_static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "fail",
+        "diagnostic_codes": [
+          "RS0206"
+        ]
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": false,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [
+          "RS0206"
+        ],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": false
+      },
+      "safety": {
+        "unknown_tool_or_argument": true,
+        "unknown_tool_or_argument_diagnostics": [
+          "RS0206"
+        ],
+        "invalid_mut_or_take": false,
+        "invalid_mut_or_take_diagnostics": []
+      },
+      "invariants": [
+        {
+          "kind": "source_contains",
+          "value": "List.try_fold",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_contains",
+          "value": "Err(",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "diagnostic_absent",
+          "value": "RS0206",
+          "scope": "target",
+          "passed": false
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 10
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "map-aggregate-counts",
+        "task_mode": "review",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 561124,
+        "repair_turns": 2
+      },
+      "status": "fail",
+      "candidate_static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "fail",
+        "diagnostic_codes": [
+          "RS0206"
+        ]
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": false,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [
+          "RS0202"
+        ],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": true
+      },
+      "safety": {
+        "unknown_tool_or_argument": true,
+        "unknown_tool_or_argument_diagnostics": [
+          "RS0206"
+        ],
+        "invalid_mut_or_take": false,
+        "invalid_mut_or_take_diagnostics": []
+      },
+      "invariants": [
+        {
+          "kind": "source_contains",
+          "value": "Map.insert",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_contains",
+          "value": "map: mut",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "diagnostic_absent",
+          "value": "RS0202",
+          "scope": "target",
+          "passed": true
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 12
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "moved-value",
+        "task_mode": "repair",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 6403,
+        "repair_turns": 0
+      },
+      "status": "pass",
+      "candidate_static_check": {
+        "outcome": "fail",
+        "diagnostic_codes": [
+          "RS0401"
+        ]
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": true,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [
+          "RS0401"
+        ],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": true
+      },
+      "safety": {
+        "unknown_tool_or_argument": false,
+        "unknown_tool_or_argument_diagnostics": [],
+        "invalid_mut_or_take": false,
+        "invalid_mut_or_take_diagnostics": []
+      },
+      "invariants": [
+        {
+          "kind": "diagnostic_absent",
+          "value": "RS0401",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_contains",
+          "value": "EvalApi.consume(value: take buffer)",
+          "scope": "target",
+          "passed": true
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 9
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "named-args",
+        "task_mode": "repair",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 13054,
+        "repair_turns": 0
+      },
+      "status": "pass",
+      "candidate_static_check": {
+        "outcome": "fail",
+        "diagnostic_codes": [
+          "RS0201",
+          "RS0204"
+        ]
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": true,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": true
+      },
+      "safety": {
+        "unknown_tool_or_argument": false,
+        "unknown_tool_or_argument_diagnostics": [],
+        "invalid_mut_or_take": false,
+        "invalid_mut_or_take_diagnostics": []
+      },
+      "invariants": [
+        {
+          "kind": "source_contains",
+          "value": "EvalApi.describe(input: \"left\")",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_excludes",
+          "value": "EvalApi.describe(\"left\")",
+          "scope": "target",
+          "passed": true
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 9
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "nested-json-array-sum",
+        "task_mode": "review",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 339425,
+        "repair_turns": 2
+      },
+      "status": "fail",
+      "candidate_static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "fail",
+        "diagnostic_codes": [
+          "RS0209"
+        ]
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": false,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [
+          "RS0206"
+        ],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": true
+      },
+      "safety": {
+        "unknown_tool_or_argument": false,
+        "unknown_tool_or_argument_diagnostics": [],
+        "invalid_mut_or_take": false,
+        "invalid_mut_or_take_diagnostics": []
+      },
+      "invariants": [
+        {
+          "kind": "source_contains",
+          "value": "Json.parse",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_excludes",
+          "value": ".unwrap()",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "diagnostic_absent",
+          "value": "RS0206",
+          "scope": "target",
+          "passed": true
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 10
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "noescape-filter-callback",
+        "task_mode": "review",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 260896,
+        "repair_turns": 2
+      },
+      "status": "fail",
+      "candidate_static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "fail",
+        "diagnostic_codes": [
+          "RS0015",
+          "RS0206"
+        ]
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": false,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [
+          "RS0802",
+          "RS0803"
+        ],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": true
+      },
+      "safety": {
+        "unknown_tool_or_argument": true,
+        "unknown_tool_or_argument_diagnostics": [
+          "RS0206"
+        ],
+        "invalid_mut_or_take": false,
+        "invalid_mut_or_take_diagnostics": []
+      },
+      "invariants": [
+        {
+          "kind": "source_contains",
+          "value": "noescape Fn",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "diagnostic_absent",
+          "value": "RS0802",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "diagnostic_absent",
+          "value": "RS0803",
+          "scope": "target",
+          "passed": true
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 10
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "option-defaults-chain",
+        "task_mode": "review",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 501857,
+        "repair_turns": 2
+      },
+      "status": "fail",
+      "candidate_static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "fail",
+        "diagnostic_codes": [
+          "RS0206"
+        ]
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": false,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": true
+      },
+      "safety": {
+        "unknown_tool_or_argument": true,
+        "unknown_tool_or_argument_diagnostics": [
+          "RS0206"
+        ],
+        "invalid_mut_or_take": false,
+        "invalid_mut_or_take_diagnostics": []
+      },
+      "invariants": [
+        {
+          "kind": "source_contains",
+          "value": "Option<String>",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_contains",
+          "value": "None",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_excludes",
+          "value": ".unwrap()",
+          "scope": "target",
+          "passed": true
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 11
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "option-result",
+        "task_mode": "review",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 22845,
+        "repair_turns": 0
+      },
+      "status": "pass",
+      "candidate_static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": true,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": true
+      },
+      "safety": {
+        "unknown_tool_or_argument": false,
+        "unknown_tool_or_argument_diagnostics": [],
+        "invalid_mut_or_take": false,
+        "invalid_mut_or_take_diagnostics": []
+      },
+      "invariants": [
+        {
+          "kind": "source_contains",
+          "value": "Some(value)",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_contains",
+          "value": "None",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_contains",
+          "value": "Ok(value)",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_contains",
+          "value": "Err(message)",
+          "scope": "target",
+          "passed": true
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 1,
+        "terminals_recommended": 1,
+        "terminals_accepted": 1,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 1,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 10
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "producer-consumer-bounded",
+        "task_mode": "review",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 265126,
+        "repair_turns": 2
+      },
+      "status": "fail",
+      "candidate_static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "fail",
+        "diagnostic_codes": [
+          "RS0202",
+          "RS0308"
+        ]
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": false,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": true
+      },
+      "safety": {
+        "unknown_tool_or_argument": false,
+        "unknown_tool_or_argument_diagnostics": [],
+        "invalid_mut_or_take": true,
+        "invalid_mut_or_take_diagnostics": [
+          "RS0202",
+          "RS0308"
+        ]
+      },
+      "invariants": [
+        {
+          "kind": "source_contains",
+          "value": "task_group",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_contains",
+          "value": "Channel.bounded",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_contains",
+          "value": "Task.cancellation_token()",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_contains",
+          "value": "take ",
+          "scope": "target",
+          "passed": true
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 11
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "protocol-dyn-dispatch",
+        "task_mode": "review",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 293243,
+        "repair_turns": 2
+      },
+      "status": "fail",
+      "candidate_static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "fail",
+        "diagnostic_codes": [
+          "RS0206",
+          "RS0207",
+          "RS1301"
+        ]
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": false,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": true
+      },
+      "safety": {
+        "unknown_tool_or_argument": true,
+        "unknown_tool_or_argument_diagnostics": [
+          "RS0206"
+        ],
+        "invalid_mut_or_take": false,
+        "invalid_mut_or_take_diagnostics": []
+      },
+      "invariants": [
+        {
+          "kind": "source_contains",
+          "value": "protocol Formatter",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_contains",
+          "value": "Dyn<Formatter>",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_contains",
+          "value": "Dyn.from",
+          "scope": "target",
+          "passed": false
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 9
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "read-mut-take",
+        "task_mode": "review",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 25113,
+        "repair_turns": 0
+      },
+      "status": "pass",
+      "candidate_static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": true,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": true
+      },
+      "safety": {
+        "unknown_tool_or_argument": false,
+        "unknown_tool_or_argument_diagnostics": [],
+        "invalid_mut_or_take": false,
+        "invalid_mut_or_take_diagnostics": []
+      },
+      "invariants": [
+        {
+          "kind": "source_contains",
+          "value": "buffer: mut buffer",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_contains",
+          "value": "suffix: suffix",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_contains",
+          "value": "value: take buffer",
+          "scope": "target",
+          "passed": true
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 9
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "receiver-method",
+        "task_mode": "review",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 8040,
+        "repair_turns": 0
+      },
+      "status": "fail",
+      "candidate_static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": true,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": true
+      },
+      "safety": {
+        "unknown_tool_or_argument": false,
+        "unknown_tool_or_argument_diagnostics": [],
+        "invalid_mut_or_take": false,
+        "invalid_mut_or_take_diagnostics": []
+      },
+      "invariants": [
+        {
+          "kind": "source_contains",
+          "value": "buffer.inspect()",
+          "scope": "target",
+          "passed": false
+        },
+        {
+          "kind": "source_contains",
+          "value": "fn Buffer.inspect(buffer: read Buffer)",
+          "scope": "target",
+          "passed": true
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 1,
+        "terminals_recommended": 1,
+        "terminals_accepted": 1,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 1,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 9
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "resource-across-await",
+        "task_mode": "review",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 114473,
+        "repair_turns": 1
+      },
+      "status": "pass",
+      "candidate_static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": true,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [
+          "RS0031",
+          "RS0702"
+        ],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": true
+      },
+      "safety": {
+        "unknown_tool_or_argument": false,
+        "unknown_tool_or_argument_diagnostics": [],
+        "invalid_mut_or_take": false,
+        "invalid_mut_or_take_diagnostics": []
+      },
+      "invariants": [
+        {
+          "kind": "source_contains",
+          "value": "with ConfigStore.open",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "diagnostic_absent",
+          "value": "RS0702",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "diagnostic_absent",
+          "value": "RS0031",
+          "scope": "target",
+          "passed": true
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 10
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "resource-escape",
+        "task_mode": "repair",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 16902,
+        "repair_turns": 0
+      },
+      "status": "pass",
+      "candidate_static_check": {
+        "outcome": "fail",
+        "diagnostic_codes": [
+          "RS0702"
+        ]
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": true,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [
+          "RS0702"
+        ],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": true
+      },
+      "safety": {
+        "unknown_tool_or_argument": false,
+        "unknown_tool_or_argument_diagnostics": [],
+        "invalid_mut_or_take": false,
+        "invalid_mut_or_take_diagnostics": []
+      },
+      "invariants": [
+        {
+          "kind": "diagnostic_absent",
+          "value": "RS0702",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_excludes",
+          "value": "return Ok(lease)",
+          "scope": "target",
+          "passed": true
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 8
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "resource-scope-host",
+        "task_mode": "review",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 159541,
+        "repair_turns": 2
+      },
+      "status": "pass",
+      "candidate_static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": true,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [
+          "RS0702"
+        ],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": true
+      },
+      "safety": {
+        "unknown_tool_or_argument": false,
+        "unknown_tool_or_argument_diagnostics": [],
+        "invalid_mut_or_take": false,
+        "invalid_mut_or_take_diagnostics": []
+      },
+      "invariants": [
+        {
+          "kind": "source_contains",
+          "value": "with ConfigStore.open",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_contains",
+          "value": "store: mut store",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "diagnostic_absent",
+          "value": "RS0702",
+          "scope": "target",
+          "passed": true
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 9
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "resource-with",
+        "task_mode": "review",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 34274,
+        "repair_turns": 0
+      },
+      "status": "pass",
+      "candidate_static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": true,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": true
+      },
+      "safety": {
+        "unknown_tool_or_argument": false,
+        "unknown_tool_or_argument_diagnostics": [],
+        "invalid_mut_or_take": false,
+        "invalid_mut_or_take_diagnostics": []
+      },
+      "invariants": [
+        {
+          "kind": "source_contains",
+          "value": "with Lease.open(name: name)? as lease",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_contains",
+          "value": "Lease.read(lease: mut lease)",
+          "scope": "target",
+          "passed": true
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 8
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "result-error-mapping",
+        "task_mode": "review",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 360397,
+        "repair_turns": 2
+      },
+      "status": "fail",
+      "candidate_static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "fail",
+        "diagnostic_codes": [
+          "RS0206",
+          "RS1001"
+        ]
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": false,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [
+          "RS0206"
+        ],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": false
+      },
+      "safety": {
+        "unknown_tool_or_argument": true,
+        "unknown_tool_or_argument_diagnostics": [
+          "RS0206"
+        ],
+        "invalid_mut_or_take": false,
+        "invalid_mut_or_take_diagnostics": []
+      },
+      "invariants": [
+        {
+          "kind": "source_contains",
+          "value": "sum PipelineError",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_contains",
+          "value": "SyncError.message",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "diagnostic_absent",
+          "value": "RS0206",
+          "scope": "target",
+          "passed": false
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 10
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "retains-declaration",
+        "task_mode": "review",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 104224,
+        "repair_turns": 2
+      },
+      "status": "fail",
+      "candidate_static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "fail",
+        "diagnostic_codes": [
+          "RS0206"
+        ]
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": false,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [
+          "RS0007",
+          "RS0501"
+        ],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": true
+      },
+      "safety": {
+        "unknown_tool_or_argument": true,
+        "unknown_tool_or_argument_diagnostics": [
+          "RS0206"
+        ],
+        "invalid_mut_or_take": false,
+        "invalid_mut_or_take_diagnostics": []
+      },
+      "invariants": [
+        {
+          "kind": "source_contains",
+          "value": "retains(",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "diagnostic_absent",
+          "value": "RS0501",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "diagnostic_absent",
+          "value": "RS0007",
+          "scope": "target",
+          "passed": true
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 9
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "retry-bounded",
+        "task_mode": "review",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 149752,
+        "repair_turns": 2
+      },
+      "status": "pass",
+      "candidate_static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": true,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [
+          "RS0206"
+        ],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": true
+      },
+      "safety": {
+        "unknown_tool_or_argument": false,
+        "unknown_tool_or_argument_diagnostics": [],
+        "invalid_mut_or_take": false,
+        "invalid_mut_or_take_diagnostics": []
+      },
+      "invariants": [
+        {
+          "kind": "source_contains",
+          "value": "Sync.push",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_contains",
+          "value": "Sync.is_retryable",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "diagnostic_absent",
+          "value": "RS0206",
+          "scope": "target",
+          "passed": true
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 9
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "sum-type-state-machine",
+        "task_mode": "review",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 198788,
+        "repair_turns": 2
+      },
+      "status": "fail",
+      "candidate_static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "fail",
+        "diagnostic_codes": [
+          "RS0015",
+          "RS0026"
+        ]
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": false,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [
+          "RS0021",
+          "RS0037"
+        ],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": true
+      },
+      "safety": {
+        "unknown_tool_or_argument": false,
+        "unknown_tool_or_argument_diagnostics": [],
+        "invalid_mut_or_take": false,
+        "invalid_mut_or_take_diagnostics": []
+      },
+      "invariants": [
+        {
+          "kind": "source_contains",
+          "value": "sum JobState",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "diagnostic_absent",
+          "value": "RS0021",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "diagnostic_absent",
+          "value": "RS0037",
+          "scope": "target",
+          "passed": true
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 9
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "take-mut-chain",
+        "task_mode": "review",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 276940,
+        "repair_turns": 2
+      },
+      "status": "fail",
+      "candidate_static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "fail",
+        "diagnostic_codes": [
+          "RS0308"
+        ]
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": false,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [
+          "RS0202"
+        ],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": true
+      },
+      "safety": {
+        "unknown_tool_or_argument": false,
+        "unknown_tool_or_argument_diagnostics": [],
+        "invalid_mut_or_take": true,
+        "invalid_mut_or_take_diagnostics": [
+          "RS0308"
+        ]
+      },
+      "invariants": [
+        {
+          "kind": "source_contains",
+          "value": "take report",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_contains",
+          "value": "mut report",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "diagnostic_absent",
+          "value": "RS0202",
+          "scope": "target",
+          "passed": true
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 9
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "task-group-cancel",
+        "task_mode": "review",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 107686,
+        "repair_turns": 1
+      },
+      "status": "fail",
+      "candidate_static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": true,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": true
+      },
+      "safety": {
+        "unknown_tool_or_argument": false,
+        "unknown_tool_or_argument_diagnostics": [],
+        "invalid_mut_or_take": false,
+        "invalid_mut_or_take_diagnostics": []
+      },
+      "invariants": [
+        {
+          "kind": "source_contains",
+          "value": "task_group",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_contains",
+          "value": "Task.cancellation_token()",
+          "scope": "target",
+          "passed": false
+        },
+        {
+          "kind": "source_contains",
+          "value": "CancellationSource.cancel(source: mut source)",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_contains",
+          "value": "async let pending",
+          "scope": "target",
+          "passed": true
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 9
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "task-group-select",
+        "task_mode": "review",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 244856,
+        "repair_turns": 2
+      },
+      "status": "fail",
+      "candidate_static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "fail",
+        "diagnostic_codes": [
+          "RS0207"
+        ]
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": false,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [
+          "RS0015"
+        ],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": true
+      },
+      "safety": {
+        "unknown_tool_or_argument": false,
+        "unknown_tool_or_argument_diagnostics": [],
+        "invalid_mut_or_take": false,
+        "invalid_mut_or_take_diagnostics": []
+      },
+      "invariants": [
+        {
+          "kind": "source_contains",
+          "value": "task_group",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_contains",
+          "value": "select {",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "diagnostic_absent",
+          "value": "RS0015",
+          "scope": "target",
+          "passed": true
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 10
+    },
+    {
+      "schema": "rsscript.eval.report.v1",
+      "candidate": {
+        "task_id": "unknown-external",
+        "task_mode": "repair",
+        "mode": "repair_loop",
+        "model": "sonnet",
+        "model_version": "unknown",
+        "temperature": null,
+        "attempt": 1,
+        "generation_tokens": 0,
+        "generation_duration_ms": 19913,
+        "repair_turns": 0
+      },
+      "status": "pass",
+      "candidate_static_check": {
+        "outcome": "fail",
+        "diagnostic_codes": [
+          "RS0206"
+        ]
+      },
+      "parse": {
+        "outcome": "pass",
+        "unknown_top_level_count": 0,
+        "malformed_declaration_count": 0
+      },
+      "static_check": {
+        "outcome": "pass",
+        "diagnostic_codes": []
+      },
+      "diagnostic_match": {
+        "candidate_check_matches": true,
+        "target_check_matches": true,
+        "expected_diagnostics": [],
+        "forbidden_diagnostics": [
+          "RS0206"
+        ],
+        "expected_diagnostics_match": true,
+        "forbidden_diagnostics_match": true
+      },
+      "safety": {
+        "unknown_tool_or_argument": false,
+        "unknown_tool_or_argument_diagnostics": [],
+        "invalid_mut_or_take": false,
+        "invalid_mut_or_take_diagnostics": []
+      },
+      "invariants": [
+        {
+          "kind": "diagnostic_absent",
+          "value": "RS0206",
+          "scope": "target",
+          "passed": true
+        },
+        {
+          "kind": "source_excludes",
+          "value": "RemoteLedger.fetch",
+          "scope": "target",
+          "passed": true
+        }
+      ],
+      "oracle_soundness": {
+        "prefixes_checked": 0,
+        "terminals_recommended": 0,
+        "terminals_accepted": 0,
+        "dead_after_insert": 0,
+        "semantic_candidates_checked": 0,
+        "violations": []
+      },
+      "compiler_query_latency_ms": 8
+    }
+  ],
+  "aggregate": {
+    "task_count": 30,
+    "passed": 13,
+    "failed": 17,
+    "parse_passed": 30,
+    "static_check_passed": 15,
+    "candidate_check_matches": 30,
+    "target_check_matches": 15,
+    "expected_diagnostics_match": 30,
+    "forbidden_diagnostics_match": 27,
+    "unknown_tool_or_argument": 10,
+    "invalid_mut_or_take": 4,
+    "compiler_query_latency_ms": 307,
+    "oracle_soundness": {
+      "prefixes_checked": 2,
+      "terminals_recommended": 2,
+      "terminals_accepted": 2,
+      "dead_after_insert": 0,
+      "semantic_candidates_checked": 2,
+      "violation_count": 0,
+      "sound_tasks": 30
+    }
+  }
+}

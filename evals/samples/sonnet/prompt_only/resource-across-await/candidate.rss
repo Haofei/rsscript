@@ -1,0 +1,32 @@
+fn read_cursor(path: read String) -> Result<fresh String, String> {
+    with ConfigStore.open(path)? as store {
+        ConfigStore.read_key(store, "cursor")
+    }
+}
+
+async fn sync_next_page(path: read String) -> Result<String, String> {
+    let cursor = read_cursor(path)?;
+    let fetched = Sync.fetch_page(cursor).await;
+    match fetched {
+        Ok(page) => Ok(page),
+        Err(e) => Err(SyncError.message(e)),
+    }
+}
+
+fn main() -> Result<Unit, String> {
+    let path = "app_config.json";
+
+    let fetched = task_group {
+        async let page = sync_next_page(path);
+        page.await
+    };
+
+    match fetched {
+        Ok(page) => {
+            with ConfigStore.open(path)? as store {
+                ConfigStore.write_key(store, "last_page", page)
+            }
+        }
+        Err(e) => Err(e),
+    }
+}

@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "task-group-select"
+version = 1
+mode = "review"
+title = "Race two receivers with `select` inside a `task_group`"
+prompt = "Write a single RSScript file that races two bounded channels. Create two bounded Int channels of capacity 1 and take a sender and a receiver from each. Inside one task_group, start an async let for each feeding task, then use a `select` block with one arm per receiver, where each arm awaits Receiver.recv on that receiver, writes which side won, and cancels an explicit CancellationSource. Await both async let handles inside the same task_group. Note that `async let` handles cannot be awaited from inside a `select` arm: select arms await a direct async operation."
+candidate = "fixtures/task-group-select/candidate.rss"
+interfaces = []
+expected = "expected/task-group-select.json"
+tags = ["async", "task-group", "select", "generation"]

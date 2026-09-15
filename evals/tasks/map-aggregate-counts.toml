@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "map-aggregate-counts"
+version = 1
+mode = "review"
+title = "Aggregate log-line counts into a Map"
+prompt = "Write a single RSScript file that counts log lines per level. Write fn count_by_level(lines: read List<String>) -> fresh Map<String, Int> that takes the text before the first space as the level (falling back to \"unknown\") and accumulates a count per level. Write fn render_counts(counts: read Map<String, Int>) -> fresh String that renders each level and its count joined by commas. Add fn main() -> Unit that counts three literal lines and writes the rendered result. Use only the core collection interfaces; mutation of the map must be explicit at the call site."
+candidate = "fixtures/map-aggregate-counts/candidate.rss"
+interfaces = []
+expected = "expected/map-aggregate-counts.json"
+tags = ["collections", "map", "mut", "generation"]

@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "option-defaults-chain"
+version = 1
+mode = "review"
+title = "Resolve settings from optional lookups with defaults"
+prompt = "Write a single RSScript file that resolves settings from a parallel key and value list. Declare struct Settings with fields region: String and retries: Int. Write fn lookup(keys: read List<String>, values: read List<String>, key: read String) -> Option<String> that returns the matching value or None, and fn settings_from(keys: read List<String>, values: read List<String>) -> fresh Settings that defaults region to \"us-east\" and retries to 3 when the key is absent or the retry value does not parse as an integer. Handle every Option with an explicit match; do not unwrap. Add fn main() -> Unit that writes both resolved fields."
+candidate = "fixtures/option-defaults-chain/candidate.rss"
+interfaces = []
+expected = "expected/option-defaults-chain.json"
+tags = ["option", "defaults", "generation"]

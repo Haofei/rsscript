@@ -1,0 +1,28 @@
+struct ServiceConfig {
+    name: String,
+    port: Int,
+    enabled: Bool,
+}
+
+fn load_config(text: read String) -> Result<fresh ServiceConfig, String> {
+    if let Ok(parsed) = Json.parse(text: text) {
+        if parsed.port < 1 || parsed.port > 65535 {
+            return Err("port must be between 1 and 65535")
+        }
+
+        return Ok(ServiceConfig { name: parsed.name, port: parsed.port, enabled: parsed.enabled })
+    } else {
+        return Err("invalid JSON configuration")
+    }
+}
+
+fn main() -> Unit {
+    let text = "{\"name\": \"auth-service\", \"port\": 8080, \"enabled\": true}"
+    let result = load_config(text: text)
+
+    if let Ok(config) = result {
+        Output.write(text: config.name)
+    } else if let Err(message) = result {
+        Output.write(text: message)
+    }
+}

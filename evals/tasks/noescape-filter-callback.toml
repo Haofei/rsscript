@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "noescape-filter-callback"
+version = 1
+mode = "review"
+title = "Forward a `noescape` predicate to a collection filter"
+prompt = "Write a single RSScript file that filters alerts through a caller-supplied predicate. Declare struct Alert with fields level: String and message: String. Write fn select_alerts(alerts: read List<Alert>, keep: noescape Fn(Alert) -> Bool) -> fresh List<Alert> that forwards the predicate to the core list filter, and fn urgent_only(alerts: read List<Alert>) -> fresh List<Alert> that calls it with a closure keeping only alerts whose level is \"critical\". Add fn main() -> Unit that builds two alerts and writes the number of urgent ones. The callback must not escape its call."
+candidate = "fixtures/noescape-filter-callback/candidate.rss"
+interfaces = []
+expected = "expected/noescape-filter-callback.json"
+tags = ["closures", "noescape", "generation"]

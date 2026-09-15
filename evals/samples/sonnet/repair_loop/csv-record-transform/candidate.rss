@@ -1,0 +1,62 @@
+struct Record {
+    id: String,
+    amount: Int
+}
+
+fn parse_record(line: read String) -> Result<fresh Record, String> {
+    let parts: List<String> = String.split(value: line, delimiter: ",")
+    if List.len(list: parts) != 2 {
+        return Err("expected exactly two comma-separated fields")
+    }
+
+    let id: String = String.trim(value: List.get(list: parts, index: 0))
+    let amount_text: String = String.trim(value: List.get(list: parts, index: 1))
+
+    let amount: Result<Int, String> = Int.parse(value: amount_text)
+    match amount {
+        Ok(value) => return Ok(Record { id: id, amount: value }),
+        Err(_) => return Err("amount is not an integer")
+    }
+}
+
+fn parse_all(text: read String) -> Result<fresh List<Record>, String> {
+    let mut records: List<Record> = List.new()
+    let lines: List<String> = String.split(value: text, delimiter: "\n")
+
+    for line in lines {
+        let trimmed: String = String.trim(value: line)
+        if String.is_empty(value: trimmed) {
+            continue
+        }
+
+        let parsed: Result<Record, String> = parse_record(line: trimmed)
+        match parsed {
+            Ok(record) => { List.push(list: records, value: record) },
+            Err(message) => return Err(message)
+        }
+    }
+
+    return Ok(records)
+}
+
+fn total_amount(records: read List<Record>) -> Int {
+    let mut sum: Int = 0
+    for record in records {
+        sum = sum + record.amount
+    }
+    return sum
+}
+
+fn main() -> Unit {
+    let document: String = "alice, 100\nbob, 250"
+
+    let parsed: Result<List<Record>, String> = parse_all(text: document)
+    match parsed {
+        Ok(records) => {
+            let total: Int = total_amount(records: records)
+            let total_text: String = Int.to_string(value: total)
+            IO.println(value: total_text)
+        },
+        Err(message) => IO.println(value: message)
+    }
+}

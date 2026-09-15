@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "retains-declaration"
+version = 1
+mode = "review"
+title = "Declare `retains` for parameters stored past return"
+prompt = "Write a single RSScript file with a class EventLog holding two List<String> fields, entries and tags. Write fn EventLog.new() -> EventLog that builds an empty log, fn EventLog.record(log: mut EventLog, entry: String, tag: String) -> Unit that pushes the entry and the tag into the corresponding lists, and fn EventLog.size(log: read EventLog) -> Int. Because record stores both parameters past return, it must declare the retention contract with one structured clause per retained parameter. Add fn main() -> Unit that records two events and writes the size."
+candidate = "fixtures/retains-declaration/candidate.rss"
+interfaces = []
+expected = "expected/retains-declaration.json"
+tags = ["retention", "retains", "generation"]

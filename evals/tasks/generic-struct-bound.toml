@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "generic-struct-bound"
+version = 1
+mode = "review"
+title = "Generic container with a `Struct` bound"
+prompt = "Write a single RSScript file with a generic container. Declare struct Batch<T: Struct> with fields label: String and items: List<T>, and a struct Reading with fields sensor: String and value: Int. Write fn make_batch<T: Struct>(label: take String, items: take List<T>) -> fresh Batch<T> that constructs the batch, and fn batch_size<T: Struct>(batch: read Batch<T>) -> Int that returns the item count. Add fn main() -> Unit that builds a Batch<Reading> with one reading and writes its size. Ownership transfer into the constructor must be explicit."
+candidate = "fixtures/generic-struct-bound/candidate.rss"
+interfaces = []
+expected = "expected/generic-struct-bound.json"
+tags = ["generics", "bounds", "ownership", "generation"]

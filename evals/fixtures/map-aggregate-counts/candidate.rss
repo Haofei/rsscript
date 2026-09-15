@@ -1,0 +1,37 @@
+fn count_by_level(lines: read List<String>) -> fresh Map<String, Int> {
+    let mut counts = Map.new<String, Int>()
+    for line in lines {
+        let level = match String.before(value: line, delimiter: " ") {
+            Some(found) => { found }
+            None => { "unknown" }
+        }
+        let current = Map.get_or_default<String, Int>(map: counts, key: level, default: 0)
+        Map.insert<String, Int>(map: mut counts, key: level, value: current + 1)
+    }
+    return counts
+}
+
+fn render_counts(counts: read Map<String, Int>) -> fresh String {
+    let mut parts = List.new<String>()
+    let keys = Map.keys<String, Int>(map: counts)
+    let sorted = List.sort_by<String, String>(
+        list: keys,
+        key: |key| key,
+        compare: |left, right| String.len(value: left) - String.len(value: right),
+    )
+    for key in sorted {
+        let value = Map.get_or_default<String, Int>(map: counts, key: key, default: 0)
+        List.push<String>(
+            list: mut parts,
+            value: String.concat(left: key, right: String.from_int(value: value)),
+        )
+    }
+    return List.join(list: parts, separator: ",")
+}
+
+fn main() -> Unit {
+    let lines = ["warn disk", "info boot", "warn disk"]
+    let counts = count_by_level(lines: lines)
+    Output.write(message: render_counts(counts: counts))
+    return Unit
+}

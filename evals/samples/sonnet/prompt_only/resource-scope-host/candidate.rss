@@ -1,0 +1,14 @@
+fn copy_setting(path: read String, key: read String, target: read String) -> Result<Unit, String> {
+    with mut store = ConfigStore.open(path)? {
+        let value = ConfigStore.read_key(mut store, key)?;
+        ConfigStore.write_key(mut store, target, value)?;
+    };
+    Ok(Unit)
+}
+
+fn main() -> Unit {
+    match copy_setting("config.toml", "source_key", "target_key") {
+        Ok(_) => print("copy_setting succeeded"),
+        Err(e) => print("copy_setting failed: " + e),
+    };
+}

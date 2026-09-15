@@ -1,0 +1,25 @@
+{
+  "task_id": "result-error-mapping",
+  "candidate_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "target_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "invariants": [
+    {
+      "kind": "source_contains",
+      "value": "sum PipelineError"
+    },
+    {
+      "kind": "source_contains",
+      "value": "SyncError.message"
+    },
+    {
+      "kind": "diagnostic_absent",
+      "value": "RS0206"
+    }
+  ]
+}

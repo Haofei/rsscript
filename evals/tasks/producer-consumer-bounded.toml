@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "producer-consumer-bounded"
+version = 1
+mode = "review"
+title = "Producer and consumer over a bounded channel with cancellation"
+prompt = "Write a single RSScript file with a producer and a consumer over a bounded channel. In main, create a bounded Int channel with capacity 2, take its sender and receiver, and run the producer and consumer concurrently inside a task_group. The producer sends four values and must stop early when the task_group's cancellation token is observed; obtain that token inside the task_group with Task.cancellation_token() and pass it into the producer, because an async fn has no enclosing task_group. The consumer receives until it has seen four values or the channel closes. Await both handles inside the task_group. Channel values transfer ownership, so send with take."
+candidate = "fixtures/producer-consumer-bounded/candidate.rss"
+interfaces = []
+expected = "expected/producer-consumer-bounded.json"
+tags = ["async", "channel", "cancellation", "ownership", "generation"]

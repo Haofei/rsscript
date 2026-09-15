@@ -1,0 +1,4409 @@
+{
+  "model": "sonnet",
+  "modes": {
+    "prompt_only": {
+      "tasks": {
+        "async-stream-consume": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0026",
+            "RS0030",
+            "RS0206",
+            "RS0208",
+            "RS0311"
+          ],
+          "classes": [
+            "awaits a non-async expression",
+            "hallucinated or unsupported syntax",
+            "invalid assignment",
+            "invents a symbol that is not in scope (host API or core name)",
+            "references an unknown binding",
+            "return type mismatch (often an implicit/missing `return`)"
+          ],
+          "failed_invariants": [
+            "source_contains:Stream.next"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 53875,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0026",
+                "RS0030",
+                "RS0206",
+                "RS0208",
+                "RS0311"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 25,
+              "text": "let total: Int = task_group(async fn() -> Result<Int, ChannelError> {"
+            },
+            "RS0311": {
+              "summary": "invalid assignment.",
+              "line": 10,
+              "text": "consumed = consumed + 1"
+            },
+            "RS0026": {
+              "summary": "unknown value binding `total`.",
+              "line": 18,
+              "text": "Ok(total)"
+            },
+            "RS0208": {
+              "summary": "return in `main` has type `Unit`, expected `Result<Unit, ChannelError>`.",
+              "line": 21,
+              "text": "fn main() -> Result<Unit, ChannelError> {"
+            },
+            "RS0206": {
+              "summary": "call to `write` does not resolve.",
+              "line": 30,
+              "text": "write(total)"
+            },
+            "RS0030": {
+              "summary": "`await` must consume an async call.",
+              "line": 7,
+              "text": "match await s.next() {"
+            }
+          },
+          "syntax_subclasses": [
+            "`task_group`/`with`/`spawn` used as an expression or with a bare operand",
+            "other unsupported construct"
+          ],
+          "callee_subclasses": [
+            "invents a bare output/print builtin",
+            "invents a core-namespace function that does not exist",
+            "invents a free function that does not exist",
+            "receiver-method call on a value that has no such method"
+          ],
+          "unknown_callees": [
+            "Stream.from",
+            "read s.next",
+            "task_group",
+            "write"
+          ]
+        },
+        "csv-record-transform": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0206",
+            "RS0208"
+          ],
+          "classes": [
+            "hallucinated or unsupported syntax",
+            "invents a symbol that is not in scope (host API or core name)",
+            "return type mismatch (often an implicit/missing `return`)"
+          ],
+          "failed_invariants": [
+            "source_contains:String.split"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 44803,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0206",
+                "RS0208"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 32,
+              "text": "Err(message) => return Err(message),"
+            },
+            "RS0208": {
+              "summary": "return in `total_amount` has type `Unit`, expected `Int`.",
+              "line": 39,
+              "text": "fn total_amount(records: read List<Record>) -> Int {"
+            },
+            "RS0206": {
+              "summary": "call to `print` does not resolve.",
+              "line": 56,
+              "text": "print(message);"
+            }
+          },
+          "syntax_subclasses": [
+            "Rust path syntax `::` for namespaces or turbofish",
+            "Rust/Swift struct literal `T { field: v }` instead of `T(field: v)`",
+            "expression-bodied match arm terminated by `,`"
+          ],
+          "callee_subclasses": [
+            "invents a bare output/print builtin",
+            "receiver-method call on a value that has no such method"
+          ],
+          "unknown_callees": [
+            "print",
+            "read amount_text.to_int"
+          ]
+        },
+        "destructive-symbol": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 6685,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "generic-struct-bound": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0202",
+            "RS0206",
+            "RS0208",
+            "RS0308"
+          ],
+          "classes": [
+            "hallucinated or unsupported syntax",
+            "invents a symbol that is not in scope (host API or core name)",
+            "return type mismatch (often an implicit/missing `return`)",
+            "wrong call-site data effect (missing/extra `mut` or `take`)"
+          ],
+          "failed_invariants": [
+            "diagnostic_absent:RS0308"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 38690,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0202",
+                "RS0206",
+                "RS0208",
+                "RS0308"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 28,
+              "text": "let mut readings: List<Reading> = List::new();"
+            },
+            "RS0208": {
+              "summary": "return in `batch_size` has type `Unit`, expected `Int`.",
+              "line": 18,
+              "text": "fn batch_size<T: Struct>(batch: read Batch<T>) -> Int {"
+            },
+            "RS0202": {
+              "summary": "receiver `readings` for `push` uses `read` but the method requires `mut`.",
+              "line": 29,
+              "text": "readings.push(reading);"
+            },
+            "RS0206": {
+              "summary": "call to `write` does not resolve.",
+              "line": 33,
+              "text": "write(size);"
+            },
+            "RS0308": {
+              "summary": "`take` requires a local value.",
+              "line": 31,
+              "text": "let batch: Batch<Reading> = make_batch<Reading>(take sensor_label, take readings);"
+            }
+          },
+          "syntax_subclasses": [
+            "Rust path syntax `::` for namespaces or turbofish",
+            "other unsupported construct"
+          ],
+          "callee_subclasses": [
+            "invents a bare output/print builtin"
+          ],
+          "unknown_callees": [
+            "write"
+          ]
+        },
+        "host-interface-only": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0201",
+            "RS0204",
+            "RS0208"
+          ],
+          "classes": [
+            "omits argument labels at the call site",
+            "return type mismatch (often an implicit/missing `return`)"
+          ],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 33324,
+              "check_ok": false,
+              "codes": [
+                "RS0201",
+                "RS0204",
+                "RS0208"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0208": {
+              "summary": "return in `publish_batch` has type `Unit`, expected `Result<Int, String>`.",
+              "line": 1,
+              "text": "fn publish_batch(ids: read List<String>, amount: Int) -> Result<Int, String> {"
+            },
+            "RS0201": {
+              "summary": "call to `Metrics.record` uses an unnamed argument.",
+              "line": 27,
+              "text": "Metrics.record(\"publish_batch.error\", -1)"
+            },
+            "RS0204": {
+              "summary": "call to `Metrics.record` is missing required argument `value`.",
+              "line": 27,
+              "text": "Metrics.record(\"publish_batch.error\", -1)"
+            }
+          },
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "json-config-validate": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0206",
+            "RS0208"
+          ],
+          "classes": [
+            "hallucinated or unsupported syntax",
+            "invents a symbol that is not in scope (host API or core name)",
+            "return type mismatch (often an implicit/missing `return`)"
+          ],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 78223,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0206",
+                "RS0208"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 33,
+              "text": "Err(msg) => Output.write(msg),"
+            },
+            "RS0208": {
+              "summary": "return in `load_config` has type `Unit`, expected `Result<ServiceConfig, String>`.",
+              "line": 7,
+              "text": "fn load_config(text: String) -> Result<fresh ServiceConfig, String> {"
+            },
+            "RS0206": {
+              "summary": "call to `read value.get_bool` does not resolve.",
+              "line": 14,
+              "text": "Ok(port) => match value.get_bool(\"enabled\") {"
+            }
+          },
+          "syntax_subclasses": [
+            "Rust/Swift struct literal `T { field: v }` instead of `T(field: v)`",
+            "expression-bodied match arm terminated by `,`"
+          ],
+          "callee_subclasses": [
+            "receiver-method call on a value that has no such method"
+          ],
+          "unknown_callees": [
+            "read value.get_bool",
+            "read value.get_int",
+            "read value.get_string"
+          ]
+        },
+        "list-try-fold-validate": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0206",
+            "RS0208",
+            "RS1001"
+          ],
+          "classes": [
+            "hallucinated or unsupported syntax",
+            "invents a symbol that is not in scope (host API or core name)",
+            "operator overload attempt",
+            "return type mismatch (often an implicit/missing `return`)"
+          ],
+          "failed_invariants": [
+            "source_contains:List.try_fold",
+            "diagnostic_absent:RS0206"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 41778,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0206",
+                "RS0208",
+                "RS1001"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 27,
+              "text": "Err(message) => print(\"error: \" + message),"
+            },
+            "RS0208": {
+              "summary": "return in `tally_all` has type `Unit`, expected `Result<Tally, String>`.",
+              "line": 19,
+              "text": "fn tally_all(raws: read List<String>) -> Result<fresh Tally, String> {"
+            },
+            "RS0206": {
+              "summary": "call to `try_fold` does not resolve.",
+              "line": 20,
+              "text": "try_fold(raws, fresh Tally { total: 0, count: 0 }, add_amount)"
+            },
+            "RS1001": {
+              "summary": "arithmetic operators are only built in for numeric values.",
+              "line": 10,
+              "text": "Err(\"negative amount not allowed: \" + raw)"
+            }
+          },
+          "syntax_subclasses": [
+            "Rust path syntax `::` for namespaces or turbofish",
+            "Rust/Swift struct literal `T { field: v }` instead of `T(field: v)`",
+            "expression-bodied match arm terminated by `,`"
+          ],
+          "callee_subclasses": [
+            "invents a free function that does not exist"
+          ],
+          "unknown_callees": [
+            "try_fold"
+          ]
+        },
+        "map-aggregate-counts": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0021",
+            "RS0206",
+            "RS0207",
+            "RS0209"
+          ],
+          "classes": [
+            "argument type mismatch",
+            "control-flow type mismatch (branch used as a value)",
+            "hallucinated or unsupported syntax",
+            "invents a symbol that is not in scope (host API or core name)",
+            "non-exhaustive match"
+          ],
+          "failed_invariants": [
+            "source_contains:Map.insert",
+            "source_contains:map: mut"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 56458,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0021",
+                "RS0206",
+                "RS0207",
+                "RS0209"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 15,
+              "text": "for (level, count) in counts.entries() {"
+            },
+            "RS0021": {
+              "summary": "match expression is not exhaustive.",
+              "line": 6,
+              "text": "let existing: Int = if counts.contains(level) { counts.get(level) } else { 0 };"
+            },
+            "RS0207": {
+              "summary": "binding `existing` has initializer type `Option<Int>`, expected `Int`.",
+              "line": 6,
+              "text": "let existing: Int = if counts.contains(level) { counts.get(level) } else { 0 };"
+            },
+            "RS0206": {
+              "summary": "call to `print` does not resolve.",
+              "line": 33,
+              "text": "print(rendered);"
+            },
+            "RS0209": {
+              "summary": "match arm has type `Int`, expected `Option<Int>` from the first produced arm.",
+              "line": 6,
+              "text": "let existing: Int = if counts.contains(level) { counts.get(level) } else { 0 };"
+            }
+          },
+          "syntax_subclasses": [
+            "tuple destructuring in a `for` pattern"
+          ],
+          "callee_subclasses": [
+            "invents a bare output/print builtin",
+            "invents a core-namespace function that does not exist",
+            "receiver-method call on a value that has no such method"
+          ],
+          "unknown_callees": [
+            "List.of",
+            "print",
+            "read counts.contains"
+          ]
+        },
+        "moved-value": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 11744,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "named-args": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 3631,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "nested-json-array-sum": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0206",
+            "RS0209"
+          ],
+          "classes": [
+            "control-flow type mismatch (branch used as a value)",
+            "hallucinated or unsupported syntax",
+            "invents a symbol that is not in scope (host API or core name)"
+          ],
+          "failed_invariants": [
+            "source_contains:Json.parse",
+            "diagnostic_absent:RS0206"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 31961,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0206",
+                "RS0209"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 16,
+              "text": "Err(error) => print(error),"
+            },
+            "RS0206": {
+              "summary": "call to `read read item.get_field().as_int` does not resolve.",
+              "line": 6,
+              "text": "let quantity: Int = item.get_field(\"quantity\")?.as_int()?;"
+            },
+            "RS0209": {
+              "summary": "for iterable has type `Array<Json>`, expected `List<T>`.",
+              "line": 5,
+              "text": "for item in items {"
+            }
+          },
+          "syntax_subclasses": [
+            "Rust path syntax `::` for namespaces or turbofish",
+            "expression-bodied match arm terminated by `,`"
+          ],
+          "callee_subclasses": [
+            "receiver-method call on a value that has no such method"
+          ],
+          "unknown_callees": [
+            "read read doc.get_field().as_array",
+            "read read item.get_field().as_int"
+          ]
+        },
+        "noescape-filter-callback": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0026",
+            "RS0206",
+            "RS0802"
+          ],
+          "classes": [
+            "`noescape` callback escapes",
+            "hallucinated or unsupported syntax",
+            "invents a symbol that is not in scope (host API or core name)",
+            "references an unknown binding"
+          ],
+          "failed_invariants": [
+            "diagnostic_absent:RS0802"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 9635,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0026",
+                "RS0206",
+                "RS0802"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 18,
+              "text": "Alert { level: \"critical\", message: \"server down\" },"
+            },
+            "RS0026": {
+              "summary": "unknown value binding `List`.",
+              "line": 17,
+              "text": "let alerts: List<Alert> = List["
+            },
+            "RS0802": {
+              "summary": "noescape callback `keep` cannot be returned.",
+              "line": 7,
+              "text": "return filter(alerts, keep);"
+            },
+            "RS0206": {
+              "summary": "call to `len` does not resolve.",
+              "line": 22,
+              "text": "write(len(urgent));"
+            }
+          },
+          "syntax_subclasses": [
+            "Rust/Swift struct literal `T { field: v }` instead of `T(field: v)`",
+            "other unsupported construct"
+          ],
+          "callee_subclasses": [
+            "invents a bare output/print builtin",
+            "invents a free function that does not exist"
+          ],
+          "unknown_callees": [
+            "filter",
+            "len",
+            "write"
+          ]
+        },
+        "option-defaults-chain": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0202",
+            "RS0206"
+          ],
+          "classes": [
+            "hallucinated or unsupported syntax",
+            "invents a symbol that is not in scope (host API or core name)",
+            "wrong call-site data effect (missing/extra `mut` or `take`)"
+          ],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 55413,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0202",
+                "RS0206"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 31,
+              "text": "return Settings { region: region, retries: retries };"
+            },
+            "RS0206": {
+              "summary": "call to `write` does not resolve.",
+              "line": 46,
+              "text": "write(settings.retries);"
+            },
+            "RS0202": {
+              "summary": "receiver `values` for `push` uses `read` but the method requires `mut`.",
+              "line": 41,
+              "text": "values.push(\"7\");"
+            }
+          },
+          "syntax_subclasses": [
+            "Rust/Swift struct literal `T { field: v }` instead of `T(field: v)`",
+            "expression-bodied match arm terminated by `,`"
+          ],
+          "callee_subclasses": [
+            "invents a bare output/print builtin",
+            "invents a free function that does not exist"
+          ],
+          "unknown_callees": [
+            "List<String>",
+            "parse_int",
+            "write"
+          ]
+        },
+        "option-result": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 9909,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "producer-consumer-bounded": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0002",
+            "RS0015",
+            "RS0026",
+            "RS0029",
+            "RS0030",
+            "RS0206"
+          ],
+          "classes": [
+            "`await` outside an async function",
+            "awaits a non-async expression",
+            "hallucinated or unsupported syntax",
+            "invents a symbol that is not in scope (host API or core name)",
+            "missing return type",
+            "references an unknown binding"
+          ],
+          "failed_invariants": [
+            "source_contains:take "
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 15075,
+              "check_ok": false,
+              "codes": [
+                "RS0002",
+                "RS0015",
+                "RS0026",
+                "RS0029",
+                "RS0030",
+                "RS0206"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 33,
+              "text": "let consumer_handle = spawn consumer(receiver);"
+            },
+            "RS0002": {
+              "summary": "function `main` must declare an explicit return type.",
+              "line": 25,
+              "text": "fn main() {"
+            },
+            "RS0026": {
+              "summary": "unknown value binding `Int`.",
+              "line": 26,
+              "text": "let channel = Channel.bounded::<Int>(2);"
+            },
+            "RS0206": {
+              "summary": "call to `read channel.receiver` does not resolve.",
+              "line": 28,
+              "text": "let receiver = channel.receiver();"
+            },
+            "RS0029": {
+              "summary": "`await` is only valid inside an async function.",
+              "line": 36,
+              "text": "await consumer_handle;"
+            },
+            "RS0030": {
+              "summary": "`await` must consume an async call.",
+              "line": 36,
+              "text": "await consumer_handle;"
+            }
+          },
+          "syntax_subclasses": [
+            "Rust path syntax `::` for namespaces or turbofish",
+            "`task_group`/`with`/`spawn` used as an expression or with a bare operand",
+            "other unsupported construct"
+          ],
+          "callee_subclasses": [
+            "receiver-method call on a value that has no such method"
+          ],
+          "unknown_callees": [
+            "read channel.receiver",
+            "read channel.sender"
+          ]
+        },
+        "protocol-dyn-dispatch": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0028",
+            "RS0201",
+            "RS0204",
+            "RS0206",
+            "RS0207",
+            "RS1001",
+            "RS1002",
+            "RS1301"
+          ],
+          "classes": [
+            "argument type mismatch",
+            "hallucinated or unsupported syntax",
+            "implicit conversion attempt",
+            "invents a symbol that is not in scope (host API or core name)",
+            "omits argument labels at the call site",
+            "operator overload attempt",
+            "unclassified RS1301",
+            "wrong receiver/`self` parameter convention"
+          ],
+          "failed_invariants": [
+            "source_contains:Dyn.from"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 36106,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0028",
+                "RS0201",
+                "RS0204",
+                "RS0206",
+                "RS0207",
+                "RS1001",
+                "RS1002",
+                "RS1301"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 45,
+              "text": "let json_dyn: Dyn<Formatter> = json as Dyn<Formatter>;"
+            },
+            "RS1301": {
+              "summary": "`JsonFormatter` does not satisfy protocol `Formatter` method `format`.",
+              "line": 30,
+              "text": "impl Formatter for JsonFormatter {"
+            },
+            "RS0028": {
+              "summary": "invalid `self` parameter in `format_json`.",
+              "line": 23,
+              "text": "fn format_json(self: read JsonFormatter) -> fresh String {"
+            },
+            "RS0207": {
+              "summary": "binding `value` has initializer type `String`, expected `Json`.",
+              "line": 24,
+              "text": "let value: Json = Json.object(["
+            },
+            "RS0201": {
+              "summary": "call to `Json.object` uses an unnamed argument.",
+              "line": 24,
+              "text": "let value: Json = Json.object(["
+            },
+            "RS0204": {
+              "summary": "call to `Json.object` is missing required argument `fields`.",
+              "line": 24,
+              "text": "let value: Json = Json.object(["
+            },
+            "RS0206": {
+              "summary": "call to `write` does not resolve.",
+              "line": 48,
+              "text": "write(render(json_dyn));"
+            },
+            "RS1002": {
+              "summary": "cast-style conversions are not part of RSScript.",
+              "line": 45,
+              "text": "let json_dyn: Dyn<Formatter> = json as Dyn<Formatter>;"
+            },
+            "RS1001": {
+              "summary": "arithmetic operators are only built in for numeric values.",
+              "line": 10,
+              "text": "return self.prefix + \"plain output\";"
+            }
+          },
+          "syntax_subclasses": [
+            "Rust/Swift struct literal `T { field: v }` instead of `T(field: v)`",
+            "invented `as` cast to a protocol/Dyn type"
+          ],
+          "callee_subclasses": [
+            "invents a bare output/print builtin",
+            "receiver-method call on a value that has no such method"
+          ],
+          "unknown_callees": [
+            "read value.stringify",
+            "write"
+          ]
+        },
+        "read-mut-take": {
+          "status": "fail",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [
+            "source_contains:suffix: suffix"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 32931,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "receiver-method": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 6220,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "resource-across-await": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0022",
+            "RS0201",
+            "RS0202",
+            "RS0204",
+            "RS0208"
+          ],
+          "classes": [
+            "hallucinated or unsupported syntax",
+            "omits argument labels at the call site",
+            "return type mismatch (often an implicit/missing `return`)",
+            "unclassified RS0022",
+            "wrong call-site data effect (missing/extra `mut` or `take`)"
+          ],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 44681,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0022",
+                "RS0201",
+                "RS0202",
+                "RS0204",
+                "RS0208"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 30,
+              "text": "Err(e) => Err(e),"
+            },
+            "RS0208": {
+              "summary": "return in `main` has type `Unit`, expected `Result<Unit, String>`.",
+              "line": 16,
+              "text": "fn main() -> Result<Unit, String> {"
+            },
+            "RS0201": {
+              "summary": "call to `ConfigStore.write_key` uses an unnamed argument.",
+              "line": 27,
+              "text": "ConfigStore.write_key(store, \"last_page\", page)"
+            },
+            "RS0204": {
+              "summary": "call to `ConfigStore.write_key` is missing required argument `value`.",
+              "line": 27,
+              "text": "ConfigStore.write_key(store, \"last_page\", page)"
+            },
+            "RS0202": {
+              "summary": "argument `store` for `ConfigStore.write_key` must use `mut`.",
+              "line": 27,
+              "text": "ConfigStore.write_key(store, \"last_page\", page)"
+            },
+            "RS0022": {
+              "summary": "async call `Sync.fetch_page` must be awaited.",
+              "line": 9,
+              "text": "let fetched = Sync.fetch_page(cursor).await;"
+            }
+          },
+          "syntax_subclasses": [
+            "`task_group`/`with`/`spawn` used as an expression or with a bare operand",
+            "expression-bodied match arm terminated by `,`"
+          ],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "resource-escape": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 10588,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "resource-scope-host": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0208"
+          ],
+          "classes": [
+            "hallucinated or unsupported syntax",
+            "return type mismatch (often an implicit/missing `return`)"
+          ],
+          "failed_invariants": [
+            "source_contains:with ConfigStore.open",
+            "source_contains:store: mut store"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 11358,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0208"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 12,
+              "text": "Err(e) => print(\"copy_setting failed: \" + e),"
+            },
+            "RS0208": {
+              "summary": "return in `copy_setting` has type `Unit`, expected `Result<Unit, String>`.",
+              "line": 1,
+              "text": "fn copy_setting(path: read String, key: read String, target: read String) -> Result<Unit, String> {"
+            }
+          },
+          "syntax_subclasses": [
+            "expression-bodied match arm terminated by `,`",
+            "other unsupported construct"
+          ],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "resource-with": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0208"
+          ],
+          "classes": [
+            "hallucinated or unsupported syntax",
+            "return type mismatch (often an implicit/missing `return`)"
+          ],
+          "failed_invariants": [
+            "source_contains:with Lease.open(name: name)? as lease"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 8269,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0208"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 2,
+              "text": "with Lease.open(name: name)? as mut lease {"
+            },
+            "RS0208": {
+              "summary": "return in `read_named` has type `Unit`, expected `Result<String, String>`.",
+              "line": 1,
+              "text": "fn read_named(name: read String) -> Result<String, String> {"
+            }
+          },
+          "syntax_subclasses": [
+            "`mut` written on the `with ... as` binding"
+          ],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "result-error-mapping": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0021",
+            "RS0206",
+            "RS0208",
+            "RS0209"
+          ],
+          "classes": [
+            "control-flow type mismatch (branch used as a value)",
+            "hallucinated or unsupported syntax",
+            "invents a symbol that is not in scope (host API or core name)",
+            "non-exhaustive match",
+            "return type mismatch (often an implicit/missing `return`)"
+          ],
+          "failed_invariants": [
+            "diagnostic_absent:RS0206"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 94286,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0021",
+                "RS0206",
+                "RS0208",
+                "RS0209"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 36,
+              "text": "Err(err) => print(PipelineError.detail(error: err)),"
+            },
+            "RS0021": {
+              "summary": "match statement is not exhaustive.",
+              "line": 10,
+              "text": "match error {"
+            },
+            "RS0208": {
+              "summary": "return in `push_amount` has type `Unit`, expected `Result<Int, PipelineError>`.",
+              "line": 23,
+              "text": "fn push_amount(id: read String, raw: read String) -> Result<Int, PipelineError> {"
+            },
+            "RS0206": {
+              "summary": "call to `Int.parse` does not resolve.",
+              "line": 17,
+              "text": "match Int.parse(raw) {"
+            },
+            "RS0209": {
+              "summary": "match pattern `PipelineError.Upstream` cannot match scrutinee type `PipelineError`.",
+              "line": 12,
+              "text": "PipelineError.Upstream(detail) => \"upstream error: \" + detail,"
+            }
+          },
+          "syntax_subclasses": [
+            "expression-bodied match arm terminated by `,`"
+          ],
+          "callee_subclasses": [
+            "invents a core-namespace function that does not exist"
+          ],
+          "unknown_callees": [
+            "Int.parse"
+          ]
+        },
+        "retains-declaration": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0202",
+            "RS0206"
+          ],
+          "classes": [
+            "hallucinated or unsupported syntax",
+            "invents a symbol that is not in scope (host API or core name)",
+            "wrong call-site data effect (missing/extra `mut` or `take`)"
+          ],
+          "failed_invariants": [
+            "source_contains:retains("
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 21798,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0202",
+                "RS0206"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 7,
+              "text": "return EventLog { entries: List<String>::new(), tags: List<String>::new() }"
+            },
+            "RS0202": {
+              "summary": "argument `log` for `EventLog.record` must use `mut`.",
+              "line": 25,
+              "text": "EventLog.record(log, \"shutdown\", \"info\")"
+            },
+            "RS0206": {
+              "summary": "call to `print` does not resolve.",
+              "line": 26,
+              "text": "print(EventLog.size(log))"
+            }
+          },
+          "syntax_subclasses": [
+            "Rust/Swift struct literal `T { field: v }` instead of `T(field: v)`",
+            "other unsupported construct"
+          ],
+          "callee_subclasses": [
+            "invents a bare output/print builtin"
+          ],
+          "unknown_callees": [
+            "print"
+          ]
+        },
+        "retry-bounded": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0201",
+            "RS0204",
+            "RS0206",
+            "RS0208"
+          ],
+          "classes": [
+            "invents a symbol that is not in scope (host API or core name)",
+            "omits argument labels at the call site",
+            "return type mismatch (often an implicit/missing `return`)"
+          ],
+          "failed_invariants": [
+            "diagnostic_absent:RS0206"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 19371,
+              "check_ok": false,
+              "codes": [
+                "RS0201",
+                "RS0204",
+                "RS0206",
+                "RS0208"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0208": {
+              "summary": "return in `push_with_retry` has type `Unit`, expected `Result<Int, String>`.",
+              "line": 1,
+              "text": "fn push_with_retry(id: read String, amount: Int, max_attempts: Int) -> Result<Int, String> {"
+            },
+            "RS0201": {
+              "summary": "call to `Metrics.record` uses an unnamed argument.",
+              "line": 10,
+              "text": "Metrics.record(\"push_attempts\", attempt)"
+            },
+            "RS0204": {
+              "summary": "call to `Metrics.record` is missing required argument `value`.",
+              "line": 10,
+              "text": "Metrics.record(\"push_attempts\", attempt)"
+            },
+            "RS0206": {
+              "summary": "call to `print` does not resolve.",
+              "line": 30,
+              "text": "Err(message) => print(message)"
+            }
+          },
+          "syntax_subclasses": [],
+          "callee_subclasses": [
+            "invents a bare output/print builtin"
+          ],
+          "unknown_callees": [
+            "print"
+          ]
+        },
+        "sum-type-state-machine": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0206",
+            "RS0208"
+          ],
+          "classes": [
+            "hallucinated or unsupported syntax",
+            "invents a symbol that is not in scope (host API or core name)",
+            "return type mismatch (often an implicit/missing `return`)"
+          ],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 70133,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0206",
+                "RS0208"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 27,
+              "text": "let job0 = JobState::Queued;"
+            },
+            "RS0208": {
+              "summary": "return in `describe` has type `Unit`, expected `String`.",
+              "line": 17,
+              "text": "fn describe(state: read JobState) -> fresh String {"
+            },
+            "RS0206": {
+              "summary": "call to `write` does not resolve.",
+              "line": 31,
+              "text": "write(description);"
+            }
+          },
+          "syntax_subclasses": [
+            "Rust path syntax `::` for namespaces or turbofish"
+          ],
+          "callee_subclasses": [
+            "invents a bare output/print builtin"
+          ],
+          "unknown_callees": [
+            "write"
+          ]
+        },
+        "take-mut-chain": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0202",
+            "RS0208",
+            "RS0308"
+          ],
+          "classes": [
+            "hallucinated or unsupported syntax",
+            "return type mismatch (often an implicit/missing `return`)",
+            "wrong call-site data effect (missing/extra `mut` or `take`)"
+          ],
+          "failed_invariants": [
+            "diagnostic_absent:RS0202"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 25554,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0202",
+                "RS0208",
+                "RS0308"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 2,
+              "text": "Report { title: title, lines: [] }"
+            },
+            "RS0208": {
+              "summary": "return in `build_report` has type `Unit`, expected `Report`.",
+              "line": 1,
+              "text": "fn build_report(title: take String) -> fresh Report {"
+            },
+            "RS0202": {
+              "summary": "argument `report` for `ReportSink.emit` must use `take`.",
+              "line": 10,
+              "text": "ReportSink.emit(report)"
+            },
+            "RS0308": {
+              "summary": "`take` requires a local value.",
+              "line": 18,
+              "text": "finish_report(take report)"
+            }
+          },
+          "syntax_subclasses": [
+            "Rust/Swift struct literal `T { field: v }` instead of `T(field: v)`"
+          ],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "task-group-cancel": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 24374,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "task-group-select": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015"
+          ],
+          "classes": [
+            "hallucinated or unsupported syntax"
+          ],
+          "failed_invariants": [
+            "diagnostic_absent:RS0015"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 10855,
+              "check_ok": false,
+              "codes": [
+                "RS0015"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 37,
+              "text": "await main()"
+            }
+          },
+          "syntax_subclasses": [
+            "other unsupported construct"
+          ],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "unknown-external": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 7245,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        }
+      },
+      "aggregate": {
+        "task_count": 30,
+        "passed": 8,
+        "failed": 22,
+        "parse_passed": 27,
+        "static_check_passed": 9,
+        "candidate_check_matches": 30,
+        "target_check_matches": 9,
+        "expected_diagnostics_match": 30,
+        "forbidden_diagnostics_match": 22,
+        "unknown_tool_or_argument": 17,
+        "invalid_mut_or_take": 5,
+        "compiler_query_latency_ms": 297,
+        "oracle_soundness": {
+          "prefixes_checked": 2,
+          "terminals_recommended": 2,
+          "terminals_accepted": 2,
+          "dead_after_insert": 0,
+          "semantic_candidates_checked": 2,
+          "violation_count": 0,
+          "sound_tasks": 30
+        }
+      },
+      "missing_candidates": []
+    },
+    "language_card": {
+      "tasks": {
+        "async-stream-consume": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0031",
+            "RS0202",
+            "RS0203",
+            "RS0204",
+            "RS0206"
+          ],
+          "classes": [
+            "hallucinated or unsupported syntax",
+            "holds a local value across an `await`",
+            "invents a symbol that is not in scope (host API or core name)",
+            "invents an argument label that is not in the signature",
+            "omits argument labels at the call site",
+            "wrong call-site data effect (missing/extra `mut` or `take`)"
+          ],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 135555,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0031",
+                "RS0202",
+                "RS0203",
+                "RS0204",
+                "RS0206"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 27,
+              "text": "let outcome = task_group {"
+            },
+            "RS0202": {
+              "summary": "argument `stream` for `Stream.next` must use `read`.",
+              "line": 6,
+              "text": "match await Stream.next(stream: mut stream) {"
+            },
+            "RS0206": {
+              "summary": "call to `List.of` does not resolve.",
+              "line": 24,
+              "text": "local numbers: List<Int> = List.of(3, 4)"
+            },
+            "RS0203": {
+              "summary": "call to `Stream.from_list` has no argument named `list`.",
+              "line": 25,
+              "text": "let mut stream: Stream<Int> = Stream.from_list(list: take numbers)"
+            },
+            "RS0204": {
+              "summary": "call to `Stream.from_list` is missing required argument `items`.",
+              "line": 25,
+              "text": "let mut stream: Stream<Int> = Stream.from_list(list: take numbers)"
+            },
+            "RS0031": {
+              "summary": "local value `stream` cannot live across `await`.",
+              "line": 6,
+              "text": "match await Stream.next(stream: mut stream) {"
+            }
+          },
+          "syntax_subclasses": [
+            "`task_group`/`with`/`spawn` used as an expression or with a bare operand"
+          ],
+          "callee_subclasses": [
+            "invents a core-namespace function that does not exist"
+          ],
+          "unknown_callees": [
+            "List.of"
+          ]
+        },
+        "csv-record-transform": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0026",
+            "RS0203",
+            "RS0204",
+            "RS0206",
+            "RS0307",
+            "RS0308"
+          ],
+          "classes": [
+            "hallucinated or unsupported syntax",
+            "invalid `manage` operand",
+            "invents a symbol that is not in scope (host API or core name)",
+            "invents an argument label that is not in the signature",
+            "omits argument labels at the call site",
+            "references an unknown binding",
+            "wrong call-site data effect (missing/extra `mut` or `take`)"
+          ],
+          "failed_invariants": [
+            "source_contains:String.split"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 72874,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0026",
+                "RS0203",
+                "RS0204",
+                "RS0206",
+                "RS0307",
+                "RS0308"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 56,
+              "text": "Err(message) => Debug.print(text: message),"
+            },
+            "RS0026": {
+              "summary": "unknown value binding `records`.",
+              "line": 40,
+              "text": "return Ok(manage records)"
+            },
+            "RS0203": {
+              "summary": "call to `read text.split` has no argument named `separator`.",
+              "line": 26,
+              "text": "for line in text.split(separator: \"\\n\") {"
+            },
+            "RS0204": {
+              "summary": "call to `read text.split` is missing required argument `delimiter`.",
+              "line": 26,
+              "text": "for line in text.split(separator: \"\\n\") {"
+            },
+            "RS0206": {
+              "summary": "call to `read records.push` does not resolve.",
+              "line": 37,
+              "text": "records.push(value: take record)"
+            },
+            "RS0308": {
+              "summary": "`take` requires a local value.",
+              "line": 37,
+              "text": "records.push(value: take record)"
+            },
+            "RS0307": {
+              "summary": "`manage` requires a local binding.",
+              "line": 40,
+              "text": "return Ok(manage records)"
+            }
+          },
+          "syntax_subclasses": [
+            "Rust/Swift struct literal `T { field: v }` instead of `T(field: v)`",
+            "expression-bodied match arm terminated by `,`"
+          ],
+          "callee_subclasses": [
+            "invents a core-namespace function that does not exist",
+            "receiver-method call on a value that has no such method"
+          ],
+          "unknown_callees": [
+            "Int.parse",
+            "read parts[].trim",
+            "read records.push"
+          ]
+        },
+        "destructive-symbol": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 6243,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "generic-struct-bound": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0026",
+            "RS0308"
+          ],
+          "classes": [
+            "hallucinated or unsupported syntax",
+            "references an unknown binding",
+            "wrong call-site data effect (missing/extra `mut` or `take`)"
+          ],
+          "failed_invariants": [
+            "diagnostic_absent:RS0308"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 31609,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0026",
+                "RS0308"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 20,
+              "text": "let reading: Reading = Reading { sensor: \"sensor-1\", value: 72 }"
+            },
+            "RS0026": {
+              "summary": "unknown value binding `T`.",
+              "line": 12,
+              "text": "return Batch<T> { label: take label, items: take items }"
+            },
+            "RS0308": {
+              "summary": "`take` requires a local value.",
+              "line": 22,
+              "text": "let batch: Batch<Reading> = make_batch<Reading>(label: take \"morning-batch\", items: take items)"
+            }
+          },
+          "syntax_subclasses": [
+            "Rust/Swift struct literal `T { field: v }` instead of `T(field: v)`",
+            "other unsupported construct"
+          ],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "host-interface-only": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 27471,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "json-config-validate": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0021",
+            "RS0206",
+            "RS0209"
+          ],
+          "classes": [
+            "control-flow type mismatch (branch used as a value)",
+            "hallucinated or unsupported syntax",
+            "invents a symbol that is not in scope (host API or core name)",
+            "non-exhaustive match"
+          ],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 85688,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0021",
+                "RS0206",
+                "RS0209"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 48,
+              "text": "Err(error) => Output.write(text: error),"
+            },
+            "RS0021": {
+              "summary": "match statement is not exhaustive.",
+              "line": 8,
+              "text": "match error {"
+            },
+            "RS0206": {
+              "summary": "call to `Json.get_bool` does not resolve.",
+              "line": 31,
+              "text": "let enabled = match Json.get_bool(value: value, field: \"enabled\") {"
+            },
+            "RS0209": {
+              "summary": "match pattern `JsonError.TypeMismatch` cannot match scrutinee type `JsonError`.",
+              "line": 11,
+              "text": "JsonError.TypeMismatch(field, expected) => return \"field \" + field + \" must be \" + expected,"
+            }
+          },
+          "syntax_subclasses": [
+            "Rust/Swift struct literal `T { field: v }` instead of `T(field: v)`",
+            "expression-bodied match arm terminated by `,`"
+          ],
+          "callee_subclasses": [
+            "invents a core-namespace function that does not exist"
+          ],
+          "unknown_callees": [
+            "Json.get_bool",
+            "Json.get_int",
+            "Json.get_string"
+          ]
+        },
+        "list-try-fold-validate": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0201",
+            "RS0203",
+            "RS0204",
+            "RS0206",
+            "RS1001"
+          ],
+          "classes": [
+            "hallucinated or unsupported syntax",
+            "invents a symbol that is not in scope (host API or core name)",
+            "invents an argument label that is not in the signature",
+            "omits argument labels at the call site",
+            "operator overload attempt"
+          ],
+          "failed_invariants": [
+            "diagnostic_absent:RS0206"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 81365,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0201",
+                "RS0203",
+                "RS0204",
+                "RS0206",
+                "RS1001"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 18,
+              "text": "return List.try_fold(list: raws, init: Tally { total: 0, count: 0 }, op: add_amount)"
+            },
+            "RS0206": {
+              "summary": "call to `Int.parse` does not resolve.",
+              "line": 7,
+              "text": "return match Int.parse(raw: raw) {"
+            },
+            "RS0203": {
+              "summary": "call to `List.try_fold` has no argument named `op`.",
+              "line": 18,
+              "text": "return List.try_fold(list: raws, init: Tally { total: 0, count: 0 }, op: add_amount)"
+            },
+            "RS0204": {
+              "summary": "call to `Int.to_string` is missing required argument `value`.",
+              "line": 24,
+              "text": "Ok(tally) => \"total: \" + Int.to_string(tally.total)"
+            },
+            "RS0201": {
+              "summary": "call to `Int.to_string` uses an unnamed argument.",
+              "line": 24,
+              "text": "Ok(tally) => \"total: \" + Int.to_string(tally.total)"
+            },
+            "RS1001": {
+              "summary": "arithmetic operators are only built in for numeric values.",
+              "line": 25,
+              "text": "Err(message) => \"error: \" + message"
+            }
+          },
+          "syntax_subclasses": [
+            "Rust/Swift struct literal `T { field: v }` instead of `T(field: v)`"
+          ],
+          "callee_subclasses": [
+            "invents a core-namespace function that does not exist"
+          ],
+          "unknown_callees": [
+            "Int.parse"
+          ]
+        },
+        "map-aggregate-counts": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0206",
+            "RS0501"
+          ],
+          "classes": [
+            "hallucinated or unsupported syntax",
+            "invents a symbol that is not in scope (host API or core name)",
+            "missing `retains` for a parameter stored past return"
+          ],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 110935,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0206",
+                "RS0501"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 25,
+              "text": "for (level, count) in counts {"
+            },
+            "RS0206": {
+              "summary": "call to `print` does not resolve.",
+              "line": 48,
+              "text": "print(rendered)"
+            },
+            "RS0501": {
+              "summary": "retaining API `Map.insert` cannot retain local value `level`.",
+              "line": 15,
+              "text": "Map.insert(map: mut counts, key: level, value: current + 1)"
+            }
+          },
+          "syntax_subclasses": [
+            "expression-bodied match arm terminated by `,`",
+            "tuple destructuring in a `for` pattern"
+          ],
+          "callee_subclasses": [
+            "invents a bare output/print builtin",
+            "invents a core-namespace function that does not exist"
+          ],
+          "unknown_callees": [
+            "String.split_once",
+            "print"
+          ]
+        },
+        "moved-value": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 6069,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "named-args": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 13575,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "nested-json-array-sum": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0021",
+            "RS0026",
+            "RS0206",
+            "RS0209",
+            "RS0311"
+          ],
+          "classes": [
+            "control-flow type mismatch (branch used as a value)",
+            "hallucinated or unsupported syntax",
+            "invalid assignment",
+            "invents a symbol that is not in scope (host API or core name)",
+            "non-exhaustive match",
+            "references an unknown binding"
+          ],
+          "failed_invariants": [
+            "diagnostic_absent:RS0206"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 46644,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0021",
+                "RS0026",
+                "RS0206",
+                "RS0209",
+                "RS0311"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 17,
+              "text": "mut total: Int = 0"
+            },
+            "RS0311": {
+              "summary": "invalid assignment.",
+              "line": 30,
+              "text": "total = total + quantity"
+            },
+            "RS0021": {
+              "summary": "match statement is not exhaustive.",
+              "line": 39,
+              "text": "match sum_quantities(text: read document) {"
+            },
+            "RS0026": {
+              "summary": "unknown value binding `total`.",
+              "line": 33,
+              "text": "return Result.Ok(total)"
+            },
+            "RS0206": {
+              "summary": "call to `print` does not resolve.",
+              "line": 41,
+              "text": "Result.Err(error) => print(text: read JsonError.message(error: read error))"
+            },
+            "RS0209": {
+              "summary": "match pattern `Result.Err` cannot match scrutinee type `Result<Int, JsonError>`.",
+              "line": 41,
+              "text": "Result.Err(error) => print(text: read JsonError.message(error: read error))"
+            }
+          },
+          "syntax_subclasses": [
+            "`mut` used as a binding keyword instead of `let mut`"
+          ],
+          "callee_subclasses": [
+            "invents a bare output/print builtin",
+            "invents a core-namespace function that does not exist"
+          ],
+          "unknown_callees": [
+            "Json.as_array",
+            "Json.get_field",
+            "print"
+          ]
+        },
+        "noescape-filter-callback": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0201",
+            "RS0204",
+            "RS0206",
+            "RS0802"
+          ],
+          "classes": [
+            "`noescape` callback escapes",
+            "hallucinated or unsupported syntax",
+            "invents a symbol that is not in scope (host API or core name)",
+            "omits argument labels at the call site"
+          ],
+          "failed_invariants": [
+            "diagnostic_absent:RS0802"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 21143,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0201",
+                "RS0204",
+                "RS0206",
+                "RS0802"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 19,
+              "text": "Alert { level: \"info\", message: \"nightly backup completed\" },"
+            },
+            "RS0802": {
+              "summary": "noescape callback `keep` cannot be passed to `List.filter` as an ordinary value.",
+              "line": 7,
+              "text": "return List.filter(alerts, keep)"
+            },
+            "RS0201": {
+              "summary": "call to `List.filter` uses an unnamed argument.",
+              "line": 7,
+              "text": "return List.filter(alerts, keep)"
+            },
+            "RS0204": {
+              "summary": "call to `List.filter` is missing required argument `predicate`.",
+              "line": 7,
+              "text": "return List.filter(alerts, keep)"
+            },
+            "RS0206": {
+              "summary": "call to `read urgent.length` does not resolve.",
+              "line": 22,
+              "text": "write(urgent.length())"
+            }
+          },
+          "syntax_subclasses": [
+            "Rust/Swift struct literal `T { field: v }` instead of `T(field: v)`",
+            "other unsupported construct"
+          ],
+          "callee_subclasses": [
+            "invents a bare output/print builtin",
+            "invents a core-namespace function that does not exist",
+            "receiver-method call on a value that has no such method"
+          ],
+          "unknown_callees": [
+            "List.of",
+            "read urgent.length",
+            "write"
+          ]
+        },
+        "option-defaults-chain": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0206",
+            "RS0208",
+            "RS0209",
+            "RS1001"
+          ],
+          "classes": [
+            "control-flow type mismatch (branch used as a value)",
+            "hallucinated or unsupported syntax",
+            "invents a symbol that is not in scope (host API or core name)",
+            "operator overload attempt",
+            "return type mismatch (often an implicit/missing `return`)"
+          ],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 147816,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0206",
+                "RS0208",
+                "RS0209",
+                "RS1001"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 38,
+              "text": "return Settings { region: region, retries: retries }"
+            },
+            "RS0208": {
+              "summary": "return in `lookup_at` has type `String`, expected `Option<String>`.",
+              "line": 10,
+              "text": "return List.get(list: values, index: index)"
+            },
+            "RS0206": {
+              "summary": "call to `print` does not resolve.",
+              "line": 48,
+              "text": "print(text: report)"
+            },
+            "RS0209": {
+              "summary": "match pattern `None` cannot match scrutinee type `String`.",
+              "line": 14,
+              "text": "None => {"
+            },
+            "RS1001": {
+              "summary": "arithmetic operators are only built in for numeric values.",
+              "line": 47,
+              "text": "let report = \"region=\" + settings.region + \" retries=\" + Int.to_string(value: settings.retries)"
+            }
+          },
+          "syntax_subclasses": [
+            "Rust/Swift struct literal `T { field: v }` instead of `T(field: v)`",
+            "expression-bodied match arm terminated by `,`"
+          ],
+          "callee_subclasses": [
+            "invents a bare output/print builtin",
+            "invents a core-namespace function that does not exist"
+          ],
+          "unknown_callees": [
+            "Int.parse",
+            "print"
+          ]
+        },
+        "option-result": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 21392,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "producer-consumer-bounded": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0206",
+            "RS0308",
+            "RS0401"
+          ],
+          "classes": [
+            "invents a symbol that is not in scope (host API or core name)",
+            "use after move (`take`n value used again)",
+            "wrong call-site data effect (missing/extra `mut` or `take`)"
+          ],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 43132,
+              "check_ok": false,
+              "codes": [
+                "RS0206",
+                "RS0308",
+                "RS0401"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0206": {
+              "summary": "call to `Channel.split` does not resolve.",
+              "line": 24,
+              "text": "let (sender, receiver) = Channel.split(channel: take channel)"
+            },
+            "RS0308": {
+              "summary": "`take` requires a local value.",
+              "line": 29,
+              "text": "async let consumer_handle = consume(receiver: take receiver)"
+            },
+            "RS0401": {
+              "summary": "`channel` was moved into the managed runtime by `manage channel`.",
+              "line": 24,
+              "text": "let (sender, receiver) = Channel.split(channel: take channel)"
+            }
+          },
+          "syntax_subclasses": [],
+          "callee_subclasses": [
+            "invents a core-namespace function that does not exist",
+            "receiver-method call on a value that has no such method"
+          ],
+          "unknown_callees": [
+            "Channel.split",
+            "read item.is_none"
+          ]
+        },
+        "protocol-dyn-dispatch": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0024",
+            "RS0206",
+            "RS1301"
+          ],
+          "classes": [
+            "hallucinated or unsupported syntax",
+            "invents a symbol that is not in scope (host API or core name)",
+            "invents a type that is not in scope",
+            "unclassified RS1301"
+          ],
+          "failed_invariants": [
+            "source_contains:Dyn.from"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 40095,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0024",
+                "RS0206",
+                "RS1301"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 31,
+              "text": "let json = JsonFormatter { field: \"status\" }"
+            },
+            "RS1301": {
+              "summary": "`JsonFormatter` does not satisfy protocol `Formatter` method `format`.",
+              "line": 23,
+              "text": "impl Formatter for JsonFormatter {}"
+            },
+            "RS0024": {
+              "summary": "unknown type `Self`.",
+              "line": 19,
+              "text": "fn JsonFormatter.format(self: read Self) -> fresh String {"
+            },
+            "RS0206": {
+              "summary": "call to `read Json.object().to_string` does not resolve.",
+              "line": 20,
+              "text": "return Json.object(fields: [(\"field\", Json.string(self.field))]).to_string()"
+            }
+          },
+          "syntax_subclasses": [
+            "Rust/Swift struct literal `T { field: v }` instead of `T(field: v)`"
+          ],
+          "callee_subclasses": [
+            "invents a core-namespace function that does not exist"
+          ],
+          "unknown_callees": [
+            "read Json.object().to_string"
+          ]
+        },
+        "read-mut-take": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 19503,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "receiver-method": {
+          "status": "fail",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [
+            "source_contains:buffer.inspect()"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 11190,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "resource-across-await": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0208",
+            "RS0702"
+          ],
+          "classes": [
+            "hallucinated or unsupported syntax",
+            "resource escapes its `with` scope",
+            "return type mismatch (often an implicit/missing `return`)"
+          ],
+          "failed_invariants": [
+            "source_contains:with ConfigStore.open",
+            "diagnostic_absent:RS0702"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 47358,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0208",
+                "RS0702"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 24,
+              "text": "with store {"
+            },
+            "RS0208": {
+              "summary": "return in `main` has type `Unit`, expected `Result<Unit, String>`.",
+              "line": 16,
+              "text": "fn main() -> Result<Unit, String> {"
+            },
+            "RS0702": {
+              "summary": "resource-producing expression of type `ConfigStore` must be consumed by `with`.",
+              "line": 23,
+              "text": "let store = ConfigStore.open(path: \"config.toml\")?"
+            }
+          },
+          "syntax_subclasses": [
+            "`task_group`/`with`/`spawn` used as an expression or with a bare operand",
+            "expression-bodied match arm terminated by `,`"
+          ],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "resource-escape": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 11796,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "resource-scope-host": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0005",
+            "RS0015",
+            "RS0702"
+          ],
+          "classes": [
+            "hallucinated or unsupported syntax",
+            "redeclares interface symbols inside the implementation file",
+            "resource escapes its `with` scope"
+          ],
+          "failed_invariants": [
+            "source_contains:with ConfigStore.open",
+            "source_contains:store: mut store",
+            "diagnostic_absent:RS0702"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 65774,
+              "check_ok": false,
+              "codes": [
+                "RS0005",
+                "RS0015",
+                "RS0702"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 31,
+              "text": "Err(e) => panic(e),"
+            },
+            "RS0005": {
+              "summary": "function `ConfigStore.write_key` is declared more than once.",
+              "line": 10,
+              "text": "pub fn ConfigStore.write_key("
+            },
+            "RS0702": {
+              "summary": "resource-producing expression of type `Result<ConfigStore, String>` must be consumed by `with`.",
+              "line": 17,
+              "text": "return match ConfigStore.open(path: path) {"
+            }
+          },
+          "syntax_subclasses": [
+            "expression-bodied match arm terminated by `,`",
+            "other unsupported construct"
+          ],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "resource-with": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 19266,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "result-error-mapping": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0021",
+            "RS0206",
+            "RS0209",
+            "RS1001"
+          ],
+          "classes": [
+            "control-flow type mismatch (branch used as a value)",
+            "invents a symbol that is not in scope (host API or core name)",
+            "non-exhaustive match",
+            "operator overload attempt"
+          ],
+          "failed_invariants": [
+            "diagnostic_absent:RS0206"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 62878,
+              "check_ok": false,
+              "codes": [
+                "RS0021",
+                "RS0206",
+                "RS0209",
+                "RS1001"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0021": {
+              "summary": "match statement is not exhaustive.",
+              "line": 7,
+              "text": "match error {"
+            },
+            "RS0206": {
+              "summary": "call to `Int.parse` does not resolve.",
+              "line": 14,
+              "text": "match Int.parse(text: raw) {"
+            },
+            "RS0209": {
+              "summary": "match arm has type `Result<T, PipelineError>`, expected `Int` from the first produced arm.",
+              "line": 23,
+              "text": "Err(error) => return Err(error)"
+            },
+            "RS1001": {
+              "summary": "arithmetic operators are only built in for numeric values.",
+              "line": 16,
+              "text": "None => return Err(PipelineError.BadInput(detail: \"not an integer: \" + raw))"
+            }
+          },
+          "syntax_subclasses": [],
+          "callee_subclasses": [
+            "invents a core-namespace function that does not exist"
+          ],
+          "unknown_callees": [
+            "Int.parse"
+          ]
+        },
+        "retains-declaration": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0202",
+            "RS0206",
+            "RS0306"
+          ],
+          "classes": [
+            "hallucinated or unsupported syntax",
+            "invents a symbol that is not in scope (host API or core name)",
+            "local binding of a class value",
+            "wrong call-site data effect (missing/extra `mut` or `take`)"
+          ],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 6563,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0202",
+                "RS0206",
+                "RS0306"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 7,
+              "text": "return EventLog { entries: List<String>.new(), tags: List<String>.new() }"
+            },
+            "RS0202": {
+              "summary": "receiver `log.tags` for `push` uses `read` but the method requires `mut`.",
+              "line": 15,
+              "text": "log.tags.push(tag)"
+            },
+            "RS0206": {
+              "summary": "call to `print` does not resolve.",
+              "line": 26,
+              "text": "print(EventLog.size(log: log))"
+            },
+            "RS0306": {
+              "summary": "class binding `log` cannot be local.",
+              "line": 23,
+              "text": "local log = EventLog.new()"
+            }
+          },
+          "syntax_subclasses": [
+            "Rust/Swift struct literal `T { field: v }` instead of `T(field: v)`"
+          ],
+          "callee_subclasses": [
+            "invents a bare output/print builtin"
+          ],
+          "unknown_callees": [
+            "print"
+          ]
+        },
+        "retry-bounded": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0206"
+          ],
+          "classes": [
+            "invents a symbol that is not in scope (host API or core name)"
+          ],
+          "failed_invariants": [
+            "diagnostic_absent:RS0206"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 44563,
+              "check_ok": false,
+              "codes": [
+                "RS0206"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0206": {
+              "summary": "call to `write` does not resolve.",
+              "line": 34,
+              "text": "write(message)"
+            }
+          },
+          "syntax_subclasses": [],
+          "callee_subclasses": [
+            "invents a bare output/print builtin"
+          ],
+          "unknown_callees": [
+            "write"
+          ]
+        },
+        "sum-type-state-machine": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0026",
+            "RS0209"
+          ],
+          "classes": [
+            "control-flow type mismatch (branch used as a value)",
+            "hallucinated or unsupported syntax",
+            "references an unknown binding"
+          ],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 76832,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0026",
+                "RS0209"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 22,
+              "text": "JobState.Failed(reason: r) => \"failed: \" + r,"
+            },
+            "RS0026": {
+              "summary": "unknown value binding `JobState`.",
+              "line": 27,
+              "text": "let queued: JobState = JobState.Queued"
+            },
+            "RS0209": {
+              "summary": "match pattern `JobState.Queued` cannot match scrutinee type `JobState`.",
+              "line": 19,
+              "text": "JobState.Queued => \"queued\","
+            }
+          },
+          "syntax_subclasses": [
+            "expression-bodied match arm terminated by `,`"
+          ],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "take-mut-chain": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0005",
+            "RS0015",
+            "RS0202",
+            "RS0308"
+          ],
+          "classes": [
+            "hallucinated or unsupported syntax",
+            "redeclares interface symbols inside the implementation file",
+            "wrong call-site data effect (missing/extra `mut` or `take`)"
+          ],
+          "failed_invariants": [
+            "diagnostic_absent:RS0202"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 27284,
+              "check_ok": false,
+              "codes": [
+                "RS0005",
+                "RS0015",
+                "RS0202",
+                "RS0308"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 9,
+              "text": "return Report { title: title, lines: [] }"
+            },
+            "RS0005": {
+              "summary": "function `ReportSink.emit` is declared more than once.",
+              "line": 6,
+              "text": "pub fn ReportSink.emit(report: take Report) -> Unit"
+            },
+            "RS0202": {
+              "summary": "receiver `report.lines` for `push` uses `read` but the method requires `mut`.",
+              "line": 13,
+              "text": "report.lines.push(line)"
+            },
+            "RS0308": {
+              "summary": "`take` requires a local value.",
+              "line": 21,
+              "text": "local report = build_report(title: take \"Quarterly Report\")"
+            }
+          },
+          "syntax_subclasses": [
+            "Rust/Swift struct literal `T { field: v }` instead of `T(field: v)`",
+            "other unsupported construct"
+          ],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "task-group-cancel": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 124311,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "task-group-select": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0026",
+            "RS0030",
+            "RS0202",
+            "RS0206",
+            "RS0208"
+          ],
+          "classes": [
+            "awaits a non-async expression",
+            "hallucinated or unsupported syntax",
+            "invents a symbol that is not in scope (host API or core name)",
+            "references an unknown binding",
+            "return type mismatch (often an implicit/missing `return`)",
+            "wrong call-site data effect (missing/extra `mut` or `take`)"
+          ],
+          "failed_invariants": [
+            "diagnostic_absent:RS0015"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 67682,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0026",
+                "RS0030",
+                "RS0202",
+                "RS0206",
+                "RS0208"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 17,
+              "text": "await task_group {"
+            },
+            "RS0026": {
+              "summary": "unknown value binding `winner`.",
+              "line": 36,
+              "text": "return winner"
+            },
+            "RS0208": {
+              "summary": "return in `feed` has type `Result<Unit, ChannelError>`, expected `Unit`.",
+              "line": 2,
+              "text": "return await Sender.send(sender: take sender, value: value)"
+            },
+            "RS0202": {
+              "summary": "argument `value` for `Sender.send` must use `take`.",
+              "line": 2,
+              "text": "return await Sender.send(sender: take sender, value: value)"
+            },
+            "RS0206": {
+              "summary": "call to `Channel.take_receiver` does not resolve.",
+              "line": 12,
+              "text": "local receiver_b = Channel.take_receiver(channel: mut channel_b)"
+            },
+            "RS0030": {
+              "summary": "`await` must consume an async call.",
+              "line": 17,
+              "text": "await task_group {"
+            }
+          },
+          "syntax_subclasses": [
+            "`task_group`/`with`/`spawn` used as an expression or with a bare operand"
+          ],
+          "callee_subclasses": [
+            "invents a core-namespace function that does not exist"
+          ],
+          "unknown_callees": [
+            "Channel.take_receiver",
+            "Channel.take_sender"
+          ]
+        },
+        "unknown-external": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 17146,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        }
+      },
+      "aggregate": {
+        "task_count": 30,
+        "passed": 10,
+        "failed": 20,
+        "parse_passed": 30,
+        "static_check_passed": 11,
+        "candidate_check_matches": 30,
+        "target_check_matches": 11,
+        "expected_diagnostics_match": 30,
+        "forbidden_diagnostics_match": 20,
+        "unknown_tool_or_argument": 14,
+        "invalid_mut_or_take": 7,
+        "compiler_query_latency_ms": 309,
+        "oracle_soundness": {
+          "prefixes_checked": 2,
+          "terminals_recommended": 2,
+          "terminals_accepted": 2,
+          "dead_after_insert": 0,
+          "semantic_candidates_checked": 2,
+          "violation_count": 0,
+          "sound_tasks": 30
+        }
+      },
+      "missing_candidates": []
+    },
+    "repair_loop": {
+      "tasks": {
+        "async-stream-consume": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 1,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 83726,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0031",
+                "RS0202",
+                "RS0203",
+                "RS0204",
+                "RS0206",
+                "RS0311"
+              ]
+            },
+            {
+              "turn": 2,
+              "duration_ms": 165506,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "csv-record-transform": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0202",
+            "RS0206"
+          ],
+          "classes": [
+            "hallucinated or unsupported syntax",
+            "invents a symbol that is not in scope (host API or core name)",
+            "wrong call-site data effect (missing/extra `mut` or `take`)"
+          ],
+          "failed_invariants": [],
+          "repair_turns": 2,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 103299,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0201",
+                "RS0204",
+                "RS0206",
+                "RS1001"
+              ]
+            },
+            {
+              "turn": 2,
+              "duration_ms": 393166,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0206"
+              ]
+            },
+            {
+              "turn": 3,
+              "duration_ms": 108023,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0202",
+                "RS0206"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 17,
+              "text": "Ok(value) => return Ok(Record { id: id, amount: value }),"
+            },
+            "RS0206": {
+              "summary": "call to `IO.println` does not resolve.",
+              "line": 60,
+              "text": "Err(message) => IO.println(value: message)"
+            },
+            "RS0202": {
+              "summary": "argument `list` for `List.push` must use `mut`.",
+              "line": 34,
+              "text": "Ok(record) => { List.push(list: records, value: record) },"
+            }
+          },
+          "syntax_subclasses": [
+            "Rust/Swift struct literal `T { field: v }` instead of `T(field: v)`"
+          ],
+          "callee_subclasses": [
+            "invents a core-namespace function that does not exist"
+          ],
+          "unknown_callees": [
+            "IO.println",
+            "Int.parse"
+          ]
+        },
+        "destructive-symbol": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 5046,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "generic-struct-bound": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0026",
+            "RS0206",
+            "RS0308"
+          ],
+          "classes": [
+            "hallucinated or unsupported syntax",
+            "invents a symbol that is not in scope (host API or core name)",
+            "references an unknown binding",
+            "wrong call-site data effect (missing/extra `mut` or `take`)"
+          ],
+          "failed_invariants": [
+            "diagnostic_absent:RS0308"
+          ],
+          "repair_turns": 2,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 6145,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0026",
+                "RS0202",
+                "RS0206",
+                "RS0308"
+              ]
+            },
+            {
+              "turn": 2,
+              "duration_ms": 85853,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0206"
+              ]
+            },
+            {
+              "turn": 3,
+              "duration_ms": 48334,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0026",
+                "RS0206",
+                "RS0308"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 21,
+              "text": "readings.push(Reading { sensor: \"temp-1\", value: 72 })"
+            },
+            "RS0026": {
+              "summary": "unknown value binding `readings`.",
+              "line": 24,
+              "text": "local batch: Batch<Reading> = make_batch<Reading>(label: take morning_label, items: take readings)"
+            },
+            "RS0206": {
+              "summary": "call to `print` does not resolve.",
+              "line": 25,
+              "text": "print(batch_size<Reading>(batch: batch).to_string())"
+            },
+            "RS0308": {
+              "summary": "`take` requires a local value.",
+              "line": 24,
+              "text": "local batch: Batch<Reading> = make_batch<Reading>(label: take morning_label, items: take readings)"
+            }
+          },
+          "syntax_subclasses": [
+            "Rust/Swift struct literal `T { field: v }` instead of `T(field: v)`",
+            "`mut` used as a binding keyword instead of `let mut`"
+          ],
+          "callee_subclasses": [
+            "invents a bare output/print builtin",
+            "receiver-method call on a value that has no such method"
+          ],
+          "unknown_callees": [
+            "print",
+            "read readings.push"
+          ]
+        },
+        "host-interface-only": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 35133,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "json-config-validate": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0025",
+            "RS0203",
+            "RS0204"
+          ],
+          "classes": [
+            "hallucinated or unsupported syntax",
+            "invents a struct field",
+            "invents an argument label that is not in the signature",
+            "omits argument labels at the call site"
+          ],
+          "failed_invariants": [],
+          "repair_turns": 2,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 43373,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0021",
+                "RS0206",
+                "RS0209"
+              ]
+            },
+            {
+              "turn": 2,
+              "duration_ms": 386942,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0601"
+              ]
+            },
+            {
+              "turn": 3,
+              "duration_ms": 262427,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0025",
+                "RS0203",
+                "RS0204"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 13,
+              "text": "return Ok(ServiceConfig { name: parsed.name, port: parsed.port, enabled: parsed.enabled })"
+            },
+            "RS0025": {
+              "summary": "unknown field `port` on type `fresh JsonValue`.",
+              "line": 9,
+              "text": "if parsed.port < 1 || parsed.port > 65535 {"
+            },
+            "RS0203": {
+              "summary": "call to `Output.write` has no argument named `text`.",
+              "line": 26,
+              "text": "Output.write(text: message)"
+            },
+            "RS0204": {
+              "summary": "call to `Output.write` is missing required argument `message`.",
+              "line": 26,
+              "text": "Output.write(text: message)"
+            }
+          },
+          "syntax_subclasses": [
+            "Rust/Swift struct literal `T { field: v }` instead of `T(field: v)`"
+          ],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "list-try-fold-validate": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0206"
+          ],
+          "classes": [
+            "invents a symbol that is not in scope (host API or core name)"
+          ],
+          "failed_invariants": [
+            "diagnostic_absent:RS0206"
+          ],
+          "repair_turns": 2,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 115391,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0206",
+                "RS0209",
+                "RS0308"
+              ]
+            },
+            {
+              "turn": 2,
+              "duration_ms": 159616,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0203",
+                "RS0204",
+                "RS0206",
+                "RS0601"
+              ]
+            },
+            {
+              "turn": 3,
+              "duration_ms": 96566,
+              "check_ok": false,
+              "codes": [
+                "RS0206"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0206": {
+              "summary": "call to `Int.parse` does not resolve.",
+              "line": 7,
+              "text": "let parsed: Result<Int, String> = Int.parse(value: raw)"
+            }
+          },
+          "syntax_subclasses": [],
+          "callee_subclasses": [
+            "invents a core-namespace function that does not exist"
+          ],
+          "unknown_callees": [
+            "Int.parse"
+          ]
+        },
+        "map-aggregate-counts": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0206"
+          ],
+          "classes": [
+            "invents a symbol that is not in scope (host API or core name)"
+          ],
+          "failed_invariants": [],
+          "repair_turns": 2,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 93323,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0202",
+                "RS0203",
+                "RS0204",
+                "RS0206",
+                "RS0308"
+              ]
+            },
+            {
+              "turn": 2,
+              "duration_ms": 371236,
+              "check_ok": false,
+              "codes": [
+                "RS0203",
+                "RS0204",
+                "RS0206",
+                "RS0209"
+              ]
+            },
+            {
+              "turn": 3,
+              "duration_ms": 96565,
+              "check_ok": false,
+              "codes": [
+                "RS0206"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0206": {
+              "summary": "call to `Map.entries` does not resolve.",
+              "line": 46,
+              "text": "for entry in Map.entries(map: counts) {"
+            }
+          },
+          "syntax_subclasses": [],
+          "callee_subclasses": [
+            "invents a core-namespace function that does not exist"
+          ],
+          "unknown_callees": [
+            "Map.entries"
+          ]
+        },
+        "moved-value": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 6403,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "named-args": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 13054,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "nested-json-array-sum": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0209"
+          ],
+          "classes": [
+            "control-flow type mismatch (branch used as a value)"
+          ],
+          "failed_invariants": [],
+          "repair_turns": 2,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 111946,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0206"
+              ]
+            },
+            {
+              "turn": 2,
+              "duration_ms": 82912,
+              "check_ok": false,
+              "codes": [
+                "RS0209"
+              ]
+            },
+            {
+              "turn": 3,
+              "duration_ms": 144567,
+              "check_ok": false,
+              "codes": [
+                "RS0209"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0209": {
+              "summary": "match arm has type `Result<T, JsonError>`, expected `Int` from the first produced arm.",
+              "line": 21,
+              "text": "Err(error) => return Err(error)"
+            }
+          },
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "noescape-filter-callback": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0206"
+          ],
+          "classes": [
+            "hallucinated or unsupported syntax",
+            "invents a symbol that is not in scope (host API or core name)"
+          ],
+          "failed_invariants": [],
+          "repair_turns": 2,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 73629,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0201",
+                "RS0204",
+                "RS0206"
+              ]
+            },
+            {
+              "turn": 2,
+              "duration_ms": 39074,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0206",
+                "RS0207"
+              ]
+            },
+            {
+              "turn": 3,
+              "duration_ms": 148193,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0206"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 11,
+              "text": "return select_alerts(alerts: alerts, keep: fn(alert: read Alert) -> Bool {"
+            },
+            "RS0206": {
+              "summary": "call to `Console.write_line` does not resolve.",
+              "line": 24,
+              "text": "Console.write_line(text: String.from_int(value: urgent_count))"
+            }
+          },
+          "syntax_subclasses": [
+            "other unsupported construct"
+          ],
+          "callee_subclasses": [
+            "invents a core-namespace function that does not exist"
+          ],
+          "unknown_callees": [
+            "Console.write_line"
+          ]
+        },
+        "option-defaults-chain": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0206"
+          ],
+          "classes": [
+            "invents a symbol that is not in scope (host API or core name)"
+          ],
+          "failed_invariants": [],
+          "repair_turns": 2,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 62809,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0206",
+                "RS0208",
+                "RS0209"
+              ]
+            },
+            {
+              "turn": 2,
+              "duration_ms": 288301,
+              "check_ok": false,
+              "codes": [
+                "RS0206"
+              ]
+            },
+            {
+              "turn": 3,
+              "duration_ms": 150747,
+              "check_ok": false,
+              "codes": [
+                "RS0206"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0206": {
+              "summary": "call to `print` does not resolve.",
+              "line": 51,
+              "text": "print(value: String.from_int(value: settings.retries))"
+            }
+          },
+          "syntax_subclasses": [],
+          "callee_subclasses": [
+            "invents a bare output/print builtin",
+            "invents a core-namespace function that does not exist"
+          ],
+          "unknown_callees": [
+            "Int.from_str",
+            "print"
+          ]
+        },
+        "option-result": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 22845,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "producer-consumer-bounded": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0202",
+            "RS0308"
+          ],
+          "classes": [
+            "wrong call-site data effect (missing/extra `mut` or `take`)"
+          ],
+          "failed_invariants": [],
+          "repair_turns": 2,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 23077,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0021",
+                "RS0026",
+                "RS0030",
+                "RS0206",
+                "RS0308",
+                "RS0311"
+              ]
+            },
+            {
+              "turn": 2,
+              "duration_ms": 187757,
+              "check_ok": false,
+              "codes": [
+                "RS0202",
+                "RS0206",
+                "RS0207",
+                "RS0308"
+              ]
+            },
+            {
+              "turn": 3,
+              "duration_ms": 54292,
+              "check_ok": false,
+              "codes": [
+                "RS0202",
+                "RS0308"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0202": {
+              "summary": "argument `value` for `read sender.send` must use `take`.",
+              "line": 8,
+              "text": "await sender.send(value: count)"
+            },
+            "RS0308": {
+              "summary": "`take` requires a local value.",
+              "line": 38,
+              "text": "async let consumer_handle = consume(receiver: take receiver)"
+            }
+          },
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "protocol-dyn-dispatch": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0206",
+            "RS0207",
+            "RS1301"
+          ],
+          "classes": [
+            "argument type mismatch",
+            "invents a symbol that is not in scope (host API or core name)",
+            "unclassified RS1301"
+          ],
+          "failed_invariants": [
+            "source_contains:Dyn.from"
+          ],
+          "repair_turns": 2,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 84117,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0206",
+                "RS1301"
+              ]
+            },
+            {
+              "turn": 2,
+              "duration_ms": 112843,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS1001",
+                "RS1301"
+              ]
+            },
+            {
+              "turn": 3,
+              "duration_ms": 96283,
+              "check_ok": false,
+              "codes": [
+                "RS0206",
+                "RS0207",
+                "RS1301"
+              ]
+            }
+          ],
+          "examples": {
+            "RS1301": {
+              "summary": "`JsonFormatter` does not satisfy protocol `Formatter` method `format`.",
+              "line": 29,
+              "text": "impl Formatter for JsonFormatter {"
+            },
+            "RS0206": {
+              "summary": "call to `String.add` does not resolve.",
+              "line": 26,
+              "text": "return String.add(left: String.add(left: \"{\\\"field\\\": \", right: escape_json(text: self.field)), right: \"}\")"
+            },
+            "RS0207": {
+              "summary": "argument `formatter` for `render` has type `JsonFormatter`, expected `Dyn<Formatter>`.",
+              "line": 42,
+              "text": "let json_text = render(formatter: json)"
+            }
+          },
+          "syntax_subclasses": [],
+          "callee_subclasses": [
+            "invents a core-namespace function that does not exist"
+          ],
+          "unknown_callees": [
+            "String.add"
+          ]
+        },
+        "read-mut-take": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 25113,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "receiver-method": {
+          "status": "fail",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [
+            "source_contains:buffer.inspect()"
+          ],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 8040,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "resource-across-await": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 1,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 51910,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0208"
+              ]
+            },
+            {
+              "turn": 2,
+              "duration_ms": 62563,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "resource-escape": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 16902,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "resource-scope-host": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 2,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 113591,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0208"
+              ]
+            },
+            {
+              "turn": 2,
+              "duration_ms": 30802,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0207",
+                "RS0706"
+              ]
+            },
+            {
+              "turn": 3,
+              "duration_ms": 15148,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "resource-with": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 34274,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "result-error-mapping": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0206",
+            "RS1001"
+          ],
+          "classes": [
+            "invents a symbol that is not in scope (host API or core name)",
+            "operator overload attempt"
+          ],
+          "failed_invariants": [
+            "diagnostic_absent:RS0206"
+          ],
+          "repair_turns": 2,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 72546,
+              "check_ok": false,
+              "codes": [
+                "RS0021",
+                "RS0206",
+                "RS0209",
+                "RS1001"
+              ]
+            },
+            {
+              "turn": 2,
+              "duration_ms": 243650,
+              "check_ok": false,
+              "codes": [
+                "RS0206",
+                "RS0209"
+              ]
+            },
+            {
+              "turn": 3,
+              "duration_ms": 44201,
+              "check_ok": false,
+              "codes": [
+                "RS0206",
+                "RS1001"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0206": {
+              "summary": "call to `Int.parse` does not resolve.",
+              "line": 14,
+              "text": "match Int.parse(value: raw) {"
+            },
+            "RS1001": {
+              "summary": "arithmetic operators are only built in for numeric values.",
+              "line": 16,
+              "text": "None => return Result.Err(PipelineError.BadInput(detail: \"not an integer: \" + raw))"
+            }
+          },
+          "syntax_subclasses": [],
+          "callee_subclasses": [
+            "invents a core-namespace function that does not exist"
+          ],
+          "unknown_callees": [
+            "Int.parse"
+          ]
+        },
+        "retains-declaration": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0206"
+          ],
+          "classes": [
+            "invents a symbol that is not in scope (host API or core name)"
+          ],
+          "failed_invariants": [],
+          "repair_turns": 2,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 5647,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0202",
+                "RS0206"
+              ]
+            },
+            {
+              "turn": 2,
+              "duration_ms": 53611,
+              "check_ok": false,
+              "codes": [
+                "RS0206"
+              ]
+            },
+            {
+              "turn": 3,
+              "duration_ms": 44966,
+              "check_ok": false,
+              "codes": [
+                "RS0206"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0206": {
+              "summary": "call to `print` does not resolve.",
+              "line": 26,
+              "text": "print(EventLog.size(log: log))"
+            }
+          },
+          "syntax_subclasses": [],
+          "callee_subclasses": [
+            "invents a bare output/print builtin"
+          ],
+          "unknown_callees": [
+            "print"
+          ]
+        },
+        "retry-bounded": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 2,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 35866,
+              "check_ok": false,
+              "codes": [
+                "RS0206",
+                "RS0311"
+              ]
+            },
+            {
+              "turn": 2,
+              "duration_ms": 25002,
+              "check_ok": false,
+              "codes": [
+                "RS0026",
+                "RS0206",
+                "RS0311"
+              ]
+            },
+            {
+              "turn": 3,
+              "duration_ms": 88884,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "sum-type-state-machine": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0015",
+            "RS0026"
+          ],
+          "classes": [
+            "hallucinated or unsupported syntax",
+            "references an unknown binding"
+          ],
+          "failed_invariants": [],
+          "repair_turns": 2,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 26523,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0021",
+                "RS0026",
+                "RS0208"
+              ]
+            },
+            {
+              "turn": 2,
+              "duration_ms": 26478,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0026",
+                "RS0209"
+              ]
+            },
+            {
+              "turn": 3,
+              "duration_ms": 145787,
+              "check_ok": false,
+              "codes": [
+                "RS0015",
+                "RS0026"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0015": {
+              "summary": "unsupported RSScript syntax.",
+              "line": 36,
+              "text": "Failed(reason: reason) => {"
+            },
+            "RS0026": {
+              "summary": "unknown value binding `reason`.",
+              "line": 37,
+              "text": "return \"failed: \" + reason"
+            }
+          },
+          "syntax_subclasses": [
+            "other unsupported construct"
+          ],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "take-mut-chain": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0308"
+          ],
+          "classes": [
+            "wrong call-site data effect (missing/extra `mut` or `take`)"
+          ],
+          "failed_invariants": [],
+          "repair_turns": 2,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 27371,
+              "check_ok": false,
+              "codes": [
+                "RS0005",
+                "RS0015",
+                "RS0201",
+                "RS0202",
+                "RS0204",
+                "RS0308",
+                "RS0604"
+              ]
+            },
+            {
+              "turn": 2,
+              "duration_ms": 126891,
+              "check_ok": false,
+              "codes": [
+                "RS0308"
+              ]
+            },
+            {
+              "turn": 3,
+              "duration_ms": 122678,
+              "check_ok": false,
+              "codes": [
+                "RS0308"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0308": {
+              "summary": "`take` requires a local value.",
+              "line": 18,
+              "text": "finish_report(report: take report)"
+            }
+          },
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "task-group-cancel": {
+          "status": "fail",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [
+            "source_contains:Task.cancellation_token()"
+          ],
+          "repair_turns": 1,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 81447,
+              "check_ok": false,
+              "codes": [
+                "RS0206"
+              ]
+            },
+            {
+              "turn": 2,
+              "duration_ms": 26239,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "task-group-select": {
+          "status": "fail",
+          "static_check": "fail",
+          "codes": [
+            "RS0207"
+          ],
+          "classes": [
+            "argument type mismatch"
+          ],
+          "failed_invariants": [],
+          "repair_turns": 2,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 69120,
+              "check_ok": false,
+              "codes": [
+                "RS0031",
+                "RS0202",
+                "RS0207",
+                "RS0308",
+                "RS0311"
+              ]
+            },
+            {
+              "turn": 2,
+              "duration_ms": 150862,
+              "check_ok": false,
+              "codes": [
+                "RS0206"
+              ]
+            },
+            {
+              "turn": 3,
+              "duration_ms": 24874,
+              "check_ok": false,
+              "codes": [
+                "RS0207"
+              ]
+            }
+          ],
+          "examples": {
+            "RS0207": {
+              "summary": "binding `receiver_b` has initializer type `Result<fresh Receiver<Int>, ChannelError>`, expected `Receiver<Int>`.",
+              "line": 8,
+              "text": "let receiver_b: Receiver<Int> = Channel.receiver(channel: mut chan_b)"
+            }
+          },
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        },
+        "unknown-external": {
+          "status": "pass",
+          "static_check": "pass",
+          "codes": [],
+          "classes": [],
+          "failed_invariants": [],
+          "repair_turns": 0,
+          "transcript": [
+            {
+              "turn": 1,
+              "duration_ms": 19913,
+              "check_ok": true,
+              "codes": []
+            }
+          ],
+          "examples": {},
+          "syntax_subclasses": [],
+          "callee_subclasses": [],
+          "unknown_callees": []
+        }
+      },
+      "aggregate": {
+        "task_count": 30,
+        "passed": 13,
+        "failed": 17,
+        "parse_passed": 30,
+        "static_check_passed": 15,
+        "candidate_check_matches": 30,
+        "target_check_matches": 15,
+        "expected_diagnostics_match": 30,
+        "forbidden_diagnostics_match": 27,
+        "unknown_tool_or_argument": 10,
+        "invalid_mut_or_take": 4,
+        "compiler_query_latency_ms": 307,
+        "oracle_soundness": {
+          "prefixes_checked": 2,
+          "terminals_recommended": 2,
+          "terminals_accepted": 2,
+          "dead_after_insert": 0,
+          "semantic_candidates_checked": 2,
+          "violation_count": 0,
+          "sound_tasks": 30
+        }
+      },
+      "missing_candidates": []
+    }
+  }
+}

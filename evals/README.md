@@ -43,3 +43,41 @@ reported oracle violation makes `agent-eval` exit unsuccessfully.
 when analysis or call resolution is incomplete. Use it for forbidden operations;
 `target_source_contains` and `target_source_excludes` only check literal source
 text and do not establish whether an operation occurs.
+
+## Generation tasks
+
+Alongside the ten original repair/review fixtures, `tasks/` carries twenty
+`generation`-tagged tasks that describe a small embedded-automation program in
+natural language (`prompt`) rather than handing a broken candidate to a model.
+Their `fixtures/<id>/candidate.rss` is a *verified reference solution*: each one
+was checked with
+
+```bash
+cargo run -q -p rsscript-cli --bin rss -- check \
+  evals/fixtures/<id>/candidate.rss --interface evals/interfaces/<name>.rssi
+```
+
+so the task is known to be solvable. They keep `mode = "review"` because the
+seed candidate already satisfies the target contract; their `expected/*.json`
+invariants record the structural facts a correct solution must exhibit
+(`retains(`, `Dyn<...>`, `take`/`mut` at the call site, `task_group`, `select {`)
+and the diagnostics it must not emit.
+
+`tools/gen_eval_tasks.py` regenerates those twenty task/expected pairs
+deterministically; edit the table there rather than the generated files.
+
+## Collecting model samples
+
+`tools/collect-model-samples.py` is an optional, caller-owned runner that drives
+the locally installed Claude Code CLI over these tasks and writes candidates in
+the layout `agent-eval --candidates` accepts. It is not part of the offline
+corpus contract: nothing in `evals/` requires model access, and the scorer still
+never shells out to a model.
+
+```bash
+python3 tools/collect-model-samples.py --model sonnet --mode prompt_only
+cargo run -p rsscript-xtask -- agent-eval \
+  --tasks evals/tasks \
+  --candidates evals/samples/sonnet/prompt_only \
+  --output evals/samples/sonnet/prompt_only/report.v1.json
+```

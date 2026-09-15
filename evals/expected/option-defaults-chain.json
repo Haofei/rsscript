@@ -1,0 +1,25 @@
+{
+  "task_id": "option-defaults-chain",
+  "candidate_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "target_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "invariants": [
+    {
+      "kind": "source_contains",
+      "value": "Option<String>"
+    },
+    {
+      "kind": "source_contains",
+      "value": "None"
+    },
+    {
+      "kind": "source_excludes",
+      "value": ".unwrap()"
+    }
+  ]
+}

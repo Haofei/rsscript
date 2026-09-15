@@ -1,0 +1,25 @@
+{
+  "task_id": "protocol-dyn-dispatch",
+  "candidate_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "target_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "invariants": [
+    {
+      "kind": "source_contains",
+      "value": "protocol Formatter"
+    },
+    {
+      "kind": "source_contains",
+      "value": "Dyn<Formatter>"
+    },
+    {
+      "kind": "source_contains",
+      "value": "Dyn.from"
+    }
+  ]
+}

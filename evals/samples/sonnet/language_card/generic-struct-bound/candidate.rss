@@ -1,0 +1,24 @@
+struct Reading {
+    sensor: String,
+    value: Int,
+}
+
+struct Batch<T: Struct> {
+    label: String,
+    items: List<T>,
+}
+
+fn make_batch<T: Struct>(label: take String, items: take List<T>) -> fresh Batch<T> {
+    return Batch<T> { label: take label, items: take items }
+}
+
+fn batch_size<T: Struct>(batch: read Batch<T>) -> Int {
+    return batch.items.len()
+}
+
+fn main() -> Unit {
+    let reading: Reading = Reading { sensor: "sensor-1", value: 72 }
+    let items: List<Reading> = [take reading]
+    let batch: Batch<Reading> = make_batch<Reading>(label: take "morning-batch", items: take items)
+    let size: Int = batch_size(batch: batch)
+}

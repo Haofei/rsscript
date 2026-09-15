@@ -1,0 +1,18 @@
+fn sum_quantities(text: read String) -> Result<Int, JsonError> {
+    let doc: Json = Json::parse(text)?;
+    let items: Array<Json> = doc.get_field("items")?.as_array()?;
+    let mut total: Int = 0;
+    for item in items {
+        let quantity: Int = item.get_field("quantity")?.as_int()?;
+        total = total + quantity;
+    }
+    return Ok(total);
+}
+
+fn main() -> Unit {
+    let text: String = "{\"items\": [{\"quantity\": 3}, {\"quantity\": 7}]}";
+    match sum_quantities(text) {
+        Ok(total) => print(total),
+        Err(error) => print(error),
+    }
+}

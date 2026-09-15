@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "protocol-dyn-dispatch"
+version = 1
+mode = "review"
+title = "Two protocol implementations dispatched through `Dyn<P>`"
+prompt = "Write a single RSScript file that declares a protocol Formatter with one method fn format(self: read Self) -> fresh String, and two structs that implement it: PlainFormatter (field prefix: String) rendering a plain string, and JsonFormatter (field field: String) rendering a JSON field with the core Json interface. Provide the implementation functions and an `impl Formatter for ...` block for each. Write fn render(formatter: read Dyn<Formatter>) -> fresh String that dispatches dynamically. Add fn main() -> Unit that builds one value of each struct, converts each into a Dyn<Formatter>, and writes both rendered strings. Dynamic protocol dispatch is written as Dyn<P>."
+candidate = "fixtures/protocol-dyn-dispatch/candidate.rss"
+interfaces = []
+expected = "expected/protocol-dyn-dispatch.json"
+tags = ["protocol", "dyn", "dispatch", "generation"]

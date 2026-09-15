@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "resource-scope-host"
+version = 1
+mode = "review"
+title = "Copy a setting inside a `with` resource scope"
+prompt = "Write a single RSScript file that copies one key of a scoped host resource to another key. The only host surface available is the declared interface: a resource ConfigStore with ConfigStore.open(path: read String) -> Result<ConfigStore, String>, ConfigStore.read_key(store: mut ConfigStore, key: read String) -> Result<fresh String, String>, and ConfigStore.write_key(store: mut ConfigStore, key: read String, value: read String) -> Result<Unit, String>. Write fn copy_setting(path: read String, key: read String, target: read String) -> Result<Unit, String> that acquires the store with a `with` scope so cleanup runs, reads the key, and writes it to the target key. The store must not escape the `with` scope. Add fn main() -> Unit that calls it and reports success or the error."
+candidate = "fixtures/resource-scope-host/candidate.rss"
+interfaces = ["interfaces/config_store.rssi"]
+expected = "expected/resource-scope-host.json"
+tags = ["resource", "with", "host-boundary", "generation"]

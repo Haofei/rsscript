@@ -1,0 +1,48 @@
+struct Record {
+    id: String
+    amount: Int
+}
+
+fn parse_record(line: read String) -> Result<fresh Record, String> {
+    let fields = String.split(value: line, delimiter: ",")
+    if List.len<String>(list: fields) != 2 {
+        return Err("expected two fields")
+    }
+    let id = String.trim(value: List.get<String>(list: fields, index: 0))
+    let raw = String.trim(value: List.get<String>(list: fields, index: 1))
+    match String.parse_int(value: raw) {
+        Some(amount) => { return Ok(Record(id: id, amount: amount)) }
+        None => { return Err("amount is not an integer") }
+    }
+}
+
+fn parse_all(text: read String) -> Result<fresh List<Record>, String> {
+    let mut records = List.new<Record>()
+    let lines = String.lines(value: text)
+    for line in lines {
+        if String.is_empty(value: String.trim(value: line)) {
+            continue
+        }
+        let record = parse_record(line: line)?
+        List.push<Record>(list: mut records, value: record)
+    }
+    return Ok(records)
+}
+
+fn total_amount(records: read List<Record>) -> Int {
+    return List.fold<Record, Int>(
+        list: records,
+        initial: 0,
+        folder: |running, record| running + record.amount,
+    )
+}
+
+fn main() -> Unit {
+    match parse_all(text: "a,1\nb,2\n") {
+        Ok(records) => {
+            Output.write(message: String.from_int(value: total_amount(records: records)))
+        }
+        Err(message) => { Output.write(message: message) }
+    }
+    return Unit
+}

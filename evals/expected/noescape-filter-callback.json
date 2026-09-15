@@ -1,0 +1,25 @@
+{
+  "task_id": "noescape-filter-callback",
+  "candidate_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "target_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "invariants": [
+    {
+      "kind": "source_contains",
+      "value": "noescape Fn"
+    },
+    {
+      "kind": "diagnostic_absent",
+      "value": "RS0802"
+    },
+    {
+      "kind": "diagnostic_absent",
+      "value": "RS0803"
+    }
+  ]
+}

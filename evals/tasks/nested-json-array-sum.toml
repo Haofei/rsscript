@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "nested-json-array-sum"
+version = 1
+mode = "review"
+title = "Sum a field across a nested JSON array"
+prompt = "Write a single RSScript file that sums a field across a nested JSON array. Write fn sum_quantities(text: read String) -> Result<Int, JsonError> that parses the text, reads the object field `items`, iterates the array, reads the integer field `quantity` from each element, and returns the total. Propagate every JsonError rather than unwrapping. Add fn main() -> Unit that calls it on a literal document containing two items and writes the total or the error message. Use only the core Json interface."
+candidate = "fixtures/nested-json-array-sum/candidate.rss"
+interfaces = []
+expected = "expected/nested-json-array-sum.json"
+tags = ["json", "result", "generation"]

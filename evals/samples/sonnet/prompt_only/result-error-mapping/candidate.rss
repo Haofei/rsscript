@@ -1,0 +1,38 @@
+// Domain error mapping for the automation pipeline. Only Sync.push and
+// SyncError.message from automation_api.rssi are used as host calls.
+
+sum PipelineError {
+    BadInput(detail: String),
+    Upstream(detail: String),
+}
+
+fn PipelineError.detail(error: read PipelineError) -> fresh String {
+    match error {
+        PipelineError.BadInput(detail) => "bad input: " + detail,
+        PipelineError.Upstream(detail) => "upstream error: " + detail,
+    }
+}
+
+fn parse_amount(raw: read String) -> Result<Int, PipelineError> {
+    match Int.parse(raw) {
+        Some(value) => Ok(value),
+        None => Err(PipelineError.BadInput(detail: "not an integer: " + raw)),
+    }
+}
+
+fn push_amount(id: read String, raw: read String) -> Result<Int, PipelineError> {
+    match parse_amount(raw: raw) {
+        Err(err) => Err(err),
+        Ok(amount) => match Sync.push(id: id, amount: amount) {
+            Ok(accepted) => Ok(accepted),
+            Err(sync_err) => Err(PipelineError.Upstream(detail: SyncError.message(error: sync_err))),
+        },
+    }
+}
+
+fn main() -> Unit {
+    match push_amount(id: "acct-1", raw: "42") {
+        Ok(accepted) => print("accepted: " + Int.to_string(accepted)),
+        Err(err) => print(PipelineError.detail(error: err)),
+    }
+}

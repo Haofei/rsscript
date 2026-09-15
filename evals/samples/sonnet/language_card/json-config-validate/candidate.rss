@@ -1,0 +1,50 @@
+struct ServiceConfig {
+    name: String,
+    port: Int,
+    enabled: Bool,
+}
+
+fn describe_json_error(error: read JsonError) -> String {
+    match error {
+        JsonError.ParseError(message) => return "invalid json: " + message,
+        JsonError.MissingField(field) => return "missing field: " + field,
+        JsonError.TypeMismatch(field, expected) => return "field " + field + " must be " + expected,
+    }
+}
+
+fn load_config(text: read String) -> Result<fresh ServiceConfig, String> {
+    let value = match Json.parse(text: text) {
+        Ok(value) => value,
+        Err(error) => return Err(describe_json_error(error: error)),
+    }
+
+    let name = match Json.get_string(value: value, field: "name") {
+        Ok(name) => name,
+        Err(error) => return Err(describe_json_error(error: error)),
+    }
+
+    let port = match Json.get_int(value: value, field: "port") {
+        Ok(port) => port,
+        Err(error) => return Err(describe_json_error(error: error)),
+    }
+
+    let enabled = match Json.get_bool(value: value, field: "enabled") {
+        Ok(enabled) => enabled,
+        Err(error) => return Err(describe_json_error(error: error)),
+    }
+
+    if port < 1 || port > 65535 {
+        return Err("port must be between 1 and 65535")
+    }
+
+    return Ok(ServiceConfig { name: name, port: port, enabled: enabled })
+}
+
+fn main() -> Unit {
+    let text = "{\"name\": \"payments\", \"port\": 8080, \"enabled\": true}"
+
+    match load_config(text: text) {
+        Ok(config) => Output.write(text: config.name),
+        Err(error) => Output.write(text: error),
+    }
+}

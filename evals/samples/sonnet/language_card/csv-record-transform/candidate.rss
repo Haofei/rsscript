@@ -1,0 +1,58 @@
+struct Record {
+    id: String,
+    amount: Int,
+}
+
+fn parse_record(line: read String) -> Result<fresh Record, String> {
+    let parts = line.split(separator: ",")
+    if parts.len() != 2 {
+        return Err("expected exactly two fields")
+    }
+
+    let id = parts[0].trim()
+    let amount_text = parts[1].trim()
+
+    let amount = match Int.parse(value: amount_text) {
+        Some(value) => value,
+        None => return Err("invalid amount: " + amount_text),
+    }
+
+    return Ok(Record { id: id, amount: amount })
+}
+
+fn parse_all(text: read String) -> Result<fresh List<Record>, String> {
+    let local records: List<Record> = List.new()
+
+    for line in text.split(separator: "\n") {
+        let trimmed = line.trim()
+        if trimmed.len() == 0 {
+            continue
+        }
+
+        let record = match parse_record(line: trimmed) {
+            Ok(value) => value,
+            Err(message) => return Err(message),
+        }
+
+        records.push(value: take record)
+    }
+
+    return Ok(manage records)
+}
+
+fn total_amount(records: read List<Record>) -> Int {
+    let mut sum = 0
+    for record in records {
+        sum = sum + record.amount
+    }
+    return sum
+}
+
+fn main() -> Unit {
+    let text = "a1, 100\na2, 200"
+
+    match parse_all(text: text) {
+        Ok(records) => Debug.print(text: Int.to_string(value: total_amount(records: records))),
+        Err(message) => Debug.print(text: message),
+    }
+}

@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "resource-across-await"
+version = 1
+mode = "review"
+title = "Keep a resource scope off the await path"
+prompt = "Write a single RSScript file that reads a cursor from a scoped host resource and then fetches a page asynchronously. The declared host interfaces supply the resource ConfigStore (open/read_key/write_key) and the async function Sync.fetch_page(cursor: read String) -> Result<fresh String, SyncError>, plus SyncError.message. Write fn read_cursor(path: read String) -> Result<fresh String, String> that acquires the store with a `with` scope and reads the key \"cursor\", and async fn sync_next_page(path: read String) -> Result<String, String> that gets the cursor and then awaits the fetch. Do not hold the resource scope across the await. In fn main() -> Result<Unit, String>, run sync_next_page inside a task_group with an async let awaited in the same task_group, and write the page."
+candidate = "fixtures/resource-across-await/candidate.rss"
+interfaces = ["interfaces/config_store.rssi", "interfaces/automation_api.rssi"]
+expected = "expected/resource-across-await.json"
+tags = ["resource", "async", "await", "generation"]

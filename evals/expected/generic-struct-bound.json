@@ -1,0 +1,25 @@
+{
+  "task_id": "generic-struct-bound",
+  "candidate_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "target_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "invariants": [
+    {
+      "kind": "source_contains",
+      "value": "T: Struct"
+    },
+    {
+      "kind": "source_contains",
+      "value": "take "
+    },
+    {
+      "kind": "diagnostic_absent",
+      "value": "RS0308"
+    }
+  ]
+}

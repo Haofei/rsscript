@@ -1,0 +1,25 @@
+{
+  "task_id": "retry-bounded",
+  "candidate_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "target_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "invariants": [
+    {
+      "kind": "source_contains",
+      "value": "Sync.push"
+    },
+    {
+      "kind": "source_contains",
+      "value": "Sync.is_retryable"
+    },
+    {
+      "kind": "diagnostic_absent",
+      "value": "RS0206"
+    }
+  ]
+}
