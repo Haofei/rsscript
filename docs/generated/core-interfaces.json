@@ -3,8 +3,8 @@
   "version": 1,
   "completeness": "complete",
   "provenance": [
-    "rsscript_interface_catalog::CORE_INTERFACES",
-    "rsscript_interface_catalog::STANDARD_PACKAGE_INTERFACES"
+    "rsscript_semantics::interface_catalog::CORE_INTERFACES",
+    "rsscript_semantics::interface_catalog::STANDARD_PACKAGE_INTERFACES"
   ],
   "sha256_algorithm": "sha256",
   "interfaces": [

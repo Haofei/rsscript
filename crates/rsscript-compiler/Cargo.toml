@@ -16,7 +16,6 @@ rsscript-abi-model = { path = "../rsscript-abi-model" }
 rsscript-bytecode = { path = "../rsscript-bytecode", optional = true }
 rsscript-codegen-vm = { path = "../rsscript-codegen-vm", optional = true }
 rsscript-diagnostics = { path = "../rsscript-diagnostics" }
-rsscript-interface-catalog = { path = "../rsscript-interface-catalog" }
 rsscript-lowering = { path = "../rsscript-lowering", default-features = false, optional = true }
 rsscript-mir = { path = "../rsscript-mir", optional = true }
 rsscript-core-types = { path = "../rsscript-core-types" }

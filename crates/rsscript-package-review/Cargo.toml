@@ -10,7 +10,6 @@ publish = false
 [dependencies]
 rsscript-package-model = { path = "../rsscript-package-model" }
 rsscript-abi-model = { path = "../rsscript-abi-model" }
-rsscript-interface-catalog = { path = "../rsscript-interface-catalog" }
 rsscript-project = { path = "../rsscript-project" }
 rsscript-diagnostics = { path = "../rsscript-diagnostics" }
 rsscript-semantics = { path = "../rsscript-semantics" }

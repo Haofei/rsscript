@@ -1158,7 +1158,6 @@ dependencies = [
  "rsscript-codegen-vm",
  "rsscript-core-types",
  "rsscript-diagnostics",
- "rsscript-interface-catalog",
  "rsscript-lowering",
  "rsscript-mir",
  "rsscript-semantics",
@@ -1218,10 +1217,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rsscript-interface-catalog"
-version = "0.1.0"
-
-[[package]]
 name = "rsscript-jit-cranelift"
 version = "0.1.0"
 dependencies = [
@@ -1279,7 +1274,6 @@ dependencies = [
  "rsscript-bytecode",
  "rsscript-compiler",
  "rsscript-core-types",
- "rsscript-interface-catalog",
  "rsscript-provider-api",
  "rsscript-semantics",
  "rsscript-vm",
@@ -1295,7 +1289,6 @@ dependencies = [
  "rsscript-abi-model",
  "rsscript-core-types",
  "rsscript-diagnostics",
- "rsscript-interface-catalog",
  "rsscript-syntax",
  "serde",
  "serde_json",

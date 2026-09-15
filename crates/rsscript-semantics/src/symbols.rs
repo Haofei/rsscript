@@ -1443,9 +1443,9 @@ mod tests {
     /// outlive a rename or removal in the core interfaces.
     #[test]
     fn known_aliases_name_real_core_interface_functions() {
-        let prelude: Vec<String> = rsscript_interface_catalog::CORE_INTERFACES
+        let prelude: Vec<String> = crate::interface_catalog::CORE_INTERFACES
             .iter()
-            .chain(rsscript_interface_catalog::STANDARD_PACKAGE_INTERFACES.iter())
+            .chain(crate::interface_catalog::STANDARD_PACKAGE_INTERFACES.iter())
             .flat_map(|(_, source)| source.lines())
             .filter_map(|line| line.trim().strip_prefix("pub fn "))
             .map(|declaration| {

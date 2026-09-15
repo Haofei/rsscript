@@ -40,9 +40,14 @@ mod generic_constraints;
 pub mod hir;
 mod hir_uses;
 mod identities;
+/// Platform-neutral `.rssi` source for the core and standard-package
+/// interfaces, embedded at build time. Data only: this module must not name a
+/// host, provider, policy, or capability concept, and nothing in it may depend
+/// on the rest of the semantic model.
+pub mod interface_catalog;
 mod interface_descriptor;
 mod interfaces {
-    pub(crate) use rsscript_interface_catalog::{
+    pub(crate) use crate::interface_catalog::{
         CORE_INTERFACES, STANDARD_PACKAGE_INTERFACES, default_interfaces,
     };
 }

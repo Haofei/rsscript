@@ -252,9 +252,9 @@ fn package_identity(manifest: &crate::Manifest) -> PackageIdentity {
 
 fn interface_catalog_digest() -> String {
     let mut digest = Sha256::new();
-    for (path, source) in rsscript_interface_catalog::CORE_INTERFACES
+    for (path, source) in rsscript_semantics::interface_catalog::CORE_INTERFACES
         .iter()
-        .chain(rsscript_interface_catalog::STANDARD_PACKAGE_INTERFACES.iter())
+        .chain(rsscript_semantics::interface_catalog::STANDARD_PACKAGE_INTERFACES.iter())
     {
         digest.update((path.len() as u64).to_be_bytes());
         digest.update(path.as_bytes());

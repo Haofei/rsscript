@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 
 use rsscript_diagnostics::diagnostic_explanations;
-use rsscript_interface_catalog::{CORE_INTERFACES, STANDARD_PACKAGE_INTERFACES};
+use rsscript_semantics::interface_catalog::{CORE_INTERFACES, STANDARD_PACKAGE_INTERFACES};
 use rsscript_syntax::PARSER_KEYWORDS;
 use rsscript_syntax::lexer::{BUILTIN_CONSTANTS, CONTEXTUAL_KEYWORDS, KEYWORDS};
 use serde::Serialize;
@@ -315,7 +315,7 @@ fn core_interfaces_document() -> String {
     let standard_packages = standard_package_interfaces();
     let mut output = header(
         "RSScript core interfaces",
-        "rsscript-interface-catalog::{CORE_INTERFACES, STANDARD_PACKAGE_INTERFACES}",
+        "rsscript-semantics::interface_catalog::{CORE_INTERFACES, STANDARD_PACKAGE_INTERFACES}",
     );
     output.push_str(&format!("{} core interface files and {} standard-package interface files are prelude-visible to a single-file check. Machine-readable catalog: [core-interfaces.json](core-interfaces.json), where each entry carries a `kind` of `{CORE_KIND}` or `{STANDARD_PACKAGE_KIND}`.\n\n## Core interfaces\n\nPlatform-neutral, always available.\n\n", core.len(), standard_packages.len()));
     for interface in core {
@@ -401,7 +401,7 @@ fn signatures_document() -> String {
     let signatures = interface_signatures();
     let mut output = header(
         "RSScript core interface signatures",
-        "rsscript-interface-catalog::{CORE_INTERFACES, STANDARD_PACKAGE_INTERFACES}",
+        "rsscript-semantics::interface_catalog::{CORE_INTERFACES, STANDARD_PACKAGE_INTERFACES}",
     );
     output.push_str(&format!(
         "Every public function a single-file check can call without declaring anything — top-level `pub fn` and `pub async fn` declarations, plus the methods declared by a `protocol` — as {} signatures across {} namespaces, spelled exactly as `rss fmt` prints them. Nothing here is truncated. The machine-readable form is the `signatures` array of [language-card.json](language-card.json).\n\nA call is `Namespace.function(label: value)`. Parameter declarations keep `read`; at a call site `read` is omitted because it is the default, while `mut` and `take` stay explicit.\n",
@@ -537,8 +537,8 @@ fn core_interfaces_json() -> String {
         version: VERSION,
         completeness: COMPLETE,
         provenance: [
-            "rsscript_interface_catalog::CORE_INTERFACES",
-            "rsscript_interface_catalog::STANDARD_PACKAGE_INTERFACES",
+            "rsscript_semantics::interface_catalog::CORE_INTERFACES",
+            "rsscript_semantics::interface_catalog::STANDARD_PACKAGE_INTERFACES",
         ],
         sha256_algorithm: "sha256",
         interfaces: prelude_interfaces(),
@@ -554,7 +554,7 @@ fn language_card_json() -> String {
         provenance: [
             "rsscript_syntax::lexer",
             "rsscript_diagnostics::diagnostic_explanations",
-            "rsscript_interface_catalog::CORE_INTERFACES",
+            "rsscript_semantics::interface_catalog::CORE_INTERFACES",
         ],
         language_version: LANGUAGE_VERSION,
         specification_version: SPEC_VERSION,

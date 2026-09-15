@@ -13,7 +13,6 @@ core = [
   "rsscript-core-types",
   "rsscript-corelib",
   "rsscript-diagnostics",
-  "rsscript-interface-catalog",
   "rsscript-language-service",
   "rsscript-lowering",
   "rsscript-mir",

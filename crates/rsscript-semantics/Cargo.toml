@@ -12,7 +12,6 @@ doctest = false
 [dependencies]
 rsscript-abi-model = { path = "../rsscript-abi-model" }
 rsscript-diagnostics = { path = "../rsscript-diagnostics" }
-rsscript-interface-catalog = { path = "../rsscript-interface-catalog" }
 rsscript-core-types = { path = "../rsscript-core-types" }
 rsscript-syntax = { path = "../rsscript-syntax" }
 serde = { version = "1", features = ["derive"] }

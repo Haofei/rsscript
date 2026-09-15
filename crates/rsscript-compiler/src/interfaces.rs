@@ -1,7 +1,9 @@
 //! Compatibility façade over the platform-neutral interface catalog.
 
 #[cfg(feature = "lowering")]
-pub(crate) use rsscript_interface_catalog::{CORE_INTERFACES, STANDARD_PACKAGE_INTERFACES};
+pub(crate) use rsscript_semantics::interface_catalog::{
+    CORE_INTERFACES, STANDARD_PACKAGE_INTERFACES,
+};
 
 #[cfg(feature = "lowering")]
 pub(crate) fn interface_catalog_digest() -> String {

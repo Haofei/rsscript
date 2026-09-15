@@ -15,7 +15,6 @@ execution = [
     "dep:rsscript-artifact",
     "rsscript_compiler/bytecode",
     "dep:rsscript-bytecode",
-    "dep:rsscript-interface-catalog",
     "dep:rsscript-provider-api",
     "dep:rsscript-vm",
 ]
@@ -39,7 +38,6 @@ rsscript-artifact = { path = "../rsscript-artifact", optional = true }
 rsscript_compiler = { package = "rsscript-compiler", path = "../rsscript-compiler", default-features = false }
 rsscript-core-types = { path = "../rsscript-core-types" }
 rsscript-bytecode = { path = "../rsscript-bytecode", optional = true }
-rsscript-interface-catalog = { path = "../rsscript-interface-catalog", optional = true }
 rsscript-provider-api = { path = "../rsscript-provider-api", optional = true }
 rsscript-semantics = { path = "../rsscript-semantics" }
 rsscript-vm = { path = "../rsscript-vm", optional = true, default-features = false }

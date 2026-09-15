@@ -2,7 +2,7 @@
 
 # RSScript core interface signatures
 
-Source: `rsscript-interface-catalog::{CORE_INTERFACES, STANDARD_PACKAGE_INTERFACES}`.
+Source: `rsscript-semantics::interface_catalog::{CORE_INTERFACES, STANDARD_PACKAGE_INTERFACES}`.
 
 Every public function a single-file check can call without declaring anything — top-level `pub fn` and `pub async fn` declarations, plus the methods declared by a `protocol` — as 450 signatures across 59 namespaces, spelled exactly as `rss fmt` prints them. Nothing here is truncated. The machine-readable form is the `signatures` array of [language-card.json](language-card.json).
 

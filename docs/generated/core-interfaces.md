@@ -2,7 +2,7 @@
 
 # RSScript core interfaces
 
-Source: `rsscript-interface-catalog::{CORE_INTERFACES, STANDARD_PACKAGE_INTERFACES}`.
+Source: `rsscript-semantics::interface_catalog::{CORE_INTERFACES, STANDARD_PACKAGE_INTERFACES}`.
 
 35 core interface files and 4 standard-package interface files are prelude-visible to a single-file check. Machine-readable catalog: [core-interfaces.json](core-interfaces.json), where each entry carries a `kind` of `core` or `standard_package`.
 

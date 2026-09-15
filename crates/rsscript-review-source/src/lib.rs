@@ -20,11 +20,11 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use serde::Serialize;
 
 use rsscript_diagnostics::{Span, code};
-use rsscript_interface_catalog::standard_package_interfaces;
 use rsscript_semantics::hir::{
     CallResolution, FunctionSig as HirFunctionSig, Hir, HirBindingKind, HirBlock, HirExpr, HirStmt,
     ParamEffect, ResolvedCalleeKind,
 };
+use rsscript_semantics::interface_catalog::standard_package_interfaces;
 use rsscript_syntax::ast::{
     Block, CallArg, Callee, DataEffect, Expr, FieldDecl, FunctionDecl, GenericBound, Item, LetKind,
     MatchPattern, Param, Program, ProtocolImpl, Stmt, TypeDecl, TypeKind, TypeRef, merge_programs,
