@@ -813,6 +813,9 @@ struct VariantLayout {
 /// their semantic layout; `Result` is a language primitive and therefore has
 /// a dedicated typed payload projection instead of a synthetic source name.
 enum MatchBindings {
+    /// A tuple pattern's elements, keyed by the synthetic `itemN` field names
+    /// the parser gives them.
+    Tuple(Vec<rsscript_syntax::ast::MatchFieldPattern>),
     Variant(VariantLayout, Vec<rsscript_syntax::ast::MatchPattern>),
     Result {
         ok: bool,
@@ -822,6 +825,17 @@ enum MatchBindings {
         some: bool,
         binding: Option<rsscript_syntax::ast::MatchPattern>,
     },
+}
+
+/// Parse the synthetic tuple struct name `__TupleN` to its arity `N`.
+///
+/// Tuple literals, tuple types, and tuple patterns all desugar to this one
+/// generic struct (`syntax/desugar.rs::inject_tuple_structs`), and the name is
+/// reserved, so recognizing it by spelling is recognizing the desugar, not
+/// guessing at a user type.
+fn tuple_struct_arity(name: &str) -> Option<usize> {
+    name.strip_prefix("__Tuple")
+        .and_then(|arity| arity.parse().ok())
 }
 
 #[derive(Default)]

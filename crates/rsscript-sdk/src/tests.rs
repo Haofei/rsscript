@@ -1356,3 +1356,70 @@ fn main() -> String {{
     // `item0` is 0 and `item28` is 28.
     assert_eq!(report.value(), Some("28last"));
 }
+
+/// Tuple patterns in `match` reach the typed MIR control-flow subset.
+///
+/// A tuple pattern is the synthetic struct pattern `__TupleN { item0: …, … }`
+/// (`syntax/parser/pattern.rs`), so lowering tests the refutable elements as a
+/// short-circuiting branch ladder and binds the rest by field projection. The
+/// program exercises every element form the subset accepts — a literal, a
+/// binding, `_`, and a nested tuple pattern — in both the statement and the
+/// expression form of `match`.
+#[test]
+fn tuple_match_patterns_lower_and_execute() {
+    const SOURCE: &str = r#"
+fn classify(p: (Int, String)) -> fresh String {
+    match read p {
+        (0, "zero") => { return "both" }
+        (0, name) => { return String.concat(left: "zero-", right: name) }
+        (n, _) => { return String.from_int(value: n) }
+    }
+}
+
+fn nested(p: ((Int, Int), String)) -> fresh String {
+    match read p {
+        ((1, b), name) => { return String.concat(left: String.from_int(value: b), right: name) }
+        ((a, _), _) => { return String.from_int(value: a) }
+        _ => { return "?" }
+    }
+}
+
+fn corner(p: (Int, Int)) -> fresh String {
+    return match read p {
+        (0, 0) => { "origin" }
+        (0, y) => { String.from_int(value: y) }
+        (x, _) => { String.from_int(value: x) }
+    }
+}
+
+fn main() -> fresh String {
+    let parts = [
+        classify(p: (0, "zero")),
+        classify(p: (0, "q")),
+        classify(p: (5, "q")),
+        nested(p: ((1, 9), "x")),
+        nested(p: ((2, 9), "x")),
+        corner(p: (0, 0)),
+        corner(p: (0, 4)),
+        corner(p: (7, 4)),
+    ]
+    return String.join(parts: read parts, separator: "|")
+}
+"#;
+
+    let built = Compiler
+        .compile("tuple-patterns.rss", SOURCE)
+        .expect("tuple patterns in `match` compile");
+    let admitted = admitted(built);
+    let report = Runtime::default()
+        .link(&admitted)
+        .expect("link tuple pattern program")
+        .execute(ExecutionRequest::default());
+
+    assert_eq!(report.termination_reason(), TerminationReason::Completed);
+    assert_eq!(
+        report.value(),
+        Some("both|zero-q|5|9x|2|origin|4|7"),
+        "each arm is selected by its own element tests"
+    );
+}
