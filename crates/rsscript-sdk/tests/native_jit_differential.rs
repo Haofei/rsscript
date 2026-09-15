@@ -1576,3 +1576,65 @@ fn an_armed_intrinsic_call_budget_no_longer_refuses_native_dispatch() {
         "an armed intrinsic call budget must still admit whole-function or OSR dispatch"
     );
 }
+
+#[test]
+fn a_custom_max_depth_no_longer_refuses_whole_function_native_entry() {
+    // `attempt_native` used to refuse every whole-function region whenever
+    // `max_depth` differed from the VM's `DEFAULT_MAX_DEPTH`, because the internal
+    // ABI was said to carry only a host-stack cap. It carries the logical limit
+    // too — `RegionCallControls::logical_depth` forwards it exactly as OSR entry
+    // already did — so entry now declines only when the configured limit is within
+    // reach of the region's static frame bound.
+    //
+    // A recursion that exceeds a small limit must still terminate with the
+    // interpreter's reason and count, and an ordinary hot loop must still tier up
+    // under a non-default limit.
+    let deep_recursion = "fn down(n: Int) -> Int { if n <= 0 { return 0 }; return 1 + down(n: n - 1) } fn main() -> Int { return down(n: 5000) }";
+    for &max_depth in &[4_usize, 16, 64, 256] {
+        let limits = RunLimits::unbounded_for_trusted_host().with_max_depth(max_depth);
+        let (interpreter, native) = accounting_pair(
+            "custom-max-depth-recursion.rss",
+            deep_recursion,
+            limits,
+            NativeJitOptions {
+                cost_model: NativeCostModel::Off,
+                collect_telemetry: true,
+                ..NativeJitOptions::default()
+            },
+        );
+        assert_eq!(
+            native.outcome(),
+            interpreter.outcome(),
+            "a recursion past max_depth {max_depth} must terminate with the interpreter's reason"
+        );
+        assert_eq!(
+            native.usage.steps_consumed, interpreter.usage.steps_consumed,
+            "a recursion past max_depth {max_depth} must report the interpreter's step count"
+        );
+    }
+
+    // The hot loop is a leaf, so its static frame bound is its own frame plus the
+    // dissolved-leaf allowance; a 256-frame profile leaves it far out of reach and
+    // native entry must happen.
+    let hot = "fn hot(limit: Int) -> Int { let mut i = 0; let mut total = 0; while i < limit { total = total + i * 3 - i / 2 + 7; i = i + 1 }; return total } fn main() -> Int { return hot(limit: 3000) }";
+    let (interpreter, native) = accounting_pair(
+        "custom-max-depth-hot-loop.rss",
+        hot,
+        RunLimits::unbounded_for_trusted_host().with_max_depth(256),
+        NativeJitOptions {
+            cost_model: NativeCostModel::Off,
+            collect_telemetry: true,
+            ..NativeJitOptions::default()
+        },
+    );
+    assert_eq!(native.outcome(), interpreter.outcome());
+    assert_eq!(
+        native.usage.steps_consumed, interpreter.usage.steps_consumed,
+        "a hot loop under a non-default max_depth must report the interpreter's step count"
+    );
+    let telemetry = native_telemetry(&native);
+    assert!(
+        telemetry.native_calls + telemetry.osr_entries > 0,
+        "a non-default max_depth must no longer refuse whole-function or OSR dispatch"
+    );
+}

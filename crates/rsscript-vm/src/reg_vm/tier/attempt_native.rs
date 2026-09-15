@@ -27,11 +27,6 @@ impl RegVm {
         if JitCallCtx::is_active() {
             return NativeAttempt::Fallback;
         }
-        // The current internal ABI carries only a host-stack cap, not the user's
-        // logical frame limit. Custom max_depth therefore remains interpreter-only.
-        if self.limits.max_depth != DEFAULT_MAX_DEPTH {
-            return NativeAttempt::Fallback;
-        }
         // Native limit parity (execution spec §6.2, Model A): Cranelift code polls
         // neither the step budget nor the cancel flag, so a hot, tiered-up function
         // containing an unbounded loop would run natively and bypass `step_budget`
@@ -611,6 +606,40 @@ impl RegVm {
                 selected_tier,
             )
         };
+        // Logical frame limit. `RegionCallControls::logical_depth` forwards the
+        // configured `max_depth` into the call frame exactly as OSR entry already
+        // does, and `TailCallGuard` enforces it for a tail-recursive loop. The other
+        // two ways a region adds interpreter frames carry no generated guard: a
+        // compiled native-to-native edge (one frame per chain hop, bounded by the
+        // entry's static `native_call_depth`) and a leaf call the inliner dissolved
+        // (one further frame — `controlled_static_inline_candidate` refuses a callee
+        // that itself calls, so dissolved callees do not nest). Decline whenever the
+        // configured limit is within reach of that bound, so the interpreter — which
+        // raises the canonical depth error in `push_frame` — owns every run that
+        // could reach it. This frame is already pushed, so `frames.len()` counts it.
+        {
+            const DISSOLVED_LEAF_FRAMES: usize = 1;
+            let chain_frames = self
+                .native
+                .as_ref()
+                .map(|native| match selected_tier {
+                    NativeCodeTier::Baseline => &native.baseline_module,
+                    NativeCodeTier::Optimized => native
+                        .optimized_module
+                        .as_ref()
+                        .expect("optimized dispatch requires optimized module"),
+                })
+                .and_then(|module| module.native_call_depth(id))
+                .map_or(usize::MAX, |depth| depth as usize);
+            let reachable_depth = self
+                .frames
+                .len()
+                .saturating_add(chain_frames)
+                .saturating_add(DISSOLVED_LEAF_FRAMES);
+            if reachable_depth > self.limits.max_depth {
+                return NativeAttempt::Fallback;
+            }
+        }
         // Phase 2: marshal each argument to 64 bits per its inferred parameter
         // type. Scalars unbox directly; a `Handle` (struct/list) is registered in
         // the per-call heap table and passed as its index, for the host helpers to
