@@ -16,9 +16,171 @@ also execute shape-preserving stores and `List.push`: the helper charges the exa
 capacity delta into a transaction-local allocation cell, live memory is measured
 from the tentative VM root graph, and both are committed only with the heap
 transaction. Every other allocating/replacing helper and native-call edge fails
-closed. Intrinsic-call and Provider-call meters remain interpreter/host owned;
-Provider and async operations remain continuation barriers rather than being
-hidden in machine code.
+closed. A spliced-in callee body owns its own source steps, and a deopt inside
+one rolls that region's charge back to the caller's call instruction, which the
+interpreter re-executes. A region whose source cost cannot be attributed exactly
+— a native-to-native call edge, an OSR loop containing a dissolved call, or a key
+whose hash work is proportional to its size — declines under armed controls
+instead of under-reporting. Intrinsic-call and Provider-call meters remain
+interpreter/host owned; Provider and async operations remain continuation
+barriers rather than being hidden in machine code. "Accounting parity status"
+below is the per-fact status and the remaining gap list.
+
+## Accounting parity status
+
+The first JIT goal in [../roadmap.md](../roadmap.md) is that native execution
+report the same deterministic step, allocation, cancellation, and deadline facts
+as the interpreter, so bounded and isolated execution can use it. This section is
+the current status of that goal, fact by fact, and the concrete list of what is
+still missing. It is deliberately written as status rather than intent: where a
+fact cannot be attributed exactly, the native tier declines and the interpreter
+runs the region, and that decline is part of the contract rather than a bug.
+
+The interpreter is the accounting oracle. `RegVm::tick`
+(`crates/rsscript-vm/src/reg_vm/exec.rs`) charges one source step *before* each
+bytecode instruction executes, so an instruction that fails is still counted;
+`RegVm::charge_work` charges additional units for work hidden behind one
+instruction; and `RegVm::usage` publishes `steps_consumed`,
+`allocation_bytes_consumed`, and the live-memory figures into `ExecutionUsage`.
+
+### Step count
+
+**Equivalent** for whole-function regions, OSR regions, and continuations
+whenever native code runs at all with a step, cancellation, or deadline control
+armed. A program run with step limit `N` terminates with the same reason and
+reports the same `steps_consumed` under native execution as under the
+interpreter. Four mechanisms make that exact:
+
+- **Segment reservation.** Generated code reserves a whole no-deopt accounting
+  segment's source cost before the segment's first instruction
+  (`step_segment_costs` in `crates/rsscript-jit-cranelift/src/codegen.rs`). A
+  segment is capped at 512 source steps and never crosses a CFG leader, a
+  possibly-bailing instruction, or an inlined-region boundary.
+- **Inlined callee bodies own their own steps.** The leaf inliner returns a
+  per-instruction `NativeInlineAccounting`
+  (`crates/rsscript-vm/src/reg_vm/native/passes/inlining.rs`), so each spliced
+  callee instruction owns one interpreter step and the call itself owns one,
+  instead of the whole callee body collapsing onto the caller's call ip and
+  owning nothing.
+- **All-or-nothing roll-back for an inlined region.** A deopt inside an inlined
+  region resumes the interpreter at the caller's call instruction, which
+  re-executes the whole call, so generated code reports `steps_resume` — the
+  count as of the last precisely-resumable segment entry — rather than the
+  running count. A guard bail elsewhere likewise excludes the pre-charged cost of
+  the one instruction the interpreter is about to execute again.
+- **Constant key-hash work is billed.** `map_key_from_value`
+  (`crates/rsscript-vm/src/reg_vm/value_ops.rs`) bills one unit for a scalar map
+  key on top of the instruction's own tick, so an `Int`-keyed map insert, get, or
+  membership test costs the interpreter two source steps.
+  `charge_native_key_hash_work`
+  (`crates/rsscript-vm/src/reg_vm/native/translate/jit_post.rs`) bills that
+  constant onto the owning native item. Sorted maps and sorted sets are
+  list-backed, hash nothing, and are deliberately absent from that set.
+
+Three shapes **decline** instead of running natively while a control is armed,
+because their source cost is not attributable:
+
+- a region that would reach a callee over a native-to-native call edge
+  (`RegVm::attempt_native` builds no compiled-callee edges when
+  `RegionCompileControls` are non-default);
+- an OSR region whose loop body contains a call the inliner would dissolve
+  (`RegVm::build_osr_plan`);
+- a region that hashes a key whose cost is proportional to its size
+  (`native_source_cost_is_static`).
+
+### Allocation bytes
+
+**Equivalent where admitted, otherwise declined.** The interpreter accounts
+through `RegVm::account_bytes` / `ensure_memory_available`
+(`crates/rsscript-vm/src/reg_vm/exec/storage_accounting.rs`). Whole-function
+native entry admits an armed `allocation_budget` or `live_memory_limit` only with
+a per-region read-only proof (`whole_function_memory_controls_supported` in
+`crates/rsscript-vm/src/reg_vm/tier.rs`); OSR additionally admits
+shape-preserving stores and `List.push`, whose helper charges the exact capacity
+delta into a transaction-local cell that is committed only with the heap
+transaction. Every other allocating or replacing helper and every native-call
+edge fails closed.
+
+### Cancellation
+
+**Termination reason equivalent; observation point is a polling approximation on
+both sides.** The interpreter polls `CancellationToken` on the first instruction
+and then every `CANCEL_POLL_INTERVAL` (1024) source steps. Generated code loads
+the same `AtomicBool` (`CancellationToken::as_atomic`) at every accounting
+segment entry and every loop backedge — at most every 512 source steps. Both are
+throttled polls, so the exact step at which cancellation is *observed* is not a
+deterministic fact on either engine and is not claimed to be equivalent; the
+reported reason, and the step count actually paid for by the region before the
+bail, are.
+
+### Deadline
+
+**Termination reason equivalent; observation point bounded by the segment.** The
+interpreter evaluates `MonotonicDeadline::is_expired` on every tick and in
+`charge_work`. Generated code calls the VM's `rss_jit_deadline_expired` helper
+(`crates/rsscript-vm/src/reg_vm/jit_native_a.rs`) at the same polling points as
+cancellation, before reserving the next segment, so a deopt resumes at the first
+unpaid source instruction and the interpreter reports the canonical typed
+failure. Deadline latency inside a native region is therefore bounded by one
+accounting segment rather than by one instruction.
+
+### Remaining gap list
+
+1. **Native-to-native call edges carry no meter.**
+   `NativeModule::compile_native_callee`
+   (`crates/rsscript-jit-cranelift/src/module.rs`) compiles with
+   `LimitChecks::default()` unconditionally, and the child entry neither charges
+   nor rolls back the shared limits cell. Needed: accept `RegionCompileControls`
+   there, thread the caller's limits cell through the child frame, and roll the
+   callee's charge back when the caller deopts at the call site. Until then
+   `RegVm::attempt_native`
+   (`crates/rsscript-vm/src/reg_vm/tier/attempt_native.rs`) declines to build
+   those edges under armed controls, so such functions lose native execution.
+2. **OSR origins carry no inline accounting.** `native_jit_origins`
+   (`crates/rsscript-vm/src/reg_vm/native/translate/jit_post.rs`) derives cost
+   from `source_ip` uniqueness, and the OSR pass chain in `RegVm::build_osr_plan`
+   (`crates/rsscript-vm/src/reg_vm/tier/osr_plan_builder.rs`) composes ip maps
+   across passes without a cost vector. Needed: thread `NativeInlineAccounting`
+   through that chain the way `NativePipelineState` already does for
+   whole-function translation. Until then an armed OSR region containing a call
+   declines.
+3. **Data-dependent key hashing cannot be charged from generated code.**
+   `map_key_from_value` bills `1 + len / 64` for a String/Bytes key and recurses
+   for a structural one. The region's step counter is a Cranelift register
+   variable, so a host helper cannot add to it. Needed: a limits-cell ABI a
+   helper can charge against. Until then `native_source_cost_is_static` declines
+   `MapInsertHandleKeyInt` and `SetInsertHandle` regions under armed controls.
+4. **Unarmed native execution reports zero steps.** With no step, cancellation,
+   or deadline control armed, `LimitChecks::default()` emits no accounting at
+   all, so `ExecutionUsage::steps_consumed` for a natively executed region is
+   `0` — no limit is bypassed, but the reported usage fact is not equivalent.
+   Needed: arm `step` unconditionally in `RegVm::attempt_native`'s
+   `compile_controls` (the limits cell already represents a missing ceiling as
+   `i64::MAX`) and re-measure the release gate; the cost is one add and one
+   compare per accounting segment and has not been measured.
+5. **Closure sinking drops the deleted instruction's step.**
+   `native_inline_leaf_calls_inner` emits nothing for `sinkable.dead_defs`, so a
+   sunk `MakeClosure` and its dead copy `Move`s own no source cost even though
+   the interpreter ticks them. Needed: attribute each empty span's cost to the
+   next emitted item, or decline when a span is empty and a control is armed.
+6. **Intrinsic and Provider call meters stay interpreter-owned.**
+   `RegVm::native_preemption_controls_supported`
+   (`crates/rsscript-vm/src/reg_vm/exec.rs`) refuses native dispatch whenever
+   `intrinsic_call_budget` or `provider_call_budget` is armed, because native
+   code does not route intrinsic dispatch through `charge_intrinsic_call`.
+7. **A custom `max_depth` refuses whole-function native entry.** The internal ABI
+   carries a host-stack cap, not the language's logical frame limit
+   (`RegVm::attempt_native`). OSR entry already forwards the configured limit.
+
+### Coverage this is verified by
+
+`crates/rsscript-sdk/tests/native_jit_differential.rs`:
+`native_step_accounting_matches_the_interpreter_under_an_armed_budget`,
+`native_step_accounting_matches_the_interpreter_for_osr_entered_loops`,
+`native_step_accounting_is_exact_when_a_guard_deopts`,
+`cancellation_and_deadline_stop_native_execution_with_the_interpreter_reason`,
+and `native_kernel_corpus_reports_the_interpreter_step_count_under_a_budget`,
+which replays the whole native kernel corpus under armed step budgets.
 
 ## Stable invariants
 
@@ -107,7 +269,9 @@ hidden in machine code.
   once, preserves Provider traces and scheduler semantics, then probes the next
   scalar continuation. Generated code never re-enters the interpreter or spans a
   suspension.
-- Limit-aware regions meter their one-to-one source instructions. A missing step
+- Limit-aware regions meter their source instructions, including the instructions
+  of a callee the leaf inliner spliced in and the constant key-hash unit the
+  interpreter bills on top of an `Int`-keyed map operation. A missing step
   ceiling is represented as `i64::MAX` in the call-owned limits cell; it disables
   rejection without disabling usage accounting when cancellation/deadline still
   require a shared source-step stream. Scheduler-owned async bookkeeping remains
@@ -222,8 +386,12 @@ function aliases, codegen internals, and module implementation types remain
 crate-private.
 
 Native rewrites carry
-`NativeInstructionOrigin { source_ip, resume_ip, source_cost }` in one owned
-pipeline state. JIT instruction indices are CFG identities only. A pass may
+`NativeInstructionOrigin { source_ip, resume_ip, source_cost, inlined }` in one
+owned pipeline state. `inlined` marks an item spliced in from a callee body: it
+owns real interpreter steps that have no distinct position in the caller's
+bytecode, so it is exempt from the one-cost-per-`source_ip` validation rule and
+its charge is rolled back rather than reported when a guard inside the region
+bails. JIT instruction indices are CFG identities only. A pass may
 temporarily return a local new-to-previous map, but only the pipeline state
 composes it; source identity, interpreter resume, and accounting ownership may not
 travel in unrelated parallel vectors. Expansion assigns one source cost to exactly
