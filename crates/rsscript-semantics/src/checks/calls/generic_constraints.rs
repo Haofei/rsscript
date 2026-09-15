@@ -511,7 +511,7 @@ pub(super) fn collect_type_param_substitutions_bounded(
     }
     let pattern = pattern.trim();
     let actual = actual.trim();
-    if actual == "?" {
+    if actual == rsscript_abi_model::WireType::UNRESOLVED {
         return true;
     }
     if let Some(pattern) = fresh_type_target(pattern) {

@@ -241,10 +241,22 @@ fn unknown_register() -> TypedRegisterFactV1 {
     }
 }
 
+/// Project a MIR type onto a typed fact.
+///
+/// An absent type and an *unresolved* one are the same evidence: none. MIR
+/// must intern a `TypeId` for every ABI position, so semantic inference's
+/// unresolved placeholder ([`WireType::UNRESOLVED`]) reaches MIR as a nominal
+/// type spelled `?` — the type of an unannotated closure parameter, which the
+/// checker never proves (§ local closures). Reporting that as
+/// `Known(Named "?")` would be a false fact: no consumer can resolve it, the
+/// bytecode verifier compares it against the concrete argument register and
+/// rejects the artifact, and a JIT that believed it would assume a record
+/// layout that does not exist. `Unknown` is the truthful projection.
 pub(super) fn fact_type(ty: Option<&WireType>) -> TypedFactTypeV1 {
-    ty.cloned()
-        .map(TypedFactTypeV1::Known)
-        .unwrap_or(TypedFactTypeV1::Unknown)
+    match ty {
+        Some(ty) if ty.is_resolved() => TypedFactTypeV1::Known(ty.clone()),
+        _ => TypedFactTypeV1::Unknown,
+    }
 }
 
 pub(super) fn ownership(mode: MirParameterMode) -> TypedValueOwnershipV1 {
@@ -256,7 +268,11 @@ pub(super) fn ownership(mode: MirParameterMode) -> TypedValueOwnershipV1 {
 }
 
 fn copy_type(ty: WireType) -> TypedFactTypeV1 {
-    TypedFactTypeV1::Known(ty)
+    if ty.is_resolved() {
+        TypedFactTypeV1::Known(ty)
+    } else {
+        TypedFactTypeV1::Unknown
+    }
 }
 
 fn int_type() -> WireType {
@@ -490,7 +506,7 @@ fn apply_instruction_facts(
             ..
         } => {
             let result = call_target_signature(mir, target)
-                .map(|signature| TypedFactTypeV1::Known(signature.result))
+                .map(|signature| copy_type(signature.result))
                 .unwrap_or(TypedFactTypeV1::Unknown);
             set_register_type(registers, conflicted, value(*destination), result, None);
         }
@@ -514,7 +530,7 @@ fn typed_call_site(
                 .unwrap_or_else(|| vec![WireType::Unit; arguments.len()]);
             let result = proven
                 .as_ref()
-                .map(|value| TypedFactTypeV1::Known(value.result.clone()))
+                .map(|value| copy_type(value.result.clone()))
                 .unwrap_or(TypedFactTypeV1::Unknown);
             let effects = proven
                 .as_ref()

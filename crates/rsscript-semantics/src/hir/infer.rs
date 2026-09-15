@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use rsscript_abi_model::WireType;
+
 use crate::{ResolvedType, TypeQualifiers, builtin_generic_type_params};
 
 use super::*;
@@ -190,7 +192,7 @@ pub fn infer_hir_expr_type(
             let item_type = items
                 .first()
                 .and_then(|item| infer_hir_expr_type(hir, item, value_types))
-                .unwrap_or_else(|| ResolvedType::named("?", []));
+                .unwrap_or_else(|| ResolvedType::named(WireType::UNRESOLVED, []));
             Some(ResolvedType::named("List", [item_type]))
         }
         // An unannotated closure's `Fn` shape is contextual: its parameter
@@ -482,7 +484,13 @@ pub(super) fn infer_arg_expr_type(
         Expr::Closure { params, body, .. } => infer_closure_return_type(hir, body, value_types)
             .map(|return_type| {
                 ResolvedType::function(
-                    (0..params.len()).map(|_| ResolvedType::named("?", [])),
+                    // An unannotated closure parameter has no proved type:
+                    // nothing in the surface syntax, the binding, or the call
+                    // contract names one. The reserved unresolved spelling
+                    // records that absence explicitly, so MIR lowering and the
+                    // typed executable facts report `Unknown` for the position
+                    // instead of inventing a nominal type.
+                    (0..params.len()).map(|_| ResolvedType::named(WireType::UNRESOLVED, [])),
                     (0..params.len()).map(|_| None),
                     Some(return_type),
                     TypeQualifiers {

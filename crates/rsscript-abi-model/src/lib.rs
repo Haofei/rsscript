@@ -769,6 +769,47 @@ pub enum WireQualifier {
 }
 
 impl WireType {
+    /// Reserved spelling for a type the checker could not resolve.
+    ///
+    /// Semantic inference marks an unproved type with this name (an
+    /// unannotated closure parameter, the element of an empty list literal).
+    /// It is not a user-writable identifier, so a `Named` type carrying it is
+    /// unambiguously a placeholder rather than a nominal type any consumer
+    /// could resolve. Backends must treat it as *absence of a proof*, never as
+    /// a type: it has no layout, no size, and no verifier meaning.
+    pub const UNRESOLVED: &'static str = "?";
+
+    /// Whether every position in this type names a resolved type.
+    ///
+    /// A type that fails this carries [`WireType::UNRESOLVED`] somewhere
+    /// inside it, so it proves nothing about the values it describes.
+    pub fn is_resolved(&self) -> bool {
+        match self {
+            Self::Named {
+                package,
+                name,
+                arguments,
+            } => {
+                !(package.is_none() && name == Self::UNRESOLVED)
+                    && arguments.iter().all(Self::is_resolved)
+            }
+            Self::List { element } => element.is_resolved(),
+            Self::Map { key, value } => key.is_resolved() && value.is_resolved(),
+            Self::Option { value } | Self::Qualified { value, .. } => value.is_resolved(),
+            Self::Result { ok, error } => ok.is_resolved() && error.is_resolved(),
+            Self::Tuple { elements } => elements.iter().all(Self::is_resolved),
+            Self::Unit
+            | Self::Bool
+            | Self::Int { .. }
+            | Self::Float { .. }
+            | Self::String
+            | Self::Char
+            | Self::Bytes
+            | Self::Resource { .. }
+            | Self::Handle { .. } => true,
+        }
+    }
+
     pub fn parse(source: &str) -> Self {
         let source = source.trim();
         for (prefix, qualifier) in [

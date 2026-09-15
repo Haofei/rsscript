@@ -928,6 +928,14 @@ fn checked_parameter_modes(signature: &checked::FunctionSig) -> Vec<MirParameter
 /// `MakeClosure` and `CallClosure`. This intentionally unwraps only the
 /// function node itself; each parameter and result still passes through the
 /// same structural wire conversion as ordinary MIR function signatures.
+///
+/// A `local`/`let` closure with no declared `Fn(...)` contract has no proved
+/// parameter types: semantic inference fills each parameter position with its
+/// unresolved placeholder, which `checked_type_to_wire` carries through as
+/// [`WireType::UNRESOLVED`]. MIR must still intern a `TypeId` per ABI position
+/// (arity and modes are real facts even when the types are not), so the
+/// placeholder is retained here and the *typed executable facts* drop it: a
+/// position spelled `?` is reported `Unknown`, never `Known`.
 fn checked_closure_signature(
     types: &mut TypeTable,
     ty: &rsscript_semantics::ResolvedType,
@@ -1185,6 +1193,11 @@ fn checked_type_to_wire(
                     ok: Box::new(ok.clone()),
                     error: Box::new(error.clone()),
                 },
+                // Semantic inference's unresolved marker is not a nominal
+                // type; it reaches the wire model as the reserved
+                // `WireType::UNRESOLVED` spelling so that backends can tell
+                // "no proof" from "a type named this", and it falls through
+                // here with no package qualifier.
                 _ => {
                     let (package, name) = name.rsplit_once('.').map_or_else(
                         || (None, name.clone()),
