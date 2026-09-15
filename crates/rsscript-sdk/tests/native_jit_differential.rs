@@ -1638,3 +1638,97 @@ fn a_custom_max_depth_no_longer_refuses_whole_function_native_entry() {
         "a non-default max_depth must no longer refuse whole-function or OSR dispatch"
     );
 }
+
+/// The limit profile `rss run --trusted-in-process` applies, mirrored from
+/// `RunnerLimitsV1::default()` through `runner::runner_limits`. `--native`
+/// selects an accelerator, not a trust level, so it now runs under exactly this
+/// profile instead of replacing it with
+/// `RunLimits::unbounded_for_trusted_host()`.
+fn default_runner_limit_profile() -> RunLimits {
+    RunLimits::bounded()
+        .with_max_depth(256)
+        .with_step_budget(10_000_000)
+        .with_allocation_budget(256 * 1024 * 1024)
+        .with_live_memory_limit(128 * 1024 * 1024)
+        .with_output_budget(1024 * 1024)
+        .with_intrinsic_call_budget(1_000_000)
+        .with_provider_call_budget(10_000)
+        .with_resource_limit(4096)
+        .with_deadline(MonotonicDeadline::after(Duration::from_millis(60_000)))
+}
+
+#[test]
+fn the_default_runner_limit_profile_still_admits_native_dispatch() {
+    // Every gate in this profile used to refuse: `intrinsic_call_budget` refused
+    // whole-function and OSR dispatch outright, and a `max_depth` of 256 refused
+    // whole-function entry because it differs from the VM's `DEFAULT_MAX_DEPTH`.
+    // That is why the CLI replaced the profile wholesale; with both gates closed
+    // it no longer has to.
+    for (name, source) in [
+        (
+            "runner-profile-scalar-loop.rss",
+            "fn main() -> Int { let mut i = 0; let mut total = 0; while i < 200000 { total = total + i * 3 - i / 2 + 7; i = i + 1 }; return total }",
+        ),
+        (
+            "runner-profile-repeated-entry.rss",
+            "fn hot(limit: Int) -> Int { let mut i = 0; let mut total = 0; while i < limit { total = total + i * 3 - i / 2 + 7; i = i + 1 }; return total } fn main() -> Int { let mut out = 0; let mut r = 0; while r < 50 { out = hot(limit: 200); r = r + 1 }; return out }",
+        ),
+        (
+            "runner-profile-intrinsic-loop.rss",
+            "fn main() -> Int { let text = \"rsscript\"; let mut i = 0; let mut total = 0; while i < 20000 { total = total + String.len(value: text); i = i + 1 }; return total }",
+        ),
+    ] {
+        let (interpreter, native) = accounting_pair(
+            name,
+            source,
+            default_runner_limit_profile(),
+            NativeJitOptions {
+                cost_model: NativeCostModel::Off,
+                collect_telemetry: true,
+                ..NativeJitOptions::default()
+            },
+        );
+        assert_eq!(
+            native.outcome(),
+            interpreter.outcome(),
+            "{name} must terminate like the interpreter under the default runner profile"
+        );
+        assert_eq!(
+            native.usage.steps_consumed, interpreter.usage.steps_consumed,
+            "{name} must report the interpreter's step count under the default runner profile"
+        );
+        assert_eq!(
+            native.usage.intrinsic_calls, interpreter.usage.intrinsic_calls,
+            "{name} must report the interpreter's intrinsic count under the default runner profile"
+        );
+        let telemetry = native_telemetry(&native);
+        assert!(
+            telemetry.native_calls + telemetry.osr_entries > 0,
+            "{name} must reach whole-function or OSR dispatch under the default runner profile"
+        );
+    }
+}
+
+#[test]
+fn the_default_runner_limit_profile_still_stops_an_over_budget_native_run() {
+    let source = "fn hot(limit: Int) -> Int { let mut i = 0; let mut total = 0; while i < limit { total = total + i * 3 - i / 2 + 7; i = i + 1 }; return total } fn main() -> Int { return hot(limit: 100000000) }";
+    let (interpreter, native) = accounting_pair(
+        "runner-profile-over-budget.rss",
+        source,
+        default_runner_limit_profile(),
+        NativeJitOptions {
+            cost_model: NativeCostModel::Off,
+            collect_telemetry: true,
+            ..NativeJitOptions::default()
+        },
+    );
+    assert_eq!(
+        native.termination_reason(),
+        TerminationReason::StepBudgetExceeded
+    );
+    assert_eq!(native.outcome(), interpreter.outcome());
+    assert_eq!(
+        native.usage.steps_consumed,
+        interpreter.usage.steps_consumed
+    );
+}
