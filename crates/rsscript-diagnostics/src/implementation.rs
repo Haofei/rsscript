@@ -14,6 +14,7 @@ pub mod code {
     pub const INVALID_TRY_OPERATOR: &str = "RS0013";
     pub const UNSUPPORTED_SYNTAX: &str = "RS0015";
     pub const LOOP_CONTROL_OUTSIDE_LOOP: &str = "RS0016";
+    pub const READ_BEFORE_ASSIGNMENT: &str = "RS0017";
     pub const NON_EXHAUSTIVE_MATCH: &str = "RS0021";
     pub const ASYNC_CALL_NOT_CONSUMED: &str = "RS0022";
     pub const FD_OUTSIDE_INTERNAL_BOUNDARY: &str = "RS0023";
@@ -499,6 +500,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::LOWER_NAME_CONFLICT,
         title: "lowered name conflict",
         explanation: "A `#lower_name(\"...\")` pin must be a valid Rust identifier and must not collide with any other declaration's lowered backend name, so generated symbols stay unique.",
+    },
+    DiagnosticExplanation {
+        code: code::READ_BEFORE_ASSIGNMENT,
+        title: "binding read before it is assigned",
+        explanation: "A `let` declared with a type but no initializer holds no value until something assigns it. Reading it first would lower to uninitialized memory, so the checker rejects it. The analysis is deliberately conservative: it reports a read only when *no* earlier statement assigns the binding at all, so a binding assigned on just one arm of an `if`, or only inside a loop body, is treated as assigned. Closure bodies are not analysed, because a closure runs at a time the checker does not model.",
     },
     DiagnosticExplanation {
         code: code::NON_EXHAUSTIVE_MATCH,

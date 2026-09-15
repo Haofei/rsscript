@@ -2931,10 +2931,32 @@ fn main() -> Unit {
 
 ### 6.12 Definite assignment
 
-There is **no definite-assignment analysis**. A `let` with a type annotation and
-no initializer is accepted, and reading the binding afterwards is accepted:
+A `let` with a type annotation and no initializer is a **deferred declaration**:
+the binding exists but holds no value. Reading it before anything assigns it is
+`RS0017` (`control_flow.rs::definite_assignment_diagnostics`).
 
-**Accepted** (but see §12 — this is a gap, not an intended feature)
+The analysis is deliberately weaker than full definite assignment, and the exact
+rule is:
+
+* The body is walked in source order. Within one statement, the reads in its
+  expressions are seen before that statement's own assignment takes effect — so
+  `x = x + 1` on a deferred `x` is a read of an unassigned binding.
+* **Any** assignment to the name earlier in that walk marks it assigned from
+  then on, including an assignment inside one arm of an `if`, one `match` arm,
+  or a loop body that may run zero times. The analysis is therefore *optimistic
+  about paths*.
+* A later `let` of the same name with an initializer also marks it assigned.
+* Closure bodies are not walked: a closure runs at a time the check does not
+  model.
+* `let … else` bindings are not deferred declarations. They lower to a `let`
+  with no value in HIR, so the deferred set is read off the *syntax* tree to
+  keep the two apart exactly.
+
+The consequence is that every read `RS0017` reports is unassigned on *every*
+path: branch merging produces no false positives, at the cost of missing reads
+that are unassigned on only some paths.
+
+**Rejected — `RS0017`**
 
 ```rsscript
 fn main() -> Unit {
@@ -2944,8 +2966,21 @@ fn main() -> Unit {
 }
 ```
 
-Likewise `break` and `continue` outside any loop are accepted by the checker.
-Both are listed in §12.
+**Accepted** — one assigning path is enough
+
+```rsscript
+fn main() -> Unit {
+    let mut x: Int
+    let c = true
+    if c {
+        x = 1
+    } else {
+        x = 2
+    }
+    Output.write(message: Int.to_string(value: x))
+    return Unit
+}
+```
 
 ---
 
@@ -4058,6 +4093,7 @@ explanations).
 | --- | --- | --- |
 | `RS0013` | invalid try operator | §6.10 |
 | `RS0016` | `break`/`continue` outside a loop | §6.3 |
+| `RS0017` | binding read before it is assigned | §6.12 |
 | `RS0021` | non-exhaustive match | §6.7 |
 | `RS0037` | variant pattern arity mismatch | §6.4 |
 | `RS0209` | control-flow type mismatch (condition, iterable, scrutinee, literal pattern, variant family, match-arm type) | §6.2, §6.3, §6.6, §6.8 |
@@ -4148,7 +4184,7 @@ fixture or by an example in this document):
 This is a documentation gap in the generated catalog, not a language gap (§12).
 
 Note also that the code space has holes: `RS0004`, `RS0006`, `RS0008`–`RS0012`,
-`RS0014`, `RS0017`–`RS0020`, `RS0703`, and `RS0705` are not defined.
+`RS0014`, `RS0018`–`RS0020`, `RS0703`, and `RS0705` are not defined.
 
 ---
 
@@ -4183,8 +4219,6 @@ and finding no enforcing code.
 
 These are findings for the maintainer, not features.
 
-* **No definite-assignment analysis.** `let x: Int` with no initializer,
-  followed by a read of `x`, is accepted (§6.12).
 * **`use` of a non-existent module is silent.** An unresolvable import simply
   leaves the reference unmangled; only an actual use of an unresolvable *name*
   produces `RS0026`/`RS0206` (§1.4).

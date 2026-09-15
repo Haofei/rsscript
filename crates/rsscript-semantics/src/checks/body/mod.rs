@@ -114,6 +114,12 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
             analyzer
                 .diagnostics
                 .extend(rsscript_semantics::loop_control_flow_diagnostics(block));
+            analyzer
+                .diagnostics
+                .extend(rsscript_semantics::definite_assignment_diagnostics(
+                    &function.body,
+                    block,
+                ));
             check_block(
                 analyzer,
                 &local_analysis,
