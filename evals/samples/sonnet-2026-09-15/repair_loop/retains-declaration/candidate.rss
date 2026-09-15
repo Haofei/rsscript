@@ -1,0 +1,29 @@
+class EventLog {
+    entries: List<String>,
+    tags: List<String>,
+    count: Int
+}
+
+fn EventLog.new() -> EventLog {
+    return EventLog(entries: List.new(), tags: List.new(), count: 0)
+}
+
+fn EventLog.record(log: mut EventLog, entry: String, tag: String) -> Unit
+    retains(entry)
+    retains(tag)
+{
+    List.push(list: mut log.entries, value: entry)
+    List.push(list: mut log.tags, value: tag)
+    log.count = log.count + 1
+}
+
+fn EventLog.size(log: read EventLog) -> Int {
+    return log.count
+}
+
+fn main() -> Unit {
+    let mut log: EventLog = EventLog.new()
+    EventLog.record(log: mut log, entry: "startup", tag: "info")
+    EventLog.record(log: mut log, entry: "shutdown", tag: "info")
+    Console.write(value: EventLog.size(log: log))
+}

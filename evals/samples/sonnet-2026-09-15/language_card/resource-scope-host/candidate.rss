@@ -1,0 +1,37 @@
+resource ConfigStore
+
+pub fn ConfigStore.open(path: read String) -> Result<ConfigStore, String>
+
+pub fn ConfigStore.read_key(store: mut ConfigStore, key: read String) -> Result<fresh String, String>
+
+pub fn ConfigStore.write_key(
+    store: mut ConfigStore,
+    key: read String,
+    value: read String,
+) -> Result<Unit, String>
+
+fn copy_setting(path: read String, key: read String, target: read String) -> Result<Unit, String> {
+    with ConfigStore.open(path: path) {
+        Ok(store) => {
+            match ConfigStore.read_key(store: mut store, key: key) {
+                Ok(value) => {
+                    return ConfigStore.write_key(store: mut store, key: target, value: value)
+                }
+                Err(e) => { return Err(e) }
+            }
+        }
+        Err(e) => { return Err(e) }
+    }
+}
+
+fn main() -> Unit {
+    match copy_setting(path: "config.toml", key: "source_key", target: "target_key") {
+        Ok(_) => {
+            print(message: "copied setting successfully")
+        }
+        Err(e) => {
+            print(message: "failed to copy setting")
+            print(message: e)
+        }
+    }
+}

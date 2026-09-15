@@ -1,0 +1,21 @@
+fn sum_quantities(text: read String) -> Result<Int, JsonError> {
+    let document: JsonValue = Json.parse(text: text)?
+    let items: JsonValue = Json.field(value: document, name: "items")?
+    let elements: List<JsonValue> = Json.array(items: items)
+    let mut total: Int = 0
+    for element in elements {
+        let quantity_value: JsonValue = Json.field(value: element, name: "quantity")?
+        let quantity: Int = Json.as_int(value: quantity_value)?
+        total = total + quantity
+    }
+    return Ok(total)
+}
+
+fn main() -> Unit {
+    let text: String = "{\"items\": [{\"quantity\": 3}, {\"quantity\": 5}]}"
+    let result: Result<Int, JsonError> = sum_quantities(text: text)
+    match result {
+        Ok(total) => { Output.write(message: String.from_int(value: total)) }
+        Err(error) => { Output.write(message: error.message) }
+    }
+}

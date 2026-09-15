@@ -1,0 +1,34 @@
+async fn main() -> Unit {
+    let mut winner: String = ""
+    let mut cancel: CancellationSource = CancellationSource()
+
+    let channel_a: Channel<Int> = Channel.bounded(capacity: 1)
+    let sender_a: Sender<Int> = Channel.sender(channel: channel_a)
+    let receiver_a: Receiver<Int> = Channel.receiver(channel: mut channel_a).unwrap()
+
+    let channel_b: Channel<Int> = Channel.bounded(capacity: 1)
+    let sender_b: Sender<Int> = Channel.sender(channel: channel_b)
+    let receiver_b: Receiver<Int> = Channel.receiver(channel: mut channel_b).unwrap()
+
+    let payload_a: Int = 1
+    let payload_b: Int = 2
+
+    task_group {
+        async let feed_a = Sender.send(sender: sender_a, value: take payload_a)
+        async let feed_b = Sender.send(sender: sender_b, value: take payload_b)
+
+        select {
+            await Receiver.recv(receiver: mut receiver_a) => {
+                winner = "left"
+                CancellationSource.cancel(source: mut cancel)
+            }
+            await Receiver.recv(receiver: mut receiver_b) => {
+                winner = "right"
+                CancellationSource.cancel(source: mut cancel)
+            }
+        }
+
+        await feed_a
+        await feed_b
+    }
+}

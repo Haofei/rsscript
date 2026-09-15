@@ -1,0 +1,23 @@
+struct Alert {
+    level: String,
+    message: String,
+}
+
+fn select_alerts(alerts: read List<Alert>, keep: noescape Fn(Alert) -> Bool) -> fresh List<Alert> {
+    return filter(alerts, keep);
+}
+
+fn urgent_only(alerts: read List<Alert>) -> fresh List<Alert> {
+    return select_alerts(alerts, |a: Alert| -> Bool {
+        return a.level == "critical";
+    });
+}
+
+fn main() -> Unit {
+    let alerts: fresh List<Alert> = List::new();
+    alerts.push(Alert { level: "critical", message: "Server down" });
+    alerts.push(Alert { level: "info", message: "All good" });
+
+    let urgent: fresh List<Alert> = urgent_only(alerts);
+    write(urgent.len());
+}

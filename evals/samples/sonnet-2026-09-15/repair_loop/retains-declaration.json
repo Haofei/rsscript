@@ -1,0 +1,12 @@
+{
+  "schema": "rsscript.eval.candidate.v1",
+  "task_id": "retains-declaration",
+  "source": "retains-declaration/candidate.rss",
+  "mode": "repair_loop",
+  "model": "sonnet",
+  "model_version": "unknown",
+  "temperature": null,
+  "attempt": 1,
+  "generation_duration_ms": 204879,
+  "repair_turns": 2
+}

@@ -1,0 +1,25 @@
+struct Report {
+    title: String
+    lines: List<String>
+}
+
+pub fn ReportSink.emit(report: take Report) -> Unit
+
+fn build_report(title: take String) -> fresh Report {
+    Report { title: title, lines: [] }
+}
+
+fn add_line(report: mut Report, line: read String) -> Unit {
+    report.lines.push(line.clone())
+}
+
+fn finish_report(report: take Report) -> Unit {
+    ReportSink.emit(take report)
+}
+
+fn main() -> Unit {
+    let mut report = build_report(take "Quarterly Status");
+    add_line(mut report, "Revenue is up 12%");
+    add_line(mut report, "Headcount grew by 3");
+    finish_report(take report);
+}

@@ -1,0 +1,35 @@
+fn attempt_push(id: read String, amount: Int, attempts_left: Int, attempt_number: Int) -> Result<Int, String> {
+    let result: Result<Int, SyncError> = Sync.push(id: id, amount: amount)
+    match result {
+        Ok(value) => {
+            Metrics.record(name: "push_attempts", value: attempt_number)
+            return Ok(value)
+        },
+        Err(error) => {
+            let message: String = SyncError.message(error: error)
+            if !Sync.is_retryable(error: error) {
+                return Err(message)
+            }
+            if attempts_left <= 1 {
+                return Err(message)
+            }
+            return attempt_push(id: id, amount: amount, attempts_left: attempts_left - 1, attempt_number: attempt_number + 1)
+        },
+    }
+}
+
+fn push_with_retry(id: read String, amount: Int, max_attempts: Int) -> Result<Int, String> {
+    return attempt_push(id: id, amount: amount, attempts_left: max_attempts, attempt_number: 1)
+}
+
+fn main() -> Unit {
+    let result: Result<Int, String> = push_with_retry(id: "sync-1", amount: 100, max_attempts: 3)
+    match result {
+        Ok(value) => {
+            Metrics.record(name: "push_with_retry_result", value: value)
+        },
+        Err(message) => {
+            Metrics.record(name: "push_with_retry_failed", value: -1)
+        },
+    }
+}

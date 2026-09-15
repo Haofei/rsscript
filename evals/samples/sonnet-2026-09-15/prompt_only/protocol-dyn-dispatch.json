@@ -1,0 +1,12 @@
+{
+  "schema": "rsscript.eval.candidate.v1",
+  "task_id": "protocol-dyn-dispatch",
+  "source": "protocol-dyn-dispatch/candidate.rss",
+  "mode": "prompt_only",
+  "model": "sonnet",
+  "model_version": "unknown",
+  "temperature": null,
+  "attempt": 1,
+  "generation_duration_ms": 16706,
+  "repair_turns": 0
+}

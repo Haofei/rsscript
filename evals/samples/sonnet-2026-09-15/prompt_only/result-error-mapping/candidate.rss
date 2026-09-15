@@ -1,0 +1,35 @@
+sum PipelineError {
+    BadInput(detail: String),
+    Upstream(detail: String),
+}
+
+fn PipelineError.detail(error: read PipelineError) -> fresh String {
+    match error {
+        BadInput(detail) => "BadInput: " + detail,
+        Upstream(detail) => "Upstream: " + detail,
+    }
+}
+
+fn parse_amount(raw: read String) -> Result<Int, PipelineError> {
+    match Int.parse(text: raw) {
+        Ok(value) => Ok(value),
+        Err(message) => Err(BadInput(detail: "invalid integer: " + raw)),
+    }
+}
+
+fn push_amount(id: read String, raw: read String) -> Result<Int, PipelineError> {
+    match parse_amount(raw: raw) {
+        Err(error) => Err(error),
+        Ok(amount) => match Sync.push(id: id, amount: amount) {
+            Ok(count) => Ok(count),
+            Err(sync_error) => Err(Upstream(detail: SyncError.message(error: sync_error))),
+        },
+    }
+}
+
+fn main() -> Unit {
+    match push_amount(id: "acct-1", raw: "42") {
+        Ok(count) => print(text: "accepted: " + Int.to_string(value: count)),
+        Err(error) => print(text: PipelineError.detail(error: error)),
+    }
+}

@@ -1,0 +1,12 @@
+{
+  "schema": "rsscript.eval.candidate.v1",
+  "task_id": "option-defaults-chain",
+  "source": "option-defaults-chain/candidate.rss",
+  "mode": "prompt_only",
+  "model": "sonnet",
+  "model_version": "unknown",
+  "temperature": null,
+  "attempt": 1,
+  "generation_duration_ms": 21146,
+  "repair_turns": 0
+}

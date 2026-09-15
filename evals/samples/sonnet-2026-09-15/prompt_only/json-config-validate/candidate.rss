@@ -1,0 +1,61 @@
+struct ServiceConfig {
+    name: String,
+    port: Int,
+    enabled: Bool,
+}
+
+fn load_config(text: String) -> Result<fresh ServiceConfig, String> {
+    let json = match Json.parse(text) {
+        Ok(value) => value,
+        Err(err) => match err {
+            JsonError.InvalidSyntax(message) => return Err("invalid json syntax: " + message),
+            JsonError.UnexpectedType(message) => return Err("unexpected json type: " + message),
+            JsonError.MissingField(field) => return Err("missing json field: " + field),
+            JsonError.UnexpectedEnd => return Err("unexpected end of json input"),
+        },
+    };
+
+    let name = match json.get_string("name") {
+        Ok(value) => value,
+        Err(err) => match err {
+            JsonError.InvalidSyntax(message) => return Err("invalid json syntax reading name: " + message),
+            JsonError.UnexpectedType(message) => return Err("field 'name' has wrong type: " + message),
+            JsonError.MissingField(field) => return Err("missing required field: " + field),
+            JsonError.UnexpectedEnd => return Err("unexpected end of json input while reading name"),
+        },
+    };
+
+    let port = match json.get_int("port") {
+        Ok(value) => value,
+        Err(err) => match err {
+            JsonError.InvalidSyntax(message) => return Err("invalid json syntax reading port: " + message),
+            JsonError.UnexpectedType(message) => return Err("field 'port' has wrong type: " + message),
+            JsonError.MissingField(field) => return Err("missing required field: " + field),
+            JsonError.UnexpectedEnd => return Err("unexpected end of json input while reading port"),
+        },
+    };
+
+    if port < 1 || port > 65535 {
+        return Err("port out of range: must be between 1 and 65535");
+    }
+
+    let enabled = match json.get_bool("enabled") {
+        Ok(value) => value,
+        Err(err) => match err {
+            JsonError.InvalidSyntax(message) => return Err("invalid json syntax reading enabled: " + message),
+            JsonError.UnexpectedType(message) => return Err("field 'enabled' has wrong type: " + message),
+            JsonError.MissingField(field) => return Err("missing required field: " + field),
+            JsonError.UnexpectedEnd => return Err("unexpected end of json input while reading enabled"),
+        },
+    };
+
+    Ok(fresh ServiceConfig { name: name, port: port, enabled: enabled })
+}
+
+fn main() -> Unit {
+    let text = "{\"name\": \"auth-service\", \"port\": 8080, \"enabled\": true}";
+    match load_config(text) {
+        Ok(config) => Output.write(config.name),
+        Err(message) => Output.write(message),
+    }
+}

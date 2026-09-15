@@ -1,0 +1,31 @@
+sum JobState {
+    Queued,
+    Running(worker: String),
+    Done(code: Int),
+    Failed(reason: String),
+}
+
+fn advance(state: read JobState, worker: read String) -> fresh JobState {
+    match state {
+        JobState::Queued => JobState::Running(worker: worker),
+        JobState::Running(worker: _) => JobState::Done(code: 0),
+        JobState::Done(code: c) => JobState::Done(code: c),
+        JobState::Failed(reason: r) => JobState::Failed(reason: r),
+    }
+}
+
+fn describe(state: read JobState) -> fresh String {
+    match state {
+        JobState::Queued => "queued",
+        JobState::Running(worker: w) => "running on ${w}",
+        JobState::Done(code: c) => "done with code ${c}",
+        JobState::Failed(reason: r) => "failed: ${r}",
+    }
+}
+
+fn main() -> Unit {
+    let job0 = JobState::Queued;
+    let job1 = advance(job0, "worker-1");
+    let job2 = advance(job1, "worker-1");
+    write(describe(job2));
+}

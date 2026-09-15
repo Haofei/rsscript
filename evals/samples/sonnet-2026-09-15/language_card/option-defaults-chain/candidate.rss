@@ -1,0 +1,50 @@
+struct Settings {
+    region: String,
+    retries: Int,
+}
+
+fn lookup(keys: read List<String>, values: read List<String>, key: read String) -> Option<String> {
+    let mut index: Int = 0
+    let length: Int = List.length(list: keys)
+    while index < length {
+        match List.get(list: keys, index: index) {
+            Some(candidate) => {
+                if candidate == key {
+                    return List.get(list: values, index: index)
+                }
+            }
+            None => {}
+        }
+        index = index + 1
+    }
+    return None
+}
+
+fn settings_from(keys: read List<String>, values: read List<String>) -> fresh Settings {
+    let region: String = match lookup(keys: keys, values: values, key: "region") {
+        Some(value) => { value }
+        None => { "us-east" }
+    }
+
+    let retries: Int = match lookup(keys: keys, values: values, key: "retries") {
+        Some(text) => {
+            match Int.parse(text: text) {
+                Some(parsed) => { parsed }
+                None => { 3 }
+            }
+        }
+        None => { 3 }
+    }
+
+    return Settings(region: region, retries: retries)
+}
+
+fn main() -> Unit {
+    let keys: List<String> = ["region", "retries"]
+    let values: List<String> = ["eu-west", "5"]
+    let settings: Settings = settings_from(keys: keys, values: values)
+
+    let mut output: local Buffer = Buffer.create()
+    Buffer.write(target: mut output, text: settings.region)
+    Buffer.write(target: mut output, text: Int.to_string(value: settings.retries))
+}

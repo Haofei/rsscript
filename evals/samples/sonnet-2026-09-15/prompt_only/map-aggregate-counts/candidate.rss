@@ -1,0 +1,37 @@
+fn count_by_level(lines: read List<String>) -> fresh Map<String, Int> {
+    let mut counts: Map<String, Int> = Map.new();
+    for line in lines {
+        let idx: Int = line.index_of(" ");
+        let level: String = if idx >= 0 { line.slice(0, idx) } else { "unknown" };
+        if counts.contains(level) {
+            let current: Int = counts.get(level);
+            mut counts.insert(level, current + 1);
+        } else {
+            mut counts.insert(level, 1);
+        }
+    }
+    return counts;
+}
+
+fn render_counts(counts: read Map<String, Int>) -> fresh String {
+    let mut result: String = "";
+    let mut first: Bool = true;
+    for key in counts.keys() {
+        let value: Int = counts.get(key);
+        let entry: String = key + ":" + value.to_string();
+        if first {
+            result = entry;
+            first = false;
+        } else {
+            result = result + "," + entry;
+        }
+    }
+    return result;
+}
+
+fn main() -> Unit {
+    let lines: List<String> = List.of("INFO started", "ERROR failed", "INFO done");
+    let counts: Map<String, Int> = count_by_level(lines);
+    let rendered: String = render_counts(counts);
+    write(rendered);
+}

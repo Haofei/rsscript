@@ -1,0 +1,12 @@
+async fn main() -> Result<Unit, String> {
+    let mut source = CancellationSource.new()
+    task_group {
+        CancellationSource.cancel(source: mut source)
+        if CancellationSource.is_cancelled(source: source) {
+            return Ok(Unit)
+        }
+        async let pending = EvalApi.fetch(key: "work")
+        let ignored = await pending?
+    }
+    return Ok(Unit)
+}
