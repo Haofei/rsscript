@@ -12,6 +12,12 @@ pub(super) struct NativeInstructionOrigin {
     /// Interpreter source-step cost owned by this native item. Expansion assigns
     /// the cost to exactly one result; fusion must preserve the summed cost.
     pub(super) source_cost: u32,
+    /// Interpreter intrinsic dispatches owned by this native item. The
+    /// interpreter charges one per executed `CallIntrinsic`/`CallTypedIntrinsic`
+    /// (`RegVm::charge_intrinsic_call`), so this is derived exactly like
+    /// `source_cost`: the item that owns a source instruction's step also owns its
+    /// intrinsic dispatch.
+    pub(super) intrinsic_cost: u32,
     /// This item came from an inlined callee region. Its `resume_ip` is the
     /// caller's call instruction, so a deopt re-executes the whole call and the
     /// region's charge must be rolled back instead of reported.
@@ -25,6 +31,7 @@ impl NativeInstructionOrigin {
             source_ip: u32::try_from(self.source_ip).ok()?,
             resume_ip: u32::try_from(self.resume_ip).ok()?,
             source_cost: self.source_cost,
+            intrinsic_cost: self.intrinsic_cost,
             inlined: self.inlined,
         })
     }
@@ -33,9 +40,15 @@ impl NativeInstructionOrigin {
 #[cfg(feature = "native-jit")]
 pub(super) fn native_jit_origins(
     instructions: &[vm_jit::JitInstr],
+    region_code: &[RegInstr],
     source_ip_map: Option<&[usize]>,
     source_instruction_count: usize,
 ) -> Option<Vec<vm_jit::JitInstructionOrigin>> {
+    // The intrinsic meter reads the register instruction each native item lowers,
+    // so the two streams must be index-aligned. Fail closed rather than guess.
+    if region_code.len() != instructions.len() {
+        return None;
+    }
     let mut charged_sources = std::collections::HashSet::new();
     instructions
         .iter()
@@ -52,11 +65,15 @@ pub(super) fn native_jit_origins(
                     | vm_jit::JitInstr::OsrExit
                     | vm_jit::JitInstr::RegionExit { .. }
             );
+            let source_cost = u32::from(
+                executes_source && valid_source.is_some() && charged_sources.insert(source_ip),
+            );
             Some(vm_jit::JitInstructionOrigin {
                 source_ip: u32::try_from(source_ip).ok()?,
                 resume_ip: u32::try_from(source_ip).ok()?,
-                source_cost: u32::from(
-                    executes_source && valid_source.is_some() && charged_sources.insert(source_ip),
+                source_cost,
+                intrinsic_cost: u32::from(
+                    source_cost != 0 && dispatches_an_intrinsic(&region_code[ip]),
                 ),
                 // OSR/continuation regions do not yet carry inline accounting; see
                 // the accounting-parity status in docs/spec/native-jit-contract.md.
@@ -64,6 +81,23 @@ pub(super) fn native_jit_origins(
             })
         })
         .collect()
+}
+
+/// Whether the interpreter charges one intrinsic dispatch for this register
+/// instruction.
+///
+/// `RegVm::charge_intrinsic_call` runs at the entry of both intrinsic dispatch
+/// functions, which `RegInstr::CallIntrinsic` and `RegInstr::CallTypedIntrinsic`
+/// are the only two instructions to reach. Generated code runs the same
+/// intrinsics as host helpers *and* as direct lowerings (`ListLenDirect`, the
+/// direct flat-list accesses), so the charge is owned per source instruction
+/// rather than by a helper-side hook.
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn dispatches_an_intrinsic(instruction: &RegInstr) -> bool {
+    matches!(
+        instruction,
+        RegInstr::CallIntrinsic { .. } | RegInstr::CallTypedIntrinsic { .. }
+    )
 }
 
 /// Whether one native item hashes a map/set key whose interpreter work is the
@@ -113,12 +147,27 @@ fn hashes_a_data_dependent_key(instruction: &vm_jit::JitInstr) -> bool {
 ///
 /// Without this a natively executed map loop under-reports exactly one source
 /// step per insert, get, or membership test.
+///
+/// The interpreter bills this through `RegVm::charge_work`, which returns without
+/// charging anything when no step budget, cancellation token, or deadline is
+/// armed. Native accounting is unconditional, so the charge must be applied on
+/// exactly the same condition or an unarmed native map loop *over*-reports by one
+/// step per hashing instruction. That condition is derivable from the region's
+/// `RegionCompileControls` (`step_ceiling || cancel || deadline`), which is part
+/// of the compiled version key, so the two compiled variants never alias.
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn charge_native_key_hash_work(
-    code: &[vm_jit::JitInstr],
-    origins: &mut [vm_jit::JitInstructionOrigin],
+    jit_fn: &mut vm_jit::JitFunction,
+    interpreter_charges_hidden_work: bool,
 ) {
-    for (instruction, origin) in code.iter().zip(origins.iter_mut()) {
+    if !interpreter_charges_hidden_work {
+        return;
+    }
+    for (instruction, origin) in jit_fn
+        .code
+        .iter()
+        .zip(jit_fn.instruction_origins.iter_mut())
+    {
         // A zero-cost item is a duplicate of an already-charged source
         // instruction; the charge belongs to the item that owns the source step.
         if hashes_a_constant_cost_key(instruction) && origin.source_cost != 0 {
@@ -175,21 +224,42 @@ impl NativePipelineState {
             return None;
         }
         let mut charged = std::collections::HashSet::new();
-        let origins = transformed_to_bytecode
+        let origins: Vec<NativeInstructionOrigin> = transformed_to_bytecode
             .into_iter()
             .enumerate()
-            .map(|(transformed, ip)| NativeInstructionOrigin {
-                source_ip: ip,
-                resume_ip: ip,
-                source_cost: match &accounting {
+            .map(|(transformed, ip)| {
+                let source_cost = match &accounting {
                     Some(accounting) => accounting.source_cost[transformed],
                     None => u32::from(charged.insert(ip)),
-                },
-                inlined: accounting
-                    .as_ref()
-                    .is_some_and(|accounting| accounting.inlined[transformed]),
+                };
+                NativeInstructionOrigin {
+                    source_ip: ip,
+                    resume_ip: ip,
+                    source_cost,
+                    // The item that owns a source instruction's step also owns its
+                    // intrinsic dispatch. A spliced callee instruction owns its own
+                    // step, so an intrinsic call inside an inlined body is charged
+                    // too.
+                    intrinsic_cost: u32::from(
+                        source_cost != 0 && dispatches_an_intrinsic(&code[transformed]),
+                    ),
+                    inlined: accounting
+                        .as_ref()
+                        .is_some_and(|accounting| accounting.inlined[transformed]),
+                }
             })
             .collect();
+        // Fail closed: an intrinsic dispatch that owns no source step would run
+        // natively without being charged against `intrinsic_call_budget`.
+        if code
+            .iter()
+            .zip(origins.iter())
+            .any(|(instruction, origin)| {
+                dispatches_an_intrinsic(instruction) && origin.intrinsic_cost == 0
+            })
+        {
+            return None;
+        }
         Some(Self {
             code,
             n_regs,
@@ -209,6 +279,9 @@ impl NativePipelineState {
         let previous_cost = self.origins.iter().try_fold(0_u64, |sum, origin| {
             sum.checked_add(u64::from(origin.source_cost))
         })?;
+        let previous_intrinsic_cost = self.origins.iter().try_fold(0_u64, |sum, origin| {
+            sum.checked_add(u64::from(origin.intrinsic_cost))
+        })?;
         let mut charged_previous = std::collections::HashSet::new();
         let origins = next_to_previous
             .into_iter()
@@ -216,6 +289,7 @@ impl NativePipelineState {
                 let mut origin = self.origins.get(previous).copied()?;
                 if !charged_previous.insert(previous) {
                     origin.source_cost = 0;
+                    origin.intrinsic_cost = 0;
                 }
                 Some(origin)
             })
@@ -223,7 +297,10 @@ impl NativePipelineState {
         let next_cost = origins.iter().try_fold(0_u64, |sum, origin| {
             sum.checked_add(u64::from(origin.source_cost))
         })?;
-        if next_cost != previous_cost {
+        let next_intrinsic_cost = origins.iter().try_fold(0_u64, |sum, origin| {
+            sum.checked_add(u64::from(origin.intrinsic_cost))
+        })?;
+        if next_cost != previous_cost || next_intrinsic_cost != previous_intrinsic_cost {
             // A rewrite may expand one source item, but silently dropping source
             // accounting would make bounded native execution disagree with the VM.
             return None;

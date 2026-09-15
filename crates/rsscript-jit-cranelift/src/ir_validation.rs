@@ -215,10 +215,25 @@ pub(crate) fn validate_with_limits(
                     .checked_add(u64::from(origin.source_cost))
                     .ok_or_else(|| JitError::invalid_ir("source-step cost overflow"))?;
             }
+            // An intrinsic dispatch is billed by the same source instruction that
+            // owns the source step, so an item that owns no source step may not own
+            // an intrinsic call either. This keeps the two meters from drifting
+            // apart across a rewrite.
+            if origin.intrinsic_cost != 0 && origin.source_cost == 0 {
+                return Err(JitError::invalid_ir(format!(
+                    "instruction origin {jit_ip} owns an intrinsic call without owning a source step"
+                )));
+            }
+            if origin.intrinsic_cost > 1 {
+                return Err(JitError::invalid_ir(format!(
+                    "instruction origin {jit_ip} owns {} intrinsic calls; one source instruction dispatches at most one",
+                    origin.intrinsic_cost
+                )));
+            }
             if matches!(
                 program.code[jit_ip],
                 JitInstr::RegionExit { .. } | JitInstr::OsrExit | JitInstr::Bail
-            ) && origin.source_cost != 0
+            ) && (origin.source_cost != 0 || origin.intrinsic_cost != 0)
             {
                 return Err(JitError::invalid_ir(format!(
                     "non-executing boundary instruction {jit_ip} must have zero source cost"

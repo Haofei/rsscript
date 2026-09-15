@@ -734,6 +734,11 @@ impl RegVm {
         // budget is actually armed.
         let emit_step = true;
         let emit_step_ceiling = self.limits.step_budget.is_some();
+        // The intrinsic-call meter is likewise unconditional: `intrinsic_calls` is a
+        // reported usage fact, so a natively executed loop must charge it whether or
+        // not a ceiling is armed.
+        let emit_intrinsic = true;
+        let emit_intrinsic_ceiling = self.limits.intrinsic_call_budget.is_some();
         let emit_cancel = self.limits.cancel.is_some();
         let emit_deadline = self.limits.deadline.is_some();
         let allocation_armed = self.limits.allocation_budget.is_some();
@@ -861,6 +866,8 @@ impl RegVm {
             profile: profile_owned.as_ref(),
             emit_step,
             emit_step_ceiling,
+            emit_intrinsic,
+            emit_intrinsic_ceiling,
             emit_cancel,
             emit_deadline,
             memory_armed,
@@ -1191,7 +1198,7 @@ impl RegVm {
         // were fixed at the top of this call from `self.limits`; the compiled variant
         // matches (same eval-constant limits), so a non-null cell is required exactly
         // when armed. `steps` flows in here and back out below into `self.steps`.
-        let armed = emit_step || emit_cancel || emit_deadline;
+        let armed = emit_step || emit_cancel || emit_deadline || emit_intrinsic;
         // native limit accounting mem: seed the mem cell before EVERY OSR call (with
         // an optional full-width budget). The `ListPush*` helper charges flat-capacity growth against it; on a
         // clean exit we read `allocated_bytes` back to commit, on a bail the rollback+rerun
@@ -1223,12 +1230,18 @@ impl RegVm {
         // loop from its header and charges again everything the native body already
         // paid for. Such an exit must therefore report the pre-entry count.
         let steps_before_native = self.steps;
+        let intrinsic_calls_before_native = self.intrinsic_calls;
         let initial_steps = i64::try_from(self.steps).unwrap_or(i64::MAX);
         let step_budget = self
             .limits
             .step_budget
             .and_then(|budget| i64::try_from(budget).ok());
-        let (result, native_steps) = if armed {
+        let initial_intrinsic_calls = i64::try_from(self.intrinsic_calls).unwrap_or(i64::MAX);
+        let intrinsic_budget = self
+            .limits
+            .intrinsic_call_budget
+            .and_then(|budget| i64::try_from(budget).ok());
+        let (result, native_usage) = if armed {
             module.call_with_indexed_flat_args_and_controls_in_session_at_depth(
                 &mut native_ref.call_session,
                 id,
@@ -1244,6 +1257,8 @@ impl RegVm {
                     initial_steps,
                     step_budget,
                     cancel: self.limits.cancel.as_ref().map(|token| token.as_atomic()),
+                    initial_intrinsic_calls,
+                    intrinsic_budget,
                 },
             )
         } else {
@@ -1259,7 +1274,10 @@ impl RegVm {
                         limit: self.limits.max_depth,
                     },
                 ),
-                initial_steps,
+                vm_jit::RegionCallUsage {
+                    steps: initial_steps,
+                    intrinsic_calls: initial_intrinsic_calls,
+                },
             )
         };
         let elapsed = started.map(|started| started.elapsed().as_nanos());
@@ -1270,7 +1288,10 @@ impl RegVm {
         // back) into the interpreter's counter, so resuming the interpreter continues
         // the single tick stream with no double-/under-count.
         if emit_step {
-            self.steps = native_steps.max(0) as u64;
+            self.steps = native_usage.steps.max(0) as u64;
+        }
+        if emit_intrinsic {
+            self.intrinsic_calls = native_usage.intrinsic_calls.max(0) as u64;
         }
         // Only the normal OSR-exit below keeps the region's charge; every other exit
         // hands the loop back to the interpreter to run again from the header.
@@ -1278,6 +1299,9 @@ impl RegVm {
             () => {{
                 if emit_step {
                     self.steps = steps_before_native;
+                }
+                if emit_intrinsic {
+                    self.intrinsic_calls = intrinsic_calls_before_native;
                 }
                 false
             }};

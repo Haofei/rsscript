@@ -894,6 +894,13 @@ pub struct JitInstructionOrigin {
     pub source_ip: u32,
     pub resume_ip: u32,
     pub source_cost: u32,
+    /// Number of interpreter intrinsic dispatches owned by this item. Derived
+    /// exactly like `source_cost`: the embedding VM charges one per source
+    /// instruction that dispatches a stdlib/runtime intrinsic, and exactly one
+    /// generated item owns that charge. Generated code runs those intrinsics both
+    /// as host helpers and as direct lowerings, so this per-item cost — not a
+    /// helper-side hook — is the only sound charge point.
+    pub intrinsic_cost: u32,
     pub inlined: bool,
 }
 
@@ -903,6 +910,7 @@ impl JitInstructionOrigin {
             source_ip: ip,
             resume_ip: ip,
             source_cost: 1,
+            intrinsic_cost: 0,
             inlined: false,
         }
     }
@@ -961,6 +969,7 @@ impl JitFunction {
                     Some(JitInstr::RegionExit { .. } | JitInstr::OsrExit | JitInstr::Bail)
                 ) {
                     origin.source_cost = 0;
+                    origin.intrinsic_cost = 0;
                 }
                 origin
             })

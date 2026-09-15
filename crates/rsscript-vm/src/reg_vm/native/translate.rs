@@ -13,8 +13,8 @@ use osr_loop::*;
 mod type_infer;
 use type_infer::*;
 
-pub(in crate::reg_vm) use jit_post::native_source_cost_is_static;
 use jit_post::*;
+pub(in crate::reg_vm) use jit_post::{charge_native_key_hash_work, native_source_cost_is_static};
 pub(in crate::reg_vm) use loop_regions::*;
 
 #[cfg(all(test, feature = "native-jit"))]
@@ -1696,12 +1696,11 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     // parameter defaults to `Int` (and a mismatching argument then just falls back).
     let param_types: Vec<NativeTy> = native_reg_types[..func.params].to_vec();
 
-    let mut instruction_origins = origins
+    let instruction_origins = origins
         .iter()
         .copied()
         .map(NativeInstructionOrigin::to_jit)
         .collect::<Option<Vec<_>>>()?;
-    charge_native_key_hash_work(&jit_code, &mut instruction_origins);
 
     let jit_fn = vm_jit::JitFunction {
         n_params: func.params as u32,

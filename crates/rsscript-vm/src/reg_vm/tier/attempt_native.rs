@@ -76,6 +76,10 @@ impl RegVm {
             step_ceiling: self.limits.step_budget.is_some(),
             cancel: self.limits.cancel.is_some(),
             deadline: self.limits.deadline.is_some(),
+            // The intrinsic-call meter is likewise a reported usage fact, so it is
+            // counted unconditionally and only *rejects* when a budget is armed.
+            intrinsic: true,
+            intrinsic_ceiling: self.limits.intrinsic_call_budget.is_some(),
         };
         // Cheap negative path: a function known not native-eligible never compiles,
         // so skip all per-call tiering/cache/name-hash work and fall straight back
@@ -217,7 +221,11 @@ impl RegVm {
                         }
                     });
                     let entry = match translated {
-                        Some(translation) => {
+                        Some(mut translation) => {
+                            // The interpreter's `charge_work` bills a scalar map
+                            // key's hash unit only when a step budget, cancellation
+                            // token, or deadline is armed, so mirror that exactly.
+                            charge_native_key_hash_work(&mut translation.jit_fn, enforcing);
                             let Some(analyzed) = NativeRegion::whole(translation).analyze() else {
                                 return NativeAttempt::Fallback;
                             };
@@ -842,7 +850,8 @@ impl RegVm {
         // the interpreter re-run this function from the top, which charges the whole
         // region again. Such an exit must therefore report the pre-entry count.
         let steps_before_native = self.steps;
-        let (result, elapsed, native_steps) = {
+        let intrinsic_calls_before_native = self.intrinsic_calls;
+        let (result, elapsed, native_usage) = {
             let Some(native_ref) = self.native.as_mut() else {
                 heap_tx.abort();
                 drop(flat_guards);
@@ -865,10 +874,15 @@ impl RegVm {
                 .limits
                 .step_budget
                 .and_then(|budget| i64::try_from(budget).ok());
+            let initial_intrinsic_calls = i64::try_from(self.intrinsic_calls).unwrap_or(i64::MAX);
+            let intrinsic_budget = self
+                .limits
+                .intrinsic_call_budget
+                .and_then(|budget| i64::try_from(budget).ok());
             // Every whole-function region now carries source-step accounting, so the
             // limits-aware entry is the only entry. `step_budget` stays `None` when
             // nothing is armed, which the cell encodes as `i64::MAX`.
-            let (result, native_steps) = module
+            let (result, native_usage) = module
                 .call_with_indexed_flat_args_and_controls_in_session_at_depth(
                     &mut native_ref.call_session,
                     id,
@@ -884,13 +898,18 @@ impl RegVm {
                         initial_steps,
                         step_budget,
                         cancel: self.limits.cancel.as_ref().map(|token| token.as_atomic()),
+                        initial_intrinsic_calls,
+                        intrinsic_budget,
                     },
                 );
             let elapsed = started.map(|started| started.elapsed().as_nanos());
-            (result, elapsed, native_steps)
+            (result, elapsed, native_usage)
         };
         if compile_controls.step {
-            self.steps = native_steps.max(0) as u64;
+            self.steps = native_usage.steps.max(0) as u64;
+        }
+        if compile_controls.intrinsic {
+            self.intrinsic_calls = native_usage.intrinsic_calls.max(0) as u64;
         }
         // Every post-call exit that returns `Fallback` re-runs the function from its
         // first instruction on the interpreter, so the region's charge is rolled
@@ -899,6 +918,9 @@ impl RegVm {
             () => {{
                 if compile_controls.step {
                     self.steps = steps_before_native;
+                }
+                if compile_controls.intrinsic {
+                    self.intrinsic_calls = intrinsic_calls_before_native;
                 }
                 NativeAttempt::Fallback
             }};
