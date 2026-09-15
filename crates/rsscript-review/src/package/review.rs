@@ -1,12 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use rsscript_diagnostics::{Diagnostic, Span, code};
-use rsscript_project::{ProjectManifestGraphLimits, capture_project_manifest_graph};
-use rsscript_review_core::{
+use crate::review_core::{
     NativeApiRiskPolicy, PackageRiskEvidence, package_risk as derive_package_risk,
 };
-use rsscript_review_source::{ReviewMap, ReviewMapClassification, review_map_semantic_database};
+use crate::review_facts::{ReviewMap, ReviewMapClassification, review_map_semantic_database};
+use rsscript_diagnostics::{Diagnostic, Span, code};
+use rsscript_project::{ProjectManifestGraphLimits, capture_project_manifest_graph};
 use rsscript_semantics::{
     SemanticDatabase, core_interfaces,
     hir::{CallResolution, HirCallSite},
@@ -16,27 +16,27 @@ use rsscript_syntax::{
     lint_source,
 };
 
-use crate::contract::{
+use crate::package::contract::{
     PackageFunctionContract, collect_package_const_contracts, collect_package_function_contracts,
     collect_package_sum_type_contracts, collect_package_type_alias_contracts,
     collect_package_type_contracts, package_contract_has_resource_boundary,
     package_interface_contract_diagnostics, package_interface_diagnostic_exports,
     package_interface_environment_diagnostics, package_review_exports,
 };
-use crate::source_set::{
+use crate::package::source_set::{
     Manifest, ManifestNativeRust, PackageSource, load_package_from_manifest_source,
 };
-use crate::{
+use crate::package::{
     AwaitBoundary, native_binding_interface_sources, package_external_bindings,
     package_feature_resolution_diagnostics_from_manifest_graph, package_native_binding_diagnostics,
     session_analysis,
 };
-use crate::{
+use crate::package::{
     collect_dependency_interface_sources_for_tests_from_manifest_graph,
     collect_dependency_interface_sources_from_manifest_graph, collect_package_await_sites,
     package_dependency_spec,
 };
-use rsscript_package_model::{
+use crate::package_model::{
     ArtifactProducer, PACKAGE_REVIEW_SCHEMA, PackageDependencyKind, PackageExternalBinding,
     PackageIdentity, PackageNativeRustReview, PackageProviderImplementation, PackageReview,
     PackageReviewAwaitBoundary, PackageReviewAwaitSite, PackageReviewDependency, PackageReviewFile,

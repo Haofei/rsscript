@@ -11,8 +11,8 @@ use rsscript_syntax::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::await_facts::collect_package_await_sites;
-use crate::contract::{
+use crate::package::await_facts::collect_package_await_sites;
+use crate::package::contract::{
     collect_package_const_contracts, collect_package_function_contracts,
     collect_package_protocol_contracts, collect_package_protocol_impl_contracts,
     collect_package_sum_type_contracts, collect_package_type_alias_contracts,
@@ -20,13 +20,13 @@ use crate::contract::{
     package_interface_contract_diagnostics, package_interface_diagnostic_exports,
     package_interface_environment_diagnostics,
 };
-use crate::dependency::{
+use crate::package::dependency::{
     collect_dependency_interface_sources, collect_dependency_interface_sources_for_tests,
     package_feature_resolution_diagnostics,
 };
-use crate::execution_facts::collect_execution_facts;
-use crate::source_set::{PackageSource, load_package};
-use rsscript_package_model::{
+use crate::package::execution_facts::collect_execution_facts;
+use crate::package::source_set::{PackageSource, load_package};
+use crate::package_model::{
     PACKAGE_ANALYSIS_SCHEMA, PackageAnalysis, PackageAnalysisAwaitSite, PackageAnalysisCallEdge,
     PackageAnalysisExport, PackageAnalysisExternalImport, PackageAnalysisFile,
     PackageAnalysisParameter, PackageAnalysisProducer, PackageAnalysisSummary, PackageIdentity,
@@ -242,7 +242,7 @@ fn dedup_diagnostics(diagnostics: &mut Vec<Diagnostic>) {
     });
 }
 
-fn package_identity(manifest: &crate::Manifest) -> PackageIdentity {
+fn package_identity(manifest: &crate::package::Manifest) -> PackageIdentity {
     PackageIdentity {
         name: manifest.package.name.clone(),
         version: manifest.package.version.clone(),

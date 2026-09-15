@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::runtime_catalog;
+use crate::package::runtime_catalog;
 use rsscript_syntax::ast::{Block, Callee, Expr, Item, Stmt};
 
-use crate::PackageSource;
-use rsscript_package_model::PackageReviewFileKind;
+use crate::package::PackageSource;
+use crate::package_model::PackageReviewFileKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AwaitBoundary {

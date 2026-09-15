@@ -7,12 +7,12 @@ use sha2::{Digest, Sha256};
 
 use rsscript_syntax::format_source;
 
-use crate::dependency::{DependencyResolutionScope, resolve_dependency_graph};
-use crate::review::{NativeRustReviewFn, review_package_dir_captured_with_features};
-use crate::source_set::{
+use crate::package::dependency::{DependencyResolutionScope, resolve_dependency_graph};
+use crate::package::review::{NativeRustReviewFn, review_package_dir_captured_with_features};
+use crate::package::source_set::{
     LoadedPackage, ManifestNativeRust, PackageSource, load_package_with_features,
 };
-use rsscript_package_model::{
+use crate::package_model::{
     PackageLock, PackageLockDiff, PackageLockFieldChange, PackageLockMetadata, PackageLockPackage,
     PackageLockPackageChange, PackageReview, PackageReviewAwaitBoundary, PackageReviewFileKind,
     PackageRisk,
@@ -898,14 +898,14 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::load_package;
+    use crate::package::load_package;
 
     fn unexpected_native_review(
         _: &Path,
-        _: &crate::Manifest,
+        _: &crate::package::Manifest,
         _: &[PackageSource],
         _: &ManifestNativeRust,
-    ) -> Result<rsscript_package_model::PackageNativeRustReview, String> {
+    ) -> Result<crate::package_model::PackageNativeRustReview, String> {
         Err("the interface-only async package must not request native review".to_string())
     }
 

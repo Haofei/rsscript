@@ -344,7 +344,7 @@ fn semantic_diff_is_an_artifact_contract_not_sdk_implementation() {
 fn package_analysis_schema_is_an_artifact_contract_not_compiler_implementation() {
     let root = workspace_root();
     let artifact = read(&root.join("crates/rsscript-artifact/src/lib.rs"));
-    let package_types = read(&root.join("crates/rsscript-package-model/src/lib.rs"));
+    let package_types = read(&root.join("crates/rsscript-review/src/package_model.rs"));
 
     for contract_type in [
         "PackageAnalysisV1",
@@ -390,31 +390,33 @@ fn package_analysis_schema_is_an_artifact_contract_not_compiler_implementation()
             .exists(),
         "compiler must not retain package evidence presentation"
     );
-    let package_format = read(&root.join("crates/rsscript-package-review/src/format.rs"));
+    let package_format = read(&root.join("crates/rsscript-review/src/package/format.rs"));
     assert!(
         !package_format.contains("format_package_analysis_json"),
         "review adapter must not define a second presentation for Artifact-owned analysis evidence"
     );
-    let review_manifest: toml::Value = toml::from_str(&read(
-        &root.join("crates/rsscript-package-review/Cargo.toml"),
-    ))
-    .expect("package review manifest should parse");
+    let review_manifest: toml::Value =
+        toml::from_str(&read(&root.join("crates/rsscript-review/Cargo.toml")))
+            .expect("review manifest should parse");
     let review_dependencies = normal_dependency_packages(&review_manifest);
-    assert!(
-        review_dependencies.contains("rsscript-package-model"),
-        "review presentation must consume the compiler-independent package evidence model"
-    );
     assert!(
         !review_dependencies.contains("rsscript-compiler"),
         "review presentation must not pull the compiler compatibility closure"
     );
+    // Presentation still consumes the evidence model rather than redefining it;
+    // both are modules of `rsscript-review` now, so the edge is checked in
+    // source instead of in a manifest.
     assert!(
-        root.join("crates/rsscript-package-model/src/lib.rs")
+        package_format.contains("crate::package_model::"),
+        "review presentation must consume the compiler-independent package evidence model"
+    );
+    assert!(
+        root.join("crates/rsscript-review/src/package_model.rs")
             .is_file()
             && !root
                 .join("crates/rsscript-compiler/src/package/types.rs")
                 .exists(),
-        "package review types must be physically owned by rsscript-package-model"
+        "package review types must be physically owned by the review evidence model"
     );
     let compiler_manifest: toml::Value =
         toml::from_str(&read(&root.join("crates/rsscript-compiler/Cargo.toml")))

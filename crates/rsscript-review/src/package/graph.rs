@@ -1,23 +1,23 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use crate::dependency::{
+use crate::package::dependency::{
     DependencyResolutionScope, ResolvedDependencyEdge, ResolvedDependencyGraph,
     resolve_dependency_graph,
 };
-use crate::lock::effective_interface_hash;
-use crate::review::{NativeRustReviewFn, review_package_dir_captured_with_features};
-use crate::source_set::{
+use crate::package::lock::effective_interface_hash;
+use crate::package::review::{NativeRustReviewFn, review_package_dir_captured_with_features};
+use crate::package::source_set::{
     ManifestDependencyBudget, ManifestProviderChoice, load_package_manifest,
     load_package_with_features,
 };
-use rsscript_package_model::{
+use crate::package_model::{
     PackageDependencyKind, PackageGraphCheck, PackageIdentity, PackageProviderImplementation,
     PackageReviewFileKind, PackageRisk, PackageTree, PackageTreeNode, PackageTreeSummary,
     PackageVirtual,
 };
 
-use crate::{Manifest, PackageDependencySpec, PackageSource};
+use crate::package::{Manifest, PackageDependencySpec, PackageSource};
 
 fn package_identity(manifest: &Manifest) -> PackageIdentity {
     PackageIdentity {

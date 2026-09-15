@@ -3,15 +3,15 @@ use std::path::Path;
 
 use serde::Deserialize;
 
+use crate::package_model::PackageReviewFileKind;
 use rsscript_diagnostics::{Diagnostic, Span, code};
-use rsscript_package_model::PackageReviewFileKind;
 use rsscript_project::read_project_utf8_file_bounded;
 use rsscript_syntax::{
     ast::{FunctionDecl, Item, Program, TypeRef},
     format_program, parse_source,
 };
 
-use crate::{ManifestNativeRust, PackageSource, collect_package_function_contracts};
+use crate::package::{ManifestNativeRust, PackageSource, collect_package_function_contracts};
 
 const NATIVE_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
 

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::review_facts::{ReviewMap, ReviewMapClassification};
 use rsscript_diagnostics::{Diagnostic, Span, code};
-use rsscript_review_source::{ReviewMap, ReviewMapClassification};
 use rsscript_syntax::ast::{
     ConstDecl, DataEffect, Expr, FieldDecl, FunctionDecl, GenericBound, GenericParam, Item, Param,
     ProtocolDecl, ProtocolImpl, SumTypeDecl, SumVariant, TypeAliasDecl, TypeDecl, TypeKind,
@@ -9,9 +9,9 @@ use rsscript_syntax::ast::{
 };
 use rsscript_syntax::parse_source;
 
-use crate::PackageSource;
-use crate::session_analysis;
-use rsscript_package_model::{PackageReviewExport, PackageReviewFileKind};
+use crate::package::PackageSource;
+use crate::package::session_analysis;
+use crate::package_model::{PackageReviewExport, PackageReviewFileKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageFunctionContract {

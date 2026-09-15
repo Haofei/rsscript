@@ -1,23 +1,23 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use rsscript_diagnostics::Diagnostic;
-use rsscript_package_model::{
+use crate::package_model::{
     PackageCheck, PackageCheckLock, PackageLock, PackageNativeRustCheck, PackageNativeRustReview,
     PackageRisk,
 };
+use rsscript_diagnostics::Diagnostic;
 
-use crate::graph::check_package_graph;
-use crate::lock::{
+use crate::package::graph::check_package_graph;
+use crate::package::lock::{
     NativeRustPathFn, compare_locked_packages, lock_package_dir_captured,
     package_lock_diff_reasons, read_package_lock,
 };
-use crate::policy::{
+use crate::package::policy::{
     collect_manifest_review_policy_diagnostics, collect_manifest_review_policy_violations,
     package_review_policy_has_high_risk_violation, package_review_policy_ok,
 };
-use crate::review::{NativeRustReviewFn, review_package_dir_captured_with_features};
-use crate::source_set::load_package;
+use crate::package::review::{NativeRustReviewFn, review_package_dir_captured_with_features};
+use crate::package::source_set::load_package;
 
 /// Legacy native-wrapper validation remains host-specific. The neutral check
 /// combines its result with review, graph, lock, and policy evidence.

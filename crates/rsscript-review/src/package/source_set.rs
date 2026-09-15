@@ -7,7 +7,7 @@ use rsscript_project::{
 };
 use serde::Deserialize;
 
-use rsscript_package_model::PackageReviewFileKind;
+use crate::package_model::PackageReviewFileKind;
 
 const MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
 pub const SNAPSHOT_MANIFEST_SOURCE_FILE: &str = ".rsscript-snapshot-manifest";

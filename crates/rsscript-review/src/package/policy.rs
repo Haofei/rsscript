@@ -3,10 +3,10 @@ use std::path::Path;
 use rsscript_diagnostics::{Diagnostic, Span, code};
 use rsscript_project::read_project_utf8_file_bounded;
 
-use crate::ManifestReviewPolicy;
-use crate::collect_package_function_contracts;
-use crate::{Manifest, PackageSource};
-use rsscript_package_model::{
+use crate::package::ManifestReviewPolicy;
+use crate::package::collect_package_function_contracts;
+use crate::package::{Manifest, PackageSource};
+use crate::package_model::{
     PackageNativeRustCheck, PackageReview, PackageReviewFileKind, PackageRisk,
 };
 

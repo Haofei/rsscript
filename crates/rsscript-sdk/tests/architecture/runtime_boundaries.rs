@@ -626,7 +626,7 @@ fn bytecode_language_compatibility_is_not_inferred_from_compiler_version() {
     assert!(emitter.contains("compiler_provenance"));
     assert!(verifier.contains("BYTECODE_CONTAINER_FORMAT_VERSION"));
 
-    let analysis = read(&root.join("crates/rsscript-package-review/src/analysis.rs"));
+    let analysis = read(&root.join("crates/rsscript-review/src/package/analysis.rs"));
     assert!(analysis.contains("rsscript_abi_model::LANGUAGE_SEMANTICS_VERSION"));
     assert!(
         !analysis.contains("language_version: env!(\"CARGO_PKG_VERSION\")"),
@@ -904,7 +904,7 @@ fn high_risk_state_machines_keep_dedicated_module_owners() {
     let root = workspace_root();
     let required = [
         "crates/rsscript-semantics/src/task_groups.rs",
-        "crates/rsscript-package-review/src/bindings.rs",
+        "crates/rsscript-review/src/package/bindings.rs",
         "crates/rsscript-vm/src/reg_vm/tier/admission.rs",
         "crates/rsscript-vm/src/reg_vm/tier/call_scratch.rs",
         "crates/rsscript-vm/src/reg_vm/tier/recursion.rs",

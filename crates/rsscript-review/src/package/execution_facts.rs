@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 
 use rsscript_syntax::ast::{Block, Callee, DataEffect, Expr, Item, Stmt};
 
-use crate::PackageSource;
-use rsscript_package_model::{
+use crate::package::PackageSource;
+use crate::package_model::{
     PackageAnalysisResourceLifetime, PackageAnalysisResourceTransfer, PackageAnalysisTaskGroup,
     PackageReviewFileKind,
 };

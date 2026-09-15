@@ -1,6 +1,6 @@
 //! Captured package-review compatibility inputs.
 //!
-//! This crate owns the manifest/source-set representation used by optional
+//! This module owns the manifest/source-set representation used by optional
 //! package review tooling. It is deliberately separate from the compiler's
 //! normal in-memory frontend path: callers capture project input before asking
 //! the compiler for semantic facts.
@@ -73,7 +73,7 @@ pub fn session_analysis(
 /// presentation model without routing through compiler compatibility code.
 pub fn package_sources(
     package_dir: &std::path::Path,
-) -> Result<Vec<rsscript_package_model::PackageSourceFile>, String> {
+) -> Result<Vec<crate::package_model::PackageSourceFile>, String> {
     let package = load_package(package_dir)?;
     Ok(package_source_files(package.sources))
 }
@@ -82,7 +82,7 @@ pub fn package_sources(
 /// compatibility tools that still present the expanded source set.
 pub fn package_sources_with_dependency_interfaces(
     package_dir: &std::path::Path,
-) -> Result<Vec<rsscript_package_model::PackageSourceFile>, String> {
+) -> Result<Vec<crate::package_model::PackageSourceFile>, String> {
     let package = load_package(package_dir)?;
     let mut sources = package.sources;
     sources.extend(collect_dependency_interface_sources(
@@ -95,10 +95,10 @@ pub fn package_sources_with_dependency_interfaces(
 
 fn package_source_files(
     sources: Vec<PackageSource>,
-) -> Vec<rsscript_package_model::PackageSourceFile> {
+) -> Vec<crate::package_model::PackageSourceFile> {
     sources
         .into_iter()
-        .map(|source| rsscript_package_model::PackageSourceFile {
+        .map(|source| crate::package_model::PackageSourceFile {
             path: source.path,
             relative_path: source.relative_path,
             contents: source.contents,

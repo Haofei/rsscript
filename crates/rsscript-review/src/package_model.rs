@@ -2,12 +2,12 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::review_facts::{ReviewFinding, ReviewMap};
 use rsscript_diagnostics::{Diagnostic, Span};
-use rsscript_review_source::{ReviewFinding, ReviewMap};
 
 /// Compatibility re-export for legacy package APIs. New review consumers must
 /// import the model from `rsscript-review-core` directly.
-pub use rsscript_review_core::PackageRisk;
+pub use crate::review_core::PackageRisk;
 
 pub use rsscript_artifact::{
     PACKAGE_ANALYSIS_SCHEMA, PackageAnalysisAwaitSiteV1 as PackageAnalysisAwaitSite,

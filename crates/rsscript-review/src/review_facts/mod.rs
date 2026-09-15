@@ -1,6 +1,3 @@
-#![forbid(unsafe_code)]
-// Optional source-level review rendering keeps its lint debt out of compiler Core.
-
 //! Source-level review: the review-MAP (AST/HIR fact extraction + classification)
 //! and the semantic-DIFF (signature contracts).
 //!

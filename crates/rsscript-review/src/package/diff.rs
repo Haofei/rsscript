@@ -1,20 +1,20 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use crate::review_facts::{ReviewFinding, ReviewRisk, review_sources};
 use rsscript_diagnostics::code;
-use rsscript_review_source::{ReviewFinding, ReviewRisk, review_sources};
 use rsscript_syntax::ast::TypeKind;
 
-use crate::contract::{
+use crate::package::contract::{
     collect_package_function_contracts, collect_package_type_contracts,
     package_added_function_contract_is_high_risk, package_added_type_contract_is_high_risk,
     package_function_contract_boundary_changed, package_function_contracts_for_source,
     package_function_contracts_match, package_type_contract_boundary_changed,
     package_type_contracts_for_source, package_type_contracts_match,
 };
-use crate::source_set::{Manifest, ManifestNativeRust, PackageSource, load_package};
-use crate::{NativeRustReviewFn, review_package_dir_captured_with_features};
-use rsscript_package_model::{
+use crate::package::source_set::{Manifest, ManifestNativeRust, PackageSource, load_package};
+use crate::package::{NativeRustReviewFn, review_package_dir_captured_with_features};
+use crate::package_model::{
     PackageDiff, PackageExternalBindingChange, PackageExternalBindingChangeKind, PackageIdentity,
     PackageInterfaceChange, PackageInterfaceChangeKind, PackageManifestChange,
     PackageReviewAwaitBoundary, PackageReviewAwaitSite, PackageReviewFileKind, PackageRisk,
@@ -124,7 +124,7 @@ pub fn diff_package_dirs_with_native_review(
     }
     for change in &external_binding_changes {
         if change.change == PackageExternalBindingChangeKind::Added
-            && change.risk == rsscript_package_model::PackageRisk::High
+            && change.risk == crate::package_model::PackageRisk::High
         {
             reasons.push(format!(
                 "new high-risk external_binding `{}` via {}",
@@ -165,13 +165,13 @@ pub fn diff_package_dirs_with_native_review(
 /// Distinct external_bindings (by category + binding symbol) added or removed between
 /// two package versions, high-risk first.
 fn diff_package_external_bindings(
-    old: &[rsscript_package_model::PackageExternalBinding],
-    new: &[rsscript_package_model::PackageExternalBinding],
+    old: &[crate::package_model::PackageExternalBinding],
+    new: &[crate::package_model::PackageExternalBinding],
 ) -> Vec<PackageExternalBindingChange> {
     use std::collections::BTreeMap;
     fn distinct(
-        external_bindings: &[rsscript_package_model::PackageExternalBinding],
-    ) -> BTreeMap<(String, String), rsscript_package_model::PackageRisk> {
+        external_bindings: &[crate::package_model::PackageExternalBinding],
+    ) -> BTreeMap<(String, String), crate::package_model::PackageRisk> {
         let mut map = BTreeMap::new();
         for external_binding in external_bindings {
             map.entry((
@@ -205,11 +205,11 @@ fn diff_package_external_bindings(
             });
         }
     }
-    let rank = |risk: rsscript_package_model::PackageRisk| match risk {
-        rsscript_package_model::PackageRisk::High => 0u8,
-        rsscript_package_model::PackageRisk::Elevated => 1,
-        rsscript_package_model::PackageRisk::Low => 2,
-        rsscript_package_model::PackageRisk::Unknown => 3,
+    let rank = |risk: crate::package_model::PackageRisk| match risk {
+        crate::package_model::PackageRisk::High => 0u8,
+        crate::package_model::PackageRisk::Elevated => 1,
+        crate::package_model::PackageRisk::Low => 2,
+        crate::package_model::PackageRisk::Unknown => 3,
     };
     changes.sort_by(|a, b| {
         rank(a.risk)
@@ -781,7 +781,7 @@ fn manifest_change(
 #[cfg(test)]
 mod external_binding_diff_tests {
     use super::*;
-    use rsscript_package_model::{PackageExternalBinding, PackageRisk};
+    use crate::package_model::{PackageExternalBinding, PackageRisk};
 
     fn cap(binding: &str, category: &str, risk: PackageRisk) -> PackageExternalBinding {
         PackageExternalBinding {

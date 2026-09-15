@@ -8,11 +8,11 @@ use rsscript_project::{
 
 use rsscript_diagnostics::{Diagnostic, Span, code};
 
-use crate::{
+use crate::package::{
     Manifest, ManifestReviewFeaturePolicy, PackageSource, load_package_from_manifest_source,
     parse_package_manifest_source, resolve_package_features, selected_root_package_features,
 };
-use rsscript_package_model::{PackageDependencyKind, PackageReviewFileKind};
+use crate::package_model::{PackageDependencyKind, PackageReviewFileKind};
 pub use rsscript_project::canonical_project_path_label as canonical_path_label;
 
 const PACKAGE_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
@@ -682,7 +682,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{DependencyResolutionScope, resolve_dependency_graph};
-    use crate::canonical_path_label;
+    use crate::package::canonical_path_label;
 
     struct TestPackages(PathBuf);
 

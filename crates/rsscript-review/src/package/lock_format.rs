@@ -1,4 +1,4 @@
-use rsscript_package_model::PackageLock;
+use crate::package_model::PackageLock;
 
 /// Canonical package-lock serialization used by the package capture boundary.
 ///

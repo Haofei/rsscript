@@ -1874,43 +1874,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rsscript-package-model"
-version = "0.1.0"
-dependencies = [
- "rsscript-artifact",
- "rsscript-build-support",
- "rsscript-diagnostics",
- "rsscript-project",
- "rsscript-review-core",
- "rsscript-review-source",
- "serde",
- "serde_json",
- "sha2",
- "toml",
-]
-
-[[package]]
-name = "rsscript-package-review"
-version = "0.1.0"
-dependencies = [
- "rsscript-abi-model",
- "rsscript-build-support",
- "rsscript-diagnostics",
- "rsscript-package-model",
- "rsscript-project",
- "rsscript-review-core",
- "rsscript-review-source",
- "rsscript-semantics",
- "rsscript-syntax",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "toml",
- "uuid",
-]
-
-[[package]]
 name = "rsscript-project"
 version = "0.1.0"
 dependencies = [
@@ -2042,22 +2005,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "rsscript-review-core"
+name = "rsscript-review"
 version = "0.1.0"
 dependencies = [
- "serde",
-]
-
-[[package]]
-name = "rsscript-review-source"
-version = "0.1.0"
-dependencies = [
+ "rsscript-abi-model",
+ "rsscript-artifact",
+ "rsscript-build-support",
  "rsscript-core-types",
  "rsscript-diagnostics",
+ "rsscript-project",
  "rsscript-semantics",
  "rsscript-syntax",
  "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
+ "toml",
+ "uuid",
 ]
 
 [[package]]
