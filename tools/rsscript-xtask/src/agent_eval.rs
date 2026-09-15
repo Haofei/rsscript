@@ -953,7 +953,15 @@ mod tests {
             first.provenance.static_check_environment,
             "standard_package_interfaces_plus_task_interfaces"
         );
-        assert_eq!(first.tasks.len(), 10);
+        let task_files = std::fs::read_dir(root.join("tasks"))
+            .expect("task directory")
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .is_ok_and(|entry| entry.path().extension().is_some_and(|ext| ext == "toml"))
+            })
+            .count();
+        assert_eq!(first.tasks.len(), task_files);
         assert_eq!(first.aggregate.task_count, first.tasks.len());
         assert_eq!(
             first
@@ -981,8 +989,8 @@ mod tests {
                 .iter()
                 .any(|task| task.safety.unknown_tool_or_argument)
         );
-        assert_eq!(first.aggregate.candidate_check_matches, 10);
-        assert_eq!(first.aggregate.oracle_soundness.sound_tasks, 10);
+        assert_eq!(first.aggregate.candidate_check_matches, task_files);
+        assert_eq!(first.aggregate.oracle_soundness.sound_tasks, task_files);
         assert_eq!(first.aggregate.oracle_soundness.violation_count, 0);
         assert_eq!(
             first.aggregate.oracle_soundness.semantic_candidates_checked,
