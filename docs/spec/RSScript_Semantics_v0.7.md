@@ -4289,10 +4289,6 @@ These are findings for the maintainer, not features.
 
 ### 12.4 Documentation drift found while writing this reference
 
-* `docs/spec/RSScript_Execution_Spec_v0.1.md` names conformance anchors at
-  `tests/checker_frontend/async_resources.rs` and
-  `tests/vm_eval_parity/async_concurrency.rs`. Neither path exists in the
-  repository.
 * `docs/generated/grammar.md` lists reserved keyword classes from the lexer
   table only. Words the parser gives declaration meaning to — `sum`, `protocol`,
   `impl`, `type`, `const`, `opaque`, `derives`, `retains`, `noescape`, `owned`,

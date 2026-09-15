@@ -49,8 +49,16 @@ cooperative, abort-safe, or not cancellation-aware, and whether it may block.
 The runtime validates the semantic signature and ABI before executing the first
 instruction; deployment metadata cannot weaken these language rules.
 
-Conformance anchors live in `tests/checker_frontend/async_resources.rs`,
-`tests/vm_eval_parity/async_concurrency.rs`, and the runtime resource tests.
+Conformance anchors:
+
+| Rule group | Anchor |
+| --- | --- |
+| `async let` scoping and exactly-once handle consumption | `crates/rsscript-semantics/src/task_groups.rs` (module tests) |
+| `await` placement, values live across an `await`, `Task.cancellation_token()` ownership | `crates/rsscript-semantics/src/await_placement.rs` (module tests) |
+| resource escape from a `with` scope, and resource producers | `crates/rsscript-semantics/src/resource_flow.rs`, `crates/rsscript-semantics/src/resource_producers.rs` |
+| structured task lifecycle at runtime (created / completed / cancelled / peak-live counts) | `crates/rsscript-sdk/src/tests.rs::execution_usage_reports_structured_task_lifecycle` |
+| scheduler cancellation | `crates/rsscript-vm/src/reg_vm/scheduler.rs` (module tests) |
+| exactly-once resource cleanup on every terminal path | `crates/rsscript-sdk/tests/execution_state_corpus.rs` |
 
 The optional native JIT consumes an in-process, non-serialized IR and is released
 in lockstep with the VM. It is not an Artifact format and carries no independent
