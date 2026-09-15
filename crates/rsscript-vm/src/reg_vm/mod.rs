@@ -7,11 +7,7 @@ use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 
-use rsscript_abi_model::{
-    FunctionSignature, WireCallTypeTable, WireRecordFieldLayout, WireRecordLayout, WireType,
-    WireValue, WireVariantCaseLayout, WireVariantLayout,
-};
-use rsscript_corelib::{
+use crate::corelib::{
     collections::{
         dedup as core_list_dedup, deque_to_vec as core_deque_to_vec,
         enumerate as core_list_enumerate, map_difference as core_map_difference,
@@ -41,6 +37,10 @@ use rsscript_corelib::{
     },
     regex::CompiledRegex,
     structured_data::yaml_to_json as core_yaml_to_json,
+};
+use rsscript_abi_model::{
+    FunctionSignature, WireCallTypeTable, WireRecordFieldLayout, WireRecordLayout, WireType,
+    WireValue, WireVariantCaseLayout, WireVariantLayout,
 };
 
 use self::calls::PureClosurePlan;

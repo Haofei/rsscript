@@ -6,7 +6,7 @@ use crate::review_facts::{ReviewFinding, ReviewMap};
 use rsscript_diagnostics::{Diagnostic, Span};
 
 /// Compatibility re-export for legacy package APIs. New review consumers must
-/// import the model from `rsscript-review-core` directly.
+/// import the model from [`crate::review_core`] directly.
 pub use crate::review_core::PackageRisk;
 
 pub use rsscript_artifact::{

@@ -1,10 +1,18 @@
-#![forbid(unsafe_code)]
-
 //! Deterministic algorithms for RSScript's core library.
 //!
-//! This crate deliberately knows nothing about bytecode, VM values, Providers,
-//! budgets, or host state. Execution backends adapt their value representation
-//! at the boundary and retain responsibility for accounting.
+//! MODULE BOUNDARY. This was the separate `rsscript-corelib` crate and it keeps
+//! that crate's contract: it is a one-way pure library. It deliberately knows
+//! nothing about bytecode, VM values, Providers, budgets, or host state, and it
+//! must never name one — no `crate::`, no `super::`, no `VmValue`, no
+//! `EvalError`. The VM adapts its value representation at the boundary
+//! (`reg_vm::intrinsics`) and retains responsibility for accounting.
+//!
+//! This module is also the only place in `rsscript-vm` allowed to name the
+//! encoding, regex, date, hash/HMAC, compression, and YAML implementation
+//! crates. `deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results`
+//! enforces both halves per file; see
+//! `docs/architecture/vm-runtime-dependency-inventory.md`.
+#![forbid(unsafe_code)]
 
 use base64::Engine;
 use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};

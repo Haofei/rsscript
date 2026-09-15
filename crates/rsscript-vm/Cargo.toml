@@ -10,11 +10,24 @@ publish = false
 [dependencies]
 rsscript-abi-model = { path = "../rsscript-abi-model" }
 rsscript-bytecode = { path = "../rsscript-bytecode" }
-rsscript-corelib = { path = "../rsscript-corelib" }
 rsscript-diagnostics = { path = "../rsscript-diagnostics" }
 rsscript-core-types = { path = "../rsscript-core-types" }
 rsscript-provider-api = { path = "../rsscript-provider-api" }
 serde = { version = "1", features = ["derive", "rc"] }
+# Deterministic core-library implementation crates. These belong to the
+# `corelib` module alone; no other VM source file may name them. See
+# docs/architecture/vm-runtime-dependency-inventory.md.
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+flate2 = "1"
+hex = "0.4"
+hmac = "0.12"
+percent-encoding = "2"
+regex = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_yaml_ng = "0.10"
+sha2 = "0.10"
+sha3 = "0.10"
 vm-jit = { package = "rsscript-jit-cranelift", path = "../rsscript-jit-cranelift", optional = true }
 
 [features]
