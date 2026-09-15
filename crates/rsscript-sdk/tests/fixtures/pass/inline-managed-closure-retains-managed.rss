@@ -1,10 +1,7 @@
+// interface: inline-managed-closure-retains-managed.rssi
+
 struct Image
 struct Callback
-
-fn Image.inspect(image: Image) -> Unit
-
-fn store(callback: Callback) -> Unit
-    retains(callback)
 
 fn schedule_image(image: Image) -> Unit {
     store(callback: || {

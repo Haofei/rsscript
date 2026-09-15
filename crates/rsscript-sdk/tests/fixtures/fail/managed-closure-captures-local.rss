@@ -1,4 +1,5 @@
 // expect: RS0801
+// interface: ../interfaces/image.rssi
 
 struct Image {
     pixels: Buffer

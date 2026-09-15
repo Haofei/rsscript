@@ -1,3 +1,5 @@
+// interface: realistic-supported-review-corpus.rssi
+// interface: ../interfaces/host-csv.rssi
 
 struct Picture
 struct PictureError
@@ -13,40 +15,6 @@ struct MemoStore
 struct Tally
 struct LexicalScope
 struct ClosureRecord
-
-fn Picture.load(path: Path) -> Result<fresh Picture, PictureError>
-fn Picture.resize(image: mut Picture, width: Int, height: Int) -> Unit
-fn Picture.normalize(image: mut Picture) -> Unit
-fn Picture.sharpen(image: mut Picture) -> Unit
-fn Picture.inspect(image: Picture) -> Unit
-fn Picture.save(image: Picture, path: Path) -> Result<Unit, PictureError>
-fn InboundMessage.path(request: InboundMessage) -> String
-fn OutboundMessage.ok(body: String) -> Result<fresh OutboundMessage, HttpError>
-fn Settings.load(path: Path) -> Result<fresh SettingsValue, SettingsError>
-fn Settings.new(name: String, rules: List<Policy>) -> fresh Settings
-fn SettingsStore.replace(store: mut SettingsStore, value: SettingsValue) -> Unit
-    retains(value)
-fn SettingsStore.name(store: SettingsStore) -> String
-fn PolicyLoader.load_rules(path: Path) -> Result<fresh List<Policy>, SettingsError>
-fn SharedSettings.new(value: Settings) -> fresh SharedSettings
-    retains(value)
-fn SharedSettings.replace(global: mut SharedSettings, value: Settings) -> Unit
-    retains(value)
-fn MemoStore.insert(cache: mut MemoStore, key: String, value: String) -> Unit
-    retains(key) retains(value)
-fn MemoStore.lookup(cache: MemoStore, key: String) -> String
-fn Tally.add(counter: mut Tally, amount: Int) -> Unit
-fn Tally.value(counter: Tally) -> Int
-fn LexicalScope.root() -> fresh LexicalScope
-fn LexicalScope.child(parent: LexicalScope) -> fresh LexicalScope
-    retains(parent)
-fn LexicalScope.bind_function(env: mut LexicalScope, function: ClosureRecord) -> Unit
-    retains(function)
-fn LexicalScope.has_parent(env: LexicalScope) -> Bool
-fn LexicalScope.has_function(env: LexicalScope) -> Bool
-fn ClosureRecord.new(closure: LexicalScope) -> fresh ClosureRecord
-fn ClosureRecord.has_closure(function: ClosureRecord) -> Bool
-
 
 class User {
     id: String
@@ -71,20 +39,10 @@ struct WorkItem {
 class RetainedImageStore {
 }
 
-fn RetainedImageStore.store(cache: mut RetainedImageStore, image: Picture) -> Unit
-    retains(image)
-
-fn User.lookup(id: String) -> User
-fn User.touch(user: User) -> Unit
-
 fn audit_step(callback: noescape Fn()) -> Unit {
     callback()
     return Unit
 }
-
-fn HttpError.from_config(error: SettingsError) -> HttpError
-fn HttpError.from_json(error: JsonError) -> HttpError
-fn HttpError.from_image(error: PictureError) -> HttpError
 
 fn parse_plan(request: InboundMessage) -> Result<fresh UploadPlan, JsonError> {
     let body = InboundMessage.path(request)

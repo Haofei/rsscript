@@ -1,4 +1,4 @@
-// expect: RS0027
+// expect: RS0027 RS0206
 fn write_line<W: MissingWriter>(
     writer: mut W,
     message: String,

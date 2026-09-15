@@ -1,0 +1,1 @@
+pub async fn fetch(url: Url) -> Result<fresh Bytes, NetworkError>

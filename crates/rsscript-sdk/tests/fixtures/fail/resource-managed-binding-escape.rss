@@ -1,4 +1,5 @@
 // expect: RS0702
+// interface: ../interfaces/file-resource.rssi
 
 resource File {
     fd: Int
@@ -9,7 +10,7 @@ resource File {
 }
 
 fn bad_binding(path: Path) -> Unit {
-    with File.open(path)? as file {
+    with File.open(path) as file {
         let saved = file
     }
 }

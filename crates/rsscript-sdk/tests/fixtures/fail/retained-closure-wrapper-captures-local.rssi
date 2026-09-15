@@ -1,0 +1,6 @@
+pub fn Image.load(path: Path) -> fresh Image
+
+pub fn Image.inspect(image: Image) -> Unit
+
+pub fn schedule(scheduler: mut Scheduler, callback: CallbackOption) -> Unit
+    retains(callback)

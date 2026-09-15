@@ -1,0 +1,1 @@
+pub fn User.log(user: User) -> Unit

@@ -1,0 +1,1 @@
+pub fn consume(image: take Image) -> Unit

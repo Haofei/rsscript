@@ -1,0 +1,9 @@
+pub fn File.open_read(path: Path) -> Result<File, FileError>
+
+pub fn File.open_write(path: Path) -> Result<File, FileError>
+
+pub fn File.read_all(file: mut File) -> Result<fresh Bytes, FileError>
+
+pub fn File.write(file: mut File, data: Bytes) -> Result<Unit, FileError>
+
+pub fn OS.close(fd: Int) -> Unit

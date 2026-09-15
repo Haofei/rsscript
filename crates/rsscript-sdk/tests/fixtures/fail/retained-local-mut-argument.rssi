@@ -1,0 +1,2 @@
+pub fn store(value: mut Widget) -> Unit
+    retains(value)

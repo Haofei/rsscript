@@ -1,4 +1,6 @@
-// expect: RS0305
+// expect: RS0305 RS0401
+
+// interface: field-move-base-manage-conflict.rssi
 
 struct Workspace {
     id: Int
@@ -7,9 +9,6 @@ struct Workspace {
 struct Config {
     workspace: Workspace
 }
-
-fn use_config(config: Config, workspace: Workspace) -> Unit
-fn make_config() -> fresh Config
 
 fn run() -> Unit {
     local config = make_config()

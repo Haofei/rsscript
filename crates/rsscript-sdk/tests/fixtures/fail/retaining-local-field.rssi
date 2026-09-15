@@ -1,0 +1,4 @@
+pub fn Cache.store(cache: mut Cache, value: Image) -> Unit
+    retains(value)
+
+pub fn make_holder(path: Path) -> fresh Holder

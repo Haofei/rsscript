@@ -1,6 +1,6 @@
 // expect: RS0022
 
-async fn fetch(url: Url) -> Result<fresh Bytes, NetworkError>
+// interface: async-call-unconsumed.rssi
 
 fn receive(url: Url) -> Unit {
     let bytes = fetch(url)

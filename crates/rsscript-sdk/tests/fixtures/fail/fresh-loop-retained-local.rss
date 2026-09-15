@@ -1,4 +1,6 @@
-// expect: RS0601
+// expect: RS0501 RS0601
+
+// interface: fresh-loop-retained-local.rssi
 
 class RetainedImageStore {
     entries: List<Image>
@@ -7,11 +9,6 @@ class RetainedImageStore {
 struct Image {
     pixels: Buffer
 }
-
-fn Image.load(path: Path) -> fresh Image
-
-fn RetainedImageStore.store(cache: mut RetainedImageStore, image: Image) -> Unit
-    retains(image)
 
 fn maybe_cached(cache: mut RetainedImageStore, path: Path, should_store: Bool) -> fresh Image {
     local image = Image.load(path)

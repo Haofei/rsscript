@@ -1,4 +1,4 @@
-// expect: RS1001
+// expect: RS0026 RS1001
 struct Point {
     x: Int
 }

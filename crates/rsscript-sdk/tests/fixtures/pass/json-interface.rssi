@@ -1,8 +1,0 @@
-struct JsonValue
-
-pub fn parse(text: String) -> Result<fresh JsonValue, JsonError>
-
-pub fn field_string(
-    value: JsonValue,
-    name: String,
-) -> Result<String, JsonError>

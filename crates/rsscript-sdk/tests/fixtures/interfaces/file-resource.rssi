@@ -1,0 +1,16 @@
+// The `File` resource API the resource fixtures are written against, matching
+// the companion interface in spec §8.2. Each fixture declares `resource File`
+// itself so it can exercise `drop`; only the producers and accessors live here,
+// and they are bodyless because a resource producer must be external (§8.2).
+
+pub fn File.open(path: Path) -> File
+
+pub fn File.open_result(path: Path) -> Result<File, IOError>
+
+pub fn File.read_all(file: mut File) -> fresh Bytes
+
+pub fn File.stat(file: read File) -> Int
+
+pub fn File.write(file: mut File, data: String) -> Unit
+
+pub fn OS.close(fd: Int) -> Unit

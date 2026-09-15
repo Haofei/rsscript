@@ -1,0 +1,70 @@
+pub fn Picture.load(path: Path) -> Result<fresh Picture, PictureError>
+
+pub fn Picture.resize(image: mut Picture, width: Int, height: Int) -> Unit
+
+pub fn Picture.normalize(image: mut Picture) -> Unit
+
+pub fn Picture.sharpen(image: mut Picture) -> Unit
+
+pub fn Picture.inspect(image: Picture) -> Unit
+
+pub fn Picture.save(image: Picture, path: Path) -> Result<Unit, PictureError>
+
+pub fn InboundMessage.path(request: InboundMessage) -> String
+
+pub fn OutboundMessage.ok(body: String) -> Result<fresh OutboundMessage, HttpError>
+
+pub fn Settings.load(path: Path) -> Result<fresh SettingsValue, SettingsError>
+
+pub fn Settings.new(name: String, rules: List<Policy>) -> fresh Settings
+
+pub fn SettingsStore.replace(store: mut SettingsStore, value: SettingsValue) -> Unit
+    retains(value)
+
+pub fn SettingsStore.name(store: SettingsStore) -> String
+
+pub fn PolicyLoader.load_rules(path: Path) -> Result<fresh List<Policy>, SettingsError>
+
+pub fn SharedSettings.new(value: Settings) -> fresh SharedSettings
+    retains(value)
+
+pub fn SharedSettings.replace(global: mut SharedSettings, value: Settings) -> Unit
+    retains(value)
+
+pub fn MemoStore.insert(cache: mut MemoStore, key: String, value: String) -> Unit
+    retains(key) retains(value)
+
+pub fn MemoStore.lookup(cache: MemoStore, key: String) -> String
+
+pub fn Tally.add(counter: mut Tally, amount: Int) -> Unit
+
+pub fn Tally.value(counter: Tally) -> Int
+
+pub fn LexicalScope.root() -> fresh LexicalScope
+
+pub fn LexicalScope.child(parent: LexicalScope) -> fresh LexicalScope
+    retains(parent)
+
+pub fn LexicalScope.bind_function(env: mut LexicalScope, function: ClosureRecord) -> Unit
+    retains(function)
+
+pub fn LexicalScope.has_parent(env: LexicalScope) -> Bool
+
+pub fn LexicalScope.has_function(env: LexicalScope) -> Bool
+
+pub fn ClosureRecord.new(closure: LexicalScope) -> fresh ClosureRecord
+
+pub fn ClosureRecord.has_closure(function: ClosureRecord) -> Bool
+
+pub fn RetainedImageStore.store(cache: mut RetainedImageStore, image: Picture) -> Unit
+    retains(image)
+
+pub fn User.lookup(id: String) -> User
+
+pub fn User.touch(user: User) -> Unit
+
+pub fn HttpError.from_config(error: SettingsError) -> HttpError
+
+pub fn HttpError.from_json(error: JsonError) -> HttpError
+
+pub fn HttpError.from_image(error: PictureError) -> HttpError

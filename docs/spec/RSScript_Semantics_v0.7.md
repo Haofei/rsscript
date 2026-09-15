@@ -4272,10 +4272,7 @@ These are findings for the maintainer, not features.
 
 * **A `.rss` function cannot construct a resource.** Returning a resource
   constructor is `RS0702`. Every resource must be produced by a bodyless
-  function in an `.rssi` interface (§8.2). Several "pass" fixtures under
-  `crates/rsscript-sdk/tests/fixtures/pass/` therefore do *not* pass a plain
-  `rss check` — they rely on bodyless `.rss` declarations, which also emit
-  `RS0015`. Treat those fixtures as shape examples, not as checkable programs.
+  function in an `.rssi` interface (§8.2).
 * **`String` is not Copy** (§2.2), so `retains(s: String)` is legal while
   `retains(n: Int)` is `RS0007`.
 * **`Float` is `Clone` but not `Eq` and not `Ord`; `Bool` is `Ord` but `Char`

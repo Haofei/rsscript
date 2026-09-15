@@ -1,0 +1,1 @@
+pub fn Image.load(path: Path) -> fresh Image

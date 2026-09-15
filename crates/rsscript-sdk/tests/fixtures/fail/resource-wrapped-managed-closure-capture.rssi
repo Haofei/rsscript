@@ -1,0 +1,3 @@
+pub fn File.open(path: Path) -> File
+
+pub fn File.read_all(file: mut File) -> String

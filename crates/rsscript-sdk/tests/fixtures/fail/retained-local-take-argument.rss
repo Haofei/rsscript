@@ -1,12 +1,10 @@
 // expect: RS0501
 
+// interface: retained-local-take-argument.rssi
 
 struct Widget {
     value: Int
 }
-
-fn store(value: take Widget) -> Unit
-    retains(value)
 
 fn bad() -> Unit {
     local widget = Widget(value: 1)

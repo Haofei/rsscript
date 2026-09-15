@@ -1,5 +1,11 @@
 // expect: RS0601
 
+// interface: fresh-return-managed.rssi
+
+class Cache {
+    entries: List<Image>
+}
+
 struct Image {
     pixels: Buffer
 }

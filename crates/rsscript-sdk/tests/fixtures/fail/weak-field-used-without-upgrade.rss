@@ -1,4 +1,6 @@
 // expect: RS0903
+// interface: weak-field-used-without-upgrade.rssi
+
 class User {
     id: Int
 }
@@ -6,8 +8,6 @@ class User {
 struct Session {
     owner: weak User
 }
-
-fn User.log(user: User) -> Unit
 
 fn bad_read(session: Session) -> Unit {
     User.log(user: session.owner)

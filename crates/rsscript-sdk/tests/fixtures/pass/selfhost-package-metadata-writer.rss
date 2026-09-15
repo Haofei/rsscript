@@ -1,3 +1,4 @@
+// interface: ../interfaces/host-fs.rssi
 
 struct PackageMetadataInput {
     package_name: String

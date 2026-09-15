@@ -1,0 +1,3 @@
+pub fn use_inner(inner: mut Inner, cache: mut Cache) -> Unit
+
+pub fn make_state() -> fresh State

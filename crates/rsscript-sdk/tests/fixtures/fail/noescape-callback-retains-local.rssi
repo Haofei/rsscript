@@ -1,0 +1,2 @@
+pub fn Cache.store(image: ImageData) -> Unit
+    retains(image)

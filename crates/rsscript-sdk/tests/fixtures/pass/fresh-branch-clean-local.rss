@@ -1,10 +1,8 @@
+// interface: fresh-branch-clean-local.rssi
 
 struct Image {
     pixels: Buffer
 }
-
-fn Image.load(path: Path) -> fresh Image
-fn Image.inspect(image: Image) -> Unit
 
 fn thumbnail(path: Path, should_inspect: Bool) -> fresh Image {
     local image = Image.load(path)

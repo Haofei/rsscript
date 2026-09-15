@@ -1,3 +1,4 @@
+// interface: field-disjoint-local-inline.rssi
 
 struct Cache {
     value: Int
@@ -15,9 +16,6 @@ struct Inner {
 struct State {
     inner: Inner
 }
-
-fn use_parts(cache: mut Cache, buffer: mut Buffer) -> Unit
-fn make_state() -> fresh State
 
 fn run() -> Unit {
     local state = make_state()

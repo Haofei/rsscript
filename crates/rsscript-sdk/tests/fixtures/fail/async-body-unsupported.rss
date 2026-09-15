@@ -1,6 +1,6 @@
 // expect: RS0029
 
-async fn fetch(url: Url) -> Result<fresh Bytes, NetworkError>
+// interface: async-body-unsupported.rssi
 
 fn receive(url: Url) -> Unit {
     let bytes = await fetch(url)

@@ -1,0 +1,3 @@
+pub fn apply(image: mut Image, callback: noescape Fn()) -> Unit
+
+pub fn save_image(image: Image) -> Unit

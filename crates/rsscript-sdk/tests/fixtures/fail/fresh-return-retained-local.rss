@@ -1,5 +1,7 @@
 // expect: RS0501 RS0601
 
+// interface: fresh-return-retained-local.rssi
+
 class RetainedImageStore {
     entries: Map<String, Image>
 }
@@ -7,11 +9,6 @@ class RetainedImageStore {
 struct Image {
     pixels: Buffer
 }
-
-fn Image.load(path: Path) -> fresh Image
-
-fn RetainedImageStore.store(cache: mut RetainedImageStore, image: Image) -> Unit
-    retains(image)
 
 fn bad_fresh(cache: mut RetainedImageStore, path: Path) -> fresh Image {
     local image = Image.load(path)

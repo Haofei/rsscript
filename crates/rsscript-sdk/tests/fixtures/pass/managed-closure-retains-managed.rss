@@ -1,6 +1,6 @@
-struct Image
+// interface: managed-closure-retains-managed.rssi
 
-fn Image.inspect(image: Image) -> Unit
+struct Image
 
 fn retain_callback(image: Image) -> Unit {
     let callback = || {

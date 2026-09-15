@@ -1,0 +1,7 @@
+pub fn Picture.load(path: Path) -> Result<fresh Picture, PictureError>
+
+pub fn Picture.resize(image: mut Picture, width: Int, height: Int) -> Unit
+
+pub fn Picture.normalize(image: mut Picture) -> Unit
+
+pub fn Picture.save(image: Picture, path: Path) -> Result<Unit, PictureError>

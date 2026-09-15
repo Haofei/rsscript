@@ -1,8 +1,8 @@
 // expect: RS0301
 
-struct Widget
+// interface: managed-to-local-effect.rssi
 
-fn make_widget() -> fresh Widget
+struct Widget
 
 fn bad() -> Unit {
     let shared = make_widget()

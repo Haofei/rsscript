@@ -1,5 +1,7 @@
 // expect: RS0601
 
+// interface: fresh-return-handle-field.rssi
+
 struct Image {
     pixels: Buffer
 }
@@ -7,8 +9,6 @@ struct Image {
 struct ImageBox {
     image: handle Image
 }
-
-fn load_box(path: Path) -> fresh ImageBox
 
 fn bad_image(path: Path) -> fresh Image {
     local boxed = load_box(path)

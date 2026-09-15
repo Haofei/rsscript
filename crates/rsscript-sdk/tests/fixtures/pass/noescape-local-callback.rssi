@@ -1,0 +1,3 @@
+pub fn Picture.load(path: Path) -> Result<fresh Picture, PictureError>
+
+pub fn Picture.inspect(picture: Picture) -> Unit

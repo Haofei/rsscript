@@ -1,8 +1,8 @@
 // expect: RS0803
 
-struct Callback
+// interface: local-closure-pass-ordinary.rssi
 
-fn store(callback: Callback) -> Unit
+struct Callback
 
 fn bad() -> Unit {
     local callback = || {

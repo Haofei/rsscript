@@ -1,3 +1,4 @@
+// interface: file-read-write-resource.rssi
 
 resource File {
     fd: Int

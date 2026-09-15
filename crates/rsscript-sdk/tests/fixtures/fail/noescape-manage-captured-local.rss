@@ -1,4 +1,4 @@
-// expect: RS0804
+// expect: RS0307 RS0804
 
 struct Image {
     id: Int

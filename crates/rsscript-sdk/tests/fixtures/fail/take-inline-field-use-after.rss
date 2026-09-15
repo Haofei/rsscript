@@ -1,16 +1,12 @@
 // expect: RS0401
 
+// interface: take-inline-field-use-after.rssi
+
 struct Image
 
 struct Holder {
     image: Image
 }
-
-fn make_holder(path: Path) -> fresh Holder
-
-fn consume(image: take Image) -> Unit
-
-fn inspect(image: Image) -> Unit
 
 fn bad_take_field(path: Path) -> Unit {
     local holder = make_holder(path)

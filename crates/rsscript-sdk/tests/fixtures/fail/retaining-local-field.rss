@@ -1,5 +1,7 @@
 // expect: RS0501
 
+// interface: retaining-local-field.rssi
+
 struct Image {
     pixels: Buffer
 }
@@ -9,11 +11,6 @@ struct Holder {
 }
 
 struct Cache
-
-fn Cache.store(cache: mut Cache, value: Image) -> Unit
-    retains(value)
-
-fn make_holder(path: Path) -> fresh Holder
 
 fn bad_store(cache: mut Cache, path: Path) -> Unit {
     local holder = make_holder(path)

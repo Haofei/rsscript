@@ -1,4 +1,7 @@
 // expect: RS0801
+// interface: ../interfaces/image.rssi
+
+struct Callback
 
 class Scheduler {
     callbacks: List<Callback>
