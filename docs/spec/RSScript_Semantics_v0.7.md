@@ -201,19 +201,29 @@ Core and standard-package interfaces (`CORE_INTERFACES`,
 `STANDARD_PACKAGE_INTERFACES`) declare no `module`: they are the root namespace
 and are prelude-visible, so their names are reached without any `use`.
 
-**Accepted** — the interface declaring `module host.fs` is supplied to the check
+A cross-module import therefore only resolves when the other module's file or
+`.rssi` is part of the same check — that is why the example pipelines under
+`examples/` pass their `interfaces/*.rssi` to `rss check`. Within one file, the
+module it declares is itself importable:
+
+**Accepted**
 
 ```rsscript
 module app.report
 
-use host.fs.read_all
+use app.report.Row
 
-pub fn title(name: String) -> fresh String {
-    return String.concat(left: "Report: ", right: name)
+struct Row {
+    name: String
+}
+
+pub fn title(row: read Row) -> fresh String {
+    return String.concat(left: "Report: ", right: row.name)
 }
 
 fn main() -> Unit {
-    Output.write(message: title(name: "q1"))
+    local row = Row(name: "q1")
+    Output.write(message: title(row: read row))
     return Unit
 }
 ```
