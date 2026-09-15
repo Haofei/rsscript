@@ -192,10 +192,18 @@ impl RegVm {
 
     /// Repeatedly wake any parked task whose wait is now satisfiable, until no
     /// further progress (a fixpoint), so a single send can cascade-wake a chain.
+    ///
+    /// When one event unblocks several parked tasks at once they wake in
+    /// ascending task-id order, which is the order they were created: task ids
+    /// are handed out by a counter in `create_task`. `tasks` is a `HashMap`, so
+    /// without the sort below the wake order — and therefore the order the
+    /// woken tasks enter the FIFO ready queue and resume — would be hash order,
+    /// and would vary between runs of the same program. The execution report
+    /// and the runner are deterministic, so this is too.
     pub(super) fn satisfy_waiters(&mut self) -> Result<(), EvalError> {
         loop {
             self.poll_provider_futures();
-            let ready: Vec<TaskId> = self
+            let mut ready: Vec<TaskId> = self
                 .tasks
                 .iter()
                 .filter(|(_, slot)| slot.done.is_none())
@@ -220,6 +228,7 @@ impl RegVm {
             if ready.is_empty() {
                 return Ok(());
             }
+            ready.sort_unstable();
             for tid in ready {
                 self.resolve_wait(tid)?;
             }
@@ -566,6 +575,41 @@ mod tests {
         assert_eq!(usage.tasks_completed, 1, "only main completed");
         assert_eq!(usage.tasks_cancelled, 1);
         assert_eq!(usage.tasks_live_at_return, 0);
+    }
+
+    /// Wake order after a park is the parked tasks' creation order.
+    ///
+    /// `satisfy_waiters` collects the newly-runnable tasks by iterating the
+    /// `tasks` map, which is a `HashMap`: before the sort, the order the woken
+    /// tasks entered the ready queue — and so the order they resumed — was hash
+    /// order and varied between runs of the same program. Eight waiters make an
+    /// accidental pass vanishingly unlikely (1 in 8!).
+    #[test]
+    fn one_event_wakes_parked_tasks_in_creation_order() {
+        let mut vm = RegVm::new(cancellation_unit(), vec![], HashMap::new());
+        let worker = Rc::clone(&vm.unit.functions[1]);
+        let created = (0..8)
+            .map(|_| {
+                let tid = vm.create_task(Rc::clone(&worker), Vec::new());
+                let slot = vm.tasks.get_mut(&tid).expect("task slot");
+                slot.resume_dst = 0;
+                // An empty `JoinAll` is satisfied the moment it is polled, so
+                // every task below is unblocked by the same pass.
+                slot.wait = Some(Wait::JoinAll { tasks: Vec::new() });
+                tid
+            })
+            .collect::<Vec<_>>();
+        // `create_task` queues each new task as ready; wake order is what is
+        // being measured, so start from an empty queue.
+        vm.ready_queue.clear();
+
+        vm.satisfy_waiters().expect("every wait is satisfiable");
+
+        assert_eq!(
+            vm.ready_queue.iter().copied().collect::<Vec<_>>(),
+            created,
+            "one event must wake parked tasks in creation order, not hash order"
+        );
     }
 
     #[test]

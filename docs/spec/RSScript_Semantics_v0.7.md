@@ -328,6 +328,9 @@ module-qualified path, is rejected with `RS0019` (§12.1.1); `use a.b.*` binds
 only the module's `pub` names. Declarations supplied by an `.rssi`, the prelude
 interfaces, and `main` are exempt.
 
+Protocols carry no visibility at all and are not module-scoped, so neither `pub`
+nor `RS0019` applies to a protocol name. The rule is stated in §7.1.
+
 ### 1.7 Reserved names
 
 Declaration leaf names beginning `__rss_` or `__rsscript_` are reserved for
@@ -3218,6 +3221,28 @@ Generic protocols and generic protocol implementations are reserved: a `<` two
 tokens after `protocol` or `impl` is `RS0015` ("generic protocol declaration").
 Use a function generic with a protocol bound instead.
 
+**A protocol has no visibility, and protocol names are global.**
+
+> A `protocol` declaration takes no `pub`, and the parser records none:
+> `ProtocolDecl` carries a name and a span and nothing else
+> (`rsscript-syntax/src/ast.rs`). Every protocol declared anywhere in the
+> checked program — in the source program or in any supplied `.rssi` — is
+> visible everywhere in it, without a `use`. The cross-module privacy rule
+> (`RS0019`, §1.6) therefore has no private protocol to reject, and neither does
+> the `pub`-only wildcard import.
+
+Name resolution matches: `checks/declarations/signatures.rs::visible_protocol_names`
+and `::protocol_name_is_visible` scan every interface program and the whole
+source program with no module filter and no `pub` filter, so `RS0027` ("unknown
+protocol") means the name is declared nowhere, never that it is declared out of
+reach.
+
+Protocol *methods* are a separate matter. A protocol declaration contributes one
+bodyless `Protocol.method` function per method, and an `impl` maps each of those
+to a concrete function whose own `pub`-ness is the ordinary declaration rule
+(§1.6). A protocol declared in a file that also declares a `module` does not
+currently work at all — see §12.2.
+
 ### 7.2 Declaring conformance
 
 ```
@@ -4151,16 +4176,38 @@ Guaranteed (`docs/spec/RSScript_Execution_Spec_v0.1.md`,
   a task runs until it suspends or completes. A newly created task is pushed to
   the back of the ready queue, so sibling `async let` children *start* in
   declaration order.
+* **Wake order after a park is creation order.**
+
+  > When one event makes several parked tasks runnable at once, they are woken
+  > in ascending task-id order — which is the order they were created, since
+  > `create_task` hands ids out from a counter. They therefore enter the FIFO
+  > ready queue in that order, and resume in it.
+
+  `satisfy_waiters` collects the newly-runnable tasks by scanning the task
+  table, which is a `HashMap`, and sorts them before waking any
+  (`scheduler.rs::satisfy_waiters`); without that sort the order was hash order
+  and varied between runs of the same program. Pinned by
+  `scheduler.rs::one_event_wakes_parked_tasks_in_creation_order`. This is the
+  same commitment as `select` tie-breaking and the execution report: a program
+  run twice on the same input behaves the same way both times.
 
 Explicitly **not** guaranteed, and *unspecified* at the language level:
 
-* **Wake order after a park.** `satisfy_waiters` scans the task table, which is
-  a `HashMap`, so when one event makes several parked tasks runnable at once the
-  order in which they are woken is not defined. Only the *start* order of tasks
-  and the FIFO ready queue are stable; a program must not depend on which of
-  several simultaneously-unblocked tasks resumes first.
-* **Fairness.** Nothing bounds how long a ready task may wait, and a task that
-  never suspends never yields.
+* **Fairness.** Nothing bounds how long a ready task may wait, and this is
+  deliberate rather than merely unspecified: the scheduler is cooperative, so a
+  task yields only at a suspension point, and a task that never suspends never
+  yields. Precisely:
+
+  > A task is scheduled only when it is at the front of the ready queue, and it
+  > runs until it suspends or completes. There is no preemption, no time slice,
+  > and no starvation bound. A task with no `await`, no channel operation, and
+  > no `select` runs to completion once started, whatever else is ready.
+
+  The ordering rules above (start order, ready-queue FIFO, wake order) say
+  *which* task runs next; nothing says *when*. A program that needs another task
+  to make progress must reach a suspension point. The only bounds on a
+  non-yielding task are the run limits — step, allocation, deadline — which stop
+  the program rather than reschedule it.
 * **Parallelism.** Nothing in the language says whether children run on separate
   OS threads or are interleaved on one. Purity and parallelism are inferred from
   validated source or supplied by provider metadata.
@@ -4575,6 +4622,19 @@ These are findings for the maintainer, not features.
   a wrong answer, but it is a rule the design implies and the front end does
   not fully deliver: the fix is a checker that types more expression forms, not
   a backend that guesses.
+* **A protocol cannot be declared inside a module.** A protocol's methods are
+  contributed as bodyless `Protocol.method` functions, and
+  `source_rules.rs` exempts them from `RS0015` ("bodyless source function") by
+  matching the function's namespace against the declared protocol names. In a
+  file that also declares a `module`, the module mangling has already renamed
+  the method to `app__Sized.area`, whose namespace `app__Sized` is not the
+  protocol name `Sized`, so the exemption misses and every method of the
+  protocol is rejected. The `impl` then reports `RS1301` ("`Sized` does not
+  declare method `area`") and each dispatch reports `RS0206`. Protocols
+  therefore work only in a module-less `.rss` or in an `.rssi`, which is why
+  every shipped protocol is declared in one of those. The rule in §7.1 — that
+  protocol names are global — is what the name resolution does; this is a
+  mangling that the exemption does not follow.
 * **A used binding with an open generic position is trusted.** `RS0034` fires
   only when the binding is never used (§3.3). `let xs = []` followed by pushes
   of mixed element types, or a bare `let v = Ok(1)` that is later returned, keeps
