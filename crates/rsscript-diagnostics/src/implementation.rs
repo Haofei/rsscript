@@ -13,6 +13,7 @@ pub mod code {
     pub const UNKNOWN_RETAINED_PARAMETER: &str = "RS0007";
     pub const INVALID_TRY_OPERATOR: &str = "RS0013";
     pub const UNSUPPORTED_SYNTAX: &str = "RS0015";
+    pub const LOOP_CONTROL_OUTSIDE_LOOP: &str = "RS0016";
     pub const NON_EXHAUSTIVE_MATCH: &str = "RS0021";
     pub const ASYNC_CALL_NOT_CONSUMED: &str = "RS0022";
     pub const FD_OUTSIDE_INTERNAL_BOUNDARY: &str = "RS0023";
@@ -488,6 +489,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::UNSUPPORTED_SYNTAX,
         title: "unsupported syntax",
         explanation: "The frontend parser could not lower this source construct into the supported RSScript AST. The checker reports this before Rust lowering so unsupported source does not become generated Rust `todo!()` code.",
+    },
+    DiagnosticExplanation {
+        code: code::LOOP_CONTROL_OUTSIDE_LOOP,
+        title: "loop control outside a loop",
+        explanation: "`break` and `continue` name the innermost enclosing `loop`, `while`, or `for` of the same function body. A closure body starts a new control-flow region, so a `break` written inside a closure does not reach a loop around the closure. Outside any enclosing loop the statement has no target and the program would not lower, so the checker rejects it instead of letting it become a backend error.",
     },
     DiagnosticExplanation {
         code: code::LOWER_NAME_CONFLICT,

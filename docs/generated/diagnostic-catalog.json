@@ -75,6 +75,11 @@
       "explanation": "The frontend parser could not lower this source construct into the supported RSScript AST. The checker reports this before Rust lowering so unsupported source does not become generated Rust `todo!()` code."
     },
     {
+      "code": "RS0016",
+      "title": "loop control outside a loop",
+      "explanation": "`break` and `continue` name the innermost enclosing `loop`, `while`, or `for` of the same function body. A closure body starts a new control-flow region, so a `break` written inside a closure does not reach a loop around the closure. Outside any enclosing loop the statement has no target and the program would not lower, so the checker rejects it instead of letting it become a backend error."
+    },
+    {
       "code": "RS0021",
       "title": "non-exhaustive match",
       "explanation": "`match` must cover every visible variant for the supported enum shapes. In v0.7 that means `Some`/`None`, `Ok`/`Err`, all variants of a declared sum type, or a `_` fallback."

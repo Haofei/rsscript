@@ -99,6 +99,9 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
                     block,
                     return_error_type.as_deref(),
                 ));
+            analyzer
+                .diagnostics
+                .extend(rsscript_semantics::loop_control_flow_diagnostics(block));
             check_block(
                 analyzer,
                 &local_analysis,

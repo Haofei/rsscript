@@ -78,6 +78,177 @@ pub fn missing_return_value_diagnostics(program: &Program, hir: &Hir) -> Vec<Dia
     diagnostics
 }
 
+/// Diagnose `break`/`continue` written outside any enclosing loop.
+///
+/// The rule is purely lexical: a `break` or `continue` binds to the innermost
+/// `loop`/`while`/`for` that encloses it *in the same control-flow region*. A
+/// closure body is its own region, so a loop surrounding the closure is not a
+/// target for a `break` inside it. Every other nesting construct (`if`, `match`
+/// arms, `select` arms, `with` bodies, plain blocks) is transparent.
+pub fn loop_control_flow_diagnostics(block: &HirBlock) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    collect_loop_control_flow(block, false, &mut diagnostics);
+    diagnostics
+}
+
+fn loop_control_outside_loop_diagnostic(keyword: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        code::LOOP_CONTROL_OUTSIDE_LOOP,
+        format!("`{keyword}` is not inside a loop."),
+        span,
+        "no enclosing loop",
+    )
+    .with_cause(
+        "`break` and `continue` target the innermost enclosing `loop`, `while`, or `for` of the same control-flow region; a closure body starts a new region.",
+    )
+    .with_fix(
+        "remove_loop_control",
+        format!("Remove the `{keyword}`, or move it inside the loop it was meant to control."),
+        "manual",
+    )
+}
+
+fn collect_loop_control_flow(block: &HirBlock, in_loop: bool, diagnostics: &mut Vec<Diagnostic>) {
+    for statement in &block.statements {
+        match statement {
+            HirStmt::Break(span) if !in_loop => {
+                diagnostics.push(loop_control_outside_loop_diagnostic("break", span.clone()));
+            }
+            HirStmt::Continue(span) if !in_loop => {
+                diagnostics.push(loop_control_outside_loop_diagnostic(
+                    "continue",
+                    span.clone(),
+                ));
+            }
+            HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
+            HirStmt::Loop {
+                condition, body, ..
+            } => {
+                if let Some(condition) = condition {
+                    collect_loop_control_flow_expr(condition, in_loop, diagnostics);
+                }
+                collect_loop_control_flow(body, true, diagnostics);
+            }
+            HirStmt::For { iterable, body, .. } => {
+                collect_loop_control_flow_expr(iterable, in_loop, diagnostics);
+                collect_loop_control_flow(body, true, diagnostics);
+            }
+            HirStmt::If {
+                condition,
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_loop_control_flow_expr(condition, in_loop, diagnostics);
+                collect_loop_control_flow(then_body, in_loop, diagnostics);
+                if let Some(else_body) = else_body {
+                    collect_loop_control_flow(else_body, in_loop, diagnostics);
+                }
+            }
+            HirStmt::With { resource, body, .. } => {
+                collect_loop_control_flow_expr(resource, in_loop, diagnostics);
+                collect_loop_control_flow(body, in_loop, diagnostics);
+            }
+            HirStmt::Match { value, arms, .. } => {
+                collect_loop_control_flow_expr(value, in_loop, diagnostics);
+                for arm in arms {
+                    if let Some(guard) = &arm.guard {
+                        collect_loop_control_flow_expr(guard, in_loop, diagnostics);
+                    }
+                    collect_loop_control_flow(&arm.body, in_loop, diagnostics);
+                }
+            }
+            HirStmt::Select { arms, .. } => {
+                for arm in arms {
+                    collect_loop_control_flow_expr(&arm.operation, in_loop, diagnostics);
+                    collect_loop_control_flow(&arm.body, in_loop, diagnostics);
+                }
+            }
+            HirStmt::Let { value, .. } => {
+                if let Some(value) = value {
+                    collect_loop_control_flow_expr(value, in_loop, diagnostics);
+                }
+            }
+            HirStmt::Return { value, .. } => {
+                if let Some(value) = value {
+                    collect_loop_control_flow_expr(value, in_loop, diagnostics);
+                }
+            }
+            HirStmt::Assign { target, value, .. } => {
+                collect_loop_control_flow_expr(target, in_loop, diagnostics);
+                collect_loop_control_flow_expr(value, in_loop, diagnostics);
+            }
+            HirStmt::Expr(expr) => collect_loop_control_flow_expr(expr, in_loop, diagnostics),
+        }
+    }
+}
+
+/// Walk into the blocks an expression can carry. A closure body is a new
+/// control-flow region, so it restarts with no enclosing loop.
+fn collect_loop_control_flow_expr(
+    expr: &HirExpr,
+    in_loop: bool,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match expr {
+        HirExpr::Closure { body, .. } => collect_loop_control_flow(body, false, diagnostics),
+        HirExpr::Match { value, arms, .. } => {
+            collect_loop_control_flow_expr(value, in_loop, diagnostics);
+            for arm in arms {
+                if let Some(guard) = &arm.guard {
+                    collect_loop_control_flow_expr(guard, in_loop, diagnostics);
+                }
+                collect_loop_control_flow(&arm.body, in_loop, diagnostics);
+            }
+        }
+        HirExpr::Call { args, receiver, .. } => {
+            if let Some(receiver) = receiver {
+                collect_loop_control_flow_expr(&receiver.value, in_loop, diagnostics);
+            }
+            for arg in args {
+                collect_loop_control_flow_expr(&arg.value, in_loop, diagnostics);
+            }
+        }
+        HirExpr::Binary { left, right, .. } => {
+            collect_loop_control_flow_expr(left, in_loop, diagnostics);
+            collect_loop_control_flow_expr(right, in_loop, diagnostics);
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
+        | HirExpr::Try { value, .. }
+        | HirExpr::Field { base: value, .. } => {
+            collect_loop_control_flow_expr(value, in_loop, diagnostics);
+        }
+        HirExpr::Index { base, index, .. } => {
+            collect_loop_control_flow_expr(base, in_loop, diagnostics);
+            collect_loop_control_flow_expr(index, in_loop, diagnostics);
+        }
+        HirExpr::ArrayLiteral { items, .. } => {
+            for item in items {
+                collect_loop_control_flow_expr(item, in_loop, diagnostics);
+            }
+        }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                collect_loop_control_flow_expr(&entry.key, in_loop, diagnostics);
+                collect_loop_control_flow_expr(&entry.value, in_loop, diagnostics);
+            }
+        }
+        HirExpr::ObjectLiteral { fields, .. } => {
+            for field in fields {
+                collect_loop_control_flow_expr(&field.value, in_loop, diagnostics);
+            }
+        }
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Char { .. }
+        | HirExpr::Unknown(_) => {}
+    }
+}
+
 /// Diagnose a control-flow condition whose checked HIR type is not `Bool`.
 /// Unknown expression types are left to the resolving/type-checking passes.
 pub fn bool_condition_diagnostic(expr: &HirExpr, construct: &str) -> Option<Diagnostic> {
@@ -692,6 +863,49 @@ fn match_arm_value_type(block: &HirBlock) -> Option<&str> {
 mod tests {
     use super::*;
     use rsscript_syntax::parse_source;
+
+    fn loop_control_codes(source: &str) -> Vec<String> {
+        let program = parse_source("loop-control.rss", source);
+        let hir = Hir::from_syntax(&program);
+        let block = hir
+            .function_body("check")
+            .and_then(|body| body.block.as_ref())
+            .expect("function body")
+            .clone();
+        loop_control_flow_diagnostics(&block)
+            .into_iter()
+            .map(|diagnostic| diagnostic.code.clone())
+            .collect()
+    }
+
+    #[test]
+    fn rejects_break_and_continue_with_no_enclosing_loop() {
+        assert_eq!(
+            loop_control_codes("fn check() -> Unit { if true { break } continue }"),
+            [
+                code::LOOP_CONTROL_OUTSIDE_LOOP,
+                code::LOOP_CONTROL_OUTSIDE_LOOP
+            ]
+        );
+    }
+
+    #[test]
+    fn accepts_break_and_continue_inside_loops() {
+        assert!(
+            loop_control_codes(
+                "fn check(items: read List<Int>) -> Unit { while true { if true { break } } for item in items { continue } }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_closure_body_does_not_inherit_the_enclosing_loop() {
+        assert_eq!(
+            loop_control_codes("fn check() -> Unit { while true { let f = || { break } } }"),
+            [code::LOOP_CONTROL_OUTSIDE_LOOP]
+        );
+    }
 
     #[test]
     fn derives_non_exhaustive_match_diagnostics_from_resolved_facts() {

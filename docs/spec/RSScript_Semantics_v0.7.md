@@ -2481,9 +2481,14 @@ Three loop forms (`ast.rs`):
 | `for name in iterable { … }` | `ForStmt`; the iterable must be `List<T>` |
 | `await for name in stream { … }` | `ForStmt` with `is_async`; the iterable must be `Stream<T>` |
 
-`break` and `continue` are statements. Note that a `loop` is treated as
-*possibly falling through* by the return check (§4.7), so an unconditional
-`loop { }` at the end of a non-`Unit` function still produces `RS0208`.
+`break` and `continue` are statements. Each targets the innermost enclosing
+`loop`/`while`/`for` *of the same control-flow region*; a closure body starts a
+new region, so a `break` written inside a closure does not reach a loop around
+the closure. With no such enclosing loop the statement is `RS0016`
+(`control_flow.rs::loop_control_flow_diagnostics`). Note that a `loop` is
+treated as *possibly falling through* by the return check (§4.7), so an
+unconditional `loop { }` at the end of a non-`Unit` function still produces
+`RS0208`.
 
 The `for` element binding is a read view for non-Copy struct elements (§5.6).
 
@@ -2530,6 +2535,19 @@ fn main() -> Unit {
     for x in n {
         Output.write(message: "x")
     }
+    return Unit
+}
+```
+
+**Rejected — `RS0016`** (twice: once for `break`, once for `continue`)
+
+```rsscript
+fn main() -> Unit {
+    let n = 1
+    if n > 0 {
+        break
+    }
+    continue
     return Unit
 }
 ```
@@ -4021,6 +4039,7 @@ explanations).
 | Code | Title | Section |
 | --- | --- | --- |
 | `RS0013` | invalid try operator | §6.10 |
+| `RS0016` | `break`/`continue` outside a loop | §6.3 |
 | `RS0021` | non-exhaustive match | §6.7 |
 | `RS0037` | variant pattern arity mismatch | §6.4 |
 | `RS0209` | control-flow type mismatch (condition, iterable, scrutinee, literal pattern, variant family, match-arm type) | §6.2, §6.3, §6.6, §6.8 |
@@ -4111,7 +4130,7 @@ fixture or by an example in this document):
 This is a documentation gap in the generated catalog, not a language gap (§12).
 
 Note also that the code space has holes: `RS0004`, `RS0006`, `RS0008`–`RS0012`,
-`RS0014`, `RS0016`–`RS0020`, `RS0703`, and `RS0705` are not defined.
+`RS0014`, `RS0017`–`RS0020`, `RS0703`, and `RS0705` are not defined.
 
 ---
 
@@ -4148,7 +4167,6 @@ These are findings for the maintainer, not features.
 
 * **No definite-assignment analysis.** `let x: Int` with no initializer,
   followed by a read of `x`, is accepted (§6.12).
-* **`break` / `continue` outside a loop** are accepted by the checker.
 * **`?` in a function that returns neither `Result` nor `Option`** is not
   diagnosed as long as the operand is a `Result`. `try_error_type_diagnostics`
   derives its obligation from the *function's* error type, so a function with no
