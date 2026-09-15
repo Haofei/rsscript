@@ -93,7 +93,7 @@ recognised by the parser as ordinary identifiers in keyword position.
 | `'x'` | `Char` |
 | `true` / `false` | `Bool` |
 | `Unit` | `Unit` |
-| `[a, b]` | `List<T>` where `T` is the type of the *first* element; an empty list gets the placeholder element type `?` |
+| `[a, b]` | `List<T>` where `T` is the type of the *first* element; an empty list gets the placeholder element type `?`, and an unused binding of one is `RS0034` (§3.3) |
 | `{ … }` object literal | `JsonLiteral` |
 | `{ k: v }` map literal | `MapLiteral` |
 
@@ -1002,8 +1002,10 @@ Two consequences are worth stating plainly because they surprise people:
   String` (§2.13). `let x = a + b` on a mismatched or non-numeric pair leaves
   `x` untyped, because `operators.rs` already reports that pair as
   `RS0210`/`RS1001` and a derived type would only add a second error.
-* **An empty list literal has element type `?`.** `let xs = []` is effectively
-  untyped; annotate it (`let xs: List<Int> = []`).
+* **An empty list literal has element type `?`.** `let xs = []` gives `xs` the
+  type `List<?>`, and `?` makes the dependent checks skip. An *unused* one is
+  `RS0034` (§3.3); a used one is trusted, exactly as a used bare `Ok(...)` is.
+  Annotate it (`let xs: List<Int> = []`) when the element type matters.
 
 Local bindings do not need annotations when the initializer's type is known:
 
@@ -1022,18 +1024,29 @@ fn main() -> Unit {
 
 ### 3.3 When a binding annotation is required
 
-Because `Ok`, `Err`, and `None` each leave one generic position open, a `let`
-bound to a bare one of them is only well-typed if something later constrains the
-open position. If the binding is never used, nothing can, and the program would
-not lower. The checker reports that in RSScript instead of letting it surface as
-a backend "type annotations needed" error: `RS0034`
-(`source_rules.rs::uninferable_binding_type_diagnostic`).
+Because `Ok`, `Err`, `None`, and an empty list literal `[]` each leave one
+generic position open, a `let` bound to a bare one of them is only well-typed if
+something later constrains the open position. If the binding is never used,
+nothing can, and the program would not lower. The checker reports that in
+RSScript instead of letting it surface as a backend "type annotations needed"
+error: `RS0034` (`ownership.rs::uninferable_binding_type_diagnostic`, applied by
+`checks/body/binding.rs::open_generic_initializer`). `Some(x)` and a non-empty
+`[x, …]` are fully determined by their contents and are excluded.
 
 **Rejected — `RS0034`**
 
 ```rsscript
 fn main() -> Unit {
     let value = Ok(1)
+    return Unit
+}
+```
+
+**Rejected — `RS0034`**
+
+```rsscript
+fn main() -> Unit {
+    let xs = []
     return Unit
 }
 ```
@@ -4247,8 +4260,11 @@ and finding no enforcing code.
 
 These are findings for the maintainer, not features.
 
-* **An empty list literal has element type `?`** and does not trigger `RS0034`,
-  unlike a bare `Ok(...)`/`None` (§1.2, §3.3).
+* **A used binding with an open generic position is trusted.** `RS0034` fires
+  only when the binding is never used (§3.3). `let xs = []` followed by pushes
+  of mixed element types, or a bare `let v = Ok(1)` that is later returned, keeps
+  the `?`/placeholder position and the dependent checks keep skipping it. There
+  is no constraint propagation from later uses back to the binding (§3.2).
 
 ### 12.3 Surprises worth calling out
 

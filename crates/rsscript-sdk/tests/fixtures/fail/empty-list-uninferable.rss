@@ -1,0 +1,6 @@
+// expect: RS0034
+
+fn main() -> Unit {
+    let xs = []
+    return Unit
+}

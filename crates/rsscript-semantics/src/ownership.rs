@@ -484,11 +484,11 @@ pub fn uninferable_binding_type_diagnostic(name: &str, span: Span) -> Diagnostic
         "uninferable binding type",
     )
     .with_cause(
-        "A bare `Ok(...)`, `Err(...)`, or `None` leaves a type parameter open, and this binding is never used, so nothing can constrain it — the type is ambiguous and would not lower to valid Rust.",
+        "A bare `Ok(...)`, `Err(...)`, `None`, or `[]` leaves a type parameter open, and this binding is never used, so nothing can constrain it — the type is ambiguous and would not lower to valid Rust.",
     )
     .with_fix(
         "annotate_binding_type",
-        "Add a type annotation (e.g. `let v: Result<Int, String> = ...`) or remove the unused binding.",
+        "Add a type annotation (e.g. `let v: Result<Int, String> = ...`, `let xs: List<Int> = []`) or remove the unused binding.",
         "manual",
     )
 }
