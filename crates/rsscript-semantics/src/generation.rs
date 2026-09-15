@@ -108,7 +108,37 @@ pub struct Completion {
     pub signature: Option<String>,
     pub result_type: Option<TypeRef>,
     pub required_effect: Option<Effect>,
+    /// The resolved parameters of a callable candidate, in declaration order.
+    ///
+    /// Empty for anything that is not a call. The rendered [`Self::signature`]
+    /// string carries the same facts for a human; this is the machine form, so
+    /// a generator picks the label and the effect instead of inferring them
+    /// from prose.
+    pub parameters: Vec<ParameterFact>,
     pub completeness: Completeness,
+}
+
+/// One resolved parameter of a callable completion candidate.
+///
+/// Wrong call-site effects and invented labels are the two failure classes the
+/// language card made *worse*: telling a model that `mut`/`take` and argument
+/// names are explicit, without telling it which, converts silence into
+/// confident error. These are the facts that answer "which effect and which
+/// label does this parameter want?" before the call is written.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ParameterFact {
+    pub name: String,
+    pub ty: String,
+    /// The effect the call site must supply. `read` is the language default.
+    pub effect: Effect,
+    /// Whether the effect keyword has to be written. `read` is canonical by
+    /// omission, so only `mut` and `take` are written at a call site.
+    pub effect_written: bool,
+    /// Whether `name:` may be left off at a call to this function. Public,
+    /// core, native, constructor and protocol calls require every label;
+    /// private helper calls and receiver-call shorthand accept positional
+    /// arguments.
+    pub label_omittable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -618,8 +648,41 @@ fn completion_from_semantic(
         required_effect: matches!(kind, CompletionKind::ArgName | CompletionKind::Method)
             .then(|| candidate.required_effect.map(effect))
             .flatten(),
+        parameters: candidate
+            .signature
+            .as_ref()
+            .map(|signature| parameter_facts(signature, kind))
+            .unwrap_or_default(),
         completeness: semantic_completeness(candidate.completeness),
     }
+}
+
+fn parameter_facts(
+    signature: &crate::hir::FunctionSig,
+    kind: CompletionKind,
+) -> Vec<ParameterFact> {
+    // Positional arguments are accepted by receiver-call shorthand and by a
+    // private declaration in this program; a public, builtin, or external
+    // signature — every core-interface function included — requires each
+    // label. This mirrors the call checker's own `allow_positional_args` rule,
+    // so the answer here and the diagnostic that fires on a wrong call cannot
+    // disagree.
+    let label_omittable = kind == CompletionKind::Method
+        || (!signature.is_public && !signature.is_builtin && !signature.is_external);
+    signature
+        .params
+        .iter()
+        .map(|parameter| {
+            let resolved = parameter.effect.unwrap_or(crate::hir::ParamEffect::Read);
+            ParameterFact {
+                name: parameter.name.clone(),
+                ty: parameter.ty.to_string(),
+                effect: effect(resolved),
+                effect_written: resolved != crate::hir::ParamEffect::Read,
+                label_omittable,
+            }
+        })
+        .collect()
 }
 
 fn format_signature(signature: &crate::hir::FunctionSig) -> String {

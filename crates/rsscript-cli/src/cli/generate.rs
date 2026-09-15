@@ -286,6 +286,28 @@ fn print_continuations_text(path: &str, source_bytes: usize, continuations: &Con
             Some(ty) => println!("name: {}: {}", name.text, ty.display),
             None => println!("name: {}", name.text),
         }
+        // The resolved parameter line is what turns "this function exists" into
+        // "this is the call you write": the label to spell and the effect that
+        // goes with it, rather than a guess that the checker then rejects.
+        // Printed in the spelling the call site must use: a label that may be
+        // dropped is bracketed, and an effect keyword appears only when it has
+        // to be written, because `read` is canonical by omission.
+        for parameter in &name.parameters {
+            println!(
+                "  param: {} {}{}",
+                if parameter.label_omittable {
+                    format!("[{}:]", parameter.name)
+                } else {
+                    format!("{}:", parameter.name)
+                },
+                if parameter.effect_written {
+                    format!("{} ", effect_name(parameter.effect))
+                } else {
+                    String::new()
+                },
+                parameter.ty,
+            );
+        }
     }
     if let Some(expected_type) = &continuations.expected_type {
         println!("expected type: {}", expected_type.display);
@@ -312,6 +334,14 @@ fn terminal_completeness_name(completeness: rsscript_syntax::TerminalCompletenes
     match completeness {
         rsscript_syntax::TerminalCompleteness::Complete => "complete",
         rsscript_syntax::TerminalCompleteness::Partial => "partial",
+    }
+}
+
+fn effect_name(effect: rsscript_semantics::Effect) -> &'static str {
+    match effect {
+        rsscript_semantics::Effect::Read => "read",
+        rsscript_semantics::Effect::Mut => "mut",
+        rsscript_semantics::Effect::Take => "take",
     }
 }
 
