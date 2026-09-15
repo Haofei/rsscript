@@ -4005,8 +4005,8 @@ Note that `Output.write` exists but `Output.print` does not; the interface is
 `default_interfaces()` is their concatenation. A single-file
 `rss check` / `rss build` sees both.
 
-**`CORE_INTERFACES` — 35 platform-neutral core interface files** (this is the
-list published as `docs/generated/core-interfaces.md`):
+**`CORE_INTERFACES` — 35 platform-neutral core interface files** (published as
+the *Core interfaces* section of `docs/generated/core-interfaces.md`):
 
 ```
 stdlib/arguments/arguments.rssi     stdlib/clone/clone.rssi
@@ -4045,9 +4045,9 @@ are why the channel and cancellation examples in §9 check clean as single files
 
 Package review and package lowering must receive these through explicit package
 dependencies instead — the prelude visibility is a single-file convenience, not
-a language guarantee. `docs/generated/core-interfaces.md` documents only the
-first list, so the four async files are prelude-visible but undocumented there
-(§12).
+a language guarantee. `docs/generated/core-interfaces.md` publishes both lists
+under separate headings, and every entry in `core-interfaces.json` carries a
+`kind` of `core` or `standard_package`.
 
 `rss check` accepts `--no-core` to drop the core prelude and `--interface
 <file.rssi>` to add contracts explicitly.
@@ -4289,10 +4289,6 @@ These are findings for the maintainer, not features.
 
 ### 12.4 Documentation drift found while writing this reference
 
-* `docs/generated/core-interfaces.md` documents only `CORE_INTERFACES` (35
-  files). The four `STANDARD_PACKAGE_INTERFACES` under
-  `packages/async/interface/` are equally prelude-visible to a single-file check
-  and are not listed there (§10.2).
 * `docs/spec/RSScript_Execution_Spec_v0.1.md` names conformance anchors at
   `tests/checker_frontend/async_resources.rs` and
   `tests/vm_eval_parity/async_concurrency.rs`. Neither path exists in the
