@@ -1,0 +1,35 @@
+async fn produce(sender: take Sender<Int>, token: read CancellationToken) -> Unit {
+    let values = [1, 2, 3, 4]
+    for value in values {
+        if token.is_cancelled() {
+            return
+        }
+        await sender.send(value: take value)
+    }
+}
+
+async fn consume(receiver: take Receiver<Int>) -> Unit {
+    let mut count = 0
+    while count < 4 {
+        let item = await receiver.recv()
+        if item.is_none() {
+            return
+        }
+        count = count + 1
+    }
+}
+
+async fn main() -> Int {
+    let channel = Channel.bounded<Int>(capacity: 2)
+    let (sender, receiver) = Channel.split(channel: take channel)
+
+    task_group {
+        let token = Task.cancellation_token()
+        async let producer_handle = produce(sender: take sender, token: token)
+        async let consumer_handle = consume(receiver: take receiver)
+        await producer_handle
+        await consumer_handle
+    }
+
+    return 0
+}

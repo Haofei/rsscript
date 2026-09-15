@@ -1,0 +1,33 @@
+// A scoped host resource. `ConfigStore` must be acquired with `with` so its
+// cleanup runs, and it must not escape the scope that acquired it.
+
+resource ConfigStore
+
+pub fn ConfigStore.open(path: read String) -> Result<ConfigStore, String>
+
+pub fn ConfigStore.read_key(store: mut ConfigStore, key: read String) -> Result<fresh String, String>
+
+pub fn ConfigStore.write_key(
+    store: mut ConfigStore,
+    key: read String,
+    value: read String,
+) -> Result<Unit, String>
+
+fn copy_setting(path: read String, key: read String, target: read String) -> Result<Unit, String> {
+    return match ConfigStore.open(path: path) {
+        Ok(store) => with store as scoped_store {
+            match ConfigStore.read_key(store: mut scoped_store, key: key) {
+                Ok(value) => ConfigStore.write_key(store: mut scoped_store, key: target, value: value),
+                Err(e) => Err(e),
+            }
+        },
+        Err(e) => Err(e),
+    }
+}
+
+fn main() -> Unit {
+    match copy_setting(path: "config.toml", key: "source_key", target: "target_key") {
+        Ok(_) => {}
+        Err(e) => panic(e),
+    }
+}

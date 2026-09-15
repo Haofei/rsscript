@@ -1,0 +1,25 @@
+struct Report {
+    title: String
+    lines: List<String>
+}
+
+pub fn ReportSink.emit(report: take Report) -> Unit
+
+fn build_report(title: take String) -> fresh Report {
+    return Report { title: title, lines: [] }
+}
+
+fn add_line(report: mut Report, line: read String) -> Unit {
+    report.lines.push(line)
+}
+
+fn finish_report(report: take Report) -> Unit {
+    return ReportSink.emit(report: take report)
+}
+
+fn main() -> Unit {
+    local report = build_report(title: take "Quarterly Report")
+    add_line(report: mut report, line: "First line")
+    add_line(report: mut report, line: "Second line")
+    finish_report(report: take report)
+}

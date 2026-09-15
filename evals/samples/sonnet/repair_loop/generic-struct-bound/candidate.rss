@@ -1,0 +1,26 @@
+struct Batch<T: Struct> {
+    label: String
+    items: List<T>
+}
+
+struct Reading {
+    sensor: String
+    value: Int
+}
+
+fn make_batch<T: Struct>(label: take String, items: take List<T>) -> fresh Batch<T> {
+    return Batch { label: label, items: items }
+}
+
+fn batch_size<T: Struct>(batch: read Batch<T>) -> Int {
+    return batch.items.len()
+}
+
+fn main() -> Unit {
+    mut readings: List<Reading> = List<Reading>.new()
+    readings.push(Reading { sensor: "temp-1", value: 72 })
+
+    local morning_label: String = "morning"
+    local batch: Batch<Reading> = make_batch<Reading>(label: take morning_label, items: take readings)
+    print(batch_size<Reading>(batch: batch).to_string())
+}

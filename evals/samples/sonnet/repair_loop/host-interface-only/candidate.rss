@@ -1,0 +1,30 @@
+fn publish_batch(ids: read List<String>, amount: Int) -> Result<Int, String> {
+    let mut total: Int = 0
+
+    for id in ids {
+        match Sync.push(id: id, amount: amount) {
+            Ok(accepted) => {
+                total = total + accepted
+            }
+            Err(error) => {
+                return Err(SyncError.message(error: error))
+            }
+        }
+    }
+
+    Metrics.record(name: "batch.accepted_total", value: total)
+    return Ok(total)
+}
+
+fn main() -> Unit {
+    let ids: List<String> = ["order-1", "order-2"]
+
+    match publish_batch(ids: ids, amount: 5) {
+        Ok(total) => {
+            Metrics.record(name: "batch.publish_batch.ok", value: total)
+        }
+        Err(message) => {
+            Metrics.record(name: "batch.publish_batch.err", value: 0)
+        }
+    }
+}

@@ -1,0 +1,18 @@
+fn parse_first(values: read List<String>) -> Result<Int, String> {
+    match EvalApi.first(values: values) {
+        Some(value) => {
+            return EvalApi.parse(input: value)
+        }
+        None => {
+            return Err("no values")
+        }
+    }
+}
+
+fn main() -> Unit {
+    let values: List<String> = ["42"]
+    match parse_first(values: values) {
+        Ok(value) => {}
+        Err(message) => {}
+    }
+}

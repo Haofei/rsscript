@@ -1,0 +1,49 @@
+fn count_by_level(lines: read List<String>) -> fresh Map<String, Int> {
+    local counts: Map<String, Int> = Map.new()
+
+    for line in lines {
+        local level: String = match String.split_once(s: line, separator: " ") {
+            Some((head, _)) => head,
+            None => "unknown",
+        }
+
+        local current: Int = match Map.get(map: counts, key: level) {
+            Some(n) => n,
+            None => 0,
+        }
+
+        Map.insert(map: mut counts, key: level, value: current + 1)
+    }
+
+    return counts
+}
+
+fn render_counts(counts: read Map<String, Int>) -> fresh String {
+    local result: String = ""
+    local first: Bool = true
+
+    for (level, count) in counts {
+        local entry: String = level + "=" + Int.to_string(value: count)
+
+        if first {
+            result = entry
+            first = false
+        } else {
+            result = result + ", " + entry
+        }
+    }
+
+    return result
+}
+
+fn main() -> Unit {
+    local lines: List<String> = List.new()
+    List.push(list: mut lines, value: "INFO started up")
+    List.push(list: mut lines, value: "ERROR failed to connect")
+    List.push(list: mut lines, value: "INFO shutting down")
+
+    local counts: Map<String, Int> = count_by_level(lines)
+    local rendered: String = render_counts(counts)
+
+    print(rendered)
+}

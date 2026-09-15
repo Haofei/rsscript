@@ -1,0 +1,38 @@
+fn producer(sender: Sender<Int>, token: CancellationToken) async {
+    let values = [1, 2, 3, 4];
+    for v in values {
+        if token.is_cancelled() {
+            break;
+        }
+        sender.send(v.take()).await;
+    }
+}
+
+fn consumer(receiver: Receiver<Int>) async {
+    let mut count = 0;
+    while count < 4 {
+        match receiver.recv().await {
+            Some(v) => {
+                count = count + 1;
+            }
+            None => {
+                break;
+            }
+        }
+    }
+}
+
+fn main() {
+    let channel = Channel.bounded::<Int>(2);
+    let sender = channel.sender();
+    let receiver = channel.receiver();
+
+    task_group {
+        let token = Task.cancellation_token();
+        let producer_handle = spawn producer(sender, token);
+        let consumer_handle = spawn consumer(receiver);
+
+        await producer_handle;
+        await consumer_handle;
+    }
+}

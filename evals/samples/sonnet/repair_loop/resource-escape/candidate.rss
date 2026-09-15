@@ -1,0 +1,10 @@
+fn read_and_release(name: read String) -> Result<String, String> {
+    with Lease.open(name: name)? as lease {
+        let value: String = Lease.read(lease: mut lease)?
+        return Ok(value)
+    }
+}
+
+fn main() -> Unit {
+    return Unit
+}

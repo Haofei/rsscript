@@ -1,0 +1,34 @@
+fn count_by_level(lines: read List<String>) -> fresh Map<String, Int> {
+    let counts: fresh Map<String, Int> = Map.new();
+    for line in lines {
+        let idx: Int = line.index_of(" ");
+        let level: String = if idx >= 0 { line.slice(0, idx) } else { "unknown" };
+        let existing: Int = if counts.contains(level) { counts.get(level) } else { 0 };
+        mut counts.insert(level, existing + 1);
+    }
+    return counts;
+}
+
+fn render_counts(counts: read Map<String, Int>) -> fresh String {
+    let mut result: fresh String = "";
+    let mut first: Bool = true;
+    for (level, count) in counts.entries() {
+        if !first {
+            result = result + ", ";
+        }
+        result = result + level + ": " + count.to_string();
+        first = false;
+    }
+    return result;
+}
+
+fn main() -> Unit {
+    let lines: fresh List<String> = List.of(
+        "INFO starting up",
+        "ERROR disk full",
+        "INFO shutting down"
+    );
+    let counts: fresh Map<String, Int> = count_by_level(lines);
+    let rendered: fresh String = render_counts(counts);
+    print(rendered);
+}

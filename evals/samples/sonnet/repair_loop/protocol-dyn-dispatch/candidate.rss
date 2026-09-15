@@ -1,0 +1,43 @@
+protocol Formatter {
+    fn format(self: read Self) -> fresh String
+}
+
+struct PlainFormatter {
+    prefix: String
+}
+
+struct JsonFormatter {
+    field: String
+}
+
+fn escape_json(text: read String) -> fresh String {
+    return String.add(left: String.add(left: "\"", right: text), right: "\"")
+}
+
+fn PlainFormatter.format(self: read PlainFormatter) -> fresh String {
+    return self.prefix
+}
+
+impl Formatter for PlainFormatter {
+    fn format = PlainFormatter.format
+}
+
+fn JsonFormatter.format(self: read JsonFormatter) -> fresh String {
+    return String.add(left: String.add(left: "{\"field\": ", right: escape_json(text: self.field)), right: "}")
+}
+
+impl Formatter for JsonFormatter {
+    fn format = JsonFormatter.format
+}
+
+fn render(formatter: read Dyn<Formatter>) -> fresh String {
+    return formatter.format()
+}
+
+fn main() -> Unit {
+    let plain = PlainFormatter(prefix: "Result: ")
+    let json = JsonFormatter(field: "status")
+
+    let plain_text = render(formatter: plain)
+    let json_text = render(formatter: json)
+}

@@ -1,0 +1,33 @@
+async fn drain(stream: Stream<Int>, limit: Int) -> Result<Int, ChannelError> {
+    var s: Stream<Int> = stream
+    var total: Int = 0
+    var consumed: Int = 0
+
+    while consumed < limit {
+        match await s.next() {
+            Some(value) => {
+                total = total + value
+                consumed = consumed + 1
+            }
+            None => {
+                break
+            }
+        }
+    }
+
+    Ok(total)
+}
+
+fn main() -> Result<Unit, ChannelError> {
+    let items: List<Int> = [3, 7]
+    let stream: Stream<Int> = Stream.from(items)
+
+    let total: Int = task_group(async fn() -> Result<Int, ChannelError> {
+        async let handle = drain(stream, 5)
+        await handle
+    })?
+
+    write(total)
+
+    Ok(Unit)
+}

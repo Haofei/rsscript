@@ -1,0 +1,37 @@
+import Concurrency
+
+func main() async {
+    let channelA = Channel<Int>.bounded(capacity: 1)
+    let channelB = Channel<Int>.bounded(capacity: 1)
+
+    let senderA = channelA.sender
+    let receiverA = channelA.receiver
+    let senderB = channelB.sender
+    let receiverB = channelB.receiver
+
+    let cancelSource = CancellationSource()
+
+    await task_group { group in
+        async let feedA: Void = {
+            await senderA.send(1)
+        }()
+
+        async let feedB: Void = {
+            await senderB.send(2)
+        }()
+
+        select {
+        case let valueA = await receiverA.recv():
+            print("Channel A won with value \(valueA)")
+            cancelSource.cancel()
+        case let valueB = await receiverB.recv():
+            print("Channel B won with value \(valueB)")
+            cancelSource.cancel()
+        }
+
+        await feedA
+        await feedB
+    }
+}
+
+await main()

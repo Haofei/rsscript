@@ -1,0 +1,37 @@
+async fn feed(sender: take Sender<Int>, value: read Int) -> Unit {
+    return await Sender.send(sender: take sender, value: value)
+}
+
+async fn main() -> Int {
+    local channel_a = Channel.bounded(capacity: 1)
+    local channel_b = Channel.bounded(capacity: 1)
+
+    local sender_a = Channel.take_sender(channel: mut channel_a)
+    local receiver_a = Channel.take_receiver(channel: mut channel_a)
+    local sender_b = Channel.take_sender(channel: mut channel_b)
+    local receiver_b = Channel.take_receiver(channel: mut channel_b)
+
+    local cancel = CancellationSource.new()
+    local mut winner: Int = 0
+
+    await task_group {
+        async let feed_a = feed(sender: take sender_a, value: 1)
+        async let feed_b = feed(sender: take sender_b, value: 2)
+
+        select {
+            value = await Receiver.recv(receiver: mut receiver_a) => {
+                winner = 1
+                CancellationSource.cancel(source: mut cancel)
+            }
+            value = await Receiver.recv(receiver: mut receiver_b) => {
+                winner = 2
+                CancellationSource.cancel(source: mut cancel)
+            }
+        }
+
+        await feed_a
+        await feed_b
+    }
+
+    return winner
+}

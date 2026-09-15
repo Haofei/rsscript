@@ -1,0 +1,25 @@
+struct Alert {
+    level: String,
+    message: String,
+}
+
+fn select_alerts(alerts: read List<Alert>, keep: noescape Fn(Alert) -> Bool) -> fresh List<Alert> {
+    return List.filter(list: alerts, predicate: keep)
+}
+
+fn urgent_only(alerts: read List<Alert>) -> fresh List<Alert> {
+    return select_alerts(alerts: alerts, keep: fn(alert: read Alert) -> Bool {
+        return alert.level == "critical"
+    })
+}
+
+fn main() -> Unit {
+    local disk_full: Alert = Alert(level: "critical", message: "Disk full")
+    local backup_complete: Alert = Alert(level: "info", message: "Backup complete")
+    local alerts: List<Alert> = [disk_full, backup_complete]
+
+    local urgent: List<Alert> = urgent_only(alerts: alerts)
+    local urgent_count: Int = List.len(list: urgent)
+
+    Console.write_line(text: String.from_int(value: urgent_count))
+}

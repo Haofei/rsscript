@@ -1,0 +1,62 @@
+fn find_space(line: read String, index: Int) -> Int {
+    let ch: String = String.slice(value: line, start: index, len: 1)
+    if ch == "" {
+        return -1
+    }
+    if ch == " " {
+        return index
+    }
+    return find_space(line: line, index: index + 1)
+}
+
+fn level_of(line: read String) -> fresh String {
+    let idx: Int = find_space(line: line, index: 0)
+    if idx < 0 {
+        return "unknown"
+    }
+    return String.slice(value: line, start: 0, len: idx)
+}
+
+fn count_occurrences(list: read List<String>, target: read String) -> Int {
+    local hits: List<String> = List.new()
+    for item in list {
+        if item == target {
+            List.push(list: mut hits, value: read item)
+        }
+    }
+    return List.len(list: hits)
+}
+
+fn count_by_level(lines: read List<String>) -> fresh Map<String, Int> {
+    local all_levels: List<String> = List.new()
+    for line in lines {
+        let level: String = level_of(line: line)
+        List.push(list: mut all_levels, value: read level)
+    }
+    local counts: Map<String, Int> = Map.new()
+    for level in all_levels {
+        let count: Int = count_occurrences(list: all_levels, target: level)
+        Map.insert(map: mut counts, key: read level, value: read count)
+    }
+    return manage counts
+}
+
+fn render_counts(counts: read Map<String, Int>) -> fresh String {
+    local parts: List<String> = List.new()
+    for entry in Map.entries(map: counts) {
+        let count_str: String = Int.to_string(value: entry.value)
+        let piece: String = String.concat(left: entry.key, right: String.concat(left: ": ", right: count_str))
+        List.push(list: mut parts, value: read piece)
+    }
+    return String.join(parts: parts, separator: ", ")
+}
+
+fn main() -> Unit {
+    local lines: List<String> = List.new()
+    List.push(list: mut lines, value: read "INFO service started")
+    List.push(list: mut lines, value: read "ERROR disk failure")
+    List.push(list: mut lines, value: read "INFO shutdown complete")
+
+    let counts: Map<String, Int> = count_by_level(lines: lines)
+    let rendered: String = render_counts(counts: counts)
+}
