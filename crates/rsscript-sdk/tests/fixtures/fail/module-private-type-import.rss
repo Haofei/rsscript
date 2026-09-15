@@ -1,0 +1,10 @@
+// expect: RS0019
+// source: ../modules/library.rss
+
+module app
+
+use lib.core.Blueprint
+
+fn run(plan: Blueprint) -> Int {
+    return plan.id
+}

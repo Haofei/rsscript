@@ -115,6 +115,8 @@ pub mod code {
     pub const REVIEW_SUM_TYPE_CHANGED: &str = "RSR018";
     pub const REVIEW_CONST_CHANGED: &str = "RSR019";
     pub const REVIEW_TYPE_ALIAS_CHANGED: &str = "RSR020";
+
+    pub const PRIVATE_DECLARATION_ACCESS: &str = "RS0019";
 }
 
 #[doc(hidden)]
@@ -981,6 +983,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::LINT_DUPLICATE_EFFECT,
         title: "duplicate effect lint",
         explanation: "Effect clauses are review contracts. Repeating the same effect adds noise without changing semantics, so the linter warns and suggests removing the duplicate.",
+    },
+    DiagnosticExplanation {
+        code: code::PRIVATE_DECLARATION_ACCESS,
+        title: "private declaration used from another module",
+        explanation: "A declaration without `pub` is visible only inside the module that declares it. Another module may neither import it nor name it through a module-qualified path. Mark the declaration `pub` to make it part of the module's surface, or move the caller into the same module.",
     },
 ];
 

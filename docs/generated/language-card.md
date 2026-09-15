@@ -7,7 +7,7 @@ Source: `syntax, diagnostics, and core interface registries`.
 A compact generated index for contributors and tools.
 
 - 30 reserved keywords, 2 contextual words, and 7 built-in constants.
-- 107 documented diagnostic codes.
+- 108 documented diagnostic codes.
 - 35 platform-neutral core interface files.
 
 - [Grammar surface](grammar.md) ([JSON](grammar.json))

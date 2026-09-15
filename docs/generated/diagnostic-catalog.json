@@ -90,6 +90,11 @@
       "explanation": "`use a.b.name` imports `name` from module `a.b`, so `a.b` must be declared by a `module a.b` header on some file in the compilation unit — the sources being checked or an interface supplied to the check. When it is not, the import binds nothing: name resolution leaves the reference unmangled, and a typo in the path goes unnoticed until the imported name is used, if it is used at all. Core and standard-package interfaces declare no module and are prelude-visible, so their names need no `use` at all."
     },
     {
+      "code": "RS0019",
+      "title": "private declaration used from another module",
+      "explanation": "A declaration without `pub` is visible only inside the module that declares it. Another module may neither import it nor name it through a module-qualified path. Mark the declaration `pub` to make it part of the module's surface, or move the caller into the same module."
+    },
+    {
       "code": "RS0021",
       "title": "non-exhaustive match",
       "explanation": "`match` must cover every visible variant for the supported enum shapes. In v0.7 that means `Some`/`None`, `Ok`/`Err`, all variants of a declared sum type, or a `_` fallback."

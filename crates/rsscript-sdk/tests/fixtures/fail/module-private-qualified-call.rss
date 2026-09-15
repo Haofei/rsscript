@@ -1,0 +1,10 @@
+// expect: RS0019
+// source: ../modules/library.rss
+
+// A module-qualified path needs no `use`, and is gated the same way.
+
+module app
+
+fn run(value: Int) -> Int {
+    return lib.core.private_helper(value: value)
+}

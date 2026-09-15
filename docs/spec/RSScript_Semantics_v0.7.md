@@ -4366,10 +4366,6 @@ and finding no enforcing code.
 * **`select` tie-breaking** when two arms are ready at once (§9.9).
 * **Cancellation latency.** Cooperative; depends on the provider descriptor
   (§9.9).
-* **Cross-module privacy.** `pub` gates positional arguments and package
-  contracts, but module isolation rewrites a cross-module reference regardless
-  of `pub`, and no diagnostic rejects using a non-`pub` declaration from another
-  module (§1.6).
 * **Evaluation order of call arguments.** Not stated anywhere in the front end.
 * **Integer overflow behaviour** for `+`/`-`/`*` on `Int`. `Math.wrapping_add`
   and friends exist, which implies the plain operators are *not* wrapping, but
@@ -4377,6 +4373,33 @@ and finding no enforcing code.
 * **`Float` semantics** beyond its row in the builtin protocol table (§2.1):
   rounding mode, `NaN` payload propagation, and the behaviour of `Float`
   formatting are runtime concerns the front end does not constrain.
+
+### 12.1.1 Specified since v0.7: cross-module privacy
+
+`pub` is now enforced across module boundaries — `RS0019`,
+`module_isolation.rs::cross_module_privacy_diagnostics`. The rule:
+
+> A declaration without `pub` is visible only inside the module that declares
+> it. Another module may neither `use` it nor name it through a
+> module-qualified path (`a.b.name`), and `use a.b.*` binds only the module's
+> `pub` names.
+
+It applies to free functions, `struct`/`class`/`resource` types, `sum` types,
+type aliases, and constants — every declaration form that carries `is_public`
+(`rsscript-syntax/src/ast.rs`). Two exemptions:
+
+* **Interface declarations.** A declaration read from a supplied `.rssi` keeps
+  its current visibility, public or not: an interface is a host contract whose
+  surface is checked against its implementation by `RS1301` at package
+  granularity, not by this rule. The prelude and core interfaces are `.rssi`
+  and are never part of the isolation graph at all (§10.2), so they are
+  unaffected.
+* **`main`.** The entry point keeps its global symbol inside a module (§1.5) and
+  is not reachable by import in the first place.
+
+`protocol` declarations carry no visibility in the AST — `ProtocolDecl` has only
+a name and a span — and protocol names are global rather than module-scoped, so
+there is no private protocol for the rule to reject.
 
 ### 12.2 Gaps — rules the design implies but the checker does not enforce
 

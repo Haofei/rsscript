@@ -1,0 +1,22 @@
+// source: ../modules/library.rss
+
+// `pub` declarations in another module are importable and callable through a
+// module-qualified path; both forms are exercised here.
+
+module app
+
+use lib.core.public_helper
+use lib.core.Widget
+use lib.core.LIMIT
+
+fn build(id: Int) -> fresh Widget {
+    return Widget(id: public_helper(value: id))
+}
+
+fn qualified(id: Int) -> Int {
+    return lib.core.public_helper(value: id)
+}
+
+fn limit() -> Int {
+    return LIMIT
+}
