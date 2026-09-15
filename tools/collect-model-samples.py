@@ -46,7 +46,13 @@ AGENT_GUIDE = ROOT / "AGENT.md"
 
 MODES = ("prompt_only", "language_card", "repair_loop")
 
-CODE_FENCE = re.compile(r"```(?:rsscript|rss)?[ \t]*\n(.*?)```", re.DOTALL)
+# Any fence info string is accepted, not just `rsscript`/`rss`. RSScript has no
+# highlighter, and models routinely label the block with the language it looks
+# most like: three of the first thirty `prompt_only` samples were lost to
+# ```rust and ```rescript fences. Dropping those candidates silently removed
+# exactly the confused attempts the measurement exists to count, so the sample
+# was biased towards success by the runner rather than by the model.
+CODE_FENCE = re.compile(r"```[^\n`]*\n(.*?)```", re.DOTALL)
 
 OUTPUT_CONTRACT = (
     "Reply with exactly one fenced code block containing the complete "
