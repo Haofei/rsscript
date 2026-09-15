@@ -38,6 +38,13 @@ pub fn resize(image: take Image, width: Int) -> fresh Image {
 Top-level file feature and profile declarations are not grammar productions.
 Implementation-origin markers are not declaration modifiers.
 
+`pub` is a module boundary, not a hint. A declaration without `pub` is visible
+only inside the module that declares it: another module may neither import it
+nor name it through a module-qualified path, and a glob import binds only the
+declaring module's `pub` names. Interface (`.rssi`) declarations are exempt —
+an interface is a host contract whose surface is governed by the package
+contract rather than by module visibility.
+
 ## 3. Types and protocol dispatch
 
 The core scalar and structural types include `Unit`, `Bool`, `Int`, `Float`,
@@ -100,6 +107,12 @@ parallelism are inferred from validated source or supplied by provider metadata.
 resource scope and guarantees cleanup on every exit. Resources may not escape
 their scope unless the type and ownership rules explicitly permit the transfer.
 Handle and weak-reference rules continue to govern managed object graphs.
+
+A resource slot is host-owned: it is acquired at the external boundary and
+released by the runtime. An implementation file may *declare* a `resource` type,
+its fields, and its `drop` body, but may not construct one — every resource is
+produced by a bodyless function declared in an interface, which is where the
+host's cleanup contract exists.
 
 ```rsscript
 with Stream.open(config) as stream {
