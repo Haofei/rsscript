@@ -1553,6 +1553,53 @@ fn protocol_method_name(name: &str) -> &str {
 mod tests {
     use super::format_source;
 
+    /// Formatting is the normalizer for the two accepted surface sugars: a brace
+    /// struct literal and a comma-terminated match arm format to exactly the
+    /// canonical constructor call and block arm, and formatting the canonical
+    /// spelling again is a fixed point.
+    #[test]
+    fn normalizes_accepted_surface_sugar_to_the_canonical_spelling() {
+        let sugar = r#"struct Report {
+    title: String
+    count: Int
+}
+
+fn build(title: take String, value: Int) -> Report {
+    return Report { title: take title, count: value }
+}
+
+fn classify(value: Int) -> Int {
+    return match value {
+        0 => 10,
+        _ => 20,
+    }
+}
+"#;
+        let canonical = r#"struct Report {
+    title: String
+    count: Int
+}
+
+fn build(title: take String, value: Int) -> Report {
+    return Report(title: take title, count: value)
+}
+
+fn classify(value: Int) -> Int {
+    return match value {
+        0 => {
+            10
+        }
+        _ => {
+            20
+        }
+    }
+}
+"#;
+
+        assert_eq!(format_source("sugar.rss", sugar), canonical);
+        assert_eq!(format_source("canonical.rss", canonical), canonical);
+    }
+
     #[test]
     fn formats_core_surface_deterministically() {
         let source = r#"struct   Session {

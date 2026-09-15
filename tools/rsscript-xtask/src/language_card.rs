@@ -102,6 +102,31 @@ struct LanguageCardJson {
     core_interface_count: usize,
     diagnostic_fixes: DiagnosticFixAvailability,
     canonical_call_example: String,
+    accepted_surface_sugar: Vec<SurfaceSugar>,
+}
+
+/// An alternate surface spelling the parser desugars to `canonical` before the
+/// checker sees it. `rss fmt` rewrites `accepted` to `canonical`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct SurfaceSugar {
+    accepted: &'static str,
+    canonical: &'static str,
+    desugars_in: &'static str,
+}
+
+fn accepted_surface_sugar() -> Vec<SurfaceSugar> {
+    vec![
+        SurfaceSugar {
+            accepted: "T { field: value }",
+            canonical: "T(field: value)",
+            desugars_in: "parser",
+        },
+        SurfaceSugar {
+            accepted: "Pattern => expr,",
+            canonical: "Pattern => { expr }",
+            desugars_in: "parser",
+        },
+    ]
 }
 
 pub fn run(root: &Path, check: bool) -> Result<(), Box<dyn Error>> {
@@ -242,9 +267,29 @@ fn language_card_document() -> String {
     output.push_str(&format!("- {} reserved keywords, {} contextual words, and {} built-in constants.\n- {} documented diagnostic codes.\n- {} platform-neutral core interface files.\n\n", keyword_data.iter().filter(|keyword| !keyword.contextual).count(), keyword_data.iter().filter(|keyword| keyword.contextual).count(), builtin_constants().len(), diagnostics().len(), core_interfaces().len()));
     output.push_str("- [Grammar surface](grammar.md) ([JSON](grammar.json))\n- [Keyword classification](keywords.md)\n- [Diagnostic catalog](diagnostic-catalog.md) ([JSON](diagnostic-catalog.json))\n- [Core interfaces](core-interfaces.md) ([JSON](core-interfaces.json))\n\nMachine-readable summary: [language-card.json](language-card.json). Diagnostic explanation catalogs do not fabricate fixes; machine-applicable edits are instance-level data returned by `rss check --json` and `rss fix --json`.\n\n## Canonical call spelling\n\nNamed arguments stay named. A direct call-site `read` wrapper is omitted because it is the default; `mut` and `take` remain explicit. The formatter does not invent or remove argument labels.\n\n```rsscript\n");
     output.push_str(&canonical_example());
-    output.push_str("```\n");
+    output.push_str("```\n\n");
+    output.push_str(ACCEPTED_SUGAR_SECTION);
     output
 }
+
+/// Two surface spellings models already write are accepted and desugared by the
+/// parser. Both are listed here because silence about them was measured to cost
+/// more than the sugar does: see `docs/planning/2026-09-model-failure-modes.md`.
+const ACCEPTED_SUGAR_SECTION: &str = r#"## Accepted surface sugar
+
+Two alternate spellings are accepted and desugared by the parser to the
+canonical form. They produce the same AST, so the checker sees only the
+canonical node, and `rss fmt` rewrites them to the canonical spelling —
+formatting is the normalizer.
+
+| Also accepted | Canonical |
+| --- | --- |
+| `T { field: value }` | `T(field: value)` |
+| `Pattern => expr,` | `Pattern => { expr }` |
+
+A trailing comma after a block arm (`Pattern => { ... },`) is accepted too.
+Prefer the canonical spelling when writing new code.
+"#;
 
 fn canonical_example() -> String {
     "fn apply(target: mut Buffer, input: take String, note: read String) -> Unit {}\n\nfn update(target: mut Buffer, input: take String, note: read String) -> Unit {\n    return apply(target: mut target, input: take input, note: note)\n}\n".to_string()
@@ -327,6 +372,7 @@ fn language_card_json() -> String {
         core_interface_count: core_interfaces().len(),
         diagnostic_fixes: diagnostic_fix_availability(),
         canonical_call_example: canonical_example(),
+        accepted_surface_sugar: accepted_surface_sugar(),
     })
 }
 
@@ -567,6 +613,32 @@ mod tests {
                 .as_str()
                 .is_some_and(|example| example.contains("note: note"))
         );
+    }
+
+    /// The card may only advertise sugar the parser really accepts, and it must
+    /// name the spelling `rss fmt` actually prints.
+    #[test]
+    fn advertised_surface_sugar_formats_to_its_canonical_spelling() {
+        let sugared = "fn build(title: take String) -> Report {\n    return Report { title: take title }\n}\n\nfn classify(value: Int) -> Int {\n    return match value {\n        0 => 10,\n        _ => 20,\n    }\n}\n";
+        let formatted = rsscript_syntax::format_source("card.rss", sugared);
+        assert!(
+            formatted.contains("Report(title: take title)"),
+            "brace struct literal must format to the constructor call: {formatted}"
+        );
+        assert!(
+            !formatted.contains("=> 10,"),
+            "expression arm must format to a block arm: {formatted}"
+        );
+
+        for sugar in accepted_surface_sugar() {
+            assert!(
+                ACCEPTED_SUGAR_SECTION.contains(sugar.accepted)
+                    && ACCEPTED_SUGAR_SECTION.contains(sugar.canonical),
+                "the rendered card must document `{}` -> `{}`",
+                sugar.accepted,
+                sugar.canonical
+            );
+        }
     }
 
     #[test]

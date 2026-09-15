@@ -121,14 +121,31 @@ pub(super) fn parse_match_arms(tokens: &[Token], start: usize, end: usize) -> Pa
                 malformed_spans.push(tokens[arrow].span.clone());
                 break;
             }
-            let body_end = next_line_or_block_end(tokens, body_start, end);
+            // Expression-arm sugar: `Pattern => expr,`. A top-level `,` on the
+            // arm's line terminates the arm, so the trailing comma that models
+            // already write is accepted instead of being parsed as part of the
+            // expression. The block built here is the same single-statement
+            // `Block` the canonical `Pattern => { expr }` produces, so nothing
+            // downstream sees the alternate spelling and `rss fmt` prints the
+            // canonical block form.
+            let line_end = next_line_or_block_end(tokens, body_start, end);
+            let (body_end, arm_end) = match find_top_level_symbol(tokens, body_start, line_end, ",")
+            {
+                Some(comma) => (comma, Some(comma + 1)),
+                None => (line_end, None),
+            };
+            if body_end <= body_start {
+                malformed_spans.push(tokens[arrow].span.clone());
+                index = arm_end.unwrap_or(line_end).max(index + 1);
+                continue;
+            }
             let (statement, next) = parse_stmt(tokens, body_start, body_end);
             (
                 Block {
                     statements: vec![statement],
                     span: tokens[body_start].span.clone(),
                 },
-                next,
+                arm_end.unwrap_or(next),
             )
         };
         arms.push(MatchArm {

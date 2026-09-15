@@ -392,3 +392,84 @@ fn artifact_bundle_verify_run_and_semantic_diff_form_one_cli_workflow() {
     assert_eq!(diff["schema"], "rsscript.semantic_diff.v2");
     assert_ne!(diff["old"]["module_digest"], diff["new"]["module_digest"]);
 }
+
+/// Check `source` end to end through the real `rss check --json` entry point and
+/// return the diagnostic codes it reports, in order.
+fn check_diagnostic_codes(source: &str) -> Vec<String> {
+    let temp = tempfile::tempdir().expect("temp dir should be creatable");
+    let path = temp.path().join("main.rss");
+    fs::write(&path, source).expect("write fixture");
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .args(["check", "--json"])
+        .arg(&path)
+        .output()
+        .expect("rss check should run");
+    let diagnostics: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("rss check --json emits JSON");
+    diagnostics
+        .as_array()
+        .expect("diagnostics are an array")
+        .iter()
+        .map(|diagnostic| diagnostic["code"].as_str().unwrap_or_default().to_string())
+        .collect()
+}
+
+/// Brace struct literals are accepted surface sugar that the parser desugars to
+/// the canonical constructor call, so the checker only ever sees one form: an
+/// accepted program and a rejected one must produce the same diagnostics in
+/// either spelling.
+#[test]
+fn brace_struct_literals_type_check_exactly_like_constructor_calls() {
+    let program = |literal: &str| {
+        format!(
+            "struct Report {{\n    title: String\n    count: Int\n}}\n\nfn build(title: take String, count: Int) -> Report {{\n    return {literal}\n}}\n"
+        )
+    };
+
+    assert_eq!(
+        check_diagnostic_codes(&program("Report(title: take title, count: count)")),
+        Vec::<String>::new(),
+        "the canonical constructor call must check cleanly"
+    );
+    assert_eq!(
+        check_diagnostic_codes(&program("Report { title: take title, count: count }")),
+        Vec::<String>::new(),
+        "the brace struct literal must check exactly like the constructor call"
+    );
+
+    // The sugar is not a checker bypass: the same mistake is reported the same
+    // way in both spellings.
+    let canonical_errors = check_diagnostic_codes(&program(
+        "Report(title: take title, count: count, extra: 1)",
+    ));
+    let sugared_errors = check_diagnostic_codes(&program(
+        "Report { title: take title, count: count, extra: 1 }",
+    ));
+    assert!(
+        !canonical_errors.is_empty(),
+        "an unknown constructor field must be rejected"
+    );
+    assert_eq!(canonical_errors, sugared_errors);
+}
+
+/// A comma-terminated expression match arm is accepted sugar for the canonical
+/// block arm, and reaches the checker as the same AST.
+#[test]
+fn expression_match_arms_check_exactly_like_block_arms() {
+    let program = |arms: &str| {
+        format!("fn classify(value: Int) -> Int {{\n    return match value {{\n{arms}    }}\n}}\n")
+    };
+
+    assert_eq!(
+        check_diagnostic_codes(&program(
+            "        0 => {\n            10\n        }\n        _ => {\n            20\n        }\n"
+        )),
+        Vec::<String>::new(),
+        "the canonical block arm must check cleanly"
+    );
+    assert_eq!(
+        check_diagnostic_codes(&program("        0 => 10,\n        _ => 20,\n")),
+        Vec::<String>::new(),
+        "the expression arm must check exactly like the block arm"
+    );
+}

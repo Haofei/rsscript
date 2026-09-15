@@ -86,7 +86,9 @@ Until the priorities above are complete, do not expand language syntax, public
 intrinsics, speculative JIT tiers without scorecard evidence, the C backend,
 full self-host bootstrap, package publishing, native plugin surface, or
 language-level policy. Correctness, security boundary, maintenance, and
-measured-regression fixes remain allowed.
+measured-regression fixes remain allowed. Syntax sugar that desugars in the
+parser to an existing AST node and is justified by a measured generation failure
+is also permitted; new semantics are not.
 
 Rust AOT stays Experimental. REIR stays an Integration. Self-hosting stays
 Research. For these three surfaces, allowed changes are limited to correctness,

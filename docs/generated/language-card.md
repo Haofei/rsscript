@@ -28,3 +28,18 @@ fn update(target: mut Buffer, input: take String, note: read String) -> Unit {
     return apply(target: mut target, input: take input, note: note)
 }
 ```
+
+## Accepted surface sugar
+
+Two alternate spellings are accepted and desugared by the parser to the
+canonical form. They produce the same AST, so the checker sees only the
+canonical node, and `rss fmt` rewrites them to the canonical spelling —
+formatting is the normalizer.
+
+| Also accepted | Canonical |
+| --- | --- |
+| `T { field: value }` | `T(field: value)` |
+| `Pattern => expr,` | `Pattern => { expr }` |
+
+A trailing comma after a block arm (`Pattern => { ... },`) is accepted too.
+Prefer the canonical spelling when writing new code.
