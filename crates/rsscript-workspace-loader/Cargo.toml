@@ -7,7 +7,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-rsscript-operation = { path = "../rsscript-operation" }
+rsscript-core-types = { path = "../rsscript-core-types" }
 toml = "0.8"
 sha2 = "0.10"
 serde = { version = "1", features = ["derive"] }

@@ -1,5 +1,3 @@
-#![forbid(unsafe_code)]
-
 use serde::{Deserialize, Serialize};
 
 macro_rules! stable_id {

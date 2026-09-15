@@ -16,7 +16,7 @@ pub use rsscript_abi_model::{
     WireTypeId, WireTypeTableOverflow, WireValue, WireVariantCaseLayout, WireVariantId,
     WireVariantLayout,
 };
-pub use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationId};
+pub use rsscript_core_types::{CancellationToken, MonotonicDeadline, OperationId};
 use serde::{Deserialize, Serialize};
 
 mod wire_validation;

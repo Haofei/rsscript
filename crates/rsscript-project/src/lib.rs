@@ -15,7 +15,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
-use rsscript_operation::OperationContext;
+use rsscript_core_types::OperationContext;
 use rsscript_semantics::FrontendInputSnapshot;
 use rsscript_workspace_loader::{
     WorkspaceDependencySection, WorkspaceFileKind, WorkspaceLoadError, WorkspaceLoadErrorCode,

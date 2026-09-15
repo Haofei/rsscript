@@ -7,7 +7,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-rsscript-operation = { path = "../rsscript-operation" }
+rsscript-core-types = { path = "../rsscript-core-types" }
 rsscript-semantics = { path = "../rsscript-semantics" }
 rsscript-syntax = { path = "../rsscript-syntax" }
 rsscript-diagnostics = { path = "../rsscript-diagnostics" }

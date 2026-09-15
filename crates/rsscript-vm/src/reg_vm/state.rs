@@ -25,9 +25,9 @@ pub struct VmLimits {
     /// Maximum reachable RSScript value storage at an instruction boundary.
     pub live_memory_limit: Option<usize>,
     /// Host-controlled cooperative cancellation token.
-    pub cancel: Option<rsscript_operation::CancellationToken>,
+    pub cancel: Option<rsscript_core_types::CancellationToken>,
     /// Monotonic execution deadline shared with Provider calls.
-    pub deadline: Option<rsscript_operation::MonotonicDeadline>,
+    pub deadline: Option<rsscript_core_types::MonotonicDeadline>,
     /// Maximum bytes written to captured stdout/stderr.
     pub stdout_budget: Option<usize>,
     /// Maximum deterministic runtime intrinsic calls.

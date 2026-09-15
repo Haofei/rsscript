@@ -37,7 +37,7 @@ native-jit = [
 rsscript-abi-model = { path = "../rsscript-abi-model", optional = true }
 rsscript-artifact = { path = "../rsscript-artifact", optional = true }
 rsscript_compiler = { package = "rsscript-compiler", path = "../rsscript-compiler", default-features = false }
-rsscript-operation = { path = "../rsscript-operation" }
+rsscript-core-types = { path = "../rsscript-core-types" }
 rsscript-bytecode = { path = "../rsscript-bytecode", optional = true }
 rsscript-interface-catalog = { path = "../rsscript-interface-catalog", optional = true }
 rsscript-provider-api = { path = "../rsscript-provider-api", optional = true }

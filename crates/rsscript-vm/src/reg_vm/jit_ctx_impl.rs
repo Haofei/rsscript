@@ -5,7 +5,7 @@ use super::*;
 
 #[cfg(feature = "native-jit")]
 impl JitCallCtx {
-    pub(in crate::reg_vm) fn enter_frame(deadline: Option<rsscript_operation::MonotonicDeadline>) {
+    pub(in crate::reg_vm) fn enter_frame(deadline: Option<rsscript_core_types::MonotonicDeadline>) {
         JIT_CALL_CTX.with(|ctx| {
             let mut ctx = ctx.borrow_mut();
             if ctx.active_depth == 0 {
@@ -77,7 +77,7 @@ impl JitCallCtx {
             ctx.active_depth > 0
                 && ctx
                     .deadline
-                    .is_some_and(rsscript_operation::MonotonicDeadline::is_expired)
+                    .is_some_and(rsscript_core_types::MonotonicDeadline::is_expired)
         })
     }
 

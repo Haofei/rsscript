@@ -11,7 +11,7 @@ use std::io::Read;
 use std::path::Component;
 use std::path::{Path, PathBuf};
 
-use rsscript_operation::{OperationAbort, OperationContext};
+use rsscript_core_types::{OperationAbort, OperationContext};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -783,7 +783,7 @@ fn check_operation(operation: Option<&OperationContext>) -> Result<(), Workspace
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rsscript_operation::{CancellationToken, MonotonicDeadline};
+    use rsscript_core_types::{CancellationToken, MonotonicDeadline};
     use std::io::Write;
     use std::time::{Duration, Instant};
 

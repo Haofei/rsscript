@@ -294,7 +294,7 @@ mod tests {
         let mut limits = VmLimits::unbounded_for_trusted_host();
         assert!(osr_execution_controls_supported(&limits));
 
-        limits.deadline = Some(rsscript_operation::MonotonicDeadline::after(
+        limits.deadline = Some(rsscript_core_types::MonotonicDeadline::after(
             Duration::from_secs(1),
         ));
         assert!(osr_execution_controls_supported(&limits));

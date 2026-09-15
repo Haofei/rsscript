@@ -3,8 +3,8 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationContext};
-pub use rsscript_source_model::Span;
+pub use rsscript_core_types::Span;
+use rsscript_core_types::{CancellationToken, MonotonicDeadline, OperationContext};
 
 #[derive(Debug, Clone, Copy)]
 pub struct FrontendBudgetLimits {

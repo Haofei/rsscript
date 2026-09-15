@@ -733,7 +733,7 @@ fn vm_runtime_dependency_inventory_prevents_library_implementation_regressions()
         "rsscript-bytecode".to_owned(),
         "rsscript-corelib".to_owned(),
         "rsscript-diagnostics".to_owned(),
-        "rsscript-operation".to_owned(),
+        "rsscript-core-types".to_owned(),
         "rsscript-provider-api".to_owned(),
         "rsscript-text".to_owned(),
         "serde".to_owned(),

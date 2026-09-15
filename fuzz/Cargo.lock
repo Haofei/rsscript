@@ -1131,7 +1131,7 @@ version = "0.1.0"
 dependencies = [
  "half",
  "rsscript-abi-model",
- "rsscript-operation",
+ "rsscript-core-types",
  "semver",
  "serde",
  "serde_json",
@@ -1156,11 +1156,11 @@ dependencies = [
  "rsscript-build-support",
  "rsscript-bytecode",
  "rsscript-codegen-vm",
+ "rsscript-core-types",
  "rsscript-diagnostics",
  "rsscript-interface-catalog",
  "rsscript-lowering",
  "rsscript-mir",
- "rsscript-operation",
  "rsscript-semantics",
  "rsscript-syntax",
  "rsscript-text",
@@ -1169,6 +1169,13 @@ dependencies = [
  "serde_json",
  "sha2",
  "toml",
+]
+
+[[package]]
+name = "rsscript-core-types"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -1192,7 +1199,7 @@ dependencies = [
 name = "rsscript-diagnostics"
 version = "0.1.0"
 dependencies = [
- "rsscript-source-model",
+ "rsscript-core-types",
  "serde",
  "serde_json",
 ]
@@ -1247,18 +1254,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "rsscript-operation"
-version = "0.1.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "rsscript-provider-api"
 version = "0.1.0"
 dependencies = [
  "rsscript-abi-model",
- "rsscript-operation",
+ "rsscript-core-types",
  "serde",
  "serde_json",
 ]
@@ -1280,8 +1280,8 @@ dependencies = [
  "rsscript-build-support",
  "rsscript-bytecode",
  "rsscript-compiler",
+ "rsscript-core-types",
  "rsscript-interface-catalog",
- "rsscript-operation",
  "rsscript-provider-api",
  "rsscript-semantics",
  "rsscript-vm",
@@ -1295,10 +1295,9 @@ name = "rsscript-semantics"
 version = "0.1.0"
 dependencies = [
  "rsscript-abi-model",
+ "rsscript-core-types",
  "rsscript-diagnostics",
  "rsscript-interface-catalog",
- "rsscript-operation",
- "rsscript-source-model",
  "rsscript-syntax",
  "rsscript-text",
  "rsscript-work-budget",
@@ -1307,18 +1306,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "rsscript-source-model"
-version = "0.1.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "rsscript-syntax"
 version = "0.1.0"
 dependencies = [
+ "rsscript-core-types",
  "rsscript-diagnostics",
- "rsscript-source-model",
  "rsscript-work-budget",
 ]
 
@@ -1333,10 +1325,10 @@ dependencies = [
  "rsscript-abi-model",
  "rsscript-build-support",
  "rsscript-bytecode",
+ "rsscript-core-types",
  "rsscript-corelib",
  "rsscript-diagnostics",
  "rsscript-jit-cranelift",
- "rsscript-operation",
  "rsscript-provider-api",
  "rsscript-text",
  "serde",
@@ -1349,8 +1341,7 @@ dependencies = [
 name = "rsscript-work-budget"
 version = "0.1.0"
 dependencies = [
- "rsscript-operation",
- "rsscript-source-model",
+ "rsscript-core-types",
 ]
 
 [[package]]

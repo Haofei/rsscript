@@ -12,7 +12,7 @@ rsscript-abi-model = { path = "../rsscript-abi-model" }
 rsscript-bytecode = { path = "../rsscript-bytecode" }
 rsscript-corelib = { path = "../rsscript-corelib" }
 rsscript-diagnostics = { path = "../rsscript-diagnostics" }
-rsscript-operation = { path = "../rsscript-operation" }
+rsscript-core-types = { path = "../rsscript-core-types" }
 rsscript-provider-api = { path = "../rsscript-provider-api" }
 rsscript-text = { path = "../rsscript-text" }
 serde = { version = "1", features = ["derive", "rc"] }

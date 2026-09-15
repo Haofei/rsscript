@@ -1,7 +1,7 @@
 use super::*;
 use crate::hir::{HirExpr, HirStmt};
 use crate::validate_sources_with_interfaces;
-use rsscript_operation::{CancellationToken, MonotonicDeadline};
+use rsscript_core_types::{CancellationToken, MonotonicDeadline};
 use std::time::{Duration, Instant};
 
 #[test]

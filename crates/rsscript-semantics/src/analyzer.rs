@@ -2,7 +2,7 @@ use crate::text_util::{split_top_level_type_args, type_arg_names, type_root_name
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 
-use rsscript_operation::OperationContext;
+use rsscript_core_types::OperationContext;
 
 use crate::checks;
 use crate::checks::budget::{
@@ -505,7 +505,7 @@ pub fn analyze_sources_with_interfaces_result_with_operation(
 pub fn analyze_frontend_input_snapshot_with_operation(
     input: &FrontendInputSnapshot,
     operation: &OperationContext,
-) -> Result<Vec<Diagnostic>, rsscript_operation::OperationAbort> {
+) -> Result<Vec<Diagnostic>, rsscript_core_types::OperationAbort> {
     let interfaces = input
         .interfaces()
         .files()
@@ -1287,7 +1287,7 @@ mod entrypoint_tests {
     use crate::checks::budget::{FrontendBudget, FrontendBudgetLimits};
     use crate::diagnostic::code;
     use crate::{FrontendCompletion, FrontendStopReason};
-    use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationContext};
+    use rsscript_core_types::{CancellationToken, MonotonicDeadline, OperationContext};
 
     const SOURCE: &str = "fn helper(value: read Int) -> Int { return value }\n\
         fn main() -> Int { return helper(value: 1) }\n";

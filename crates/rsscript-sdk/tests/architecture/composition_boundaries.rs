@@ -129,7 +129,7 @@ fn syntax_model_is_owned_by_the_boundary_crate() {
 #[test]
 fn source_coordinates_are_not_owned_by_budget_accounting() {
     let root = workspace_root();
-    let source_model = read(&root.join("crates/rsscript-source-model/src/lib.rs"));
+    let source_model = read(&root.join("crates/rsscript-core-types/src/source_model.rs"));
     for source_type in ["FileId", "SourceRevision", "ModuleId", "InterfaceId"] {
         assert!(
             source_model.contains("stable_id!(")
@@ -146,16 +146,16 @@ fn source_coordinates_are_not_owned_by_budget_accounting() {
 
     let budget = read(&root.join("crates/rsscript-work-budget/src/lib.rs"));
     assert!(!budget.contains("pub struct Span"));
-    assert!(budget.contains("pub use rsscript_source_model::Span"));
+    assert!(budget.contains("pub use rsscript_core_types::Span"));
 
     let syntax = read(&root.join("crates/rsscript-syntax/src/lib.rs"));
-    assert!(syntax.contains("pub use rsscript_source_model"));
+    assert!(syntax.contains("pub use rsscript_core_types"));
 }
 
 #[test]
 fn cancellation_and_deadlines_share_one_operation_contract() {
     let root = workspace_root();
-    let operation = read(&root.join("crates/rsscript-operation/src/lib.rs"));
+    let operation = read(&root.join("crates/rsscript-core-types/src/operation.rs"));
     assert!(operation.contains("pub struct CancellationToken"));
     assert!(operation.contains("pub struct MonotonicDeadline"));
 
@@ -172,8 +172,8 @@ fn cancellation_and_deadlines_share_one_operation_contract() {
         read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs")),
         read(&root.join("crates/rsscript-vm/src/reg_vm/state.rs"))
     );
-    assert!(vm.contains("Option<rsscript_operation::CancellationToken>"));
-    assert!(vm.contains("Option<rsscript_operation::MonotonicDeadline>"));
+    assert!(vm.contains("Option<rsscript_core_types::CancellationToken>"));
+    assert!(vm.contains("Option<rsscript_core_types::MonotonicDeadline>"));
 }
 
 #[test]
@@ -238,7 +238,7 @@ fn language_engine_does_not_read_the_operating_system() {
     assert_eq!(
         loader_dependencies,
         BTreeSet::from([
-            "rsscript-operation".to_string(),
+            "rsscript-core-types".to_string(),
             "rustix".to_string(),
             "serde".to_string(),
             "sha2".to_string(),

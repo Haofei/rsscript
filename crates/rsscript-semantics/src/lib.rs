@@ -329,7 +329,7 @@ pub use resource_types::{
     weak_field_diagnostics,
 };
 pub use retained_closure_flow::retained_closure_captures_from_flow;
-pub use rsscript_source_model::{FileId, InterfaceId, ModuleId, SourceRevision};
+pub use rsscript_core_types::{FileId, InterfaceId, ModuleId, SourceRevision};
 pub use signatures::signature_diagnostics;
 pub use source_bodies::{block_surface_diagnostics, item_body_surface_diagnostics};
 pub use source_rules::{

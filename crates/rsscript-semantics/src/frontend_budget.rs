@@ -136,7 +136,7 @@ impl Deref for AnalysisDiagnostics {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rsscript_source_model::Span;
+    use rsscript_core_types::Span;
 
     #[test]
     fn exhausted_diagnostic_budget_has_one_terminal_completion_fact() {
