@@ -353,3 +353,70 @@ Samples, per-turn transcripts and the three `report.v1.json` files are committed
 under `evals/samples/sonnet/` (1.4 MB), so every count here can be re-derived
 without model access. Re-running the collector will produce different samples:
 the model is not deterministic and these are single draws.
+
+## After syntax sugar and scorer change (2026-09-15)
+
+The same 90 committed samples, re-scored with the parser that accepts brace
+struct literals and comma-terminated match arms, and with the scorer that keeps
+`status` on compiling plus structural invariants. **No new samples were
+collected**: every candidate file is byte-identical to the one measured above,
+so each difference below is caused by the tooling and by nothing else.
+
+| mode | compiles (30) | scorer pass (30) | RS0015 candidates | RS0206 candidates | canonical spelling (30) |
+|---|---|---|---|---|---|
+| `prompt_only` | 9 → **9** | 8 → **9** | 19 → **16** | 15 → **16** | — → 4 |
+| `language_card` | 11 → **11** | 10 → **11** | 16 → **10** | 14 → **15** | — → 5 |
+| `repair_loop` | 15 → **15** | 13 → **14** | 5 → **3** | 9 → **9** | — → 7 |
+
+Three findings, and the third is the uncomfortable one.
+
+**The scorer change converted exactly the candidates it was meant to.** Pass
+count rises by one in each mode, and the three are precisely the
+canonical-spelling-only failures named in "Compiles but still wrong":
+`read-mut-take` in `prompt_only` (wrote the default `read` at the call site) and
+`receiver-method` in `language_card` and `repair_loop` (used the qualified call
+instead of receiver-call shorthand). The fourth, `task-group-cancel` in
+`repair_loop`, still fails, and should: the repair turn deleted
+`Task.cancellation_token()`, which is a structural loss, not a spelling. Both
+facts are now visible at once — that candidate reports `status: fail` with
+`canonical_spelling.canonical: true`.
+
+**The sugar removes the hallucinated-syntax error it was measured against.**
+RS0015 falls from 40 candidate-appearances across the three modes to 29, an 11
+candidate drop, and it is concentrated exactly where the construct breakdown
+predicted: `language_card`, where brace literals were the single most common
+construct, improves most (16 → 10).
+
+**But not one additional candidate compiles.** Accepting the two forms does not
+convert a single failing candidate into a passing one, because it *unmasks* the
+errors underneath. A brace struct literal used to abort a region before the
+checker reached it; now the region type-checks and reports what was always wrong
+with it. Four of the eleven candidates that lost RS0015 gained a different code
+in its place — `result-error-mapping` gained RS0201/RS0204/RS1001,
+`json-config-validate` gained RS0203/RS0204, `protocol-dyn-dispatch` gained
+RS0207 — and RS0206 *rises* slightly (38 → 40 across all 90) for the same
+reason: `resource-scope-host` now parses far enough in two modes for its
+invented calls to be resolved and rejected.
+
+This is the honest reading of the sugar: it converts a syntax error into the
+semantic error the candidate really had. That is a strict improvement for the
+repair loop, since RS0201/RS0202/RS0204 are the classes the measurement shows
+being cleared and never persisting, while RS0015 says only "unsupported
+expression". It is *not* a first-attempt pass-rate win, and nothing here
+supports claiming one. The pass-rate lever the data still points at is the one
+RS0206 marks: telling the model which functions exist.
+
+Re-derive these numbers without model access:
+
+```bash
+for mode in prompt_only language_card repair_loop; do
+  cargo run -p rsscript-xtask -- agent-eval \
+    --tasks evals/tasks \
+    --candidates "evals/samples/sonnet/$mode" \
+    --output "evals/samples/sonnet/$mode/report.2026-09-15.v1.json"
+done
+```
+
+The three `report.2026-09-15.v1.json` files are committed beside the original
+`report.v1.json`, which is left untouched so the tables earlier in this report
+stay checkable against the scoring that produced them.
