@@ -444,7 +444,7 @@ pub fn dyn_from_diagnostic(
         code::PROTOCOL_NOT_SATISFIED,
         format!("cannot construct `Dyn<{protocol}>` from `{value_type}`."),
         span,
-        "external_binding protocol not satisfied",
+        "dynamic protocol not satisfied",
     )
     .with_cause(cause)
     .with_cause(

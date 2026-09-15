@@ -1,0 +1,20 @@
+// expect: RS0032
+
+protocol Render {
+    fn render(self: read Self) -> fresh String
+}
+
+struct Label {
+    text: String
+}
+
+fn show(value: read Dyn<Render>) -> fresh String {
+    return Render.render(self: value)
+}
+
+fn main() -> Unit {
+    local label = Label(text: "hi")
+    let boxed = Dyn.from<Render, Label>(value: take label)
+    Output.write(message: show(value: boxed))
+    return Unit
+}

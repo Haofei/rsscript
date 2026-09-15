@@ -679,7 +679,8 @@ The argument is deliberately *not* re-checked as an ordinary type, so a protocol
 name never produces a contradictory `RS0024`.
 
 `Dyn.from<P, T>(value: take T) -> fresh Dyn<P>` (declared in
-`stdlib/dyn/dyn.rssi`) constructs one. See §7.4 for the conformance gap.
+`stdlib/dyn/dyn.rssi`) constructs one, and requires that `T` satisfies `P`
+(§7.4).
 
 **Rejected — `RS0027`**
 
@@ -3056,13 +3057,15 @@ fn main() -> Unit {
 }
 ```
 
-**However**, `Dyn.from` does **not** currently check that `T` satisfies `P`. The
-semantic layer defines the diagnostic for it
-(`generic_constraints.rs::dyn_from_diagnostic`, which would be `RS0032`), but
-nothing in the checker calls it, and the following program — identical except
-that the `impl Render for Label` block is deleted — is **accepted**:
+`Dyn.from<P, T>` requires that `T` satisfies `P` — either through a visible
+`impl P for T` or through a declared protocol bound on a type parameter
+(`fn box_any<T: Render>(value: take T) -> fresh Dyn<Render>` is accepted). The
+check is `checks/calls/generic_constraints.rs::check_dyn_from_call`, and the
+diagnostic is `generic_constraints.rs::dyn_from_diagnostic` (`RS0032`). The
+following program — identical except that the `impl Render for Label` block is
+deleted — is **rejected**:
 
-**Accepted, and arguably should not be** (see §12)
+**Rejected — `RS0032`**
 
 ```rsscript
 protocol Render {
@@ -3090,7 +3093,7 @@ fn main() -> Unit {
 | | `fn f<T: P>(x: read T)` | `fn f(x: read Dyn<P>)` |
 | --- | --- | --- |
 | dispatch | static, resolved per instantiation | dynamic |
-| conformance proof | at the call site, by §3.5 | when the `Dyn` is constructed (currently unchecked) |
+| conformance proof | at the call site, by §3.5 | when the `Dyn` is constructed, by §3.5 (`RS0032`) |
 | number of bounds | exactly one per type parameter | one protocol per `Dyn` |
 | value shape | the concrete value | an explicit boundary value |
 
@@ -4011,7 +4014,7 @@ explanations).
 | `RS0206` | unknown callee | §4.2, §10.1 |
 | `RS0207` | argument / initializer / callback-shape type mismatch | §3.3, §4.10, §5.10 |
 | `RS0208` | return type mismatch (including fall-through) | §4.7 |
-| `RS0032` | protocol bound not satisfied | §3.5, §7.3 |
+| `RS0032` | protocol bound not satisfied | §3.5, §7.3, §7.4 |
 
 ### 11.4 Control flow
 
@@ -4143,13 +4146,6 @@ and finding no enforcing code.
 
 These are findings for the maintainer, not features.
 
-* **`Dyn.from` does not check conformance.** `dyn_from_diagnostic` exists in
-  `generic_constraints.rs` and would emit `RS0032`, but nothing calls it.
-  `Dyn.from<Render, Label>(value: take label)` is accepted even with no
-  `impl Render for Label` and no `Render` bound (§7.4). The *use* of the
-  resulting `Dyn<Render>` is accepted too, because `Dyn<P>` satisfies `P`
-  unconditionally. This is the one place where the nominal-protocol invariant
-  can currently be bypassed.
 * **No definite-assignment analysis.** `let x: Int` with no initializer,
   followed by a read of `x`, is accepted (§6.12).
 * **`break` / `continue` outside a loop** are accepted by the checker.
