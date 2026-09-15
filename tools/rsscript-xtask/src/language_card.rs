@@ -1047,7 +1047,7 @@ mod tests {
     #[test]
     fn canonical_surface_forms_show_a_right_and_wrong_pair() {
         let forms = canonical_surface_forms();
-        assert_eq!(forms.len(), 5);
+        assert_eq!(forms.len(), 7);
         let section = canonical_surface_forms_section();
         for form in &forms {
             assert_ne!(form.right, form.wrong);

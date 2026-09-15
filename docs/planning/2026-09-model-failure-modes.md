@@ -420,3 +420,223 @@ done
 The three `report.2026-09-15.v1.json` files are committed beside the original
 `report.v1.json`, which is left untouched so the tables earlier in this report
 stay checkable against the scoring that produced them.
+
+## Fresh samples after oracle changes (2026-09-15)
+
+The previous section re-scored the *old* samples with the new tooling and found
+that the syntax sugar unmasked semantic errors without compiling one extra
+candidate. That left the oracle changes themselves — the canonical surface
+forms, the 450-signature index, the `RS0206` did-you-mean — unmeasured, because
+every sample predated them. This section is a fresh draw against the current
+tree: 30 tasks x 3 modes, one sample each, collected with
+
+```bash
+python3 tools/collect-model-samples.py --model sonnet --jobs 5 --timeout 400 \
+  --out evals/samples/sonnet-2026-09-15
+```
+
+`claude -p --model sonnet --output-format text --allowedTools ""` run from an
+empty temporary directory, exactly as before. Both sample sets below are scored
+by one `agent-eval` build and one `rss check` binary, so every difference is the
+samples, not the tooling. These are different draws at n = 1 per task per mode;
+a difference of one or two candidates is not a result.
+
+Two things went wrong during collection and both matter for reading the numbers.
+Three `prompt_only` replies were discarded by the runner because the model
+fenced the program as ```` ```rust ```` or ```` ```rescript ````; the fence
+regex accepted only `rsscript`/`rss`. All three were ordinary failing
+candidates, so the defect had been quietly inflating pass rates, and the
+September baseline was collected with the same defect. They were re-collected
+after the fix. Separately, a model session limit interrupted `repair_loop`: five
+tasks produced no candidate and were re-collected after the limit reset, and two
+more (`result-error-mapping`, `retains-declaration`) lost their third repair
+turn. Both had already failed turn 2 and are scored as failures, so they cost
+the mode at most two conversions.
+
+### Pass rates
+
+| set / mode | compiles | scorer pass | generation compile | generation pass | repair/review pass | canonical spelling |
+|---|---|---|---|---|---|---|
+| September `prompt_only` | 9/30 | 9/30 | 0/20 | 0/20 | 9/10 | 4 |
+| September `language_card` | 11/30 | 11/30 | 1/20 | 1/20 | 10/10 | 5 |
+| September `repair_loop` | 15/30 | 14/30 | 5/20 | 5/20 | 9/10 | 7 |
+| **fresh `prompt_only`** | **6/30** | **6/30** | **0/20** | **0/20** | 6/10 | 4 |
+| **fresh `language_card`** | **11/30** | **11/30** | **3/20** | **3/20** | 8/10 | 5 |
+| **fresh `repair_loop`** | **17/30** | **17/30** | **8/20** | **8/20** | 9/10 | 5 |
+
+The one number that moved beyond plausible noise is the generation half of
+`repair_loop`: **5/20 to 8/20**, with the whole mode at 17/30 against 14/30.
+`language_card` went 1/20 to 3/20 on the generation tasks while staying at 11/30
+overall, because it lost two of the ten easy repair/review tasks in this draw.
+`prompt_only` went *down*, 9/30 to 6/30, entirely on the repair/review half
+(9/10 to 6/10) — that half has no card and no diagnostics, so nothing in this
+work could have affected it, and the fence fix restored three failing candidates
+that the September run would also have dropped. Read `prompt_only` as draw
+variance on a mode the changes cannot reach.
+
+### Failure classes, September to fresh
+
+Candidates showing the class at least once, out of 30 per mode.
+
+| class | `prompt_only` | `language_card` | `repair_loop` |
+|---|---|---|---|
+| hallucinated syntax (RS0015) | 16 -> 18 | 10 -> **6** | 3 -> **0** |
+| invents a symbol (RS0206) | 16 -> 17 | 15 -> 16 | 9 -> **6** |
+| wrong call-site effect (RS0202/RS0308) | 6 -> 8 | 7 -> **8** | 4 -> **8** |
+| — RS0202 alone | 6 -> 6 | 4 -> 5 | 3 -> 5 |
+| — RS0308 alone | 2 -> 3 | 4 -> **8** | 3 -> **6** |
+| omits argument labels (RS0201/RS0204) | 6 -> 6 | 5 -> 3 | 1 -> 4 |
+| invented argument label (RS0203) | 0 -> 0 | 4 -> 3 | 1 -> 3 |
+| return-type mismatch (RS0208) | 13 -> 12 | 3 -> 4 | 0 -> 0 |
+| branch used as a value (RS0209) | 3 -> 4 | 6 -> 4 | 1 -> 2 |
+| string `+` (RS1001) | 4 -> 5 | 4 -> **0** | 1 -> **0** |
+
+**The canonical surface forms work.** RS0015 falls 10 -> 6 with the card and
+3 -> 0 after repair, and the sub-class breakdown shows what is left:
+no Rust `::` paths, no tuple destructuring in `for`, no invented `as Dyn<P>`
+cast — only `task_group`-as-an-expression (2), `mut` on a `with ... as` binding
+(1) and a four-candidate tail. RS1001 (`+` for string concatenation) went 4 -> 0
+with the card too. In `prompt_only`, which never sees the card, RS0015 went the
+other way (16 -> 18). That contrast is the cleanest evidence in this report that
+the card's example table is doing the work rather than the model having changed.
+
+**The signature index did not stop invention, but the did-you-mean made it
+repairable.** As a first-attempt class RS0206 is flat — 15 -> 16 candidates with
+the card, still the largest class there, and the most-invented names are the
+same family as before (`print` 4, `List.of` 3, `List.length` 3, `Int.parse` 3,
+`Io.println` 2, `List.size` 2, `Json.get_int` 2). Pointing at a 450-signature
+index does not make a model read it. What changed is what happens next.
+
+### Did the model follow the suggestions?
+
+Restricting to `repair_loop` candidates that hit RS0206 on turn 1:
+
+| | September (no did-you-mean) | fresh (did-you-mean) |
+|---|---|---|
+| candidates with RS0206 at turn 1 | 15 | 12 |
+| RS0206 gone by the final turn | 6 | **10** |
+| final source calls a name the fix would have named | 5 / 15 | **12 / 12** |
+
+Every one of the twelve ends up calling `Output.write`, `String.parse_int`,
+`List.new`, `List.try_fold`, `Json.field` or `Channel.receiver` — the exact
+targets in the alias table — against five of fifteen before. The class-level
+counts agree from the other side: across repair turns RS0206 was **cleared 10
+times and persisted 2**, where the September run had it cleared 6 and persisted
+9, making it the one class larger in the persisted column than any other. That
+inversion is the single clearest oracle effect in the data.
+
+The honest caveat is that those target names are also simply the correct API
+names, so a candidate could reach them without being told. 5/15 -> 12/12
+alongside 6-cleared/9-persisted -> 10-cleared/2-persisted is a large joint shift,
+but it is 30 candidates and it is one draw.
+
+A second caveat is instrumentation, and it is fixed rather than argued: this
+run's transcripts recorded only a list of codes per turn, so "was a suggestion
+shown and declined?" could only be answered indirectly. The collector now keeps
+each turn's source (`turn<N>.rss`) and the exact diagnostic rows that turn was
+shown, fix applicability and replacement text included, so the question is
+directly answerable from the committed samples in future runs.
+
+### What repair cleared, and what it could not
+
+Comparing each repairing candidate's first and last turn:
+
+| | cleared | persisted | introduced |
+|---|---|---|---|
+| RS0206 invents a symbol | **10** | 2 | 2 |
+| RS0207 argument type mismatch | 6 | 2 | 1 |
+| RS0015 hallucinated syntax | 6 | 0 | 0 |
+| RS0308 `take` of a non-local | 4 | **4** | 1 |
+| RS0202 wrong call-site effect | 4 | 1 | **3** |
+| RS0204 omits a label | 4 | 0 | 2 |
+| RS0203 invented label | 4 | 0 | 1 |
+| RS0208 / RS0209 / RS1001 | 3 / 3 / 3 | 0 | 0 / 1 / 0 |
+
+RS0206 has swapped places with the effect classes. The class that now dominates
+the persisted column is **RS0308, `take` requires a local value** — and RS0202
+is the class repair most often *introduces*.
+
+### The class that now dominates: `take` without `local`
+
+RS0308 is 34 instances across 17 candidate-appearances in the fresh set, more
+than any other code, and it reads the same way every time:
+
+```
+`take` requires a local value.
+  > let mut report: Report = build_report(title: take "Weekly Status")
+  > finish_report(report: take report)
+  > let batch: Batch<Reading> = make_batch(label: take label, items: take items)
+  fixes: [('manual', 'Pass a local value with `take`, or use `read`/`mut` for managed values.')]
+```
+
+Every instance is `take` applied to a `let` binding or to a literal, and every
+instance carries exactly one fix, which is `manual` and names no edit. By the
+report's own rule — *diagnostics that name the correct edit get fixed;
+diagnostics that only name the error do not* — this is precisely the shape that
+persists, and it does.
+
+The card was complicit in producing it. It says `mut` and `take` are written
+explicitly at the call site, and its surface-forms table teaches `let mut total:
+Int = 0` as *the* binding form. It never mentions `local`, which is the binding
+form a `take` actually requires: the verified reference solutions spell it
+`local title = "daily"` and then `build_report(title: take title)`. A model
+following the card exactly writes `let title = ...` and is then told by RS0202
+that the argument "must use `take`" — which walks it straight into RS0308. Two
+diagnostics, each correct, compose into a trap.
+
+`RS0308` itself is emitted from ownership analysis, outside the files this work
+owns, so the edit-carrying fix it needs is left to that owner; the smallest
+change available here is the card, and it now states the rule and shows both
+spellings.
+
+### What was implemented, and the count behind each
+
+1. **A correct machine-applicable fix for RS0202** — 12 of the 32 RS0202
+   instances in the fresh set are the "wrong effect written" shape
+   (`uses `take` but the parameter is `read``), not the "effect missing" shape.
+   For all 12, the old fix inserted the required keyword *in front of* the
+   keyword already there, producing `take mut value` or `read mut "x"`, neither
+   of which parses. `rss fix --write` was turning a type error into a syntax
+   error. The fix now replaces a wrong keyword and deletes one in front of a
+   `read` parameter, where omission is canonical.
+
+2. **A did-you-mean for RS0203** — 28 RS0203 instances in the fresh set, and not
+   one is a typo. They are other languages' names for the same slot: `text` for
+   `value` (12), `separator` for `delimiter` (3), `a`/`b` for `left`/`right`
+   (4), `pattern` for `needle`, `end` for `len`, `list` for `parts`. Edit
+   distance reaches none of them; *position* reaches all of them, because the
+   model orders the arguments correctly and only misnames them. When the call is
+   otherwise a complete named call, the parameter in the argument's own position
+   is now offered with a machine-applicable rename. This covers 28 of 28
+   instances in the fresh set and 9 of 9 in the held-out September set, every
+   one correctly, and each rename clears two errors, since a wrong label is
+   charged as both RS0203 and RS0204. The repair data is what makes this the
+   right target: RS0203/RS0204 appear at *turn 2* in ten of the nineteen
+   repairing candidates — the did-you-mean fixes the callee name, and the model
+   then invents labels for the function it has just been handed.
+
+3. **Resolved parameter facts at the call cursor** — RS0202/RS0308 together are
+   8 candidates in every mode, and the top class in `repair_loop`. `rss generate
+   continuations` now returns, for each callable candidate, every parameter's
+   name, type, the effect the call site must supply, whether that effect has to
+   be written at all, and whether the label may be dropped (mirroring the call
+   checker's own positional rule), so the call can be written from facts instead
+   of from the card's instruction to be explicit.
+
+4. **The card's `take`/`local` rule** — 34 RS0308 instances, above.
+
+5. **Collector fixes** — the fence regex, the per-turn transcripts, and `--rss`
+   to pin the checker for a whole run.
+
+### Reproducing
+
+```bash
+python3 tools/collect-model-samples.py --model sonnet --jobs 5 --timeout 400 \
+  --rss ./target/debug/rss --out evals/samples/sonnet-2026-09-15
+for mode in prompt_only language_card repair_loop; do
+  cargo run -p rsscript-xtask -- agent-eval --tasks evals/tasks \
+    --candidates "evals/samples/sonnet-2026-09-15/$mode" \
+    --output "evals/samples/sonnet-2026-09-15/$mode/report.v1.json"
+done
+python3 tools/analyze-model-samples.py --model sonnet-2026-09-15 --rss ./target/debug/rss
+```
