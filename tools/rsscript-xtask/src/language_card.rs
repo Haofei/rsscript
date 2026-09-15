@@ -168,6 +168,22 @@ fn canonical_surface_forms() -> Vec<CanonicalSurfaceForm> {
             right: "let mut total: Int = 0",
             wrong: "mut total: Int = 0",
         },
+        // Measured as the class that survives the repair loop: 34 `RS0308`
+        // instances across 17 candidate-appearances in the fresh samples, and
+        // every one of them is `take` of a `let` binding or of a literal. The
+        // card was complicit — it teaches that `take` is written explicitly at
+        // the call site, and taught `let mut` as *the* binding form without
+        // ever naming the binding form a `take` actually requires.
+        CanonicalSurfaceForm {
+            form: "a value you will `take` is bound with `local`",
+            right: "local title = \"daily\"",
+            wrong: "let title = \"daily\"",
+        },
+        CanonicalSurfaceForm {
+            form: "`take` moves a binding, never a literal",
+            right: "local title = \"daily\"; build(title: take title)",
+            wrong: "build(title: take \"daily\")",
+        },
     ]
 }
 
@@ -336,7 +352,7 @@ fn language_card_document() -> String {
     );
     output.push_str("A compact generated index for contributors and tools.\n\n");
     output.push_str(&format!("- {} reserved keywords, {} contextual words, {} parser-level words, and {} built-in constants.\n- {} documented diagnostic codes.\n- {} platform-neutral core interface files carrying {} callable signatures.\n\n", keyword_data.iter().filter(|keyword| !keyword.contextual).count(), keyword_data.iter().filter(|keyword| keyword.contextual).count(), parser_keywords().len(), builtin_constants().len(), diagnostics().len(), core_interfaces().len(), interface_signatures().len()));
-    output.push_str("- [Grammar surface](grammar.md) ([JSON](grammar.json))\n- [Keyword classification](keywords.md)\n- [Diagnostic catalog](diagnostic-catalog.md) ([JSON](diagnostic-catalog.json))\n- [Core interfaces](core-interfaces.md) ([JSON](core-interfaces.json))\n- [Core interface signatures](signatures.md)\n\nMachine-readable summary: [language-card.json](language-card.json). Diagnostic explanation catalogs do not fabricate fixes; machine-applicable edits are instance-level data returned by `rss check --json` and `rss fix --json`.\n\n## Canonical call spelling\n\nNamed arguments stay named. A direct call-site `read` wrapper is omitted because it is the default; `mut` and `take` remain explicit. The formatter does not invent or remove argument labels.\n\n```rsscript\n");
+    output.push_str("- [Grammar surface](grammar.md) ([JSON](grammar.json))\n- [Keyword classification](keywords.md)\n- [Diagnostic catalog](diagnostic-catalog.md) ([JSON](diagnostic-catalog.json))\n- [Core interfaces](core-interfaces.md) ([JSON](core-interfaces.json))\n- [Core interface signatures](signatures.md)\n\nMachine-readable summary: [language-card.json](language-card.json). Diagnostic explanation catalogs do not fabricate fixes; machine-applicable edits are instance-level data returned by `rss check --json` and `rss fix --json`.\n\n## Canonical call spelling\n\nNamed arguments stay named. A direct call-site `read` wrapper is omitted because it is the default; `mut` and `take` remain explicit. The formatter does not invent or remove argument labels. `take` moves the value out of its binding, so its operand must be a `local` binding — a `let` binding and a literal cannot be taken, and a parameter that wants `take` therefore needs a `local` on the caller's side.\n\n```rsscript\n");
     output.push_str(&canonical_example());
     output.push_str("```\n\n");
     output.push_str(ACCEPTED_SUGAR_SECTION);

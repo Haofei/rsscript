@@ -17,6 +17,11 @@ Implementation functions in `.rss` have bodies. Interface functions in `.rssi`
 are ordinary bodyless declarations. Parameters use the closed `read`, `mut`, and
 `take` data-effect set.
 
+An `.rssi` file is *supplied* to the compiler alongside the implementation, not
+copied into it. Never restate an interface declaration inside the `.rss` file
+you are writing: its symbols are already in scope, and repeating one declares it
+twice.
+
 ```rsscript
 fn transform(input: take Image, options: read Options) -> fresh Image {
     return Image.transform(input: take input, options)
