@@ -796,6 +796,18 @@ to `__Tuple2(item0: a, item1: b)` and `(T, U)` to `__Tuple2<T, U>`;
 `expand_tuple_destructuring` turns `let (a, b) = e` into a temporary plus
 `.itemN` projections.
 
+Because a tuple is an ordinary generic struct, **every tuple value is a generic
+instance**, and its type arguments must be substituted before they leave the
+front end. `lowerer.rs::lower_record_constructor` applies the call site's
+inferred type arguments to the constructor's declared result, so a `(1, "a")`
+lowers as `__Tuple2<Int, String>` rather than as the declaration's parameter
+names. That substitution is what the typed executable facts carry, and the
+bytecode verifier checks them against the enclosing function's concrete result;
+an unsubstituted `__Tuple2<A, B>` is rejected there. The checker proves a call
+site's type arguments all at once or not at all, so where it cannot,
+`lower_record_constructor` refuses to lower rather than guess — a build error,
+never a fact naming a type parameter.
+
 `desugar.rs::tuple_type_param` names element `i`'s type parameter
 `(b'A' + i) as char`, so the parameters are `A`, `B`, `C`, … . Past `Z` that
 arithmetic produces characters that are not identifiers at all (`[`, `\`, `]`,
