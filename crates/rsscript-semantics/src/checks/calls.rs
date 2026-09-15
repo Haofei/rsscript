@@ -981,6 +981,65 @@ fn return_type_mismatch_diagnostic(
         ));
 }
 
+/// Candidate replacements for a callee that did not resolve, drawn from the
+/// checker's own callable symbol table: every user function and prelude-visible
+/// core-interface function, plus the declared type names a constructor call can
+/// name. Nothing outside this table can be suggested, so a "did you mean" can
+/// never point at a function that does not exist.
+fn unresolved_callee_suggestions(
+    analyzer: &Analyzer<'_>,
+    written: &str,
+) -> Vec<rsscript_semantics::NameSuggestion> {
+    let in_scope: Vec<String> = analyzer
+        .hir
+        .signatures()
+        .map(|(key, _)| key.to_string())
+        .chain(analyzer.hir.types().map(|info| info.name.clone()))
+        .collect();
+    rsscript_semantics::unresolved_call_suggestions(written, in_scope.iter().map(String::as_str))
+}
+
+/// The exact source range covering the callee written at `call_span`, when the
+/// characters there spell `written` verbatim.
+///
+/// Returns `None` whenever the source does not line up exactly — an explicit
+/// generic argument list, a receiver expression that is not a plain dotted
+/// name, a call synthesized from string interpolation — so a rename fix is only
+/// ever offered for a contiguous run of source it can replace character for
+/// character.
+fn callee_rename_span(
+    tokens: &[crate::syntax::lexer::Token],
+    call_span: &Span,
+    written: &str,
+) -> Option<Span> {
+    let start = tokens.iter().position(|token| {
+        token.span.file == call_span.file
+            && token.span.line == call_span.line
+            && token.span.column == call_span.column
+    })?;
+    let mut text = String::new();
+    let mut column = call_span.column;
+    for token in tokens.iter().skip(start) {
+        if token.span.line != call_span.line || token.span.column != column {
+            break;
+        }
+        text.push_str(&token.text());
+        column += token.span.length;
+        if text == written {
+            return Some(Span {
+                file: call_span.file.clone(),
+                line: call_span.line,
+                column: call_span.column,
+                length: column - call_span.column,
+            });
+        }
+        if text.chars().count() >= written.chars().count() {
+            break;
+        }
+    }
+    None
+}
+
 fn check_call_args(
     analyzer: &mut Analyzer<'_>,
     function: &FunctionDecl,
@@ -1015,12 +1074,17 @@ fn check_call_args(
     let signature = match resolution {
         CallResolution::Resolved { signature, .. } => signature,
         CallResolution::Unknown => {
-            analyzer
-                .diagnostics
-                .push(rsscript_semantics::unknown_callee_diagnostic(
-                    &callee_display(callee),
+            let written = callee_display(callee);
+            let suggestions = unresolved_callee_suggestions(analyzer, &written);
+            let rename_span = callee_rename_span(analyzer.tokens, call_span, &written);
+            analyzer.diagnostics.push(
+                rsscript_semantics::unknown_callee_diagnostic_with_suggestions(
+                    &written,
                     call_span.clone(),
-                ));
+                    &suggestions,
+                    rename_span,
+                ),
+            );
             return;
         }
         CallResolution::Ambiguous { candidates } => {

@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use rsscript_diagnostics::{Diagnostic, Span, code};
+use rsscript_diagnostics::{Diagnostic, FixEdit, Span, code};
 
 /// Facts that determine whether a rendered legacy HIR type still contains an
 /// unresolved generic parameter.
@@ -343,7 +343,29 @@ pub fn list_literal_item_type_mismatch_diagnostic(
 }
 
 pub fn unknown_callee_diagnostic(call_name: &str, span: Span) -> Diagnostic {
-    Diagnostic::error(
+    unknown_callee_diagnostic_with_suggestions(call_name, span, &[], None)
+}
+
+/// `RS0206` with the replacement named, not just the failure.
+///
+/// The measured repair data is unambiguous: diagnostics whose message names the
+/// edit get fixed and never persist, while `RS0206` — which said only that a
+/// call "does not resolve" — persisted through three repair turns nine times,
+/// because a model told twice that `print` does not exist simply re-invents it.
+/// `suggestions` are in-scope names computed by
+/// [`crate::unresolved_call_suggestions`].
+///
+/// `rename_span` is the exact source range covering the written callee. When it
+/// is present and the best suggestion is a pure rename, the fix carries a
+/// machine-applicable edit so `rss fix --json` can apply it; otherwise the
+/// suggestion is advisory help.
+pub fn unknown_callee_diagnostic_with_suggestions(
+    call_name: &str,
+    span: Span,
+    suggestions: &[crate::NameSuggestion],
+    rename_span: Option<Span>,
+) -> Diagnostic {
+    let diagnostic = Diagnostic::error(
         code::UNKNOWN_CALLEE,
         format!("call to `{call_name}` does not resolve."),
         span,
@@ -351,8 +373,32 @@ pub fn unknown_callee_diagnostic(call_name: &str, span: Span) -> Diagnostic {
     )
     .with_cause(
         "The callee is not a user function, known type constructor, enum variant, or builtin signature.",
-    )
-    .with_fix(
+    );
+
+    let Some(best) = suggestions.first() else {
+        return diagnostic.with_fix(
+            "declare_or_import_callee",
+            "Declare the function or add a builtin signature for this API.",
+            "manual",
+        );
+    };
+
+    let named = suggestions
+        .iter()
+        .map(|suggestion| format!("`{}`", suggestion.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let title = format!("Did you mean {named}?");
+
+    let diagnostic = match rename_span.filter(|_| best.pure_rename) {
+        Some(rename_span) => diagnostic.with_fix_edit(
+            "rename_callee",
+            title,
+            FixEdit::replace(&rename_span, best.name.clone()),
+        ),
+        None => diagnostic.with_fix("rename_callee", title, "maybe-incorrect"),
+    };
+    diagnostic.with_fix(
         "declare_or_import_callee",
         "Declare the function or add a builtin signature for this API.",
         "manual",

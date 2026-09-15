@@ -250,6 +250,7 @@ pub use type_compatibility::{
     contains_unresolved_generic_type, list_literal_item_type_mismatch_diagnostic,
     map_literal_entry_type_mismatch_diagnostic, message_payload_not_transferable_diagnostic,
     type_compatible, type_contains_unresolved_generic, unknown_callee_diagnostic,
+    unknown_callee_diagnostic_with_suggestions,
 };
 pub use weak_fields::{is_weak_upgrade_call, weak_field_upgrade_diagnostic};
 
@@ -337,8 +338,10 @@ pub use source_rules::{
     module_use_layout_diagnostics, type_ref_surface_diagnostics, unsupported_syntax_diagnostic,
 };
 pub use symbols::{
-    Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
+    Definition, INVENTED_METHOD_ALIASES, INVENTED_NAME_ALIASES, NameSuggestion, Reference,
+    RssDocumentSymbol, SuggestionSource, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
     document_symbols, document_symbols_from_program, symbol_index, symbol_index_from_program,
+    unresolved_call_suggestions,
 };
 pub use take_handle_fields::take_handle_fields;
 pub use task_groups::task_group_async_let_diagnostics;

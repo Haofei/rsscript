@@ -625,7 +625,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::UNKNOWN_CALLEE,
         title: "unknown callee",
-        explanation: "The checker could not resolve the function or method call against user declarations, known constructors, or builtin signatures.",
+        explanation: "The checker could not resolve the function or method call against user declarations, known constructors, or builtin signatures. The instance carries a `did you mean` fix naming in-scope replacements, computed from the checker's own callable symbol table by edit distance and by known aliases for names that are commonly invented (`print` and `write` for `Output.write`, `Int.parse` for `String.parse_int`, the `get_*` JSON accessors for the `Json.field_*` family). When the replacement is a pure rename the fix is machine-applicable and carries the edit; a receiver-call spelling that must also move its receiver into a named argument is advisory.",
     },
     DiagnosticExplanation {
         code: code::ARGUMENT_TYPE_MISMATCH,
