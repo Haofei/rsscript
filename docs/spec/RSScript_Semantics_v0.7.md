@@ -483,6 +483,40 @@ fn take_it(value: Widget) -> Unit {
 }
 ```
 
+#### Builtin protocol conformance
+
+`BUILTIN_PROTOCOL_TABLE` in `crates/rsscript-semantics/src/types.rs` is the
+single source of truth for which builtin type satisfies which builtin protocol.
+Both the generic-bound check (`generic_constraints.rs`, `RS0032`, §3.5) and the
+derive check (`derive_fields.rs`, `RS0211`, §2.12) read it, so the answer cannot
+differ between a bound and a derive.
+
+| Type | `Eq` | `Ord` | `Hashable` | `Clone` |
+| --- | --- | --- | --- | --- |
+| `Int`, `Int8`, `Int16`, `Int32`, `Int64` | yes | yes | yes | yes |
+| `UInt`, `UInt8`, `UInt16`, `UInt32`, `UInt64` | yes | yes | yes | yes |
+| `Byte` | yes | yes | yes | yes |
+| `Char` | yes | yes | yes | yes |
+| `Bool` | yes | yes | yes | yes |
+| `Unit` | yes | yes | yes | yes |
+| `String` | yes | yes | yes | yes |
+| `Float`, `Float32`, `Float64` | **no** | **no** | **no** | yes |
+
+`Float` is the only asymmetric row, and deliberately so: IEEE-754 equality is
+not reflexive (`NaN != NaN`) and its ordering is partial, so a total `Eq`, a
+total `Ord`, and a hash consistent with equality are all unavailable. `Float` is
+still `Clone`, and still Copy (§2.2) — Copy and `Clone` are about storage, the
+other three are about semantics.
+
+A type name that is not a row above gets no answer from the table; the checker
+falls through to the container rule, the caller's own bounds, a visible `impl`,
+or a declared derive (§3.5).
+
+`Bytes`, `Buffer`, `Path`, `Url`, `Fd`, `StringView`, `BytesView`,
+`BufferView`, and the error types are **not** in the table: the front end has no
+builtin conformance for them, so a bound on one is `RS0032` unless an interface
+declares an `impl`.
+
 ### 2.2 Which types are Copy
 
 `crates/rsscript-semantics/src/value_properties.rs` owns the single source of
@@ -1188,11 +1222,12 @@ fn wrap<T>(value: take T) -> fresh T {
 concrete type satisfies a protocol bound at a resolved call site. In order:
 
 1. `Dyn<P>` satisfies `P`.
-2. Builtin structural facts:
-   * `Ord` is satisfied by `Int`, `String`, `Bool`;
-   * `Hashable` and `Eq` by `Int*`, `UInt*`, `Bool`, `Byte`, `Char`, `Unit`,
-     `String`;
-   * `Clone` by all of those plus `Float*`.
+2. Builtin conformance, read from the one table in §2.1
+   (`types.rs::BUILTIN_PROTOCOL_TABLE`). A row in that table is the final
+   answer for that type: every integer width, `Byte`, `Char`, `Bool`, `Unit`,
+   and `String` satisfy `Eq`, `Ord`, `Hashable`, and `Clone`; `Float`,
+   `Float32`, and `Float64` satisfy `Clone` and nothing else, and do **not**
+   fall through to the steps below.
 3. For `Hashable` / `Eq` / `Clone`, a `List`, `Option`, or `Result` satisfies the
    bound iff every type argument does (recursively).
 4. A caller's own type parameter with a matching `T: P` bound satisfies `P`.
@@ -1204,9 +1239,8 @@ concrete type satisfies a protocol bound at a resolved call site. In order:
 Nothing else. In particular structural method matching never satisfies a bound —
 protocols are nominal.
 
-Note the asymmetry in step 2: `Float` is `Clone` but neither `Ord` nor `Eq`, and
-`Bool` is `Ord` but `Byte`/`Char` are not. A failure is `RS0032`, with guidance
-specialised for `Hashable` and `Eq`.
+The only asymmetry in step 2 is `Float`, which is `Clone` and nothing else. A
+failure is `RS0032`, with guidance specialised for `Hashable` and `Eq`.
 
 **Rejected — `RS0032`** — `List.sort<T: Ord>` over a struct with no `Ord`
 
@@ -4285,7 +4319,9 @@ and finding no enforcing code.
 * **Integer overflow behaviour** for `+`/`-`/`*` on `Int`. `Math.wrapping_add`
   and friends exist, which implies the plain operators are *not* wrapping, but
   the front end does not say what they are.
-* **`Float` semantics** beyond "it is not `Ord` and not `Eq`" (§3.5).
+* **`Float` semantics** beyond its row in the builtin protocol table (§2.1):
+  rounding mode, `NaN` payload propagation, and the behaviour of `Float`
+  formatting are runtime concerns the front end does not constrain.
 
 ### 12.2 Gaps — rules the design implies but the checker does not enforce
 
@@ -4304,10 +4340,8 @@ These are findings for the maintainer, not features.
   function in an `.rssi` interface (§8.2).
 * **`String` is not Copy** (§2.2), so `retains(s: String)` is legal while
   `retains(n: Int)` is `RS0007`.
-* **`Float` is `Clone` but not `Eq` and not `Ord`; `Bool` is `Ord` but `Char`
-  and `Byte` are not** (§3.5). The three builtin predicates in
-  `generic_constraints.rs` have different membership and are easy to misread as
-  one set.
+* **`Float` is `Clone` but not `Eq`, not `Ord`, and not `Hashable`** (§2.1).
+  Every other builtin scalar satisfies all four.
 * **Structured patterns need a scrutinee effect, variant patterns do not.**
   `match value { Some(n) => … }` is fine; `match point { Point { x } => … }` is
   `RS0202` (§6.5).

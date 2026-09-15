@@ -38,6 +38,91 @@ fn split_top_level_type_args(args: &str) -> Vec<&str> {
     parts
 }
 
+/// Which builtin protocols each builtin type conforms to.
+///
+/// This is the single source of truth for the four builtin predicates; the
+/// bound check (`generic_constraints.rs`) and the derive check
+/// (`derive_fields.rs`) both read it, so `Eq`, `Ord`, `Hashable`, and `Clone`
+/// cannot drift apart per call site. Spec §2.1 renders the same table.
+///
+/// The deliberate rows:
+///
+/// * Every integer width, `Byte`, `Char`, `Bool`, and `Unit` are totally
+///   ordered, so they are `Ord` as well as `Eq` and `Hashable`.
+/// * `Float` (and `Float32`/`Float64`) is `Clone` only. IEEE-754 equality is
+///   not reflexive (`NaN != NaN`) and its ordering is partial, so total `Eq`,
+///   `Ord`, and `Hashable` would all be unsound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BuiltinProtocolRow {
+    pub eq: bool,
+    pub ord: bool,
+    pub hashable: bool,
+    pub clone: bool,
+}
+
+const TOTAL: BuiltinProtocolRow = BuiltinProtocolRow {
+    eq: true,
+    ord: true,
+    hashable: true,
+    clone: true,
+};
+
+const CLONE_ONLY: BuiltinProtocolRow = BuiltinProtocolRow {
+    eq: false,
+    ord: false,
+    hashable: false,
+    clone: true,
+};
+
+/// The builtin protocol table, keyed by builtin type name.
+pub const BUILTIN_PROTOCOL_TABLE: &[(&str, BuiltinProtocolRow)] = &[
+    ("Int", TOTAL),
+    ("Int8", TOTAL),
+    ("Int16", TOTAL),
+    ("Int32", TOTAL),
+    ("Int64", TOTAL),
+    ("UInt", TOTAL),
+    ("UInt8", TOTAL),
+    ("UInt16", TOTAL),
+    ("UInt32", TOTAL),
+    ("UInt64", TOTAL),
+    ("Byte", TOTAL),
+    ("Char", TOTAL),
+    ("Bool", TOTAL),
+    ("Unit", TOTAL),
+    ("String", TOTAL),
+    ("Float", CLONE_ONLY),
+    ("Float32", CLONE_ONLY),
+    ("Float64", CLONE_ONLY),
+];
+
+/// The table row for `type_name`, or `None` when it names no builtin type in
+/// the table (a user type, a container, or a generic parameter).
+pub fn builtin_protocol_row(type_name: &str) -> Option<BuiltinProtocolRow> {
+    let root = type_root_name(type_name);
+    BUILTIN_PROTOCOL_TABLE
+        .iter()
+        .find(|(name, _)| *name == root)
+        .map(|(_, row)| *row)
+}
+
+/// Whether the builtin type `type_name` conforms to `protocol`.
+///
+/// `None` means the table has nothing to say — the caller decides from the
+/// declared `derives`, the visible `impl` inventory, or the element types of a
+/// container. A `false` is a definite "no".
+pub fn builtin_type_satisfies_protocol(type_name: &str, protocol: &str) -> Option<bool> {
+    let row = builtin_protocol_row(type_name)?;
+    match protocol {
+        "Eq" => Some(row.eq),
+        "Ord" => Some(row.ord),
+        // `Hash` is the derive spelling of the `Hashable` protocol.
+        "Hashable" | "Hash" => Some(row.hashable),
+        "Clone" => Some(row.clone),
+        _ => None,
+    }
+}
+
 pub(crate) fn substitute_type_args(
     type_name: &str,
     substitutions: &HashMap<String, String>,

@@ -224,10 +224,17 @@ fn structural_support(
     local_types: &HashMap<String, LocalTypeDerives>,
     generic_params: &HashSet<&str>,
 ) -> DeriveSupport {
+    // Builtin conformance comes from the one table in `types.rs` (spec §2.1),
+    // the same one the generic-bound check reads, so `Float` cannot be `Eq`
+    // for a derive while being not-`Eq` for a bound.
+    if let Some(satisfied) = crate::builtin_type_satisfies_protocol(root, derive) {
+        return if satisfied {
+            DeriveSupport::Yes
+        } else {
+            DeriveSupport::No
+        };
+    }
     match root {
-        "Float" | "Float32" | "Float64" => DeriveSupport::No,
-        "Int" | "Int8" | "Int16" | "Int32" | "Int64" | "UInt" | "UInt8" | "UInt16" | "UInt32"
-        | "UInt64" | "Bool" | "Byte" | "Char" | "Unit" | "String" => DeriveSupport::Yes,
         "List" | "Option" => match ty.args.first() {
             Some(arg) => field_supports_derive(arg, derive, local_types, generic_params),
             None => DeriveSupport::Unknown,
@@ -278,10 +285,14 @@ fn hash_key_support(
     if generic_params.contains(root) {
         return DeriveSupport::No;
     }
+    if let Some(satisfied) = crate::builtin_type_satisfies_protocol(root, "Hashable") {
+        return if satisfied {
+            DeriveSupport::Yes
+        } else {
+            DeriveSupport::No
+        };
+    }
     match root {
-        "Float" | "Float32" | "Float64" => DeriveSupport::No,
-        "Int" | "Int8" | "Int16" | "Int32" | "Int64" | "UInt" | "UInt8" | "UInt16" | "UInt32"
-        | "UInt64" | "Bool" | "Byte" | "Char" | "Unit" | "String" => DeriveSupport::Yes,
         "List" | "Option" => match ty.args.first() {
             Some(arg) => hash_key_support(arg, local_types, generic_params),
             None => DeriveSupport::Unknown,

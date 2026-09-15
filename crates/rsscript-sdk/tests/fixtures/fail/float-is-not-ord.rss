@@ -1,0 +1,8 @@
+// expect: RS0032
+
+// `Float` is `Clone` and nothing else (spec §2.1): IEEE-754 ordering is partial.
+
+fn sort_floats(values: mut List<Float>) -> Unit {
+    List.sort(list: mut values)
+    return Unit
+}

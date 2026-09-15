@@ -344,8 +344,9 @@ pub use take_handle_fields::take_handle_fields;
 pub use task_groups::task_group_async_let_diagnostics;
 pub use type_aliases::cyclic_type_alias_diagnostics;
 pub use types::{
-    ResolvedParamEffect, ResolvedType, ResolvedTypeKind, SemanticTypeFacts, TypeArena, TypeId,
-    TypeQualifiers,
+    BUILTIN_PROTOCOL_TABLE, BuiltinProtocolRow, ResolvedParamEffect, ResolvedType,
+    ResolvedTypeKind, SemanticTypeFacts, TypeArena, TypeId, TypeQualifiers, builtin_protocol_row,
+    builtin_type_satisfies_protocol,
 };
 pub(crate) use types::{
     builtin_generic_type_params, substitute_type_args, type_arg_names, type_root_name,

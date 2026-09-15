@@ -174,14 +174,12 @@ pub fn type_satisfies_protocol_bound(
     if dyn_protocol(actual).is_some_and(|dyn_protocol| dyn_protocol == protocol) {
         return true;
     }
-    if protocol == "Ord" && builtin_type_is_ord(actual_root) {
-        return true;
-    }
-    if (protocol == "Hashable" || protocol == "Eq") && builtin_type_is_hashable(actual_root) {
-        return true;
-    }
-    if protocol == "Clone" && builtin_type_is_clone(actual_root) {
-        return true;
+    // One table decides `Eq`/`Ord`/`Hashable`/`Clone` for every builtin type
+    // (`types.rs::BUILTIN_PROTOCOL_TABLE`, spec §2.1). A `Some(false)` is a
+    // definite "no" — `Float` is `Clone` but never `Eq`, `Ord`, or `Hashable` —
+    // so it must not fall through to the container and impl rules below.
+    if let Some(satisfied) = crate::builtin_type_satisfies_protocol(actual_root, protocol) {
+        return satisfied;
     }
     if (protocol == "Hashable" || protocol == "Eq" || protocol == "Clone")
         && matches!(actual_root, "List" | "Option" | "Result")
@@ -291,55 +289,6 @@ fn dyn_protocol(type_name: &str) -> Option<&str> {
         .then(|| crate::type_arg_names(type_name))
         .flatten()
         .and_then(|args| args.first().copied())
-}
-
-fn builtin_type_is_ord(type_name: &str) -> bool {
-    matches!(type_name, "Int" | "String" | "Bool")
-}
-
-fn builtin_type_is_hashable(type_name: &str) -> bool {
-    matches!(
-        type_name,
-        "Int"
-            | "Int8"
-            | "Int16"
-            | "Int32"
-            | "Int64"
-            | "UInt"
-            | "UInt8"
-            | "UInt16"
-            | "UInt32"
-            | "UInt64"
-            | "Bool"
-            | "Byte"
-            | "Char"
-            | "Unit"
-            | "String"
-    )
-}
-
-fn builtin_type_is_clone(type_name: &str) -> bool {
-    matches!(
-        type_name,
-        "Int"
-            | "Int8"
-            | "Int16"
-            | "Int32"
-            | "Int64"
-            | "UInt"
-            | "UInt8"
-            | "UInt16"
-            | "UInt32"
-            | "UInt64"
-            | "Bool"
-            | "Byte"
-            | "Char"
-            | "Unit"
-            | "Float"
-            | "Float32"
-            | "Float64"
-            | "String"
-    )
 }
 
 fn type_derives_protocol(derives: &[String], protocol: &str) -> bool {
@@ -654,6 +603,56 @@ mod tests {
 
         fn consume_substitution(&self) -> bool {
             true
+        }
+    }
+
+    /// The four builtin predicates must agree, cell for cell, with the table
+    /// spec §2.1 publishes. Written out literally rather than derived from
+    /// `BUILTIN_PROTOCOL_TABLE` so a silent edit to the table fails here.
+    #[test]
+    fn builtin_protocol_bounds_match_the_published_table() {
+        // (type, Eq, Ord, Hashable, Clone)
+        let table: &[(&str, bool, bool, bool, bool)] = &[
+            ("Int", true, true, true, true),
+            ("Int8", true, true, true, true),
+            ("Int16", true, true, true, true),
+            ("Int32", true, true, true, true),
+            ("Int64", true, true, true, true),
+            ("UInt", true, true, true, true),
+            ("UInt8", true, true, true, true),
+            ("UInt16", true, true, true, true),
+            ("UInt32", true, true, true, true),
+            ("UInt64", true, true, true, true),
+            ("Byte", true, true, true, true),
+            ("Char", true, true, true, true),
+            ("Bool", true, true, true, true),
+            ("Unit", true, true, true, true),
+            ("String", true, true, true, true),
+            ("Float", false, false, false, true),
+            ("Float32", false, false, false, true),
+            ("Float64", false, false, false, true),
+        ];
+        assert_eq!(table.len(), crate::BUILTIN_PROTOCOL_TABLE.len());
+
+        let facts = ProtocolSatisfactionFacts::default();
+        for (name, eq, ord, hashable, clone) in table {
+            for (protocol, expected) in [
+                ("Eq", *eq),
+                ("Ord", *ord),
+                ("Hashable", *hashable),
+                ("Clone", *clone),
+            ] {
+                assert_eq!(
+                    type_satisfies_protocol_bound(name, protocol, &facts),
+                    expected,
+                    "`{name}: {protocol}`"
+                );
+                assert_eq!(
+                    crate::builtin_type_satisfies_protocol(name, protocol),
+                    Some(expected),
+                    "table row `{name}: {protocol}`"
+                );
+            }
         }
     }
 
