@@ -221,3 +221,156 @@ fn fail_fixtures_emit_exactly_their_expected_codes() {
         failures.join("\n")
     );
 }
+
+/// The workspace root, from this crate's manifest directory.
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("workspace root should exist")
+}
+
+/// Every `.rssi` under `directory`, recursively, sorted so failures report
+/// stably.
+fn interface_files(directory: &Path, found: &mut Vec<PathBuf>) {
+    let mut entries = fs::read_dir(directory)
+        .unwrap_or_else(|error| panic!("read {}: {error}", directory.display()))
+        .map(|entry| entry.expect("directory entry").path())
+        .collect::<Vec<_>>();
+    entries.sort();
+    for path in entries {
+        if path.is_dir() {
+            interface_files(&path, found);
+        } else if path
+            .extension()
+            .is_some_and(|extension| extension == "rssi")
+        {
+            found.push(path);
+        }
+    }
+}
+
+/// A signature-level rule holds wherever the signature is written. An `.rssi`
+/// declaration has no body, but it has a contract, and an interface that
+/// escaped the rule could export one the language does not have — `pub fn
+/// make_default<T>() -> fresh T` was accepted in an interface while the same
+/// signature in a `.rss` file was `RS0603`.
+///
+/// The diagnostic must also land on the interface, not on the source that
+/// supplied it: the reader has to be sent to the file they can fix.
+#[test]
+fn invalid_interface_signatures_are_diagnosed_against_the_interface_file() {
+    const SOURCE: &str = "fn main() -> Unit {\n    return Unit\n}\n";
+    const INTERFACE: &str = "pub fn make_default<T>() -> fresh T\n";
+
+    let mut interfaces = standard_package_interfaces().to_vec();
+    interfaces.push(("host/defaults.rssi", INTERFACE));
+    let diagnostics = analyze_sources_with_interfaces(&[("main.rss", SOURCE)], &interfaces);
+
+    let invalid_fresh = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "RS0603")
+        .unwrap_or_else(|| {
+            panic!(
+                "an invalid `.rssi` signature must be diagnosed; got {:?}",
+                diagnostics
+                    .iter()
+                    .map(|diagnostic| diagnostic.code.as_str())
+                    .collect::<Vec<_>>()
+            )
+        });
+    assert_eq!(
+        invalid_fresh.span.file, "host/defaults.rssi",
+        "the diagnostic must point at the interface that declares the signature"
+    );
+    assert!(
+        invalid_fresh.summary.contains("make_default"),
+        "the diagnostic must name the interface declaration: {}",
+        invalid_fresh.summary
+    );
+
+    // The bounded form of the same signature is clean, so the rule is not
+    // rejecting every generic `fresh` return in an interface.
+    let mut bounded = standard_package_interfaces().to_vec();
+    bounded.push((
+        "host/defaults.rssi",
+        "pub fn make_default<T: Struct>() -> fresh T\n",
+    ));
+    assert!(
+        analyze_sources_with_interfaces(&[("main.rss", SOURCE)], &bounded).is_empty(),
+        "a correctly bounded interface signature must stay clean"
+    );
+}
+
+/// The prelude is the one interface set every program sees, so a regression in
+/// it would be invisible in ordinary fixtures until it reached users. Check
+/// every `.rssi` that ships, read from disk rather than from the embedded
+/// catalog, so an interface added to `stdlib/` or `packages/` is covered the
+/// day it lands.
+#[test]
+fn every_shipped_interface_passes_the_signature_checks() {
+    const SOURCE: &str = "fn main() -> Unit {\n    return Unit\n}\n";
+
+    let root = workspace_root();
+    let mut paths = Vec::new();
+    interface_files(&root.join("stdlib"), &mut paths);
+    for package in {
+        let mut packages = fs::read_dir(root.join("packages"))
+            .expect("packages directory should exist")
+            .map(|entry| entry.expect("packages entry").path())
+            .collect::<Vec<_>>();
+        packages.sort();
+        packages
+    } {
+        let interface = package.join("interface");
+        if interface.is_dir() {
+            interface_files(&interface, &mut paths);
+        }
+    }
+    assert!(
+        paths.len() >= 30,
+        "the shipped interface set should not have shrunk to {} files",
+        paths.len()
+    );
+
+    // Supply the whole set at once: the interfaces reference each other's
+    // protocols (`Ord`, `Eq`, `Hashable`), so checking one in isolation would
+    // report a missing protocol that the prelude does in fact declare. Each
+    // diagnostic still carries its own interface's path, so a failure names
+    // the file to fix.
+    let sources = paths
+        .iter()
+        .map(|path| {
+            let relative = path
+                .strip_prefix(&root)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .into_owned();
+            let text = fs::read_to_string(path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            (relative, text)
+        })
+        .collect::<Vec<_>>();
+    let interfaces = sources
+        .iter()
+        .map(|(file, text)| (file.as_str(), text.as_str()))
+        .collect::<Vec<_>>();
+
+    let failures = analyze_sources_with_interfaces(&[("main.rss", SOURCE)], &interfaces)
+        .into_iter()
+        .map(|diagnostic| {
+            format!(
+                "{}:{}:{}: {}",
+                diagnostic.span.file, diagnostic.span.line, diagnostic.span.column, diagnostic.code
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        failures.is_empty(),
+        "{} diagnostics across the {} shipped interfaces:\n{}",
+        failures.len(),
+        paths.len(),
+        failures.join("\n")
+    );
+}

@@ -4268,6 +4268,21 @@ under separate headings, and every entry in `core-interfaces.json` carries a
 `rss check` accepts `--no-core` to drop the core prelude and `--interface
 <file.rssi>` to add contracts explicitly.
 
+**Signature-level rules apply to `.rssi` declarations.** An interface has no
+bodies, so body rules have nothing to run on, but its *signatures* are ordinary
+RSScript signatures and are checked as such: `checks/declarations.rs` runs
+`signature_diagnostics` and `generic_constraint_diagnostics` over the source
+program and over every supplied interface program. `pub fn make_default<T>() ->
+fresh T` is `RS0603` in a `.rssi` exactly as it is in a `.rss`, and the
+diagnostic carries the interface file's own span, because each interface is
+parsed under its own path. Declaration-*inventory* rules (duplicates, protocol
+implementations) stay merged-program rules and are not repeated per file.
+
+`crates/rsscript-sdk/tests/fixture_corpus.rs::every_shipped_interface_passes_the_signature_checks`
+runs those rules over every `stdlib/**/*.rssi` and `packages/**/interface/*.rssi`
+read from disk, so the prelude cannot regress silently and a newly added
+interface is covered the day it lands.
+
 ### 10.3 Purity constraints on the core
 
 Where a service could be either pure or ambient, the core interface takes the
@@ -4548,6 +4563,18 @@ explicit note and offers a `_` arm rather than implying a missing case
 
 These are findings for the maintainer, not features.
 
+* **A generic construction is only as provable as its arguments' types.** The
+  checker proves a call site's generic arguments all at once or not at all
+  (`hir/infer.rs::infer_call_type_arguments`), from the types it can give the
+  argument expressions. Identifiers, literals, calls, field reads, operator
+  results, and `List`/`Map` element reads all carry a type; anything else does
+  not. A generic record built only from expressions in that last group — a
+  tuple whose element is an index into an untyped value, say — therefore has no
+  proved instance, and `lower_record_constructor` refuses to lower it rather
+  than record a type argument it cannot prove (§2.9). It is a build error, not
+  a wrong answer, but it is a rule the design implies and the front end does
+  not fully deliver: the fix is a checker that types more expression forms, not
+  a backend that guesses.
 * **A used binding with an open generic position is trusted.** `RS0034` fires
   only when the binding is never used (§3.3). `let xs = []` followed by pushes
   of mixed element types, or a bare `let v = Ok(1)` that is later returned, keeps
