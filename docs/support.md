@@ -15,9 +15,9 @@ belongs to an independent runner/provider wrapper.
 
 The reference VM is the Core execution model. The Cranelift JIT is the VM's
 opt-in native tier for trusted hosts; it is actively developed and remains
-Experimental until its accounting matches the interpreter. Rust AOT is an
-Experimental compatibility backend. Native plugins are trusted provider
-implementations, REIR is an optional Integration, and self-hosting is Research.
+Experimental until its accounting matches the interpreter. Native plugins are
+trusted provider implementations. Rust AOT, REIR, and self-hosting are archived
+on the `archive/experiments-2026-09` branch and are not supported surfaces.
 
 Untrusted, third-party, or machine-generated scripts require an independently
 isolated runner. Successful validation is not authorization to execute them in

@@ -48,23 +48,10 @@ members = [
     "crates/process-guard",
 ]
 
-# Integration and research packages are physically maintained below
-# `experiments/` and deliberately excluded from the supported root workspace.
-# The trusted opt-in Cranelift engine is a root member, but not a default member.
-# Native package source remains a test fixture, but its Rust bridge is no
-# longer a workspace member.
-exclude = [
-    "experiments/aot-backend",
-    "experiments/aot-model",
-    "experiments/aot-runtime",
-    "experiments/reir",
-    "experiments/rsscript-review-reir",
-    "experiments/fixtures/native-abi-fixture/native/rust",
-]
 
 # The root workspace owns only Core, applications, the runner, and supported
-# providers. The separate `experiments/` workspace consumes Core by path but
-# cannot widen root dependency resolution or release metadata.
+# providers. Rust AOT, REIR, and self-hosting research are archived on the
+# `archive/experiments-2026-09` branch and are not workspace members.
 default-members = [
     "crates/rsscript-abi-model",
     "crates/rsscript-artifact",

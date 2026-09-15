@@ -16,9 +16,8 @@ When documents disagree, use this order:
 
 1. [Language specification](spec/RSScript_v0.7_Spec.md)
 2. [Execution specification](spec/RSScript_Execution_Spec_v0.1.md)
-3. [REIR specification](spec/Review_Evidence_IR_Spec_v0.2.md)
-4. Current code, tests, `rss --help`, and the root [README](../README.md)
-5. The references and roadmap below
+3. Current code, tests, `rss --help`, and the root [README](../README.md)
+4. The references and roadmap below
 
 ## Current Documents
 
@@ -38,7 +37,7 @@ When documents disagree, use this order:
 | [architecture/experimental-retention.toml](architecture/experimental-retention.toml) | Evidence, retention clocks, and product ownership for surfaces outside Core |
 | [development/DEVELOPMENT.md](development/DEVELOPMENT.md) | Local development and verification |
 | [development/DOCKER.md](development/DOCKER.md) | Containerized development |
-| [self-hosting.md](self-hosting.md) | Experimental self-hosting goal, current coverage, and validation contract |
+| [self-hosting.md](self-hosting.md) | Where the archived self-hosting research lives and why it is not a product goal |
 | [generated/language-card.md](generated/language-card.md) | Generated keyword, diagnostic, and core-interface quick reference |
 | [generated/language-card.json](generated/language-card.json), [grammar.json](generated/grammar.json), [diagnostic-catalog.json](generated/diagnostic-catalog.json), [core-interfaces.json](generated/core-interfaces.json) | Machine-readable generated language-reference catalogs |
 
@@ -48,8 +47,7 @@ When documents disagree, use this order:
 | --- | --- |
 | [RSScript Spec Revision 7](spec/RSScript_v0.7_Spec.md) | Normative text for the `0.1.x` language-semantics line |
 | [RSScript Semantics v0.7](spec/RSScript_Semantics_v0.7.md) | Source-backed reference for the language semantics as implemented, with a diagnostic index |
-| [Execution v0.1](spec/RSScript_Execution_Spec_v0.1.md) | Interpreter, JIT, AOT parity, limits, and host ABI |
-| [REIR v0.2](spec/Review_Evidence_IR_Spec_v0.2.md) | Review evidence model and reconciliation |
+| [Execution v0.1](spec/RSScript_Execution_Spec_v0.1.md) | Interpreter, JIT parity, limits, and host ABI |
 
 The specifications are intentionally detailed and some tests read them by path.
 Do not rename them without updating those tests.

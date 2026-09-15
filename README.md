@@ -186,9 +186,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-These are the Core workspace checks. REIR and self-hosting are isolated
-experiments, and Rust AOT remains an experiments-workspace backend that `rss
-run` cannot select. The native JIT is a required trusted-host performance tier of the
+These are the Core workspace checks. Rust AOT, REIR, and self-hosting research
+are archived on the `archive/experiments-2026-09` branch. The native JIT is a required trusted-host performance tier of the
 VM under active development; it is feature-gated out of the default Core
 verification closure, and its correctness and workload evidence run separately
 (see [`docs/roadmap.md`](docs/roadmap.md)).

@@ -141,7 +141,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             run_tier_command(command, arguments)
         }
         _ => Err(
-            "usage:\n  cargo run -p rsscript-xtask --release -- core-metrics [--iterations N] [--output FILE] [--check SLO]\n  cargo run -p rsscript-xtask -- validate-ci\n  cargo run -p rsscript-xtask -- language-card [--check]\n  cargo run -p rsscript-xtask -- agent-eval --tasks DIR --candidates DIR --output FILE\n  cargo run -p rsscript-xtask -- {check,clippy,test,doc}-tier TIER [--workspace root|experiments] [--feature-set supported|research]"
+            "usage:\n  cargo run -p rsscript-xtask --release -- core-metrics [--iterations N] [--output FILE] [--check SLO]\n  cargo run -p rsscript-xtask -- validate-ci\n  cargo run -p rsscript-xtask -- language-card [--check]\n  cargo run -p rsscript-xtask -- agent-eval --tasks DIR --candidates DIR --output FILE\n  cargo run -p rsscript-xtask -- {check,clippy,test,doc}-tier TIER [--feature-set supported|research]"
                 .into(),
         ),
     }
@@ -206,18 +206,14 @@ fn run_tier_command(
         .windows(2)
         .find_map(|pair| (pair[0] == "--feature-set").then_some(pair[1].as_str()))
         .unwrap_or("supported");
-    if !matches!(workspace, "root" | "experiments") {
+    if workspace != "root" {
         return Err(format!("unknown Cargo workspace `{workspace}`").into());
     }
     if !matches!(feature_set, "supported" | "research") {
         return Err(format!("unknown feature set `{feature_set}`").into());
     }
     let root = workspace_root();
-    let document: toml::Value = toml::from_str(&fs::read_to_string(if workspace == "root" {
-        root.join("docs/architecture/workspace-tiers.toml")
-    } else {
-        root.join("docs/architecture/experiments-tiers.toml")
-    })?)?;
+    let document = tier_document(&root)?;
     let packages = tier_packages(&document, &tier)?;
     if packages.is_empty() {
         println!("workspace tier `{tier}` is empty");
@@ -232,9 +228,6 @@ fn run_tier_command(
         _ => unreachable!("validated command"),
     });
     command.arg("--locked");
-    if workspace == "experiments" {
-        command.args(["--manifest-path", "experiments/Cargo.toml"]);
-    }
     if feature_set == "research" {
         command.arg("--all-features");
     }
@@ -272,12 +265,10 @@ fn validate_ci() -> Result<(), Box<dyn Error>> {
     let root = workspace_root();
     language_card::run(&root, true)?;
     let root_inventory = cargo_inventory(&root, None)?;
-    let experiments_inventory = cargo_inventory(&root, Some("experiments/Cargo.toml"))?;
     validate_workspace_tiers(&root, &root_inventory)?;
-    validate_experiments_tiers(&root, &experiments_inventory)?;
     validate_security_workflow_coverage(&root, &root_inventory)?;
-    validate_lint_inheritance(&root, &root_inventory, &experiments_inventory)?;
-    validate_experimental_retention(&root, &root_inventory, &experiments_inventory)?;
+    validate_lint_inheritance(&root, &root_inventory)?;
+    validate_experimental_retention(&root, &root_inventory)?;
     validate_contract_registry(&root)?;
     repository_architecture::validate(&root)?;
     validate_workflow_boundaries(&root)?;
@@ -298,12 +289,7 @@ fn validate_ci() -> Result<(), Box<dyn Error>> {
             if !line.contains("cargo ") && !line.contains("cargo +") {
                 continue;
             }
-            let inventory = if line.contains("--manifest-path experiments/Cargo.toml") {
-                &experiments_inventory
-            } else {
-                &root_inventory
-            };
-            validate_workflow_cargo_command(line, inventory)
+            validate_workflow_cargo_command(line, &root_inventory)
                 .map_err(|error| format!("{}:{}: {error}", path.display(), line_index + 1))?;
             checked += 1;
         }
@@ -535,7 +521,6 @@ fn classify_retention_status(
 fn validate_experimental_retention(
     root: &Path,
     root_inventory: &BTreeMap<String, CargoPackageInventory>,
-    experiments_inventory: &BTreeMap<String, CargoPackageInventory>,
 ) -> Result<(), Box<dyn Error>> {
     let path = root.join("docs/architecture/experimental-retention.toml");
     let document: toml::Value = toml::from_str(&fs::read_to_string(&path)?)?;
@@ -777,7 +762,6 @@ fn validate_experimental_retention(
         }
         let inventory = match workspace {
             "root" => root_inventory,
-            "experiments" => experiments_inventory,
             _ => {
                 return Err(format!(
                     "experimental retention `{id}` has unknown workspace `{workspace}`"
@@ -829,14 +813,6 @@ fn validate_experimental_retention(
         .filter(|surface| surface["kind"].as_str() == Some("cargo_package"))
         .filter_map(|surface| surface["package"].as_str())
         .collect::<BTreeSet<_>>();
-    for package in experiments_inventory.keys() {
-        if !retained_packages.contains(package.as_str()) {
-            return Err(format!(
-                "experimental package `{package}` has no time-bounded retention entry"
-            )
-            .into());
-        }
-    }
     let root_tiers: toml::Value = toml::from_str(&fs::read_to_string(
         root.join("docs/architecture/workspace-tiers.toml"),
     )?)?;
@@ -860,7 +836,6 @@ fn validate_experimental_retention(
         .collect::<BTreeSet<_>>();
     let all_tests = root_inventory
         .values()
-        .chain(experiments_inventory.values())
         .flat_map(|package| package.tests.iter().chain(package.test_functions.iter()))
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
@@ -1003,93 +978,12 @@ fn validate_workspace_tiers(
     Ok(())
 }
 
-fn validate_experiments_tiers(
-    root: &Path,
-    inventory: &BTreeMap<String, CargoPackageInventory>,
-) -> Result<(), Box<dyn Error>> {
-    let path = root.join("docs/architecture/experiments-tiers.toml");
-    let document: toml::Value = toml::from_str(&fs::read_to_string(path)?)?;
-    if document["schema"].as_integer() != Some(1) {
-        return Err("experiments tier inventory must use schema 1".into());
-    }
-    let ci = document["ci"]
-        .as_table()
-        .ok_or("experiments tier inventory needs [ci]")?;
-    let mut classified = BTreeSet::new();
-    for tier in ["experimental", "integrations"] {
-        let packages = tier_packages(&document, tier)?;
-        let workflows = ci
-            .get(tier)
-            .and_then(toml::Value::as_array)
-            .ok_or_else(|| format!("experiments tier `{tier}` needs CI mapping"))?;
-        if workflows.is_empty() && !packages.is_empty() {
-            return Err(format!("experiments tier `{tier}` has no workflow").into());
-        }
-        for package in packages {
-            if !inventory.contains_key(&package) {
-                return Err(format!(
-                    "experiments tier `{tier}` contains missing package `{package}`"
-                )
-                .into());
-            }
-            if !classified.insert(package.clone()) {
-                return Err(
-                    format!("experiments package `{package}` occurs more than once").into(),
-                );
-            }
-        }
-    }
-    let actual = inventory.keys().cloned().collect::<BTreeSet<_>>();
-    if classified != actual {
-        return Err(format!(
-            "experiments tier inventory mismatch; missing={:?}, stale={:?}",
-            actual.difference(&classified).collect::<Vec<_>>(),
-            classified.difference(&actual).collect::<Vec<_>>()
-        )
-        .into());
-    }
-    let workflow = fs::read_to_string(root.join(".github/workflows/security-sensitive.yml"))?;
-    let filters_paths = workflow.lines().any(|line| line.trim() == "paths:");
-    let path_prefixes = workflow
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix("- \"")?.strip_suffix("/**\""))
-        .collect::<Vec<_>>();
-    for boundary in document["security_boundaries"]
-        .as_array()
-        .ok_or("experiments tier inventory needs security_boundaries")?
-    {
-        let package = boundary
-            .as_str()
-            .ok_or("security boundary must be a string")?;
-        let metadata = inventory
-            .get(package)
-            .ok_or_else(|| format!("missing experimental security boundary `{package}`"))?;
-        let directory = metadata
-            .manifest_dir
-            .strip_prefix(root)?
-            .to_string_lossy()
-            .replace('\\', "/");
-        if filters_paths
-            && !path_prefixes
-                .iter()
-                .any(|prefix| directory == *prefix || directory.starts_with(&format!("{prefix}/")))
-        {
-            return Err(format!(
-                "experimental security boundary `{package}` lacks `{directory}/**` workflow coverage"
-            )
-            .into());
-        }
-    }
-    Ok(())
-}
-
 fn validate_lint_inheritance(
     root: &Path,
     root_inventory: &BTreeMap<String, CargoPackageInventory>,
-    experiments_inventory: &BTreeMap<String, CargoPackageInventory>,
 ) -> Result<(), Box<dyn Error>> {
     let unsafe_boundaries = BTreeSet::from(["rss-process-guard", "rsscript-jit-cranelift"]);
-    for (package, metadata) in root_inventory.iter().chain(experiments_inventory) {
+    for (package, metadata) in root_inventory.iter() {
         let manifest = fs::read_to_string(metadata.manifest_dir.join("Cargo.toml"))?;
         let document: toml::Value = toml::from_str(&manifest)?;
         if document["lints"]["workspace"].as_bool() != Some(true) {

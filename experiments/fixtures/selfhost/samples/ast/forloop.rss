@@ -1,7 +1,0 @@
-fn sum_all(xs: List<Int>) -> Int {
-    let mut total = 0
-    for x in xs {
-        total = total + x
-    }
-    return total
-}

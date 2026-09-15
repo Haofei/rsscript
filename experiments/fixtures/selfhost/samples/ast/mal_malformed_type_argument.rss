@@ -1,8 +1,0 @@
-// expect: RS0015
-
-fn bad(
-    values: Map<, String>,
-    backup: Result<String,, IOError>,
-) -> Unit {
-    return Unit
-}

@@ -1,6 +1,0 @@
-schema = "rsscript.bindings.v1"
-
-[[function]]
-symbol = "NativeAbiFixture.sort_int"
-provider = "rss_native_abi_fixture_bridge"
-entry = "sort_int"

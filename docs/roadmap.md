@@ -51,10 +51,9 @@ compiler, or trust boundary.
    all four generation modes with caller-supplied model samples. Evaluations may
    demonstrate progress, but no incomplete query result is a successful compile
    or an execution authorization.
-5. Preserve the one-way experimental boundary. Rust AOT, REIR, and
-   self-hosting accept only correctness, security, dependency, and regression
-   maintenance; they do not gain roadmap feature work or become default SDK,
-   VM, or CLI dependencies.
+5. Keep the archived research archived. Rust AOT, REIR, and self-hosting
+   live on the `archive/experiments-2026-09` branch; they are not workspace
+   members and do not return as SDK, VM, or CLI dependencies.
 6. Preserve the current repository and workspace shape: do not split the
    repository, delete backends, or reorder the Cargo workspace as part of this
    work. Keep `rsscript.bytecode.v1`, host deployment boundaries, and the
@@ -90,8 +89,7 @@ measured-regression fixes remain allowed. Syntax sugar that desugars in the
 parser to an existing AST node and is justified by a measured generation failure
 is also permitted; new semantics are not.
 
-Rust AOT stays Experimental. REIR stays an Integration. Self-hosting stays
-Research. For these three surfaces, allowed changes are limited to correctness,
-security, dependency, and regression maintenance. The Cranelift JIT is
+Rust AOT, REIR, and self-hosting are archived on the
+`archive/experiments-2026-09` branch and receive no changes. The Cranelift JIT is
 Experimental in maturity but is an active product surface; its promotion
 follows the criteria in [feature-matrix.md](feature-matrix.md).

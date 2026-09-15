@@ -1,3 +1,0 @@
-fn greet(name: String, count: Int) -> String {
-    return $"hi {name}, you have {count} left {{brace}}"
-}

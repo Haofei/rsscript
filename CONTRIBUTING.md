@@ -18,9 +18,6 @@ cargo test --locked -p rsscript-cli --features execution
 Experimental packages use their own workspace and do not define Core release
 health:
 
-```bash
-cargo test --locked --manifest-path experiments/Cargo.toml --workspace
-```
 
 Provider implementations must use `WireValue`, instance-owned authority, and
 the Provider conformance harness. Security-sensitive changes should include

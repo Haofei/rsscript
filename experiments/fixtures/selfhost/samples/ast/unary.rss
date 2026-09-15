@@ -1,7 +1,0 @@
-fn checks(a: Int, done: Bool) -> Int {
-    let neg = -5
-    if !done {
-        return neg
-    }
-    return ~a
-}

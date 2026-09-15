@@ -58,5 +58,5 @@ pinning is the only supported Rust distribution mechanism.
 5. Confirm the tagged workflow promotes target-identical artifact names and
    marks an alpha/beta/rc tag as a pre-release.
 
-No release step publishes providers, JIT, AOT, REIR libraries, native plugins,
-or research crates as Core SDK contracts.
+No release step publishes providers, JIT, native plugins, or archived research
+crates as Core SDK contracts.

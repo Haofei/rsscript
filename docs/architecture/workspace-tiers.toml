@@ -61,9 +61,8 @@ integrations = [
 # even when no root-workspace package currently belongs to it.
 experimental = []
 
-# Experimental-preview, explicit opt-in execution engines. These are root workspace
-# members so Core never depends on an `experiments/` path, but they are not
-# default members and cannot be selected by an Artifact.
+# Explicit opt-in execution engines. Root workspace members, but not default
+# members, and never selectable by an Artifact.
 optional_engines = [
   "rsscript-jit-cranelift",
 ]
@@ -80,14 +79,6 @@ tooling = [
 examples = [
   "embedded-report-pipeline",
   "structured-async-pipeline",
-]
-
-# Non-Cargo Research/Integration inputs are physically owned by the separate
-# experiments workspace. Retired repository-root compatibility aliases must not
-# return; all Research fixture access uses these physical owners directly.
-fixture_roots = [
-  "experiments/fixtures/selfhost",
-  "experiments/fixtures/native-abi-fixture",
 ]
 
 # Packages whose bytes, host authority, process boundary, verification, or

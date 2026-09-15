@@ -38,26 +38,12 @@ process-global or cross-evaluation cache.
 It also emits one `rsscript.aot_jit_matrix.v1` record, validated against
 `aot-jit-matrix.schema.json`. The matrix records semantic parity, execution and
 compile time, transition counts, and explicit `null` values for metrics the
-current engine cannot report. The Core harness marks AOT as `not_measured`:
-the Rust/AOT backend lives in the experiments workspace and must contribute a
-measurement from its own controlled runner before any AOT/JIT performance
-comparison is claimed. `not_measured` is evidence of a missing measurement,
-not a zero-cost or unsupported engine.
-
-The experiments workspace owns the slow, ignored cross-engine harness that
-turns the AOT cell into a real measurement without creating a Core-to-AOT
-dependency:
-
-```bash
-cargo test --locked --release --manifest-path experiments/Cargo.toml \
-  -p rsscript-aot-backend --test aot_jit_matrix -- --ignored --nocapture
-```
-
-It builds the generated Rust package in an isolated target directory and
-alternates interpreter, JIT, and AOT samples. AOT execution includes process
-startup and records that measurement mode in its reason field. Scheduled CI
-publishes this evidence; promotion decisions still require a pinned,
-controlled-hardware run rather than GitHub-hosted timing alone.
+current engine cannot report. The AOT cell is always `not_measured`: the Rust
+AOT backend is archived on the `archive/experiments-2026-09` branch and no
+longer contributes a measurement. `not_measured` is evidence of a missing
+measurement, not a zero-cost or unsupported engine. Promotion decisions still
+require a pinned, controlled-hardware run rather than GitHub-hosted timing
+alone.
 
 `mixed-mode-continuation` is the canonical barrier workload: it repeatedly
 executes scalar regions around an interpreter-owned aggregate boundary and guards

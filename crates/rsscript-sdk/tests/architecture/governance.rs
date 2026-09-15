@@ -188,33 +188,6 @@ fn workspace_tiers_are_exhaustive_and_define_default_members() {
 }
 
 #[test]
-fn selfhost_parity_is_an_independent_research_package_not_a_release_gate() {
-    let root = workspace_root();
-    let compiler_manifest = read(&root.join("crates/rsscript-compiler/Cargo.toml"));
-    let experiments_manifest = read(&root.join("experiments/Cargo.toml"));
-    let selfhost_workflow = read(&root.join(".github/workflows/selfhost.yml"));
-    let release_workflow = read(&root.join(".github/workflows/release.yml"));
-
-    assert!(
-        !compiler_manifest.contains("selfhost-parity")
-            && !compiler_manifest.contains("rsscript-vm"),
-        "the Core compiler must not retain the Research harness or a VM dependency"
-    );
-    assert!(
-        experiments_manifest.contains("\"selfhost-parity\""),
-        "the Research harness must be an independent experiments workspace member"
-    );
-    assert!(
-        selfhost_workflow.contains("-p rsscript-selfhost-parity"),
-        "the dedicated Research workflow must run the independent parity package"
-    );
-    assert!(
-        !release_workflow.contains("selfhost_parity::"),
-        "Research parity must not block the supported release path"
-    );
-}
-
-#[test]
 fn sdk_development_closure_does_not_compile_experimental_integrations() {
     let root = workspace_root();
     let manifest = read(&root.join("crates/rsscript-sdk/Cargo.toml"));
@@ -227,7 +200,7 @@ fn sdk_development_closure_does_not_compile_experimental_integrations() {
 
     assert!(
         !dev_dependencies.contains("../../experiments/"),
-        "the SDK test closure must not pull experiments; integration tests belong to the experiments workspace"
+        "the SDK test closure must not path-depend on archived experiments"
     );
     for package in ["name = \"reir\"", "name = \"rsscript-review-reir\""] {
         assert!(
@@ -240,8 +213,8 @@ fn sdk_development_closure_does_not_compile_experimental_integrations() {
 #[test]
 fn reviewed_execution_closures_do_not_resolve_experimental_backends() {
     let root = workspace_root();
-    // Core has a separate experiments workspace, but an optional dependency can
-    // still accidentally pull a lab back into the normal product path. Check
+    // Archived backends live on a branch, but an optional dependency can
+    // still accidentally pull one back into the normal product path. Check
     // the feature closures that power the supported embedding, CLI, and VM
     // routes rather than merely checking default features or workspace members.
     for (package, features) in [
@@ -268,37 +241,6 @@ fn reviewed_execution_closures_do_not_resolve_experimental_backends() {
             );
         }
     }
-}
-
-#[test]
-fn research_fixtures_are_owned_by_the_experiments_boundary() {
-    let root = workspace_root();
-    let experiment_manifest = read(&root.join("experiments/Cargo.toml"));
-    let root_manifest = read(&root.join("Cargo.toml"));
-
-    for (retired_alias, owned_path) in [
-        ("selfhost", "experiments/fixtures/selfhost"),
-        (
-            "packages/native-abi-fixture",
-            "experiments/fixtures/native-abi-fixture",
-        ),
-    ] {
-        assert!(
-            !root.join(retired_alias).exists(),
-            "retired Research fixture alias `{retired_alias}` must not return at the Core root"
-        );
-        assert!(
-            root.join(owned_path).is_dir(),
-            "Research fixture owner `{owned_path}` must exist under experiments"
-        );
-    }
-
-    assert!(root_manifest.contains("experiments/fixtures/native-abi-fixture/native/rust"));
-    assert!(!root_manifest.contains("packages/native-abi-fixture/native/rust"));
-    assert!(
-        experiment_manifest.contains("fixtures/native-abi-fixture/native/rust"),
-        "the experiments workspace must also exclude the native fixture bridge"
-    );
 }
 
 #[test]
@@ -480,75 +422,6 @@ fn intrinsic_catalog_is_the_only_generated_registry_source() {
         referenced_intrinsic_ids, intrinsic_ids,
         "every VM intrinsic implementation must have at least one catalog binding"
     );
-}
-
-#[test]
-fn selfhost_known_type_sets_are_generated() {
-    let root = workspace_root();
-    let checker = read(&root.join("experiments/fixtures/selfhost/check.rss"));
-    assert!(
-        !checker.contains("fn is_builtin_type(") && !checker.contains("fn is_stdlib_type("),
-        "self-host type knowledge must come from generated interface metadata"
-    );
-    let metadata = read(&root.join("experiments/selfhost-parity/src/interface_metadata.rs"));
-    assert!(metadata.contains("rsscript_semantics::BUILTIN_TYPE_NAMES"));
-    assert!(metadata.contains("for name in &metadata.types"));
-}
-
-#[test]
-fn selfhost_checker_entry_is_orchestration_only() {
-    let root = workspace_root();
-    let checker = read(&root.join("experiments/fixtures/selfhost/check.rss"));
-    let declarations = checker
-        .lines()
-        .filter(|line| {
-            let line = line.trim_start();
-            line.starts_with("fn ") || line.starts_with("struct ") || line.starts_with("const ")
-        })
-        .collect::<Vec<_>>();
-
-    assert_eq!(declarations, ["fn main(args: read List<String>) -> Unit {"]);
-    assert!(checker.lines().count() < 1_000);
-    for import in [
-        "use selfhost.checker.support.*",
-        "use selfhost.checker.output.*",
-        "use selfhost.checker.type_model.*",
-        "use selfhost.checker.diagnostics.syntax_declarations.*",
-        "use selfhost.checker.diagnostics.effects_calls.*",
-    ] {
-        assert!(
-            checker.contains(import),
-            "checker entry must retain {import}"
-        );
-    }
-
-    for (path, module) in [
-        (
-            "experiments/fixtures/selfhost/checker/support.rss",
-            "module selfhost.checker.support",
-        ),
-        (
-            "experiments/fixtures/selfhost/checker/output.rss",
-            "module selfhost.checker.output",
-        ),
-        (
-            "experiments/fixtures/selfhost/checker/type_model.rss",
-            "module selfhost.checker.type_model",
-        ),
-        (
-            "experiments/fixtures/selfhost/checker/diagnostics/syntax_declarations.rss",
-            "module selfhost.checker.diagnostics.syntax_declarations",
-        ),
-        (
-            "experiments/fixtures/selfhost/checker/diagnostics/effects_calls.rss",
-            "module selfhost.checker.diagnostics.effects_calls",
-        ),
-    ] {
-        assert!(
-            read(&root.join(path)).contains(module),
-            "{path} must declare {module}"
-        );
-    }
 }
 
 #[test]

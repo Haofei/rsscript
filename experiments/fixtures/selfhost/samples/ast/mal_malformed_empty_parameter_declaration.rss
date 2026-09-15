@@ -1,5 +1,0 @@
-// expect: RS0015
-
-fn bad(, path: Path) -> Unit {
-    return Unit
-}

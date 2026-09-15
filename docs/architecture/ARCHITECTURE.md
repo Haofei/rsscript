@@ -17,14 +17,14 @@ package interface + binding descriptor
   -> optional host implementation
 
 package analysis + binding/provider metadata
-  -> optional review/REIR adapter
+  -> optional review adapter
 ```
 
 The required dependency direction is syntax → semantics → lowering → owned
 executable IR. `rsscript-vm` consumes only owned executable IR and execution-layer
 contracts; it does not depend on syntax, semantics, HIR, lowering, or the compiler.
 Host providers depend on the host API/runtime boundary; the compiler does not
-depend on concrete providers, deployment policy, or REIR.
+depend on concrete providers, deployment policy, or review tooling.
 
 `rsscript-abi-model` owns external symbols and semantic signature hashes without
 depending on provider implementations. `rsscript-provider-api` owns versioned
@@ -57,7 +57,7 @@ The optional `rsscript-mir/conformance` feature is a test-only reference
 interpreter: dual-path fixtures compare it with the legacy VM before a
 capability can advance to MIR-only execution.
 `rsscript-sdk` is the stable embedding façade; embedders do not depend on the
-compiler's analyzer database, register VM, Rust AOT, JIT, package review, or
+compiler's analyzer database, register VM, JIT, package review, or
 source-map types directly. `rsscript-cli` is the composition root.
 
 `WorkspaceLoader` is the low-level OS/VFS capture adapter. `rsscript-project`
@@ -97,6 +97,6 @@ provider selection, or native implementation inspection. Analysis and lowering
 therefore share one immutable digest even when the optional review subsystem is
 not compiled or run.
 
-Review/REIR combines validated semantic facts with binding, provider, deployment,
+Review combines validated semantic facts with binding, provider, deployment,
 or runtime evidence. Disabling review must not change AST, HIR, validation,
 lowering, or generated code.

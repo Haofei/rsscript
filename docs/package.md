@@ -19,8 +19,8 @@ build-selection features remain package metadata and are not language features.
 `rss build --analysis-out <analysis.json> <package-directory>` writes an Artifact
 Bundle and optionally extracts the neutral
 analysis artifact, and `rss inspect analysis --json <package-directory>` prints
-it. Optional review is derived by the separate REIR integration rather than by
-the product CLI.
+it. Optional review is derived by separate review tooling rather than by the
+product CLI.
 
 Provider loading uses the platform-neutral types in `rsscript-abi-model` and the
 registry contract in `rsscript-provider-api`. Semantic signatures are hashed from

@@ -231,7 +231,7 @@ fn compiler_default_dependency_closure_is_host_neutral() {
     );
     assert!(
         manifest["dependencies"].get("rsscript-vm").is_none(),
-        "self-host execution belongs to the independent experiments workspace"
+        "the compiler must not depend on the VM"
     );
 
     assert!(
@@ -865,66 +865,6 @@ fn vm_core_does_not_embed_time_logging_or_os_intrinsics() {
 }
 
 #[test]
-fn rust_aot_lowering_does_not_restore_removed_host_abi_types() {
-    let root = workspace_root();
-    let lowering_root = root.join("experiments/aot-backend/src/rust_lower");
-    let forbidden = [
-        "rsscript_runtime::File",
-        "rsscript_runtime::Http",
-        "rsscript_runtime::Process",
-        "rsscript_runtime::RssTcp",
-        "rsscript_runtime::RssWebSocket",
-        "rsscript_runtime::TempDir",
-        "rsscript_runtime::RssInstant",
-        "rsscript_runtime::RssDeadline",
-        "runtime_struct_constructor",
-        "is_file_open_expr",
-    ];
-    for path in rust_files_below(&lowering_root) {
-        let source = read(&path);
-        for symbol in forbidden {
-            assert!(
-                !source.contains(symbol),
-                "experimental AOT lowering must not restore host ABI `{symbol}` in {}",
-                path.display()
-            );
-        }
-    }
-}
-
-#[test]
-fn generated_aot_abi_does_not_expose_wall_clock_or_timer_services() {
-    let root = workspace_root();
-    let runtime = read(&root.join("experiments/aot-runtime/src/lib.rs"));
-    let abi_macro = runtime
-        .split("macro_rules! runtime_abi_exports")
-        .nth(1)
-        .and_then(|source| source.split("/// Exact compatibility surface").next())
-        .expect("generated AOT ABI macro");
-    for forbidden in [
-        "RssInstant",
-        "clock_now",
-        "clock_system_unix_ms",
-        "instant_elapsed",
-        "RssDeadline",
-        "deadline_after",
-        "TimerError",
-        "TimerSleepPending",
-        "timer_sleep",
-        "OperationContext",
-    ] {
-        assert!(
-            !abi_macro.contains(forbidden),
-            "generated AOT ABI must obtain host time through a provider: `{forbidden}`"
-        );
-    }
-    assert!(
-        runtime.contains("pub mod host"),
-        "execution deadlines remain explicit host controls"
-    );
-}
-
-#[test]
 fn program_arguments_enter_through_the_explicit_main_abi() {
     let root = workspace_root();
     let catalog = read(&root.join("crates/rsscript-compiler/intrinsics.toml"));
@@ -963,13 +903,8 @@ fn high_risk_state_machines_keep_dedicated_module_owners() {
         "crates/rsscript-vm/src/reg_vm/tier/admission.rs",
         "crates/rsscript-vm/src/reg_vm/tier/call_scratch.rs",
         "crates/rsscript-vm/src/reg_vm/tier/recursion.rs",
-        "experiments/aot-backend/src/rust_lower/helpers/executable_declarations.rs",
-        "experiments/aot-backend/src/rust_lower/helpers/semantic_projection.rs",
-        "experiments/aot-runtime/src/json.rs",
         "crates/rsscript-jit-cranelift/src/analysis.rs",
         "crates/rsscript-jit-cranelift/src/executable_memory.rs",
-        "experiments/reir/src/reconciliation/engine.rs",
-        "experiments/reir/src/cli/safe_io.rs",
     ];
     let missing = required
         .iter()
@@ -981,49 +916,4 @@ fn high_risk_state_machines_keep_dedicated_module_owners() {
         "refactoring module owners must remain explicit: {}",
         missing.join(", ")
     );
-}
-
-#[test]
-fn selfhost_frontend_does_not_restore_retired_language_contracts() {
-    let root = workspace_root();
-    let checker = read(&root.join("experiments/fixtures/selfhost/check.rss"));
-    let syntax_declarations = read(
-        &root.join("experiments/fixtures/selfhost/checker/diagnostics/syntax_declarations.rss"),
-    );
-    for retired_code in [
-        "RS0004", "RS0006", "RS0009", "RS0010", "RS0011", "RS0012", "RS0014", "RS0016", "RS0017",
-        "RS0018", "RS0019", "RS0020", "RS0101",
-    ] {
-        assert!(
-            !checker.contains(retired_code),
-            "self-hosted checker must not emit retired diagnostic `{retired_code}`"
-        );
-    }
-
-    let scanner = read(&root.join("experiments/fixtures/selfhost/scan.rss"));
-    for retired_mapping in [
-        "word == \"features\"",
-        "word == \"profile\"",
-        "word == \"native\"",
-        "word == \"effects\"",
-        "word == \"unsafe\"",
-    ] {
-        assert!(
-            !scanner.contains(retired_mapping),
-            "self-hosted scanner must not restore retired keyword mapping `{retired_mapping}`"
-        );
-    }
-
-    for retired_feature_check in [
-        "RS0101 FEATURE_VIOLATION",
-        "collect_feature_use_tokens",
-        "file_local_use",
-        "file_async_use",
-        "file_unsafe_use",
-    ] {
-        assert!(
-            !syntax_declarations.contains(retired_feature_check),
-            "self-hosted diagnostics must not retain retired feature check `{retired_feature_check}`"
-        );
-    }
 }

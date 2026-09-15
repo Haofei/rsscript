@@ -1,5 +1,0 @@
-fn main() -> Unit {
-    while true {
-    }
-    return Unit
-}

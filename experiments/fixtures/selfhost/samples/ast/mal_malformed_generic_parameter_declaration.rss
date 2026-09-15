@@ -1,9 +1,0 @@
-// expect: RS0015
-
-struct Box<T: Unknown> {
-    value: handle T
-}
-
-fn bad<read T>(value: String) -> Unit {
-    return Unit
-}

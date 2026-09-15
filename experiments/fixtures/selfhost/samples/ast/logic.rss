@@ -1,3 +1,0 @@
-fn check(a: Int, b: Int) -> Bool {
-    return a == b || a > b
-}

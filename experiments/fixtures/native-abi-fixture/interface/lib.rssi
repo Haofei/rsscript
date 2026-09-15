@@ -1,2 +1,0 @@
-
-fn NativeAbiFixture.sort_int(values: mut List<Int>) -> Unit

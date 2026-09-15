@@ -37,5 +37,5 @@ verify an external signature before loading the Artifact.
 
 Release binaries, pre-release tags, and the Git-revision-only alpha SDK policy
 are defined in [releasing.md](releasing.md). A binary release version does not
-implicitly promote Experimental providers, AOT, JIT, REIR, plugins, or research
+implicitly promote Experimental providers, JIT, plugins, or archived research
 surfaces to the Core compatibility contract.

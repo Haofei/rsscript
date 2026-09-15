@@ -83,9 +83,9 @@ host rather than by source or by an Artifact, and leaves language validity
 untouched. Bounded and isolated execution stay on the interpreter until native
 execution provides the same deterministic accounting; closing that gap is
 roadmap work, as recorded in
-[ADR 0233](architecture/adr/0233-jit-is-a-product-owned-vm-tier.md). Rust AOT,
-native plugins, REIR, and self-hosting remain optional Experimental,
-Integration, or Research surfaces.
+[ADR 0233](architecture/adr/0233-jit-is-a-product-owned-vm-tier.md). Native
+plugins remain an optional Experimental surface. Rust AOT, REIR, and
+self-hosting are archived on the `archive/experiments-2026-09` branch.
 
 Language, Artifact, runtime ABI, and Provider compatibility are independent,
 fail-closed contracts defined in [compatibility.md](compatibility.md).

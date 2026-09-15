@@ -10,7 +10,6 @@ const UNSAFE_BOUNDARIES: &[(&str, &str, &str)] = &[
 pub(super) fn validate(root: &Path) -> Result<(), Box<dyn Error>> {
     validate_root_workspace_ownership(root)?;
     validate_compiler_manifest(root)?;
-    validate_aot_runtime_boundary(root)?;
     validate_unsafe_crate_boundaries(root)?;
     validate_backend_dependency_direction(root)?;
     Ok(())
@@ -27,20 +26,20 @@ fn validate_root_workspace_ownership(root: &Path) -> Result<(), Box<dyn Error>> 
         "rss-testgen",
         "rsscript-review-reir",
     ]);
-    let experiments = root.join("experiments").canonicalize()?;
+    let repository = root.canonicalize()?;
 
     for member in members {
         let manifest_path = member.join("Cargo.toml");
         let manifest = read_toml(&manifest_path)?;
         let package = package_name(&manifest)?;
         if forbidden.contains(package) {
-            return Err(format!("root workspace owns experimental package `{package}`").into());
+            return Err(format!("root workspace owns archived package `{package}`").into());
         }
         for dependency_path in dependency_paths(&manifest) {
             let resolved = member.join(dependency_path).canonicalize()?;
-            if resolved.starts_with(&experiments) {
+            if !resolved.starts_with(&repository) {
                 return Err(format!(
-                    "root package `{package}` path-depends on experiments at {}",
+                    "root package `{package}` path-depends outside the repository at {}",
                     resolved.display()
                 )
                 .into());
@@ -58,44 +57,6 @@ fn validate_compiler_manifest(root: &Path) -> Result<(), Box<dyn Error>> {
         .is_some_and(|dependencies| !dependencies.is_empty())
     {
         return Err("Core compiler must not retain research/fuzz dev-dependencies".into());
-    }
-    Ok(())
-}
-
-fn validate_aot_runtime_boundary(root: &Path) -> Result<(), Box<dyn Error>> {
-    let directory = root.join("experiments/aot-runtime");
-    let manifest = read_toml(&directory.join("Cargo.toml"))?;
-    if package_name(&manifest)? != "rsscript-aot-runtime" {
-        return Err("AOT runtime package identity drifted".into());
-    }
-    let dependencies = dependency_packages(&manifest);
-    for forbidden in [
-        "rsscript",
-        "rsscript-sdk",
-        "rand",
-        "reqwest",
-        "rss-process-guard",
-        "tokio-tungstenite",
-        "toml",
-        "uuid",
-    ] {
-        if dependencies.contains(forbidden) {
-            return Err(format!("AOT runtime depends on forbidden `{forbidden}`").into());
-        }
-    }
-    for feature in ["host-compat", "net"] {
-        if manifest["features"].get(feature).is_some() {
-            return Err(format!("AOT runtime retains legacy feature `{feature}`").into());
-        }
-    }
-    for path in rust_files_below(&directory.join("src"))? {
-        if fs::read_to_string(&path)?.contains("rsscript_sdk::") {
-            return Err(format!(
-                "AOT runtime source {} imports the product SDK",
-                path.strip_prefix(root).unwrap_or(&path).display()
-            )
-            .into());
-        }
     }
     Ok(())
 }

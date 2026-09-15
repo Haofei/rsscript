@@ -101,13 +101,9 @@ cargo test --locked -p rsscript-provider-http
 cargo test --locked -p rsscript-runner-protocol
 ```
 
-The separate experiments workspace consumes Core contracts but is not a Core
-release dependency:
-
-```sh
-cargo clippy --locked --manifest-path experiments/Cargo.toml --workspace --all-targets --all-features -- -D warnings
-cargo test --locked --manifest-path experiments/Cargo.toml --workspace --all-features
-```
+Rust AOT, REIR, and self-hosting research are archived on the
+`archive/experiments-2026-09` branch and are not built or tested from this
+workspace.
 
 Native JIT is an explicit trusted-host SDK mode. It is absent from default
 closures and requires both correctness and performance evidence:

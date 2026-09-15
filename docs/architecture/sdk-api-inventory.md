@@ -84,7 +84,7 @@ through typed `experimental::native_jit::NativeJitOptions`; the experimental
 namespace deliberately carries no Rust source-compatibility promise, while
 selecting it never changes execution limits.
 The report exposes only stable engine telemetry, not `NativeStats`, opcodes,
-registers, OSR plans, or backend implementation state. AOT, REIR, review/risk,
+registers, OSR plans, or backend implementation state. Review/risk
 and compiler-internal APIs remain outside this inventory.
 
 ## Compatibility check

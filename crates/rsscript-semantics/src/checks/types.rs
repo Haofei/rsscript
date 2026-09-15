@@ -1,7 +1,7 @@
 //! Type-name, field-shape, and resource-type validation.
 //!
-//! Kept as a named phase so the self-hosted checker can mirror this boundary
-//! without coupling its partial AST to Rust implementation details.
+//! Kept as a named phase so the pipeline exposes one stable boundary for
+//! type-shape validation.
 
 use crate::analyzer::Analyzer;
 

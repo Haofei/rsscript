@@ -38,7 +38,7 @@ provider, native plugin, JIT, or generated program trustworthy.
   limits profile: the default runner profile arms both and would leave that flag
   with no native tier. See `docs/spec/native-jit-contract.md` for the parity
   status table.
-- Review and REIR report evidence; authority stays with the host.
+- Review tooling reports evidence; authority stays with the host.
 
 ## Untrusted and generated input
 

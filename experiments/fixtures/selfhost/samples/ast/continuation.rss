@@ -1,7 +1,0 @@
-fn calc(a: Int, b: Int) -> Int {
-    let total = a
-        + b
-        + a
-    return total
-        + b
-}

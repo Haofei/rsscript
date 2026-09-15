@@ -17,7 +17,7 @@ pub(super) fn check(analyzer: &mut Analyzer<'_>) {
 /// at least one pin are reported here (plain default collisions, if any, are a
 /// separate concern from this escape hatch).
 fn check_lowered_name_conflicts(analyzer: &mut Analyzer<'_>) {
-    // S02.6: `#lower_name` validates the Rust AOT backend namespace. It is an
+    // S02.6: `#lower_name` validates the lowered backend namespace. It is an
     // explicit compiler-backend constraint, not a platform-neutral language
     // semantic rule; source declaration identity is delegated below.
     let mut seen: HashMap<String, (String, bool)> = HashMap::new();

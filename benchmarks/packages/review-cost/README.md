@@ -33,7 +33,7 @@ The `review_ratio` is `must_review / total`. Lower = less review burden.
 
 ## CI integration
 
-Use `--json` output with the stable REIR CI schema:
+Use `--json` output with the stable review CI schema:
 
 ```yaml
 - name: Review cost check

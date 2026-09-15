@@ -1,3 +1,0 @@
-// expect: RS0015
-fn main() -> Unit {
-    let x = 1

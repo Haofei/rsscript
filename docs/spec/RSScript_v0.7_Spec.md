@@ -182,7 +182,7 @@ semantic summaries, retention facts, resource facts, async facts, and external
 symbols. It contains no host grants.
 
 Binding/provider review is optional and consumes the validated call graph plus
-binding metadata. REIR and deployment policy must not influence validation or
+binding metadata. Review tooling and deployment policy must not influence validation or
 lowering.
 
 ## 11. Runtime limits

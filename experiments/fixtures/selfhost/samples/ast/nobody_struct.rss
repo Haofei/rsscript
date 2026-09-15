@@ -1,8 +1,0 @@
-struct Picture
-struct PictureError
-
-fn load(path: Path) -> Result<Picture, PictureError>
-
-{
-    return Picture()
-}

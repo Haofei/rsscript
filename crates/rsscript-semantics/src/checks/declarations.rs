@@ -1,7 +1,7 @@
 //! Declaration-level semantic checks.
 //!
-//! This is the Rust-side ownership boundary mirrored by
-//! `selfhost/semantics/declarations.rss`.  The individual implementations still
+//! This is the ownership boundary for declaration-level rules.  The
+//! individual implementations still
 //! live with their analysis helpers while the larger checker refactor proceeds;
 //! this module fixes the pipeline's stable semantic grouping first.
 

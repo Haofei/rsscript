@@ -1,8 +1,0 @@
-// expect: RS0015
-struct {
-    value: String
-}
-
-fn main() -> Unit {
-    return Unit
-}

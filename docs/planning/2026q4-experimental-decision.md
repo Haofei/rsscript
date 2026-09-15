@@ -9,6 +9,11 @@
 > `benchmarks/vm-jit`. The rest of this log — including the module-size
 > convergence notes, which describe a mechanism the project has since retired —
 > stands as a historical record of what was decided and executed.
+>
+> **Superseded for Deadline 2.** The experiments workspace (Rust AOT, REIR,
+> self-hosting parity, artifact store) was archived on the
+> `archive/experiments-2026-09` branch on 2026-09-15 and removed from the main
+> tree; its retention entries no longer exist.
 
 This milestone implements the convergence priority in
 [../roadmap.md](../roadmap.md) by resolving the time-bounded experimental

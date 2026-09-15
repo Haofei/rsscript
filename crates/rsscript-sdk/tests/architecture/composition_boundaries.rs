@@ -23,29 +23,29 @@ fn register_vm_has_no_disabled_test_composition_tree() {
 }
 
 #[test]
-fn selfhost_parity_domains_remain_separate_modules() {
+fn compiler_facade_does_not_expose_review_integrations() {
     let root = workspace_root();
-    let aggregator = root.join("experiments/selfhost-parity/src/selfhost_parity.rs");
-    let source = read(&aggregator);
-    let expected = ["lexer", "parser", "checker", "ast_oracle", "ast_parity"];
-
+    let compiler_manifest: toml::Value =
+        toml::from_str(&read(&root.join("crates/rsscript-compiler/Cargo.toml")))
+            .expect("compiler manifest should parse");
+    let compiler_dependencies = normal_dependency_packages(&compiler_manifest);
     assert!(
-        source.lines().count() <= expected.len() + 10,
-        "selfhost_parity.rs must remain a composition root"
+        !compiler_dependencies.contains("reir")
+            && !compiler_dependencies.contains("rsscript-review-reir"),
+        "normal compiler builds must not depend on review integrations"
     );
-    for domain in expected {
-        assert!(
-            source.contains(&format!("selfhost_parity/{domain}.rs")),
-            "self-host parity composition root is missing `{domain}`"
-        );
-        assert!(
-            root.join(format!(
-                "experiments/selfhost-parity/src/selfhost_parity/{domain}.rs"
-            ))
-            .is_file(),
-            "self-host parity domain `{domain}` must have its own module"
-        );
-    }
+    let compiler_library = read(&root.join("crates/rsscript-compiler/src/lib.rs"));
+    assert!(
+        !compiler_library.contains("reir"),
+        "the compiler façade must not expose review-integration formatting APIs"
+    );
+    let package_cli = read(&root.join("crates/rsscript-cli/src/cli/mod.rs"));
+    assert!(
+        !package_cli.contains("mod package;")
+            && !package_cli.contains("\"pkg\"")
+            && !package_cli.contains("rss pkg"),
+        "repository/review package commands must stay out of the product CLI"
+    );
 }
 
 #[test]
@@ -795,47 +795,6 @@ fn production_frontend_callers_share_the_compilation_session_boundary() {
 }
 
 #[test]
-fn reir_is_a_one_way_optional_integration() {
-    let root = workspace_root();
-    let compiler_manifest: toml::Value =
-        toml::from_str(&read(&root.join("crates/rsscript-compiler/Cargo.toml")))
-            .expect("compiler manifest should parse");
-    let compiler_dependencies = normal_dependency_packages(&compiler_manifest);
-    assert!(
-        !compiler_dependencies.contains("reir")
-            && !compiler_dependencies.contains("rsscript-review-reir"),
-        "normal compiler builds must not depend on review integrations"
-    );
-
-    let integration_manifest: toml::Value = toml::from_str(&read(
-        &root.join("experiments/rsscript-review-reir/Cargo.toml"),
-    ))
-    .expect("REIR integration manifest should parse");
-    let integration_dependencies = normal_dependency_packages(&integration_manifest);
-    assert_eq!(
-        integration_dependencies,
-        BTreeSet::from(["reir".to_string(), "serde_json".to_string(),])
-    );
-    let integration_library = read(&root.join("experiments/rsscript-review-reir/src/lib.rs"));
-    assert!(integration_library.contains("package_analysis"));
-    assert!(!integration_library.contains("PackageReview"));
-    assert!(!integration_library.contains("format_package_review"));
-
-    let compiler_library = read(&root.join("crates/rsscript-compiler/src/lib.rs"));
-    assert!(
-        !compiler_library.contains("reir"),
-        "the compiler façade must not expose REIR formatting APIs"
-    );
-    let package_cli = read(&root.join("crates/rsscript-cli/src/cli/mod.rs"));
-    assert!(
-        !package_cli.contains("mod package;")
-            && !package_cli.contains("\"pkg\"")
-            && !package_cli.contains("rss pkg"),
-        "repository/review package commands must stay out of the product CLI"
-    );
-}
-
-#[test]
 fn compiler_does_not_embed_a_native_plugin_loader() {
     let root = workspace_root();
     let manifest: toml::Value =
@@ -908,6 +867,6 @@ fn lsp_dependency_closure_selects_frontend_only() {
             && compiler_manifest["features"]
                 .get("selfhost-parity")
                 .is_none(),
-        "frontend-only compiler closure must not retain the self-host VM adapter"
+        "frontend-only compiler closure must not retain a VM adapter"
     );
 }

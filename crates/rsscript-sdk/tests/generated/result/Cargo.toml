@@ -1,7 +1,0 @@
-[package]
-name = "rsscript-generated-result"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-rsscript-runtime = { package = "rsscript-aot-runtime", path = "../../../../../experiments/aot-runtime" }
