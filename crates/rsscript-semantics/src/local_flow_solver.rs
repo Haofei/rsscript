@@ -1,6 +1,6 @@
 //! Fixed-point ownership analysis for the neutral local-flow graph.
 
-use crate::{Flow, LocalFlowState, LocalFlowStep, merge_non_fallthrough, path_root};
+use crate::{Flow, LocalFlowState, LocalFlowStep, MoveSite, merge_non_fallthrough, path_root};
 use rsscript_syntax::Span;
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -334,7 +334,7 @@ fn merge_local_fallthrough_states(
 }
 
 fn merge_moved_paths_from_branch(
-    moved_paths: &mut HashMap<String, Span>,
+    moved_paths: &mut HashMap<String, MoveSite>,
     base: &LocalFlowState,
     branch: &LocalFlowState,
 ) {

@@ -1098,6 +1098,32 @@ struct LoopTargets {
     break_target: BlockId,
     cleanup_depth: usize,
 }
+/// Replace a signature's own type parameters with the concrete type arguments
+/// the checker inferred for one call site.
+///
+/// Substitution is keyed by the **declared parameter name**, never by spelling
+/// or position within a rendered type, so a generic record whose parameters are
+/// `A`, `B`, … (the synthetic `__TupleN` structs) and one whose parameters are
+/// `T`, `Key`, … behave identically. With no inferred arguments — a
+/// non-generic record, or a call site the checker could not fully solve — the
+/// declared type is returned unchanged.
+fn substitute_signature_type_params(
+    ty: &ResolvedType,
+    signature: &checked::FunctionSig,
+    type_arguments: &[ResolvedType],
+) -> ResolvedType {
+    if type_arguments.is_empty() || signature.type_params.is_empty() {
+        return ty.clone();
+    }
+    let substitutions = signature
+        .type_params
+        .iter()
+        .cloned()
+        .zip(type_arguments.iter().cloned())
+        .collect::<BTreeMap<String, ResolvedType>>();
+    ty.substitute(&substitutions)
+}
+
 /// Convert semantic type facts into the provider-neutral wire representation
 /// without round-tripping through a rendered type string. This keeps source
 /// spelling and formatting changes out of MIR identity. Function values are

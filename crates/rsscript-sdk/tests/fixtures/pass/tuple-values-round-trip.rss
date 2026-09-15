@@ -1,0 +1,43 @@
+// A tuple is a synthetic `__TupleN<A, B, ..>` generic struct, so every
+// position that carries one is a generic instance whose type arguments must be
+// substituted before they reach the typed executable facts. Returning a tuple,
+// storing one in an inline struct field, and passing one as an argument each
+// used to record the declaration's parameter names (`A`, `B`, ..) instead of
+// the element types, which built cleanly and then failed bytecode
+// verification. `crates/rsscript-sdk/src/tests.rs` runs this same program end
+// to end; this fixture pins the checker half.
+
+struct Point {
+    location: (Int, Int)
+}
+
+fn labelled() -> (Int, String) {
+    return (1, "one")
+}
+
+fn widened(value: Int) -> (Int, Int, Bool) {
+    return (value, value * 2, true)
+}
+
+fn sum(pair: read (Int, Int)) -> Int {
+    return pair.item0 + pair.item1
+}
+
+// An element read off a container, and an arithmetic result, are argument
+// forms whose type the call-site substitution has to prove too.
+fn picked(values: read List<Int>) -> (Int, Int) {
+    return (values[0], values[1] + 1)
+}
+
+fn main() -> String {
+    local pair = labelled()
+    let (base, doubled, flag) = widened(value: pair.item0)
+    local point = Point(location: (base, doubled))
+    let total = sum(pair: point.location)
+    local values = [4, 5]
+    let (head, next) = picked(values: values)
+    return String.concat(
+        left: pair.item1,
+        right: Int.to_string(value: total + head + next),
+    )
+}

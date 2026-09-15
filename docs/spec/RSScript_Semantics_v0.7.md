@@ -796,19 +796,35 @@ to `__Tuple2(item0: a, item1: b)` and `(T, U)` to `__Tuple2<T, U>`;
 `expand_tuple_destructuring` turns `let (a, b) = e` into a temporary plus
 `.itemN` projections.
 
-`desugar.rs::tuple_type_param` names element `i`'s type parameter
-`(b'A' + i) as char`, so the parameters are `A`, `B`, `C`, … . Past `Z` that
-arithmetic produces characters that are not identifiers at all (`[`, `\`, `]`,
-`^`, …).
+Because a tuple is an ordinary generic struct, **every tuple value is a generic
+instance**, and its type arguments must be substituted before they leave the
+front end. `lowerer.rs::lower_record_constructor` applies the call site's
+inferred type arguments to the constructor's declared result, so a `(1, "a")`
+lowers as `__Tuple2<Int, String>` rather than as the declaration's parameter
+names. That substitution is what the typed executable facts carry, and the
+bytecode verifier checks them against the enclosing function's concrete result;
+an unsubstituted `__Tuple2<A, B>` is rejected there. The checker proves a call
+site's type arguments all at once or not at all, so where it cannot,
+`lower_record_constructor` refuses to lower rather than guess — a build error,
+never a fact naming a type parameter.
 
-The front end does **not** cap tuple arity, and earlier drafts of this document
-were wrong to say it caps at 26: substitution is by declared parameter name, not
-by spelling, so element types still resolve correctly above 26 — `(Int, …, Int,
-String)` at arity 64 still reports `RS0208` against the right element. What the
-generated names do mean is that **arity above 26 must not be relied on**: the
-synthetic parameter names stop being valid identifiers, so nothing downstream of
-the checker is expected to handle them. Treat 26 as the supported ceiling and the
-front end's silence above it as an accident, not a contract.
+`desugar.rs::tuple_type_param` names element `i`'s type parameter `__rss_T{i}`.
+The name is built from the index, so it is unique at every arity and always an
+identifier; and it sits in the `__rss_` namespace that
+`source_rules.rs::is_reserved_generated_name` reserves for compiler-generated
+symbols, so no user-declared type or type parameter can capture it. The names
+themselves are private to that function: everything downstream substitutes by
+declared parameter name, not by spelling
+(`types.rs::ResolvedType::substitute`, `infer.rs::substituted_field_type`).
+
+**Tuple arity is not capped.** Earlier drafts of this document reported a
+ceiling of 26, from a generation scheme that named the parameters `A`, `B`, `C`,
+… and produced non-identifiers past `Z`. There is no such ceiling now and no
+alphabet to run out of: an arity-30 tuple compiles, verifies, and runs
+(`rsscript-sdk/src/tests.rs::wide_tuples_keep_distinct_type_parameters_and_execute`,
+`rsscript-syntax/src/parser/mod.rs::wide_tuple_structs_declare_unique_reserved_type_parameters`),
+and `(Int, …, Int, String)` at arity 64 still reports `RS0208` against the right
+element.
 
 **Accepted**
 
@@ -1931,7 +1947,19 @@ is reachable on **any** path from the move. The fixture set covers moves inside
 operands, and inline `manage` in an argument position.
 
 Two moves produce the fact: `manage x` and `take x` (including `take x.field`
-for an inline field).
+for an inline field). **The diagnostic names the one that happened.** The move
+kind travels with the fact (`local_flow_facts.rs::MoveSite`, recorded by
+`local_flow_state.rs::mark_moved`), so a `take` reads
+
+> `bag` was moved out of this scope by `take bag`. … used after take
+
+and a `manage` reads
+
+> `bag` was moved into the managed runtime by `manage bag`. … used after manage
+
+with the cause note pointing at that move's own span in both cases. Fixtures:
+`fail/use-after-manage.rss`, `fail/use-after-take.rss`,
+`fail/take-inline-field-use-after.rss`.
 
 **Rejected — `RS0401`**
 
@@ -4240,6 +4268,21 @@ under separate headings, and every entry in `core-interfaces.json` carries a
 `rss check` accepts `--no-core` to drop the core prelude and `--interface
 <file.rssi>` to add contracts explicitly.
 
+**Signature-level rules apply to `.rssi` declarations.** An interface has no
+bodies, so body rules have nothing to run on, but its *signatures* are ordinary
+RSScript signatures and are checked as such: `checks/declarations.rs` runs
+`signature_diagnostics` and `generic_constraint_diagnostics` over the source
+program and over every supplied interface program. `pub fn make_default<T>() ->
+fresh T` is `RS0603` in a `.rssi` exactly as it is in a `.rss`, and the
+diagnostic carries the interface file's own span, because each interface is
+parsed under its own path. Declaration-*inventory* rules (duplicates, protocol
+implementations) stay merged-program rules and are not repeated per file.
+
+`crates/rsscript-sdk/tests/fixture_corpus.rs::every_shipped_interface_passes_the_signature_checks`
+runs those rules over every `stdlib/**/*.rssi` and `packages/**/interface/*.rssi`
+read from disk, so the prelude cannot regress silently and a newly added
+interface is covered the day it lands.
+
 ### 10.3 Purity constraints on the core
 
 Where a service could be either pure or ambient, the core interface takes the
@@ -4345,7 +4388,7 @@ explanations).
 | `RS0308` | invalid `take` operand | §5.1 |
 | `RS0309` | managed field split conflict | §5.4 |
 | `RS0310` | read-view mutation (`for` element) | §5.6 |
-| `RS0401` | use after manage / move | §5.3 |
+| `RS0401` | use after move (`manage` or `take`) | §5.3 |
 | `RS0501` | local value retained | §5.7 |
 | `RS0601` | fresh return is not clean | §5.8 |
 | `RS0602` | freshness unknown (warning) | §5.8 |
@@ -4431,8 +4474,6 @@ and finding no enforcing code.
 * **`Float` semantics** beyond its row in the builtin protocol table (§2.1) and
   its non-trapping arithmetic (§2.13): rounding mode, `NaN` payload propagation,
   and `Float` formatting are runtime concerns the front end does not constrain.
-* **Tuple arity above 26.** Not capped and not supported; the generated type
-  parameter names stop being identifiers past `Z` (§2.9).
 
 ### 12.1.1 Specified since v0.7
 
@@ -4522,6 +4563,18 @@ explicit note and offers a `_` arm rather than implying a missing case
 
 These are findings for the maintainer, not features.
 
+* **A generic construction is only as provable as its arguments' types.** The
+  checker proves a call site's generic arguments all at once or not at all
+  (`hir/infer.rs::infer_call_type_arguments`), from the types it can give the
+  argument expressions. Identifiers, literals, calls, field reads, operator
+  results, and `List`/`Map` element reads all carry a type; anything else does
+  not. A generic record built only from expressions in that last group — a
+  tuple whose element is an index into an untyped value, say — therefore has no
+  proved instance, and `lower_record_constructor` refuses to lower it rather
+  than record a type argument it cannot prove (§2.9). It is a build error, not
+  a wrong answer, but it is a rule the design implies and the front end does
+  not fully deliver: the fix is a checker that types more expression forms, not
+  a backend that guesses.
 * **A used binding with an open generic position is trusted.** `RS0034` fires
   only when the binding is never used (§3.3). `let xs = []` followed by pushes
   of mixed element types, or a bare `let v = Ok(1)` that is later returned, keeps

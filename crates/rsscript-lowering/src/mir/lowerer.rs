@@ -619,7 +619,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 type_kind: checked::HirTypeKind::Struct | checked::HirTypeKind::Class,
             }
         ) {
-            return self.lower_record_constructor(signature, args);
+            return self.lower_record_constructor(signature, args, type_arguments);
         }
         if matches!(kind, checked::ResolvedCalleeKind::Constructor { .. }) {
             return self.unsupported("non-record checked HIR constructor");
@@ -779,13 +779,35 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
     /// Materialize a resolved struct/class constructor directly from checked
     /// signature facts. Arguments still evaluate in source order, while the
     /// resulting layout fields use declaration/parameter order.
+    ///
+    /// A generic record's declared result names its own type parameters
+    /// (`__Tuple2<A, B>`, `Box<T>`). The constructed value's type is that
+    /// result with the call site's inferred type arguments substituted in, so
+    /// the typed executable facts record `__Tuple2<Int, String>` rather than
+    /// the declaration's parameter names — which no downstream consumer can
+    /// resolve, and which the bytecode verifier rejects against the concrete
+    /// return type of the enclosing function.
     pub(super) fn lower_record_constructor(
         &mut self,
         signature: &checked::FunctionSig,
         args: &[checked::HirCallArg],
+        type_arguments: &[ResolvedType],
     ) -> Result<ValueId, MirLoweringError> {
-        let wire_type = signature
+        if !signature.type_params.is_empty() && type_arguments.is_empty() {
+            // The checker proves a generic call site's type arguments all at
+            // once or not at all. With no proof, the declared result still
+            // names the record's own parameters, and emitting that would put
+            // `__Tuple2<A, B>` into the typed executable facts: a type no
+            // consumer can resolve, which the bytecode verifier then rejects
+            // against the concrete result of the enclosing function. Refusing
+            // here reports the gap at build time instead.
+            return self.unsupported("generic record constructor without a proved type instance");
+        }
+        let return_ty = signature
             .return_ty
+            .as_ref()
+            .map(|ty| substitute_signature_type_params(ty, signature, type_arguments));
+        let wire_type = return_ty
             .as_ref()
             .map(|ty| checked_type_to_wire(ty, &self.function_name))
             .transpose()?

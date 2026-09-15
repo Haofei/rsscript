@@ -1,0 +1,3 @@
+// The bounded form of `fail/interface-invalid-fresh-generic.rssi`: signature
+// checks run over interfaces, and a correct interface signature stays clean.
+pub fn make_default<T: Struct>() -> fresh T

@@ -1553,4 +1553,55 @@ fn run() -> Unit {
         assert_eq!(arms.len(), 2);
         assert!(arms.iter().all(|arm| arm.body.statements.len() == 1));
     }
+
+    /// Tuple arity has no alphabet-sized ceiling: the synthetic `__TupleN`
+    /// struct's type parameters are generated from the element index, so at
+    /// any arity they stay unique, stay identifiers, and stay inside the
+    /// `__rss_` namespace reserved for compiler-generated symbols — a user
+    /// type or type parameter can never capture one.
+    #[test]
+    fn wide_tuple_structs_declare_unique_reserved_type_parameters() {
+        const ARITY: usize = 30;
+        let elements = std::iter::repeat_n("Int", ARITY)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let program = parse_source(
+            "test.rss",
+            &format!("fn wide(value: ({elements})) -> Unit {{}}\n"),
+        );
+
+        let expected_name = format!("__Tuple{ARITY}");
+        let Some(Item::Type(tuple)) = program
+            .items
+            .iter()
+            .find(|item| matches!(item, Item::Type(decl) if decl.name == expected_name))
+        else {
+            panic!("an arity-{ARITY} tuple injects its synthetic struct");
+        };
+        assert_eq!(tuple.type_params.len(), ARITY);
+        assert_eq!(tuple.fields.len(), ARITY);
+
+        let names = tuple
+            .type_params
+            .iter()
+            .map(|parameter| parameter.name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(names.len(), ARITY, "every element needs its own parameter");
+        for name in &names {
+            assert!(
+                name.starts_with("__rss_"),
+                "`{name}` must stay in the reserved generated namespace"
+            );
+            assert!(
+                name.chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '_'),
+                "`{name}` must stay an identifier"
+            );
+        }
+        // Field `itemI` is typed by the parameter declared at position `I`.
+        for (index, field) in tuple.fields.iter().enumerate() {
+            assert_eq!(field.name, format!("item{index}"));
+            assert_eq!(field.ty.name, tuple.type_params[index].name);
+        }
+    }
 }

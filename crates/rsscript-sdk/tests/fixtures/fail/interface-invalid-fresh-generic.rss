@@ -1,0 +1,11 @@
+// expect: RS0603
+
+// interface: interface-invalid-fresh-generic.rssi
+
+// The source file is clean. The diagnostic comes from the supplied interface:
+// signature-level checks run over `.rssi` declarations too, so an interface
+// cannot export a contract the language does not have.
+
+fn main() -> Unit {
+    return Unit
+}

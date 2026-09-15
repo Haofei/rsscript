@@ -167,7 +167,9 @@ pub fn infer_hir_expr_type(
             let field = type_info.fields.get(name)?;
             Some(substituted_field_type(hir, type_info, &base_type, field))
         }
-        Expr::Index { .. } => None,
+        Expr::Index { base, .. } => {
+            indexed_element_type(&infer_hir_expr_type(hir, base, value_types)?)
+        }
         Expr::Number(value, _) => Some(ResolvedType::named(number_literal_type_name(value), [])),
         Expr::String(_, _) | Expr::MultilineString(_, _) => Some(ResolvedType::named("String", [])),
         Expr::CharLiteral(_, _) => Some(ResolvedType::named("Char", [])),
@@ -432,7 +434,19 @@ pub(super) fn infer_arg_expr_type(
         | Expr::Spawn { value, .. }
         | Expr::Await { value, .. }
         | Expr::Try { value, .. } => infer_arg_expr_type(hir, value, value_types),
-        Expr::Ident(name, _) => value_types.get(name).cloned(),
+        // `true`, `false`, and `Unit` are literals that the surface syntax
+        // spells as identifiers. They carry a type for the same reason the
+        // scalar literals below do: a generic construction must be able to
+        // unify them with a type parameter (`(1, true)` -> `B = Bool`), and a
+        // parameter left unproved makes the whole call site's substitution
+        // incomplete. `None` is deliberately excluded: its type is
+        // `Option<?>`, which proves nothing.
+        Expr::Ident(name, _) => value_types.get(name).cloned().or_else(|| {
+            matches!(name.as_str(), "true" | "false" | "Unit")
+                .then(|| crate::checks::shared::builtin_value_type_name(name))
+                .flatten()
+                .map(|name| ResolvedType::named(name, []))
+        }),
         Expr::Call { .. } => infer_hir_expr_type(hir, expr, value_types),
         Expr::Closure { params, body, .. } => infer_closure_return_type(hir, body, value_types)
             .map(|return_type| {
@@ -456,8 +470,29 @@ pub(super) fn infer_arg_expr_type(
         Expr::Number(value, _) => Some(ResolvedType::named(number_literal_type_name(value), [])),
         Expr::String(_, _) | Expr::MultilineString(_, _) => Some(ResolvedType::named("String", [])),
         Expr::CharLiteral(_, _) => Some(ResolvedType::named("Char", [])),
-        Expr::Index { .. } | Expr::Binary { .. } | Expr::Unknown(_) => None,
+        // An operator result is as inferable as its operands, and a generic
+        // construction needs it for the same reason it needs a literal's type
+        // (`(a + b, "x")` -> `A = Int`).
+        Expr::Binary { .. } => infer_hir_expr_type(hir, expr, value_types),
+        // An element read off a typed container proves the element type
+        // (`(xs[0], xs[1])` with `xs: List<Int>` -> `A = B = Int`). This is
+        // deliberately local to argument-position inference: the checker does
+        // not give `let x = xs[0]` a type, and widening that is a separate
+        // change with a much larger blast radius.
+        Expr::Index { base, .. } => {
+            indexed_element_type(&infer_arg_expr_type(hir, base, value_types)?)
+        }
+        Expr::Unknown(_) => None,
     }
+}
+
+/// The element type produced by `base[index]` for the container types whose
+/// element position the wire format fixes. Anything else proves nothing.
+fn indexed_element_type(base_type: &ResolvedType) -> Option<ResolvedType> {
+    base_type
+        .named_argument("List", 0)
+        .or_else(|| base_type.named_argument("Map", 1))
+        .cloned()
 }
 
 /// The type of `field` accessed on a value of type `base_type`, with the type's

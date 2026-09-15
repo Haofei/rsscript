@@ -1243,3 +1243,116 @@ fn provider_host_context_and_trace_reach_the_execution_report() {
     assert_eq!(summary.response_bytes, 0);
     assert_eq!(summary.total_duration_ns, summary.max_duration_ns);
 }
+
+/// A tuple is a synthetic `__TupleN<A, B, ..>` generic struct, so every tuple
+/// value is a generic instance whose type arguments have to be substituted
+/// before they reach the typed executable facts. Until they were, a program
+/// that returned a tuple compiled and then failed bytecode verification with
+/// `__Tuple2<A, B>` — the declaration's parameter names — where the concrete
+/// element types belonged. The same fixture is checked by
+/// `tests/fixtures/pass/tuple-values-round-trip.rss`; this runs it.
+#[test]
+fn tuple_values_survive_verification_and_execute() {
+    const SOURCE: &str = r#"
+struct Point {
+    location: (Int, Int)
+}
+
+fn labelled() -> (Int, String) {
+    return (1, "one")
+}
+
+fn widened(value: Int) -> (Int, Int, Bool) {
+    return (value, value * 2, true)
+}
+
+fn sum(pair: read (Int, Int)) -> Int {
+    return pair.item0 + pair.item1
+}
+
+fn picked(values: read List<Int>) -> (Int, Int) {
+    return (values[0], values[1] + 1)
+}
+
+fn main() -> String {
+    local pair = labelled()
+    let (base, doubled, flag) = widened(value: pair.item0)
+    local point = Point(location: (base, doubled))
+    let total = sum(pair: point.location)
+    local values = [4, 5]
+    let (head, next) = picked(values: values)
+    return String.concat(
+        left: pair.item1,
+        right: Int.to_string(value: total + head + next),
+    )
+}
+"#;
+
+    let built = Compiler
+        .compile("tuples.rss", SOURCE)
+        .expect("a tuple-returning program compiles");
+    let admitted = ArtifactVerifier
+        .verify(built)
+        .expect("substituted tuple type arguments pass bytecode verification")
+        .admit_trusted_input();
+    let report = Runtime::default()
+        .link(&admitted)
+        .expect("link tuple program")
+        .execute(ExecutionRequest::default());
+
+    assert_eq!(report.termination_reason(), TerminationReason::Completed);
+    // `labelled()` is `(1, "one")`; `widened(value: 1)` is `(1, 2, true)`, so
+    // the stored `Point.location` is `(1, 2)` and `sum` is 3; `picked` reads
+    // `(4, 6)` off the list. 3 + 4 + 6 = 13.
+    assert_eq!(report.value(), Some("one13"));
+}
+
+/// Tuple arity is not capped by the generated type-parameter names: the
+/// synthetic parameters are unique for any arity, and substitution is keyed by
+/// declared name rather than by spelling, so a wide tuple resolves its
+/// elements and runs like a narrow one.
+#[test]
+fn wide_tuples_keep_distinct_type_parameters_and_execute() {
+    const ARITY: usize = 30;
+    let element_types = std::iter::repeat_n("Int", ARITY - 1)
+        .chain(std::iter::once("String"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let values = (0..ARITY - 1)
+        .map(|index| index.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let source = format!(
+        r#"
+fn wide() -> ({element_types}) {{
+    return ({values}, "last")
+}}
+
+fn main() -> String {{
+    local tuple = wide()
+    return String.concat(
+        left: Int.to_string(value: tuple.item0 + tuple.item{last}),
+        right: tuple.item{tail},
+    )
+}}
+"#,
+        last = ARITY - 2,
+        tail = ARITY - 1,
+    );
+
+    let built = Compiler
+        .compile("wide-tuple.rss", &source)
+        .expect("an arity-30 tuple compiles");
+    let admitted = ArtifactVerifier
+        .verify(built)
+        .expect("an arity-30 tuple passes bytecode verification")
+        .admit_trusted_input();
+    let report = Runtime::default()
+        .link(&admitted)
+        .expect("link wide tuple program")
+        .execute(ExecutionRequest::default());
+
+    assert_eq!(report.termination_reason(), TerminationReason::Completed);
+    // `item0` is 0 and `item28` is 28.
+    assert_eq!(report.value(), Some("28last"));
+}

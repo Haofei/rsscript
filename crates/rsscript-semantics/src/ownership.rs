@@ -1,24 +1,39 @@
 //! Ownership diagnostics derived from checked local-flow facts.
 
+use crate::{MoveKind, MoveSite};
 use rsscript_diagnostics::{Diagnostic, FixEdit, Span, code};
 
-/// Diagnose use of a value after it moved into managed storage.
-pub fn moved_use_diagnostic(name: &str, use_span: Span, move_span: &Span) -> Diagnostic {
-    Diagnostic::error(
-        code::USE_AFTER_MANAGE,
-        format!("`{name}` was moved into the managed runtime by `manage {name}`."),
-        use_span,
-        "used after manage",
-    )
-    .with_cause(format!(
-        "The move happened at {}:{}.",
-        move_span.line, move_span.column
-    ))
-    .with_fix(
-        "move_use_before_manage",
-        format!("Move this use before `manage {name}`."),
-        "manual",
-    )
+/// Diagnose use of a value after it was moved out of its binding.
+///
+/// The message names the move that actually happened. `manage x` hands the
+/// value to the managed runtime; `take x` hands it to a callee, or to a
+/// `match take x` scrutinee. Reporting one as the other sends the reader to
+/// the wrong line and suggests the wrong fix, so the move kind travels with
+/// the fact (`MoveSite`) rather than being assumed here.
+pub fn moved_use_diagnostic(name: &str, use_span: Span, move_site: &MoveSite) -> Diagnostic {
+    let moved_by = move_site.kind.expression(name);
+    let (message, label, fix_id) = match move_site.kind {
+        MoveKind::Manage => (
+            format!("`{name}` was moved into the managed runtime by `{moved_by}`."),
+            "used after manage",
+            "move_use_before_manage",
+        ),
+        MoveKind::Take => (
+            format!("`{name}` was moved out of this scope by `{moved_by}`."),
+            "used after take",
+            "move_use_before_take",
+        ),
+    };
+    Diagnostic::error(code::USE_AFTER_MANAGE, message, use_span, label)
+        .with_cause(format!(
+            "The move happened at {}:{}.",
+            move_site.span.line, move_site.span.column
+        ))
+        .with_fix(
+            fix_id,
+            format!("Move this use before `{moved_by}`."),
+            "manual",
+        )
 }
 
 /// Diagnose binding an already-managed value as a local value.
@@ -509,10 +524,53 @@ mod tests {
         }
     }
 
+    /// `RS0401` must name the move that actually happened. A `take` reported
+    /// as `manage x` points the reader at a line that does not exist and
+    /// suggests a fix for the wrong construct.
+    #[test]
+    fn moved_use_names_the_move_that_happened() {
+        let managed = moved_use_diagnostic("bag", span(9), &MoveSite::manage(span(4)));
+        assert!(
+            managed.summary.contains("`manage bag`"),
+            "a `manage` move names itself: {}",
+            managed.summary
+        );
+        assert!(!managed.summary.contains("take"));
+        assert_eq!(managed.label, "used after manage");
+        assert!(managed.causes.iter().any(|cause| cause.contains("1:4")));
+        assert!(
+            managed
+                .fixes
+                .iter()
+                .any(|fix| fix.title.contains("`manage bag`"))
+        );
+
+        let taken = moved_use_diagnostic("bag", span(9), &MoveSite::take(span(4)));
+        assert_eq!(taken.code, code::USE_AFTER_MANAGE);
+        assert!(
+            taken.summary.contains("`take bag`"),
+            "a `take` move names itself: {}",
+            taken.summary
+        );
+        assert!(
+            !taken.summary.contains("manage"),
+            "a `take` move must not be reported as a `manage`: {}",
+            taken.summary
+        );
+        assert_eq!(taken.label, "used after take");
+        assert!(taken.causes.iter().any(|cause| cause.contains("1:4")));
+        assert!(
+            taken
+                .fixes
+                .iter()
+                .any(|fix| fix.title.contains("`take bag`"))
+        );
+    }
+
     #[test]
     fn derives_diagnostics_from_local_flow_facts() {
         assert_eq!(
-            moved_use_diagnostic("value", span(9), &span(1)).code,
+            moved_use_diagnostic("value", span(9), &MoveSite::manage(span(1))).code,
             code::USE_AFTER_MANAGE
         );
         assert_eq!(

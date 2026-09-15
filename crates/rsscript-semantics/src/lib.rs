@@ -208,8 +208,8 @@ pub use literals::{
 pub use local_binding_facts::{LocalBindingValueFacts, local_binding_value_facts};
 pub use local_flow_builder::{local_flow_graph, local_flow_statement_span};
 pub use local_flow_facts::{
-    FreshReturnIssue, FreshReturnIssueKind, ManagedToLocalUse, MovedUse, ResourceEscape,
-    ResourceEscapeKind, RetainedClosureCapture, RetainedLocalUse, TakeHandleField,
+    FreshReturnIssue, FreshReturnIssueKind, ManagedToLocalUse, MoveKind, MoveSite, MovedUse,
+    ResourceEscape, ResourceEscapeKind, RetainedClosureCapture, RetainedLocalUse, TakeHandleField,
 };
 pub use local_flow_graph::{
     LocalFlowBinding, LocalFlowEdge, LocalFlowResourceBinding, LocalFlowStep, LocalFlowStepKind,

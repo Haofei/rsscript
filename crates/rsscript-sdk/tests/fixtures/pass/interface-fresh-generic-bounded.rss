@@ -1,0 +1,5 @@
+// interface: interface-fresh-generic-bounded.rssi
+
+fn main() -> Unit {
+    return Unit
+}

@@ -1,0 +1,5 @@
+// A signature-level rule is as true of a bodyless `.rssi` declaration as of a
+// `.rss` one: `fresh T` needs `T: Struct` for freshness to hold at every
+// instantiation. `pass/interface-fresh-generic-bounded.rss` shows the same
+// signature written correctly.
+pub fn make_default<T>() -> fresh T
