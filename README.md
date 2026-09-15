@@ -153,9 +153,12 @@ trusts the script opts into same-process execution with `--trusted-in-process`,
 and may add `--native` there — the flag is available only in that combination —
 for the Cranelift JIT, which uses the same verified
 Artifact, Provider linker, and Execution Report as the interpreter. Native
-execution is deliberately unavailable to the isolated runner, because exact
-step, allocation, cancellation, and deadline accounting is still the bounded
-interpreter's contract, and an Artifact can never request it: enabling the JIT
+execution is deliberately unavailable to the isolated runner: native regions
+now report the interpreter's exact step count and stop for the same
+cancellation and deadline reasons, but allocation controls need a per-region
+proof and intrinsic-call and Provider-call budgets are still interpreter-owned,
+so the bounded runner keeps the interpreter until that gap closes (status in
+`docs/spec/native-jit-contract.md`). An Artifact can never request it: enabling the JIT
 is the host's decision alone. Providers are trusted host code with the full
 authority of the process, and JIT-generated executable memory is not an
 isolation boundary. The full boundary analysis is in

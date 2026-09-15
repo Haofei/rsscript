@@ -23,10 +23,16 @@ provider, native plugin, JIT, or generated program trustworthy.
 - Providers are trusted host code and may possess all authority of the process.
 - Native plugins and generated Rust are trusted code execution mechanisms.
 - JIT-generated executable memory is not an isolation boundary.
-- Native JIT selection is a trusted-host deployment choice. It is unavailable
-  to the reference isolated runner and currently selects the explicit unbounded
-  trusted-host limits profile because exact source-step accounting is not yet
-  equivalent to the interpreter.
+- Native JIT selection is a trusted-host deployment choice and is unavailable
+  to the reference isolated runner. A natively executed region now reports the
+  interpreter's exact source-step count and stops for the same reason under an
+  armed step budget, cancellation token, or deadline; a region whose step cost
+  cannot be attributed exactly declines to the interpreter instead of running
+  unmetered. Allocation controls are admitted only with a per-region proof, and
+  intrinsic-call and Provider-call budgets remain interpreter-owned, so
+  `rss run --native` still selects the explicit unbounded trusted-host limits
+  profile until those two budgets are accounted natively. See
+  `docs/spec/native-jit-contract.md` for the parity status table.
 - Review and REIR report evidence; authority stays with the host.
 
 ## Untrusted and generated input
