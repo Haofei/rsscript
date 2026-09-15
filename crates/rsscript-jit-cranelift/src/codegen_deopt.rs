@@ -121,6 +121,8 @@ pub(crate) struct DeoptCtx<'a> {
     /// yields the count the interpreter has actually paid for when it resumes.
     /// Zero for a region that maintains a live `steps_resume` variable.
     pub(crate) steps_adjust: i64,
+    /// The same constant for the intrinsic-call meter.
+    pub(crate) intrinsics_adjust: i64,
 }
 
 impl DeoptCtx<'_> {
@@ -207,6 +209,8 @@ pub(crate) struct DeoptBuffers {
     /// shared `fallback` writes nothing. A region that keeps a live `steps_resume`
     /// variable instead leaves this `None`.
     pub(crate) steps: Option<(Variable, Value)>,
+    /// The same pair for the intrinsic-call meter's cell word.
+    pub(crate) intrinsics: Option<(Variable, Value)>,
 }
 
 pub(crate) fn bail_if(
@@ -222,11 +226,13 @@ pub(crate) fn bail_if(
         safepoint_ptr,
         payload_ptr,
         steps,
+        intrinsics,
     } = buffers;
     let site_id = *next_id;
     *next_id += 1;
     let forced = deopt.forced.is_some_and(|forced| forced.forces(site_id)) || deopt.unconditional;
     let steps_adjust = deopt.steps_adjust;
+    let intrinsics_adjust = deopt.intrinsics_adjust;
     let live = deopt.record();
     let site_block = bcx.create_block();
     let cont = bcx.create_block();
@@ -252,17 +258,25 @@ pub(crate) fn bail_if(
         bcx.ins()
             .store(MemFlags::trusted(), v, payload_ptr, (reg as i32) * 8);
     }
-    publish_resume_steps(bcx, steps, steps_adjust);
+    publish_resume_steps(bcx, steps, steps_adjust, crate::codegen::LIMITS_STEPS);
+    publish_resume_steps(
+        bcx,
+        intrinsics,
+        intrinsics_adjust,
+        crate::codegen::LIMITS_INTRINSIC_CALLS,
+    );
     bcx.ins().jump(fallback, &[]);
     bcx.switch_to_block(cont);
     cont
 }
 
-/// Write this site's exact resume count to the limits cell, on the cold edge only.
+/// Write this site's exact resume count for one meter to the limits cell, on the
+/// cold edge only.
 fn publish_resume_steps(
     bcx: &mut FunctionBuilder,
     steps: Option<(Variable, Value)>,
     steps_adjust: i64,
+    offset: i32,
 ) {
     let Some((steps_var, limits_ptr)) = steps else {
         return;
@@ -273,7 +287,8 @@ fn publish_resume_steps(
     } else {
         bcx.ins().iadd_imm(running, -steps_adjust)
     };
-    bcx.ins().store(MemFlags::trusted(), resumed, limits_ptr, 0);
+    bcx.ins()
+        .store(MemFlags::trusted(), resumed, limits_ptr, offset);
 }
 
 pub(crate) struct ChildDeoptSource<'a> {
@@ -296,11 +311,13 @@ pub(crate) fn bail_if_child_native_failed(
         safepoint_ptr,
         payload_ptr,
         steps,
+        intrinsics,
     } = buffers;
     let site_id = *next_id;
     *next_id += 1;
     let forced = deopt.forced.is_some_and(|forced| forced.forces(site_id)) || deopt.unconditional;
     let steps_adjust = deopt.steps_adjust;
+    let intrinsics_adjust = deopt.intrinsics_adjust;
     let (live, child_site) = deopt.record_child(child.metadata);
     let site_block = bcx.create_block();
     let cont = bcx.create_block();
@@ -342,7 +359,13 @@ pub(crate) fn bail_if_child_native_failed(
             ((child_site.payload_slot + slot) as i32) * 8,
         );
     }
-    publish_resume_steps(bcx, steps, steps_adjust);
+    publish_resume_steps(bcx, steps, steps_adjust, crate::codegen::LIMITS_STEPS);
+    publish_resume_steps(
+        bcx,
+        intrinsics,
+        intrinsics_adjust,
+        crate::codegen::LIMITS_INTRINSIC_CALLS,
+    );
     bcx.ins().jump(fallback, &[]);
     bcx.switch_to_block(cont);
     cont

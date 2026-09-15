@@ -19,6 +19,8 @@ pub(in crate::reg_vm) struct OsrPlanInputs<'a> {
     pub(in crate::reg_vm) profile: Option<&'a FunctionProfile>,
     pub(in crate::reg_vm) emit_step: bool,
     pub(in crate::reg_vm) emit_step_ceiling: bool,
+    pub(in crate::reg_vm) emit_intrinsic: bool,
+    pub(in crate::reg_vm) emit_intrinsic_ceiling: bool,
     pub(in crate::reg_vm) emit_cancel: bool,
     pub(in crate::reg_vm) emit_deadline: bool,
     pub(in crate::reg_vm) memory_armed: bool,
@@ -65,6 +67,8 @@ impl RegVm {
             profile,
             emit_step,
             emit_step_ceiling,
+            emit_intrinsic,
+            emit_intrinsic_ceiling,
             emit_cancel,
             emit_deadline,
             memory_armed,
@@ -73,6 +77,12 @@ impl RegVm {
             osr_version_key,
             region_key,
         } = inputs;
+        // `RegVm::charge_work` — the interpreter's hook for work hidden behind one
+        // bytecode instruction — returns without charging when no step budget,
+        // cancellation token, or deadline is armed. Native accounting is
+        // unconditional, so a region must mirror that condition exactly. It is
+        // derivable from the compiled controls, which are part of the version key.
+        let interpreter_charges_hidden_work = emit_step_ceiling || emit_cancel || emit_deadline;
         Some({
             // Fast path: cached and NOT at the header ⇒ nothing to do (no clone).
             if let Some(native) = self.native.as_ref()
@@ -185,7 +195,14 @@ impl RegVm {
                                 .translation_nanos
                                 .saturating_add(started.elapsed().as_nanos());
                         }
-                        translation.and_then(|translation| {
+                        translation.and_then(|mut translation| {
+                            // The interpreter's `charge_work` bills a scalar map key's
+                            // hash unit only when a step budget, cancellation token, or
+                            // deadline is armed, so mirror that exactly.
+                            charge_native_key_hash_work(
+                                &mut translation.jit_fn,
+                                interpreter_charges_hidden_work,
+                            );
                             let analyzed =
                                 NativeRegion::osr(lp.header as u32, translation).analyze()?;
                             let NativeRegionMetadata::Osr {
@@ -231,6 +248,8 @@ impl RegVm {
                                 step_ceiling: emit_step_ceiling,
                                 cancel: emit_cancel,
                                 deadline: emit_deadline,
+                                intrinsic: emit_intrinsic,
+                                intrinsic_ceiling: emit_intrinsic_ceiling,
                             };
                             let published =
                                 analyzed
@@ -669,7 +688,11 @@ impl RegVm {
                                     .translation_nanos
                                     .saturating_add(started.elapsed().as_nanos());
                             }
-                            translation.and_then(|translation| {
+                            translation.and_then(|mut translation| {
+                                    charge_native_key_hash_work(
+                                        &mut translation.jit_fn,
+                                        interpreter_charges_hidden_work,
+                                    );
                                     let analyzed = NativeRegion::osr(
                                         lp.header as u32,
                                         translation,
@@ -720,6 +743,8 @@ impl RegVm {
                                             step_ceiling: emit_step_ceiling,
                                             cancel: emit_cancel,
                                             deadline: emit_deadline,
+                                            intrinsic: emit_intrinsic,
+                                            intrinsic_ceiling: emit_intrinsic_ceiling,
                                         };
                                     let published = analyzed
                                         .validate(&native.baseline_module)
@@ -939,6 +964,8 @@ impl RegVm {
                                 step_ceiling: emit_step_ceiling,
                                 cancel: emit_cancel,
                                 deadline: emit_deadline,
+                                intrinsic: emit_intrinsic,
+                                intrinsic_ceiling: emit_intrinsic_ceiling,
                             },
                         );
                     match compiled {

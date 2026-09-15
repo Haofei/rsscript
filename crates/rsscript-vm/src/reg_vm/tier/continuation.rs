@@ -277,6 +277,8 @@ impl RegVm {
                         step_ceiling: self.limits.step_budget.is_some(),
                         cancel: cancel_armed,
                         deadline: self.limits.deadline.is_some(),
+                        intrinsic: true,
+                        intrinsic_ceiling: self.limits.intrinsic_call_budget.is_some(),
                     };
                     let published =
                         analyzed
@@ -455,6 +457,7 @@ impl RegVm {
             .is_some_and(|native| native.collect_stats)
             .then(std::time::Instant::now);
         let steps_before = self.steps;
+        let intrinsic_calls_before = self.intrinsic_calls;
         let initial_steps = {
             let Ok(steps) = i64::try_from(self.steps) else {
                 decline_continuation!();
@@ -462,6 +465,21 @@ impl RegVm {
             steps
         };
         let native_step_budget = match self.limits.step_budget {
+            Some(budget) => {
+                let Ok(budget) = i64::try_from(budget) else {
+                    decline_continuation!();
+                };
+                Some(budget)
+            }
+            None => None,
+        };
+        let initial_intrinsic_calls = {
+            let Ok(calls) = i64::try_from(self.intrinsic_calls) else {
+                decline_continuation!();
+            };
+            calls
+        };
+        let native_intrinsic_budget = match self.limits.intrinsic_call_budget {
             Some(budget) => {
                 let Ok(budget) = i64::try_from(budget) else {
                     decline_continuation!();
@@ -490,11 +508,14 @@ impl RegVm {
                         initial_steps,
                         step_budget: native_step_budget,
                         cancel: self.limits.cancel.as_ref().map(|token| token.as_atomic()),
+                        initial_intrinsic_calls,
+                        intrinsic_budget: native_intrinsic_budget,
                     },
                 )
         });
-        let result = native_result.map(|(outcome, steps)| {
-            self.steps = steps.max(0) as u64;
+        let result = native_result.map(|(outcome, usage)| {
+            self.steps = usage.steps.max(0) as u64;
+            self.intrinsic_calls = usage.intrinsic_calls.max(0) as u64;
             outcome
         });
         if let Some(native) = self.native.as_mut()
@@ -516,9 +537,14 @@ impl RegVm {
             let over_budget = self
                 .limits
                 .step_budget
-                .is_some_and(|budget| self.steps > budget);
+                .is_some_and(|budget| self.steps > budget)
+                || self
+                    .limits
+                    .intrinsic_call_budget
+                    .is_some_and(|budget| self.intrinsic_calls > budget);
             if !cancelled && !over_budget {
                 self.steps = steps_before;
+                self.intrinsic_calls = intrinsic_calls_before;
                 if let Some(native) = self.native.as_mut() {
                     let disabled = native
                         .continuation_controllers

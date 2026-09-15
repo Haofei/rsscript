@@ -531,6 +531,7 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
         string_literals,
     } = translate_osr_loop_inner(OsrLoweringRequest {
         code: &synthetic,
+        source_function_code: &func.code,
         register_count: func.regs,
         parameter_count: func.params,
         capture_count: func.captures,

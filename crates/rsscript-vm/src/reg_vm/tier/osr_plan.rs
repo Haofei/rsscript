@@ -18,15 +18,14 @@ pub(super) fn osr_committed_tail_calls(final_logical_depth: usize, physical_dept
 /// loop that has no generated deadline poll.
 #[cfg(feature = "native-jit")]
 /// OSR counterpart of `RegVm::native_preemption_controls_supported`, and for the
-/// same reasons: a Provider call is a barrier the interpreter owns, so an armed
-/// `provider_call_budget` does not need to refuse OSR, while an armed
-/// `intrinsic_call_budget` still does.
-/// OSR counterpart of `RegVm::native_preemption_controls_supported`, and for the
-/// same reasons: a Provider call is a barrier the interpreter owns, so an armed
-/// `provider_call_budget` does not need to refuse OSR, while an armed
-/// `intrinsic_call_budget` still does.
+/// same reasons. Neither call meter refuses OSR any more: a Provider call is a
+/// barrier the interpreter owns and performs itself, and an intrinsic dispatch is
+/// charged from generated code by the per-item `intrinsic_cost` the same way a
+/// source step is, so an armed `intrinsic_call_budget` is reserved per accounting
+/// segment and bails at the exact first uncharged source instruction.
 pub(super) fn osr_execution_controls_supported(limits: &VmLimits) -> bool {
-    limits.intrinsic_call_budget.is_none()
+    let _ = limits;
+    true
 }
 
 #[cfg(feature = "native-jit")]
@@ -297,6 +296,13 @@ mod tests {
         limits.deadline = Some(rsscript_core_types::MonotonicDeadline::after(
             Duration::from_secs(1),
         ));
+        assert!(osr_execution_controls_supported(&limits));
+    }
+
+    #[test]
+    fn generated_intrinsic_meter_allows_osr_dispatch() {
+        let mut limits = VmLimits::unbounded_for_trusted_host();
+        limits.intrinsic_call_budget = Some(16);
         assert!(osr_execution_controls_supported(&limits));
     }
 }

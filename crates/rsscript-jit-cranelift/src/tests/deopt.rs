@@ -124,12 +124,14 @@ fn deopt_map_uses_explicit_source_and_resume_identity() {
             source_ip: 6,
             resume_ip: 4,
             source_cost: 1,
+            intrinsic_cost: 0,
             inlined: false,
         },
         JitInstructionOrigin {
             source_ip: 7,
             resume_ip: 7,
             source_cost: 1,
+            intrinsic_cost: 0,
             inlined: false,
         },
     ];

@@ -40,7 +40,24 @@ pub(crate) struct LimitChecks {
     /// Poll the embedding VM's monotonic clock callback at bounded control
     /// segments and bail before the next source instruction when expired.
     pub(crate) deadline: bool,
+    /// Count interpreter intrinsic dispatches into the limits cell's fourth word,
+    /// at the same charge points as `step`. This is the *counting* half: it makes
+    /// the region report the interpreter's exact `intrinsic_calls` total and never
+    /// rejects on its own.
+    pub(crate) intrinsic: bool,
+    /// Additionally *reserve* each charge against the cell's intrinsic budget and
+    /// return to the interpreter at the exact first uncharged source instruction
+    /// when it does not fit. Only meaningful with `intrinsic`.
+    pub(crate) intrinsic_ceiling: bool,
 }
+
+/// Byte offsets into the call-owned limits cell
+/// `[steps, step_budget, cancel_addr, intrinsic_calls, intrinsic_budget]`.
+pub(crate) const LIMITS_STEPS: i32 = 0;
+pub(crate) const LIMITS_STEP_BUDGET: i32 = 8;
+pub(crate) const LIMITS_CANCEL_ADDR: i32 = 16;
+pub(crate) const LIMITS_INTRINSIC_CALLS: i32 = 24;
+pub(crate) const LIMITS_INTRINSIC_BUDGET: i32 = 32;
 
 /// Precompute the source cost charged at each accounting-segment entry.
 ///
@@ -61,10 +78,20 @@ pub(crate) struct LimitChecks {
 /// instruction when that instruction can bail. The interpreter re-executes the
 /// instruction a guard bails on, and it ticks before executing, so the reported
 /// count must exclude the pre-charged cost of that one instruction.
-fn step_segment_costs(
-    program: &JitFunction,
-    is_leader: &[bool],
-) -> (Vec<u32>, Vec<bool>, Vec<u32>) {
+struct SegmentCosts {
+    /// Per-instruction segment-entry source cost (zero unless the instruction
+    /// starts a segment).
+    entry: Vec<u32>,
+    starts: Vec<bool>,
+    /// Per-segment guard cost: the cost of the segment's last instruction when
+    /// that instruction can bail.
+    guard: Vec<u32>,
+    /// The same two vectors for the intrinsic-call meter.
+    intrinsic_entry: Vec<u32>,
+    intrinsic_guard: Vec<u32>,
+}
+
+fn step_segment_costs(program: &JitFunction, is_leader: &[bool]) -> SegmentCosts {
     const MAX_CONTROL_SEGMENT_SOURCE_COST: u32 = 512;
     let n = program.code.len();
     let mut starts = is_leader.to_vec();
@@ -100,6 +127,8 @@ fn step_segment_costs(
     }
     let mut costs = vec![0_u32; n];
     let mut guard_costs = vec![0_u32; n];
+    let mut intrinsic_costs = vec![0_u32; n];
+    let mut intrinsic_guard_costs = vec![0_u32; n];
     let mut start = 0;
     while start < n {
         debug_assert!(starts[start]);
@@ -111,23 +140,41 @@ fn step_segment_costs(
             .map(|ip| program.instruction_origin(ip).source_cost)
             .try_fold(0_u32, u32::checked_add)
             .expect("validated source-step cost fits u32");
+        intrinsic_costs[start] = (start..end)
+            .map(|ip| program.instruction_origin(ip).intrinsic_cost)
+            .try_fold(0_u32, u32::checked_add)
+            .expect("validated intrinsic-call cost fits u32");
         // Only the segment's last instruction can bail: every earlier one is
         // `step_batch_safe`. Its own pre-charged cost is what the interpreter
         // charges again when it resumes there.
         let last = end - 1;
-        guard_costs[start] = if program.code[last].descriptor().step_batch_safe {
-            0
+        let (guard, intrinsic_guard) = if program.code[last].descriptor().step_batch_safe {
+            (0, 0)
         } else {
-            program.instruction_origin(last).source_cost
+            let origin = program.instruction_origin(last);
+            (origin.source_cost, origin.intrinsic_cost)
         };
+        guard_costs[start] = guard;
+        intrinsic_guard_costs[start] = intrinsic_guard;
         start = end;
     }
-    (costs, starts, guard_costs)
+    SegmentCosts {
+        entry: costs,
+        starts,
+        guard: guard_costs,
+        intrinsic_entry: intrinsic_costs,
+        intrinsic_guard: intrinsic_guard_costs,
+    }
 }
 
 impl LimitChecks {
     pub(crate) fn any(self) -> bool {
-        self.step || self.step_ceiling || self.cancel || self.deadline
+        self.step
+            || self.step_ceiling
+            || self.cancel
+            || self.deadline
+            || self.intrinsic
+            || self.intrinsic_ceiling
     }
 
     /// Whether this region only *counts* source steps: no ceiling to reserve
@@ -136,7 +183,11 @@ impl LimitChecks {
     /// edge, instead of paying a reservation and a live `steps_resume` variable per
     /// possibly-deopting instruction.
     fn accounting_only(self) -> bool {
-        self.step && !self.step_ceiling && !self.cancel && !self.deadline
+        (self.step || self.intrinsic)
+            && !self.step_ceiling
+            && !self.intrinsic_ceiling
+            && !self.cancel
+            && !self.deadline
     }
 }
 
@@ -155,12 +206,23 @@ impl LimitChecks {
 /// Returns `None` when an inlined run reaches back past its block leader. The
 /// number of blocks executed between two blocks is path-dependent, so no
 /// compile-time constant exists and the region keeps the segment-reservation model.
-fn step_block_costs(program: &JitFunction, is_leader: &[bool]) -> Option<(Vec<u32>, Vec<i64>)> {
+struct BlockCosts {
+    charge_at: Vec<u32>,
+    adjust_at: Vec<i64>,
+    intrinsic_charge_at: Vec<u32>,
+    intrinsic_adjust_at: Vec<i64>,
+}
+
+fn step_block_costs(program: &JitFunction, is_leader: &[bool]) -> Option<BlockCosts> {
     let n = program.code.len();
     let mut charge_at = vec![0_u32; n];
     let mut adjust_at = vec![0_i64; n];
     let mut block_total = vec![0_u32; n];
     let mut prefix = vec![0_u32; n];
+    let mut intrinsic_charge_at = vec![0_u32; n];
+    let mut intrinsic_adjust_at = vec![0_i64; n];
+    let mut intrinsic_block_total = vec![0_u32; n];
+    let mut intrinsic_prefix = vec![0_u32; n];
     let mut ip = 0_usize;
     while ip < n {
         if is_leader[ip] {
@@ -173,10 +235,21 @@ fn step_block_costs(program: &JitFunction, is_leader: &[bool]) -> Option<(Vec<u3
                 .try_fold(0_u32, u32::checked_add)?;
             charge_at[ip] = total;
             block_total[ip..end].fill(total);
+            let intrinsic_total = (ip..end)
+                .map(|at| program.instruction_origin(at).intrinsic_cost)
+                .try_fold(0_u32, u32::checked_add)?;
+            intrinsic_charge_at[ip] = intrinsic_total;
+            intrinsic_block_total[ip..end].fill(intrinsic_total);
             let mut running = 0_u32;
             for (at, slot) in prefix[ip..end].iter_mut().enumerate() {
                 *slot = running;
                 running = running.checked_add(program.instruction_origin(ip + at).source_cost)?;
+            }
+            let mut intrinsic_running = 0_u32;
+            for (at, slot) in intrinsic_prefix[ip..end].iter_mut().enumerate() {
+                *slot = intrinsic_running;
+                intrinsic_running = intrinsic_running
+                    .checked_add(program.instruction_origin(ip + at).intrinsic_cost)?;
             }
         }
         ip += 1;
@@ -197,8 +270,15 @@ fn step_block_costs(program: &JitFunction, is_leader: &[bool]) -> Option<(Vec<u3
             return None;
         }
         adjust_at[ip] = i64::from(block_total[ip]) - i64::from(prefix[anchor]);
+        intrinsic_adjust_at[ip] =
+            i64::from(intrinsic_block_total[ip]) - i64::from(intrinsic_prefix[anchor]);
     }
-    Some((charge_at, adjust_at))
+    Some(BlockCosts {
+        charge_at,
+        adjust_at,
+        intrinsic_charge_at,
+        intrinsic_adjust_at,
+    })
 }
 
 pub(crate) struct CodegenMetadata {
@@ -428,6 +508,17 @@ pub(crate) fn build_function(
     let limit_var = limit_checks
         .step_ceiling
         .then(|| bcx.declare_var(types::I64));
+    // Intrinsic-call meter. A region that owns no intrinsic dispatch can neither
+    // change the count nor exceed the budget, so it materializes nothing and emits
+    // byte-identical code to an engine without this meter.
+    let region_has_intrinsics = program
+        .instruction_origins
+        .iter()
+        .any(|origin| origin.intrinsic_cost != 0);
+    let intrinsics_var =
+        (limit_checks.intrinsic && region_has_intrinsics).then(|| bcx.declare_var(types::I64));
+    let intrinsic_limit_var = (limit_checks.intrinsic_ceiling && region_has_intrinsics)
+        .then(|| bcx.declare_var(types::I64));
     // Roll-back cell for inlined-callee accounting. A bail inside an inlined region
     // resumes the interpreter at the caller's call instruction, which re-executes
     // the whole call, so the region's charge must not be reported. `steps_resume`
@@ -441,6 +532,7 @@ pub(crate) fn build_function(
         .any(|origin| origin.inlined);
     let _ = has_inlined_origins;
     let steps_resume_var = limit_checks.step.then(|| bcx.declare_var(types::I64));
+    let intrinsics_resume_var = intrinsics_var.map(|_| bcx.declare_var(types::I64));
     let cancel_addr_var = limit_checks.cancel.then(|| bcx.declare_var(ptr_ty));
     let tail_depth_var = program
         .code
@@ -453,20 +545,46 @@ pub(crate) fn build_function(
     if let Some(steps_var) = steps_var {
         let steps0 = bcx
             .ins()
-            .load(types::I64, MemFlags::trusted(), limits_ptr, 0);
+            .load(types::I64, MemFlags::trusted(), limits_ptr, LIMITS_STEPS);
         bcx.def_var(steps_var, steps0);
         if let Some(steps_resume_var) = steps_resume_var {
             bcx.def_var(steps_resume_var, steps0);
         }
         if let Some(limit_var) = limit_var {
-            let limit0 = bcx
-                .ins()
-                .load(types::I64, MemFlags::trusted(), limits_ptr, 8);
+            let limit0 = bcx.ins().load(
+                types::I64,
+                MemFlags::trusted(),
+                limits_ptr,
+                LIMITS_STEP_BUDGET,
+            );
             bcx.def_var(limit_var, limit0);
         }
     }
+    if let Some(intrinsics_var) = intrinsics_var {
+        let intrinsics0 = bcx.ins().load(
+            types::I64,
+            MemFlags::trusted(),
+            limits_ptr,
+            LIMITS_INTRINSIC_CALLS,
+        );
+        bcx.def_var(intrinsics_var, intrinsics0);
+        if let Some(intrinsics_resume_var) = intrinsics_resume_var {
+            bcx.def_var(intrinsics_resume_var, intrinsics0);
+        }
+        if let Some(intrinsic_limit_var) = intrinsic_limit_var {
+            let limit0 = bcx.ins().load(
+                types::I64,
+                MemFlags::trusted(),
+                limits_ptr,
+                LIMITS_INTRINSIC_BUDGET,
+            );
+            bcx.def_var(intrinsic_limit_var, limit0);
+        }
+    }
     if let Some(cancel_addr_var) = cancel_addr_var {
-        let caddr = bcx.ins().load(ptr_ty, MemFlags::trusted(), limits_ptr, 16);
+        let caddr = bcx
+            .ins()
+            .load(ptr_ty, MemFlags::trusted(), limits_ptr, LIMITS_CANCEL_ADDR);
         bcx.def_var(cancel_addr_var, caddr);
     }
     // Running per-site bail-id counter. Starts at 1 (0 is reserved = no bail);
@@ -624,13 +742,17 @@ pub(crate) fn build_function(
         .accounting_only()
         .then(|| step_block_costs(program, &is_leader))
         .flatten();
-    let block_charge_at = blocks.as_ref().map(|(charge, _)| charge);
-    let block_adjust_at = blocks.as_ref().map(|(_, adjust)| adjust);
+    let block_charge_at = blocks.as_ref().map(|blocks| &blocks.charge_at);
+    let block_adjust_at = blocks.as_ref().map(|blocks| &blocks.adjust_at);
+    let block_intrinsic_charge_at = blocks.as_ref().map(|blocks| &blocks.intrinsic_charge_at);
+    let block_intrinsic_adjust_at = blocks.as_ref().map(|blocks| &blocks.intrinsic_adjust_at);
     let segments =
         (limit_checks.any() && blocks.is_none()).then(|| step_segment_costs(program, &is_leader));
-    let control_cost_at = segments.as_ref().map(|(costs, _, _)| costs);
-    let segment_start_at = segments.as_ref().map(|(_, starts, _)| starts);
-    let segment_guard_cost_at = segments.as_ref().map(|(_, _, guards)| guards);
+    let control_cost_at = segments.as_ref().map(|segments| &segments.entry);
+    let segment_start_at = segments.as_ref().map(|segments| &segments.starts);
+    let segment_guard_cost_at = segments.as_ref().map(|segments| &segments.guard);
+    let intrinsic_cost_at = segments.as_ref().map(|segments| &segments.intrinsic_entry);
+    let intrinsic_guard_cost_at = segments.as_ref().map(|segments| &segments.intrinsic_guard);
     for &cold_ip in &program.cold_blocks {
         if let Some(block) = block_for[cold_ip as usize] {
             bcx.set_cold_block(block);
@@ -644,6 +766,7 @@ pub(crate) fn build_function(
     // indices stay in lock-step. A macro (not a closure) so the `&mut sites` borrow
     // lives only for the single `bail_if` call.
     let steps_adjust_at = |ip: usize| block_adjust_at.map_or(0, |adjust| adjust[ip]);
+    let intrinsics_adjust_at = |ip: usize| block_intrinsic_adjust_at.map_or(0, |adjust| adjust[ip]);
     // One shared description of where a bail goes and what it must publish. A
     // block-charged region hands every site the running counter and the limits cell
     // so the site can write its own exact resume count; the segment model leaves
@@ -653,6 +776,8 @@ pub(crate) fn build_function(
         safepoint_ptr,
         payload_ptr,
         steps: block_adjust_at.and(steps_var.map(|steps_var| (steps_var, limits_ptr))),
+        intrinsics: block_intrinsic_adjust_at
+            .and(intrinsics_var.map(|intrinsics_var| (intrinsics_var, limits_ptr))),
     };
     macro_rules! deopt {
         ($ip:expr) => {
@@ -667,6 +792,7 @@ pub(crate) fn build_function(
                 unconditional: false,
                 live_override: None,
                 steps_adjust: steps_adjust_at($ip),
+                intrinsics_adjust: intrinsics_adjust_at($ip),
             }
         };
         ($ip:expr, unconditional) => {
@@ -681,6 +807,7 @@ pub(crate) fn build_function(
                 unconditional: true,
                 live_override: None,
                 steps_adjust: steps_adjust_at($ip),
+                intrinsics_adjust: intrinsics_adjust_at($ip),
             }
         };
         ($ip:expr, live = $live:expr) => {
@@ -695,6 +822,7 @@ pub(crate) fn build_function(
                 unconditional: true,
                 live_override: Some($live),
                 steps_adjust: steps_adjust_at($ip),
+                intrinsics_adjust: intrinsics_adjust_at($ip),
             }
         };
     }
@@ -830,6 +958,17 @@ pub(crate) fn build_function(
             let charged = bcx.ins().iadd_imm(steps, i64::from(block_charge_at[i]));
             bcx.def_var(steps_var, charged);
         }
+        if let (Some(intrinsics_var), Some(block_intrinsic_charge_at)) =
+            (intrinsics_var, block_intrinsic_charge_at)
+            && is_leader[i]
+            && block_intrinsic_charge_at[i] != 0
+        {
+            let intrinsics = bcx.use_var(intrinsics_var);
+            let charged = bcx
+                .ins()
+                .iadd_imm(intrinsics, i64::from(block_intrinsic_charge_at[i]));
+            bcx.def_var(intrinsics_var, charged);
+        }
         // Publish the pre-reservation count at a precisely-resumable segment entry.
         // A poll or reservation bail below resumes the interpreter at this exact IP
         // having charged nothing for the segment. Inside an inlined callee region
@@ -843,6 +982,13 @@ pub(crate) fn build_function(
         {
             let steps = bcx.use_var(steps_var);
             bcx.def_var(steps_resume_var, steps);
+        }
+        if publish_resume
+            && let (Some(intrinsics_var), Some(intrinsics_resume_var)) =
+                (intrinsics_var, intrinsics_resume_var)
+        {
+            let intrinsics = bcx.use_var(intrinsics_var);
+            bcx.def_var(intrinsics_resume_var, intrinsics);
         }
         // Poll before reserving the segment. A pre-cancelled/expired activation
         // therefore resumes at the first unpaid source instruction, where the
@@ -913,6 +1059,36 @@ pub(crate) fn build_function(
                 bcx.def_var(steps_var, charged);
             }
         }
+        // The intrinsic-call meter rides the same segment boundaries: reserve the
+        // segment's whole intrinsic cost before its first source instruction, so a
+        // budget that does not fit resumes the interpreter at the exact first
+        // uncharged source instruction and the interpreter raises its own typed
+        // `IntrinsicBudgetExceeded`.
+        if let (Some(intrinsics_var), Some(intrinsic_cost_at)) = (intrinsics_var, intrinsic_cost_at)
+        {
+            let cost = intrinsic_cost_at[i];
+            if cost != 0 {
+                if let Some(intrinsic_limit_var) = intrinsic_limit_var {
+                    let intrinsics = bcx.use_var(intrinsics_var);
+                    let limit = bcx.use_var(intrinsic_limit_var);
+                    let remaining = bcx.ins().isub(limit, intrinsics);
+                    let required = bcx.ins().iconst(types::I64, i64::from(cost));
+                    let insufficient = bcx.ins().icmp(IntCC::SignedLessThan, remaining, required);
+                    let cont = bail_if(
+                        &mut bcx,
+                        insufficient,
+                        deopt_buffers,
+                        &vars,
+                        &mut next_id,
+                        deopt!(i),
+                    );
+                    bcx.switch_to_block(cont);
+                }
+                let intrinsics = bcx.use_var(intrinsics_var);
+                let charged = bcx.ins().iadd_imm(intrinsics, i64::from(cost));
+                bcx.def_var(intrinsics_var, charged);
+            }
+        }
         // Republish for a bail raised by the segment body. Only the segment's last
         // instruction can bail there, and the interpreter ticks that instruction
         // again when it resumes on it, so its own pre-charged cost is excluded.
@@ -929,6 +1105,20 @@ pub(crate) fn build_function(
                 bcx.ins().iadd_imm(steps, -i64::from(guard_cost))
             };
             bcx.def_var(steps_resume_var, resume);
+        }
+        if publish_resume
+            && let (Some(intrinsics_var), Some(intrinsics_resume_var), Some(intrinsic_cost_at)) =
+                (intrinsics_var, intrinsics_resume_var, intrinsic_cost_at)
+            && intrinsic_cost_at[i] != 0
+        {
+            let guard_cost = intrinsic_guard_cost_at.map_or(0, |guards| guards[i]);
+            let intrinsics = bcx.use_var(intrinsics_var);
+            let resume = if guard_cost == 0 {
+                intrinsics
+            } else {
+                bcx.ins().iadd_imm(intrinsics, -i64::from(guard_cost))
+            };
+            bcx.def_var(intrinsics_resume_var, resume);
         }
         match &program.code[i] {
             JitInstr::Nop => {}
@@ -1192,7 +1382,13 @@ pub(crate) fn build_function(
                 // interpreter then re-executes the whole call instruction.
                 if let Some(steps_var) = steps_var {
                     let s = bcx.use_var(steps_var);
-                    bcx.ins().store(MemFlags::trusted(), s, limits_ptr, 0);
+                    bcx.ins()
+                        .store(MemFlags::trusted(), s, limits_ptr, LIMITS_STEPS);
+                }
+                if let Some(intrinsics_var) = intrinsics_var {
+                    let s = bcx.use_var(intrinsics_var);
+                    bcx.ins()
+                        .store(MemFlags::trusted(), s, limits_ptr, LIMITS_INTRINSIC_CALLS);
                 }
                 if meta.direct_scalar_func_id.is_some() {
                     // Proven-infallible scalar leaves use their private direct
@@ -1336,10 +1532,22 @@ pub(crate) fn build_function(
                     // as the caller's running total; the next segment entry publishes
                     // it as the new precise-resume point.
                     if let Some(steps_var) = steps_var {
-                        let charged =
-                            bcx.ins()
-                                .load(types::I64, MemFlags::trusted(), limits_ptr, 0);
+                        let charged = bcx.ins().load(
+                            types::I64,
+                            MemFlags::trusted(),
+                            limits_ptr,
+                            LIMITS_STEPS,
+                        );
                         bcx.def_var(steps_var, charged);
+                    }
+                    if let Some(intrinsics_var) = intrinsics_var {
+                        let charged = bcx.ins().load(
+                            types::I64,
+                            MemFlags::trusted(),
+                            limits_ptr,
+                            LIMITS_INTRINSIC_CALLS,
+                        );
+                        bcx.def_var(intrinsics_var, charged);
                     }
                     let result = if meta.return_type == JitValueType::Float {
                         bcx.ins().stack_load(types::F64, out_slot, 0)
@@ -1645,7 +1853,13 @@ pub(crate) fn build_function(
                 // tick total native paid (no skipped/double count).
                 if let Some(steps_var) = steps_var {
                     let s = bcx.use_var(steps_var);
-                    bcx.ins().store(MemFlags::trusted(), s, limits_ptr, 0);
+                    bcx.ins()
+                        .store(MemFlags::trusted(), s, limits_ptr, LIMITS_STEPS);
+                }
+                if let Some(intrinsics_var) = intrinsics_var {
+                    let s = bcx.use_var(intrinsics_var);
+                    bcx.ins()
+                        .store(MemFlags::trusted(), s, limits_ptr, LIMITS_INTRINSIC_CALLS);
                 }
                 let one = bcx.ins().iconst(types::I8, 1);
                 bcx.ins().return_(&[one]);
@@ -1836,7 +2050,15 @@ pub(crate) fn build_function(
         && let Some(reported) = steps_resume_var.or(steps_var)
     {
         let s = bcx.use_var(reported);
-        bcx.ins().store(MemFlags::trusted(), s, limits_ptr, 0);
+        bcx.ins()
+            .store(MemFlags::trusted(), s, limits_ptr, LIMITS_STEPS);
+    }
+    if block_intrinsic_adjust_at.is_none()
+        && let Some(reported) = intrinsics_resume_var.or(intrinsics_var)
+    {
+        let s = bcx.use_var(reported);
+        bcx.ins()
+            .store(MemFlags::trusted(), s, limits_ptr, LIMITS_INTRINSIC_CALLS);
     }
     let deopt_status = bcx.ins().iconst(types::I8, JitStatus::Deopt as i64);
     bcx.ins().return_(&[deopt_status]);
@@ -1844,7 +2066,17 @@ pub(crate) fn build_function(
     bcx.switch_to_block(yielded);
     if let Some(steps_var) = steps_var {
         let steps = bcx.use_var(steps_var);
-        bcx.ins().store(MemFlags::trusted(), steps, limits_ptr, 0);
+        bcx.ins()
+            .store(MemFlags::trusted(), steps, limits_ptr, LIMITS_STEPS);
+    }
+    if let Some(intrinsics_var) = intrinsics_var {
+        let intrinsics = bcx.use_var(intrinsics_var);
+        bcx.ins().store(
+            MemFlags::trusted(),
+            intrinsics,
+            limits_ptr,
+            LIMITS_INTRINSIC_CALLS,
+        );
     }
     let yielded_status = bcx.ins().iconst(types::I8, JitStatus::Yielded as i64);
     bcx.ins().return_(&[yielded_status]);

@@ -710,3 +710,97 @@ fn receiver_spelling_suggestions_are_advisory_not_machine_applicable() {
     assert_eq!(fix["applicability"], "maybe-incorrect");
     assert!(fix["edit"].is_null(), "advice must carry no edit: {fix:#?}");
 }
+
+#[cfg(feature = "native-jit")]
+fn run_trusted_native_fixture(name: &str, source: &str) -> (bool, serde_json::Value) {
+    let bin = env!("CARGO_BIN_EXE_rss");
+    let temp = tempfile::tempdir().expect("temp dir should be creatable");
+    let path = temp.path().join(name);
+    fs::write(&path, source).expect("write trusted native fixture");
+    let output = Command::new(bin)
+        .args([
+            "run",
+            "--trusted-in-process",
+            "--native",
+            "--json",
+            path.to_str().expect("path is utf-8"),
+        ])
+        .output()
+        .expect("trusted native run should execute");
+    let report = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "trusted native run must emit an execution report ({error}):\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
+    (output.status.success(), report)
+}
+
+/// `--native` selects an accelerator, not a trust level: it keeps the same
+/// default runner limit profile the interpreter path runs under instead of
+/// replacing it with `RunLimits::unbounded_for_trusted_host()`. The profile's
+/// 10,000,000-step budget is the one limit a pure scalar loop can reach without
+/// allocating, and it is reachable only from inside generated code.
+#[cfg(feature = "native-jit")]
+#[test]
+fn trusted_native_execution_keeps_the_default_runner_step_budget() {
+    let source = "fn main() -> Int { let mut i = 0; let mut total = 0; while i < 100000000 { total = total + i * 3 - i / 2 + 7; i = i + 1 }; return total }\n";
+    let (success, report) = run_trusted_native_fixture("native-step-budget.rss", source);
+    assert!(!success, "an over-budget run must not report success");
+    assert_eq!(report["outcome"]["kind"], "failed");
+    assert_eq!(
+        report["outcome"]["reason"], "step_budget_exceeded",
+        "`--native` must terminate on the runner profile's step budget: {}",
+        report["outcome"]
+    );
+    assert_eq!(
+        report["usage"]["steps_consumed"], 10_000_001_u64,
+        "the reported step count must be the interpreter's, one past the budget"
+    );
+}
+
+/// A normal program must still complete, produce the interpreter's result, and
+/// actually reach the native tier under that same profile — the profile used to
+/// refuse every whole-function and OSR region because it arms
+/// `intrinsic_call_budget` and a non-default `max_depth`.
+#[cfg(feature = "native-jit")]
+#[test]
+fn trusted_native_execution_still_engages_under_the_default_runner_limits() {
+    let source = "fn main() -> Int { let mut i = 0; let mut total = 0; while i < 200000 { total = total + i * 3 - i / 2 + 7; i = i + 1 }; return total }\n";
+    let (success, native) = run_trusted_native_fixture("native-engages.rss", source);
+    assert!(
+        success,
+        "a normal program must complete: {}",
+        native["outcome"]
+    );
+    assert_eq!(native["telemetry"]["engine"]["kind"], "native");
+
+    let bin = env!("CARGO_BIN_EXE_rss");
+    let temp = tempfile::tempdir().expect("temp dir should be creatable");
+    let path = temp.path().join("native-engages-interpreted.rss");
+    fs::write(&path, source).expect("write interpreter fixture");
+    let output = Command::new(bin)
+        .args([
+            "run",
+            "--trusted-in-process",
+            "--json",
+            path.to_str().expect("path is utf-8"),
+        ])
+        .output()
+        .expect("trusted interpreter run should execute");
+    let interpreted: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("interpreter run emits a report");
+    assert_eq!(
+        native["outcome"], interpreted["outcome"],
+        "`--native` must not change the outcome"
+    );
+    assert_eq!(
+        native["usage"]["steps_consumed"], interpreted["usage"]["steps_consumed"],
+        "`--native` must report the interpreter's step count"
+    );
+    assert_eq!(
+        native["usage"]["intrinsic_calls"], interpreted["usage"]["intrinsic_calls"],
+        "`--native` must report the interpreter's intrinsic-call count"
+    );
+}

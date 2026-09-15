@@ -117,6 +117,7 @@ fn rejects_drifting_or_double_charged_instruction_origins() {
             source_ip: 0,
             resume_ip: 0,
             source_cost: 1,
+            intrinsic_cost: 0,
             inlined: false,
         },
     ];
@@ -540,6 +541,8 @@ fn region_exit_is_a_distinct_commit_capable_outcome() {
                 step_ceiling: true,
                 cancel: false,
                 deadline: false,
+                intrinsic: false,
+                intrinsic_ceiling: false,
             },
         )
         .expect("compile continuation region");
@@ -557,6 +560,8 @@ fn region_exit_is_a_distinct_commit_capable_outcome() {
             initial_steps: 0,
             step_budget: None,
             cancel: None,
+            initial_intrinsic_calls: 0,
+            intrinsic_budget: None,
         },
     );
     let NativeOutcome::Yield { exit_id } = outcome else {
@@ -594,6 +599,8 @@ fn deadline_control_polls_before_native_source_work() {
                 step_ceiling: true,
                 cancel: false,
                 deadline: true,
+                intrinsic: false,
+                intrinsic_ceiling: false,
             },
         )
         .expect("compile deadline-aware entry");
@@ -617,6 +624,8 @@ fn call_sessions_isolate_planned_yield_payloads() {
         step_ceiling: true,
         cancel: false,
         deadline: false,
+        intrinsic: false,
+        intrinsic_ceiling: false,
     };
     let make_region = |value| {
         ft(
@@ -648,6 +657,8 @@ fn call_sessions_isolate_planned_yield_payloads() {
         initial_steps: 0,
         step_budget: None,
         cancel: None,
+        initial_intrinsic_calls: 0,
+        intrinsic_budget: None,
     };
     let mut first_window = [0];
     let mut second_window = [0];
@@ -985,6 +996,7 @@ fn armed_osr_charges_explicit_source_cost_instead_of_jit_instruction_count() {
             source_ip: 0,
             resume_ip: 0,
             source_cost: 0,
+            intrinsic_cost: 0,
             inlined: false,
         },
         JitInstructionOrigin::identity(1),
@@ -992,6 +1004,7 @@ fn armed_osr_charges_explicit_source_cost_instead_of_jit_instruction_count() {
             source_ip: 2,
             resume_ip: 2,
             source_cost: 3,
+            intrinsic_cost: 0,
             inlined: false,
         },
         JitInstructionOrigin::identity(3),
@@ -999,6 +1012,7 @@ fn armed_osr_charges_explicit_source_cost_instead_of_jit_instruction_count() {
             source_ip: 4,
             resume_ip: 4,
             source_cost: 0,
+            intrinsic_cost: 0,
             inlined: false,
         },
     ];

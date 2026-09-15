@@ -395,6 +395,45 @@ pub struct RegionCallControls<'a> {
     pub initial_steps: i64,
     pub step_budget: Option<i64>,
     pub cancel: Option<&'a std::sync::atomic::AtomicBool>,
+    /// Interpreter intrinsic-dispatch count as of region entry, and the ceiling
+    /// generated code reserves against. `None` is encoded as `i64::MAX` in the
+    /// cell, which can never reject.
+    pub initial_intrinsic_calls: i64,
+    pub intrinsic_budget: Option<i64>,
+}
+
+/// The execution meters a limits-aware native activation hands back. Both are
+/// absolute interpreter-equivalent totals, not deltas.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RegionCallUsage {
+    pub steps: i64,
+    pub intrinsic_calls: i64,
+}
+
+impl RegionCallControls<'_> {
+    fn entry_usage(&self) -> RegionCallUsage {
+        RegionCallUsage {
+            steps: self.initial_steps,
+            intrinsic_calls: self.initial_intrinsic_calls,
+        }
+    }
+
+    fn cell(&self) -> [i64; 5] {
+        [
+            self.initial_steps,
+            self.step_budget.unwrap_or(i64::MAX),
+            self.cancel.map_or(0, |flag| flag as *const _ as i64),
+            self.initial_intrinsic_calls,
+            self.intrinsic_budget.unwrap_or(i64::MAX),
+        ]
+    }
+}
+
+fn cell_usage(limits: &[i64; 5]) -> RegionCallUsage {
+    RegionCallUsage {
+        steps: limits[0],
+        intrinsic_calls: limits[3],
+    }
 }
 
 struct NativeCallInvocation<'a> {
@@ -419,6 +458,12 @@ pub struct RegionCompileControls {
     pub step_ceiling: bool,
     pub cancel: bool,
     pub deadline: bool,
+    /// Count interpreter intrinsic dispatches into the limits cell. Like `step`
+    /// this is the reported usage fact and never rejects on its own.
+    pub intrinsic: bool,
+    /// Also reserve each charge against the cell's intrinsic budget. Implies
+    /// `intrinsic`; set it only when a ceiling is actually armed.
+    pub intrinsic_ceiling: bool,
 }
 
 impl RegionCompileControls {
@@ -426,7 +471,12 @@ impl RegionCompileControls {
     /// emits byte-identical code to an engine without limit accounting, and its
     /// native-to-native edges may use the frame-free direct scalar ABI.
     pub fn any(self) -> bool {
-        self.step || self.step_ceiling || self.cancel || self.deadline
+        self.step
+            || self.step_ceiling
+            || self.cancel
+            || self.deadline
+            || self.intrinsic
+            || self.intrinsic_ceiling
     }
 }
 
@@ -438,6 +488,8 @@ impl From<RegionCompileControls> for LimitChecks {
             step_ceiling: value.step_ceiling,
             cancel: value.cancel,
             deadline: value.deadline,
+            intrinsic: value.intrinsic || value.intrinsic_ceiling,
+            intrinsic_ceiling: value.intrinsic_ceiling,
         }
     }
 }
@@ -981,6 +1033,8 @@ impl NativeModule {
                 step_ceiling: step_limit,
                 cancel: cancel_armed,
                 deadline: false,
+                intrinsic: false,
+                intrinsic_ceiling: false,
             },
             false,
         )
@@ -1436,6 +1490,8 @@ impl NativeModule {
             initial_steps,
             step_budget.unwrap_or(i64::MAX),
             cancel.map_or(0, |flag| flag as *const _ as i64),
+            0,
+            i64::MAX,
         ];
         let outcome = self.call_inner(
             &mut session,
@@ -1463,7 +1519,7 @@ impl NativeModule {
         args: &mut [i64],
         lens: &[i64],
         controls: RegionCallControls<'_>,
-    ) -> (NativeOutcome, i64) {
+    ) -> (NativeOutcome, RegionCallUsage) {
         self.call_with_host_ctx_step_cancel_in_session(
             &mut NativeCallSession::new(),
             id,
@@ -1480,21 +1536,17 @@ impl NativeModule {
         args: &mut [i64],
         lens: &[i64],
         controls: RegionCallControls<'_>,
-    ) -> (NativeOutcome, i64) {
+    ) -> (NativeOutcome, RegionCallUsage) {
         let Some(func) = self.funcs.get(id.index).filter(|_| id.module_id == self.id) else {
-            return (anonymous_deopt(), controls.initial_steps);
+            return (anonymous_deopt(), controls.entry_usage());
         };
         if func.reg_types.iter().any(|ty| is_flat_type(*ty)) {
-            return (anonymous_deopt(), controls.initial_steps);
+            return (anonymous_deopt(), controls.entry_usage());
         }
         if func.limit_checks.cancel && controls.cancel.is_none() {
-            return (anonymous_deopt(), controls.initial_steps);
+            return (anonymous_deopt(), controls.entry_usage());
         }
-        let mut limits = [
-            controls.initial_steps,
-            controls.step_budget.unwrap_or(i64::MAX),
-            controls.cancel.map_or(0, |flag| flag as *const _ as i64),
-        ];
+        let mut limits = controls.cell();
         let outcome = self.call_inner(
             session,
             id,
@@ -1509,14 +1561,14 @@ impl NativeModule {
         if matches!(outcome, NativeOutcome::Yield { .. })
             && !copy_session_yield_registers(func, session, args)
         {
-            return (anonymous_deopt(), limits[0]);
+            return (anonymous_deopt(), cell_usage(&limits));
         }
-        (outcome, limits[0])
+        (outcome, cell_usage(&limits))
     }
 
     /// Run with a host context (see [`call_with_host_ctx`](Self::call_with_host_ctx))
     /// and a non-null native limit accounting limits cell. `limits_ptr` must point at a live, immovable
-    /// `[i64; 3]` = `[steps, step_budget, cancel_addr]` for the call's duration: an
+    /// `[i64; 5]` = `[steps, step_budget, cancel_addr, intrinsic_calls, intrinsic_budget]` for the call's duration: an
     /// armed OSR variant reads `step_budget`/`cancel_addr`, accumulates into and writes
     /// back `steps`. Unarmed variants ignore it (so [`call`](Self::call) passes null).
     /// # Safety
@@ -1722,7 +1774,7 @@ impl NativeModule {
         lens: &[i64],
         flat_args: &mut [IndexedFlatBufferArg<'_>],
         controls: RegionCallControls<'_>,
-    ) -> (NativeOutcome, i64) {
+    ) -> (NativeOutcome, RegionCallUsage) {
         self.call_with_indexed_flat_args_and_controls_in_session_at_depth(
             &mut NativeCallSession::new(),
             id,
@@ -1741,15 +1793,15 @@ impl NativeModule {
         lens: &[i64],
         flat_args: &mut [IndexedFlatBufferArg<'_>],
         controls: RegionCallControls<'_>,
-    ) -> (NativeOutcome, i64) {
+    ) -> (NativeOutcome, RegionCallUsage) {
         let Some(func) = self.funcs.get(id.index).filter(|_| id.module_id == self.id) else {
-            return (anonymous_deopt(), controls.initial_steps);
+            return (anonymous_deopt(), controls.entry_usage());
         };
         if !func.requires_limits {
-            return (anonymous_deopt(), controls.initial_steps);
+            return (anonymous_deopt(), controls.entry_usage());
         }
         if func.limit_checks.cancel && controls.cancel.is_none() {
-            return (anonymous_deopt(), controls.initial_steps);
+            return (anonymous_deopt(), controls.entry_usage());
         }
         let entry_types = if func.osr {
             &func.reg_types
@@ -1762,23 +1814,19 @@ impl NativeModule {
                 continue;
             }
             let Some(proof) = flat_args.get_mut(proof_cursor) else {
-                return (anonymous_deopt(), controls.initial_steps);
+                return (anonymous_deopt(), controls.entry_usage());
             };
             if proof.index != index
                 || !flat_proof_matches(&mut proof.value, ty, args.get(index), lens.get(index))
             {
-                return (anonymous_deopt(), controls.initial_steps);
+                return (anonymous_deopt(), controls.entry_usage());
             }
             proof_cursor += 1;
         }
         if proof_cursor != flat_args.len() {
-            return (anonymous_deopt(), controls.initial_steps);
+            return (anonymous_deopt(), controls.entry_usage());
         }
-        let mut limits = [
-            controls.initial_steps,
-            controls.step_budget.unwrap_or(i64::MAX),
-            controls.cancel.map_or(0, |flag| flag as *const _ as i64),
-        ];
+        let mut limits = controls.cell();
         let outcome = self.call_inner(
             session,
             id,
@@ -1790,7 +1838,7 @@ impl NativeModule {
                 limits_ptr: limits.as_mut_ptr(),
             },
         );
-        (outcome, limits[0])
+        (outcome, cell_usage(&limits))
     }
 
     /// The per-function [`DeoptMap`] computed at compile time, or `None` if `id`

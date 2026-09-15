@@ -1325,3 +1325,511 @@ fn native_kernel_corpus_reports_the_interpreter_step_count_under_a_budget() {
         drift.join("\n")
     );
 }
+
+/// Intrinsic-heavy shapes whose natively executed regions must charge
+/// `intrinsic_calls` exactly.
+///
+/// Generated code runs an intrinsic both as a host helper (`String.len`,
+/// `Map.get`) and as a direct lowering with no helper at all (`List.len` becomes
+/// `ListLenDirect`, a flat-list `List.get` becomes a direct load), so there is no
+/// single helper-side charge point. Each native item instead carries an
+/// `intrinsic_cost` beside its `source_cost`, charged at the same block/segment
+/// points into the call-owned limits cell.
+struct IntrinsicParityCase {
+    name: &'static str,
+    source: &'static str,
+    /// Whether the shape reaches generated code with the production tiering
+    /// defaults (automatic OSR only). A shape that only tiers up under eager OSR
+    /// still has to report the interpreter's counts; it just cannot pin
+    /// engagement on the default path.
+    reaches_native_by_default: bool,
+}
+
+const INTRINSIC_PARITY_CASES: &[IntrinsicParityCase] = &[
+    // `List.len` lowers directly (`ListLenDirect`) and the flat `List.get` lowers
+    // to a direct load: neither passes through a host helper, so a helper-side
+    // charge would miss both.
+    IntrinsicParityCase {
+        name: "intrinsic-direct-list.rss",
+        reaches_native_by_default: true,
+        source: "fn hot(values: List<Int>, limit: Int) -> Int { let mut i = 0; let mut total = 0; let n = List.len<Int>(list: values); while i < limit { total = total + List.len<Int>(list: values) + List.get<Int>(list: values, index: i % n); i = i + 1 }; return total } fn main() -> Int { local values = List.new<Int>(); List.push<Int>(list: mut values, value: 5); List.push<Int>(list: mut values, value: 7); List.push<Int>(list: mut values, value: 11); List.push<Int>(list: mut values, value: 13); return hot(values, limit: 1000) }",
+    },
+    // `String.len` runs as a read-only host helper inside the loop.
+    IntrinsicParityCase {
+        name: "intrinsic-string-helper.rss",
+        reaches_native_by_default: true,
+        source: "fn hot(text: String, limit: Int) -> Int { let mut i = 0; let mut total = 0; while i < limit { total = total + String.len(value: text); i = i + 1 }; return total } fn main() -> Int { return hot(text: \"rsscript\", limit: 1000) }",
+    },
+    // An `Int`-keyed map get plus the collection length helpers: the map get also
+    // bills the constant key-hash unit on top of its own tick, so the step and
+    // intrinsic meters must stay independent.
+    IntrinsicParityCase {
+        name: "intrinsic-map-get.rss",
+        // Automatic OSR does not pick this loop up; eager OSR does.
+        reaches_native_by_default: false,
+        source: "fn hot(table: Map<Int, Int>, limit: Int) -> Int { let mut i = 0; let mut total = 0; while i < limit { total = total + Map.len<Int, Int>(map: table); match Map.get<Int, Int>(map: table, key: i % 8) { Some(value) => { total = total + value } None => { total = total - 1 } }; i = i + 1 }; return total } fn main() -> Int { local table = Map<Int, Int>.new(); let mut k = 0; while k < 8 { Map.insert<Int, Int>(map: mut table, key: k, value: k * 2); k = k + 1 }; return hot(table, limit: 1000) }",
+    },
+    // The intrinsic sits inside a leaf callee the inliner dissolves, so the
+    // spliced item — not the caller's call instruction — owns the dispatch.
+    IntrinsicParityCase {
+        name: "intrinsic-inlined-leaf.rss",
+        reaches_native_by_default: true,
+        source: "fn width(text: String) -> Int { return String.len(value: text) } fn hot(text: String, limit: Int) -> Int { let mut i = 0; let mut total = 0; while i < limit { total = total + width(text); i = i + 1 }; return total } fn main() -> Int { return hot(text: \"rsscript\", limit: 1000) }",
+    },
+];
+
+/// Intrinsic budgets chosen to land before, inside and past each shape's native
+/// regions, including the exact boundary values, so an off-by-one in reservation
+/// or deopt roll-back changes the reported count.
+const INTRINSIC_PARITY_BUDGETS: &[u64] = &[
+    1, 2, 3, 12, 99, 100, 101, 511, 512, 513, 999, 1_000, 1_001, 1_002, 1_999, 2_000, 2_001,
+    1_000_000,
+];
+
+#[test]
+fn native_intrinsic_accounting_matches_the_interpreter_under_an_armed_budget() {
+    for case in INTRINSIC_PARITY_CASES {
+        let mut native_regions = 0_u64;
+        for &budget in INTRINSIC_PARITY_BUDGETS {
+            let limits = RunLimits::unbounded_for_trusted_host().with_intrinsic_call_budget(budget);
+            let (interpreter, native) = accounting_pair(
+                case.name,
+                case.source,
+                limits,
+                NativeJitOptions {
+                    cost_model: NativeCostModel::Off,
+                    collect_telemetry: true,
+                    ..NativeJitOptions::default()
+                },
+            );
+            assert_eq!(
+                native.outcome(),
+                interpreter.outcome(),
+                "{} at intrinsic budget {budget} must terminate for the same reason as the interpreter",
+                case.name
+            );
+            assert_eq!(
+                native.usage.intrinsic_calls, interpreter.usage.intrinsic_calls,
+                "{} at intrinsic budget {budget} must report the interpreter's intrinsic count",
+                case.name
+            );
+            assert_eq!(
+                native.usage.steps_consumed, interpreter.usage.steps_consumed,
+                "{} at intrinsic budget {budget} must still report the interpreter's step count",
+                case.name
+            );
+            native_regions = native_regions.saturating_add(native_region_entries(&native));
+        }
+        assert_eq!(
+            native_regions > 0,
+            case.reaches_native_by_default,
+            "{} native engagement under an armed intrinsic budget changed",
+            case.name
+        );
+    }
+}
+
+#[test]
+fn native_intrinsic_accounting_matches_the_interpreter_at_region_boundaries() {
+    // The same shapes with a step budget armed as well, so the region uses the
+    // segment-reservation model rather than block charging and both meters must
+    // agree at the same segment boundary.
+    for case in INTRINSIC_PARITY_CASES {
+        for &(steps, intrinsics) in &[
+            (100_u64, 100_u64),
+            (1_000, 50),
+            (10_000, 1_000),
+            (10_000_000, 1_001),
+            (10_000_000, 10_000_000),
+        ] {
+            let limits = RunLimits::unbounded_for_trusted_host()
+                .with_step_budget(steps)
+                .with_intrinsic_call_budget(intrinsics);
+            let (interpreter, native) = accounting_pair(
+                case.name,
+                case.source,
+                limits,
+                NativeJitOptions {
+                    cost_model: NativeCostModel::Off,
+                    collect_telemetry: true,
+                    ..NativeJitOptions::default()
+                },
+            );
+            assert_eq!(
+                native.outcome(),
+                interpreter.outcome(),
+                "{} at step {steps}/intrinsic {intrinsics} must match the interpreter outcome",
+                case.name
+            );
+            assert_eq!(
+                native.usage.intrinsic_calls, interpreter.usage.intrinsic_calls,
+                "{} at step {steps}/intrinsic {intrinsics} must report the interpreter's intrinsic count",
+                case.name
+            );
+            assert_eq!(
+                native.usage.steps_consumed, interpreter.usage.steps_consumed,
+                "{} at step {steps}/intrinsic {intrinsics} must report the interpreter's step count",
+                case.name
+            );
+        }
+    }
+}
+
+#[test]
+fn native_intrinsic_accounting_matches_the_interpreter_under_eager_osr() {
+    for case in INTRINSIC_PARITY_CASES {
+        for &budget in &[100_u64, 1_000, 1_001, 1_000_000] {
+            let limits = RunLimits::unbounded_for_trusted_host().with_intrinsic_call_budget(budget);
+            let (interpreter, native) = accounting_pair(
+                case.name,
+                case.source,
+                limits,
+                NativeJitOptions {
+                    cost_model: NativeCostModel::Off,
+                    eager_osr: true,
+                    collect_telemetry: true,
+                    ..NativeJitOptions::default()
+                },
+            );
+            assert_eq!(
+                native.outcome(),
+                interpreter.outcome(),
+                "{} under eager OSR at intrinsic budget {budget} must match the interpreter outcome",
+                case.name
+            );
+            assert_eq!(
+                native.usage.intrinsic_calls, interpreter.usage.intrinsic_calls,
+                "{} under eager OSR at intrinsic budget {budget} must report the interpreter's intrinsic count",
+                case.name
+            );
+            assert_eq!(
+                native.usage.steps_consumed, interpreter.usage.steps_consumed,
+                "{} under eager OSR at intrinsic budget {budget} must report the interpreter's steps",
+                case.name
+            );
+        }
+    }
+}
+
+#[test]
+fn an_unbounded_native_run_reports_the_interpreter_intrinsic_call_count() {
+    // `intrinsic_calls` is a reported usage fact, not only a ceiling. A natively
+    // executed region used to report only the intrinsics the interpreter happened
+    // to run outside generated code.
+    for case in INTRINSIC_PARITY_CASES {
+        for eager_osr in [false, true] {
+            let (interpreter, native) = accounting_pair(
+                case.name,
+                case.source,
+                RunLimits::unbounded_for_trusted_host(),
+                NativeJitOptions {
+                    cost_model: NativeCostModel::Off,
+                    eager_osr,
+                    collect_telemetry: true,
+                    ..NativeJitOptions::default()
+                },
+            );
+            assert_eq!(
+                native.outcome(),
+                interpreter.outcome(),
+                "{} (eager_osr={eager_osr}) must terminate like the interpreter with nothing armed",
+                case.name
+            );
+            assert_eq!(
+                native.usage.intrinsic_calls, interpreter.usage.intrinsic_calls,
+                "{} (eager_osr={eager_osr}) must report the interpreter's intrinsic count with nothing armed",
+                case.name
+            );
+            if eager_osr || case.reaches_native_by_default {
+                assert!(
+                    native_region_entries(&native) > 0
+                        || native_telemetry(&native).native_bails > 0,
+                    "{} (eager_osr={eager_osr}) must actually reach generated code",
+                    case.name
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn an_armed_intrinsic_call_budget_no_longer_refuses_native_dispatch() {
+    // The gate used to be unconditional: `native_preemption_controls_supported`
+    // and `osr_execution_controls_supported` both refused every whole-function and
+    // OSR region while `intrinsic_call_budget` was armed, which left the default
+    // runner profile with no native tier at all.
+    let case = &INTRINSIC_PARITY_CASES[0];
+    let limits = RunLimits::unbounded_for_trusted_host().with_intrinsic_call_budget(1_000_000);
+    let (_, native) = accounting_pair(
+        case.name,
+        case.source,
+        limits,
+        NativeJitOptions {
+            cost_model: NativeCostModel::Off,
+            collect_telemetry: true,
+            ..NativeJitOptions::default()
+        },
+    );
+    let telemetry = native_telemetry(&native);
+    assert!(
+        telemetry.native_calls + telemetry.osr_entries > 0,
+        "an armed intrinsic call budget must still admit whole-function or OSR dispatch"
+    );
+}
+
+#[test]
+fn a_custom_max_depth_no_longer_refuses_whole_function_native_entry() {
+    // `attempt_native` used to refuse every whole-function region whenever
+    // `max_depth` differed from the VM's `DEFAULT_MAX_DEPTH`, because the internal
+    // ABI was said to carry only a host-stack cap. It carries the logical limit
+    // too — `RegionCallControls::logical_depth` forwards it exactly as OSR entry
+    // already did — so entry now declines only when the configured limit is within
+    // reach of the region's static frame bound.
+    //
+    // A recursion that exceeds a small limit must still terminate with the
+    // interpreter's reason and count, and an ordinary hot loop must still tier up
+    // under a non-default limit.
+    let deep_recursion = "fn down(n: Int) -> Int { if n <= 0 { return 0 }; return 1 + down(n: n - 1) } fn main() -> Int { return down(n: 5000) }";
+    for &max_depth in &[4_usize, 16, 64, 256] {
+        let limits = RunLimits::unbounded_for_trusted_host().with_max_depth(max_depth);
+        let (interpreter, native) = accounting_pair(
+            "custom-max-depth-recursion.rss",
+            deep_recursion,
+            limits,
+            NativeJitOptions {
+                cost_model: NativeCostModel::Off,
+                collect_telemetry: true,
+                ..NativeJitOptions::default()
+            },
+        );
+        assert_eq!(
+            native.outcome(),
+            interpreter.outcome(),
+            "a recursion past max_depth {max_depth} must terminate with the interpreter's reason"
+        );
+        assert_eq!(
+            native.usage.steps_consumed, interpreter.usage.steps_consumed,
+            "a recursion past max_depth {max_depth} must report the interpreter's step count"
+        );
+    }
+
+    // The hot loop is a leaf, so its static frame bound is its own frame plus the
+    // dissolved-leaf allowance; a 256-frame profile leaves it far out of reach and
+    // native entry must happen.
+    let hot = "fn hot(limit: Int) -> Int { let mut i = 0; let mut total = 0; while i < limit { total = total + i * 3 - i / 2 + 7; i = i + 1 }; return total } fn main() -> Int { return hot(limit: 3000) }";
+    let (interpreter, native) = accounting_pair(
+        "custom-max-depth-hot-loop.rss",
+        hot,
+        RunLimits::unbounded_for_trusted_host().with_max_depth(256),
+        NativeJitOptions {
+            cost_model: NativeCostModel::Off,
+            collect_telemetry: true,
+            ..NativeJitOptions::default()
+        },
+    );
+    assert_eq!(native.outcome(), interpreter.outcome());
+    assert_eq!(
+        native.usage.steps_consumed, interpreter.usage.steps_consumed,
+        "a hot loop under a non-default max_depth must report the interpreter's step count"
+    );
+    let telemetry = native_telemetry(&native);
+    assert!(
+        telemetry.native_calls + telemetry.osr_entries > 0,
+        "a non-default max_depth must no longer refuse whole-function or OSR dispatch"
+    );
+}
+
+/// The limit profile `rss run --trusted-in-process` applies, mirrored from
+/// `RunnerLimitsV1::default()` through `runner::runner_limits`. `--native`
+/// selects an accelerator, not a trust level, so it now runs under exactly this
+/// profile instead of replacing it with
+/// `RunLimits::unbounded_for_trusted_host()`.
+fn default_runner_limit_profile() -> RunLimits {
+    RunLimits::bounded()
+        .with_max_depth(256)
+        .with_step_budget(10_000_000)
+        .with_allocation_budget(256 * 1024 * 1024)
+        .with_live_memory_limit(128 * 1024 * 1024)
+        .with_output_budget(1024 * 1024)
+        .with_intrinsic_call_budget(1_000_000)
+        .with_provider_call_budget(10_000)
+        .with_resource_limit(4096)
+        .with_deadline(MonotonicDeadline::after(Duration::from_millis(60_000)))
+}
+
+#[test]
+fn the_default_runner_limit_profile_still_admits_native_dispatch() {
+    // Every gate in this profile used to refuse: `intrinsic_call_budget` refused
+    // whole-function and OSR dispatch outright, and a `max_depth` of 256 refused
+    // whole-function entry because it differs from the VM's `DEFAULT_MAX_DEPTH`.
+    // That is why the CLI replaced the profile wholesale; with both gates closed
+    // it no longer has to.
+    for (name, source) in [
+        (
+            "runner-profile-scalar-loop.rss",
+            "fn main() -> Int { let mut i = 0; let mut total = 0; while i < 200000 { total = total + i * 3 - i / 2 + 7; i = i + 1 }; return total }",
+        ),
+        (
+            "runner-profile-repeated-entry.rss",
+            "fn hot(limit: Int) -> Int { let mut i = 0; let mut total = 0; while i < limit { total = total + i * 3 - i / 2 + 7; i = i + 1 }; return total } fn main() -> Int { let mut out = 0; let mut r = 0; while r < 50 { out = hot(limit: 200); r = r + 1 }; return out }",
+        ),
+        (
+            "runner-profile-intrinsic-loop.rss",
+            "fn main() -> Int { let text = \"rsscript\"; let mut i = 0; let mut total = 0; while i < 20000 { total = total + String.len(value: text); i = i + 1 }; return total }",
+        ),
+    ] {
+        let (interpreter, native) = accounting_pair(
+            name,
+            source,
+            default_runner_limit_profile(),
+            NativeJitOptions {
+                cost_model: NativeCostModel::Off,
+                collect_telemetry: true,
+                ..NativeJitOptions::default()
+            },
+        );
+        assert_eq!(
+            native.outcome(),
+            interpreter.outcome(),
+            "{name} must terminate like the interpreter under the default runner profile"
+        );
+        assert_eq!(
+            native.usage.steps_consumed, interpreter.usage.steps_consumed,
+            "{name} must report the interpreter's step count under the default runner profile"
+        );
+        assert_eq!(
+            native.usage.intrinsic_calls, interpreter.usage.intrinsic_calls,
+            "{name} must report the interpreter's intrinsic count under the default runner profile"
+        );
+        let telemetry = native_telemetry(&native);
+        assert!(
+            telemetry.native_calls + telemetry.osr_entries > 0,
+            "{name} must reach whole-function or OSR dispatch under the default runner profile"
+        );
+    }
+}
+
+#[test]
+fn the_default_runner_limit_profile_still_stops_an_over_budget_native_run() {
+    let source = "fn hot(limit: Int) -> Int { let mut i = 0; let mut total = 0; while i < limit { total = total + i * 3 - i / 2 + 7; i = i + 1 }; return total } fn main() -> Int { return hot(limit: 100000000) }";
+    let (interpreter, native) = accounting_pair(
+        "runner-profile-over-budget.rss",
+        source,
+        default_runner_limit_profile(),
+        NativeJitOptions {
+            cost_model: NativeCostModel::Off,
+            collect_telemetry: true,
+            ..NativeJitOptions::default()
+        },
+    );
+    assert_eq!(
+        native.termination_reason(),
+        TerminationReason::StepBudgetExceeded
+    );
+    assert_eq!(native.outcome(), interpreter.outcome());
+    assert_eq!(
+        native.usage.steps_consumed,
+        interpreter.usage.steps_consumed
+    );
+}
+
+/// OSR and continuation regions whose rewrites replace or delete the intrinsic
+/// dispatch the interpreter still runs.
+///
+/// The string and bytes length-law folds turn `String.len`/`Bytes.len` into
+/// arithmetic on operand byte lengths and delete the now-dead allocation, so the
+/// transformed stream carries no intrinsic dispatch at all. The intrinsic meter
+/// therefore reads the *source* instruction each item is charged for, not the
+/// transformed one it lowers: derived from the transformed stream these three
+/// shapes report 47, 92 and 3 intrinsic calls against the interpreter's 3002,
+/// 6002 and 3003.
+///
+/// Each shape puts its loop in a function that also writes output, so
+/// whole-function native entry declines and the loop can only reach generated
+/// code through OSR or a continuation.
+const OSR_INTRINSIC_PARITY_CASES: &[(&str, &str)] = &[
+    (
+        "osr-string-length-fold.rss",
+        "fn main() -> Unit { let mut i = 0; let mut total = 0; while i < 3000 { total = total + String.len(value: String.concat(left: \"ab\", right: \"cde\")); i = i + 1 }; Output.write(message: String.from_int(value: total)); return Unit }",
+    ),
+    (
+        "osr-string-from-int-fold.rss",
+        "fn main() -> Unit { let mut i = 0; let mut total = 0; while i < 3000 { total = total + String.len(value: String.from_int(value: i)); i = i + 1 }; Output.write(message: String.from_int(value: total)); return Unit }",
+    ),
+    (
+        "osr-map-len-helper.rss",
+        "fn main() -> Unit { local table = Map<Int, Int>.new(); Map.insert<Int, Int>(map: mut table, key: 1, value: 2); let mut i = 0; let mut total = 0; while i < 3000 { total = total + Map.len<Int, Int>(map: table); i = i + 1 }; Output.write(message: String.from_int(value: total)); return Unit }",
+    ),
+];
+
+#[test]
+fn a_rewritten_osr_region_reports_the_interpreter_intrinsic_call_count() {
+    for (name, source) in OSR_INTRINSIC_PARITY_CASES {
+        for eager_osr in [false, true] {
+            for limits in [
+                RunLimits::unbounded_for_trusted_host(),
+                RunLimits::unbounded_for_trusted_host().with_intrinsic_call_budget(1_500),
+                RunLimits::unbounded_for_trusted_host()
+                    .with_intrinsic_call_budget(1_000_000)
+                    .with_step_budget(10_000_000),
+            ] {
+                let (interpreter, native) = accounting_pair(
+                    name,
+                    source,
+                    limits,
+                    NativeJitOptions {
+                        cost_model: NativeCostModel::Off,
+                        eager_osr,
+                        collect_telemetry: true,
+                        ..NativeJitOptions::default()
+                    },
+                );
+                assert_eq!(
+                    native.outcome(),
+                    interpreter.outcome(),
+                    "{name} (eager_osr={eager_osr}) must terminate like the interpreter"
+                );
+                assert_eq!(
+                    native.usage.intrinsic_calls, interpreter.usage.intrinsic_calls,
+                    "{name} (eager_osr={eager_osr}) must report the interpreter's intrinsic count"
+                );
+                assert_eq!(
+                    native.usage.steps_consumed, interpreter.usage.steps_consumed,
+                    "{name} (eager_osr={eager_osr}) must report the interpreter's step count"
+                );
+                assert_eq!(
+                    native.stdout, interpreter.stdout,
+                    "{name} (eager_osr={eager_osr}) must produce the interpreter's output"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn the_rewritten_osr_cases_reach_generated_code_outside_whole_function_entry() {
+    // Pins what makes the case above meaningful: these loops are entered through
+    // OSR or a continuation, not through whole-function translation, which
+    // accounts through a different pipeline.
+    for (name, source) in OSR_INTRINSIC_PARITY_CASES {
+        let (_, native) = accounting_pair(
+            name,
+            source,
+            RunLimits::unbounded_for_trusted_host(),
+            NativeJitOptions {
+                cost_model: NativeCostModel::Off,
+                collect_telemetry: true,
+                ..NativeJitOptions::default()
+            },
+        );
+        let telemetry = native_telemetry(&native);
+        assert_eq!(
+            telemetry.native_calls, 0,
+            "{name} must not reach whole-function native entry"
+        );
+        assert!(
+            telemetry.osr_entries + telemetry.continuation_entries > 0,
+            "{name} must reach generated code through OSR or a continuation"
+        );
+    }
+}

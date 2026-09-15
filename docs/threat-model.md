@@ -31,13 +31,17 @@ provider, native plugin, JIT, or generated program trustworthy.
   interpreter instead of running unmetered. Allocation controls are admitted only
   with a per-region proof. An armed Provider-call budget no longer refuses native
   dispatch, because a Provider call is a barrier generated code never lowers and
-  the interpreter charges every one of them. The intrinsic-call budget is still
-  interpreter-owned and still refuses native dispatch, and the internal ABI still
-  carries a host-stack cap rather than the language's `max_depth`, so
-  `rss run --native` continues to select the explicit unbounded trusted-host
-  limits profile: the default runner profile arms both and would leave that flag
-  with no native tier. See `docs/spec/native-jit-contract.md` for the parity
-  status table.
+  the interpreter charges every one of them. The intrinsic-call budget no longer
+  refuses it either: every native item carries an explicit intrinsic cost beside
+  its source cost, charged into the same call-owned limits cell, so a natively
+  executed region reports the interpreter's exact `intrinsic_calls` armed or not
+  and stops with the interpreter's reason under an armed budget. The logical
+  `max_depth` is forwarded to whole-function entry as well as OSR, and entry
+  declines when the configured limit is within reach of the region's static frame
+  bound. `rss run --native` therefore keeps the default runner limit profile
+  rather than replacing it with the unbounded trusted-host profile. See
+  `docs/spec/native-jit-contract.md` for the parity status table and the
+  remaining gaps.
 - Review tooling reports evidence; authority stays with the host.
 
 ## Untrusted and generated input

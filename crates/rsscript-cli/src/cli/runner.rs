@@ -14,10 +14,10 @@ use rss_process_guard::{
     spawn_guarded_child_strict_with_cgroup, verify_strict_child_context_with,
 };
 use rsscript_runner_protocol::{
-    ExecutionOutcomeV2, ExecutionReportV2, MAX_RESPONSE_BYTES, RunnerLimitsV1, RunnerProfileV1,
-    RunnerRequestV1, RunnerResponseV1, RunnerTerminationV1, VersionedExecutionReport, read_request,
-    read_response, validate_response_artifact, validate_response_profile, write_request,
-    write_response,
+    ExecutionEngineTelemetryV2, ExecutionOutcomeV2, ExecutionReportV2, MAX_RESPONSE_BYTES,
+    RunnerLimitsV1, RunnerProfileV1, RunnerRequestV1, RunnerResponseV1, RunnerTerminationV1,
+    VersionedExecutionReport, read_request, read_response, validate_response_artifact,
+    validate_response_profile, write_request, write_response,
 };
 #[cfg(feature = "native-jit")]
 use rsscript_sdk::experimental::native_jit::NativeJitOptions;
@@ -110,11 +110,15 @@ pub(crate) fn run_trusted_in_process(
     let request = ExecutionRequest::new(program_args.iter().copied())
         .limits(runner_limits(&RunnerLimitsV1::default()))
         .trace(TracePolicy::MetadataOnly);
+    // `--native` selects an accelerator, not a trust level: it keeps the same
+    // default runner limit profile the interpreter path runs under. The native
+    // tier accounts source steps and intrinsic dispatches into the call-owned
+    // limits cell, polls cancellation and the deadline, forwards the logical
+    // `max_depth`, and declines any region whose cost it cannot attribute exactly,
+    // so the profile is enforced identically on both engines.
     #[cfg(feature = "native-jit")]
     let request = if native {
-        request
-            .limits(RunLimits::unbounded_for_trusted_host())
-            .native_jit(NativeJitOptions::default())
+        request.native_jit(NativeJitOptions::default())
     } else {
         request
     };
@@ -124,10 +128,61 @@ pub(crate) fn run_trusted_in_process(
         request
     };
     let report = linked.execute(request);
-    let report = serde_json::to_value(report)
-        .and_then(serde_json::from_value::<ExecutionReportV2>)
+    let mut value = serde_json::to_value(report).expect("execution report serializes");
+    let engine = take_engine_telemetry_for_the_runner_contract(&mut value);
+    let mut report = serde_json::from_value::<ExecutionReportV2>(value)
         .expect("execution report matches the runner's typed v2 contract");
+    report.telemetry.engine = engine;
     finish_report(report, admitted.module_digest(), json)
+}
+
+/// Project the in-process report's engine telemetry onto the runner's typed v2
+/// contract, replacing it in `report` with the payload-free interpreter variant.
+///
+/// Two things make this a build step rather than a plain reparse. The in-process
+/// report carries the VM's full native diagnostic counter set while
+/// `ExecutionEngineTelemetryV2::Native` carries a seven-counter summary and
+/// denies unknown fields. And that variant's nanosecond counters are `u128`,
+/// which serde's internally-tagged enum buffer cannot deserialize at all — the
+/// variant can only be constructed, never parsed. The isolated runner never hits
+/// either problem because its child does not select the native tier.
+fn take_engine_telemetry_for_the_runner_contract(
+    report: &mut serde_json::Value,
+) -> ExecutionEngineTelemetryV2 {
+    fn counter(engine: &serde_json::Map<String, serde_json::Value>, key: &str) -> u64 {
+        engine
+            .get(key)
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+    }
+    fn nanos(engine: &serde_json::Map<String, serde_json::Value>, key: &str) -> u128 {
+        engine
+            .get(key)
+            .and_then(serde_json::Value::as_u64)
+            .map_or(0, u128::from)
+    }
+    let Some(slot) = report
+        .get_mut("telemetry")
+        .and_then(|telemetry| telemetry.get_mut("engine"))
+    else {
+        return ExecutionEngineTelemetryV2::Interpreter;
+    };
+    let engine = std::mem::replace(slot, serde_json::json!({ "kind": "interpreter" }));
+    let Some(engine) = engine
+        .as_object()
+        .filter(|engine| engine.get("kind").and_then(serde_json::Value::as_str) == Some("native"))
+    else {
+        return ExecutionEngineTelemetryV2::Interpreter;
+    };
+    ExecutionEngineTelemetryV2::Native {
+        considered: counter(engine, "considered"),
+        compiled: counter(engine, "compiled"),
+        native_calls: counter(engine, "native_calls"),
+        native_bails: counter(engine, "native_bails"),
+        osr_entries: counter(engine, "osr_entries"),
+        compile_nanos: nanos(engine, "compile_nanos"),
+        run_nanos: nanos(engine, "run_nanos"),
+    }
 }
 
 fn build_bundle(path: &str) -> Result<ArtifactBundle, String> {
