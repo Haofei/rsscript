@@ -26,6 +26,7 @@ Example
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import re
 import shutil
@@ -192,25 +193,35 @@ def extract_code(reply: str) -> str | None:
 CHECK_LOCK = threading.Lock()
 
 
-def run_check(source_path: Path, task: dict) -> tuple[bool, list[dict]]:
-    command = [
-        "cargo",
-        "run",
-        "-q",
-        "-p",
-        "rsscript-cli",
-        "--bin",
-        "rss",
-        "--",
-        "check",
-        "--json",
-        str(source_path),
-    ]
+def run_check(source_path: Path, task: dict, rss: str | None = None) -> tuple[bool, list[dict]]:
+    """Check one candidate, returning (no errors, diagnostics).
+
+    `rss` names a prebuilt binary. Prefer it: `cargo run` rebuilds whenever the
+    workspace changes, so a run that spans an edit is checked by two different
+    compilers and its transcripts stop being comparable with each other.
+    """
+    if rss:
+        command = [rss, "check", "--json", str(source_path)]
+    else:
+        command = [
+            "cargo",
+            "run",
+            "-q",
+            "-p",
+            "rsscript-cli",
+            "--bin",
+            "rss",
+            "--",
+            "check",
+            "--json",
+            str(source_path),
+        ]
     for path in interface_paths(task):
         command += ["--interface", str(path)]
     # `cargo run` takes a workspace lock; serialise so parallel sampling does
-    # not turn into a queue of blocked builds.
-    with CHECK_LOCK:
+    # not turn into a queue of blocked builds. A prebuilt binary needs neither.
+    lock = CHECK_LOCK if not rss else contextlib.nullcontext()
+    with lock:
         completed = subprocess.run(
             command, capture_output=True, text=True, cwd=ROOT, check=False
         )
@@ -310,7 +321,7 @@ def sample_task(task: dict, mode: str, args, out_dir: Path) -> dict:
         return {"task_id": task_id, "status": "no_code_block"}
 
     source_path.write_text(code)
-    ok, diagnostics = run_check(source_path, task)
+    ok, diagnostics = run_check(source_path, task, args.rss)
     # Each turn keeps its own source and the exact rows the next turn is shown.
     # Without them a repair transcript can say a class persisted but not whether
     # the model was offered a replacement and declined it.
@@ -357,7 +368,7 @@ def sample_task(task: dict, mode: str, args, out_dir: Path) -> dict:
                 )
                 break
             source_path.write_text(code)
-            ok, diagnostics = run_check(source_path, task)
+            ok, diagnostics = run_check(source_path, task, args.rss)
             (task_dir / f"turn{turns + 1}.rss").write_text(code)
             transcript.append(
                 {
@@ -417,6 +428,11 @@ def main() -> int:
         "--out",
         default=None,
         help="sample root (default: evals/samples/<model>)",
+    )
+    parser.add_argument(
+        "--rss",
+        default=None,
+        help="path to a prebuilt `rss` binary to check with (pins the checker)",
     )
     parser.add_argument(
         "--dump-prompt",
