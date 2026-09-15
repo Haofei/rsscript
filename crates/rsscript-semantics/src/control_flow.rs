@@ -8,13 +8,26 @@ use rsscript_syntax::ast::{
 use std::collections::HashSet;
 
 /// Construct the canonical diagnostic for a resolved non-exhaustive `match`.
-pub fn non_exhaustive_match_diagnostic(expression: bool, span: Span) -> Diagnostic {
+/// The number of witness rows the exhaustiveness checker will enumerate for one
+/// structured scrutinee before it gives up and demands a `_` (spec §6.7).
+pub const MAX_PATTERN_WITNESSES: usize = 512;
+
+/// Diagnose a `match` the checker cannot prove exhaustive.
+///
+/// `witness_cap_exceeded` says the verdict came from the enumeration cap rather
+/// than from a genuinely uncovered case; the note is the difference between "you
+/// forgot an arm" and "this scrutinee is too wide to enumerate".
+pub fn non_exhaustive_match_diagnostic(
+    expression: bool,
+    span: Span,
+    witness_cap_exceeded: bool,
+) -> Diagnostic {
     let subject = if expression {
         "match expression"
     } else {
         "match statement"
     };
-    Diagnostic::error(
+    let diagnostic = Diagnostic::error(
         code::NON_EXHAUSTIVE_MATCH,
         format!("{subject} is not exhaustive."),
         span,
@@ -22,8 +35,19 @@ pub fn non_exhaustive_match_diagnostic(expression: bool, span: Span) -> Diagnost
     )
     .with_cause(
         "Supported match statements must cover `Some`/`None`, `Ok`/`Err`, all sum type variants, or include `_`.",
-    )
-    .with_fix(
+    );
+    if witness_cap_exceeded {
+        return diagnostic
+            .with_cause(format!(
+                "The scrutinee's finite-domain fields produce more than {MAX_PATTERN_WITNESSES} witness rows, which is the checker's enumeration cap, so exhaustiveness was not proven rather than disproven. A `_` arm is required even if the arms already cover every case."
+            ))
+            .with_fix(
+                "add_wildcard_arm",
+                "Add a final `_` arm; the scrutinee is too wide for the checker to enumerate.",
+                "manual",
+            );
+    }
+    diagnostic.with_fix(
         "add_missing_arm",
         "Add the missing variant arm or a final `_` fallback.",
         "manual",
@@ -1332,12 +1356,51 @@ mod tests {
             length: 1,
         };
         assert_eq!(
-            non_exhaustive_match_diagnostic(false, span.clone()).code,
+            non_exhaustive_match_diagnostic(false, span.clone(), false).code,
             code::NON_EXHAUSTIVE_MATCH
         );
         assert_eq!(
-            non_exhaustive_match_diagnostic(true, span).code,
+            non_exhaustive_match_diagnostic(true, span, false).code,
             code::NON_EXHAUSTIVE_MATCH
+        );
+    }
+
+    #[test]
+    fn the_witness_cap_is_named_in_the_diagnostic_when_it_forced_the_verdict() {
+        let span = rsscript_diagnostics::Span {
+            file: "match.rss".to_owned(),
+            line: 1,
+            column: 1,
+            length: 1,
+        };
+        let capped = non_exhaustive_match_diagnostic(false, span.clone(), true);
+        assert!(
+            capped
+                .causes
+                .iter()
+                .any(|cause| cause.contains(&MAX_PATTERN_WITNESSES.to_string())),
+            "{:?}",
+            capped.causes
+        );
+        assert!(
+            capped
+                .fixes
+                .iter()
+                .any(|fix| fix.kind == "add_wildcard_arm")
+        );
+
+        let ordinary = non_exhaustive_match_diagnostic(false, span, false);
+        assert!(
+            ordinary
+                .causes
+                .iter()
+                .all(|cause| !cause.contains("enumeration cap"))
+        );
+        assert!(
+            ordinary
+                .fixes
+                .iter()
+                .any(|fix| fix.kind == "add_missing_arm")
         );
     }
 

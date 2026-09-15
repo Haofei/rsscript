@@ -1,0 +1,17 @@
+// Two `Bool` fields produce four witness rows, well under the 512-row cap,
+// so the checker enumerates the product and proves the four literal arms
+// cover it without a `_`.
+
+struct Pair {
+    left: Bool,
+    right: Bool
+}
+
+fn describe(p: read Pair) -> Int {
+    match p {
+        Pair { left: true, right: true } => { return 3 }
+        Pair { left: true, right: false } => { return 2 }
+        Pair { left: false, right: true } => { return 1 }
+        Pair { left: false, right: false } => { return 0 }
+    }
+}

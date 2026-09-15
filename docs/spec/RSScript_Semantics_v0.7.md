@@ -795,9 +795,19 @@ to `__Tuple2(item0: a, item1: b)` and `(T, U)` to `__Tuple2<T, U>`;
 `expand_tuple_destructuring` turns `let (a, b) = e` into a temporary plus
 `.itemN` projections.
 
-Because the checker recognises a generic type variable only as a single
-uppercase letter, tuple type parameters are `A`, `B`, `C`, …, capping tuple
-arity at 26.
+`desugar.rs::tuple_type_param` names element `i`'s type parameter
+`(b'A' + i) as char`, so the parameters are `A`, `B`, `C`, … . Past `Z` that
+arithmetic produces characters that are not identifiers at all (`[`, `\`, `]`,
+`^`, …).
+
+The front end does **not** cap tuple arity, and earlier drafts of this document
+were wrong to say it caps at 26: substitution is by declared parameter name, not
+by spelling, so element types still resolve correctly above 26 — `(Int, …, Int,
+String)` at arity 64 still reports `RS0208` against the right element. What the
+generated names do mean is that **arity above 26 must not be relied on**: the
+synthetic parameter names stop being valid identifiers, so nothing downstream of
+the checker is expected to handle them. Treat 26 as the supported ceiling and the
+front end's silence above it as an accident, not a contract.
 
 **Accepted**
 
@@ -922,6 +932,28 @@ looks like one, or an operand that is a type name rather than a value, is
 | `&& \|\|` | `Bool` | `Bool` |
 
 A mismatch is `RS0210`.
+
+#### `Int` arithmetic traps; it does not wrap
+
+`+`, `-`, `*`, `/`, and `%` on `Int` are **checked**. The VM evaluates them with
+Rust's `checked_add`/`checked_sub`/`checked_mul`/`checked_div`/`checked_rem`
+(`crates/rsscript-vm/src/reg_vm/value_ops.rs::eval_numeric_binary`), and on
+overflow raises the language-level runtime error
+`integer <operation> overflow: <lhs> and <rhs> exceed the Int range`
+(`reg_vm/mod.rs::int_overflow_error`) rather than wrapping or panicking the host.
+Division and modulo by zero are the same kind of runtime error
+(`integer division by zero`, `integer modulo by zero`). `Int` is 64-bit signed,
+so the trapping range is `i64`.
+
+This is a *runtime* rule: the front end does not reject an expression that will
+overflow, and there is no compile-time constant evaluation to catch it. A program
+that wants wrapping must say so with `Math.wrapping_add` and friends
+(`stdlib/math/math.rssi`).
+
+Float arithmetic is IEEE-754 and does not trap: `+`, `-`, `*`, `/` on `Float` are
+the plain Rust operators, so overflow yields an infinity and `0.0 / 0.0` yields
+`NaN`. `%` on `Float` is rejected by the VM. This is the runtime counterpart of
+`Float` having no `Eq`/`Ord`/`Hashable` row (§2.1).
 
 **Rejected — `RS0210`**
 
@@ -3775,6 +3807,18 @@ is chosen, every losing arm's task is **cancelled** and reaped
 (`cancel_select_losers`). Cancellation drains a cancelled task's lexical resource
 scopes, including when the task is parked.
 
+**Tie-breaking is by source order.** When more than one arm has finished by the
+time the `select` is resolved, the winner is the finished arm with the **lowest
+arm index** — the one written first. `resolve_wait` picks it with
+`handles.iter().enumerate().find(|(_, h)| … done.is_some())`, which scans the arm
+handles in declaration order, so the choice is deterministic and does not depend
+on completion timing, task ids, or hashing. The winning arm's index is what the
+`select` writes to its winner register.
+
+Being deterministic is not the same as being a priority: an arm that is *not*
+ready never wins over one that is. Source order only decides between arms that
+are already ready at the same resolution point.
+
 **Accepted**
 
 ```rsscript
@@ -4066,13 +4110,24 @@ Guaranteed (`docs/spec/RSScript_Execution_Spec_v0.1.md`,
   `Result`/`Option` contract.
 * **Deadlines are monotonic.** `MonotonicDeadline` is an `Instant`, not a wall
   clock.
+* **`select` tie-breaking is by source order.** Among arms that have finished at
+  the moment the `select` resolves, the earliest-written arm wins (§9.4). This
+  is a guarantee, not an implementation accident.
+* **Execution is single-threaded and cooperative.** `run_scheduler` drives one
+  task at a time from a FIFO ready queue (`VecDeque`, `push_back`/`pop_front`);
+  a task runs until it suspends or completes. A newly created task is pushed to
+  the back of the ready queue, so sibling `async let` children *start* in
+  declaration order.
 
 Explicitly **not** guaranteed, and *unspecified* at the language level:
 
-* **Scheduling order.** Nothing specifies which ready child runs first, whether
-  scheduling is fair, or in what order sibling `async let` children start.
-* **`select` tie-breaking.** When two arms are ready simultaneously, which one
-  wins is unspecified.
+* **Wake order after a park.** `satisfy_waiters` scans the task table, which is
+  a `HashMap`, so when one event makes several parked tasks runnable at once the
+  order in which they are woken is not defined. Only the *start* order of tasks
+  and the FIFO ready queue are stable; a program must not depend on which of
+  several simultaneously-unblocked tasks resumes first.
+* **Fairness.** Nothing bounds how long a ready task may wait, and a task that
+  never suspends never yields.
 * **Parallelism.** Nothing in the language says whether children run on separate
   OS threads or are interleaved on one. Purity and parallelism are inferred from
   validated source or supplied by provider metadata.
@@ -4357,27 +4412,30 @@ and finding no enforcing code.
 
 ### 12.1 Genuinely unspecified
 
-* **`main`'s signature.** The checker imposes no constraint (§4.9). Which return
-  types the runner accepts, and how program arguments reach `main`, is a runner
-  concern.
-* **Scheduling order, fairness, and parallelism.** Nothing specifies which ready
-  child runs first, whether sibling `async let` children start in declaration
-  order, or whether children run in parallel (§9.9).
-* **`select` tie-breaking** when two arms are ready at once (§9.9).
+* **Wake order after a park.** When one event unblocks several parked tasks at
+  once, the order in which they resume is not defined (§9.9). Task *start* order
+  and the FIFO ready queue are stable; this is not.
+* **Fairness.** Nothing bounds how long a ready task may wait, and a task that
+  never suspends never yields (§9.9).
+* **Parallelism.** Nothing in the language says whether children run on separate
+  OS threads or are interleaved on one; the register VM interleaves on one, but
+  that is an implementation fact, not a contract (§9.9).
 * **Cancellation latency.** Cooperative; depends on the provider descriptor
   (§9.9).
-* **Evaluation order of call arguments.** Not stated anywhere in the front end.
-* **Integer overflow behaviour** for `+`/`-`/`*` on `Int`. `Math.wrapping_add`
-  and friends exist, which implies the plain operators are *not* wrapping, but
-  the front end does not say what they are.
-* **`Float` semantics** beyond its row in the builtin protocol table (§2.1):
-  rounding mode, `NaN` payload propagation, and the behaviour of `Float`
-  formatting are runtime concerns the front end does not constrain.
+* **`Float` semantics** beyond its row in the builtin protocol table (§2.1) and
+  its non-trapping arithmetic (§2.13): rounding mode, `NaN` payload propagation,
+  and `Float` formatting are runtime concerns the front end does not constrain.
+* **Tuple arity above 26.** Not capped and not supported; the generated type
+  parameter names stop being identifiers past `Z` (§2.9).
 
-### 12.1.1 Specified since v0.7: cross-module privacy
+### 12.1.1 Specified since v0.7
 
-`pub` is now enforced across module boundaries — `RS0019`,
-`module_isolation.rs::cross_module_privacy_diagnostics`. The rule:
+Rules this document previously reported as *unspecified* and that are in fact
+deterministic. Each is now stated normatively in its own section; they are
+collected here so a reader of an older draft can find what changed.
+
+**Cross-module privacy — `RS0019`** (new;
+`module_isolation.rs::cross_module_privacy_diagnostics`):
 
 > A declaration without `pub` is visible only inside the module that declares
 > it. Another module may neither `use` it nor name it through a
@@ -4400,6 +4458,59 @@ type aliases, and constants — every declaration form that carries `is_public`
 `protocol` declarations carry no visibility in the AST — `ProtocolDecl` has only
 a name and a span — and protocol names are global rather than module-scoped, so
 there is no private protocol for the rule to reject.
+
+**Evaluation order of call arguments**
+(`crates/rsscript-semantics/src/call_binding.rs::CallBinding::bind`, consumed by
+`crates/rsscript-lowering/src/mir/lowerer_calls.rs`, which sorts the lowered
+arguments by `evaluation_index`):
+
+> A call's arguments are evaluated left to right **as written at the call site**,
+> not in parameter-declaration order. Precisely: the receiver of a receiver-call
+> is evaluated first; then every explicit argument in source order, whatever
+> parameter each one names; then each omitted defaulted parameter's default
+> expression, in declaration order.
+
+Because labelled arguments may be written in any order, this is observable:
+`f(second: g(), first: h())` evaluates `g()` before `h()` even though `first` is
+declared first. The binding's `by_parameter` view is the ABI layout; its
+`evaluation_order` view is this language contract, and lowering consumes the
+latter.
+
+**`Int` overflow** (`reg_vm/value_ops.rs::eval_numeric_binary`): checked, not
+wrapping. `+`, `-`, `*`, `/`, `%` on `Int` trap on overflow with a language-level
+runtime error, and `/`/`%` by zero likewise; nothing wraps and nothing panics the
+host (§2.13).
+
+**`select` tie-breaking** (`reg_vm/scheduler.rs::resolve_wait`): the finished arm
+with the lowest arm index — the one written first — wins. Deterministic, and
+independent of completion timing, task ids, and hashing (§9.4). Read from the
+implementation; the scheduler's module tests cover cancellation but not yet this
+rule.
+
+**The `main` contract** (`reg_vm/scheduler.rs::run_program`,
+`reg_vm/executable.rs`). The checker still imposes no signature constraint on
+`main` and a file with no `main` still checks clean (§4.9), but the runner's
+contract is not unspecified:
+
+> An entry point must declare **either no parameters, or exactly one parameter
+> whose type is `List<String>`**, which receives the program arguments. Any
+> other arity, or a single parameter of any other type, is the runtime error
+> "entry point `main` must accept either no parameters or one `List<String>`
+> parameter". The return type is unconstrained: the runner returns `main`'s
+> value, and the execution report carries it as a typed wire value when the
+> declared return type parses as one and omits it otherwise
+> (`executable.rs::main_result_wire_value`). A program with no `main` fails at
+> run time with "cannot resolve function `main`".
+
+`Arguments.*` (`stdlib/arguments/arguments.rssi`) takes an explicit
+`args: read List<String>` precisely so argument access is never ambient: the
+`List<String>` parameter is the only way arguments enter a program.
+
+**The exhaustiveness witness cap** (§6.7) is unchanged at 512 rows, but it is no
+longer silent: when the cap is what forced the verdict, `RS0021` says so as an
+explicit note and offers a `_` arm rather than implying a missing case
+(`control_flow.rs::non_exhaustive_match_diagnostic`,
+`rsscript_semantics::MAX_PATTERN_WITNESSES`).
 
 ### 12.2 Gaps — rules the design implies but the checker does not enforce
 
@@ -4425,11 +4536,10 @@ These are findings for the maintainer, not features.
 * **`Type.method` dispatch is by inferred receiver type**, not by method name,
   so a receiver whose type is unknown makes `x.m()` unresolvable — `RS0206`
   (§4.2).
-* **Tuple arity is capped at 26** because the checker recognises a generic type
-  variable only as a single uppercase letter (§2.9).
 * **The exhaustiveness witness product is capped at 512 rows.** A struct or sum
-  with many finite-domain fields silently becomes "not provably exhaustive" and
-  needs an explicit `_` (§6.7).
+  with many finite-domain fields becomes "not provably exhaustive" and needs an
+  explicit `_`. The diagnostic now says when the cap is the reason (§12.1.1), so
+  this is a surprise about the shape of the rule, not about a silent one (§6.7).
 
 ### 12.4 Documentation drift found while writing this reference
 

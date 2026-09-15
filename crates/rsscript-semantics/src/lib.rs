@@ -139,7 +139,7 @@ pub use completion::{
     semantic_completion_with_interface_sources, semantic_completion_with_interfaces,
 };
 pub use control_flow::{
-    bool_condition_diagnostic, conflicting_pattern_field_effect_diagnostic,
+    MAX_PATTERN_WITNESSES, bool_condition_diagnostic, conflicting_pattern_field_effect_diagnostic,
     definite_assignment_diagnostics, duplicate_pattern_field_diagnostic, for_iterable_diagnostic,
     function_fallthrough_diagnostics, loop_control_flow_diagnostics,
     managed_pattern_field_effect_diagnostic, match_expression_arm_type_diagnostics,
