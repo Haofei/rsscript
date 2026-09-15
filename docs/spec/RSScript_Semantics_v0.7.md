@@ -2751,33 +2751,43 @@ fn area(shape: Shape) -> Int {
 }
 ```
 
-### 6.5 Scrutinee effects on structured patterns
+### 6.5 Scrutinee effects on patterns
 
 A `match` may carry a scrutinee effect: `match read x { … }`,
-`match mut x { … }`, `match take x { … }`. The rule
-(`control_flow.rs::structured_match_effect_diagnostic`, `RS0202`):
+`match mut x { … }`, `match take x { … }`.
 
-> A **structured** pattern — one that projects a field place, i.e. a struct
-> pattern, a positional variant pattern with bindings, or a list pattern —
-> requires an explicit scrutinee effect. Literal patterns, bare variant names,
-> plain bindings, and wildcards do not project a place and are outside the rule.
+> **An omitted scrutinee effect is `read`**, for every pattern form. This is the
+> same rule as the call site (§4.6, "a bare argument *is* `read`"): `match x`
+> and `match read x` are the same match, exactly as `f(bag: b)` and
+> `f(bag: read b)` are the same call.
 
-Additional per-field rules in the same family:
+The rule is uniform across pattern forms. A variant pattern that binds a payload
+(`Some(n)`) and a struct pattern that binds a field (`Point { x }`) project the
+same kind of place, so they answer to the same rule: under a `read` scrutinee a
+Copy field is bound by copy and a non-Copy field is bound as a read view, and
+neither form needs the effect spelled. Until v0.7 the struct and list forms
+demanded an explicit effect (`RS0202`) while the variant form did not; the
+demand was purely syntactic — the per-field rules below already treated an
+omitted effect as `read` — so it has been removed.
+
+What still constrains a pattern is the per-field effect, and those rules are
+unchanged:
 
 | Rule | Diagnostic |
 | --- | --- |
-| a field pattern requesting `mut`/`take` on a **managed class** value | `managed_pattern_field_effect_diagnostic` |
-| a field effect stronger than the scrutinee effect | `weakened_pattern_field_effect_diagnostic` |
+| a field pattern requesting `mut`/`take` on a **managed class** value | `managed_pattern_field_effect_diagnostic`, `RS0310` |
+| a field effect stronger than the scrutinee effect (spelled or defaulted `read`) | `weakened_pattern_field_effect_diagnostic`, `RS0310` |
 | the same field projected twice when either projection mutates or takes | `conflicting_pattern_field_effect_diagnostic` |
 | the same field listed twice | `duplicate_pattern_field_diagnostic` |
-| a field name not declared by the type | `unknown_pattern_field_diagnostic` |
-| declared fields omitted without `..` | `omitted_pattern_fields_diagnostic` |
+| a field name not declared by the type | `unknown_pattern_field_diagnostic`, `RS0025` |
+| declared fields omitted without `..` | `omitted_pattern_fields_diagnostic`, `RS0209` |
 
-Note the asymmetry that catches people out: `match value { Some(n) => … }` on an
-`Option<Int>` is fine without an effect, but `match point { Point { x } => … }`
-is `RS0202`.
+Field effects are monotonic: a field may never request more authority than the
+scrutinee provides. So `match point { Point { x: mut a } => … }` is `RS0310` —
+the scrutinee defaulted to `read` — and writing `match mut point` makes it legal
+(`crates/rsscript-semantics/src/checks/body/semantics.rs::check_pattern_field_effects`).
 
-**Rejected — `RS0202`**
+**Accepted** — the two pattern forms behave the same way
 
 ```rsscript
 struct Point {
@@ -2788,6 +2798,28 @@ struct Point {
 fn describe(point: read Point) -> Int {
     match point {
         Point { x, y } => { return x + y }
+    }
+}
+
+fn pick(value: Option<Int>) -> Int {
+    match value {
+        Some(n) => { return n }
+        None => { return 0 }
+    }
+}
+```
+
+**Rejected — `RS0310`** — a field asking for more than the scrutinee gives
+
+```rsscript
+struct Point {
+    x: Int,
+    y: Int
+}
+
+fn bump(point: mut Point) -> Int {
+    match point {
+        Point { x: mut a, y } => { return y }
     }
 }
 ```
@@ -4367,9 +4399,6 @@ These are findings for the maintainer, not features.
   `retains(n: Int)` is `RS0007`.
 * **`Float` is `Clone` but not `Eq`, not `Ord`, and not `Hashable`** (§2.1).
   Every other builtin scalar satisfies all four.
-* **Structured patterns need a scrutinee effect, variant patterns do not.**
-  `match value { Some(n) => … }` is fine; `match point { Point { x } => … }` is
-  `RS0202` (§6.5).
 * **`Type.method` dispatch is by inferred receiver type**, not by method name,
   so a receiver whose type is unknown makes `x.m()` unresolvable — `RS0206`
   (§4.2).

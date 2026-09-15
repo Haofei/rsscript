@@ -1,0 +1,44 @@
+// An omitted `match` scrutinee effect is `read`, for every pattern form (spec
+// §6.5): a struct pattern, a list pattern, and a variant pattern that binds a
+// payload all project the same kind of place, so none of them has to spell it.
+
+struct Point {
+    x: Int,
+    y: Int
+}
+
+struct Label {
+    text: String
+}
+
+fn describe(point: read Point) -> Int {
+    match point {
+        Point { x, y } => { return x + y }
+    }
+}
+
+fn describe_explicit(point: read Point) -> Int {
+    match read point {
+        Point { x, y } => { return x + y }
+    }
+}
+
+fn title_length(label: read Label) -> Int {
+    match label {
+        Label { text } => { return String.len(value: text) }
+    }
+}
+
+fn head(values: read List<Int>) -> Int {
+    match values {
+        [first, ..rest] => { return first }
+        [] => { return 0 }
+    }
+}
+
+fn pick(value: Option<Int>) -> Int {
+    match value {
+        Some(n) => { return n }
+        None => { return 0 }
+    }
+}

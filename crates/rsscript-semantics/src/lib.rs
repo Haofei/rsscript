@@ -146,8 +146,8 @@ pub use control_flow::{
     match_guard_mutation_diagnostic, match_literal_type_diagnostic, match_pattern_type_diagnostic,
     match_scrutinee_diagnostic, match_variant_family_diagnostic, missing_return_value_diagnostics,
     non_exhaustive_match_diagnostic, omitted_pattern_fields_diagnostic,
-    structured_match_effect_diagnostic, unknown_pattern_field_diagnostic,
-    variant_pattern_arity_diagnostic, weakened_pattern_field_effect_diagnostic,
+    unknown_pattern_field_diagnostic, variant_pattern_arity_diagnostic,
+    weakened_pattern_field_effect_diagnostic,
 };
 pub use database::{
     AnalysisResult, CompilationSession, CompilationSessionStats, FrontendCompletion,
