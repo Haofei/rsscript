@@ -227,7 +227,15 @@ def run_check(source_path: Path, task: dict) -> tuple[bool, list[dict]]:
     return not errors, diagnostics
 
 
-def compact_diagnostics(diagnostics: list[dict]) -> str:
+def diagnostic_rows(diagnostics: list[dict]) -> list[dict]:
+    """The error rows a repair turn is shown, and the transcript records.
+
+    `fixes` keeps each fix's applicability and its concrete edit, not only its
+    title. A machine-applicable fix already carries the exact replacement text
+    and the span it belongs at; forwarding only the prose title made the model
+    re-derive an edit the compiler had already computed, and made the
+    transcript unable to answer whether a suggestion was taken.
+    """
     rows = []
     for diagnostic in diagnostics:
         if diagnostic.get("severity") != "error":
@@ -240,10 +248,30 @@ def compact_diagnostics(diagnostics: list[dict]) -> str:
                 "line": (diagnostic.get("primary_span") or {}).get("line"),
                 "label": (diagnostic.get("primary_span") or {}).get("label"),
                 "causes": diagnostic.get("causes"),
-                "fixes": [f.get("title") for f in diagnostic.get("fixes") or []],
+                "fixes": [
+                    {
+                        "title": fix.get("title"),
+                        "applicability": fix.get("applicability"),
+                        "replacement": (fix.get("edit") or {}).get("replacement"),
+                        "replace_line": ((fix.get("edit") or {}).get("span") or {}).get(
+                            "line"
+                        ),
+                        "replace_column": (
+                            (fix.get("edit") or {}).get("span") or {}
+                        ).get("column"),
+                        "replace_length": (
+                            (fix.get("edit") or {}).get("span") or {}
+                        ).get("length"),
+                    }
+                    for fix in diagnostic.get("fixes") or []
+                ],
             }
         )
-    return json.dumps(rows, indent=2)
+    return rows
+
+
+def compact_diagnostics(diagnostics: list[dict]) -> str:
+    return json.dumps(diagnostic_rows(diagnostics), indent=2)
 
 
 # ---------------------------------------------------------------------------
@@ -283,12 +311,18 @@ def sample_task(task: dict, mode: str, args, out_dir: Path) -> dict:
 
     source_path.write_text(code)
     ok, diagnostics = run_check(source_path, task)
+    # Each turn keeps its own source and the exact rows the next turn is shown.
+    # Without them a repair transcript can say a class persisted but not whether
+    # the model was offered a replacement and declined it.
+    (task_dir / "turn1.rss").write_text(code)
     transcript.append(
         {
             "turn": 1,
             "duration_ms": duration_ms,
             "check_ok": ok,
             "codes": sorted({d["code"] for d in diagnostics if d.get("severity") == "error"}),
+            "source": "turn1.rss",
+            "diagnostics": diagnostic_rows(diagnostics),
         }
     )
 
@@ -324,6 +358,7 @@ def sample_task(task: dict, mode: str, args, out_dir: Path) -> dict:
                 break
             source_path.write_text(code)
             ok, diagnostics = run_check(source_path, task)
+            (task_dir / f"turn{turns + 1}.rss").write_text(code)
             transcript.append(
                 {
                     "turn": turns + 1,
@@ -336,6 +371,8 @@ def sample_task(task: dict, mode: str, args, out_dir: Path) -> dict:
                             if d.get("severity") == "error"
                         }
                     ),
+                    "source": f"turn{turns + 1}.rss",
+                    "diagnostics": diagnostic_rows(diagnostics),
                 }
             )
 
