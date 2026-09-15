@@ -171,27 +171,64 @@ accounting segment rather than by one instruction.
 
 1. **OSR origins carry no inline accounting.** `native_jit_origins`
    (`crates/rsscript-vm/src/reg_vm/native/translate/jit_post.rs`) derives cost
-   from `source_ip` uniqueness, and the OSR pass chain in `RegVm::build_osr_plan`
-   (`crates/rsscript-vm/src/reg_vm/tier/osr_plan_builder.rs`) composes ip maps
-   across passes without a cost vector. Needed: thread `NativeInlineAccounting`
-   through that chain the way `NativePipelineState` already does for
-   whole-function translation. Until then **any** OSR region containing a call
-   declines. Note the widened blast radius: accounting is now unconditional, so
-   this decline, which used to apply only under an armed control, applies to every
-   run, and an OSR loop containing a dissolvable call no longer reaches generated
-   code at all.
+   from `source_ip` uniqueness, so an item the leaf inliner spliced in owns no
+   source step. `RegVm::build_osr_plan`
+   (`crates/rsscript-vm/src/reg_vm/tier/osr_plan_builder.rs`) therefore declines
+   **any** OSR region containing a `CallKnown`, `CallClosure`, or `SpawnTask`.
+   Note the widened blast radius: accounting is now unconditional, so this
+   decline, which used to apply only under an armed control, applies to every run,
+   and an OSR loop containing a dissolvable call no longer reaches generated code
+   at all.
+
+   This is more than threading `NativeInlineAccounting` down to
+   `native_jit_origins`. `build_osr_plan` composes **eight** `next -> previous`
+   ip maps (`ip_map0`, `ip_map_fc`, `ip_map_sl`, `ip_map_by`, `ip_map_r`,
+   `ip_map1`, `ip_map2`, `ip_map3`, `ip_map3b`) and several of those passes delete
+   or replace source instructions rather than permuting them — the string
+   length-law fold deletes a dead string allocation outright
+   (`native_string_length_fold_in_region` in
+   `crates/rsscript-vm/src/reg_vm/native/passes/region_optimization_sr.rs`), and
+   the Option/Result/variant/struct scalar-replacement passes dissolve the
+   aggregates they replace. A cost vector composed naively across those hops would
+   silently under-report exactly the steps the interpreter still ticks.
+
+   The whole-function path already has the right shape for this:
+   `NativePipelineState::apply_rewrite` composes one hop, re-charges only the
+   first item mapping to a given predecessor, and **rejects** a rewrite whose
+   total cost changed. Needed: give the OSR chain the same accumulator, seeded
+   from `native_inline_leaf_calls_preserving_known_calls_with_accounting`, so a
+   cost-losing hop declines the region instead of mis-charging it; then thread the
+   result through `OsrTranslationRequest` and `OsrLoweringRequest` into
+   `native_jit_origins`, and cover the rewrites inside
+   `translate_osr_loop_inner` itself (`native_memoize_loop_invariant_runtime_helper_calls`,
+   `native_forward_direct_list_store_loads`) the same way. The corpus shapes that
+   exercise those dissolving passes (`native-option`, `native-result`,
+   `native-struct`, `native-variant`, `native-string`) currently reach generated
+   code through whole-function translation, which does account exactly, so this
+   gap is a lost optimization rather than a live mis-count.
 2. **Data-dependent key hashing cannot be charged from generated code.**
    `map_key_from_value` bills `1 + len / 64` for a String/Bytes key and recurses
-   for a structural one. The region's step counter is a Cranelift register
-   variable, so a host helper cannot add to it. Needed: a limits-cell ABI a
-   helper can charge against. Until then `native_source_cost_is_static` declines
-   `MapInsertHandleKeyInt` and `SetInsertHandle` regions. That decline is likewise
-   now unconditional rather than armed-only, for the same reason as gap 1.
+   for a structural one. `native_source_cost_is_static` therefore declines
+   `MapInsertHandleKeyInt` and `SetInsertHandle` regions, and that decline is now
+   unconditional rather than armed-only, for the same reason as gap 1.
+
+   The limits cell a helper could charge against now exists and is already
+   forwarded into every child frame, so the ABI half of this is no longer the
+   obstacle. The obstacle is that the running count lives in a Cranelift register
+   variable between block-charge points, not in the cell: a helper that added to
+   the cell would be overwritten by the next write-back. Needed: either spill the
+   counter around a data-dependent helper the way `CallNative` already flushes and
+   reloads it, or give the helper a separate cell word that the region folds in at
+   its exits. The `CallNative` flush/reload in
+   `crates/rsscript-jit-cranelift/src/codegen.rs` is the worked example.
 3. **Closure sinking drops the deleted instruction's step.**
    `native_inline_leaf_calls_inner` emits nothing for `sinkable.dead_defs`, so a
    sunk `MakeClosure` and its dead copy `Move`s own no source cost even though
    the interpreter ticks them. Needed: attribute each empty span's cost to the
-   next emitted item, or decline when a span is empty and a control is armed.
+   next emitted item, or decline when a span is empty. This is the same
+   re-attribution problem gap 1 hits across the OSR pass chain, and the two are
+   best solved together: a deleting rewrite either moves the deleted item's cost
+   onto a surviving item or fails closed.
 4. **The intrinsic-call meter stays interpreter-owned.**
    `RegVm::native_preemption_controls_supported`
    (`crates/rsscript-vm/src/reg_vm/exec.rs`) refuses whole-function and OSR
