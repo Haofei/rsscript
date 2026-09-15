@@ -117,6 +117,7 @@ fn rejects_drifting_or_double_charged_instruction_origins() {
             source_ip: 0,
             resume_ip: 0,
             source_cost: 1,
+            inlined: false,
         },
     ];
     assert!(
@@ -981,18 +982,21 @@ fn armed_osr_charges_explicit_source_cost_instead_of_jit_instruction_count() {
             source_ip: 0,
             resume_ip: 0,
             source_cost: 0,
+            inlined: false,
         },
         JitInstructionOrigin::identity(1),
         JitInstructionOrigin {
             source_ip: 2,
             resume_ip: 2,
             source_cost: 3,
+            inlined: false,
         },
         JitInstructionOrigin::identity(3),
         JitInstructionOrigin {
             source_ip: 4,
             resume_ip: 4,
             source_cost: 0,
+            inlined: false,
         },
     ];
     let id = m.compile_osr(&program, 1, true, false).unwrap();

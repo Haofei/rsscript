@@ -198,15 +198,23 @@ pub(crate) fn validate_with_limits(
                     origin.resume_ip
                 )));
             }
-            if origin.source_cost != 0 && !charged_sources.insert(origin.source_ip) {
-                return Err(JitError::invalid_ir(format!(
-                    "source instruction {} owns source cost more than once",
-                    origin.source_ip
-                )));
+            // An inlined item owns callee source steps that have no distinct
+            // position in this function's bytecode, so neither the
+            // one-cost-per-source-instruction rule nor the
+            // total-fits-the-source-function bound applies to it. Its accounting is
+            // checked instead by the all-or-nothing roll-back contract in codegen:
+            // a deopt inside the inlined region re-executes the caller's call.
+            if !origin.inlined {
+                if origin.source_cost != 0 && !charged_sources.insert(origin.source_ip) {
+                    return Err(JitError::invalid_ir(format!(
+                        "source instruction {} owns source cost more than once",
+                        origin.source_ip
+                    )));
+                }
+                total_source_cost = total_source_cost
+                    .checked_add(u64::from(origin.source_cost))
+                    .ok_or_else(|| JitError::invalid_ir("source-step cost overflow"))?;
             }
-            total_source_cost = total_source_cost
-                .checked_add(u64::from(origin.source_cost))
-                .ok_or_else(|| JitError::invalid_ir("source-step cost overflow"))?;
             if matches!(
                 program.code[jit_ip],
                 JitInstr::RegionExit { .. } | JitInstr::OsrExit | JitInstr::Bail
@@ -217,9 +225,15 @@ pub(crate) fn validate_with_limits(
                 )));
             }
         }
-        if total_source_cost > source_len as u64 {
+        // An embedding interpreter may bill more than one step for a single
+        // instruction when part of its cost is data-proportional (RSScript charges
+        // one extra unit for hashing an `Int` map key on top of the instruction's
+        // own tick). The native subset admits only the constant-cost shape of such
+        // an instruction, so two steps per source instruction is the exact ceiling;
+        // the one-charge-per-`source_ip` rule above remains the real invariant.
+        if total_source_cost > (source_len as u64).saturating_mul(2) {
             return Err(JitError::invalid_ir(format!(
-                "source-step cost {total_source_cost} exceeds source instruction count {source_len}"
+                "source-step cost {total_source_cost} exceeds twice the source instruction count {source_len}"
             )));
         }
     }

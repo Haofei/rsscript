@@ -163,13 +163,23 @@ impl RegVm {
                         }
                         return NativeAttempt::Fallback;
                     }
-                    let compiled_call_sites = native_compiled_call_sites(
-                        &self.jit_state,
-                        native,
-                        &unit,
-                        func,
-                        native_key,
-                    );
+                    // Native-to-native call edges are compiled by
+                    // `compile_native_callee`, which emits no step/cancellation/
+                    // deadline accounting at all: a callee reached over that edge
+                    // runs entirely off the meter, so a hot callee loop could pass
+                    // an armed step budget while reporting zero usage. Until the
+                    // child ABI charges (and rolls back) the shared limits cell,
+                    // an armed region must not build those edges. Every call then
+                    // either dissolves through the origin-aware leaf inliner, which
+                    // does account the callee body exactly, or the function declines
+                    // native and runs on the interpreter.
+                    let compiled_call_sites = if compile_controls
+                        == vm_jit::RegionCompileControls::default()
+                    {
+                        native_compiled_call_sites(&self.jit_state, native, &unit, func, native_key)
+                    } else {
+                        std::collections::HashMap::new()
+                    };
                     let translated = native.measure_translation(|| {
                         if compiled_call_sites.is_empty() {
                             translate_to_native_jit(
@@ -219,6 +229,14 @@ impl RegVm {
                             let jit_fn = analyzed.jit_fn();
                             if compile_controls != vm_jit::RegionCompileControls::default()
                                 && !precise_resume_safe
+                            {
+                                return NativeAttempt::Fallback;
+                            }
+                            // Exact source accounting: a key whose hash work is
+                            // proportional to its size cannot be charged from
+                            // generated code, so an armed region declines rather
+                            // than under-report the steps the interpreter bills.
+                            if compile_controls.step && !native_source_cost_is_static(&jit_fn.code)
                             {
                                 return NativeAttempt::Fallback;
                             }

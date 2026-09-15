@@ -203,6 +203,9 @@ impl RegVm {
                             let written_regs = written_regs.clone();
                             let string_literals = analyzed.string_literals().to_vec();
                             let jit_fn = analyzed.jit_fn();
+                            if emit_step && !native_source_cost_is_static(&jit_fn.code) {
+                                return None;
+                            }
                             if !osr_memory_controls_supported(jit_fn, memory_armed) {
                                 return None;
                             }
@@ -345,6 +348,31 @@ impl RegVm {
                 // bails OSR rather than misresume mid-fragment.
                 let real_code = &func.code;
                 mapped_osr_loop(&eff_func.code, &expand_map, header_ip).and_then(|lp_orig| {
+                // Exact source accounting: the OSR origin table charges one step per
+                // distinct source ip, so a call the leaf inliner dissolves into the
+                // region would own zero steps for its entire callee body — including
+                // a loop inside it. Until the OSR origin pipeline carries the same
+                // inline accounting as whole-function translation, an armed region
+                // declines instead of under-reporting usage and running past an armed
+                // step budget. See "Accounting parity status" in
+                // docs/spec/native-jit-contract.md.
+                if emit_step
+                    && eff_func
+                        .code
+                        .get(lp_orig.header..lp_orig.exit)
+                        .is_none_or(|region| {
+                            region.iter().any(|instr| {
+                                matches!(
+                                    instr,
+                                    RegInstr::CallKnown { .. }
+                                        | RegInstr::CallClosure { .. }
+                                        | RegInstr::SpawnTask { .. }
+                                )
+                            })
+                        })
+                {
+                    return None;
+                }
                 native_inline_leaf_calls(
                     &unit,
                     eff_func,
@@ -661,7 +689,10 @@ impl RegVm {
                                     let written_regs = written_regs.clone();
                                     let string_literals = analyzed.string_literals().to_vec();
                                     let jit_fn = analyzed.jit_fn();
-                                    if !osr_memory_controls_supported(jit_fn, memory_armed) {
+                                    if emit_step && !native_source_cost_is_static(&jit_fn.code) {
+                                return None;
+                            }
+                            if !osr_memory_controls_supported(jit_fn, memory_armed) {
                                         return None;
                                     }
                                     let n_jit_regs = jit_fn.n_regs as usize;

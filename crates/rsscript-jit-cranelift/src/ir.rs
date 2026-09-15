@@ -880,11 +880,21 @@ pub struct MemoScope {
 /// `source_cost` is the number of interpreter source steps owned by this item;
 /// across a rewrite the total cost must be preserved and an expanded source
 /// instruction assigns its cost to exactly one generated item.
+///
+/// `inlined` marks an item spliced in from a callee body. Such an item owns real
+/// interpreter source steps (the callee's own instructions) that have no distinct
+/// position in the caller's bytecode, so it is exempt from the one-cost-per-
+/// `source_ip` and total-cost-fits-the-source-function accounting rules that hold
+/// for ordinary one-to-one items. Its `resume_ip` is the caller's call
+/// instruction: a deopt re-executes the whole call, so generated code must roll
+/// the region's charged cost back rather than report it (see
+/// `codegen::step_segment_costs` and the `steps_resume` write-back).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct JitInstructionOrigin {
     pub source_ip: u32,
     pub resume_ip: u32,
     pub source_cost: u32,
+    pub inlined: bool,
 }
 
 impl JitInstructionOrigin {
@@ -893,6 +903,7 @@ impl JitInstructionOrigin {
             source_ip: ip,
             resume_ip: ip,
             source_cost: 1,
+            inlined: false,
         }
     }
 }

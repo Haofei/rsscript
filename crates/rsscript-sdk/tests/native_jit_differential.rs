@@ -837,3 +837,288 @@ fn provider_barrier_executes_once_and_reenters_native() {
             .is_some_and(|count| *count >= 1)
     );
 }
+
+/// One interpreter/native pair for the same program and the same armed limits.
+///
+/// The interpreter is the accounting oracle: `usage.steps_consumed` and the
+/// termination reason it reports are what native execution must reproduce.
+fn accounting_pair(
+    name: &str,
+    source: &str,
+    limits: RunLimits,
+    options: NativeJitOptions,
+) -> (ExecutionReport, ExecutionReport) {
+    let built = Compiler.compile(name, source).expect("source compiles");
+    let admitted = ArtifactVerifier
+        .verify(built)
+        .expect("artifact verifies")
+        .admit_trusted_input();
+    let linked = Runtime::new(ProviderRegistry::default())
+        .link(&admitted)
+        .expect("artifact links");
+    let interpreter = linked.execute(ExecutionRequest::default().limits(limits.clone()));
+    let native = linked.execute(
+        ExecutionRequest::default()
+            .limits(limits)
+            .native_jit(options),
+    );
+    (interpreter, native)
+}
+
+fn native_region_entries(report: &ExecutionReport) -> u64 {
+    let telemetry = native_telemetry(report);
+    telemetry
+        .native_calls
+        .saturating_add(telemetry.osr_entries)
+        .saturating_add(telemetry.continuation_entries)
+}
+
+/// Program shapes whose natively executed regions must account source steps
+/// exactly. `native_under_limits` records whether the shape can still reach
+/// generated code once a preemption control is armed: a region whose callee body
+/// cannot be attributed exactly declines to the interpreter instead of
+/// under-reporting, and that decline is itself part of the contract.
+struct StepParityCase {
+    name: &'static str,
+    source: &'static str,
+    native_under_limits: bool,
+}
+
+const STEP_PARITY_CASES: &[StepParityCase] = &[
+    StepParityCase {
+        name: "call-free-loop.rss",
+        source: "fn main() -> Int { let mut i = 0; let mut total = 0; while i < 3000 { total = total + i * 3 - i / 2; i = i + 1 }; return total }",
+        native_under_limits: true,
+    },
+    // The callee owns the loop. Its body cannot be attributed to a single caller
+    // instruction, so an armed region declines rather than run 57k unmetered
+    // source steps behind one `CallKnown`.
+    StepParityCase {
+        name: "callee-owns-the-loop.rss",
+        source: "fn hot(limit: Int) -> Int { let mut i = 0; let mut total = 0; while i < 3000 { total = total + i * 3 - i / 2; i = i + 1 }; return total } fn main() -> Int { return hot(limit: 3000) }",
+        native_under_limits: false,
+    },
+    // Repeated whole-function native entry: each call's own region is metered and
+    // the interpreter carries the count across entries.
+    StepParityCase {
+        name: "repeated-native-entry.rss",
+        source: "fn hot(limit: Int) -> Int { let mut i = 0; let mut total = 0; while i < limit { total = total + i * 3 - i / 2; i = i + 1 }; return total } fn main() -> Int { let mut out = 0; let mut r = 0; while r < 50 { out = hot(limit: 200); r = r + 1 }; return out }",
+        native_under_limits: true,
+    },
+    // A leaf call inside the hot loop: the inliner dissolves it, so every spliced
+    // callee instruction owns its own interpreter step.
+    StepParityCase {
+        name: "inlined-leaf-in-loop.rss",
+        source: "fn square(v: Int) -> Int { return v * v } fn main() -> Int { let mut i = 0; let mut total = 0; while i < 3000 { total = total + square(v: i % 97); i = i + 1 }; return total }",
+        native_under_limits: true,
+    },
+];
+
+/// Step budgets chosen to land before, inside and past each shape's native
+/// regions, including values that fall exactly on a region entry/exit boundary
+/// (the reported counts for these programs are 101, 1001, 10001 and their
+/// completion totals), so an off-by-one in segment reservation or deopt roll-back
+/// changes the reported count.
+const STEP_PARITY_BUDGETS: &[u64] = &[
+    1, 2, 3, 12, 99, 100, 101, 102, 511, 512, 513, 1_000, 1_001, 1_002, 10_000, 57_011, 57_012,
+    57_013, 10_000_000,
+];
+
+#[test]
+fn native_step_accounting_matches_the_interpreter_under_an_armed_budget() {
+    for case in STEP_PARITY_CASES {
+        let mut native_regions = 0_u64;
+        for &budget in STEP_PARITY_BUDGETS {
+            let limits = RunLimits::unbounded_for_trusted_host().with_step_budget(budget);
+            let (interpreter, native) = accounting_pair(
+                case.name,
+                case.source,
+                limits,
+                NativeJitOptions {
+                    cost_model: NativeCostModel::Off,
+                    collect_telemetry: true,
+                    ..NativeJitOptions::default()
+                },
+            );
+            assert_eq!(
+                native.outcome(),
+                interpreter.outcome(),
+                "{} at step budget {budget} must terminate for the same reason as the interpreter",
+                case.name
+            );
+            assert_eq!(
+                native.usage.steps_consumed, interpreter.usage.steps_consumed,
+                "{} at step budget {budget} must report the interpreter's step count",
+                case.name
+            );
+            native_regions = native_regions.saturating_add(native_region_entries(&native));
+        }
+        assert_eq!(
+            native_regions > 0,
+            case.native_under_limits,
+            "{} native engagement under an armed step budget changed",
+            case.name
+        );
+    }
+}
+
+#[test]
+fn native_step_accounting_matches_the_interpreter_for_osr_entered_loops() {
+    for case in STEP_PARITY_CASES {
+        for &budget in &[100_u64, 1_000, 10_000, 10_000_000] {
+            let limits = RunLimits::unbounded_for_trusted_host().with_step_budget(budget);
+            let (interpreter, native) = accounting_pair(
+                case.name,
+                case.source,
+                limits,
+                NativeJitOptions {
+                    cost_model: NativeCostModel::Off,
+                    eager_osr: true,
+                    collect_telemetry: true,
+                    ..NativeJitOptions::default()
+                },
+            );
+            assert_eq!(
+                native.outcome(),
+                interpreter.outcome(),
+                "{} under eager OSR at step budget {budget} must match the interpreter outcome",
+                case.name
+            );
+            assert_eq!(
+                native.usage.steps_consumed, interpreter.usage.steps_consumed,
+                "{} under eager OSR at step budget {budget} must report the interpreter's steps",
+                case.name
+            );
+        }
+    }
+}
+
+#[test]
+fn native_step_accounting_is_exact_when_a_guard_deopts() {
+    // The interpreter charges a step *before* executing an instruction, so the
+    // failing multiply is counted. Generated code reserves its segment up front,
+    // so the count it reports on a guard bail must exclude the instruction the
+    // interpreter is about to re-execute.
+    let cases: &[(&str, &str)] = &[
+        (
+            "guard-deopt-inline-free.rss",
+            "fn main() -> Int { let mut i = 0; let mut total = 1; while i < 200 { total = total * 3 + 1; i = i + 1 }; return total }",
+        ),
+        (
+            "guard-deopt-through-callee.rss",
+            "fn step(v: Int) -> Int { return v * 3 + 1 } fn main() -> Int { let mut i = 0; let mut total = 1; while i < 200 { total = step(v: total); i = i + 1 }; return total }",
+        ),
+    ];
+    for (name, source) in cases {
+        for eager_osr in [false, true] {
+            let limits = RunLimits::unbounded_for_trusted_host().with_step_budget(10_000);
+            let (interpreter, native) = accounting_pair(
+                name,
+                source,
+                limits,
+                NativeJitOptions {
+                    cost_model: NativeCostModel::Off,
+                    eager_osr,
+                    collect_telemetry: true,
+                    ..NativeJitOptions::default()
+                },
+            );
+            assert_eq!(
+                native.outcome(),
+                interpreter.outcome(),
+                "{name} (eager_osr={eager_osr}) must report the same overflow failure"
+            );
+            assert_eq!(
+                native.usage.steps_consumed, interpreter.usage.steps_consumed,
+                "{name} (eager_osr={eager_osr}) must report the interpreter's step count"
+            );
+        }
+    }
+}
+
+#[test]
+fn cancellation_and_deadline_stop_native_execution_with_the_interpreter_reason() {
+    let source = "fn main() -> Int { let mut i = 0; let mut total = 0; while i < 100000000 { total = total + i * 3 - i / 2; i = i + 1 }; return total }";
+    let options = NativeJitOptions {
+        cost_model: NativeCostModel::Off,
+        collect_telemetry: true,
+        ..NativeJitOptions::default()
+    };
+
+    let deadline = RunLimits::unbounded_for_trusted_host()
+        .with_deadline(MonotonicDeadline::after(Duration::from_millis(50)));
+    let (interpreter, native) = accounting_pair("native-deadline.rss", source, deadline, options);
+    assert_eq!(
+        native.outcome(),
+        interpreter.outcome(),
+        "a deadline reached inside a native region must report the interpreter's failure"
+    );
+    assert!(
+        native.usage.steps_consumed > 0,
+        "a deadline bail must still report the source steps the native region paid for"
+    );
+
+    let cancel = CancellationToken::new();
+    let watchdog = cancel.clone();
+    let canceller = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(50));
+        watchdog.cancel();
+    });
+    let cancelled = RunLimits::unbounded_for_trusted_host().with_cancellation(cancel);
+    let (interpreter, native) = accounting_pair("native-cancel.rss", source, cancelled, options);
+    canceller.join().expect("watchdog thread joins");
+    assert_eq!(
+        native.outcome(),
+        interpreter.outcome(),
+        "a cancellation observed inside a native region must report the interpreter's failure"
+    );
+    assert!(
+        native.usage.steps_consumed > 0,
+        "a cancellation bail must still report the source steps the native region paid for"
+    );
+}
+
+/// Every native kernel in the differential corpus must report the interpreter's
+/// step count once a step budget is armed.
+///
+/// This is the regression guard for the whole source-cost model rather than for
+/// one shape: an inlined callee body, a native-to-native call edge, a guard
+/// deopt, or an interpreter charge that is *not* one step per instruction (the
+/// `Int` map-key hash `RegVm::charge_work` bills) each show up here as a drifting
+/// count on a workload the engine is expected to accelerate.
+#[test]
+fn native_kernel_corpus_reports_the_interpreter_step_count_under_a_budget() {
+    let mut drift = Vec::new();
+    for (name, source) in CASES {
+        for &budget in &[1_000_u64, 100_000, 100_000_000] {
+            let limits = RunLimits::unbounded_for_trusted_host().with_step_budget(budget);
+            let (interpreter, native) = accounting_pair(
+                name,
+                source,
+                limits,
+                NativeJitOptions {
+                    cost_model: NativeCostModel::Off,
+                    collect_telemetry: true,
+                    ..NativeJitOptions::default()
+                },
+            );
+            if interpreter.usage.steps_consumed != native.usage.steps_consumed
+                || interpreter.outcome() != native.outcome()
+            {
+                drift.push(format!(
+                    "{name} at step budget {budget}: interpreter {} {:?} vs native {} {:?} ({} native regions)",
+                    interpreter.usage.steps_consumed,
+                    interpreter.outcome(),
+                    native.usage.steps_consumed,
+                    native.outcome(),
+                    native_region_entries(&native),
+                ));
+            }
+        }
+    }
+    assert!(
+        drift.is_empty(),
+        "native step accounting drifted from the interpreter:\n{}",
+        drift.join("\n")
+    );
+}

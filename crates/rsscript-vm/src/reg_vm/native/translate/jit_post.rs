@@ -12,6 +12,10 @@ pub(super) struct NativeInstructionOrigin {
     /// Interpreter source-step cost owned by this native item. Expansion assigns
     /// the cost to exactly one result; fusion must preserve the summed cost.
     pub(super) source_cost: u32,
+    /// This item came from an inlined callee region. Its `resume_ip` is the
+    /// caller's call instruction, so a deopt re-executes the whole call and the
+    /// region's charge must be rolled back instead of reported.
+    pub(super) inlined: bool,
 }
 
 #[cfg(feature = "native-jit")]
@@ -21,6 +25,7 @@ impl NativeInstructionOrigin {
             source_ip: u32::try_from(self.source_ip).ok()?,
             resume_ip: u32::try_from(self.resume_ip).ok()?,
             source_cost: self.source_cost,
+            inlined: self.inlined,
         })
     }
 }
@@ -53,9 +58,81 @@ pub(super) fn native_jit_origins(
                 source_cost: u32::from(
                     executes_source && valid_source.is_some() && charged_sources.insert(source_ip),
                 ),
+                // OSR/continuation regions do not yet carry inline accounting; see
+                // the accounting-parity status in docs/spec/native-jit-contract.md.
+                inlined: false,
             })
         })
         .collect()
+}
+
+/// Whether one native item hashes a map/set key whose interpreter work is the
+/// compile-time constant of a single unit.
+///
+/// `map_key_from_value` (`reg_vm/value_ops.rs`) bills one unit for a scalar key,
+/// and `RegVm::charge_work` adds it on top of the instruction's own `tick`, so
+/// the interpreter spends two source steps on an `Int`-keyed map insert, get, or
+/// membership test. Sorted maps and sorted sets are list-backed and hash nothing,
+/// so they are deliberately absent.
+#[cfg(feature = "native-jit")]
+fn hashes_a_constant_cost_key(instruction: &vm_jit::JitInstr) -> bool {
+    match instruction {
+        vm_jit::JitInstr::MatchMapGetInt { .. } | vm_jit::JitInstr::MatchMapGetFloat { .. } => true,
+        vm_jit::JitInstr::HostCall { helper, .. } => matches!(
+            helper,
+            vm_jit::HostHelper::MapInsertInt
+                | vm_jit::HostHelper::MapInsertFloat
+                | vm_jit::HostHelper::MapGetInt
+                | vm_jit::HostHelper::MapGetMatchInt
+                | vm_jit::HostHelper::MapGetMatchFloat
+                | vm_jit::HostHelper::MapContainsInt
+                | vm_jit::HostHelper::SetInsertInt
+        ),
+        _ => false,
+    }
+}
+
+/// Whether one native item hashes a key whose interpreter work is proportional to
+/// the key's size (`1 + len / 64` for a String/Bytes key, and recursive for a
+/// structural key). Generated code cannot know that at compile time and cannot
+/// add to the in-register step counter from inside a host helper, so a region
+/// containing one declines while step accounting is armed.
+#[cfg(feature = "native-jit")]
+fn hashes_a_data_dependent_key(instruction: &vm_jit::JitInstr) -> bool {
+    matches!(
+        instruction,
+        vm_jit::JitInstr::HostCall {
+            helper: vm_jit::HostHelper::MapInsertHandleKeyInt | vm_jit::HostHelper::SetInsertHandle,
+            ..
+        }
+    )
+}
+
+/// Bill the interpreter's constant key-hash work onto the item that owns the
+/// hashing source instruction.
+///
+/// Without this a natively executed map loop under-reports exactly one source
+/// step per insert, get, or membership test.
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn charge_native_key_hash_work(
+    code: &[vm_jit::JitInstr],
+    origins: &mut [vm_jit::JitInstructionOrigin],
+) {
+    for (instruction, origin) in code.iter().zip(origins.iter_mut()) {
+        // A zero-cost item is a duplicate of an already-charged source
+        // instruction; the charge belongs to the item that owns the source step.
+        if hashes_a_constant_cost_key(instruction) && origin.source_cost != 0 {
+            origin.source_cost = origin.source_cost.saturating_add(1);
+        }
+    }
+}
+
+/// Whether every source step this region can spend is statically attributable,
+/// which is what an armed step budget (or the shared source-step stream a
+/// cancellation/deadline poll rides on) requires.
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn native_source_cost_is_static(code: &[vm_jit::JitInstr]) -> bool {
+    !code.iter().any(hashes_a_data_dependent_key)
 }
 
 /// Owned state threaded through native rewrites.
@@ -74,21 +151,43 @@ pub(super) struct NativePipelineState {
 
 #[cfg(feature = "native-jit")]
 impl NativePipelineState {
+    /// Seed the pipeline from a lowered stream.
+    ///
+    /// `accounting` supplies the exact interpreter source-step cost per
+    /// transformed item, which is *not* derivable from `transformed_to_bytecode`
+    /// alone: an inlined callee body collapses onto the caller's call ip, so the
+    /// one-cost-per-original-ip rule would silently drop every step the
+    /// interpreter spends inside the callee. Passing `None` keeps that
+    /// one-to-one rule for producers that do not inline.
     pub(super) fn new(
         code: Vec<RegInstr>,
         n_regs: usize,
         transformed_to_bytecode: Vec<usize>,
+        accounting: Option<NativeInlineAccounting>,
     ) -> Option<Self> {
         if code.len() != transformed_to_bytecode.len() {
+            return None;
+        }
+        if let Some(accounting) = &accounting
+            && (accounting.source_cost.len() != code.len()
+                || accounting.inlined.len() != code.len())
+        {
             return None;
         }
         let mut charged = std::collections::HashSet::new();
         let origins = transformed_to_bytecode
             .into_iter()
-            .map(|ip| NativeInstructionOrigin {
+            .enumerate()
+            .map(|(transformed, ip)| NativeInstructionOrigin {
                 source_ip: ip,
                 resume_ip: ip,
-                source_cost: u32::from(charged.insert(ip)),
+                source_cost: match &accounting {
+                    Some(accounting) => accounting.source_cost[transformed],
+                    None => u32::from(charged.insert(ip)),
+                },
+                inlined: accounting
+                    .as_ref()
+                    .is_some_and(|accounting| accounting.inlined[transformed]),
             })
             .collect();
         Some(Self {
@@ -152,7 +251,7 @@ mod pipeline_state_tests {
             RegInstr::LoadUnit { dst: 1 },
             RegInstr::LoadUnit { dst: 2 },
         ];
-        let mut state = NativePipelineState::new(initial, 3, vec![10, 20, 30]).unwrap();
+        let mut state = NativePipelineState::new(initial, 3, vec![10, 20, 30], None).unwrap();
 
         state
             .apply_rewrite(
@@ -182,7 +281,8 @@ mod pipeline_state_tests {
     #[test]
     fn pipeline_state_rejects_a_drifting_rewrite_map() {
         let mut state =
-            NativePipelineState::new(vec![RegInstr::LoadUnit { dst: 0 }], 1, vec![0]).unwrap();
+            NativePipelineState::new(vec![RegInstr::LoadUnit { dst: 0 }], 1, vec![0], None)
+                .unwrap();
         assert!(
             state
                 .apply_rewrite(vec![RegInstr::LoadUnit { dst: 0 }], 1, Vec::new(),)
@@ -193,7 +293,7 @@ mod pipeline_state_tests {
     #[test]
     fn pipeline_state_charges_an_expanded_source_exactly_once() {
         let initial = vec![RegInstr::LoadUnit { dst: 0 }];
-        let mut state = NativePipelineState::new(initial, 1, vec![7]).unwrap();
+        let mut state = NativePipelineState::new(initial, 1, vec![7], None).unwrap();
         state
             .apply_rewrite(
                 vec![RegInstr::LoadUnit { dst: 0 }, RegInstr::LoadUnit { dst: 0 }],

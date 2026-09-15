@@ -43,13 +43,37 @@ pub(crate) struct LimitChecks {
 /// every source instruction precharged for the segment has already reached the
 /// same pre-dispatch tick boundary as the interpreter. If the whole segment does
 /// not fit, generated code leaves `steps` untouched and deopts at the segment entry.
-fn step_segment_costs(program: &JitFunction, is_leader: &[bool]) -> Vec<u32> {
+///
+/// A segment additionally never spans the boundary of an inlined callee region
+/// (an item whose origin is `inlined`). The region's charge is all-or-nothing:
+/// `steps_resume` is refreshed only at non-inlined segment entries, so a deopt
+/// anywhere inside the region reports the step count as of the caller's call
+/// instruction — exactly what the interpreter then re-executes.
+///
+/// Returns the per-instruction segment-entry cost, the segment-start mask, and
+/// the per-segment *guard cost*: the source cost of the segment's last
+/// instruction when that instruction can bail. The interpreter re-executes the
+/// instruction a guard bails on, and it ticks before executing, so the reported
+/// count must exclude the pre-charged cost of that one instruction.
+fn step_segment_costs(
+    program: &JitFunction,
+    is_leader: &[bool],
+) -> (Vec<u32>, Vec<bool>, Vec<u32>) {
     const MAX_CONTROL_SEGMENT_SOURCE_COST: u32 = 512;
     let n = program.code.len();
     let mut starts = is_leader.to_vec();
     for (i, instr) in program.code.iter().enumerate() {
         if !instr.descriptor().step_batch_safe && i + 1 < n {
             starts[i + 1] = true;
+        }
+    }
+    for (ip, start) in starts.iter_mut().enumerate().skip(1) {
+        let previous = program.instruction_origin(ip - 1);
+        let current = program.instruction_origin(ip);
+        if current.inlined != previous.inlined
+            || (current.inlined && current.source_ip != previous.source_ip)
+        {
+            *start = true;
         }
     }
     let mut accumulated = 0_u32;
@@ -69,6 +93,7 @@ fn step_segment_costs(program: &JitFunction, is_leader: &[bool]) -> Vec<u32> {
         ip += 1;
     }
     let mut costs = vec![0_u32; n];
+    let mut guard_costs = vec![0_u32; n];
     let mut start = 0;
     while start < n {
         debug_assert!(starts[start]);
@@ -80,9 +105,18 @@ fn step_segment_costs(program: &JitFunction, is_leader: &[bool]) -> Vec<u32> {
             .map(|ip| program.instruction_origin(ip).source_cost)
             .try_fold(0_u32, u32::checked_add)
             .expect("validated source-step cost fits u32");
+        // Only the segment's last instruction can bail: every earlier one is
+        // `step_batch_safe`. Its own pre-charged cost is what the interpreter
+        // charges again when it resumes there.
+        let last = end - 1;
+        guard_costs[start] = if program.code[last].descriptor().step_batch_safe {
+            0
+        } else {
+            program.instruction_origin(last).source_cost
+        };
         start = end;
     }
-    costs
+    (costs, starts, guard_costs)
 }
 
 impl LimitChecks {
@@ -316,6 +350,19 @@ pub(crate) fn build_function(
     // holds the `step_budget`; `cancel_addr_var` holds the host `AtomicBool` address.
     let steps_var = limit_checks.step.then(|| bcx.declare_var(types::I64));
     let limit_var = limit_checks.step.then(|| bcx.declare_var(types::I64));
+    // Roll-back cell for inlined-callee accounting. A bail inside an inlined region
+    // resumes the interpreter at the caller's call instruction, which re-executes
+    // the whole call, so the region's charge must not be reported. `steps_resume`
+    // tracks the charge as of the last non-inlined segment entry and is what every
+    // deopt edge writes back. It is materialized only for a program that actually
+    // contains inlined items, so an ordinary one-to-one region emits byte-identical
+    // code to an engine without this cell.
+    let has_inlined_origins = program
+        .instruction_origins
+        .iter()
+        .any(|origin| origin.inlined);
+    let _ = has_inlined_origins;
+    let steps_resume_var = limit_checks.step.then(|| bcx.declare_var(types::I64));
     let cancel_addr_var = limit_checks.cancel.then(|| bcx.declare_var(ptr_ty));
     let tail_depth_var = program
         .code
@@ -330,6 +377,9 @@ pub(crate) fn build_function(
             .ins()
             .load(types::I64, MemFlags::trusted(), limits_ptr, 0);
         bcx.def_var(steps_var, steps0);
+        if let Some(steps_resume_var) = steps_resume_var {
+            bcx.def_var(steps_resume_var, steps0);
+        }
         let limit0 = bcx
             .ins()
             .load(types::I64, MemFlags::trusted(), limits_ptr, 8);
@@ -488,9 +538,12 @@ pub(crate) fn build_function(
     // Source-step cost is reserved once per conservative accounting segment. This
     // is computed from the same CFG leaders used for codegen and does not affect an
     // unarmed compile.
-    let control_cost_at = limit_checks
+    let segments = limit_checks
         .any()
         .then(|| step_segment_costs(program, &is_leader));
+    let control_cost_at = segments.as_ref().map(|(costs, _, _)| costs);
+    let segment_start_at = segments.as_ref().map(|(_, starts, _)| starts);
+    let segment_guard_cost_at = segments.as_ref().map(|(_, _, guards)| guards);
     for &cold_ip in &program.cold_blocks {
         if let Some(block) = block_for[cold_ip as usize] {
             bcx.set_cold_block(block);
@@ -665,10 +718,24 @@ pub(crate) fn build_function(
             bcx.seal_block(body_block);
             bcx.def_var(memo_scope_backedges[scope_index], zero);
         }
+        // Publish the pre-reservation count at a precisely-resumable segment entry.
+        // A poll or reservation bail below resumes the interpreter at this exact IP
+        // having charged nothing for the segment. Inside an inlined callee region
+        // the published value stays at the caller's call instruction, which the
+        // interpreter re-executes in full.
+        let publish_resume = steps_resume_var.is_some()
+            && segment_start_at.is_some_and(|starts| starts[i])
+            && !program.instruction_origin(i).inlined;
+        if publish_resume
+            && let (Some(steps_var), Some(steps_resume_var)) = (steps_var, steps_resume_var)
+        {
+            let steps = bcx.use_var(steps_var);
+            bcx.def_var(steps_resume_var, steps);
+        }
         // Poll before reserving the segment. A pre-cancelled/expired activation
         // therefore resumes at the first unpaid source instruction, where the
         // interpreter performs its canonical tick and reports the failure.
-        let poll_control = control_cost_at.as_ref().is_some_and(|costs| costs[i] != 0)
+        let poll_control = control_cost_at.is_some_and(|costs| costs[i] != 0)
             || (!backedge_target.is_empty() && backedge_target[i]);
         if poll_control {
             let mut trip: Option<Value> = None;
@@ -713,7 +780,7 @@ pub(crate) fn build_function(
         // the first unpaid source step. When it fits, one add replaces all of the
         // segment's per-instruction increments.
         if let (Some(steps_var), Some(limit_var), Some(control_cost_at)) =
-            (steps_var, limit_var, control_cost_at.as_ref())
+            (steps_var, limit_var, control_cost_at)
         {
             let cost = control_cost_at[i];
             if cost != 0 {
@@ -738,6 +805,23 @@ pub(crate) fn build_function(
                 let charged = bcx.ins().iadd(steps, required);
                 bcx.def_var(steps_var, charged);
             }
+        }
+        // Republish for a bail raised by the segment body. Only the segment's last
+        // instruction can bail there, and the interpreter ticks that instruction
+        // again when it resumes on it, so its own pre-charged cost is excluded.
+        if publish_resume
+            && let (Some(steps_var), Some(steps_resume_var), Some(control_cost_at)) =
+                (steps_var, steps_resume_var, control_cost_at)
+            && control_cost_at[i] != 0
+        {
+            let guard_cost = segment_guard_cost_at.map_or(0, |guards| guards[i]);
+            let steps = bcx.use_var(steps_var);
+            let resume = if guard_cost == 0 {
+                steps
+            } else {
+                bcx.ins().iadd_imm(steps, -i64::from(guard_cost))
+            };
+            bcx.def_var(steps_resume_var, resume);
         }
         match &program.code[i] {
             JitInstr::Nop => {}
@@ -1703,8 +1787,11 @@ pub(crate) fn build_function(
     // here covers all bails (budget/cancel/guard/OSR-exit). `steps_var` is an SSA
     // Variable, so `use_var` resolves to the accumulated count on whichever edge
     // bailed — the interpreter then resumes with the exact paid tick total.
-    if let Some(steps_var) = steps_var {
-        let s = bcx.use_var(steps_var);
+    // With inlined items present the reported value is `steps_resume`, the charge
+    // as of the last precisely-resumable segment entry; the interpreter re-executes
+    // everything the region charged past that point.
+    if let Some(reported) = steps_resume_var.or(steps_var) {
+        let s = bcx.use_var(reported);
         bcx.ins().store(MemFlags::trusted(), s, limits_ptr, 0);
     }
     let deopt_status = bcx.ins().iconst(types::I8, JitStatus::Deopt as i64);
