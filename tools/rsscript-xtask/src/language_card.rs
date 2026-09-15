@@ -7,6 +7,7 @@ use std::path::Path;
 
 use rsscript_diagnostics::diagnostic_explanations;
 use rsscript_interface_catalog::{CORE_INTERFACES, STANDARD_PACKAGE_INTERFACES};
+use rsscript_syntax::PARSER_KEYWORDS;
 use rsscript_syntax::lexer::{BUILTIN_CONSTANTS, CONTEXTUAL_KEYWORDS, KEYWORDS};
 use serde::Serialize;
 
@@ -59,9 +60,13 @@ struct GrammarJson {
     schema: &'static str,
     version: u32,
     completeness: &'static str,
-    provenance: [&'static str; 3],
+    provenance: [&'static str; 4],
     reserved_keywords: Vec<Keyword>,
     contextual_keywords: Vec<Keyword>,
+    /// Words the parser matches positionally that the lexer leaves as plain
+    /// identifiers. Omitting them made the published grammar surface claim a
+    /// smaller language than the parser accepts.
+    parser_keywords: Vec<Keyword>,
     builtin_constants: Vec<String>,
 }
 
@@ -97,6 +102,7 @@ struct LanguageCardJson {
     grammar_sha256: String,
     reserved_keyword_count: usize,
     contextual_keyword_count: usize,
+    parser_keyword_count: usize,
     builtin_constant_count: usize,
     diagnostic_count: usize,
     core_interface_count: usize,
@@ -256,6 +262,10 @@ fn grammar_document() -> String {
     for keyword in keywords.iter().filter(|keyword| keyword.contextual) {
         output.push_str(&format!("- `{}` ({})\n", keyword.word, keyword.category));
     }
+    output.push_str("\n## Parser-level words\n\nThe lexer leaves these as plain identifiers; the parser matches them as keywords in specific positions. They are declaration, clause, ownership and structured-concurrency words, and a program that uses one as an ordinary name will not parse where the parser expects the keyword.\n\n");
+    for keyword in parser_keywords() {
+        output.push_str(&format!("- `{}` ({})\n", keyword.word, keyword.category));
+    }
     output.push_str("\n## Built-in constants and constructors\n\n");
     for constant in builtin_constants() {
         output.push_str(&format!("- `{constant}`\n"));
@@ -325,7 +335,7 @@ fn language_card_document() -> String {
         "syntax, diagnostics, and core interface registries",
     );
     output.push_str("A compact generated index for contributors and tools.\n\n");
-    output.push_str(&format!("- {} reserved keywords, {} contextual words, and {} built-in constants.\n- {} documented diagnostic codes.\n- {} platform-neutral core interface files carrying {} callable signatures.\n\n", keyword_data.iter().filter(|keyword| !keyword.contextual).count(), keyword_data.iter().filter(|keyword| keyword.contextual).count(), builtin_constants().len(), diagnostics().len(), core_interfaces().len(), interface_signatures().len()));
+    output.push_str(&format!("- {} reserved keywords, {} contextual words, {} parser-level words, and {} built-in constants.\n- {} documented diagnostic codes.\n- {} platform-neutral core interface files carrying {} callable signatures.\n\n", keyword_data.iter().filter(|keyword| !keyword.contextual).count(), keyword_data.iter().filter(|keyword| keyword.contextual).count(), parser_keywords().len(), builtin_constants().len(), diagnostics().len(), core_interfaces().len(), interface_signatures().len()));
     output.push_str("- [Grammar surface](grammar.md) ([JSON](grammar.json))\n- [Keyword classification](keywords.md)\n- [Diagnostic catalog](diagnostic-catalog.md) ([JSON](diagnostic-catalog.json))\n- [Core interfaces](core-interfaces.md) ([JSON](core-interfaces.json))\n- [Core interface signatures](signatures.md)\n\nMachine-readable summary: [language-card.json](language-card.json). Diagnostic explanation catalogs do not fabricate fixes; machine-applicable edits are instance-level data returned by `rss check --json` and `rss fix --json`.\n\n## Canonical call spelling\n\nNamed arguments stay named. A direct call-site `read` wrapper is omitted because it is the default; `mut` and `take` remain explicit. The formatter does not invent or remove argument labels.\n\n```rsscript\n");
     output.push_str(&canonical_example());
     output.push_str("```\n\n");
@@ -493,6 +503,7 @@ fn grammar_json() -> String {
         provenance: [
             "rsscript_syntax::lexer::KEYWORDS",
             "rsscript_syntax::lexer::CONTEXTUAL_KEYWORDS",
+            "rsscript_syntax::PARSER_KEYWORDS",
             "rsscript_syntax::lexer::BUILTIN_CONSTANTS",
         ],
         reserved_keywords: all_keywords
@@ -504,6 +515,7 @@ fn grammar_json() -> String {
             .into_iter()
             .filter(|keyword| keyword.contextual)
             .collect(),
+        parser_keywords: parser_keywords(),
         builtin_constants: builtin_constants(),
     })
 }
@@ -556,6 +568,7 @@ fn language_card_json() -> String {
             .iter()
             .filter(|keyword| keyword.contextual)
             .count(),
+        parser_keyword_count: parser_keywords().len(),
         builtin_constant_count: builtin_constants().len(),
         diagnostic_count: diagnostics().len(),
         core_interface_count: core_interfaces().len(),
@@ -613,6 +626,25 @@ fn keywords() -> Vec<Keyword> {
     }));
     output.sort_by(|left, right| left.word.cmp(&right.word));
     output
+}
+
+/// The parser's own positional-keyword table, rendered like the lexer tables.
+///
+/// `docs/generated/grammar.md` omitted every one of these, so the published
+/// grammar surface described a smaller language than the parser accepts.
+/// `rsscript_syntax` owns the table and tests it against its own productions;
+/// this generator only renders it.
+fn parser_keywords() -> Vec<Keyword> {
+    let mut keywords = PARSER_KEYWORDS
+        .iter()
+        .map(|(word, category)| Keyword {
+            word: (*word).to_string(),
+            category: format!("{category:?}").to_ascii_lowercase(),
+            contextual: true,
+        })
+        .collect::<Vec<_>>();
+    keywords.sort_by(|left, right| left.word.cmp(&right.word));
+    keywords
 }
 
 fn builtin_constants() -> Vec<String> {
@@ -831,6 +863,85 @@ mod tests {
                 sugar.canonical
             );
         }
+    }
+
+    /// The published grammar surface must list every word the parser treats as
+    /// a keyword, not only the ones the lexer reserves. It used to omit all
+    /// seventeen parser-level words, so it described a smaller language than
+    /// the parser accepts.
+    #[test]
+    fn grammar_surface_lists_the_parser_level_words() {
+        let document = grammar_document();
+        let grammar: serde_json::Value = serde_json::from_str(&grammar_json()).unwrap();
+
+        assert_eq!(
+            grammar["parser_keywords"]
+                .as_array()
+                .map(Vec::len)
+                .unwrap_or_default(),
+            rsscript_syntax::PARSER_KEYWORDS.len()
+        );
+        assert!(
+            grammar["provenance"]
+                .as_array()
+                .expect("provenance array")
+                .iter()
+                .any(|entry| entry == "rsscript_syntax::PARSER_KEYWORDS"),
+            "the parser table must be named as a source of the grammar surface"
+        );
+
+        for (word, _) in rsscript_syntax::PARSER_KEYWORDS {
+            assert!(
+                document.contains(&format!("- `{word}` (")),
+                "`{word}` is missing from the rendered grammar surface"
+            );
+        }
+        for word in [
+            "sum",
+            "protocol",
+            "impl",
+            "type",
+            "const",
+            "opaque",
+            "derives",
+            "retains",
+            "noescape",
+            "owned",
+            "captures",
+            "task_group",
+            "select",
+            "spawn",
+            "use",
+            "module",
+        ] {
+            assert!(
+                rsscript_syntax::PARSER_KEYWORDS
+                    .iter()
+                    .any(|(published, _)| *published == word),
+                "`{word}` must be published as a parser keyword"
+            );
+        }
+
+        let card: serde_json::Value = serde_json::from_str(&language_card_json()).unwrap();
+        assert_eq!(
+            card["parser_keyword_count"].as_u64().unwrap_or_default() as usize,
+            rsscript_syntax::PARSER_KEYWORDS.len()
+        );
+    }
+
+    /// `RS0207` is a semantic-frontend check, not a Rust-backend one.
+    #[test]
+    fn argument_type_mismatch_does_not_name_an_archived_backend() {
+        let explanation = diagnostics()
+            .into_iter()
+            .find(|diagnostic| diagnostic.code == "RS0207")
+            .expect("RS0207 is documented");
+        assert!(
+            !explanation.explanation.contains("Rust lowering"),
+            "{}",
+            explanation.explanation
+        );
+        assert!(explanation.explanation.contains("backend lowering"));
     }
 
     /// The signature index is generated from the interface sources themselves,

@@ -6,7 +6,7 @@ Source: `syntax, diagnostics, and core interface registries`.
 
 A compact generated index for contributors and tools.
 
-- 30 reserved keywords, 2 contextual words, and 7 built-in constants.
+- 30 reserved keywords, 2 contextual words, 17 parser-level words, and 7 built-in constants.
 - 107 documented diagnostic codes.
 - 35 platform-neutral core interface files carrying 450 callable signatures.
 

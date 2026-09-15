@@ -5,6 +5,7 @@
   "provenance": [
     "rsscript_syntax::lexer::KEYWORDS",
     "rsscript_syntax::lexer::CONTEXTUAL_KEYWORDS",
+    "rsscript_syntax::PARSER_KEYWORDS",
     "rsscript_syntax::lexer::BUILTIN_CONSTANTS"
   ],
   "reserved_keywords": [
@@ -168,6 +169,93 @@
     {
       "word": "native",
       "category": "modifier",
+      "contextual": true
+    }
+  ],
+  "parser_keywords": [
+    {
+      "word": "captures",
+      "category": "modifier",
+      "contextual": true
+    },
+    {
+      "word": "const",
+      "category": "declaration",
+      "contextual": true
+    },
+    {
+      "word": "derives",
+      "category": "modifier",
+      "contextual": true
+    },
+    {
+      "word": "impl",
+      "category": "declaration",
+      "contextual": true
+    },
+    {
+      "word": "module",
+      "category": "declaration",
+      "contextual": true
+    },
+    {
+      "word": "noescape",
+      "category": "ownership",
+      "contextual": true
+    },
+    {
+      "word": "opaque",
+      "category": "declaration",
+      "contextual": true
+    },
+    {
+      "word": "owned",
+      "category": "ownership",
+      "contextual": true
+    },
+    {
+      "word": "protocol",
+      "category": "declaration",
+      "contextual": true
+    },
+    {
+      "word": "retains",
+      "category": "modifier",
+      "contextual": true
+    },
+    {
+      "word": "select",
+      "category": "control",
+      "contextual": true
+    },
+    {
+      "word": "spawn",
+      "category": "control",
+      "contextual": true
+    },
+    {
+      "word": "sum",
+      "category": "declaration",
+      "contextual": true
+    },
+    {
+      "word": "task_group",
+      "category": "control",
+      "contextual": true
+    },
+    {
+      "word": "type",
+      "category": "declaration",
+      "contextual": true
+    },
+    {
+      "word": "use",
+      "category": "declaration",
+      "contextual": true
+    },
+    {
+      "word": "view",
+      "category": "declaration",
       "contextual": true
     }
   ],

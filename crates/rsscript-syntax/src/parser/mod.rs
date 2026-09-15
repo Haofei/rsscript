@@ -9,7 +9,7 @@ use crate::ast::{
     ProtocolImplMapping, ReturnStmt, SelectArm, SelectStmt, Stmt, SumTypeDecl, SumVariant,
     TaskGroupStmt, TypeAliasDecl, TypeDecl, TypeKind, TypeRef, UseDecl, WithStmt,
 };
-use crate::lexer::{Token, TokenKind, lex_with_budget};
+use crate::lexer::{KeywordCategory, Token, TokenKind, lex_with_budget};
 use crate::{FrontendBudget, FrontendBudgetLimits, ParseRecursionGuard, Span};
 
 mod expr;
@@ -24,6 +24,38 @@ use items::*;
 use scan::*;
 use stmt::*;
 use types::*;
+
+/// Words the parser matches as keywords in specific positions, which the lexer
+/// deliberately leaves as plain identifiers and which are therefore absent from
+/// [`crate::lexer::KEYWORDS`].
+///
+/// The generated grammar surface reads this table. It is not a second,
+/// documentation-only catalog: `parser_keywords_are_matched_by_a_parser_
+/// production` asserts every entry is really matched by a production in this
+/// module, so a word cannot survive here after the parser stops recognizing it.
+pub const PARSER_KEYWORDS: &[(&str, KeywordCategory)] = &[
+    // Declarations and bindings
+    ("sum", KeywordCategory::Declaration),
+    ("protocol", KeywordCategory::Declaration),
+    ("impl", KeywordCategory::Declaration),
+    ("type", KeywordCategory::Declaration),
+    ("const", KeywordCategory::Declaration),
+    ("opaque", KeywordCategory::Declaration),
+    ("module", KeywordCategory::Declaration),
+    ("use", KeywordCategory::Declaration),
+    ("view", KeywordCategory::Declaration),
+    // Declaration clauses
+    ("derives", KeywordCategory::Modifier),
+    ("retains", KeywordCategory::Modifier),
+    ("captures", KeywordCategory::Modifier),
+    // Ownership annotations on a type
+    ("noescape", KeywordCategory::Ownership),
+    ("owned", KeywordCategory::Ownership),
+    // Structured concurrency statements
+    ("task_group", KeywordCategory::Control),
+    ("select", KeywordCategory::Control),
+    ("spawn", KeywordCategory::Control),
+];
 
 /// The parser's closed top-level dispatch table. Prefix completion reads this
 /// table directly; it is intentionally not a second, completion-only catalog.
@@ -1314,6 +1346,54 @@ fn run() -> Unit {
                 },
             ]
         ));
+    }
+
+    /// Every parser keyword must really be matched by a production in this
+    /// module. The parser recognizes a positional keyword through exactly three
+    /// forms, so scanning its own sources for them ties the published grammar
+    /// surface to the parser's behavior instead of to a hand-kept list.
+    #[test]
+    fn parser_keywords_are_matched_by_a_parser_production() {
+        const SOURCES: &[&str] = &[
+            include_str!("mod.rs"),
+            include_str!("expr.rs"),
+            include_str!("items.rs"),
+            include_str!("pattern.rs"),
+            include_str!("scan.rs"),
+            include_str!("stmt.rs"),
+            include_str!("types.rs"),
+        ];
+
+        for (word, _) in PARSER_KEYWORDS {
+            let matched = SOURCES.iter().any(|source| {
+                source.contains(&format!("is_ident_text(\"{word}\")"))
+                    || source.contains(&format!("at_ident(\"{word}\")"))
+                    || source.contains(&format!("name == \"{word}\""))
+                    || source.contains(&format!("(\"{word}\")"))
+            });
+            assert!(
+                matched,
+                "`{word}` is published as a parser keyword but no production matches it"
+            );
+        }
+    }
+
+    /// A parser keyword is by definition one the lexer does *not* reserve, so
+    /// the three published tables stay disjoint.
+    #[test]
+    fn parser_keywords_are_disjoint_from_the_lexer_tables() {
+        for (word, _) in PARSER_KEYWORDS {
+            assert!(
+                !crate::lexer::KEYWORDS.iter().any(|(kw, _)| kw == word),
+                "`{word}` is already a reserved keyword"
+            );
+            assert!(
+                !crate::lexer::CONTEXTUAL_KEYWORDS
+                    .iter()
+                    .any(|(kw, _)| kw == word),
+                "`{word}` is already a contextual keyword"
+            );
+        }
     }
 
     /// The single statement of `function`'s body, by index.
