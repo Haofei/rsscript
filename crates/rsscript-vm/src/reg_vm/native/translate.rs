@@ -1789,6 +1789,7 @@ pub(in crate::reg_vm) fn translate_osr_loop_profiled(
     let profile_guidance = native_osr_profile_guidance(profile, code, n_regs, lp, ip_map);
     translate_osr_loop_inner(OsrLoweringRequest {
         code,
+        source_function_code: &func.code,
         register_count: n_regs,
         parameter_count: n_params,
         capture_count: captures,
@@ -1822,6 +1823,11 @@ fn osr_uf_find(a: &mut [usize], mut x: usize) -> usize {
 #[cfg(feature = "native-jit")]
 struct OsrLoweringRequest<'a> {
     code: &'a [RegInstr],
+    /// The *original* bytecode of the function this region belongs to, indexed by
+    /// `source_ip`. A region rewrite may replace an intrinsic dispatch with
+    /// something else, so the intrinsic meter reads the source instruction the
+    /// interpreter actually runs rather than the transformed one it lowers.
+    source_function_code: &'a [RegInstr],
     register_count: usize,
     parameter_count: usize,
     capture_count: usize,

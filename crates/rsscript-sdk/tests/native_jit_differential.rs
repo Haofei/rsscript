@@ -1732,3 +1732,104 @@ fn the_default_runner_limit_profile_still_stops_an_over_budget_native_run() {
         interpreter.usage.steps_consumed
     );
 }
+
+/// OSR and continuation regions whose rewrites replace or delete the intrinsic
+/// dispatch the interpreter still runs.
+///
+/// The string and bytes length-law folds turn `String.len`/`Bytes.len` into
+/// arithmetic on operand byte lengths and delete the now-dead allocation, so the
+/// transformed stream carries no intrinsic dispatch at all. The intrinsic meter
+/// therefore reads the *source* instruction each item is charged for, not the
+/// transformed one it lowers: derived from the transformed stream these three
+/// shapes report 47, 92 and 3 intrinsic calls against the interpreter's 3002,
+/// 6002 and 3003.
+///
+/// Each shape puts its loop in a function that also writes output, so
+/// whole-function native entry declines and the loop can only reach generated
+/// code through OSR or a continuation.
+const OSR_INTRINSIC_PARITY_CASES: &[(&str, &str)] = &[
+    (
+        "osr-string-length-fold.rss",
+        "fn main() -> Unit { let mut i = 0; let mut total = 0; while i < 3000 { total = total + String.len(value: String.concat(left: \"ab\", right: \"cde\")); i = i + 1 }; Output.write(message: String.from_int(value: total)); return Unit }",
+    ),
+    (
+        "osr-string-from-int-fold.rss",
+        "fn main() -> Unit { let mut i = 0; let mut total = 0; while i < 3000 { total = total + String.len(value: String.from_int(value: i)); i = i + 1 }; Output.write(message: String.from_int(value: total)); return Unit }",
+    ),
+    (
+        "osr-map-len-helper.rss",
+        "fn main() -> Unit { local table = Map<Int, Int>.new(); Map.insert<Int, Int>(map: mut table, key: 1, value: 2); let mut i = 0; let mut total = 0; while i < 3000 { total = total + Map.len<Int, Int>(map: table); i = i + 1 }; Output.write(message: String.from_int(value: total)); return Unit }",
+    ),
+];
+
+#[test]
+fn a_rewritten_osr_region_reports_the_interpreter_intrinsic_call_count() {
+    for (name, source) in OSR_INTRINSIC_PARITY_CASES {
+        for eager_osr in [false, true] {
+            for limits in [
+                RunLimits::unbounded_for_trusted_host(),
+                RunLimits::unbounded_for_trusted_host().with_intrinsic_call_budget(1_500),
+                RunLimits::unbounded_for_trusted_host()
+                    .with_intrinsic_call_budget(1_000_000)
+                    .with_step_budget(10_000_000),
+            ] {
+                let (interpreter, native) = accounting_pair(
+                    name,
+                    source,
+                    limits,
+                    NativeJitOptions {
+                        cost_model: NativeCostModel::Off,
+                        eager_osr,
+                        collect_telemetry: true,
+                        ..NativeJitOptions::default()
+                    },
+                );
+                assert_eq!(
+                    native.outcome(),
+                    interpreter.outcome(),
+                    "{name} (eager_osr={eager_osr}) must terminate like the interpreter"
+                );
+                assert_eq!(
+                    native.usage.intrinsic_calls, interpreter.usage.intrinsic_calls,
+                    "{name} (eager_osr={eager_osr}) must report the interpreter's intrinsic count"
+                );
+                assert_eq!(
+                    native.usage.steps_consumed, interpreter.usage.steps_consumed,
+                    "{name} (eager_osr={eager_osr}) must report the interpreter's step count"
+                );
+                assert_eq!(
+                    native.stdout, interpreter.stdout,
+                    "{name} (eager_osr={eager_osr}) must produce the interpreter's output"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn the_rewritten_osr_cases_reach_generated_code_outside_whole_function_entry() {
+    // Pins what makes the case above meaningful: these loops are entered through
+    // OSR or a continuation, not through whole-function translation, which
+    // accounts through a different pipeline.
+    for (name, source) in OSR_INTRINSIC_PARITY_CASES {
+        let (_, native) = accounting_pair(
+            name,
+            source,
+            RunLimits::unbounded_for_trusted_host(),
+            NativeJitOptions {
+                cost_model: NativeCostModel::Off,
+                collect_telemetry: true,
+                ..NativeJitOptions::default()
+            },
+        );
+        let telemetry = native_telemetry(&native);
+        assert_eq!(
+            telemetry.native_calls, 0,
+            "{name} must not reach whole-function native entry"
+        );
+        assert!(
+            telemetry.osr_entries + telemetry.continuation_entries > 0,
+            "{name} must reach generated code through OSR or a continuation"
+        );
+    }
+}

@@ -9,6 +9,7 @@ pub(super) fn translate_osr_loop_inner(request: OsrLoweringRequest<'_>) -> Optio
 
     let OsrLoweringRequest {
         code,
+        source_function_code,
         register_count: n_regs,
         parameter_count: n_params,
         capture_count: captures,
@@ -1718,8 +1719,12 @@ pub(super) fn translate_osr_loop_inner(request: OsrLoweringRequest<'_>) -> Optio
     // Handle parameters marshal through the window; scalars use `reg_types`.
     let param_types: Vec<NativeTy> = native_reg_types[..n_params].to_vec();
 
-    let instruction_origins =
-        native_jit_origins(&jit_code, code, source_ip_map, source_instruction_count)?;
+    let instruction_origins = native_jit_origins(
+        &jit_code,
+        source_function_code,
+        source_ip_map,
+        source_instruction_count,
+    )?;
 
     let jit_fn = vm_jit::JitFunction {
         n_params: n_params as u32,

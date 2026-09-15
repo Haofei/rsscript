@@ -40,13 +40,16 @@ impl NativeInstructionOrigin {
 #[cfg(feature = "native-jit")]
 pub(super) fn native_jit_origins(
     instructions: &[vm_jit::JitInstr],
-    region_code: &[RegInstr],
+    source_code: &[RegInstr],
     source_ip_map: Option<&[usize]>,
     source_instruction_count: usize,
 ) -> Option<Vec<vm_jit::JitInstructionOrigin>> {
-    // The intrinsic meter reads the register instruction each native item lowers,
-    // so the two streams must be index-aligned. Fail closed rather than guess.
-    if region_code.len() != instructions.len() {
+    // The intrinsic meter reads the *source* instruction each native item is
+    // charged for, not the transformed one it lowers. A region rewrite may replace
+    // an intrinsic dispatch with something else - the string and bytes length-law
+    // folds turn `String.len`/`Bytes.len` into arithmetic - while the interpreter
+    // still runs the intrinsic and charges it.
+    if source_code.len() < source_instruction_count {
         return None;
     }
     let mut charged_sources = std::collections::HashSet::new();
@@ -73,7 +76,7 @@ pub(super) fn native_jit_origins(
                 resume_ip: u32::try_from(source_ip).ok()?,
                 source_cost,
                 intrinsic_cost: u32::from(
-                    source_cost != 0 && dispatches_an_intrinsic(&region_code[ip]),
+                    source_cost != 0 && dispatches_an_intrinsic(&source_code[source_ip]),
                 ),
                 // OSR/continuation regions do not yet carry inline accounting; see
                 // the accounting-parity status in docs/spec/native-jit-contract.md.
